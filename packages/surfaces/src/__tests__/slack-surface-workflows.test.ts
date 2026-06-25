@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as child_process from 'node:child_process';
-import { SlackSurface, parsePlanningRequest } from '../slack/slack-surface.js';
+import { SlackSurface, parsePlanningRequest, BUILTIN_HARNESS_PRESETS } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
 import type { WorkflowContext } from '../slack/workflow-assistant.js';
@@ -144,6 +144,23 @@ describe('parsePlanningRequest', () => {
       repo: undefined,
       text: 'go',
       unknownPreset: 'omp+gpt5',
+    });
+  });
+});
+
+// ── Built-in harness presets ─────────────────────────────────
+
+describe('BUILTIN_HARNESS_PRESETS', () => {
+  it('ships an omp+codex preset that runs omp with the codex model', () => {
+    expect(BUILTIN_HARNESS_PRESETS['omp+codex']).toEqual({ tool: 'omp', model: 'codex' });
+  });
+
+  it('lets a lobby [omp+codex] tag select the omp+codex preset', () => {
+    const keys = Object.keys(BUILTIN_HARNESS_PRESETS);
+    expect(parsePlanningRequest('<@BOT> [omp+codex] add a /health endpoint', keys, 'cursor+claude')).toEqual({
+      presetKey: 'omp+codex',
+      repo: undefined,
+      text: 'add a /health endpoint',
     });
   });
 });
