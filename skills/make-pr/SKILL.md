@@ -14,6 +14,12 @@ Use this skill when the work is already done and the user wants a PR created, up
 For stacked PRs, apply `skills/review-compression/SKILL.md` before you write titles or PR bodies. If one branch mixes more than one local review claim, split the stack first.
 For decomposition or extraction refactors (splitting a large file into modules), one PR moves one cohesive unit: create the target file, move ONE function/class/phase, re-point references, keep the public surface stable. The next unit is the next PR. Bundling several extractions into one branch ("extract prepare + dispatch + finalize") is the default mistake this rule prevents — see the **Decomposition & Extraction Refactors** section of `skills/review-compression/SKILL.md`.
 
+## Splitting changes into PRs
+
+`plan-to-invoker` decomposes the work by atomic feature; once the diff exists, **make-pr owns slicing it into one review-claim PR per slice**. `skills/review-compression/SKILL.md` is the slicing authority — apply its **Boundary**, **Ordering**, and **Grouping** rules to chop the implemented diff, then publish the resulting stack with the Invoker-on-Invoker `mergify stack push` flow documented below (see **Invoker-specific publication rule**).
+
+In short: atomic-feature planning hands the diff to make-pr, and make-pr defers boundary/order/grouping decisions to review-compression before any titles, bodies, or pushes are produced.
+
 ## Stack ordering
 
 Order slices so a reviewer reads the evidence before the change it justifies (see `skills/review-compression/SKILL.md` → Ordering Rules):
