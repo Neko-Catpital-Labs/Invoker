@@ -1,0 +1,46 @@
+# Anti-Pattern H: Invalid feature-step dependency direction
+# Expected outcome: skill-doctor fails lint-task-atomicity with a feature step ordering violation
+# because a same-feature sub-slice depends on a later Feature step without an explicit exception.
+
+name: "Anti-pattern: earlier feature step depends on later feature step"
+description: |
+  Demonstrates a feature-step direction violation where a same-feature sub-slice
+  declared as an earlier Feature step depends on a later Feature step task
+  without declaring "Feature step exception: allowed".
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/EdbertChan/Invoker
+baseBranch: master
+featureBranch: plan/anti-pattern-feature-step-order-violation
+
+tasks:
+  - id: ui-activation-sub-slice
+    description: |
+      Prepare UI activation sub-slice for the prompt-edit feature.
+      Feature: prompt-edit
+      Feature step: 1
+      Feature state: active
+      Acceptance criteria:
+      - Ensure UI activation scaffolding is ready for downstream integration.
+    prompt: |
+      Modify packages/ui/src/components/TaskPanel.tsx to prepare prompt-edit
+      activation behavior and ensure the change preserves command-task editing
+      interactions. This task must remain UI-focused and intentionally depend on
+      a later Feature step inside the same prompt-edit feature so the atomicity
+      linter rejects it.
+    dependencies: [domain-contract-adjustment]
+
+  - id: domain-contract-adjustment
+    description: |
+      Adjust domain-layer prompt-edit contract for the prompt-edit feature.
+      Feature: prompt-edit
+      Feature step: 2
+      Feature state: active
+      Acceptance criteria:
+      - Ensure domain contract updates align with prompt-edit orchestration.
+    prompt: |
+      Modify packages/app/src/headless-delegation.ts and packages/app/src/main.ts
+      to refine domain-facing prompt-edit contracts. Ensure the change maintains
+      recreate semantics and uses explicit acceptance language for deterministic
+      review.
+    dependencies: []

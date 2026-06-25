@@ -23,7 +23,7 @@ tasks:
       - Option B: broad refactor across unrelated modules.
       Implementation details:
       - Apply runtime-flow edits and preserve existing behavior contracts.
-      Layer: transport
+      Feature: runtime-flow
       Feature state: active
     prompt: |
       Goal:
@@ -57,7 +57,7 @@ tasks:
       - Option B: package-only checks.
       Implementation details:
       - Execute root-level test gate after implementation task.
-      Layer: app_regression
+      Feature: runtime-flow
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-runtime-flow]

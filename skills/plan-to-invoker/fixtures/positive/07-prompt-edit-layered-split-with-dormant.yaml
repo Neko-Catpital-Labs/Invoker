@@ -33,7 +33,7 @@ tasks:
       - Option B: bundle contract, app bridge, and UI activation together.
       Implementation details:
       - Mirror existing command-edit contract shapes for prompt editing.
-      Layer: contact_surface
+      Feature: prompt-edit
       Feature state: active
       Files:
       - packages/app/src/preload.ts
@@ -83,7 +83,7 @@ tasks:
       - Option B: activate UI editing while adding app bridge plumbing.
       Implementation details:
       - Route prompt edits through existing command-service and owner-delegation paths.
-      Layer: app_bridge
+      Feature: prompt-edit
       Feature state: active
       Files:
       - packages/app/src/main.ts
@@ -133,7 +133,7 @@ tasks:
       - Option B: enable UI behavior by default in the same slice.
       Implementation details:
       - Reuse command-edit primitives while keeping prompt editing gated.
-      Layer: ui_activation
+      Feature: prompt-edit
       Feature state: dormant
       Files:
       - packages/ui/src/components/TaskPanel.tsx
@@ -181,7 +181,7 @@ tasks:
       - Option B: rely only on the terminal full-suite gate.
       Implementation details:
       - Cover IPC routing and TaskPanel prompt-edit flow deterministically.
-      Layer: e2e_regression
+      Feature: prompt-edit
       Feature state: active
       Files:
       - packages/app/src/__tests__/main.prompt-edit.test.ts
@@ -232,7 +232,7 @@ tasks:
       - Option B: repeat full-suite verification in every slice.
       Implementation details:
       - Execute `pnpm run test:all` after every earlier task completes.
-      Layer: e2e_regression
+      Feature: prompt-edit
       Feature state: active
       Files:
       - none

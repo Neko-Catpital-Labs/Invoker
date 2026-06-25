@@ -27,7 +27,7 @@ tasks:
       - Add the fallback helper and keep repro work separate.
       Non-goals:
       - Do not add repro scripts or benchmark harness changes in this slice.
-      Layer: app_bridge
+      Feature: owner-refresh-fallback
       Feature state: active
       Files:
       - packages/app/src/refresh-task-graph.ts
@@ -85,7 +85,7 @@ tasks:
       - Execute the repository-wide regression command.
       Non-goals:
       - Do not modify source files.
-      Layer: app_regression
+      Feature: owner-refresh-fallback
       Feature state: active
     command: 'pnpm run test:all'
     dependencies: [implement-owner-refresh-fallback]
