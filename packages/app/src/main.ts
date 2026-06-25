@@ -34,8 +34,9 @@
 
 import { app, dialog, ipcMain, Menu, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { config as loadDotenv } from 'dotenv';
 import {
   configureEarlyElectronApp,
   formatGuiOwnerBootstrapFallbackMessage,
@@ -125,6 +126,7 @@ import {
   resolveHeadlessTargetWorkflowId,
 } from './headless-command-classification.js';
 import { backupPlan } from './plan-backup.js';
+import { runStartupPrerequisites } from './startup-prerequisites.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
@@ -460,6 +462,15 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const repoRoot = resolveRepoRoot(__dirname, { fallback: process.resourcesPath });
+
+// Load secrets from ~/.invoker/.env (canonical) then the repo .env BEFORE any startup guard
+// reads process.env. dotenv never overrides vars already set in the real environment.
+function loadInvokerEnvFiles(): void {
+  for (const envPath of [path.join(homedir(), '.invoker', '.env'), path.resolve(repoRoot, '.env')]) {
+    if (existsSync(envPath)) loadDotenv({ path: envPath });
+  }
+}
+loadInvokerEnvFiles();
 const invokerConfig: InvokerConfig = (() => {
   try {
     return loadConfig();
@@ -772,13 +783,6 @@ interface SlackBotDeps {
 }
 
 async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
-  // Load .env for Slack tokens
-  try {
-    const dotenv = await import('dotenv');
-    dotenv.config({ path: path.resolve(repoRoot, '.env') });
-  } catch {
-    // dotenv not installed — rely on environment variables
-  }
 
   const requiredVars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
   for (const v of requiredVars) {
@@ -2960,16 +2964,18 @@ function createEmbeddedTerminalBackendFromConfig(
         maybeDelayResume: maybeDelayWorkflowResumeForTest,
       });
 
-      // Skip Slack startup when env vars are missing. Avoids a dynamic
-      // `import('dotenv')` inside wireSlackBot whose promise can stall when
-      // the ESM loader gets stuck behind other startup work (e.g. the docker
-      // CLI hang we observed). startSlackBot would throw on missing env vars
-      // immediately after dotenv anyway.
+      // .env is loaded synchronously at startup; skip Slack only when required vars are still missing.
       const slackEnvVars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
       const slackEnvMissing = slackEnvVars.filter((v) => !process.env[v]);
       if (slackEnvMissing.length > 0) {
-        logger.info(`Slack bot not started (missing env: ${slackEnvMissing.join(', ')})`, { module: 'slack' });
+        logger.info(`Slack bot not started — missing env: ${slackEnvMissing.join(', ')}. Run \`invoker-cli setup slack\` or set them in ~/.invoker/.env`, { module: 'slack' });
       } else {
+        for (const check of runStartupPrerequisites(
+          invokerConfig.slackHarnessPresets ?? DEFAULT_SLACK_HARNESS_PRESETS,
+          invokerConfig.defaultSlackHarnessPreset ?? 'cursor+claude',
+        )) {
+          logger.warn(`Prerequisites — ${check.name}: ${check.detail}${check.remediation ? ` (${check.remediation})` : ''}`, { module: 'prerequisites' });
+        }
         startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
           logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
         });
