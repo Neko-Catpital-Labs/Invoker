@@ -151,6 +151,13 @@ export class MergeGateExecutor extends BaseExecutor<MergeGateEntry> {
 
     try {
       this.emitOutput(handle.executionId, `[merge] Starting merge gate action: ${task.id}\n`);
+      // Surface that the running phase begins with provisioning, not the merge
+      // itself — the gate clone can take a while on large repos, and without this
+      // the task just reads as "Executing" with no visible progress.
+      this.emitOutput(
+        handle.executionId,
+        `[merge] Preparing gate workspace (cloning/provisioning; this can take a while on large repos)…\n`,
+      );
       // Capture launch lineage so a stale (relaunched) run's direct metadata
       // write is suppressed.
       const lineage: MergeGateLineage = {
