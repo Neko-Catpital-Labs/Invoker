@@ -1,7 +1,7 @@
 # Anti-Pattern G: Monolithic prompt-edit bridge workflow (wf-1777929074509-8 shape)
 # Source: dependency-first layered decomposition benchmark
 # Expected outcome: validate-plan passes schema, but skill-doctor fails lint-task-atomicity
-# due to missing Layer:/Feature state: metadata and poor review decomposition.
+# due to missing Feature:/Feature state: metadata and poor review decomposition.
 
 name: "Anti-pattern: monolithic GUI prompt edit bridge"
 description: |
