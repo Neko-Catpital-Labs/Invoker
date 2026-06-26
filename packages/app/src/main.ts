@@ -770,6 +770,7 @@ const DEFAULT_SLACK_HARNESS_PRESETS: Record<string, { tool: 'cursor' | 'omp' | '
   'cursor+claude': { tool: 'cursor', model: 'claude' },
   'cursor+codex': { tool: 'cursor', model: 'codex' },
   'omp+claude': { tool: 'omp', model: 'claude' },
+  'omp+codex': { tool: 'omp', model: 'codex' },
   omp: { tool: 'omp' },
   codex: { tool: 'codex' },
 };
