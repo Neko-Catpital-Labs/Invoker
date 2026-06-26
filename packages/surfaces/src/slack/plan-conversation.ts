@@ -362,6 +362,7 @@ export class PlanConversation {
     const { command, args } = this.planningCommandBuilder
       ? this.planningCommandBuilder({ tool: this.tool ?? 'cursor', model: this.model, prompt })
       : defaultPlanningCommand(this.cursorCommand, { model: this.model, prompt });
+    const plannerLabel = this.tool ?? command;
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, {
         cwd: this.workingDir ?? process.cwd(),
@@ -393,7 +394,7 @@ export class PlanConversation {
       const timer = setTimeout(() => {
         this.log('plan-conversation', 'error', `[PERF] cursor_timeout: pid=${child.pid ?? 'none'}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, stderrTail="${stderr.slice(-500).replace(/\n/g, '\\n')}"`);
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
-        reject(new Error(`Cursor CLI timed out after ${this.timeoutMs}ms`));
+        reject(new Error(`${plannerLabel} timed out after ${this.timeoutMs}ms`));
       }, this.timeoutMs);
 
       child.on('close', (code) => {
@@ -403,13 +404,13 @@ export class PlanConversation {
           resolve(stdout.trim() || '(no output)');
         } else {
           const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';
-          reject(new Error(`Cursor CLI exited with code ${code}: ${errMsg}`));
+          reject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`));
         }
       });
 
       child.on('error', (err) => {
         clearTimeout(timer);
-        reject(new Error(`Failed to spawn Cursor CLI: ${err.message}`));
+        reject(new Error(`Failed to spawn ${plannerLabel}: ${err.message}`));
       });
     });
   }
