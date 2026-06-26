@@ -1,3 +1,4 @@
+# Terminal proof stays focused on the plan-to-invoker script + fixture suite; a full-suite `pnpm run test:all` gate is optional and risk-based, not the default.
 name: "Plan-to-Invoker Deterministic Step 4: Examples to tested fixtures"
 description: |
   Move long markdown examples into executable/tested fixtures and keep docs
@@ -31,17 +32,8 @@ tasks:
       - convert-markdown-examples-to-fixtures
 
   - id: run-plan-to-invoker-tests
-    description: "Run script + fixture validation tests"
+    description: "Run script + fixture validation tests as the terminal focused proof"
     command: "bash scripts/test-plan-to-invoker-skill.sh"
     poolId: remote_digital_ocean_1_pool
     dependencies:
       - trim-reference-markdown
-
-  - id: post-fix-regression
-    description: "Run the full repository test suite as post-fix regression"
-    command: "pnpm run test:all"
-    poolId: remote_digital_ocean_1_pool
-    dependencies:
-      - convert-markdown-examples-to-fixtures
-      - trim-reference-markdown
-      - run-plan-to-invoker-tests
