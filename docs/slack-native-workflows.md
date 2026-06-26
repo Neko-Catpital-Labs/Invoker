@@ -27,6 +27,7 @@ A preset names the **CLI tool** that both plans conversationally and converts th
 | `cursor+claude` (default) | cursor | claude |
 | `cursor+codex` | cursor | codex |
 | `omp+claude` | omp | claude |
+| `omp+codex` | omp | codex |
 | `omp` | omp | (CLI default) |
 | `codex` | codex | (CLI default) |
 
