@@ -25,6 +25,7 @@ import type {
   TaskStateChanges,
   Attempt,
   TaskStatus,
+  WorkflowDerivedStatus,
   WorkflowRollup,
   WorkflowRollupTaskSummary,
   ExternalDependency,
@@ -42,6 +43,7 @@ import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
   PersistenceAdapter,
+  ReviewGateLookup,
   Workflow,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
@@ -1017,6 +1019,59 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const workflowIds = rows.map((row: any) => String(row.id));
     const rollups = this.loadWorkflowRollups(workflowIds);
     return rows.map((row: any) => this.rowToWorkflow(row, rollups.get(String(row.id))));
+  }
+
+  findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
+    // The PR↔workflow link lives only on the merge node, as either the bare PR
+    // number (review_id) or the full PR URL (review_url ending in /pull/<pr>).
+    const rows = this.queryAll(
+      `SELECT t.id AS mergeTaskId,
+              t.workflow_id AS workflowId,
+              t.review_id AS reviewId,
+              t.review_url AS reviewUrl,
+              t.branch AS branch,
+              t.selected_attempt_id AS selectedAttemptId,
+              t.status AS mergeTaskStatus,
+              w.generation AS workflowGeneration,
+              w.base_branch AS baseBranch
+         FROM tasks t
+         JOIN workflows w ON w.id = t.workflow_id
+        WHERE t.is_merge_node = 1 AND (t.review_id = ? OR t.review_url LIKE ?)`,
+      [pr, `%/pull/${pr}`],
+    );
+    if (rows.length === 0) return undefined;
+
+    // workflows has no status column — status is a derived rollup. Compute it
+    // per candidate so re-published PRs (multiple merge nodes) can prefer the
+    // live workflow, then the highest generation.
+    const workflowIds = [...new Set(rows.map((row) => String(row.workflowId)))];
+    const rollups = this.loadWorkflowRollups(workflowIds);
+    const TERMINAL = new Set<WorkflowDerivedStatus>(['completed', 'failed', 'closed']);
+
+    const candidates = rows.map((row) => {
+      const workflowStatus = rollups.get(String(row.workflowId))?.status ?? 'pending';
+      return { row, workflowStatus, terminal: TERMINAL.has(workflowStatus) };
+    });
+    candidates.sort((a, b) => {
+      if (a.terminal !== b.terminal) return a.terminal ? 1 : -1; // non-terminal first
+      return Number(b.row.workflowGeneration ?? 0) - Number(a.row.workflowGeneration ?? 0);
+    });
+
+    const { row, workflowStatus } = candidates[0];
+    const str = (value: unknown): string | undefined =>
+      value == null ? undefined : String(value);
+    return {
+      workflowId: String(row.workflowId),
+      mergeTaskId: String(row.mergeTaskId),
+      reviewId: str(row.reviewId),
+      reviewUrl: str(row.reviewUrl),
+      branch: str(row.branch),
+      baseBranch: str(row.baseBranch),
+      workflowStatus,
+      workflowGeneration: Number(row.workflowGeneration ?? 0),
+      mergeTaskStatus: str(row.mergeTaskStatus),
+      selectedAttemptId: str(row.selectedAttemptId),
+    };
   }
 
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[] {
