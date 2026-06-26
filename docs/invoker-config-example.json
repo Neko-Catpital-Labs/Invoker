@@ -95,7 +95,12 @@
   "autoApproveAIFixes": true,
   "autoFixCi": false,
 
+  "webToken": "change-me-to-a-long-random-secret",
+  "webHost": "127.0.0.1",
+  "webPort": 4200,
+
   "notes": {
+    "web_surface": "webToken enables the browser UI + Slack live status card surfaces. Env vars INVOKER_WEB_TOKEN / INVOKER_WEB_HOST / INVOKER_WEB_PORT override these. Set webHost to 0.0.0.0 to reach it from another machine (e.g. the DigitalOcean host); open http://<host>:<webPort>/?token=<webToken>.",
     "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
     "config_locations": [
       "~/.invoker/config.json - Default user-level settings",
