@@ -59,6 +59,20 @@ must_output_contain() {
     fail "$hint — missing in command output: $needle"
   fi
 }
+
+# Forbids a regex pattern from appearing in a file. Used to guard against
+# obsolete defaults reappearing in positive/canonical planning artifacts.
+must_not_match_regex() {
+  local file="$1"
+  local pattern="$2"
+  local hint="$3"
+  if grep -Eq -- "$pattern" "$file"; then
+    local sample
+    sample="$(grep -nE -- "$pattern" "$file" | head -3)"
+    fail "$hint — forbidden pattern in $file:
+$sample"
+  fi
+}
 [[ -f "$CANONICAL_COMMAND" ]] || fail "expected canonical command source"
 must_not_exist "$REPO_ROOT/.claude/commands/plan-to-invoker.md" "legacy Claude handoff command copy must not drift from canonical source"
 must_not_exist "$REPO_ROOT/.cursor/commands/plan-to-invoker.md" "legacy Cursor handoff command copy must not drift from canonical source"
@@ -203,6 +217,33 @@ must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-c
 must_contain "$TASK_PATTERNS" "Assume zero context" "Task patterns must define zero-context prompt requirement"
 must_contain "$TASK_PATTERNS" "deterministic pass/fail expectations" "Task patterns must require deterministic prompt outcomes"
 must_contain "$TASK_PATTERNS" "Review compression contract" "Task patterns must define review compression metadata"
+
+# Contract guard — positive/canonical planning artifacts must not present
+# `pnpm run test:all` as the default terminal gate. The guard targets only
+# task values that are exactly the obsolete full-suite command (quoted or
+# unquoted), so negative fixtures, rejected "Option B" prose, and explicit
+# risk-justified gates that wrap or chain other commands are unaffected.
+DEFAULT_FULL_SUITE_GATE_REGEX='^[[:space:]]+command:[[:space:]]*["'"'"']?pnpm run test:all["'"'"']?[[:space:]]*$'
+
+POSITIVE_FIXTURE_DIR="$SKILL_DIR/fixtures/positive"
+[[ -d "$POSITIVE_FIXTURE_DIR" ]] || fail "expected positive fixture directory: $POSITIVE_FIXTURE_DIR"
+for plan in "$POSITIVE_FIXTURE_DIR"/*.yaml; do
+  [[ -e "$plan" ]] || continue
+  must_not_match_regex "$plan" "$DEFAULT_FULL_SUITE_GATE_REGEX" \
+    "Positive fixture must not reintroduce \`pnpm run test:all\` as the default terminal gate"
+done
+
+shopt -s nullglob
+HARDENING_TEMPLATES=( "$REPO_ROOT"/plans/plan-to-invoker-deterministic-step-*.yaml )
+shopt -u nullglob
+[[ ${#HARDENING_TEMPLATES[@]} -gt 0 ]] || fail "expected at least one plan-to-invoker hardening template under plans/"
+for template in "${HARDENING_TEMPLATES[@]}"; do
+  must_not_match_regex "$template" "$DEFAULT_FULL_SUITE_GATE_REGEX" \
+    "Plan-to-invoker hardening template must not reintroduce \`pnpm run test:all\` as the default terminal gate"
+done
+
+must_not_match_regex "$CANONICAL_COMMAND" "$DEFAULT_FULL_SUITE_GATE_REGEX" \
+  "Canonical Invoker handoff command must not present \`pnpm run test:all\` as the default terminal gate"
 
 echo "OK: plan-to-invoker skill contract checks passed"
 
