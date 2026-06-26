@@ -205,8 +205,10 @@ while IFS= read -r pr; do
     continue
   fi
 
-  # per-PR attempt cap (counts every attempt, including failed omp runs).
-  if [ "$(ledger_count coderabbit-attempt "$num")" -ge "$MAX_CODERABBIT_ATTEMPTS" ]; then
+  # Per-feedback-batch attempt cap: counts attempts for THIS comment marker
+  # (incl. failed omp runs), so repeated failures on the same feedback stop but
+  # genuinely new CodeRabbit comments still get a fresh budget.
+  if [ "$(ledger_count coderabbit-attempt "$num" "$LATEST_MARKER")" -ge "$MAX_CODERABBIT_ATTEMPTS" ]; then
     log_line "PR #$num: CodeRabbit address hit cap of $MAX_CODERABBIT_ATTEMPTS; skip"
     continue
   fi

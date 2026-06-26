@@ -116,10 +116,12 @@ while IFS= read -r pr; do
     continue
   fi
 
-  # (e) hard attempt cap + one-time GitHub flag. Counts accepted dispatches
-  # (rebase-recreate-attempt), so a dispatch that is accepted but never confirms
-  # still counts toward the cap instead of re-firing forever.
-  if [ "$(ledger_count rebase-recreate-attempt "$wf")" -ge "$MAX_REBASE_ATTEMPTS" ]; then
+  # (e) per-generation attempt cap + one-time GitHub flag. Counts accepted
+  # dispatches for THIS generation (rebase-recreate-attempt), so a dispatch that
+  # is accepted but never confirms still counts toward the cap instead of
+  # re-firing forever, while a genuinely new conflict (new generation) gets a
+  # fresh budget.
+  if [ "$(ledger_count rebase-recreate-attempt "$wf" "$gen")" -ge "$MAX_REBASE_ATTEMPTS" ]; then
     log_line "PR #$num: giving up — rebase-recreate hit cap of $MAX_REBASE_ATTEMPTS for workflow $wf"
     flag_exhausted "$num" "$wf"
     continue

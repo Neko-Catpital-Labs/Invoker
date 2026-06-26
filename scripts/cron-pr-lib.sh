@@ -117,9 +117,12 @@ ledger_record() {
 }
 
 ledger_count() {
-  # ledger_count <kind> <key> -> number of recorded rows
-  awk -F '\t' -v k="$1" -v key="$2" \
-    '$1 == k && $2 == key { c++ } END { print c + 0 }' "$LEDGER"
+  # ledger_count <kind> <key> [marker] -> rows matching kind+key, and the marker
+  # too when given. The marker scope keeps an attempt cap per feedback-batch
+  # (comment timestamp / workflow generation) instead of per-PR-lifetime, so a
+  # newer batch gets a fresh budget while repeats of the same batch stay capped.
+  awk -F '\t' -v k="$1" -v key="$2" -v m="${3-}" -v has_m="${3+1}" \
+    '$1 == k && $2 == key && (has_m == "" || $3 == m) { c++ } END { print c + 0 }' "$LEDGER"
 }
 
 ledger_marker_seen() {

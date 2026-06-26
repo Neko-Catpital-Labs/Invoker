@@ -73,13 +73,19 @@ out="$(INVOKER_TEST_CR_UPDATED="$T2" run)"
 echo "$out" | grep -q "would launch omp for new CodeRabbit activity at $T2" \
   || fail "check 3: expected 'would launch omp ... at $T2'" "$out"
 
-# Check 4: reach the per-PR cap. The cap counts attempts (coderabbit-attempt),
-# so seed three attempt rows; a newer T3 passes dedup but still hits the cap.
-printf 'coderabbit-attempt\t777\t%s\t%s\n' "$T1" "$(date +%s)" >> "$LEDGER"
-printf 'coderabbit-attempt\t777\t%s\t%s\n' "$T2" "$(date +%s)" >> "$LEDGER"
-printf 'coderabbit-attempt\t777\t%s\t%s\n' "2026-06-25T07:00:00Z" "$(date +%s)" >> "$LEDGER"
+# Check 4: reach the cap. The cap is scoped to the CURRENT comment marker, so
+# seed three attempt rows for T3; that exact batch is then capped.
+printf 'coderabbit-attempt\t777\t%s\t%s\n' "$T3" "$(date +%s)" >> "$LEDGER"
+printf 'coderabbit-attempt\t777\t%s\t%s\n' "$T3" "$(date +%s)" >> "$LEDGER"
+printf 'coderabbit-attempt\t777\t%s\t%s\n' "$T3" "$(date +%s)" >> "$LEDGER"
 out="$(INVOKER_TEST_CR_UPDATED="$T3" run)"
 echo "$out" | grep -q "hit cap" \
-  || fail "check 4: expected 'hit cap' at the per-PR attempt cap" "$out"
+  || fail "check 4: expected 'hit cap' at the per-batch attempt cap" "$out"
+
+# Check 5: a NEWER comment T4 gets a fresh budget (cap is per-batch, not per-PR).
+T4="2026-06-25T12:00:00Z"
+out="$(INVOKER_TEST_CR_UPDATED="$T4" run)"
+echo "$out" | grep -q "would launch omp for new CodeRabbit activity at $T4" \
+  || fail "check 5: newer feedback T4 must get a fresh budget, not stay capped" "$out"
 
 echo "[repro] passed"

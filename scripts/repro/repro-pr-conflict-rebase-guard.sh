@@ -60,14 +60,18 @@ out="$(INVOKER_TEST_WF_GEN=2 run)"
 echo "$out" | grep -q "already fired for generation 2; skip" \
   || fail "branch 2: expected 'already fired for generation 2; skip'" "$out"
 
-# Branch 3: reach the cap. The cap counts accepted dispatches
-# (rebase-recreate-attempt), so seed three; a new generation 9 passes the
-# per-generation dedup but still hits the cap -> giving up.
-printf 'rebase-recreate-attempt\twf-100-1\t0\t%s\n' "$(date +%s)" >> "$LEDGER"
-printf 'rebase-recreate-attempt\twf-100-1\t1\t%s\n' "$(date +%s)" >> "$LEDGER"
-printf 'rebase-recreate-attempt\twf-100-1\t2\t%s\n' "$(date +%s)" >> "$LEDGER"
+# Branch 3: reach the cap. The cap is scoped to the CURRENT generation, so seed
+# three accepted-dispatch rows for generation 9; that generation is then capped.
+printf 'rebase-recreate-attempt\twf-100-1\t9\t%s\n' "$(date +%s)" >> "$LEDGER"
+printf 'rebase-recreate-attempt\twf-100-1\t9\t%s\n' "$(date +%s)" >> "$LEDGER"
+printf 'rebase-recreate-attempt\twf-100-1\t9\t%s\n' "$(date +%s)" >> "$LEDGER"
 out="$(INVOKER_TEST_WF_GEN=9 run)"
 echo "$out" | grep -q "giving up" \
   || fail "branch 3: expected 'giving up' at the attempt cap" "$out"
+
+# Branch 4: a genuinely new conflict (generation 10) gets a fresh budget.
+out="$(INVOKER_TEST_WF_GEN=10 run)"
+echo "$out" | grep -q "would rebase-recreate wf-100-1 (generation 10)" \
+  || fail "branch 4: a new generation must get a fresh budget, not stay capped" "$out"
 
 echo "[repro] passed"
