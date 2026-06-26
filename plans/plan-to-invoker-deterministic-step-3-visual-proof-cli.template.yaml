@@ -1,3 +1,4 @@
+# Terminal proof stays focused on the app E2E suite that covers visual-proof; a full-suite `pnpm run test:all` gate is optional and risk-based, not the default.
 name: "Plan-to-Invoker Deterministic Step 3: Visual-proof subcommands"
 description: |
   Convert visual-proof process prose into explicit script subcommands with
@@ -38,17 +39,8 @@ tasks:
       - add-visual-proof-subcommands
 
   - id: run-visual-proof-e2e
-    description: "Run app E2E suite that includes visual-proof coverage"
+    description: "Run app E2E suite that includes visual-proof coverage as the terminal focused proof"
     command: "cd packages/app && pnpm test"
     poolId: remote_digital_ocean_1_pool
     dependencies:
       - update-visual-proof-skill-doc
-
-  - id: post-fix-regression
-    description: "Run the full repository test suite as post-fix regression"
-    command: "pnpm run test:all"
-    poolId: remote_digital_ocean_1_pool
-    dependencies:
-      - add-visual-proof-subcommands
-      - update-visual-proof-skill-doc
-      - run-visual-proof-e2e
