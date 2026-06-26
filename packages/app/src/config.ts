@@ -38,6 +38,13 @@ export interface InvokerConfig {
    */
   autoApproveAIFixes?: boolean;
   /**
+   * EXPERIMENTAL_PLANNER. When true, redirect the planning step to the
+   * experimental external planner (via the redirect MCP server) instead of the
+   * native planning skill. The redirect server also reads this flag and serves no
+   * tools when off, so planning falls back to native. Default: false.
+   */
+  experimentalPlanner?: boolean;
+  /**
    * Preferred execution agent for automatic fix retries.
    * When unset, auto-fix falls back to the task's executionAgent,
    * then to the built-in default agent.
