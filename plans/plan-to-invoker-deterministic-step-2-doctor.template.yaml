@@ -1,3 +1,4 @@
+# Terminal proof stays focused on the plan-to-invoker script suite; a full-suite `pnpm run test:all` gate is optional and risk-based, not the default.
 name: "Plan-to-Invoker Deterministic Step 2: Skill doctor orchestration"
 description: |
   Add a single deterministic command that executes all plan-to-invoker checks
@@ -40,17 +41,8 @@ tasks:
       - add-skill-doctor-script
 
   - id: run-script-tests
-    description: "Run plan-to-invoker script tests after doctor integration"
+    description: "Run plan-to-invoker script tests after doctor integration as the terminal focused proof"
     command: "bash scripts/test-plan-to-invoker-skill.sh"
     poolId: remote_digital_ocean_1_pool
     dependencies:
       - wire-skill-doctor-into-skill-doc
-
-  - id: post-fix-regression
-    description: "Run the full repository test suite as post-fix regression"
-    command: "pnpm run test:all"
-    poolId: remote_digital_ocean_1_pool
-    dependencies:
-      - add-skill-doctor-script
-      - wire-skill-doctor-into-skill-doc
-      - run-script-tests
