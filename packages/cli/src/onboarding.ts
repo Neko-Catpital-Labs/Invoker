@@ -298,12 +298,41 @@ export function slackCredsFromEnv(): SlackCredentials {
   };
 }
 
+/** Apply KEY=VALUE pairs from a dotenv-style file to process.env without overriding existing vars. */
+function loadEnvFile(path: string): void {
+  if (!existsSync(path)) return;
+  for (const rawLine of readFileSync(path, 'utf8').split('\n')) {
+    const line = rawLine.trim();
+    if (line === '' || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    if (key in process.env) continue;
+    let value = line.slice(eq + 1).trim();
+    if (value.length >= 2
+      && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
+/**
+ * Load secrets from ~/.invoker/.env (canonical) then <cwd>/.env (fallback), mirroring the app's
+ * startup loader, so `setup slack --check` validates the saved file. Existing env vars always win.
+ */
+export function loadInvokerEnv(): void {
+  loadEnvFile(envFilePath());
+  loadEnvFile(join(process.cwd(), '.env'));
+}
+
 export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promise<number> {
   const wantSlack = argv[0] === 'slack';
   const checkOnly = argv.includes('--check');
   const rl = (io as { rl?: { close: () => void } }).rl;
   try {
     if (checkOnly) {
+      loadInvokerEnv();
       const checks = await validateSlackCredentials(slackCredsFromEnv());
       const report = buildReport(checks);
       io.print(formatReport(report, { json: argv.includes('--json') }));
