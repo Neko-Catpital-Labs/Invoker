@@ -198,6 +198,47 @@ describe('SlackSurface', () => {
     });
   });
 
+  describe('workflow_progress card', () => {
+    it('posts once then edits in place, targeting the mapped channel', async () => {
+      const mockRepo = {
+        getByWorkflowId: vi.fn((id: string) => (id === 'wf-1' ? { channelId: 'C-mapped' } : null)),
+        getByChannelId: vi.fn(() => undefined),
+        list: vi.fn(() => []),
+        save: vi.fn(),
+        delete: vi.fn(),
+      };
+      const cardSurface = new SlackSurface({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 's',
+        channelId: 'C-test',
+        workflowChannelRepo: mockRepo as any,
+      });
+      await cardSurface.start(async () => {});
+      const app = cardSurface.getApp() as any;
+
+      const progress = {
+        workflowId: 'wf-1',
+        name: 'WF',
+        percentComplete: 25,
+        counts: { total: 4, completed: 1, failed: 0, closed: 0, running: 1, pending: 2 },
+        tasks: [{ id: 'build', name: 'Build', status: 'running', phase: 'executing' }],
+      };
+
+      await cardSurface.handleEvent({ type: 'workflow_progress', progress } as SurfaceEvent);
+      await cardSurface.handleEvent({ type: 'workflow_progress', progress } as SurfaceEvent);
+
+      expect(app.client.chat.postMessage).toHaveBeenCalledTimes(1);
+      expect(app.client.chat.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: 'C-mapped' }),
+      );
+      expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+      expect(app.client.chat.update).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: 'C-mapped', ts: '1234567890.123456' }),
+      );
+    });
+  });
+
   describe('slash command handler', () => {
     it('rejects removed commands like approve with an error', async () => {
       await surface.start(async (cmd) => {
