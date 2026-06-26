@@ -209,7 +209,7 @@ import {
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
-import { answerOwnerReadQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
+import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import {
   createGuiMutationRegistrars,
@@ -1682,7 +1682,7 @@ function startHeadlessMode(): void {
           };
         });
         messageBus.onRequest('headless.query', async (req: unknown) =>
-          answerOwnerReadQuery(req, buildOwnerReadQueryHandlers({
+          answerOwnerHeadlessQuery(req, buildOwnerReadQueryHandlers({
             ownerModeLabel: 'standalone',
             onActivity: noteStandaloneOwnerActivity,
             getUiPerfStats: () => headlessDeps.getUiPerfStats?.() ?? {},
@@ -1693,7 +1693,14 @@ function startHeadlessMode(): void {
             persistence,
             getActionGraphSnapshot: () =>
               buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
-          })));
+          }), {
+            orchestrator,
+            persistence,
+            invokerConfig,
+            executionAgentRegistry: headlessDeps.executionAgentRegistry,
+            getUiPerfStats: headlessDeps.getUiPerfStats,
+            resetUiPerfStats: headlessDeps.resetUiPerfStats,
+          }));
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { workflowId, traceId } = req as { workflowId: string; traceId?: string };
@@ -3234,7 +3241,7 @@ function createEmbeddedTerminalBackendFromConfig(
         mode: 'gui',
       }));
       messageBus.onRequest('headless.query', async (req: unknown) =>
-        answerOwnerReadQuery(req, buildOwnerReadQueryHandlers({
+        answerOwnerHeadlessQuery(req, buildOwnerReadQueryHandlers({
           ownerModeLabel: 'gui',
           getUiPerfStats: () => getUiPerfStats(),
           resetUiPerfStats: () => resetUiPerfStats(),
@@ -3244,7 +3251,14 @@ function createEmbeddedTerminalBackendFromConfig(
           persistence,
           getActionGraphSnapshot: () =>
             buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
-        })));
+        }), {
+          orchestrator,
+          persistence,
+          invokerConfig,
+          executionAgentRegistry: agentRegistry,
+          getUiPerfStats,
+          resetUiPerfStats,
+        }));
       messageBus.onRequest('headless.run', async (req: unknown) => {
         const { planPath, traceId } = req as { planPath: string; traceId?: string };
         logger.info(
