@@ -186,6 +186,7 @@ import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.j
 import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-merge.js';
 import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
 import { WorkflowRollupProjection } from './workflow-rollup-projection.js';
+import { seedTaskCachesFromSnapshot } from './viewer-cache-hydration.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -594,6 +595,15 @@ function assertDeleteAllEnabled(): void {
 
 interface InitServicesOptions {
   readOnly?: boolean;
+  /**
+   * GUI viewer mode: never open `invoker.db`. A writable owner is always present
+   * in this mode, so the renderer's reads delegate to the owner over IPC and
+   * live updates arrive via TASK_DELTA/TASK_OUTPUT. We back the in-process
+   * services with a private empty in-memory database so no `-shm` is mapped on
+   * the real file — that is what lets the owner run WAL exclusive locking and be
+   * immune to the `-shm` truncation SIGBUS. Implies non-owner (readOnly) semantics.
+   */
+  detachedViewer?: boolean;
   executionAgentRegistry?: AgentRegistry;
   startupSyncMode?: 'all' | 'none';
 }
@@ -642,7 +652,9 @@ function updateInvokerCliFromMenu(): void {
 async function initServices(options?: InitServicesOptions): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
   mkdirSync(invokerHomeRoot, { recursive: true });
-  const readOnly = options?.readOnly === true;
+  const detachedViewer = options?.detachedViewer === true;
+  // Detached viewer mode is a non-owner mode (no writer lock, no backups).
+  const readOnly = options?.readOnly === true || detachedViewer;
   const previousMessageBus = typeof messageBus === 'undefined' ? null : messageBus;
   previousMessageBus?.disconnect();
   const serviceMessageBus = new IpcBus(undefined, { allowServe: !readOnly });
@@ -652,10 +664,14 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   if (!readOnly) {
     writerLock = acquireDbWriterLock(dbPath, `main:initServices pid=${process.pid}`);
   }
-  persistence = await SQLiteAdapter.create(dbPath, {
-    readOnly,
-    ownerCapability: !readOnly, // writable mode requires owner capability
-  });
+  persistence = detachedViewer
+    // Private empty in-memory database: never opens invoker.db, never maps -shm.
+    // Real data reaches the renderer by delegating reads to the owner over IPC.
+    ? await SQLiteAdapter.create(':memory:')
+    : await SQLiteAdapter.create(dbPath, {
+      readOnly,
+      ownerCapability: !readOnly, // writable mode requires owner capability
+    });
   // Upgrade root logger with DB persistence now that SQLiteAdapter is ready.
   logger = new FileAndDbLogger({ module: 'main' }, { persistence });
   const shellEnv = await initializeShellEnvironment();
@@ -2006,6 +2022,14 @@ function createEmbeddedTerminalBackendFromConfig(
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   let startupWorkflowId: string | null = null;
+  // In detached viewer mode the local DB is an empty in-memory copy. Workflow
+  // metadata for the bootstrap getter comes from the owner snapshot; task state
+  // is derived live from `lastKnownTaskStates` (kept current by deltas).
+  let detachedViewerWorkflows: unknown[] | null = null;
+  // While the detached viewer hydrates, owner deltas are buffered here and
+  // replayed after the cache is seeded, so an update arriving mid-hydration is
+  // not applied against an empty cache (quarantined and dropped).
+  let detachedDeltaBuffer: TaskDelta[] | null = null;
   let uiInteractive = false;
   let deferredStartupTriggered = false;
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
@@ -2876,11 +2900,83 @@ function createEmbeddedTerminalBackendFromConfig(
 
   function seedUiSnapshotCache(): void {
     lastKnownWorkflowCount = persistence.listWorkflows().length;
-    const tasks = orchestrator.getAllTasks();
-    lastKnownTaskStates.clear();
-    workflowRollupProjection.replaceAll(tasks);
-    for (const task of tasks) {
-      lastKnownTaskStates.set(task.id, JSON.stringify(task));
+    seedTaskCachesFromSnapshot(orchestrator.getAllTasks(), { lastKnownTaskStates, workflowRollupProjection });
+  }
+
+  // Detached viewer: the local DB is empty, so seed the delta caches and
+  // bootstrap snapshot from the owner. Without this, the empty cache quarantines
+  // every `updated` delta for a task the viewer has not seen (dropping live
+  // updates), and bootstrap getters return nothing. Failures are non-fatal — the
+  // renderer's delegated reads still populate the view.
+  async function hydrateDetachedViewerFromOwner(): Promise<void> {
+    try {
+      const snapshot = await messageBus.request<{ kind: string }, { tasks?: TaskState[]; workflows?: unknown[] }>(
+        'headless.query',
+        { kind: 'tasks' },
+      );
+      const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks : [];
+      const workflows = Array.isArray(snapshot?.workflows) ? snapshot.workflows : [];
+      detachedViewerWorkflows = workflows;
+      seedTaskCachesFromSnapshot(tasks, { lastKnownTaskStates, workflowRollupProjection });
+      lastKnownWorkflowCount = workflows.length;
+      startupWorkflowId = [...workflows]
+        .map((wf) => wf as { id?: string; updatedAt?: string; createdAt?: string })
+        .sort((left, right) => (Date.parse(right.updatedAt ?? '') || 0) - (Date.parse(left.updatedAt ?? '') || 0))[0]?.id ?? null;
+      logger.info(
+        `[init] Hydrated detached viewer from owner: ${tasks.length} tasks across ${workflows.length} workflows`,
+        { module: 'init' },
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn(`detached viewer hydration from owner failed; relying on delegated reads: ${message}`, { module: 'init' });
+    } finally {
+      // Resume direct delta processing and replay anything buffered during
+      // hydration (in arrival order). Always runs, so a hydration failure can
+      // never leave deltas buffered forever.
+      const buffered = detachedDeltaBuffer ?? [];
+      detachedDeltaBuffer = null;
+      for (const delta of buffered) processIncomingTaskDelta(delta);
+    }
+  }
+
+  // Current task states for the detached viewer's bootstrap getter, derived from
+  // the live delta cache so a renderer reload never sees the stale hydration
+  // snapshot.
+  function detachedViewerTasks(): TaskState[] {
+    return [...lastKnownTaskStates.keys()].map(
+      (taskId) => JSON.parse(lastKnownTaskStates.get(taskId) ?? '{}') as TaskState,
+    );
+  }
+
+  // Apply one owner task delta to the local cache and forward results to the
+  // renderer (and drive owner-side auto-fix). Extracted so the detached viewer
+  // can replay deltas that were buffered during hydration.
+  function processIncomingTaskDelta(d: TaskDelta): void {
+    uiPerfStats.mainDeltaToUi += 1;
+    if (traceUiDeltaFlow) {
+      logger.debug(`delta→ui: ${JSON.stringify(d)}`, { module: 'ui' });
+    }
+    const deltaTaskId = d.type === 'updated' || d.type === 'removed' ? d.taskId : undefined;
+    if (d.type === 'updated' && d.changes.status === 'failed') {
+      const cancellationError = shouldSkipAutoFixForError(d.changes.execution?.error);
+      const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(d.taskId);
+      logAutoFixDebug(d.taskId, 'delta-failed', {
+        shouldSkipForCancellation: cancellationError,
+        shouldAutoFixFromOrchestrator,
+      });
+      if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
+        logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
+        scheduleAutoFix(deltaTaskId);
+      } else if (deltaTaskId) {
+        logAutoFixDebug(deltaTaskId, 'delta-skip', {
+          reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
+          shouldSkipForCancellation: cancellationError,
+          shouldAutoFixFromOrchestrator,
+        });
+      }
+    }
+    for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
+      publishTaskDeltaToRenderer(rendererDelta);
     }
   }
 
@@ -3288,7 +3384,7 @@ function createEmbeddedTerminalBackendFromConfig(
       guiUsingDaemonOwner = true;
       try {
         recordStartupMark('initServices.readOnly.start');
-        await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+        await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
         recordStartupMark('initServices.readOnly.end', { ownerMode: false, daemonOwner: true });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -3311,7 +3407,7 @@ function createEmbeddedTerminalBackendFromConfig(
           return;
         }
         recordStartupMark('initServices.readOnly.start');
-        await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+        await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
         ownerMode = false;
         guiUsingDaemonOwner = false;
         recordStartupMark('initServices.readOnly.end', { ownerMode: false });
@@ -3467,8 +3563,8 @@ function createEmbeddedTerminalBackendFromConfig(
       recordStartupMark('owner-ipc-ready');
     }
 
-    bootstrapInitialWorkflowState();
     if (ownerMode) {
+      bootstrapInitialWorkflowState();
       startLifecycleEventBridge({
         messageBus,
         getInitialTasks: () => orchestrator.getAllTasks(),
@@ -3502,38 +3598,17 @@ function createEmbeddedTerminalBackendFromConfig(
 
     // Forward deltas to renderer and keep snapshot cache in sync so
     // the db-poll doesn't re-emit deltas the messageBus already delivered.
+    // Detached viewer: buffer owner deltas until hydration seeds the cache.
+    if (!ownerMode) {
+      detachedDeltaBuffer = [];
+    }
     messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
-      uiPerfStats.mainDeltaToUi += 1;
       const d = delta as TaskDelta;
-      if (traceUiDeltaFlow) {
-        logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
+      if (detachedDeltaBuffer) {
+        detachedDeltaBuffer.push(d);
+        return;
       }
-
-      const deltaTaskId = d.type === 'updated' || d.type === 'removed'
-        ? d.taskId
-        : undefined;
-      if (d.type === 'updated' && d.changes.status === 'failed') {
-        const cancellationError = shouldSkipAutoFixForError(d.changes.execution?.error);
-        const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(d.taskId);
-        logAutoFixDebug(d.taskId, 'delta-failed', {
-          shouldSkipForCancellation: cancellationError,
-          shouldAutoFixFromOrchestrator,
-        });
-        if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
-          logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
-          scheduleAutoFix(deltaTaskId);
-        } else if (deltaTaskId) {
-          logAutoFixDebug(deltaTaskId, 'delta-skip', {
-            reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
-            shouldSkipForCancellation: cancellationError,
-            shouldAutoFixFromOrchestrator,
-          });
-        }
-      }
-
-      for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
-        publishTaskDeltaToRenderer(rendererDelta);
-      }
+      processIncomingTaskDelta(d);
     });
 
     uiPerfLogInterval = setInterval(() => {
@@ -3558,8 +3633,8 @@ function createEmbeddedTerminalBackendFromConfig(
     // Register IPC handlers
     registerBootstrapStateIpc({
       ipcMain,
-      getTasks: () => orchestrator.getAllTasks(),
-      getWorkflows: () => listWorkflowsByStartupRecency(),
+      getTasks: () => (ownerMode ? orchestrator.getAllTasks() : detachedViewerTasks()),
+      getWorkflows: () => detachedViewerWorkflows ?? listWorkflowsByStartupRecency(),
       getInitialWorkflowId: () => startupWorkflowId,
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
@@ -4787,7 +4862,11 @@ function createEmbeddedTerminalBackendFromConfig(
       ),
     );
 
-    seedUiSnapshotCache();
+    if (ownerMode) {
+      seedUiSnapshotCache();
+    } else {
+      await hydrateDetachedViewerFromOwner();
+    }
     createWindow();
     recordStartupMark('createWindow.end');
 
