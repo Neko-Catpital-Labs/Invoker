@@ -671,6 +671,12 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     : await SQLiteAdapter.create(dbPath, {
       readOnly,
       ownerCapability: !readOnly, // writable mode requires owner capability
+      // The writable owner is the sole opener (the viewer runs in-memory and
+      // read-only callers delegate over IPC), so it opens WAL in EXCLUSIVE
+      // locking mode: the wal-index stays in heap, no -shm file exists, and the
+      // -shm-truncation SIGBUS becomes impossible. Kill-switch:
+      // INVOKER_DISABLE_EXCLUSIVE_LOCKING=1 reverts to shared -shm WAL.
+      exclusiveLocking: !readOnly && process.env.INVOKER_DISABLE_EXCLUSIVE_LOCKING !== '1',
     });
   // Upgrade root logger with DB persistence now that SQLiteAdapter is ready.
   logger = new FileAndDbLogger({ module: 'main' }, { persistence });
