@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   buildDoctorChecks,
   generateSlackManifest,
+  loadInvokerEnv,
   REQUIRED_BOT_SCOPES,
+  slackCredsFromEnv,
   upsertEnvLines,
   validateSlackCredentials,
   type CliConfigState,
@@ -98,3 +103,48 @@ describe('buildDoctorChecks', () => {
     expect(checks.find((c) => c.id === 'default-preset')?.status).toBe('ok');
   });
 });
+
+describe('loadInvokerEnv', () => {
+  it('loads SLACK_* from ~/.invoker/.env without overriding real env vars', () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-env-'));
+    const saved = {
+      HOME: process.env.HOME,
+      bot: process.env.SLACK_BOT_TOKEN,
+      app: process.env.SLACK_APP_TOKEN,
+      sign: process.env.SLACK_SIGNING_SECRET,
+      chan: process.env.SLACK_CHANNEL_ID,
+    };
+    try {
+      process.env.HOME = home;
+      mkdirSync(join(home, '.invoker'), { recursive: true });
+      writeFileSync(
+        join(home, '.invoker', '.env'),
+        '# slack creds\nSLACK_BOT_TOKEN=xoxb-fromfile\nSLACK_APP_TOKEN=xapp-fromfile\nSLACK_CHANNEL_ID=C123\n',
+      );
+      delete process.env.SLACK_BOT_TOKEN;
+      delete process.env.SLACK_APP_TOKEN;
+      delete process.env.SLACK_CHANNEL_ID;
+      process.env.SLACK_SIGNING_SECRET = 'real-env-wins';
+
+      loadInvokerEnv();
+
+      const creds = slackCredsFromEnv();
+      expect(creds.botToken).toBe('xoxb-fromfile');
+      expect(creds.appToken).toBe('xapp-fromfile');
+      expect(creds.channelId).toBe('C123');
+      expect(creds.signingSecret).toBe('real-env-wins');
+    } finally {
+      restoreEnv('HOME', saved.HOME);
+      restoreEnv('SLACK_BOT_TOKEN', saved.bot);
+      restoreEnv('SLACK_APP_TOKEN', saved.app);
+      restoreEnv('SLACK_SIGNING_SECRET', saved.sign);
+      restoreEnv('SLACK_CHANNEL_ID', saved.chan);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
