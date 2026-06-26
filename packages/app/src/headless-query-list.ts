@@ -10,6 +10,7 @@
  * module depends only on `headless-shared.ts`.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
 import type { AgentRegistry } from '@invoker/execution-engine';
@@ -22,7 +23,34 @@ import {
   restoreWorkflowForTask,
 } from './headless-shared.js';
 
-export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
+/**
+ * The read-query family writes its formatted output through {@link writeOut}.
+ * Locally (no active sink) it goes straight to `process.stdout`. When the
+ * writable owner answers a delegated `cli-query` it runs the same code inside
+ * {@link runReadOnlyHeadlessQueryToString}, which installs a buffering sink via
+ * AsyncLocalStorage so the rendered text is captured and returned over IPC
+ * instead of printed on the owner. AsyncLocalStorage keeps the sink isolated
+ * per request, so concurrent delegated queries never cross output.
+ */
+const queryOutputSink = new AsyncLocalStorage<(chunk: string) => void>();
+
+function writeOut(chunk: string): void {
+  const sink = queryOutputSink.getStore();
+  if (sink) sink(chunk);
+  else process.stdout.write(chunk);
+}
+
+/**
+ * Dependency subset the read-query path needs. Narrow enough that both the
+ * standalone and GUI owners can supply it without building a full
+ * {@link HeadlessDeps}.
+ */
+export type HeadlessQueryDeps = Pick<
+  HeadlessDeps,
+  'orchestrator' | 'persistence' | 'executionAgentRegistry' | 'invokerConfig' | 'getUiPerfStats' | 'resetUiPerfStats'
+>;
+
+export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
     throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|cost|cost-events|costs|ui-perf|stats>');
@@ -43,10 +71,10 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
         workflows = workflows.filter(wf => wf.status === flags.status);
       }
       switch (flags.output) {
-        case 'label': process.stdout.write(formatAsLabel(workflows) + '\n'); break;
-        case 'json':  process.stdout.write(formatAsJson(workflows.map(serializeWorkflow)) + '\n'); break;
-        case 'jsonl': process.stdout.write(formatAsJsonl(workflows.map(serializeWorkflow)) + '\n'); break;
-        default:      process.stdout.write(formatWorkflowList(workflows) + '\n'); break;
+        case 'label': writeOut(formatAsLabel(workflows) + '\n'); break;
+        case 'json':  writeOut(formatAsJson(workflows.map(serializeWorkflow)) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl(workflows.map(serializeWorkflow)) + '\n'); break;
+        default:      writeOut(formatWorkflowList(workflows) + '\n'); break;
       }
       break;
     }
@@ -56,10 +84,10 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       const workflow = deps.persistence.loadWorkflow(workflowId);
       if (!workflow) throw new Error(`Workflow "${workflowId}" not found.`);
       switch (flags.output) {
-        case 'label': process.stdout.write(`${workflow.id}\n`); break;
-        case 'json':  process.stdout.write(formatAsJson(serializeWorkflow(workflow)) + '\n'); break;
-        case 'jsonl': process.stdout.write(formatAsJsonl([serializeWorkflow(workflow)]) + '\n'); break;
-        default:      process.stdout.write(formatWorkflowList([workflow]) + '\n'); break;
+        case 'label': writeOut(`${workflow.id}\n`); break;
+        case 'json':  writeOut(formatAsJson(serializeWorkflow(workflow)) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl([serializeWorkflow(workflow)]) + '\n'); break;
+        default:      writeOut(formatWorkflowList([workflow]) + '\n'); break;
       }
       break;
     }
@@ -67,7 +95,7 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       const { orchestrator, persistence } = deps;
       const workflows = persistence.listWorkflows();
       if (workflows.length === 0) {
-        process.stdout.write('No workflows found. Run a plan first.\n');
+        writeOut('No workflows found. Run a plan first.\n');
         return;
       }
 
@@ -102,13 +130,13 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       }
 
       switch (flags.output) {
-        case 'label': process.stdout.write(formatAsLabel(allTasks) + '\n'); break;
-        case 'json':  process.stdout.write(formatAsJson(allTasks.map(serializeTask)) + '\n'); break;
-        case 'jsonl': process.stdout.write(formatAsJsonl(allTasks.map(serializeTask)) + '\n'); break;
+        case 'label': writeOut(formatAsLabel(allTasks) + '\n'); break;
+        case 'json':  writeOut(formatAsJson(allTasks.map(serializeTask)) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl(allTasks.map(serializeTask)) + '\n'); break;
         default: {
-          for (const task of allTasks) process.stdout.write(formatTaskStatus(task) + '\n');
+          for (const task of allTasks) writeOut(formatTaskStatus(task) + '\n');
           const status = orchestrator.getWorkflowStatus();
-          process.stdout.write(`\n${formatWorkflowStatus(status)}\n`);
+          writeOut(`\n${formatWorkflowStatus(status)}\n`);
           break;
         }
       }
@@ -122,10 +150,10 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       if (!task) throw new Error(`Task "${taskId}" not found`);
 
       switch (flags.output) {
-        case 'label': process.stdout.write(task.id + '\n'); break;
-        case 'json':  process.stdout.write(formatAsJson(serializeTask(task)) + '\n'); break;
-        case 'jsonl': process.stdout.write(formatAsJsonl([serializeTask(task)]) + '\n'); break;
-        default:      process.stdout.write(task.status + '\n'); break;
+        case 'label': writeOut(task.id + '\n'); break;
+        case 'json':  writeOut(formatAsJson(serializeTask(task)) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl([serializeTask(task)]) + '\n'); break;
+        default:      writeOut(task.status + '\n'); break;
       }
       break;
     }
@@ -157,16 +185,16 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       switch (flags.output) {
         case 'label': {
           const ids = [...status.running.map(t => t.taskId), ...status.queued.map(t => t.taskId)];
-          process.stdout.write(ids.join('\n') + '\n');
+          writeOut(ids.join('\n') + '\n');
           break;
         }
-        case 'json':  process.stdout.write(formatAsJson(status) + '\n'); break;
+        case 'json':  writeOut(formatAsJson(status) + '\n'); break;
         case 'jsonl': {
-          for (const t of status.running) process.stdout.write(JSON.stringify({ ...t, state: 'running' }) + '\n');
-          for (const t of status.queued) process.stdout.write(JSON.stringify({ ...t, state: 'queued' }) + '\n');
+          for (const t of status.running) writeOut(JSON.stringify({ ...t, state: 'running' }) + '\n');
+          for (const t of status.queued) writeOut(JSON.stringify({ ...t, state: 'queued' }) + '\n');
           break;
         }
-        default: process.stdout.write(formatQueueStatus(status) + '\n'); break;
+        default: writeOut(formatQueueStatus(status) + '\n'); break;
       }
       break;
     }
@@ -178,19 +206,19 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       });
       switch (flags.output) {
         case 'label':
-          process.stdout.write(graph.nodes.map((node) => node.id).join('\n') + '\n');
+          writeOut(graph.nodes.map((node) => node.id).join('\n') + '\n');
           break;
         case 'jsonl':
           for (const node of graph.nodes) {
-            process.stdout.write(JSON.stringify({ kind: 'node', ...node }) + '\n');
+            writeOut(JSON.stringify({ kind: 'node', ...node }) + '\n');
           }
           for (const edge of graph.edges) {
-            process.stdout.write(JSON.stringify({ kind: 'edge', ...edge }) + '\n');
+            writeOut(JSON.stringify({ kind: 'edge', ...edge }) + '\n');
           }
           break;
         case 'json':
         default:
-          process.stdout.write(formatAsJson(graph) + '\n');
+          writeOut(formatAsJson(graph) + '\n');
           break;
       }
       break;
@@ -201,10 +229,10 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       const events = deps.persistence.getEvents(taskId);
 
       switch (flags.output) {
-        case 'label': process.stdout.write(events.map(e => `${e.taskId}:${e.eventType}`).join('\n') + '\n'); break;
-        case 'json':  process.stdout.write(formatAsJson(events.map(serializeEvent)) + '\n'); break;
-        case 'jsonl': process.stdout.write(formatAsJsonl(events.map(serializeEvent)) + '\n'); break;
-        default:      process.stdout.write(formatEventLog(events) + '\n'); break;
+        case 'label': writeOut(events.map(e => `${e.taskId}:${e.eventType}`).join('\n') + '\n'); break;
+        case 'json':  writeOut(formatAsJson(events.map(serializeEvent)) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl(events.map(serializeEvent)) + '\n'); break;
+        default:      writeOut(formatEventLog(events) + '\n'); break;
       }
       break;
     }
@@ -233,16 +261,16 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       };
       switch (flags.output) {
         case 'label':
-          process.stdout.write(String((stats as Record<string, unknown>).maxRendererEventLoopLagMs ?? 0) + '\n');
+          writeOut(String((stats as Record<string, unknown>).maxRendererEventLoopLagMs ?? 0) + '\n');
           break;
         case 'json':
-          process.stdout.write(formatAsJson(stats) + '\n');
+          writeOut(formatAsJson(stats) + '\n');
           break;
         case 'jsonl':
-          process.stdout.write(formatAsJsonl([stats]) + '\n');
+          writeOut(formatAsJsonl([stats]) + '\n');
           break;
         default:
-          process.stdout.write(`${JSON.stringify(stats, null, 2)}\n`);
+          writeOut(`${JSON.stringify(stats, null, 2)}\n`);
           break;
       }
       break;
@@ -293,10 +321,10 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       };
 
       switch (flags.output) {
-        case 'label': process.stdout.write(`${successRate.toFixed(1)}%\n`); break;
-        case 'json':  process.stdout.write(formatAsJson(stats) + '\n'); break;
-        case 'jsonl': process.stdout.write(formatAsJsonl([stats]) + '\n'); break;
-        default:      process.stdout.write(formatWorkflowStats(stats) + '\n'); break;
+        case 'label': writeOut(`${successRate.toFixed(1)}%\n`); break;
+        case 'json':  writeOut(formatAsJson(stats) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl([stats]) + '\n'); break;
+        default:      writeOut(formatWorkflowStats(stats) + '\n'); break;
       }
       break;
     }
@@ -346,7 +374,7 @@ async function headlessCosts(
   const allEvents = await collectCostEvents(flags, deps);
 
   if (allEvents.length === 0) {
-    process.stdout.write('No cost data available.\n');
+    writeOut('No cost data available.\n');
     return;
   }
 
@@ -356,10 +384,10 @@ async function headlessCosts(
 
   switch (flags.output) {
     case 'label':
-      process.stdout.write(`${totalRollup.totalTokens} tokens $${totalRollup.totalCostUsd.toFixed(4)}\n`);
+      writeOut(`${totalRollup.totalTokens} tokens $${totalRollup.totalCostUsd.toFixed(4)}\n`);
       break;
     case 'json':
-      process.stdout.write(formatAsJson({
+      writeOut(formatAsJson({
         groups: grouped.map(serializeGroupedRollup),
         total: totalRollup,
         events: allEvents.map(serializeCostEvent),
@@ -367,13 +395,13 @@ async function headlessCosts(
       break;
     case 'jsonl':
       for (const event of allEvents) {
-        process.stdout.write(JSON.stringify(serializeCostEvent(event)) + '\n');
+        writeOut(JSON.stringify(serializeCostEvent(event)) + '\n');
       }
       break;
     default:
-      process.stdout.write(formatGroupedCostRollups(grouped) + '\n');
-      process.stdout.write('\n');
-      process.stdout.write(formatCostRollup(totalRollup) + '\n');
+      writeOut(formatGroupedCostRollups(grouped) + '\n');
+      writeOut('\n');
+      writeOut(formatCostRollup(totalRollup) + '\n');
       break;
   }
 }
@@ -485,7 +513,7 @@ async function headlessCost(
   const allEvents = await collectCostEvents(flags, deps);
 
   if (allEvents.length === 0) {
-    process.stdout.write('No cost data available.\n');
+    writeOut('No cost data available.\n');
     return;
   }
 
@@ -496,10 +524,10 @@ async function headlessCost(
 
   switch (flags.output) {
     case 'label':
-      process.stdout.write(`${totals.totalTokens} tokens $${totals.totalCostUsd.toFixed(4)}\n`);
+      writeOut(`${totals.totalTokens} tokens $${totals.totalCostUsd.toFixed(4)}\n`);
       break;
     case 'json':
-      process.stdout.write(formatAsJson({
+      writeOut(formatAsJson({
         scope,
         groupBy,
         totals,
@@ -509,13 +537,13 @@ async function headlessCost(
       break;
     case 'jsonl':
       for (const group of grouped) {
-        process.stdout.write(JSON.stringify(serializeGroupedRollup(group)) + '\n');
+        writeOut(JSON.stringify(serializeGroupedRollup(group)) + '\n');
       }
       break;
     default:
-      process.stdout.write(formatGroupedCostRollups(grouped) + '\n');
-      process.stdout.write('\n');
-      process.stdout.write(formatCostRollup(totals) + '\n');
+      writeOut(formatGroupedCostRollups(grouped) + '\n');
+      writeOut('\n');
+      writeOut(formatCostRollup(totals) + '\n');
       break;
   }
 }
@@ -532,25 +560,25 @@ async function headlessCostEvents(
   const allEvents = await collectCostEvents(flags, deps);
 
   if (allEvents.length === 0) {
-    process.stdout.write('No cost events found.\n');
+    writeOut('No cost events found.\n');
     return;
   }
 
   switch (flags.output) {
     case 'label':
       for (const event of allEvents) {
-        process.stdout.write(`${event.attribution.taskId}:${event.identity.eventId}\n`);
+        writeOut(`${event.attribution.taskId}:${event.identity.eventId}\n`);
       }
       break;
     case 'json':
-      process.stdout.write(formatAsJson(allEvents.map(serializeCostEvent)) + '\n');
+      writeOut(formatAsJson(allEvents.map(serializeCostEvent)) + '\n');
       break;
     case 'jsonl':
-      process.stdout.write(formatAsJsonl(allEvents.map(serializeCostEvent)) + '\n');
+      writeOut(formatAsJsonl(allEvents.map(serializeCostEvent)) + '\n');
       break;
     default:
       for (const event of allEvents) {
-        process.stdout.write(formatCostEvent(event) + '\n');
+        writeOut(formatCostEvent(event) + '\n');
       }
       break;
   }
@@ -559,7 +587,7 @@ async function headlessCostEvents(
 export async function headlessQuerySelect(taskId: string, deps: Pick<HeadlessDeps, 'persistence'>): Promise<void> {
   if (!taskId) throw new Error('Missing taskId.');
   const selected = deps.persistence.getSelectedExperiment(taskId);
-  process.stdout.write((selected
+  writeOut((selected
     ? `Selected experiment for ${taskId}: ${selected}`
     : `No experiment selected for ${taskId}`) + '\n');
 }
@@ -665,7 +693,7 @@ export async function headlessSession(taskId: string | undefined, deps: Pick<Hea
           if (exec.agentName) {
             agentName = String(exec.agentName);
           }
-          process.stdout.write(`Recovered agent session from event log: ${sessionId}\n`);
+          writeOut(`Recovered agent session from event log: ${sessionId}\n`);
           break;
         }
       } catch {
@@ -675,23 +703,69 @@ export async function headlessSession(taskId: string | undefined, deps: Pick<Hea
   }
 
   if (!sessionId) {
-    process.stdout.write(`No agent session for task "${taskId}"\n`);
+    writeOut(`No agent session for task "${taskId}"\n`);
     return;
   }
 
-  process.stdout.write(`agent=${agentName} sessionId=${sessionId}\n`);
+  writeOut(`agent=${agentName} sessionId=${sessionId}\n`);
 
   const allTasks = deps.orchestrator.getAllTasks();
   const result = await resolveAgentSession(sessionId, agentName, deps.executionAgentRegistry, allTasks);
   if (!result) {
-    process.stdout.write('Session lookup failed\n');
+    writeOut('Session lookup failed\n');
     return;
   }
-  process.stdout.write(`state=${result.state}${result.source ? ` source=${result.source}` : ''}\n`);
+  writeOut(`state=${result.state}${result.source ? ` source=${result.source}` : ''}\n`);
   if (result.reason) {
-    process.stdout.write(`${result.reason}\n`);
+    writeOut(`${result.reason}\n`);
   }
   for (const msg of result.messages) {
-    process.stdout.write(`[${msg.role}] ${msg.content}\n`);
+    writeOut(`[${msg.role}] ${msg.content}\n`);
   }
+}
+
+/**
+ * Top-level read-only headless commands that the writable owner can answer on
+ * behalf of a non-owner caller. Mirrors the read-command routing in
+ * `headless.ts` (`runHeadless`) but needs only {@link HeadlessQueryDeps}.
+ */
+async function dispatchReadOnlyHeadlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
+  const command = args[0];
+  switch (command) {
+    case 'query':
+      // `query ui-perf --reset` clears the owner's UI-perf stats; that is a
+      // mutation, not a read, so it must never run through the delegated path.
+      if (args[1] === 'ui-perf' && parseQueryFlags(args.slice(2)).reset) {
+        throw new Error('query ui-perf --reset is not a delegatable read-only query');
+      }
+      return headlessQuery(args.slice(1), deps);
+    case 'query-select':
+      return headlessQuerySelect(args[1], deps);
+    // Deprecated top-level aliases → canonical `query <sub>`.
+    case 'list':
+      return headlessQuery(['workflows', ...args.slice(1)], deps);
+    case 'status':
+      return headlessQuery(['tasks', ...args.slice(1)], deps);
+    case 'task-status':
+      return headlessQuery(['task', ...args.slice(1)], deps);
+    case 'queue':
+      return headlessQuery(['queue', ...args.slice(1)], deps);
+    case 'audit':
+      return headlessQuery(['audit', ...args.slice(1)], deps);
+    case 'session':
+      return headlessQuery(['session', ...args.slice(1)], deps);
+    default:
+      throw new Error(`Command "${String(command)}" is not a delegatable read-only query`);
+  }
+}
+
+/**
+ * Run a read-only headless command on the writable owner and capture its
+ * rendered stdout instead of printing it. Used by the owner's `cli-query`
+ * IPC handler so a non-owner caller never has to open the database file.
+ */
+export async function runReadOnlyHeadlessQueryToString(args: string[], deps: HeadlessQueryDeps): Promise<string> {
+  const chunks: string[] = [];
+  await queryOutputSink.run((chunk) => { chunks.push(chunk); }, () => dispatchReadOnlyHeadlessQuery(args, deps));
+  return chunks.join('');
 }

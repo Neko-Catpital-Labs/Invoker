@@ -14,6 +14,7 @@ import {
   tryDelegateQueryUiPerf,
   tryDelegateResume,
   tryDelegateRun,
+  tryPingHeadlessOwner,
   type DelegationOutcome,
 } from './headless-delegation.js';
 import {
@@ -92,6 +93,7 @@ const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 90_000;
 const POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
+const GENERIC_READ_OWNER_PING_TIMEOUT_MS = 1_500;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
 const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
 
@@ -142,6 +144,40 @@ async function delegateMutation(
   return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
 }
 
+const GENERIC_DELEGATABLE_READ_COMMANDS = new Set([
+  'list', 'status', 'task-status', 'audit', 'session', 'query-select',
+]);
+
+/**
+ * Read-only query commands the owner can answer over the generic `cli-query`
+ * channel. `queue`, `ui-perf`, and `action-graph` are excluded here — they have
+ * bespoke owner-required handling in {@link delegateReadOnlyQuery}.
+ */
+function isGenericDelegatableReadCommand(args: string[]): boolean {
+  const command = args[0];
+  if (command === 'query') {
+    const sub = args[1];
+    return sub !== undefined && sub !== 'queue' && sub !== 'ui-perf' && sub !== 'action-graph';
+  }
+  return command !== undefined && GENERIC_DELEGATABLE_READ_COMMANDS.has(command);
+}
+
+/**
+ * Delegate a read-only query to the writable owner so this process never opens
+ * the database file. Returns false when the command is not delegatable or no
+ * owner is present, letting the caller open the database directly (it is then
+ * the sole opener — safe).
+ */
+async function delegateGenericReadQuery(args: string[], bus: MessageBus): Promise<boolean> {
+  if (!isGenericDelegatableReadCommand(args)) return false;
+  const owner = await tryPingHeadlessOwner(bus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
+  if (!owner) return false;
+  const response = await tryDelegateQuery(bus, { kind: 'cli-query', args }, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
+  if (!response || typeof response.output !== 'string') return false;
+  process.stdout.write(response.output);
+  return true;
+}
+
 async function delegateReadOnlyQuery(
   args: string[],
   bus: MessageBus,
@@ -151,7 +187,7 @@ async function delegateReadOnlyQuery(
   const isQueue = (args[0] === 'query' && args[1] === 'queue') || args[0] === 'queue';
   const isActionGraph = args[0] === 'query' && args[1] === 'action-graph';
   if (!isUiPerf && !isQueue && !isActionGraph) {
-    return false;
+    return delegateGenericReadQuery(args, bus);
   }
 
   // Use the resolver to wait for any reachable owner
