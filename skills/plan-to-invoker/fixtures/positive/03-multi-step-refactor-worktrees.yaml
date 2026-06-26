@@ -5,6 +5,7 @@
 #
 # When to use worktrees: Most implementation work. Each task gets a clean environment,
 # and changes merge back automatically when the task succeeds.
+# Terminal proof stays focused on the refactored package; a full-suite `pnpm run test:all` gate is optional, not the default.
 
 name: "Refactor config validation"
 description: |
@@ -66,8 +67,3 @@ tasks:
     description: "Run full config package test suite"
     command: "cd packages/config && pnpm test 2>&1"
     dependencies: [add-schema-types]
-
-  - id: final-regression
-    description: "Run the full repository test suite as the final regression gate"
-    command: "pnpm run test:all"
-    dependencies: [extract-validator, add-validator-tests, verify-validator, add-schema-types, verify-all-tests]

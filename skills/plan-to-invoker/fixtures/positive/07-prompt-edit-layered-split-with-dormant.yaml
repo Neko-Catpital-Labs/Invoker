@@ -178,7 +178,7 @@ tasks:
       - Verify the layered prompt-edit flow after contract, bridge, and dormant UI slices exist.
       Alternative considerations:
       - Option A (chosen): add focused app and E2E regressions.
-      - Option B: rely only on the terminal full-suite gate.
+      - Option B: defer all proof to a separate workflow.
       Implementation details:
       - Cover IPC routing and TaskPanel prompt-edit flow deterministically.
       Layer: e2e_regression
@@ -198,7 +198,7 @@ tasks:
       - Verify the layered prompt-edit flow after contract, bridge, and dormant UI slices exist.
       Alternative considerations:
       - Option A (chosen): add focused app and E2E regressions.
-      - Option B: rely only on the terminal full-suite gate.
+      - Option B: defer all proof to a separate workflow.
       Implementation details:
       - Assume no prior context.
       Modify packages/app/src/__tests__/main.prompt-edit.test.ts and packages/app/e2e/prompt-edit.spec.ts.
@@ -212,26 +212,26 @@ tasks:
       - Pass condition: app-level and end-to-end prompt-edit regressions pass in CI-style runs.
     dependencies: [ui-prompt-editing-activation]
 
-  - id: final-regression
+  - id: verify-prompt-edit-app-suite
     description: |
       Review claim:
-      - Run the terminal full-suite regression gate for the layered prompt-edit stack.
+      - Run the focused app-package proof for the layered prompt-edit stack.
       Safety invariant:
       - The command changes no production code and depends on every earlier task.
       Slice rationale:
-      - Full-suite validation belongs at the terminal workflow layer.
+      - Focused per-package proof belongs at the terminal workflow layer instead of a full-suite gate.
       Architectural effect:
-      - No architecture changes; validates the integrated prompt-edit stack.
-      Run the full repository test suite as the terminal regression gate.
+      - No architecture changes; validates the integrated prompt-edit stack inside packages/app.
+      Run the packages/app test suite as the terminal focused proof.
       Goal:
-      - Run the full repository test suite as the terminal regression gate.
+      - Run the packages/app test suite as the terminal focused proof.
       Motivation:
-      - Validate all prompt-edit slices together after focused regressions exist.
+      - Validate all prompt-edit slices together via the package that owns the bridge and TaskPanel regressions.
       Alternative considerations:
-      - Option A (chosen): one terminal full-suite gate.
-      - Option B: repeat full-suite verification in every slice.
+      - Option A (chosen): focused per-package proof at the terminal layer.
+      - Option B: full-suite `pnpm run test:all` as the default terminal gate.
       Implementation details:
-      - Execute `pnpm run test:all` after every earlier task completes.
+      - Execute `cd packages/app && pnpm test` after every earlier task completes.
       Layer: e2e_regression
       Feature state: active
       Files:
@@ -239,6 +239,6 @@ tasks:
       Change types:
       - none
       Acceptance criteria:
-      - Ensure the full repository test suite passes after all prompt-edit slices land.
-    command: "pnpm run test:all"
+      - Ensure the packages/app test suite passes after all prompt-edit slices land.
+    command: "cd packages/app && pnpm test"
     dependencies: [prompt-edit-contact-surface, app-bridge-and-owner-delegation, ui-prompt-editing-activation, app-and-e2e-regressions]
