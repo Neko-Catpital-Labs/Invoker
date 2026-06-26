@@ -1439,6 +1439,188 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('post-start lineage guard (generation)', () => {
+    // Builds a runner whose executor.start() RESOLVES with a handle (the
+    // success path), with a mutable live task so the test can advance its
+    // generation while keeping selectedAttemptId fixed.
+    function makePostStartEnv(launchGeneration: number) {
+      const handle = {
+        executionId: 'exec-post-start',
+        taskId: 'gen-task',
+        workspacePath: '/tmp/post-start-ws',
+        branch: 'experiment/post-start-branch',
+        agentSessionId: 'sess-post-start',
+        containerId: 'container-post-start',
+      };
+      let completeCallback: ((response: WorkResponse) => void) | undefined;
+      let resolveStart: (() => void) | undefined;
+      const executor = {
+        type: 'worktree',
+        // Default: resolve immediately. Tests that need to advance the
+        // generation mid-start override `start` before launching.
+        start: vi.fn(async () => handle),
+        startDeferred: () => {
+          executor.start = vi.fn(() => new Promise((res) => {
+            resolveStart = () => res(handle);
+          }));
+        },
+        resolveStart: () => resolveStart?.(),
+        onComplete: vi.fn((_h: any, cb: any) => { completeCallback = cb; }),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn().mockResolvedValue(undefined),
+        destroyAll: vi.fn(),
+      };
+      const liveTask = makeTask({
+        id: 'gen-task',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'worktree' as any },
+        execution: { selectedAttemptId: 'attempt-1', generation: launchGeneration },
+      });
+      const markTaskRunningAfterLaunch = vi.fn(() => true);
+      const handleWorkerResponse = vi.fn(() => []);
+      const orchestrator = {
+        getTask: () => liveTask,
+        getAllTasks: () => [liveTask],
+        markTaskRunningAfterLaunch,
+        handleWorkerResponse,
+      };
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const logEvent = vi.fn();
+      const onSpawned = vi.fn();
+      const runner = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: {
+          updateTask,
+          updateAttempt,
+          logEvent,
+          loadAttempts: () => [],
+          appendTaskOutput: vi.fn(),
+        } as any,
+        executorRegistry: {
+          getDefault: () => executor,
+          get: () => executor,
+          getAll: () => [executor],
+        } as any,
+        cwd: '/tmp',
+        callbacks: { onSpawned },
+      });
+      const launchTask = makeTask({
+        id: 'gen-task',
+        status: 'running',
+        config: { command: 'echo hi', runnerKind: 'worktree' as any },
+        execution: { selectedAttemptId: 'attempt-1', generation: launchGeneration },
+      });
+      const triggerComplete = () => completeCallback?.({
+        requestId: 'req-post-start',
+        actionId: 'gen-task',
+        attemptId: 'attempt-1',
+        executionGeneration: launchGeneration,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+      return {
+        runner, executor, handle, liveTask, launchTask, triggerComplete,
+        markTaskRunningAfterLaunch, handleWorkerResponse, updateTask, updateAttempt,
+        logEvent, onSpawned,
+      };
+    }
+
+    const tick = () => new Promise<void>((r) => setImmediate(r));
+
+    it('rejects a launch whose start resolves after the generation advances (attempt unchanged)', async () => {
+      const env = makePostStartEnv(1);
+      env.executor.startDeferred();
+
+      const run = env.runner.executeTask(env.launchTask);
+      await tick();
+      expect(env.executor.start).toHaveBeenCalledTimes(1);
+
+      // Generation advances to N+1 while the attempt id is unchanged, then
+      // the in-flight start resolves.
+      env.liveTask.execution.generation = 2;
+      env.executor.resolveStart();
+      await run;
+
+      // Stale post-start metadata must NOT be written to the task row.
+      expect(env.updateTask).not.toHaveBeenCalledWith(
+        'gen-task',
+        expect.objectContaining({
+          execution: expect.objectContaining({ workspacePath: '/tmp/post-start-ws' }),
+        }),
+      );
+      expect(env.updateAttempt).not.toHaveBeenCalledWith(
+        'attempt-1',
+        expect.objectContaining({ workspacePath: '/tmp/post-start-ws' }),
+      );
+      // A stale generation must never be marked running.
+      expect(env.markTaskRunningAfterLaunch).not.toHaveBeenCalled();
+      // The spawned handle is killed, consistent with the stale-attempt path.
+      expect(env.executor.kill).toHaveBeenCalledWith(env.handle);
+      // No active execution is registered, and no completion is processed.
+      expect((env.runner as any).activeExecutions.size).toBe(0);
+      expect(env.onSpawned).not.toHaveBeenCalled();
+      expect(env.handleWorkerResponse).not.toHaveBeenCalled();
+      expect(env.logEvent).toHaveBeenCalledWith(
+        'gen-task',
+        'task.executor.stale_post_start',
+        expect.objectContaining({ startGeneration: 1, currentGeneration: 2 }),
+      );
+    });
+
+    it('fails the dispatch and kills the handle when generation advances during start', async () => {
+      const env = makePostStartEnv(1);
+      env.executor.startDeferred();
+      const completeCalls: number[] = [];
+      const failCalls: Array<[number, unknown]> = [];
+      const launchOutbox = {
+        completeDispatch(id: number) { completeCalls.push(id); return true; },
+        failDispatch(id: number, err: unknown) { failCalls.push([id, err]); return true; },
+      };
+
+      const run = env.runner.executeTask(env.launchTask, { dispatchId: 55, launchOutbox });
+      await tick();
+      env.liveTask.execution.generation = 2;
+      env.executor.resolveStart();
+      await run;
+
+      expect(env.executor.kill).toHaveBeenCalledWith(env.handle);
+      expect(completeCalls).toHaveLength(0);
+      expect(failCalls).toHaveLength(1);
+      expect(failCalls[0][0]).toBe(55);
+      expect((failCalls[0][1] as Error).message).toMatch(/Launch rejected/);
+    });
+
+    it('persists metadata and registers the active execution when lineage is current', async () => {
+      const env = makePostStartEnv(1); // launch and live both at generation 1
+
+      const run = env.runner.executeTask(env.launchTask);
+      await tick();
+
+      // Valid launch persists workspace/branch/session metadata.
+      expect(env.updateTask).toHaveBeenCalledWith(
+        'gen-task',
+        expect.objectContaining({
+          execution: expect.objectContaining({
+            workspacePath: '/tmp/post-start-ws',
+            branch: 'experiment/post-start-branch',
+            agentSessionId: 'sess-post-start',
+            containerId: 'container-post-start',
+          }),
+        }),
+      );
+      expect(env.markTaskRunningAfterLaunch).toHaveBeenCalledWith('gen-task', 'attempt-1');
+      expect(env.onSpawned).toHaveBeenCalled();
+      expect((env.runner as any).activeExecutions.size).toBe(1);
+      expect(env.executor.kill).not.toHaveBeenCalled();
+
+      env.triggerComplete();
+      await run;
+      expect(env.handleWorkerResponse).toHaveBeenCalled();
+    });
+  });
+
   describe('upstream branch metadata guard', () => {
     it('fails task when a completed worktree dep has no branch', async () => {
       const tasks = new Map<string, TaskState>();

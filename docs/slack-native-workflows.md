@@ -51,7 +51,15 @@ Model strings are passed verbatim to the CLI's `--model`; set exact ids your CLI
 
 ## Environment
 
-Set in `<repoRoot>/.env` (loaded on startup) or the environment, then run `./run.sh`:
+The fastest path is the setup wizard. It validates your tools, writes a ready-to-paste Slack app
+manifest, checks your tokens against the live Slack API, and saves them to `~/.invoker/.env`:
+
+```
+invoker-cli setup slack
+```
+
+To configure by hand, put these in `~/.invoker/.env` (canonical, loaded on startup before the Slack
+check) or `<repoRoot>/.env` (fallback), then run `./run.sh`:
 
 ```
 SLACK_BOT_TOKEN=xoxb-...
@@ -63,6 +71,8 @@ INVOKER_REPO_URL=git@github.com:acme/web.git   # optional; default repo (else gi
 CURSOR_COMMAND=cursor            # optional planning CLI override
 CURSOR_MODEL=...                 # optional planning model override
 ```
+
+Run `invoker-cli doctor` to confirm your tools, config, and that your default preset's CLI is installed.
 
 ## Slack app scopes
 

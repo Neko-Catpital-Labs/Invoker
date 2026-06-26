@@ -1786,6 +1786,11 @@ export class Orchestrator {
     const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
     this.persistence.logEvent?.(id, eventName, changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+    if (task.config.isMergeNode) {
+      this.autoStartExternallyUnblockedReadyTasks();
+      this.checkWorkflowCompletion();
+    }
   }
 
   /**

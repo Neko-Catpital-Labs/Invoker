@@ -47,4 +47,48 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('Task at index 0 must be an object with an "id" field');
   });
+
+  it('parses and trims executionModel from task definitions', () => {
+    const yaml = `
+name: Model Plan
+repoUrl: git@github.com:test/repo.git
+baseBranch: main
+tasks:
+  - id: claude-task
+    description: Uses claude model
+    command: echo "hi"
+    executionModel: claude
+  - id: padded-task
+    description: Padded model
+    command: echo "hi"
+    executionModel: "  claude  "
+  - id: empty-task
+    description: Empty model
+    command: echo "hi"
+    executionModel: ""
+  - id: default-task
+    description: No model
+    command: echo "hi"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionModel).toBe('claude');
+    expect(plan.tasks[1].executionModel).toBe('claude');
+    expect(plan.tasks[2].executionModel).toBeUndefined();
+    expect(plan.tasks[3].executionModel).toBeUndefined();
+  });
+
+  it('rejects a non-string executionModel with PlanParseError', () => {
+    const yaml = `
+name: Bad Model Plan
+repoUrl: git@github.com:test/repo.git
+baseBranch: main
+tasks:
+  - id: t1
+    description: Bad model
+    command: echo "hi"
+    executionModel: 123
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/executionModel/);
+  });
 });

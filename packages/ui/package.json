@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "NODE_OPTIONS='--max-old-space-size=512' vite build",
+    "build": "NODE_OPTIONS='--max-old-space-size=512' vite build && tsup src/lib/workflow-core-activity.ts --format esm --out-dir dist/lib --clean false",
     "test": "vitest run"
   },
   "dependencies": {

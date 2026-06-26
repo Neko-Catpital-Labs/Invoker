@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -10,7 +9,8 @@ import {
   TaskRunner,
   WorktreeExecutor,
   createRecoveryWorker,
-  acquireRecoveryWorkerLock,
+  acquireWorkerLock,
+  RECOVERY_WORKER_KIND,
   WorkerLockHeldError,
   registerBuiltinAgents,
 } from '@invoker/execution-engine';
@@ -28,6 +28,7 @@ import {
   type TaskState,
 } from '@invoker/workflow-core';
 import { runMcpServer } from './mcp-server.js';
+import { runDoctor, runSetup } from './onboarding.js';
 
 const VERSION = '0.0.6';
 
@@ -60,17 +61,6 @@ type LiveSubmissionResult = {
 type CliDeps = {
   createMessageBus?: () => Promise<MessageBus> | MessageBus;
   runMcpServer?: () => Promise<void>;
-};
-
-type DoctorCheck = {
-  name: string;
-  command: string;
-  requiredFor: string;
-  install?: {
-    brew?: string[];
-    apt?: string[];
-    npm?: string[];
-  };
 };
 
 type CliRuntimeConfig = {
@@ -109,16 +99,6 @@ type CliRuntimeConfig = {
   }>;
 };
 
-const doctorChecks: DoctorCheck[] = [
-  { name: 'git', command: 'git', requiredFor: 'repository checkout, branches, and merges', install: { brew: ['git'], apt: ['git'] } },
-  { name: 'pnpm', command: 'pnpm', requiredFor: 'workspace dependency installs and local builds', install: { brew: ['pnpm'], npm: ['pnpm'] } },
-  { name: 'gh', command: 'gh', requiredFor: 'GitHub PR and release workflows', install: { brew: ['gh'], apt: ['gh'] } },
-  { name: 'Docker', command: 'docker', requiredFor: 'container executors', install: { brew: ['docker'], apt: ['docker.io'] } },
-  { name: 'Codex CLI', command: 'codex', requiredFor: 'Codex-backed task execution', install: { npm: ['@openai/codex'] } },
-  { name: 'Claude CLI', command: 'claude', requiredFor: 'Claude-backed task execution', install: { npm: ['@anthropic-ai/claude-code'] } },
-  { name: 'ssh', command: 'ssh', requiredFor: 'remote SSH executors', install: { apt: ['openssh-client'] } },
-];
-
 const silentLogger: Logger = {
   debug() {},
   info() {},
@@ -136,6 +116,7 @@ function usage(): string {
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli doctor [--fix] [--json]',
+    '  invoker-cli setup [slack] [--check]',
     '  invoker-cli mcp',
     '  invoker-cli worker autofix',
     '  invoker-cli --help',
@@ -143,7 +124,8 @@ function usage(): string {
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
-    '  doctor          Check external runtime tools used by Invoker executors.',
+    '  doctor          Validate tools, config, and your default planning preset.',
+    '  setup [slack]    Validate the environment, then optionally configure Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker autofix  Run the shared auto-fix recovery worker in the foreground.',
     '',
@@ -157,84 +139,6 @@ function usage(): string {
     '  --help           Show this help text.',
     '  --version        Show the CLI version.',
   ].join('\n');
-}
-
-function commandExists(command: string): boolean {
-  return spawnSync('sh', ['-c', `command -v ${command} >/dev/null 2>&1`], {
-    stdio: 'ignore',
-  }).status === 0;
-}
-
-function runInstall(command: string, args: string[]): number {
-  const result = spawnSync(command, args, { stdio: 'inherit' });
-  return result.status ?? 1;
-}
-
-function installDoctorTool(check: DoctorCheck): { attempted: boolean; ok: boolean; detail: string } {
-  if (process.platform === 'darwin' && commandExists('brew') && check.install?.brew?.length) {
-    const code = runInstall('brew', ['install', ...check.install.brew]);
-    return { attempted: true, ok: code === 0, detail: `brew install ${check.install.brew.join(' ')}` };
-  }
-  if (process.platform === 'linux' && commandExists('apt-get') && check.install?.apt?.length) {
-    const runner = typeof process.getuid === 'function' && process.getuid() === 0 ? 'apt-get' : commandExists('sudo') ? 'sudo' : '';
-    if (runner) {
-      const args = runner === 'sudo'
-        ? ['apt-get', 'install', '-y', ...check.install.apt]
-        : ['install', '-y', ...check.install.apt];
-      const code = runInstall(runner, args);
-      return { attempted: true, ok: code === 0, detail: `${runner} ${args.join(' ')}` };
-    }
-  }
-  if (commandExists('npm') && check.install?.npm?.length) {
-    const code = runInstall('npm', ['install', '-g', ...check.install.npm]);
-    return { attempted: true, ok: code === 0, detail: `npm install -g ${check.install.npm.join(' ')}` };
-  }
-  return { attempted: false, ok: false, detail: 'No supported installer available' };
-}
-
-function parseDoctorArgs(argv: string[]): { fix: boolean; json: boolean } {
-  const options = { fix: false, json: false };
-  for (const arg of argv) {
-    if (arg === '--fix') options.fix = true;
-    else if (arg === '--json') options.json = true;
-    else throw new Error(`Unknown doctor option: ${arg}`);
-  }
-  return options;
-}
-
-function runDoctor(argv: string[]): number {
-  const options = parseDoctorArgs(argv);
-  const results = doctorChecks.map((check) => {
-    let available = commandExists(check.command);
-    let fix: ReturnType<typeof installDoctorTool> | undefined;
-    if (!available && options.fix) {
-      fix = installDoctorTool(check);
-      available = commandExists(check.command);
-    }
-    return {
-      name: check.name,
-      command: check.command,
-      requiredFor: check.requiredFor,
-      available,
-      fix,
-    };
-  });
-
-  if (options.json) {
-    process.stdout.write(`${JSON.stringify({ ok: results.every((result) => result.available), checks: results })}\n`);
-  } else {
-    for (const result of results) {
-      const status = result.available ? 'ok' : 'missing';
-      const fix = result.fix ? ` (${result.fix.detail}: ${result.fix.ok ? 'ok' : 'failed'})` : '';
-      process.stdout.write(`${status.padEnd(7)} ${result.command.padEnd(8)} ${result.requiredFor}${fix}\n`);
-    }
-    const missing = results.filter((result) => !result.available);
-    if (missing.length > 0) {
-      process.stdout.write('\nAuthentication-dependent setup, such as gh auth login and provider CLI login, remains manual.\n');
-    }
-  }
-
-  return results.every((result) => result.available) ? 0 : 1;
 }
 
 function parseArgs(argv: string[]): { command?: string; planPath?: string; options: CliOptions } {
@@ -575,7 +479,7 @@ async function runAutoFixWorker(bus: MessageBus): Promise<number> {
   // failed tasks.
   let lock;
   try {
-    lock = acquireRecoveryWorkerLock({ homeRoot, logger: silentLogger });
+    lock = acquireWorkerLock({ kind: RECOVERY_WORKER_KIND, homeRoot, logger: silentLogger });
   } catch (err) {
     if (err instanceof WorkerLockHeldError) {
       process.stderr.write(`${err.message}\n`);
@@ -634,6 +538,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
   try {
     if (argv[0] === 'doctor') {
       return runDoctor(argv.slice(1));
+    }
+    if (argv[0] === 'setup') {
+      return await runSetup(argv.slice(1));
     }
     if (argv[0] === 'mcp') {
       await (deps.runMcpServer ?? runMcpServer)();

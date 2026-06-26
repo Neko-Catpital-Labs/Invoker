@@ -12,6 +12,15 @@ description: >
 Use this skill when the work is already done and the user wants a PR created, updated, or rewritten.
 
 For stacked PRs, apply `skills/review-compression/SKILL.md` before you write titles or PR bodies. If one branch mixes more than one local review claim, split the stack first.
+For decomposition or extraction refactors (splitting a large file into modules), one PR moves one cohesive unit: create the target file, move ONE function/class/phase, re-point references, keep the public surface stable. The next unit is the next PR. Bundling several extractions into one branch ("extract prepare + dispatch + finalize") is the default mistake this rule prevents — see the **Decomposition & Extraction Refactors** section of `skills/review-compression/SKILL.md`.
+
+## Stack ordering
+
+Order slices so a reviewer reads the evidence before the change it justifies (see `skills/review-compression/SKILL.md` → Ordering Rules):
+
+- **Repro/proof comes before the fix.** Land the repro or regression proof as the earlier slice (e.g. `(1)`) and the behavior fix as the later slice (e.g. `(2)`), so the bug is demonstrated before the change is approved.
+- Keep each slice green for CI: write the proof to assert the current (buggy) behavior, or mark the unfixed expectation pending (`it.fails` / skip with a TODO); the fix slice then flips it to the corrected behavior.
+- Foundation (types, helpers, migrations, flags) precedes behavior; cleanup and docs come last.
 
 ## What this skill covers
 

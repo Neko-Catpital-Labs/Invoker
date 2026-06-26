@@ -39,7 +39,7 @@ queue_rules:
 
   - name: admin-bypass
     merge_method: squash
-    batch_size: 5
+    batch_size: 1
     batch_max_wait_time: 5min
     queue_conditions:
       - base=master

@@ -17,7 +17,6 @@ import {
   rmSync,
   statSync,
 } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
@@ -52,6 +51,28 @@ import type {
   ConversationMessage,
   WorkflowChannel,
 } from './adapter.js';
+import {
+  SCHEMA_DDL,
+  COLUMN_MIGRATIONS,
+  POST_MIGRATION_STATEMENTS,
+  WORKFLOWS_REBUILD_TABLE_DDL,
+  WORKFLOWS_REBUILD_INSERT_DDL,
+} from './sqlite-schema.js';
+import {
+  mapRowToWorkflow,
+  mapRowToTask,
+  mapRowToAttempt,
+  mapRowToTaskLaunchDispatch,
+  mapRowToWorkflowMutationIntent,
+  mapRowToWorkflowMutationLease,
+} from './sqlite-row-mappers.js';
+import {
+  taskOutputFilePath,
+  taskSpoolFilePath,
+  encodeSpoolLine,
+  readSpoolLinesFromFile,
+  readLastSpoolLinesFromFile,
+} from './sqlite-output-spool.js';
 
 type NativeSqlite = typeof import('node:sqlite');
 
@@ -63,6 +84,10 @@ function loadNativeSqlite(): Promise<NativeSqlite> {
   return nativeSqlite;
 }
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
+
+// activity_log is capped to its most recent rows so the DB file stays bounded; 0 disables.
+const DEFAULT_ACTIVITY_LOG_MAX_ROWS = 100_000;
+const ACTIVITY_LOG_PRUNE_INTERVAL = 1_000; // prune at most once per N writes
 
 const OUTPUT_DIAGNOSTIC_TAIL_CHARS = 8_000;
 
@@ -95,6 +120,8 @@ interface SQLiteAdapterOptions {
   ownerCapability?: boolean;
   outputTailLimit?: number;
   outputDir?: string;
+  /** Max retained activity_log rows; 0 disables retention. */
+  activityLogMaxRows?: number;
 }
 
 export type WorkflowMutationPriority = 'high' | 'normal';
@@ -276,6 +303,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private spoolNextOffsetCache = new Map<string, number>();
   private writeTransactionDepth = 0;
   private lastWorkflowTaskSnapshotStats: Record<string, unknown> | null = null;
+  private readonly activityLogMaxRows: number;
+  private activityLogWritesSincePrune = 0;
 
   /** Use SQLiteAdapter.create() instead. */
   private constructor(db: DatabaseSync, dbPath: string | null, options?: SQLiteAdapterOptions) {
@@ -285,6 +314,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.readOnly = options?.readOnly === true;
     this.outputTailLimit = options?.outputTailLimit ?? 100;
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
+    this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.configureConnection(dbPath !== null);
     if (!this.readOnly) {
       this.initSchema();
@@ -684,379 +714,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private initSchema(): void {
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS workflows (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        visual_proof INTEGER,
-        plan_file TEXT,
-        repo_url TEXT,
-        intermediate_repo_url TEXT,
-        branch TEXT,
-        on_finish TEXT,
-        base_branch TEXT,
-        parent_remote TEXT,
-        feature_branch TEXT,
-        merge_mode TEXT,
-        review_provider TEXT,
-        external_dependencies TEXT,
-        external_dependency_changes TEXT,
-        detached_external_dependencies TEXT,
-        generation INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS tasks (
-        id TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
-        blocked_by TEXT,
-        dependencies TEXT DEFAULT '[]',
-        command TEXT,
-        prompt TEXT,
-        exit_code INTEGER,
-        error TEXT,
-        protocol_error_code TEXT,
-        protocol_error_message TEXT,
-        input_prompt TEXT,
-        external_dependencies TEXT,
-
-        -- Context
-        summary TEXT,
-        problem TEXT,
-        approach TEXT,
-        test_plan TEXT,
-        repro_command TEXT,
-        fix_prompt TEXT,
-        fix_context TEXT,
-
-        -- Git
-        branch TEXT,
-        commit_hash TEXT,
-        fixed_integration_sha TEXT,
-        fixed_integration_recorded_at TEXT,
-        fixed_integration_source TEXT,
-        parent_task TEXT,
-
-        -- Experiments
-        pivot INTEGER DEFAULT 0,
-        experiment_variants TEXT,
-        is_reconciliation INTEGER DEFAULT 0,
-        selected_experiment TEXT,
-        experiment_results TEXT,
-        requires_manual_approval INTEGER DEFAULT 0,
-
-        -- Repository
-        repo_url TEXT,
-        feature_branch TEXT,
-
-        -- Merge node
-        is_merge_node INTEGER DEFAULT 0,
-
-        -- Claude session
-        claude_session_id TEXT,
-        workspace_path TEXT,
-
-        -- Timestamps
-        created_at TEXT DEFAULT (datetime('now')),
-        launch_phase TEXT,
-        launch_started_at TEXT,
-        launch_completed_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        execution_generation INTEGER DEFAULT 0,
-        docker_image TEXT,
-
-        FOREIGN KEY (workflow_id) REFERENCES workflows(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        payload TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (task_id) REFERENCES tasks(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_events_task_id_id
-        ON events(task_id, id);
-
-      CREATE TABLE IF NOT EXISTS activity_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-        source TEXT NOT NULL,
-        level TEXT NOT NULL DEFAULT 'info',
-        message TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS conversations (
-        thread_ts TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        extracted_plan TEXT,
-        plan_submitted INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS conversation_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        thread_ts TEXT NOT NULL,
-        seq INTEGER NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (thread_ts) REFERENCES conversations(thread_ts)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_conv_messages_thread
-        ON conversation_messages(thread_ts, seq);
-
-      CREATE TABLE IF NOT EXISTS workflow_channels (
-        workflow_id TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL,
-        requested_by TEXT,
-        lobby_channel_id TEXT,
-        lobby_thread_ts TEXT,
-        harness_preset TEXT,
-        repo_url TEXT,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_workflow_channels_channel
-        ON workflow_channels(channel_id);
-
-      CREATE TABLE IF NOT EXISTS task_output (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        data TEXT NOT NULL,
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_task_output_task
-        ON task_output(task_id);
-
-      CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id
-        ON tasks(workflow_id);
-
-      CREATE TABLE IF NOT EXISTS attempts (
-        id TEXT PRIMARY KEY,
-        node_id TEXT NOT NULL,
-        attempt_number INTEGER NOT NULL,
-        queue_priority INTEGER NOT NULL DEFAULT 0,
-        status TEXT DEFAULT 'pending',
-
-        -- Input snapshot
-        snapshot_commit TEXT,
-        base_branch TEXT,
-        upstream_attempt_ids TEXT DEFAULT '[]',
-
-        -- Overrides
-        command_override TEXT,
-        prompt_override TEXT,
-
-        -- Execution state
-        claimed_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        exit_code INTEGER,
-        error TEXT,
-        last_heartbeat_at TEXT,
-        lease_expires_at TEXT,
-
-        -- Output
-        branch TEXT,
-        commit_hash TEXT,
-        summary TEXT,
-        workspace_path TEXT,
-        claude_session_id TEXT,
-        container_id TEXT,
-
-        -- Lineage
-        supersedes_attempt_id TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-
-        -- Merge conflict
-        merge_conflict TEXT,
-
-        FOREIGN KEY (node_id) REFERENCES tasks(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_attempts_node_created
-        ON attempts(node_id, created_at);
-
-      CREATE TABLE IF NOT EXISTS workflow_mutation_intents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        workflow_id TEXT NOT NULL,
-        channel TEXT NOT NULL,
-        args_json TEXT NOT NULL,
-        priority TEXT NOT NULL DEFAULT 'normal',
-        status TEXT NOT NULL DEFAULT 'queued',
-        owner_id TEXT,
-        error TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        started_at TEXT,
-        completed_at TEXT,
-        FOREIGN KEY (workflow_id) REFERENCES workflows(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_workflow_mutation_intents_workflow_status
-        ON workflow_mutation_intents(workflow_id, status, priority, id);
-
-      CREATE TABLE IF NOT EXISTS workflow_mutation_leases (
-        workflow_id TEXT PRIMARY KEY,
-        owner_id TEXT NOT NULL,
-        active_intent_id INTEGER,
-        active_mutation_kind TEXT,
-        leased_at TEXT NOT NULL,
-        last_heartbeat_at TEXT NOT NULL,
-        lease_expires_at TEXT NOT NULL,
-        FOREIGN KEY (workflow_id) REFERENCES workflows(id),
-        FOREIGN KEY (active_intent_id) REFERENCES workflow_mutation_intents(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_workflow_mutation_leases_expiry
-        ON workflow_mutation_leases(lease_expires_at);
-
-      CREATE TABLE IF NOT EXISTS task_launch_dispatch (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        attempt_id TEXT NOT NULL,
-        workflow_id TEXT NOT NULL,
-        state TEXT NOT NULL DEFAULT 'enqueued',
-        priority TEXT NOT NULL DEFAULT 'normal',
-        dispatch_owner TEXT,
-        enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
-        leased_at TEXT,
-        acknowledged_at TEXT,
-        completed_at TEXT,
-        fenced_until TEXT,
-        attempts_count INTEGER NOT NULL DEFAULT 0,
-        last_error TEXT,
-        generation INTEGER NOT NULL,
-        FOREIGN KEY (task_id) REFERENCES tasks(id),
-        FOREIGN KEY (workflow_id) REFERENCES workflows(id)
-      );
-
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_task_launch_dispatch_active_attempt
-        ON task_launch_dispatch(attempt_id)
-        WHERE state IN ('enqueued', 'leased');
-
-      CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_ready
-        ON task_launch_dispatch(state, priority, id)
-        WHERE state IN ('enqueued', 'leased');
-
-      CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_workflow_state
-        ON task_launch_dispatch(workflow_id, state);
-
-      CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_task_state
-        ON task_launch_dispatch(task_id, state);
-
-      CREATE TABLE IF NOT EXISTS execution_resource_leases (
-        resource_key TEXT NOT NULL,
-        resource_type TEXT NOT NULL,
-        holder_id TEXT NOT NULL,
-        task_id TEXT,
-        pool_id TEXT,
-        pool_member_id TEXT,
-        acquired_at TEXT NOT NULL,
-        last_heartbeat_at TEXT NOT NULL,
-        lease_expires_at TEXT NOT NULL,
-        metadata_json TEXT,
-        PRIMARY KEY(resource_key, holder_id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_execution_resource_leases_resource
-        ON execution_resource_leases(resource_key, lease_expires_at);
-
-      CREATE INDEX IF NOT EXISTS idx_execution_resource_leases_expiry
-        ON execution_resource_leases(lease_expires_at);
-
-      CREATE TABLE IF NOT EXISTS output_spool (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        offset INTEGER NOT NULL,
-        data TEXT NOT NULL,
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (task_id) REFERENCES tasks(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_output_spool_task_offset
-        ON output_spool(task_id, offset);
-    `);
+    this.db.run(SCHEMA_DDL);
   }
 
   /** Add columns that may not exist in older databases. */
   private migrate(): void {
-    const migrations = [
-      'ALTER TABLE tasks ADD COLUMN claude_session_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',
-      'ALTER TABLE tasks ADD COLUMN container_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN is_merge_node INTEGER DEFAULT 0',
-      'ALTER TABLE workflows ADD COLUMN on_finish TEXT',
-      'ALTER TABLE workflows ADD COLUMN base_branch TEXT',
-      'ALTER TABLE workflows ADD COLUMN parent_remote TEXT',
-      'ALTER TABLE workflows ADD COLUMN feature_branch TEXT',
-      'ALTER TABLE workflows ADD COLUMN generation INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN last_heartbeat_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN experiment_prompt TEXT',
-      'ALTER TABLE tasks ADD COLUMN auto_fix INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN max_fix_attempts INTEGER',
-      'ALTER TABLE tasks ADD COLUMN action_request_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN experiments TEXT',
-      'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
-      'ALTER TABLE tasks ADD COLUMN utilization INTEGER',
-      'ALTER TABLE tasks ADD COLUMN pending_fix_error TEXT',
-      'ALTER TABLE workflows ADD COLUMN merge_mode TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_url TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_status TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_provider_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_gate TEXT',
-      'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN execution_generation INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN docker_image TEXT',
-      'ALTER TABLE tasks ADD COLUMN selected_attempt_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN pool_member_id TEXT',
-      'ALTER TABLE workflows ADD COLUMN description TEXT',
-      'ALTER TABLE workflows ADD COLUMN visual_proof INTEGER',
-      'ALTER TABLE workflows ADD COLUMN intermediate_repo_url TEXT',
-      // agent_session_id: new column for pluggable agent architecture
-      'ALTER TABLE tasks ADD COLUMN agent_session_id TEXT',
-      'ALTER TABLE attempts ADD COLUMN agent_session_id TEXT',
-      'ALTER TABLE workflows ADD COLUMN review_provider TEXT',
-      'ALTER TABLE workflows ADD COLUMN external_dependencies TEXT',
-      'ALTER TABLE workflows ADD COLUMN external_dependency_changes TEXT',
-      // detached_external_dependencies: read-only provenance for deps removed by detachWorkflow
-      'ALTER TABLE workflows ADD COLUMN detached_external_dependencies TEXT',
-      // execution_agent / agent_name: interchangeable agent support
-      'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
-      'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
-      // durable audit pointers for most-recent agent session/name
-      'ALTER TABLE tasks ADD COLUMN last_agent_session_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN last_agent_name TEXT',
-      'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
-      'ALTER TABLE tasks ADD COLUMN runner_kind TEXT',
-      'ALTER TABLE tasks ADD COLUMN pool_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN launch_phase TEXT',
-      'ALTER TABLE tasks ADD COLUMN launch_started_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN launch_completed_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN fixed_integration_sha TEXT',
-      'ALTER TABLE tasks ADD COLUMN fixed_integration_recorded_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
-      'ALTER TABLE tasks ADD COLUMN fix_prompt TEXT',
-      'ALTER TABLE tasks ADD COLUMN fix_context TEXT',
-      'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
-      'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
-      'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
-    ];
-    for (const sql of migrations) {
+    for (const sql of COLUMN_MIGRATIONS) {
       try {
         this.db.run(sql);
       } catch (err) {
@@ -1068,17 +731,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
     this.migrateWorkflowStatusColumn();
 
-    // Replace old attempt_number index with created_at index
-    this.db.run('DROP INDEX IF EXISTS idx_attempts_node');
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)');
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_events_task_id_id ON events(task_id, id)');
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id ON tasks(workflow_id)');
-    this.db.run('DROP INDEX IF EXISTS idx_task_launch_dispatch_active_attempt');
-    this.db.run(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_task_launch_dispatch_active_attempt
-        ON task_launch_dispatch(attempt_id)
-        WHERE state IN ('enqueued', 'leased')
-    `);
+    // Replace old attempt_number index with created_at index, etc.
+    for (const sql of POST_MIGRATION_STATEMENTS) {
+      this.db.run(sql);
+    }
 
     if (!this.readOnly) {
       this.migrateTestCommands();
@@ -1098,43 +754,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (foreignKeysEnabled) {
       this.db.run('PRAGMA foreign_keys = OFF');
     }
-    this.db.run(`
-      CREATE TABLE workflows_new (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        visual_proof INTEGER,
-        plan_file TEXT,
-        repo_url TEXT,
-        intermediate_repo_url TEXT,
-        branch TEXT,
-        on_finish TEXT,
-        base_branch TEXT,
-        parent_remote TEXT,
-        feature_branch TEXT,
-        merge_mode TEXT,
-        review_provider TEXT,
-        external_dependencies TEXT,
-        external_dependency_changes TEXT,
-        generation INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      )
-    `);
-    this.db.run(`
-      INSERT INTO workflows_new (
-        id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
-        branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, external_dependencies, external_dependency_changes,
-        generation, created_at, updated_at
-      )
-      SELECT
-        id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
-        branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, external_dependencies, external_dependency_changes,
-        generation, created_at, updated_at
-      FROM workflows
-    `);
+    this.db.run(WORKFLOWS_REBUILD_TABLE_DDL);
+    this.db.run(WORKFLOWS_REBUILD_INSERT_DDL);
     this.db.run('DROP TABLE workflows');
     this.db.run('ALTER TABLE workflows_new RENAME TO workflows');
     if (foreignKeysEnabled) {
@@ -1850,16 +1471,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
-  private taskOutputKey(taskId: string): string {
-    return createHash('sha256').update(taskId).digest('hex');
-  }
-
   private taskOutputFile(taskId: string): string {
-    return join(this.outputDir, 'full', `${this.taskOutputKey(taskId)}.log`);
+    return taskOutputFilePath(this.outputDir, taskId);
   }
 
   private taskSpoolFile(taskId: string): string {
-    return join(this.outputDir, 'spool', `${this.taskOutputKey(taskId)}.jsonl`);
+    return taskSpoolFilePath(this.outputDir, taskId);
   }
 
   private ensureOutputSubdir(kind: 'full' | 'spool'): void {
@@ -1880,67 +1497,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return readFileSync(file, 'utf8');
   }
 
-  private encodeSpoolLine(chunk: OutputChunk): string {
-    const data = Buffer.from(chunk.data, 'utf8').toString('base64');
-    return `${chunk.offset}\t${data}\n`;
-  }
-
-  private decodeSpoolLine(line: string): OutputChunk | null {
-    if (!line) return null;
-    const separator = line.indexOf('\t');
-    if (separator <= 0) return null;
-    const offset = Number.parseInt(line.slice(0, separator), 10);
-    if (!Number.isFinite(offset)) return null;
-    return {
-      offset,
-      data: Buffer.from(line.slice(separator + 1), 'base64').toString('utf8'),
-    };
-  }
-
   private readSpoolLines(taskId: string): OutputChunk[] {
-    const file = this.taskSpoolFile(taskId);
-    if (!existsSync(file)) return [];
-    return readFileSync(file, 'utf8')
-      .split('\n')
-      .map((line) => this.decodeSpoolLine(line))
-      .filter((chunk): chunk is OutputChunk => chunk !== null);
+    return readSpoolLinesFromFile(this.taskSpoolFile(taskId));
   }
 
   private readLastSpoolLines(taskId: string, limit: number): OutputChunk[] {
-    if (limit <= 0) return [];
-    const file = this.taskSpoolFile(taskId);
-    if (!existsSync(file)) return [];
-
-    const fd = openSync(file, 'r');
-    try {
-      const size = statSync(file).size;
-      const chunkSize = 64 * 1024;
-      let position = size;
-      let suffix = '';
-      let lines: string[] = [];
-
-      while (position > 0 && lines.length <= limit) {
-        const readSize = Math.min(chunkSize, position);
-        position -= readSize;
-        const buffer = Buffer.allocUnsafe(readSize);
-        readSync(fd, buffer, 0, readSize, position);
-        const text = buffer.toString('utf8') + suffix;
-        const parts = text.split('\n');
-        suffix = parts.shift() ?? '';
-        lines = parts.concat(lines);
-      }
-      if (position === 0 && suffix) {
-        lines.unshift(suffix);
-      }
-
-      return lines
-        .filter(Boolean)
-        .slice(-limit)
-        .map((line) => this.decodeSpoolLine(line))
-        .filter((chunk): chunk is OutputChunk => chunk !== null);
-    } finally {
-      closeSync(fd);
-    }
+    return readLastSpoolLinesFromFile(this.taskSpoolFile(taskId), limit);
   }
 
   private readLastSpoolChunk(taskId: string): OutputChunk | null {
@@ -2476,7 +2038,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.ensureWritable();
     const nextOffset = this.getNextSpoolOffset(taskId);
     this.ensureOutputSubdir('spool');
-    appendFileSync(this.taskSpoolFile(taskId), this.encodeSpoolLine({ offset: nextOffset, data }), 'utf8');
+    appendFileSync(this.taskSpoolFile(taskId), encodeSpoolLine({ offset: nextOffset, data }), 'utf8');
     this.spoolNextOffsetCache.set(taskId, nextOffset + Buffer.byteLength(data, 'utf8'));
 
     // Update in-memory tail cache
@@ -2738,6 +2300,33 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'INSERT INTO activity_log (source, level, message) VALUES (?, ?, ?)',
       [source, level, message],
     );
+    this.activityLogWritesSincePrune += 1;
+    if (this.activityLogWritesSincePrune >= ACTIVITY_LOG_PRUNE_INTERVAL) {
+      this.activityLogWritesSincePrune = 0;
+      try {
+        this.pruneActivityLog();
+      } catch {
+        /* best-effort: a prune failure must not break logging */
+      }
+    }
+  }
+
+  /** Bound activity_log to its newest `maxRows` rows; returns rows deleted. No-op when read-only or maxRows <= 0. */
+  pruneActivityLog(maxRows: number = this.activityLogMaxRows): number {
+    if (this.readOnly || !Number.isFinite(maxRows) || maxRows <= 0) return 0;
+    const total = this.queryOne('SELECT COUNT(*) AS c FROM activity_log') as
+      | { c: number }
+      | undefined;
+    const count = total?.c ?? 0;
+    if (count <= maxRows) return 0;
+    // keep newest maxRows; ids are monotonic so OFFSET is gap-safe
+    const boundary = this.queryOne(
+      'SELECT id FROM activity_log ORDER BY id DESC LIMIT 1 OFFSET ?',
+      [maxRows],
+    ) as { id: number } | undefined;
+    if (!boundary) return 0;
+    this.execRun('DELETE FROM activity_log WHERE id <= ?', [boundary.id]);
+    return count - maxRows;
   }
 
   getActivityLogs(sinceId = 0, limit = 200): ActivityLogEntry[] {
@@ -2823,106 +2412,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private rowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
-    return {
-      id: row.id,
-      name: row.name,
-      description: row.description ?? undefined,
-      visualProof: row.visual_proof === 1,
-      status: rollup?.status ?? 'pending',
-      rollup,
-      planFile: row.plan_file ?? undefined,
-      repoUrl: row.repo_url ?? undefined,
-      intermediateRepoUrl: row.intermediate_repo_url ?? undefined,
-      branch: row.branch ?? undefined,
-      onFinish: row.on_finish ?? undefined,
-      baseBranch: row.base_branch ?? undefined,
-      featureBranch: row.feature_branch ?? undefined,
-      mergeMode: row.merge_mode ?? undefined,
-      reviewProvider: row.review_provider ?? undefined,
-      externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
-      externalDependencyChanges: row.external_dependency_changes ? JSON.parse(row.external_dependency_changes) as ExternalDependencyChange[] : undefined,
-      detachedExternalDependencies: row.detached_external_dependencies ? JSON.parse(row.detached_external_dependencies) as DetachedExternalDependency[] : undefined,
-      generation: row.generation ?? 0,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
+    return mapRowToWorkflow(row, rollup);
   }
 
   private rowToTask(row: any): TaskState {
-    const normalizedStatus = row.status as TaskStatus;
-    return {
-      id: row.id,
-      description: row.description,
-      status: normalizedStatus,
-      dependencies: JSON.parse(row.dependencies || '[]'),
-      createdAt: new Date(row.created_at),
-      config: {
-        workflowId: row.workflow_id ?? undefined,
-        parentTask: row.parent_task ?? undefined,
-        command: row.command ?? undefined,
-        prompt: row.prompt ?? undefined,
-        externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
-        experimentPrompt: row.experiment_prompt ?? undefined,
-        pivot: row.pivot === 1 ? true : undefined,
-        experimentVariants: row.experiment_variants ? JSON.parse(row.experiment_variants) : undefined,
-        isReconciliation: row.is_reconciliation === 1 ? true : undefined,
-        requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
-        featureBranch: row.feature_branch ?? undefined,
-        poolId: row.pool_id ?? undefined,
-        runnerKind: normalizeRunnerKind(row.runner_kind ?? undefined),
-        ...((row.pool_member_id ?? undefined) ? { poolMemberId: row.pool_member_id } : {}),
-        dockerImage: row.docker_image ?? undefined,
-        isMergeNode: row.is_merge_node === 1 ? true : undefined,
-        summary: row.summary ?? undefined,
-        problem: row.problem ?? undefined,
-        approach: row.approach ?? undefined,
-        testPlan: row.test_plan ?? undefined,
-        reproCommand: row.repro_command ?? undefined,
-        fixPrompt: row.fix_prompt ?? undefined,
-        fixContext: row.fix_context ?? undefined,
-        executionAgent: row.execution_agent ?? undefined,
-      },
-      execution: {
-        blockedBy: row.blocked_by ?? undefined,
-        inputPrompt: row.input_prompt ?? undefined,
-        exitCode: row.exit_code ?? undefined,
-        error: row.error ?? undefined,
-        protocolErrorCode: row.protocol_error_code ?? undefined,
-        protocolErrorMessage: row.protocol_error_message ?? undefined,
-        startedAt: row.started_at ? new Date(row.started_at) : undefined,
-        completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
-        lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,
-        actionRequestId: row.action_request_id ?? undefined,
-        branch: row.branch ?? undefined,
-        commit: row.commit_hash ?? undefined,
-        fixedIntegrationSha: row.fixed_integration_sha ?? undefined,
-        fixedIntegrationRecordedAt: row.fixed_integration_recorded_at ? new Date(row.fixed_integration_recorded_at) : undefined,
-        fixedIntegrationSource: row.fixed_integration_source ?? undefined,
-        agentSessionId: row.agent_session_id || undefined,
-        lastAgentSessionId: row.last_agent_session_id || undefined,
-        agentName: row.agent_name ?? undefined,
-        lastAgentName: row.last_agent_name ?? undefined,
-        workspacePath: row.workspace_path ?? undefined,
-        containerId: row.container_id ?? undefined,
-        experiments: row.experiments ? JSON.parse(row.experiments) : undefined,
-        selectedExperiment: row.selected_experiment ?? undefined,
-        selectedExperiments: row.selected_experiments ? JSON.parse(row.selected_experiments) : undefined,
-        experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
-        pendingFixError: row.pending_fix_error ?? undefined,
-        reviewUrl: row.review_url ?? undefined,
-        reviewId: row.review_id ?? undefined,
-        reviewStatus: row.review_status ?? undefined,
-        reviewProviderId: row.review_provider_id ?? undefined,
-        reviewGate: row.review_gate ? JSON.parse(row.review_gate) : undefined,
-        phase: row.launch_phase ?? undefined,
-        launchStartedAt: row.launch_started_at ? new Date(row.launch_started_at) : undefined,
-        launchCompletedAt: row.launch_completed_at ? new Date(row.launch_completed_at) : undefined,
-        generation: row.execution_generation ?? 0,
-        selectedAttemptId: row.selected_attempt_id ?? undefined,
-        autoFixAttempts: row.auto_fix_attempts ?? undefined,
-      },
-      taskStateVersion: row.task_state_version ?? 1,
-    };
+    return mapRowToTask(row);
   }
 
   private reconcileTaskFromSelectedAttempt(task: TaskState): TaskState {
@@ -3001,33 +2495,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private rowToAttempt(row: any): Attempt {
-    return {
-      id: row.id,
-      nodeId: row.node_id,
-      queuePriority: Number(row.queue_priority ?? 0),
-      status: row.status,
-      claimedAt: row.claimed_at ? new Date(row.claimed_at) : undefined,
-      snapshotCommit: row.snapshot_commit ?? undefined,
-      baseBranch: row.base_branch ?? undefined,
-      upstreamAttemptIds: JSON.parse(row.upstream_attempt_ids || '[]'),
-      commandOverride: row.command_override ?? undefined,
-      promptOverride: row.prompt_override ?? undefined,
-      startedAt: row.started_at ? new Date(row.started_at) : undefined,
-      completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
-      exitCode: row.exit_code ?? undefined,
-      error: row.error ?? undefined,
-      lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,
-      leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : undefined,
-      branch: row.branch ?? undefined,
-      commit: row.commit_hash ?? undefined,
-      summary: row.summary ?? undefined,
-      workspacePath: row.workspace_path ?? undefined,
-      agentSessionId: row.agent_session_id || undefined,
-      containerId: row.container_id ?? undefined,
-      supersedesAttemptId: row.supersedes_attempt_id ?? undefined,
-      createdAt: new Date(row.created_at),
-      mergeConflict: row.merge_conflict ? JSON.parse(row.merge_conflict) : undefined,
-    };
+    return mapRowToAttempt(row);
   }
 
   enqueueWorkflowMutationIntent(
@@ -3792,25 +3260,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private rowToTaskLaunchDispatch(row: Record<string, unknown>): TaskLaunchDispatch {
-    const priorityRaw = String(row.priority ?? 'normal');
-    const priority: TaskLaunchDispatchPriority =
-      priorityRaw === 'high' || priorityRaw === 'low' ? priorityRaw : 'normal';
-    return {
-      id: Number(row.id),
-      taskId: String(row.task_id),
-      attemptId: String(row.attempt_id),
-      workflowId: String(row.workflow_id),
-      state: String(row.state ?? 'enqueued') as TaskLaunchDispatchState,
-      priority,
-      dispatchOwner: row.dispatch_owner ? String(row.dispatch_owner) : undefined,
-      enqueuedAt: String(row.enqueued_at),
-      leasedAt: row.leased_at ? String(row.leased_at) : undefined,
-      completedAt: row.completed_at ? String(row.completed_at) : undefined,
-      fencedUntil: row.fenced_until ? String(row.fenced_until) : undefined,
-      attemptsCount: Number(row.attempts_count ?? 0),
-      lastError: row.last_error ? String(row.last_error) : undefined,
-      generation: Number(row.generation ?? 0),
-    };
+    return mapRowToTaskLaunchDispatch(row);
   }
 
   listWorkflowMutationLeases(): WorkflowMutationLease[] {
@@ -3850,33 +3300,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private rowToWorkflowMutationIntent(row: Record<string, unknown>): WorkflowMutationIntent {
-    return {
-      id: Number(row.id),
-      workflowId: String(row.workflow_id),
-      channel: String(row.channel),
-      args: JSON.parse(String(row.args_json ?? '[]')),
-      priority: row.priority === 'high' ? 'high' : 'normal',
-      status: (row.status as WorkflowMutationIntentStatus) ?? 'queued',
-      ownerId: (row.owner_id as string) ?? undefined,
-      error: (row.error as string) ?? undefined,
-      createdAt: String(row.created_at),
-      startedAt: (row.started_at as string) ?? undefined,
-      completedAt: (row.completed_at as string) ?? undefined,
-    };
+    return mapRowToWorkflowMutationIntent(row);
   }
 
   private rowToWorkflowMutationLease(row: Record<string, unknown>): WorkflowMutationLease {
-    return {
-      workflowId: String(row.workflow_id),
-      ownerId: String(row.owner_id),
-      activeIntentId: row.active_intent_id === null || row.active_intent_id === undefined
-        ? undefined
-        : Number(row.active_intent_id),
-      activeMutationKind: row.active_mutation_kind ? String(row.active_mutation_kind) : undefined,
-      leasedAt: String(row.leased_at),
-      lastHeartbeatAt: String(row.last_heartbeat_at),
-      leaseExpiresAt: String(row.lease_expires_at),
-    };
+    return mapRowToWorkflowMutationLease(row);
   }
 
   private requeueWorkflowMutationLease(workflowId: string): void {

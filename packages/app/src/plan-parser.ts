@@ -61,6 +61,7 @@ export interface RawPlanTask {
   dockerImage?: string;
   poolId?: string;
   executionAgent?: string;
+  executionModel?: string;
 }
 
 export interface RawPlan {
@@ -348,6 +349,10 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       command: v.command,
     }));
 
+    if (task.executionModel !== undefined && typeof task.executionModel !== 'string') {
+      throw new PlanParseError(`Task "${task.id}" field "executionModel" must be a string when provided`);
+    }
+
     return {
       id: task.id,
       description: task.description,
@@ -361,6 +366,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       dockerImage: task.dockerImage,
       poolId: task.poolId,
       executionAgent: task.executionAgent?.trim() || undefined,
+      executionModel: task.executionModel?.trim() || undefined,
     };
   });
 

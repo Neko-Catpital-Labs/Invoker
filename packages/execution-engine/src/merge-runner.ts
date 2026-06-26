@@ -452,6 +452,63 @@ export function collectDirectNonMergeTaskIds(
   return out;
 }
 
+// ── Stale-lineage guard for direct execution-metadata writes ──────────────
+
+// Direct updateTask writes of merge-gate metadata bypass the worker-response
+// lineage guard. A merge-gate run can be long-lived, so if the merge task is
+// relaunched meanwhile, capture the launch lineage up front and gate the write.
+export interface MergeGateLineage {
+  selectedAttemptId: string | undefined;
+  generation: number;
+}
+
+export function captureMergeGateLineage(task: TaskState): MergeGateLineage {
+  return {
+    selectedAttemptId: task.execution.selectedAttemptId,
+    generation: task.execution.generation ?? 0,
+  };
+}
+
+// True when the live merge task still matches the captured launch lineage.
+export function mergeGateLineageIsCurrent(
+  host: MergeRunnerHost,
+  taskId: string,
+  expected: MergeGateLineage,
+): boolean {
+  const current = host.orchestrator.getTask(taskId);
+  // Task gone from the graph: can't confirm it advanced, so don't suppress.
+  if (!current) return true;
+  const currentAttempt = current.execution.selectedAttemptId;
+  if (currentAttempt !== undefined && currentAttempt !== expected.selectedAttemptId) {
+    return false;
+  }
+  if ((current.execution.generation ?? 0) !== expected.generation) return false;
+  return true;
+}
+
+// Lineage-guarded direct write; skips (and traces) when the task advanced past
+// `expected`. Returns true when the write was applied.
+export function updateMergeGateMetadataIfCurrent(
+  host: MergeRunnerHost,
+  taskId: string,
+  changes: TaskStateChanges,
+  expected: MergeGateLineage,
+): boolean {
+  if (!mergeGateLineageIsCurrent(host, taskId, expected)) {
+    const current = host.orchestrator.getTask(taskId);
+    mergeTrace('DIRECT_WRITE_STALE_LINEAGE_SKIPPED', {
+      taskId,
+      expectedSelectedAttemptId: expected.selectedAttemptId ?? null,
+      expectedGeneration: expected.generation,
+      currentSelectedAttemptId: current?.execution.selectedAttemptId ?? null,
+      currentGeneration: current ? current.execution.generation ?? 0 : null,
+    });
+    return false;
+  }
+  host.persistence.updateTask(taskId, changes);
+  return true;
+}
+
 // ── Extracted functions ──────────────────────────────────
 
 export interface MergeGateActionResult {
@@ -462,8 +519,11 @@ export interface MergeGateActionResult {
 export async function runMergeGateActionImpl(
   host: MergeRunnerHost,
   task: TaskState,
-  opts: { gateWorkspacePath?: string } = {},
+  opts: { gateWorkspacePath?: string; lineage?: MergeGateLineage } = {},
 ): Promise<MergeGateActionResult> {
+  // Executor passes the dispatched request's lineage; legacy callers fall back
+  // to the task snapshot.
+  const launchLineage = opts.lineage ?? captureMergeGateLineage(task);
   const workflowId = task.config.workflowId;
   const workflow = workflowId
     ? host.persistence.loadWorkflow(workflowId)
@@ -495,13 +555,13 @@ export async function runMergeGateActionImpl(
       `mergeMode=${mergeMode} onFinish=${onFinish} dbWorkspacePath=${safeGetWorkspacePath(host.persistence, task.id) ?? 'NULL'}`,
   );
 
-  host.persistence.updateTask(task.id, {
+  updateMergeGateMetadataIfCurrent(host, task.id, {
     execution: {
       reviewUrl: undefined,
       reviewId: undefined,
       reviewStatus: undefined,
     },
-  });
+  }, launchLineage);
 
   // Create a persistent gate worktree so workspacePath is never the main repo.
   // Use baseBranch as the ref because featureBranch may not exist yet
@@ -806,7 +866,7 @@ export async function executeMergeNodeImpl(
     config: legacyConfig,
   };
 
-  host.persistence.updateTask(task.id, legacyChanges);
+  updateMergeGateMetadataIfCurrent(host, task.id, legacyChanges, captureMergeGateLineage(task));
 
   if (response.status === 'review_ready') {
     setMergeGateReviewReady(host, task.id, legacyChanges, {
@@ -1286,10 +1346,10 @@ export async function publishAfterFixImpl(
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', prBody, consolidateDir);
       console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
-      host.persistence.updateTask(task.id, {
+      updateMergeGateMetadataIfCurrent(host, task.id, {
         config: { summary },
         execution: { reviewUrl },
-      });
+      }, captureMergeGateLineage(task));
     }
 
     setMergeGateReviewReady(host, task.id, {

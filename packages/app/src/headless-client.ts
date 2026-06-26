@@ -161,11 +161,10 @@ async function delegateReadOnlyQuery(
   );
   const ownerResult = await resolver.waitForAny(READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS);
   if (!ownerResult.resolved) {
+    if (isActionGraph) return false;
     throw new Error(isUiPerf
       ? 'query ui-perf requires a running shared owner process'
-      : isActionGraph
-        ? 'query action-graph requires a running shared owner process'
-        : 'query queue requires a running shared owner process');
+      : 'query queue requires a running shared owner process');
   }
 
   let messageBus = ownerResult.bus;
@@ -187,13 +186,27 @@ async function delegateReadOnlyQuery(
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (!response) {
+    if (isActionGraph) return false;
     throw new Error(isUiPerf
       ? 'Live owner is present but did not serve ui-perf query'
-      : isActionGraph
-        ? 'Live owner is present but did not serve action-graph query'
-        : 'Live owner is present but did not serve queue query');
+      : 'Live owner is present but did not serve queue query');
   }
-  if (isUiPerf || isActionGraph) {
+  if (isActionGraph) {
+    const outputIndex = args.indexOf('--output');
+    const output = outputIndex >= 0 ? args[outputIndex + 1] : undefined;
+    const nodes = Array.isArray(response.nodes) ? response.nodes as Array<Record<string, unknown>> : [];
+    const edges = Array.isArray(response.edges) ? response.edges as Array<Record<string, unknown>> : [];
+    if (output === 'label') {
+      process.stdout.write(nodes.map((node) => String(node.id ?? '')).filter(Boolean).join('\n') + '\n');
+    } else if (output === 'jsonl') {
+      for (const node of nodes) process.stdout.write(`${JSON.stringify({ kind: 'node', ...node })}\n`);
+      for (const edge of edges) process.stdout.write(`${JSON.stringify({ kind: 'edge', ...edge })}\n`);
+    } else {
+      process.stdout.write(`${JSON.stringify(response)}\n`);
+    }
+    return true;
+  }
+  if (isUiPerf) {
     process.stdout.write(`${JSON.stringify(response)}\n`);
     return true;
   }
