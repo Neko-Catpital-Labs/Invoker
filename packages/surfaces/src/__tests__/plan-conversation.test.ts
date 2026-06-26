@@ -558,7 +558,7 @@ describe('PlanConversation', () => {
 
   it('handles Cursor CLI error', async () => {
     mockSpawn.mockReturnValueOnce(createErrorProcess('Command not found'));
-    await expect(conversation.sendMessage('Hello')).rejects.toThrow('Failed to spawn Cursor CLI');
+    await expect(conversation.sendMessage('Hello')).rejects.toThrow('Failed to spawn agent');
   });
 
   it('handles non-zero exit code', async () => {
@@ -575,7 +575,29 @@ describe('PlanConversation', () => {
       proc.emit('close', 1);
     }, 0);
 
-    await expect(promise).rejects.toThrow('Cursor CLI exited with code 1');
+    await expect(promise).rejects.toThrow('agent exited with code 1');
+  });
+
+  it('names the planner tool (omp), not "Cursor", on non-zero exit', async () => {
+    const conv = new PlanConversation({
+      tool: 'omp',
+      planningCommandBuilder: () => ({ command: 'omp', args: ['--no-title', '--auto-approve', '-p', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    setTimeout(() => {
+      proc.stderr.emit('data', Buffer.from('No models available'));
+      proc.emit('close', 1);
+    }, 0);
+
+    const err = await promise.then(() => null, (e) => e as Error);
+    expect(err?.message).toContain('omp exited with code 1');
+    expect(err?.message).not.toContain('Cursor');
   });
 });
 
