@@ -42,9 +42,13 @@ flag_exhausted() {
     log_line "PR #$num: would post 'exhausted' comment and flag workflow $wf"
     return 0
   fi
-  gh_json pr comment "$num" --repo "$TARGET_REPO" --body "$body" >/dev/null \
-    || log_line "PR #$num: exhausted-comment post failed (non-fatal)"
-  ledger_record rebase-recreate-flagged "$wf" exhausted
+  # Only record the one-time flag if the comment actually posted; otherwise a
+  # transient GitHub failure would permanently suppress the manual-attention ping.
+  if gh_json pr comment "$num" --repo "$TARGET_REPO" --body "$body" >/dev/null; then
+    ledger_record rebase-recreate-flagged "$wf" exhausted
+  else
+    log_line "PR #$num: exhausted-comment post failed (non-fatal); will retry the flag next tick"
+  fi
 }
 
 dispatch_rebase_recreate() {
@@ -60,12 +64,18 @@ dispatch_rebase_recreate() {
     log_line "PR #$num: rebase-recreate dispatch failed; retry next tick"
     exit 1
   fi
+  # Count the accepted dispatch so a non-idempotent rebase-recreate that is
+  # accepted but never advances generation still hits the cap, instead of
+  # re-firing every tick. The cap below counts attempts, not just confirmations.
+  ledger_record rebase-recreate-attempt "$wf" "$gen"
 
   # Confirm the recreate actually landed: generation must advance past $gen.
   local deadline newgen
   deadline="$(( $(date +%s) + CONFIRM_TIMEOUT ))"
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    newgen="$("$RUNNER" --headless query workflow "$wf" --output json 2>/dev/null | jq -r '.generation // empty')"
+    # Tolerate a transient query/jq failure (set -e would otherwise abort the
+    # whole worker mid-confirmation); just keep polling until the deadline.
+    newgen="$("$RUNNER" --headless query workflow "$wf" --output json 2>/dev/null | jq -r '.generation // empty' 2>/dev/null || true)"
     if [ -n "$newgen" ] && [ "$newgen" -gt "$gen" ]; then
       ledger_record rebase-recreate "$wf" "$gen"
       log_line "PR #$num: rebase-recreate confirmed (generation $gen -> $newgen)"
@@ -89,7 +99,10 @@ while IFS= read -r pr; do
   [ -z "$pr" ] && continue
   num="$(jq -r '.number' <<<"$pr")"
 
-  rec="$(resolve_workflow_for_pr "$num")"
+  if ! rec="$(resolve_workflow_for_pr "$num")"; then
+    log_line "PR #$num: review-gate lookup failed; skip (retry next tick)"
+    continue
+  fi
   wf="$(jq -r '.workflowId // empty' <<<"$rec" 2>/dev/null || true)"
   if [ -z "$wf" ]; then
     log_line "PR #$num: no local workflow; skip"
@@ -103,8 +116,10 @@ while IFS= read -r pr; do
     continue
   fi
 
-  # (e) hard attempt cap + one-time GitHub flag.
-  if [ "$(ledger_count rebase-recreate "$wf")" -ge "$MAX_REBASE_ATTEMPTS" ]; then
+  # (e) hard attempt cap + one-time GitHub flag. Counts accepted dispatches
+  # (rebase-recreate-attempt), so a dispatch that is accepted but never confirms
+  # still counts toward the cap instead of re-firing forever.
+  if [ "$(ledger_count rebase-recreate-attempt "$wf")" -ge "$MAX_REBASE_ATTEMPTS" ]; then
     log_line "PR #$num: giving up — rebase-recreate hit cap of $MAX_REBASE_ATTEMPTS for workflow $wf"
     flag_exhausted "$num" "$wf"
     continue

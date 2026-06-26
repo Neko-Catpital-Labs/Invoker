@@ -73,9 +73,11 @@ out="$(INVOKER_TEST_CR_UPDATED="$T2" run)"
 echo "$out" | grep -q "would launch omp for new CodeRabbit activity at $T2" \
   || fail "check 3: expected 'would launch omp ... at $T2'" "$out"
 
-# Check 4: reach the per-PR cap (3 records), newer T3 -> hit cap.
-printf 'coderabbit\t777\t%s\t%s\n' "$T2" "$(date +%s)" >> "$LEDGER"
-printf 'coderabbit\t777\t%s\t%s\n' "2026-06-25T07:00:00Z" "$(date +%s)" >> "$LEDGER"
+# Check 4: reach the per-PR cap. The cap counts attempts (coderabbit-attempt),
+# so seed three attempt rows; a newer T3 passes dedup but still hits the cap.
+printf 'coderabbit-attempt\t777\t%s\t%s\n' "$T1" "$(date +%s)" >> "$LEDGER"
+printf 'coderabbit-attempt\t777\t%s\t%s\n' "$T2" "$(date +%s)" >> "$LEDGER"
+printf 'coderabbit-attempt\t777\t%s\t%s\n' "2026-06-25T07:00:00Z" "$(date +%s)" >> "$LEDGER"
 out="$(INVOKER_TEST_CR_UPDATED="$T3" run)"
 echo "$out" | grep -q "hit cap" \
   || fail "check 4: expected 'hit cap' at the per-PR attempt cap" "$out"

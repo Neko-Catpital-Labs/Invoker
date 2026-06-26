@@ -59,7 +59,8 @@ collect_coderabbit() {
 # callers can capture nothing on stdout.
 CHECKOUT_DIR=""
 prepare_checkout() {
-  local num="$1" dir="$WORKDIR/$num"
+  local num="$1"
+  local dir="$WORKDIR/$num"
   mkdir -p "$WORKDIR"
   if [ ! -d "$dir/.git" ]; then
     rm -rf "$dir"
@@ -67,8 +68,13 @@ prepare_checkout() {
       log_line "PR #$num: clone failed" >&2
       return 1
     fi
+  elif ! ( cd "$dir" && git reset --hard && git clean -fd ) >/dev/null 2>&1; then
+    # A prior omp run that exited non-zero can leave a dirty worktree; reset it
+    # so the next attempt never fails checkout on, or pushes, stale edits.
+    log_line "PR #$num: failed to clean reused checkout" >&2
+    return 1
   fi
-  if ! ( cd "$dir" && git fetch --quiet --all && gh pr checkout "$num" --repo "$TARGET_REPO" ) >/dev/null 2>&1; then
+  if ! ( cd "$dir" && git fetch --quiet --all && gh pr checkout "$num" --repo "$TARGET_REPO" && git reset --hard && git clean -fd ) >/dev/null 2>&1; then
     log_line "PR #$num: gh pr checkout failed" >&2
     return 1
   fi
@@ -111,15 +117,21 @@ launch_omp() {
   # launch_omp <num> <pr_title> <head_branch> <base_branch>; exits the script.
   local num="$1" pr_title="$2" head_branch="$3" base_branch="$4"
 
-  local rec wf tasks
-  rec="$(resolve_workflow_for_pr "$num")"
-  wf="$(jq -r '.workflowId // empty' <<<"$rec" 2>/dev/null || true)"
-  if [ -n "$wf" ]; then
-    tasks="$("$RUNNER" --headless query tasks --workflow "$wf" --output json 2>/dev/null || printf 'null')"
-    printf '%s' "$tasks" | jq empty 2>/dev/null || tasks="null"
+  # Count every real attempt (not just successes) so repeated failures hit the
+  # cap instead of retrying forever; dedup still keys off the success marker.
+  ledger_record coderabbit-attempt "$num" "$LATEST_MARKER"
+
+  local rec="" wf="" tasks="null"
+  if rec="$(resolve_workflow_for_pr "$num")"; then
+    wf="$(jq -r '.workflowId // empty' <<<"$rec" 2>/dev/null || true)"
+    if [ -n "$wf" ]; then
+      tasks="$("$RUNNER" --headless query tasks --workflow "$wf" --output json 2>/dev/null || printf 'null')"
+      printf '%s' "$tasks" | jq empty 2>/dev/null || tasks="null"
+    else
+      log_line "PR #$num: no local Invoker workflow; proceeding without task context"
+    fi
   else
-    tasks="null"
-    log_line "PR #$num: no local Invoker workflow; proceeding without task context"
+    log_line "PR #$num: review-gate lookup failed; proceeding without task context"
   fi
 
   local pr_view pr_body
@@ -150,7 +162,13 @@ launch_omp() {
 
   log_line "PR #$num: launching omp on $CHECKOUT_DIR"
   # omp reads $ctx_file during the run, so clean it up only after omp returns.
-  if ( cd "$CHECKOUT_DIR" && "$omp_cmd" "${omp_args[@]}" ); then
+  # Bound the run so a hung omp cannot hold the shared cron lock indefinitely;
+  # a timeout exits non-zero and is handled exactly like any other failure.
+  local omp_run=("$omp_cmd" "${omp_args[@]}")
+  if command -v timeout >/dev/null 2>&1; then
+    omp_run=(timeout --kill-after=1m "${INVOKER_PR_CRON_OMP_TIMEOUT:-45m}" "$omp_cmd" "${omp_args[@]}")
+  fi
+  if ( cd "$CHECKOUT_DIR" && "${omp_run[@]}" ); then
     rm -f "$ctx_file"
     ledger_record coderabbit "$num" "$LATEST_MARKER"
     log_line "PR #$num: omp addressed CodeRabbit feedback; recorded marker $LATEST_MARKER"
@@ -187,8 +205,8 @@ while IFS= read -r pr; do
     continue
   fi
 
-  # per-PR attempt cap.
-  if [ "$(ledger_count coderabbit "$num")" -ge "$MAX_CODERABBIT_ATTEMPTS" ]; then
+  # per-PR attempt cap (counts every attempt, including failed omp runs).
+  if [ "$(ledger_count coderabbit-attempt "$num")" -ge "$MAX_CODERABBIT_ATTEMPTS" ]; then
     log_line "PR #$num: CodeRabbit address hit cap of $MAX_CODERABBIT_ATTEMPTS; skip"
     continue
   fi

@@ -49,16 +49,28 @@ log_line() {
 # ---------------------------------------------------------------------------
 
 _cron_lock_reap_stale() {
-  # Steal a mkdir lock whose holder was killed before cleanup. flock has no
-  # such risk (the kernel releases the fd), so this only applies to the
-  # mkdir fallback path.
+  # Steal a mkdir lock only when its holder is gone. The holder records its PID
+  # in the lock dir; we reap on a dead PID and NEVER on age alone, so a healthy
+  # long run keeps the lock no matter how long it takes (age-based reaping would
+  # break mutual exclusion once a run crossed the threshold). flock has no such
+  # risk (the kernel releases the fd), so this only applies to the mkdir path.
   local lockdir="$1"
-  local max_age="${INVOKER_PR_CRON_LOCK_STALE_SECS:-3600}"
-  local now mtime
+  local pid_file="$lockdir/pid"
+  local holder=""
+  [ -f "$pid_file" ] && holder="$(cat "$pid_file" 2>/dev/null || true)"
+  if [ -n "$holder" ]; then
+    kill -0 "$holder" 2>/dev/null && return 0   # holder alive — do not reap
+    rm -rf "$lockdir" 2>/dev/null || true
+    return 0
+  fi
+  # No PID recorded (a pre-PID or garbled lock): fall back to an age threshold so
+  # a crashed legacy holder is still cleaned up eventually.
+  local max_age now mtime
+  max_age="${INVOKER_PR_CRON_LOCK_STALE_SECS:-3600}"
   now="$(date +%s)"
   mtime="$(stat -f %m "$lockdir" 2>/dev/null || stat -c %Y "$lockdir" 2>/dev/null || echo "$now")"
   if [ "$((now - mtime))" -ge "$max_age" ]; then
-    rmdir "$lockdir" 2>/dev/null || true
+    rm -rf "$lockdir" 2>/dev/null || true
   fi
 }
 
@@ -72,16 +84,17 @@ cron_lock() {
     return 0
   fi
 
-  # Portable fallback: atomic mkdir lock.
+  # Portable fallback: atomic mkdir lock, reaped only on a dead holder PID.
   local lockdir="${CRON_LOCK}.d"
   [ -d "$lockdir" ] && _cron_lock_reap_stale "$lockdir"
   if ! mkdir "$lockdir" 2>/dev/null; then
     log_line "another PR cron operation in progress; exiting"
     exit 0
   fi
+  printf '%s\n' "$$" > "$lockdir/pid"
   CRON_LOCK_DIR="$lockdir"
   # shellcheck disable=SC2064
-  trap 'rmdir "'"$lockdir"'" 2>/dev/null || true' EXIT
+  trap 'rm -rf "'"$lockdir"'" 2>/dev/null || true' EXIT
 }
 
 # ---------------------------------------------------------------------------
@@ -147,9 +160,12 @@ gh_json() {
 
 # ---------------------------------------------------------------------------
 # Resolve a PR number to its Invoker workflow via the read-only review-gate
-# query (Step 1). Echoes the JSON record, or `{}` when there is no local
-# workflow. A test seam (INVOKER_PR_CRON_REVIEW_GATE_CMD) lets repros stub it
-# without a built dist.
+# query (Step 1). On success it echoes the JSON record, or `{}` for a genuine
+# miss (review-gate exits 0 with `{}` when no workflow matches). A real
+# lookup/runtime failure propagates a NON-ZERO exit so callers can tell
+# "no local workflow" apart from "the lookup path is broken" instead of
+# silently skipping eligible PRs. A test seam (INVOKER_PR_CRON_REVIEW_GATE_CMD)
+# lets repros stub it without a built dist.
 # ---------------------------------------------------------------------------
 
 resolve_workflow_for_pr() {
@@ -158,5 +174,5 @@ resolve_workflow_for_pr() {
     "$INVOKER_PR_CRON_REVIEW_GATE_CMD" "$pr"
     return
   fi
-  headless_query query review-gate "$pr" --output json 2>/dev/null || printf '{}'
+  headless_query query review-gate "$pr" --output json
 }

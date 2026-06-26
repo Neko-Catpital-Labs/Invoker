@@ -25,7 +25,7 @@ import {
 export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|review-gate|action-graph|audit|session|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -131,15 +131,19 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
     }
     case 'review-gate': {
       const arg = flags.positional[0];
-      if (!arg) throw new Error('Usage: --headless query review-gate <prNumber|prUrl> [--output json|jsonl|label]');
+      if (!arg) throw new Error('Usage: --headless query review-gate <prNumber|prUrl> [--output text|json|jsonl|label]');
       const prNumber = parsePrNumber(arg);
       if (!prNumber) throw new Error(`Could not parse a PR number from "${arg}".`);
       const record = deps.persistence.findReviewGateByPr(prNumber);
       switch (flags.output) {
         case 'label': process.stdout.write(`${record?.workflowId ?? ''}\n`); break;
+        case 'json':  process.stdout.write(formatAsJson(record ?? {}) + '\n'); break;
         case 'jsonl': process.stdout.write(formatAsJsonl(record ? [record] : []) + '\n'); break;
-        case 'json':
-        default:      process.stdout.write(formatAsJson(record ?? {}) + '\n'); break;
+        default:      process.stdout.write(
+          record
+            ? `${record.workflowId}\t${record.reviewId ?? prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\t${record.branch ?? ''}\n`
+            : `No Invoker workflow found for PR ${prNumber}.\n`,
+        ); break;
       }
       break;
     }
@@ -309,7 +313,7 @@ export async function headlessQuery(args: string[], deps: HeadlessDeps): Promise
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, review-gate, action-graph, audit, session, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, queue, review-gate, action-graph, audit, session, cost, cost-events, costs, ui-perf, stats`);
   }
 }
 

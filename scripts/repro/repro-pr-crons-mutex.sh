@@ -16,7 +16,7 @@ LOCK="$TMP/crons.lock"
 HOLDER_PID=""
 cleanup() {
   [ -n "$HOLDER_PID" ] && kill "$HOLDER_PID" 2>/dev/null || true
-  rmdir "${LOCK}.d" 2>/dev/null || true
+  rm -rf "${LOCK}.d" 2>/dev/null || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -25,11 +25,21 @@ fail() { echo "[repro] FAIL: $1"; [ -n "${2:-}" ] && echo "----- output -----" &
 
 # Acquire and hold the lock out-of-band, mirroring cron-pr-lib.sh's mechanism.
 if command -v flock >/dev/null 2>&1; then
-  ( exec 9>"$LOCK"; flock 9; sleep 60 ) &
+  READY="$TMP/holder.ready"
+  ( exec 9>"$LOCK"; flock 9; : > "$READY"; sleep 60 ) &
   HOLDER_PID=$!
-  sleep 0.5
+  # Wait until the holder has actually taken the flock (a fixed sleep races and
+  # could let a worker slip past cron_lock before the lock is held).
+  for _ in $(seq 1 50); do
+    [ -f "$READY" ] && break
+    sleep 0.1
+  done
+  [ -f "$READY" ] || fail "lock holder never acquired the flock"
 else
+  # Mirror the lib's mkdir lock, including the holder PID so the reaper treats it
+  # as a live lock (and never reaps it while this repro is running).
   mkdir "${LOCK}.d"
+  printf '%s\n' "$$" > "${LOCK}.d/pid"
 fi
 
 export INVOKER_PR_CRON_LOCK="$LOCK"

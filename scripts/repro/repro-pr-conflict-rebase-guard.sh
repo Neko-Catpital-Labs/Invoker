@@ -60,9 +60,12 @@ out="$(INVOKER_TEST_WF_GEN=2 run)"
 echo "$out" | grep -q "already fired for generation 2; skip" \
   || fail "branch 2: expected 'already fired for generation 2; skip'" "$out"
 
-# Branch 3: reach the cap (3 recorded attempts), new generation 9 -> giving up.
-printf 'rebase-recreate\twf-100-1\t0\t%s\n' "$(date +%s)" >> "$LEDGER"
-printf 'rebase-recreate\twf-100-1\t1\t%s\n' "$(date +%s)" >> "$LEDGER"
+# Branch 3: reach the cap. The cap counts accepted dispatches
+# (rebase-recreate-attempt), so seed three; a new generation 9 passes the
+# per-generation dedup but still hits the cap -> giving up.
+printf 'rebase-recreate-attempt\twf-100-1\t0\t%s\n' "$(date +%s)" >> "$LEDGER"
+printf 'rebase-recreate-attempt\twf-100-1\t1\t%s\n' "$(date +%s)" >> "$LEDGER"
+printf 'rebase-recreate-attempt\twf-100-1\t2\t%s\n' "$(date +%s)" >> "$LEDGER"
 out="$(INVOKER_TEST_WF_GEN=9 run)"
 echo "$out" | grep -q "giving up" \
   || fail "branch 3: expected 'giving up' at the attempt cap" "$out"

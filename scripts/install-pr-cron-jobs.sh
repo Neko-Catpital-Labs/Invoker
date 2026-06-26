@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
+# TEMPORARY tooling — these PR-maintenance crons are a stopgap and are expected
+# to be removed once the work they automate moves into Invoker proper.
+#
 # Install (or update) the two PR-maintenance cron jobs, both every 5 minutes:
 #   - cron-coderabbit-address.sh  (address new CodeRabbit reviews)
 #   - cron-pr-conflict-rebase.sh  (rebase-recreate conflicting PRs)
 #
 # Must run on the Invoker owner host (the cron jobs reach the owner over its
-# local IPC socket and read ~/.invoker/invoker.db). Droplet prerequisites:
+# local IPC socket and read ~/.invoker/invoker.db). Prerequisites on that host:
 # clone + pnpm install + build @invoker/app and @invoker/data-store, `gh auth
-# login` as the PR author, install `omp` with creds, and have the owner
-# running. See docs/pr-maintenance-crons.md.
+# login` as the PR author, install `omp` with creds, and have the owner running.
 #
 # De-dupes by marker, so re-running is safe (updates the lines in place).
 set -euo pipefail
@@ -20,12 +22,18 @@ CONFLICT_MARKER="# invoker-cron-pr-conflict-rebase"
 CODERABBIT_LOG="${HOME}/.invoker/coderabbit-address-cron.log"
 CONFLICT_LOG="${HOME}/.invoker/pr-conflict-rebase-cron.log"
 
+# The cron lines invoke each worker via `bash`, so execute permission is not
+# required — only readability. An unconditional `chmod +x` would needlessly fail
+# on read-only or shared checkouts where the workers are still runnable.
 for worker in "$CODERABBIT_WORKER" "$CONFLICT_WORKER"; do
   if [[ ! -f "$worker" ]]; then
     echo "ERROR: missing worker script at $worker" >&2
     exit 1
   fi
-  chmod +x "$worker"
+  if [[ ! -r "$worker" ]]; then
+    echo "ERROR: worker script is not readable at $worker" >&2
+    exit 1
+  fi
 done
 
 mkdir -p "$(dirname "$CODERABBIT_LOG")"
