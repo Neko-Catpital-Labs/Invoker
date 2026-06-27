@@ -7,6 +7,7 @@ import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { MessageBus } from '@invoker/transport';
 import { loadConfig } from './config.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
+import { buildTaskGraphSnapshot } from './web/task-graph-snapshot.js';
 
 export interface RegisterReadOnlyIpcHandlersContext {
   ipcMain: IpcMain;
@@ -122,9 +123,11 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
       );
     }
 
-    const tasks = orchestrator.getAllTasks();
-    const workflows = persistence.listWorkflows();
-    const streamSequence = getTaskDeltaStreamSequence();
+    const { tasks, workflows, streamSequence } = buildTaskGraphSnapshot({
+      orchestrator,
+      persistence,
+      getStreamSequence: getTaskDeltaStreamSequence,
+    });
     logger.info(
       `get-tasks returning ${tasks.length} tasks, ${workflows.length} workflows`,
       { module: 'ipc' },
