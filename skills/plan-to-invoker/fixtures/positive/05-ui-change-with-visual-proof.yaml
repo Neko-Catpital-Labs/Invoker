@@ -63,7 +63,7 @@ tasks:
     command: "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after"
     dependencies: [fix-sidebar-transition, add-visual-proof-test]
 
-  - id: verify-regression-suite
-    description: "Run the full repository test suite as the final regression gate"
-    command: "pnpm run test:all"
-    dependencies: [add-visual-proof-test, fix-sidebar-transition, run-sidebar-unit-tests, capture-visual-proof]
+  - id: verify-sidebar-visual-spec
+    description: "Run only the sidebar visual-proof e2e spec as the focused terminal regression"
+    command: "pnpm --filter @invoker/app exec playwright test e2e/visual-proof.spec.ts -g 'sidebar-collapse' 2>&1"
+    dependencies: [run-sidebar-unit-tests, capture-visual-proof]

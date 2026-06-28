@@ -153,12 +153,12 @@ tasks:
     command: "cd packages/core && pnpm test 2>&1"
     dependencies: [refactor-state-machine, verify-graph-tests]
 
-  - id: verify-full-build
-    description: "Build all packages to verify no breakage"
-    command: "pnpm build 2>&1"
+  - id: verify-graph-build
+    description: "Build the graph package to verify no breakage in the extracted code"
+    command: "pnpm --filter @invoker/graph build 2>&1"
     dependencies: [verify-core-tests]
 
-  - id: final-regression
-    description: "Run the full repository test suite as the final regression gate"
-    command: "pnpm run test:all"
-    dependencies: [scaffold-package, move-types, move-dag-utils, extract-action-graph, update-graph-index, refactor-state-machine, write-graph-tests, verify-graph-tests, verify-core-tests, verify-full-build]
+  - id: verify-core-build
+    description: "Build the core package to verify backward compatibility after delegation"
+    command: "pnpm --filter @invoker/core build 2>&1"
+    dependencies: [verify-graph-build]
