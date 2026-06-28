@@ -178,7 +178,7 @@ tasks:
       - Verify the layered prompt-edit flow after contract, bridge, and dormant UI slices exist.
       Alternative considerations:
       - Option A (chosen): add focused app and E2E regressions.
-      - Option B: rely only on the terminal full-suite gate.
+      - Option B: rely on a broad full-suite gate at the workflow tail.
       Implementation details:
       - Cover IPC routing and TaskPanel prompt-edit flow deterministically.
       Layer: e2e_regression
@@ -215,23 +215,23 @@ tasks:
   - id: final-regression
     description: |
       Review claim:
-      - Run the terminal full-suite regression gate for the layered prompt-edit stack.
+      - Run the focused terminal regression for the layered prompt-edit stack.
       Safety invariant:
       - The command changes no production code and depends on every earlier task.
       Slice rationale:
-      - Full-suite validation belongs at the terminal workflow layer.
+      - Focused proof on the affected packages belongs at the terminal workflow layer; the default does not invoke a repo-wide full-suite gate.
       Architectural effect:
-      - No architecture changes; validates the integrated prompt-edit stack.
-      Run the full repository test suite as the terminal regression gate.
+      - No architecture changes; validates the integrated prompt-edit stack via focused package proofs.
+      Run the focused prompt-edit regressions as the terminal proof gate.
       Goal:
-      - Run the full repository test suite as the terminal regression gate.
+      - Run the focused prompt-edit regressions as the terminal proof gate.
       Motivation:
-      - Validate all prompt-edit slices together after focused regressions exist.
+      - Validate the integrated prompt-edit slices with deterministic, focused proof rather than a default `pnpm run test:all` gate.
       Alternative considerations:
-      - Option A (chosen): one terminal full-suite gate.
-      - Option B: repeat full-suite verification in every slice.
+      - Option A (chosen): one focused terminal proof scoped to the affected packages.
+      - Option B: a default `pnpm run test:all` full-suite gate even when focused proof already exists.
       Implementation details:
-      - Execute `pnpm run test:all` after every earlier task completes.
+      - Execute focused app and ui package tests after every earlier task completes.
       Layer: e2e_regression
       Feature state: active
       Files:
@@ -239,6 +239,6 @@ tasks:
       Change types:
       - none
       Acceptance criteria:
-      - Ensure the full repository test suite passes after all prompt-edit slices land.
-    command: "pnpm run test:all"
+      - Ensure the focused app and ui prompt-edit regressions pass after all prompt-edit slices land.
+    command: "cd packages/app && pnpm test 2>&1 && cd ../ui && pnpm test 2>&1"
     dependencies: [prompt-edit-contact-surface, app-bridge-and-owner-delegation, ui-prompt-editing-activation, app-and-e2e-regressions]

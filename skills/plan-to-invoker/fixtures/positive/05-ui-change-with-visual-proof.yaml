@@ -59,11 +59,6 @@ tasks:
     dependencies: [fix-sidebar-transition]
 
   - id: capture-visual-proof
-    description: "Build UI and app packages then capture after-state screenshots"
+    description: "Build UI and app packages then capture after-state screenshots as the focused terminal proof"
     command: "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after"
     dependencies: [fix-sidebar-transition, add-visual-proof-test]
-
-  - id: verify-regression-suite
-    description: "Run the full repository test suite as the final regression gate"
-    command: "pnpm run test:all"
-    dependencies: [add-visual-proof-test, fix-sidebar-transition, run-sidebar-unit-tests, capture-visual-proof]

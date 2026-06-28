@@ -63,11 +63,6 @@ tasks:
     dependencies: [verify-validator]
 
   - id: verify-all-tests
-    description: "Run full config package test suite"
+    description: "Run full config package test suite as the focused terminal proof"
     command: "cd packages/config && pnpm test 2>&1"
     dependencies: [add-schema-types]
-
-  - id: final-regression
-    description: "Run the full repository test suite as the final regression gate"
-    command: "pnpm run test:all"
-    dependencies: [extract-validator, add-validator-tests, verify-validator, add-schema-types, verify-all-tests]
