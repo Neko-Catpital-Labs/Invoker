@@ -32,7 +32,7 @@ tasks:
       - Move recovery ownership out of worker-runtime, scan failed tasks, validate stale candidates, submit fix intents, route lifecycle wakeups, and expose the headless worker command.
       Non-goals:
       - Do not add a generic worker registry.
-      Layer: app_bridge
+      Feature: all-in-one-autofix-recovery
       Feature state: active
       Files:
       - packages/app/src/worker-runtime.ts
@@ -95,7 +95,7 @@ tasks:
       - Execute root-level test gate after implementation task.
       Non-goals:
       - Do not modify source files.
-      Layer: app_regression
+      Feature: all-in-one-autofix-regression
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-all-in-one-autofix-recovery]

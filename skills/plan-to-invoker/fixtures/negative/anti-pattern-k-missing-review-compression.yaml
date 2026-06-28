@@ -17,7 +17,7 @@ tasks:
       - Option B: broad refactor across unrelated modules.
       Implementation details:
       - Apply runtime-flow edits and preserve existing behavior contracts.
-      Layer: transport
+      Feature: transport-runtime-flow
       Feature state: active
       Files:
       - packages/execution-engine/src/task-runner.ts
@@ -49,7 +49,7 @@ tasks:
       - Option B: package-only checks.
       Implementation details:
       - Execute root-level test gate after implementation task.
-      Layer: app_regression
+      Feature: transport-final-regression
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-runtime-flow]

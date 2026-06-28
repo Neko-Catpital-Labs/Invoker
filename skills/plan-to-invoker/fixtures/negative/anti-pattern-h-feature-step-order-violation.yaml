@@ -1,0 +1,132 @@
+# Anti-Pattern H: Same-feature sub-slice depends on a later Feature step
+# Expected outcome: skill-doctor fails lint-task-atomicity with a feature-step
+# ordering violation because the step-1 sub-slice depends on a step-2 sub-slice
+# of the same feature without an explicit "Feature step exception: allowed".
+
+name: "Anti-pattern: same-feature sub-slice depends on later feature step"
+description: |
+  Demonstrates a feature-step dependency-direction violation where a step-1
+  sub-slice depends on a later step-2 sub-slice of the same atomic feature
+  without an explicit feature-step exception.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/EdbertChan/Invoker
+baseBranch: master
+featureBranch: plan/anti-pattern-feature-step-order-violation
+
+tasks:
+  - id: prompt-edit-contact-surface
+    description: |
+      Review claim:
+      - Define the prompt-edit contact surface as the first feature step.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The change stays inside the contact-surface file.
+      Slice rationale:
+      - Contact-surface work is the foundation of the prompt-edit feature.
+      Architectural effect:
+      - Renderer typing gains the prompt-edit entry point.
+      Goal:
+      - Define the renderer contact surface for prompt editing.
+      Motivation:
+      - Keep the contract reviewable before the app bridge lands.
+      Alternative considerations:
+      - Option A (chosen for fixture): depend on the bridge to demonstrate the violation.
+      - Option B: keep dependencies in correct step order.
+      Implementation details:
+      - Update preload and the renderer type declarations.
+      Non-goals:
+      - Do not activate UI behavior here.
+      Feature: prompt-edit-bridge
+      Feature step: 1
+      Feature state: active
+      Files:
+      - packages/app/src/preload.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - Pass condition: renderer types compile cleanly.
+    prompt: |
+      Review claim:
+      - Define the prompt-edit contact surface as the first feature step.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change scoped to packages/app/src/preload.ts.
+      Slice rationale:
+      - Contact-surface work must land before the app bridge.
+      Architectural effect:
+      - Renderer typing gains the prompt-edit entry point.
+      Goal:
+      - Define the renderer contact surface for prompt editing.
+      Motivation:
+      - Keep the contract reviewable before the app bridge lands.
+      Alternative considerations:
+      - Option A (chosen for fixture): depend on the bridge to demonstrate the violation.
+      - Option B: keep dependencies in correct step order.
+      Implementation details:
+      - Assume no prior context. Modify packages/app/src/preload.ts only.
+      Non-goals:
+      - Do not activate UI behavior here.
+      Acceptance criteria:
+      - Pass condition: exits 0 after the renderer types compile.
+    dependencies: [prompt-edit-app-bridge]
+
+  - id: prompt-edit-app-bridge
+    description: |
+      Review claim:
+      - Route prompt-edit requests through the app bridge as the second feature step.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The change is scoped to the app bridge files.
+      Slice rationale:
+      - The app bridge depends on the contact surface in a correct ordering.
+      Architectural effect:
+      - Prompt edits gain an app-layer path through the existing command service.
+      Goal:
+      - Add the app-layer IPC bridge for prompt edits.
+      Motivation:
+      - Keep app plumbing reviewable separately from the contact surface.
+      Alternative considerations:
+      - Option A (chosen for fixture): the bridge does not depend on the surface, so the surface task wrongly depends on it.
+      - Option B: depend on the contact surface in a correct ordering.
+      Implementation details:
+      - Register IPC handlers for the prompt-edit pathway.
+      Non-goals:
+      - Do not activate TaskPanel editing here.
+      Feature: prompt-edit-bridge
+      Feature step: 2
+      Feature state: active
+      Files:
+      - packages/app/src/main.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - Pass condition: GUI-origin prompt edits route through the app handler.
+    prompt: |
+      Review claim:
+      - Route prompt-edit requests through the app bridge as the second feature step.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change scoped to packages/app/src/main.ts.
+      Slice rationale:
+      - App-layer plumbing is reviewed separately from UI activation.
+      Architectural effect:
+      - Prompt edits gain an app-layer path through the existing command service.
+      Goal:
+      - Add the app-layer IPC bridge for prompt edits.
+      Motivation:
+      - Keep app plumbing reviewable separately from the contact surface.
+      Alternative considerations:
+      - Option A (chosen for fixture): keep dependencies empty so the surface task can wrongly depend on this one.
+      - Option B: keep dependencies in correct step order.
+      Implementation details:
+      - Assume no prior context. Modify packages/app/src/main.ts only.
+      Non-goals:
+      - Do not activate TaskPanel editing here.
+      Acceptance criteria:
+      - Pass condition: exits 0 after the IPC bridge wiring compiles.
+    dependencies: []
