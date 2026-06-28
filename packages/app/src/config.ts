@@ -12,6 +12,23 @@ import { homedir } from 'node:os';
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
+   * Web surface (browser mirror of the desktop app) shared-secret token.
+   * When set (or via INVOKER_WEB_TOKEN), the owner process serves the UI at
+   * http://<webHost>:<webPort>/?token=<token>. Unset disables the web surface.
+   * INVOKER_WEB_TOKEN takes precedence over this value.
+   */
+  webToken?: string;
+  /**
+   * Host the web surface binds to. Default '127.0.0.1' (localhost only).
+   * Set '0.0.0.0' to expose it on a remote box (e.g. the DigitalOcean host).
+   * INVOKER_WEB_HOST takes precedence.
+   */
+  webHost?: string;
+  /**
+   * Port the web surface binds to. Default 4200. INVOKER_WEB_PORT takes precedence.
+   */
+  webPort?: number;
+  /**
    * When true, skip relaunching orphaned running tasks on GUI startup.
    * Useful when you want to inspect state before tasks resume automatically.
    * Default: false
