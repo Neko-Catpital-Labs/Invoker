@@ -19,6 +19,7 @@ import {
   WorkerLockHeldError,
 } from '@invoker/execution-engine';
 import { startApiServer } from './api-server.js';
+import { startWebSurfaceForHeadless } from './web/start-web-surface.js';
 import {
   parseMetadataValue,
   setTaskMetadata,
@@ -984,13 +985,15 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
   });
   wireHeadlessApproveHook(deps, taskExecutor);
 
+  const apiServerDeps = buildHeadlessApiServerDeps(deps, taskExecutor);
   const api = startApiServer({
     logger: deps.logger,
     orchestrator,
     persistence,
     executorRegistry: deps.executorRegistry,
-    ...buildHeadlessApiServerDeps(deps, taskExecutor),
+    ...apiServerDeps,
   });
+  const webSurface = startWebSurfaceForHeadless(deps, apiServerDeps);
 
   const slack = await wireSlackBot({
     executor: taskExecutor,
@@ -1004,6 +1007,7 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
   await new Promise<void>((resolve) => {
     const shutdown = async () => {
       await api.close().catch(() => {});
+      await webSurface?.close().catch(() => {});
       logFn('slack', 'info', 'Shutting down...');
       await slack.stop();
       resolve();

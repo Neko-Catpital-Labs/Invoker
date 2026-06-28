@@ -210,6 +210,9 @@ import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
+import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
+import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
+import { resolveWebToken, resolveWebHost, resolveWebPort } from './web/start-web-surface.js';
 import {
   createGuiMutationRegistrars,
   registerBootstrapStateIpc,
@@ -1127,6 +1130,7 @@ function startHeadlessMode(): void {
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
         runtimeServices,
+        appRootDir: __dirname,
       };
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
@@ -1881,6 +1885,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let taskExecutor: TaskRunner | null = null;
   let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
   let apiServer: ApiServer | null = null;
+  let webBridge: WebBridge | null = null;
   let ownerMode = true;
   const taskHandles: TaskHandleMap = new Map();
   const embeddedTerminalManager = new EmbeddedTerminalManager({
@@ -2079,6 +2084,7 @@ function createEmbeddedTerminalBackendFromConfig(
         module: 'ui-backpressure',
       });
     },
+    onEvent: (event) => webBridge?.broadcast('invoker:task-graph-event', event),
   });
 
   const publishTaskDeltaToRenderer = (delta: TaskDelta): void => {
@@ -2932,20 +2938,21 @@ function createEmbeddedTerminalBackendFromConfig(
     setTimeout(() => {
       if (!ownerMode) return;
 
+      const webMutations = new WorkflowMutationFacade({
+        logger,
+        orchestrator,
+        persistence,
+        commandService,
+        taskExecutor: requireTaskExecutor(),
+        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+        killRunningTask,
+      });
       apiServer = startApiServer({
         logger,
         orchestrator,
         persistence,
         executorRegistry,
-        mutations: new WorkflowMutationFacade({
-          logger,
-          orchestrator,
-          persistence,
-          commandService,
-          taskExecutor: requireTaskExecutor(),
-          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-          killRunningTask,
-        }),
+        mutations: webMutations,
         queueWorkflowMutation: (workflowId, priority, channel, args, options) => {
           if (!workflowMutationCoordinator) {
             throw new Error('Workflow mutation coordinator is unavailable');
@@ -2956,6 +2963,51 @@ function createEmbeddedTerminalBackendFromConfig(
         detachWorkflow: performDetachWorkflow,
       });
       recordStartupMark('api-server.started');
+
+      const webToken = resolveWebToken(invokerConfig);
+      if (webToken) {
+        const webDispatch = buildWebInvokerDispatch({
+          orchestrator,
+          persistence,
+          mutations: webMutations,
+          agentRegistry,
+          loadConfig,
+          getStreamSequence: getTaskDeltaStreamSequence,
+          refreshTaskGraph: async () => {
+            const snapshot = await resolveRefreshTaskGraphSnapshot({
+              ownerMode,
+              messageBus,
+              resolveInvokerHomeRoot,
+              orchestrator,
+              persistence,
+              logger,
+            });
+            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows);
+          },
+          deleteWorkflow: performDeleteWorkflow,
+          detachWorkflow: performDetachWorkflow,
+          getBundledSkillsStatus,
+          getSystemDiagnostics: () => collectSystemDiagnostics({
+            appVersion: app.getVersion(),
+            isPackaged: app.isPackaged,
+            platform: process.platform,
+            arch: process.arch,
+          }),
+          logger,
+        });
+        webBridge = startWebBridge({
+          logger,
+          dispatch: webDispatch,
+          messageBus,
+          persistence,
+          uiDistDir: resolveWebUiDistDir(__dirname),
+          token: webToken,
+          host: resolveWebHost(invokerConfig),
+          port: resolveWebPort(invokerConfig),
+        });
+      } else {
+        logger.info('Web surface disabled — set INVOKER_WEB_TOKEN (or config.webToken) to enable it', { module: 'web-bridge' });
+      }
 
       void recoverWorkflowMutationsOnStartup({
         ownerMode,
@@ -4730,6 +4782,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
       try {
         if (apiServer) await apiServer.close().catch(() => {});
+        if (webBridge) await webBridge.close().catch(() => {});
         reviewGateStatusWorker?.stop();
         reviewGateStatusWorker = null;
         if (dbPollInterval) clearInterval(dbPollInterval);
