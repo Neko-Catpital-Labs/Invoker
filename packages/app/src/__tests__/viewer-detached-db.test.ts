@@ -36,22 +36,28 @@ describe('detached viewer in-memory persistence', () => {
   it('is usable but opens no database file (no -shm to truncate)', async () => {
     const dir = makeDir();
     const probeDbPath = join(dir, 'invoker.db');
-    const adapter = await SQLiteAdapter.create(':memory:');
+    const previousCwd = process.cwd();
+    process.chdir(dir);
     try {
-      // Fully functional: schema is present and writes/reads work in memory.
-      expect(adapter.listWorkflows()).toEqual([]);
-      adapter.saveWorkflow(wf);
-      expect(adapter.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
-      // Telemetry writes the viewer's logger attempts must not throw in memory.
-      expect(() => adapter.writeActivityLog('viewer', 'info', 'hello')).not.toThrow();
+      const adapter = await SQLiteAdapter.create(':memory:');
+      try {
+        // Fully functional: schema is present and writes/reads work in memory.
+        expect(adapter.listWorkflows()).toEqual([]);
+        adapter.saveWorkflow(wf);
+        expect(adapter.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
+        // Telemetry writes the viewer's logger attempts must not throw in memory.
+        expect(() => adapter.writeActivityLog('viewer', 'info', 'hello')).not.toThrow();
 
-      // The immunity property: no file, no -wal, no -shm anywhere.
-      expect(existsSync(probeDbPath)).toBe(false);
-      expect(existsSync(`${probeDbPath}-shm`)).toBe(false);
-      expect(existsSync(`${probeDbPath}-wal`)).toBe(false);
-      expect(readdirSync(dir)).toEqual([]);
+        // The immunity property: no file, no -wal, no -shm anywhere.
+        expect(existsSync(probeDbPath)).toBe(false);
+        expect(existsSync(`${probeDbPath}-shm`)).toBe(false);
+        expect(existsSync(`${probeDbPath}-wal`)).toBe(false);
+        expect(readdirSync(dir)).toEqual([]);
+      } finally {
+        adapter.close();
+      }
     } finally {
-      adapter.close();
+      process.chdir(previousCwd);
     }
   });
 
