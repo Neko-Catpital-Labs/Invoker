@@ -61,102 +61,177 @@ function WorkflowGraphEmptyState({
   const suggestedCommands = [
     'plan "fix a failing test"',
     'plan "add GitHub OAuth"',
+    'plan "improve the README"',
     'inspect repo',
+  ];
+  const firstRunSteps = [
+    ['Describe a goal', 'Start from plain language or open an Invoker YAML/JSON plan.'],
+    ['Review the plan', 'Check tasks, dependencies, gates, and verification before execution.'],
+    ['Approve and run', 'Keep control at important gates before anything mutates.'],
+  ];
+  const nextStateItems = [
+    ['Plan graph', 'The local task relationship appears here before the run starts.'],
+    ['Task terminals', 'Logs stay attached to the task and run you are inspecting.'],
+    ['Approvals', 'Schema, merge, and manual gates pause here for a decision.'],
   ];
 
   return (
     <div
       data-testid="workflow-empty-state"
-      className="flex h-full w-full items-center justify-center overflow-auto px-6 py-8 text-gray-200"
+      className="h-full w-full overflow-auto bg-[radial-gradient(circle_at_50%_0%,rgba(59,130,246,0.16),rgba(15,23,42,0)_34%),radial-gradient(circle_at_86%_18%,rgba(124,58,237,0.16),rgba(15,23,42,0)_28%),linear-gradient(135deg,#030712_0%,#07111f_54%,#050712_100%)] px-4 py-4 text-gray-200"
     >
-      <div className="w-full max-w-3xl rounded-lg border border-gray-800 bg-gray-950/55 p-5 shadow-2xl shadow-black/20">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs font-semibold text-blue-300">
-              Invoker control plane
+      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col gap-3">
+        <section className="rounded-md border border-slate-700/70 bg-slate-950/70 p-4 shadow-2xl shadow-black/25 sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-blue-200">
+                Invoker terminal
+                <span className="ml-2 rounded border border-blue-400/40 bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-200">
+                  First run
+                </span>
+              </div>
+              <h2 className="mt-2 text-xl font-semibold text-white">
+                Drive Invoker from a goal
+              </h2>
             </div>
-            <h2 className="mt-1 text-lg font-semibold text-white">
-              Drive Invoker from a goal
-            </h2>
+            {(onOpenPlan || onOpenSetup) && (
+              <div className="flex flex-wrap gap-2">
+                {onOpenPlan && (
+                  <button
+                    type="button"
+                    onClick={onOpenPlan}
+                    className="rounded-md bg-blue-600 px-3 py-2 text-xs font-medium text-white shadow-lg shadow-blue-950/30 hover:bg-blue-500"
+                  >
+                    Open Plan
+                  </button>
+                )}
+                {onOpenSetup && (
+                  <button
+                    type="button"
+                    onClick={onOpenSetup}
+                    className="rounded-md border border-slate-600 bg-slate-900/80 px-3 py-2 text-xs font-medium text-slate-100 hover:bg-slate-800"
+                  >
+                    Check Setup
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-          <span className="rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-400">
-            First run
-          </span>
-        </div>
 
-        <div className="rounded-md border border-blue-500/40 bg-gray-900 px-4 py-3 font-mono text-sm">
-          <span className="text-emerald-300">invoker&gt;</span>
-          <span className="ml-2 text-gray-400">Describe a goal or command...</span>
-        </div>
-
-        <p className="mt-4 max-w-2xl text-sm leading-6 text-gray-300">
-          Invoker turns a goal into a reviewable plan, pauses for approval at important gates,
-          and keeps execution progress in one place. Existing YAML or JSON plans can still be
-          opened from the rail.
-        </p>
-        <p className="mt-2 text-xs text-gray-500">
-          Load a plan to render workflow graph
-        </p>
-
-        <div className="mt-5 grid gap-4 border-t border-gray-800 pt-4 sm:grid-cols-3">
-          <div>
-            <div className="text-sm font-medium text-white">1. Describe a goal</div>
-            <div className="mt-1 text-xs leading-5 text-gray-400">
-              Say what you want Invoker to change or inspect.
-            </div>
-          </div>
-          <div>
-            <div className="text-sm font-medium text-white">2. Review the plan</div>
-            <div className="mt-1 text-xs leading-5 text-gray-400">
-              Check tasks, dependencies, gates, and verification before execution.
-            </div>
-          </div>
-          <div>
-            <div className="text-sm font-medium text-white">3. Approve and run</div>
-            <div className="mt-1 text-xs leading-5 text-gray-400">
-              Follow progress, failures, approvals, and merge readiness in one place.
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-5">
-          <div className="text-xs font-medium text-gray-500">
-            Suggested commands
-          </div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {suggestedCommands.map((command) => (
-              <span
-                key={command}
-                className="rounded border border-gray-700 bg-gray-900 px-2 py-1 font-mono text-xs text-gray-300"
-              >
-                {command}
+          <div className="mt-5 rounded-md border border-blue-400/70 bg-slate-950 px-4 py-4 shadow-[0_0_30px_rgba(37,99,235,0.2)]">
+            <div className="flex items-center gap-3 font-mono text-sm">
+              <span className="text-emerald-300">invoker&gt;</span>
+              <span className="min-w-0 flex-1 truncate text-slate-400">
+                Describe a goal or command...
               </span>
+              <span className="hidden rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-500 sm:inline">
+                plan first
+              </span>
+            </div>
+          </div>
+
+          <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-300">
+            Invoker creates a plan first, then executes with your approval. Open an existing
+            Invoker YAML or JSON plan from the rail, or start from a goal when planning is available.
+          </p>
+
+          <div className="mt-4">
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Suggested commands
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {suggestedCommands.map((command) => (
+                <span
+                  key={command}
+                  className="rounded-md border border-slate-700 bg-slate-900/80 px-2.5 py-1.5 font-mono text-xs text-slate-300"
+                >
+                  <span className="mr-1 text-blue-300">&gt;_</span>
+                  <span>{command}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {firstRunSteps.map(([title, body], index) => (
+              <div
+                key={title}
+                className="rounded-md border border-slate-800 bg-slate-900/70 p-3"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-md border border-violet-400/40 bg-violet-500/10 text-xs font-semibold text-violet-200">
+                    {index + 1}
+                  </div>
+                  <div className="text-sm font-medium text-white">{title}</div>
+                </div>
+                <div className="mt-2 text-xs leading-5 text-slate-400">{body}</div>
+              </div>
             ))}
           </div>
-        </div>
+        </section>
 
-        {(onOpenPlan || onOpenSetup) && (
-          <div className="mt-6 flex flex-wrap gap-2">
-            {onOpenPlan && (
-              <button
-                type="button"
-                onClick={onOpenPlan}
-                className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500"
-              >
-                Open Plan
-              </button>
-            )}
-            {onOpenSetup && (
-              <button
-                type="button"
-                onClick={onOpenSetup}
-                className="rounded border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-200 hover:bg-gray-800"
-              >
-                Check Setup
-              </button>
-            )}
-          </div>
-        )}
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <section className="rounded-md border border-slate-700/70 bg-slate-950/60 p-4 shadow-2xl shadow-black/20">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+                Plan graph
+              </div>
+              <span className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-500">
+                Waiting for plan
+              </span>
+            </div>
+            <div className="mt-4 flex min-h-[185px] items-center justify-center rounded-md border border-slate-800 bg-[radial-gradient(circle_at_center,rgba(56,189,248,0.08),rgba(15,23,42,0)_46%)] px-4 py-5">
+              <div className="text-center">
+                <div className="mx-auto grid w-48 grid-cols-3 gap-x-3 gap-y-3">
+                  <div className="col-start-2 rounded-md border border-blue-400/75 bg-blue-500/10 px-3 py-2 text-[11px] text-blue-100">
+                    Goal
+                  </div>
+                  <div className="col-span-3 h-px bg-gradient-to-r from-transparent via-slate-600 to-transparent" />
+                  <div className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-2 py-2 text-[11px] text-emerald-100">
+                    Task
+                  </div>
+                  <div className="rounded-md border border-violet-400/50 bg-violet-500/10 px-2 py-2 text-[11px] text-violet-100">
+                    Gate
+                  </div>
+                  <div className="rounded-md border border-amber-400/50 bg-amber-500/10 px-2 py-2 text-[11px] text-amber-100">
+                    Merge
+                  </div>
+                </div>
+                <div className="mt-4 text-sm font-medium text-white">Your plan will appear here.</div>
+                <div className="mt-1 text-xs leading-5 text-slate-400">
+                  Review tasks, gates, and dependencies before anything runs.
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <aside className="rounded-md border border-slate-700/70 bg-slate-950/60 p-4 shadow-2xl shadow-black/20">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+              What appears next
+            </div>
+            <div className="mt-4 space-y-3">
+              {nextStateItems.map(([title, body]) => (
+                <div key={title} className="rounded-md border border-slate-800 bg-slate-900/70 p-3">
+                  <div className="text-sm font-medium text-white">{title}</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-400">{body}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-md border border-blue-400/40 bg-blue-500/10 p-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-blue-400/40 bg-slate-950/60 font-mono text-sm text-blue-200">
+                  &gt;_
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-white">Logs appear after tasks start.</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-400">
+                    Terminal output stays attached to each task.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
       </div>
     </div>
   );

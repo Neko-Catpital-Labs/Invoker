@@ -421,7 +421,8 @@ async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId
 
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
-    await expect(page.getByText('Load a plan to render workflow graph')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Drive Invoker from a goal')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Your plan will appear here.')).toBeVisible();
     await expect(page.getByTestId('rail-open-file')).toBeVisible();
     await expect(page.getByTestId('rail-settings')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
