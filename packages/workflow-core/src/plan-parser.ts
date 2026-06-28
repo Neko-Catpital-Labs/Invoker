@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from './orchestrator.js';
+import { detectDefaultBranchRemote } from './repo-default-branch.js';
 
 export class PlanParseError extends Error {
   constructor(message: string) {
@@ -58,25 +58,11 @@ export interface RawPlan {
   tasks?: RawPlanTask[];
 }
 
-function detectDefaultBranchRemote(repoUrl: string): string {
-  try {
-    const output = execFileSync('git', ['ls-remote', '--symref', repoUrl, 'HEAD'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 10_000,
-    }).trim();
-    const match = output.match(/ref:\s+refs\/heads\/(\S+)\s+HEAD/);
-    if (match) return match[1];
-  } catch {
-    // Network and local-path failures fall back to the common default.
-  }
-  return 'main';
-}
 
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
   const branch = plan.baseBranch;
   if (typeof branch === 'string' && branch.trim() !== '') return branch.trim();
-  return plan.repoUrl ? detectDefaultBranchRemote(plan.repoUrl) : 'main';
+  return plan.repoUrl ? detectDefaultBranchRemote(plan.repoUrl) ?? 'main' : 'main';
 }
 
 export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinition {
