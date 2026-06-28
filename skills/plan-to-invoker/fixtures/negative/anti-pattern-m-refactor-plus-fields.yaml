@@ -27,7 +27,7 @@ tasks:
       - Move the refresh code into packages/app/src/refresh-task-graph.ts and add a new field to the response shape.
       Non-goals:
       - Do not change behavior after extraction.
-      Layer: app_bridge
+      Feature: app_bridge
       Feature state: active
       Files:
       - packages/app/src/main.ts
@@ -83,7 +83,7 @@ tasks:
       - Execute the repository-wide regression command.
       Non-goals:
       - Do not modify source files.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
     command: 'pnpm run test:all'
     dependencies: [extract-refresh-helper]

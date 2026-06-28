@@ -19,7 +19,7 @@ test_count=0
 pass_count=0
 DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-g-monolithic-prompt-edit-bridge.yaml"
-  "anti-pattern-h-layer-order-violation.yaml"
+  "anti-pattern-h-feature-step-direction-violation.yaml"
   "anti-pattern-j-zero-context-missing-metadata.yaml"
   "anti-pattern-k-missing-review-compression.yaml"
   "anti-pattern-l-behavior-plus-proof.yaml"
@@ -331,7 +331,7 @@ tasks:
       - Modify packages/foo/src/surface.ts and preserve existing contract imports.
       Non-goals:
       - Do not add regression proof in this slice.
-      Layer: contact_surface
+      Feature: contact_surface
       Feature state: active
       Files:
       - packages/foo/src/surface.ts
@@ -388,7 +388,7 @@ tasks:
       - Add focused deterministic regression coverage.
       Non-goals:
       - Do not modify production contact-surface code in this slice.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
       Files:
       - packages/foo/src/__tests__/surface.test.ts
@@ -445,7 +445,7 @@ tasks:
       - Execute a deterministic proof command after earlier tasks complete.
       Non-goals:
       - Do not modify source files.
-      Layer: e2e_regression
+      Feature: e2e_regression
       Feature state: active
     command: "test -f packages/foo/src/surface.ts"
     dependencies: [implement-surface, add-regression-tests]
@@ -477,7 +477,7 @@ tasks:
       - Option B: defer implementation.
       Implementation details:
       - Update packages/foo/src/surface.ts.
-      Layer: contact_surface
+      Feature: contact_surface
       Feature state: active
     prompt: |
       Goal:
@@ -503,7 +503,7 @@ tasks:
       - Option B: defer implementation.
       Implementation details:
       - Update packages/foo/src/bridge.ts.
-      Layer: app_bridge
+      Feature: app_bridge
       Feature state: active
     prompt: |
       Goal:
@@ -529,7 +529,7 @@ tasks:
       - Option B: package-only checks.
       Implementation details:
       - Execute the repository test gate.
-      Layer: e2e_regression
+      Feature: e2e_regression
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-surface, implement-bridge]
@@ -592,7 +592,7 @@ tasks:
       - Update packages/foo/src/surface.ts with the stack step one behavior.
       Non-goals:
       - Do not add proof-only changes in this slice.
-      Layer: contact_surface
+      Feature: contact_surface
       Feature state: active
       Files:
       - packages/foo/src/surface.ts
@@ -648,7 +648,7 @@ tasks:
       - Execute a deterministic proof command for packages/foo.
       Non-goals:
       - Do not modify source files.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
     command: "test -f packages/foo/src/surface.ts"
     dependencies: [implement-surface]
@@ -691,7 +691,7 @@ tasks:
       - Update packages/foo/src/terminal-surface.ts with the stack terminal behavior.
       Non-goals:
       - Do not add proof-only changes in this slice.
-      Layer: contact_surface
+      Feature: contact_surface
       Feature state: active
       Files:
       - packages/foo/src/terminal-surface.ts
@@ -747,7 +747,7 @@ tasks:
       - Execute a deterministic proof command after all earlier terminal-workflow tasks complete.
       Non-goals:
       - Do not modify source files.
-      Layer: e2e_regression
+      Feature: e2e_regression
       Feature state: active
     command: "test -f packages/foo/src/terminal-surface.ts"
     dependencies: [implement-terminal-surface]
@@ -790,7 +790,7 @@ tasks:
       - Option B: distributed adapters.
       Implementation details:
       - Keep bridge in app layer and add deterministic tests.
-      Layer: app_bridge
+      Feature: app_bridge
       Feature state: active
       Acceptance criteria:
       - Ensure bridge compiles.
@@ -810,7 +810,7 @@ tasks:
       Implementation details:
       - Execute root-level test gate after implementation task.
       Run full regression gate.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-bridge]
@@ -891,7 +891,7 @@ tasks:
       - Keep bridge in app layer and add deterministic tests.
       Non-goals:
       - Do not add regression-only proof or docs in this slice.
-      Layer: app_bridge
+      Feature: app_bridge
       Feature state: active
       Files:
       - packages/app/src/main.ts
@@ -951,7 +951,7 @@ tasks:
       - Execute root-level test gate after implementation task.
       Non-goals:
       - Do not modify source files.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-bridge]
@@ -975,7 +975,7 @@ tasks:
   - id: run-focused-verification
     description: |
       Run focused verification.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
       Acceptance criteria:
       - Ensure focused tests pass.
@@ -1004,7 +1004,7 @@ tasks:
       - Execute root-level test gate after implementation task.
       Non-goals:
       - Do not modify source files.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [run-focused-verification]
@@ -1062,7 +1062,7 @@ tasks:
       - Apply runtime-flow edits and preserve current behavior contracts.
       Non-goals:
       - Do not add proof harness or docs in this slice.
-      Layer: transport
+      Feature: transport
       Feature state: active
       Files:
       - packages/execution-engine/src/task-runner.ts
@@ -1120,7 +1120,7 @@ tasks:
       - Execute root-level test gate after implementation task.
       Non-goals:
       - Do not modify source files.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-runtime-flow]
@@ -1152,7 +1152,7 @@ tasks:
       - Option B: delay updates until a later refactor.
       Implementation details:
       - Apply runtime-flow edits and preserve current behavior contracts.
-      Layer: transport
+      Feature: transport
       Feature state: active
     prompt: |
       Goal:
@@ -1178,7 +1178,7 @@ tasks:
       - Option B: package-only checks.
       Implementation details:
       - Execute root-level test gate after implementation task.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-runtime-flow]
@@ -1233,7 +1233,7 @@ tasks:
       - Modify the refresh path only.
       Non-goals:
       - Do not add repro scripts here.
-      Layer: app_bridge
+      Feature: app_bridge
       Feature state: active
       Files:
       - packages/app/src/main.ts
@@ -1284,7 +1284,7 @@ tasks:
       - Execute the root regression command.
       Non-goals:
       - Do not modify code.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-owner-fallback]
