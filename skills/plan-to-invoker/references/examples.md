@@ -112,21 +112,18 @@ When the source is a policy or architecture document with a decision table, the 
 
 ---
 
-## 9. Dependency-first layered decomposition with dormant support
+## 9. Atomic-feature decomposition with dormant support
 
-Use this pattern when a change is too large for a single reviewable workflow. For implementation plans (`onFinish != none`), include task-level `Layer:` and `Feature state:` metadata, wire dependencies in layer order, and keep dormant work explicit.
+Use this pattern when a change is too large for a single reviewable workflow. For implementation plans (`onFinish != none`), include task-level `Feature:` and `Feature state:` metadata, and use optional `Feature step:` integers to order thin sub-slices within a single feature.
 
 **See positive fixture**: `fixtures/positive/07-prompt-edit-layered-split-with-dormant.yaml`
 **See negative fixture**: `fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml`
 
 **Pattern**:
-- Break monolithic prompt-edit changes into review slices:
-  1. contact surface
-  2. app bridge / owner delegation
-  3. ui activation
-  4. app + e2e regressions
+- One workflow per atomic feature; thin optional sub-slices within a feature are ordered by `Feature step:`.
 - Use `Feature state: dormant` for planned-but-not-activated tasks, but still include `Acceptance criteria:`.
-- Use dependencies to enforce order; if a lower layer must depend on a higher layer, include `Layer exception: allowed` and rationale.
+- Within a single feature, later sub-slices may depend only on equal or earlier `Feature step:` values; override with `Feature step exception: allowed` and a rationale in the same description block.
+- Slicing an already-implemented diff into reviewable PRs is owned by `skills/make-pr/SKILL.md` driven by `skills/review-compression/SKILL.md`, not by task layering.
 
 ---
 
@@ -139,7 +136,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 - Large refactors → `onFinish: pull_request`, diamond DAGs
 - Invoker-on-Invoker PR publication → keep `mergeMode: github`, then use `mergify stack push` as the repo-specific publication step
 - Policy matrix / architecture docs → preserve row-level coverage with `coverage-map.json` and `stack-manifest.json`
-- Dependency-first layered decomposition → enforce `Layer:` + `Feature state:` metadata, preserve dependency direction, allow explicit dormant tasks
+- Atomic-feature decomposition → enforce `Feature:` + `Feature state:` metadata, allow optional `Feature step:` ordering for thin sub-slices, allow explicit dormant tasks
 
 **Validation enforces**:
 - Every prompt task must have a verification command task or proof lane
@@ -147,7 +144,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 - Avoid `npx vitest run`; use repo-supported scripts or explicit package-local commands
 - Dependencies field required (even if empty)
 - No dangerous commands without manual approval
-- For implementation plans: `Layer:` + `Feature state:` headings, allowed values, and layer-consistent dependency direction
+- For implementation plans: `Feature:` + `Feature state:` headings, with optional `Feature step:` ordering for thin sub-slices, and feature-level dependency direction
 - For implementation-plan prompt tasks: `Files:` / `Change types:` / `Acceptance criteria:` headings in `description`, zero-context prompt framing, and deterministic pass/fail expectations
 
 **References**:
