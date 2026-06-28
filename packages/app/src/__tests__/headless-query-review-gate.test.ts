@@ -93,18 +93,33 @@ describe('headless query review-gate', () => {
     await runHeadless(['query', 'review-gate', '123456', '--output', 'jsonl'], mockDeps);
     expect((stdoutSpy.mock.calls[0][0] as string).trim()).toBe('');
   });
-  it('prints a human text line by default and a clear miss message', async () => {
-    await runHeadless(['query', 'review-gate', '999'], mockDeps);
-    const line = stdoutSpy.mock.calls[0][0] as string;
-    expect(line).toContain('wf-42');
-    expect(line).toContain('running');
-    expect(line).not.toContain('{');
+
+  it('prints a human text line for --output text', async () => {
+    await runHeadless(['query', 'review-gate', '999', '--output', 'text'], mockDeps);
+    expect(findReviewGateByPr).toHaveBeenCalledWith('999');
+    expect((stdoutSpy.mock.calls[0][0] as string).trim()).toBe(
+      'PR #999 -> workflow wf-42 (merge __merge__wf-42, gen 2, running)',
+    );
 
     stdoutSpy.mockClear();
     await runHeadless(['query', 'review-gate', '123456', '--output', 'text'], mockDeps);
-    expect(stdoutSpy.mock.calls[0][0] as string).toContain('No Invoker workflow found for PR 123456');
+    expect((stdoutSpy.mock.calls[0][0] as string).trim()).toBe(
+      'No Invoker workflow found for PR #123456',
+    );
   });
 
+  it('prints a human text line by default (no --output)', async () => {
+    await runHeadless(['query', 'review-gate', '999'], mockDeps);
+    expect((stdoutSpy.mock.calls[0][0] as string).trim()).toBe(
+      'PR #999 -> workflow wf-42 (merge __merge__wf-42, gen 2, running)',
+    );
+
+    stdoutSpy.mockClear();
+    await runHeadless(['query', 'review-gate', '123456'], mockDeps);
+    expect((stdoutSpy.mock.calls[0][0] as string).trim()).toBe(
+      'No Invoker workflow found for PR #123456',
+    );
+  });
 
   it('errors when no PR argument is given', async () => {
     await expect(runHeadless(['query', 'review-gate'], mockDeps)).rejects.toThrow(/review-gate/);

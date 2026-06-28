@@ -167,10 +167,11 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         case 'label': writeOut(`${record?.workflowId ?? ''}\n`); break;
         case 'json':  writeOut(formatAsJson(record ?? {}) + '\n'); break;
         case 'jsonl': writeOut(formatAsJsonl(record ? [record] : []) + '\n'); break;
+        case 'text':
         default:      writeOut(
           record
-            ? `${record.workflowId}\t${record.reviewId ?? prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\t${record.branch ?? ''}\n`
-            : `No Invoker workflow found for PR ${prNumber}.\n`,
+            ? `PR #${prNumber} -> workflow ${record.workflowId} (merge ${record.mergeTaskId}, gen ${record.workflowGeneration}, ${record.workflowStatus})\n`
+            : `No Invoker workflow found for PR #${prNumber}\n`,
         ); break;
       }
       break;
