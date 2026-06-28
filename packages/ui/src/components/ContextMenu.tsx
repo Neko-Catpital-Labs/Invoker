@@ -10,10 +10,18 @@
  * - Labeled separators for task and danger zones
  */
 
-import { useEffect, useRef, useState, useLayoutEffect } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import {
+  firstEnabledMenuIndex,
+  isMenuActivationKey,
+  nextEnabledMenuIndex,
+} from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
+
+const MORE_ITEM_ID = '__more__';
+const MORE_ACTION = '__expandMore__';
 
 interface ContextMenuProps {
   x: number;
@@ -44,11 +52,10 @@ export function ContextMenu({
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [position, setPosition] = useState({ left: x, top: y });
   const [showMore, setShowMore] = useState(false);
+  const initialFocusAppliedRef = useRef(false);
 
-  // Generate menu items
   const items = getMenuItems(task, { agents: ['claude', 'codex'] });
 
-  // Filter items based on available handlers
   const availableItems = items.filter((item) => {
     if (item.action === 'onRecreateTask' && !onRecreateTask) return false;
     if (item.action === 'onFix' && !onFix) return false;
@@ -58,20 +65,43 @@ export function ContextMenu({
 
   const safeItems = availableItems.filter((item) => item.variant !== 'danger');
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
-  const hasMoreButton = dangerItems.length > 0 && !showMore;
-  const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  const navigableItems: MenuItem[] = useMemo(() => {
+    if (showMore) return [...safeItems, ...dangerItems];
+    if (dangerItems.length === 0) return safeItems;
+    return [
+      ...safeItems,
+      {
+        id: MORE_ITEM_ID,
+        label: 'More',
+        enabled: true,
+        action: MORE_ACTION,
+      },
+    ];
+    // safeItems / dangerItems identity changes each render — they are derived
+    // from props, so it's safe to depend on length plus showMore.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMore, safeItems.length, dangerItems.length]);
 
-  // Auto-focus first enabled item on mount
+  const firstEnabled = firstEnabledMenuIndex(navigableItems);
+
+  // Focus the menu container so document-level keydown listeners in App can't
+  // steal ArrowUp/ArrowDown/Enter/Space while the menu is open.
+  useLayoutEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // One-shot: park the highlight on the first enabled entry when the menu
+  // appears. We don't want this re-running after the user navigates or after
+  // More expands (which is handled explicitly below).
   useEffect(() => {
-    if (firstEnabledIndex >= 0) {
-      setFocusedIndex(firstEnabledIndex);
+    if (initialFocusAppliedRef.current) return;
+    if (firstEnabled >= 0) {
+      initialFocusAppliedRef.current = true;
+      setFocusedIndex(firstEnabled);
     }
-  }, [firstEnabledIndex]);
+  }, [firstEnabled]);
 
-  // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
     if (!menuRef.current) return;
 
@@ -82,22 +112,18 @@ export function ContextMenu({
     let left = x;
     let top = y;
 
-    // Flip horizontally if overflows right
     if (rect.right > viewportWidth) {
       left = x - rect.width;
     }
-
-    // Flip vertically if overflows bottom
     if (rect.bottom > viewportHeight) {
       top = y - rect.height;
     }
 
-    // Ensure menu stays within viewport (clamp to edges)
     left = Math.max(0, Math.min(left, viewportWidth - rect.width));
     top = Math.max(0, Math.min(top, viewportHeight - rect.height));
 
     setPosition({ left, top });
-  }, [x, y]);
+  }, [x, y, showMore]);
 
   // Capture-phase outside dismissal stays reliable even if graph layers stop
   // bubbling on mouse/pointer events before they reach document listeners.
@@ -133,61 +159,92 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
+  const activateMoreAndFocusFirstDanger = useCallback(() => {
+    setShowMore(true);
+    const offsetIntoDanger = firstEnabledMenuIndex(dangerItems);
+    if (offsetIntoDanger >= 0) {
+      setFocusedIndex(safeItems.length + offsetIntoDanger);
+    }
+  }, [dangerItems, safeItems.length]);
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
+  const activateItem = useCallback(
+    (item: MenuItem) => {
+      if (!item.enabled) return;
+
+      if (item.action === MORE_ACTION) {
+        activateMoreAndFocusFirstDanger();
+        return;
       }
+
+      switch (item.action) {
+        case 'onRestart':
+          onRestart(task.id);
+          break;
+        case 'onReplace':
+          onReplace(task.id);
+          break;
+        case 'onOpenTerminal':
+          onOpenTerminal(task.id);
+          break;
+        case 'onRecreateTask':
+          onRecreateTask?.(task.id);
+          break;
+        case 'onFix':
+          if (item.agentName) {
+            onFix?.(task.id, item.agentName);
+          }
+          break;
+        case 'onCancel':
+          onCancel?.(task.id);
+          break;
+      }
+      onClose();
+    },
+    [
+      activateMoreAndFocusFirstDanger,
+      onCancel,
+      onClose,
+      onFix,
+      onOpenTerminal,
+      onRecreateTask,
+      onReplace,
+      onRestart,
+      task.id,
+    ]
+  );
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      const next = nextEnabledMenuIndex(navigableItems, focusedIndex, 1);
+      if (next < 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedIndex(next);
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      const next = nextEnabledMenuIndex(navigableItems, focusedIndex, -1);
+      if (next < 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedIndex(next);
+      return;
+    }
+    if (isMenuActivationKey(e.key)) {
+      const item = navigableItems[focusedIndex];
+      if (!item || !item.enabled) return;
+      e.preventDefault();
+      e.stopPropagation();
+      activateItem(item);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
     }
   };
 
-  // Handle menu item click
-  const handleItemClick = (item: MenuItem) => {
-    if (!item.enabled) return;
-
-    switch (item.action) {
-      case 'onRestart':
-        onRestart(task.id);
-        break;
-      case 'onReplace':
-        onReplace(task.id);
-        break;
-      case 'onOpenTerminal':
-        onOpenTerminal(task.id);
-        break;
-      case 'onRecreateTask':
-        onRecreateTask?.(task.id);
-        break;
-      case 'onFix':
-        if (item.agentName) {
-          onFix?.(task.id, item.agentName);
-        }
-        break;
-      case 'onCancel':
-        onCancel?.(task.id);
-        break;
-    }
-    onClose();
-  };
-
-  // Get variant styles
   const getVariantClasses = (variant?: MenuItem['variant'], enabled?: boolean) => {
     if (!enabled) {
       return 'text-gray-500 cursor-not-allowed';
@@ -205,7 +262,6 @@ export function ContextMenu({
     }
   };
 
-  // Render separator
   const renderSeparator = (label: string) => (
     <div className="border-t border-gray-600 my-1">
       <div className="text-xs text-gray-500 text-center py-1">{label}</div>
@@ -222,45 +278,36 @@ export function ContextMenu({
       onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
     >
-      {renderedItems.map((item, idx) => {
+      {navigableItems.map((item, idx) => {
         const isFocused = idx === focusedIndex;
         const tooltip = !item.enabled && item.id === 'open-terminal'
           ? EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE
           : undefined;
+        const isMoreItem = item.id === MORE_ITEM_ID;
+        const classes = isMoreItem
+          ? 'w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700'
+          : `w-full text-left px-3 py-1.5 text-sm ${getVariantClasses(item.variant, item.enabled)}`;
 
         return (
           <div key={item.id}>
             {item.separator === 'task' && renderSeparator('Task')}
             {item.separator === 'danger' && renderSeparator('Danger')}
+            {isMoreItem && <div className="border-t border-gray-600 my-1" />}
             <button
               role="menuitem"
               aria-disabled={!item.enabled}
-              className={`w-full text-left px-3 py-1.5 text-sm ${getVariantClasses(
-                item.variant,
-                item.enabled
-              )} ${isFocused ? 'bg-gray-700' : ''}`}
-              onClick={() => handleItemClick(item)}
+              className={`${classes} ${isFocused ? 'bg-gray-700' : ''}`}
+              onClick={() => activateItem(item)}
               onMouseEnter={() => setFocusedIndex(idx)}
               disabled={!item.enabled}
               title={tooltip}
+              tabIndex={-1}
             >
               {item.label}
             </button>
           </div>
         );
       })}
-      {hasMoreButton && (
-        <div>
-          <div className="border-t border-gray-600 my-1" />
-          <button
-            role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
-          >
-            More
-          </button>
-        </div>
-      )}
     </div>
   );
 }

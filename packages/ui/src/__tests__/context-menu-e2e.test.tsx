@@ -158,4 +158,139 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  describe('keyboard navigation', () => {
+    async function getMenu() {
+      const menu = await screen.findByRole('menu');
+      return menu as HTMLElement;
+    }
+
+    function focusedLabel(menu: HTMLElement): string | null {
+      const focused = menu.querySelector<HTMLElement>('button.bg-gray-700');
+      return focused?.textContent?.trim() ?? null;
+    }
+
+    it('focuses the workflow menu on open so document listeners don\'t consume keys', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await getMenu();
+      expect(document.activeElement).toBe(menu);
+      expect(focusedLabel(menu)).toBe('Open Workflow');
+    });
+
+    it('ArrowDown/ArrowUp cycle the highlight through workflow menu items', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await getMenu();
+
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      expect(focusedLabel(menu)).toBe('Open PR');
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      expect(focusedLabel(menu)).toBe('Retry Workflow');
+      fireEvent.keyDown(menu, { key: 'ArrowUp' });
+      expect(focusedLabel(menu)).toBe('Open PR');
+    });
+
+    it('Enter activates the highlighted workflow menu item and closes the menu', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await getMenu();
+
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      expect(focusedLabel(menu)).toBe('Retry Workflow');
+      fireEvent.keyDown(menu, { key: 'Enter' });
+
+      await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+      await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    });
+
+    it('Space activates the highlighted workflow menu item', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await getMenu();
+
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      expect(focusedLabel(menu)).toBe('Copy Workflow ID');
+      fireEvent.keyDown(menu, { key: ' ' });
+
+      await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+    });
+
+    it('More is reachable via ArrowDown and Enter expands it, focusing the first revealed item', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await getMenu();
+
+      // Open, Open PR, Retry, Copy, More
+      for (let i = 0; i < 4; i++) fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      expect(focusedLabel(menu)).toBe('More');
+      fireEvent.keyDown(menu, { key: 'Enter' });
+
+      const expanded = await screen.findByText('Rebase and Retry');
+      expect(expanded).toBeInTheDocument();
+      // Focus should have moved to the first newly-revealed item.
+      expect(focusedLabel(menu)).toBe('Rebase and Retry');
+    });
+
+    it('task context menu focuses on open and Enter activates the highlighted item', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument());
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+
+      const menu = await getMenu();
+      expect(document.activeElement).toBe(menu);
+      // pending task -> first enabled item is "Restart Task".
+      expect(focusedLabel(menu)).toBe('Restart Task');
+
+      fireEvent.keyDown(menu, { key: 'Enter' });
+
+      await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-alpha'));
+      await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    });
+
+    it('ArrowDown skips disabled task menu items', async () => {
+      const runningAlpha = makeUITask({
+        id: 'task-alpha',
+        description: 'First test task',
+        status: 'running',
+        command: 'echo hello-alpha',
+        workflowId: 'wf-1',
+      });
+
+      render(<App />);
+      act(() => mock.setTasks([runningAlpha, beta, merge], workflows));
+      await waitFor(() => expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument());
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+
+      const menu = await getMenu();
+      // running -> Open Terminal first, Restart Task (disabled) skipped on cycle.
+      expect(focusedLabel(menu)).toBe('Open Terminal');
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      // Should skip the disabled "Restart Task" item and land on the next enabled one.
+      expect(focusedLabel(menu)).not.toBe('Restart Task');
+    });
+
+    it('App-level graph shortcuts do not steal ArrowUp/ArrowDown while a menu is open', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      const menu = await getMenu();
+
+      // Press ArrowDown on the document to make sure App-level keydown is also
+      // exercised. With the menu open and focused, the menu's React handler
+      // should run first and the App-level guard should bail.
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      expect(focusedLabel(menu)).toBe('Open PR');
+
+      // Menu must still be the active element — App-level Arrow handling
+      // would otherwise pull focus or change selection.
+      expect(document.activeElement).toBe(menu);
+    });
+  });
 });
