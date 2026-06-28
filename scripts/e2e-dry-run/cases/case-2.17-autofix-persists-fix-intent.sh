@@ -6,6 +6,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$REPO_ROOT"
 
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=512"
+export INVOKER_DISABLE_EXCLUSIVE_LOCKING=1
+#
+# This harness intentionally inspects the live owner DB file directly.
+# Keep shared WAL here so sqlite diagnostics can coexist with the owner.
 export INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK=1
 unset INVOKER_HEADLESS_STANDALONE
 unset INVOKER_DB_DIR
@@ -97,7 +101,7 @@ import sqlite3
 import sys
 
 db_path, task_id = sys.argv[1], sys.argv[2]
-conn = sqlite3.connect(db_path)
+conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 conn.row_factory = sqlite3.Row
 
 events = conn.execute(
@@ -142,7 +146,7 @@ if [ "$FOUND" -ne 1 ]; then
   python3 - <<'PY' "$DB_PATH" "$TASK_ID"
 import sqlite3, sys
 db_path, task_id = sys.argv[1], sys.argv[2]
-conn = sqlite3.connect(db_path)
+conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 print("recent task events:")
 for row in conn.execute("SELECT id, event_type, created_at FROM events WHERE task_id=? ORDER BY id DESC LIMIT 20", (task_id,)):
     print(row)
