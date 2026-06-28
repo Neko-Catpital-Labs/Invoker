@@ -36,8 +36,8 @@ files. One YAML file is one Invoker workflow; multiple `tasks:` entries inside
 that file are not a workflow stack.
 
 Split into multiple workflow files when the plan has more than one review slice,
-layer, implementation prompt task, package boundary, UI+non-UI boundary, or
-PR-worthy commit. Submit the resulting chain with
+atomic feature, implementation prompt task, package boundary, UI+non-UI boundary,
+or PR-worthy commit. Submit the resulting chain with
 `scripts/submit-workflow-chain.sh`, using `__UPSTREAM_WORKFLOW_ID__` in later
 templates so each workflow depends on the previous workflow's `__merge__` task.
 
@@ -59,28 +59,22 @@ not split.
 - **Independent files** → tasks creating/modifying unrelated files.
 - **Independent verification tasks** → file-existence and grep checks are read-only; run them in parallel when they do not verify a prior implementation task.
 
-## Layered decomposition contract (hard requirement for implementation plans)
+## Atomic-feature decomposition contract (hard requirement for implementation plans)
 
 For plans with `onFinish` set to `pull_request` or `merge`, each task `description` must include:
 
-1. **`Layer:`** one of:
-   - `persistence`
-   - `domain`
-   - `transport`
-   - `api`
-   - `contact_surface`
-   - `app_bridge`
-   - `owner_delegation`
-   - `ui_activation`
-   - `app_regression`
-   - `e2e_regression`
-   - `ui`
-   - `docs`
+1. **`Feature:`** — the name of exactly one atomic feature this task advances. One coherent feature per task; do not pack multiple unrelated features into a single task.
 2. **`Feature state:`** one of:
    - `active`
    - `dormant`
 
+Thin sub-slices within a single feature are optional. When a feature is sliced, each sub-slice task may include:
+
+3. **`Feature step:`** (optional) — an integer that orders sub-slices of the same `Feature:`. Use this only when the feature is actually sliced; single-task features can omit it.
+
 `onFinish: none` verify-only plans are exempt.
+
+Slicing an already-implemented diff into reviewable pull requests is owned by `skills/make-pr/SKILL.md`, driven by `skills/review-compression/SKILL.md`. Task decomposition picks the feature axis; PR-shape decomposition is not done here.
 
 ### Review compression contract
 
@@ -108,12 +102,13 @@ yields six helper modules is six chained workflows, not one "extract phases"
 task. See the **Decomposition & Extraction Refactors** section of
 `../review-compression/SKILL.md`.
 
-### Cross-layer direction
+### Feature-step direction (lightweight)
 
-- Dependencies should flow from lower/foundational layers to higher/integration layers.
-- A lower-layer task depending on a higher-layer task is rejected unless the task includes:
-  - `Layer exception: allowed`
+- When a feature is sliced into multiple sub-slices, a later sub-slice may depend only on tasks with an equal or earlier `Feature step:` value of the same `Feature:`.
+- An earlier sub-slice depending on a later one (or any other reversal of the feature-step direction) is rejected unless the task includes:
+  - `Feature step exception: allowed`
   - a short rationale in the same description block.
+- This is a lightweight feature-level check. It does not impose a fixed ordering ladder across unrelated features.
 
 ### Dormant tasks
 
@@ -122,14 +117,7 @@ task. See the **Decomposition & Extraction Refactors** section of
 
 ### Review decomposition benchmark
 
-Large prompt-edit style changes should split into dependency-ordered layer workflows:
-
-1. `contact surface`
-2. `app bridge` and `owner delegation`
-3. `ui activation`
-4. `app` + `e2e` regressions
-
-This split maps directly to review slices and should not be collapsed into one monolithic workflow.
+Large prompt-edit style changes should split into one workflow per atomic feature, each with a coherent `Feature:` heading. Within a single feature, optional thin sub-slices may be ordered with `Feature step:` integers when the work benefits from being staged. This split maps directly to review slices and should not be collapsed into one monolithic workflow.
 
 ## Sizing
 
@@ -186,7 +174,7 @@ Example cleanup command:
 - id: cleanup-experiment-artifacts-inv-123
   description: |
     Remove persisted experiment artifact after implementation handoff.
-    Layer: docs
+    Feature: experiment-artifact-cleanup
     Feature state: active
     Files:
     - docs/context/inv-123/experiment-brief.md

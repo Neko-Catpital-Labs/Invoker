@@ -8,6 +8,7 @@ SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
+EXAMPLES="$SKILL_DIR/references/examples.md"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
@@ -99,6 +100,7 @@ must_contain "$TUTORIAL" "Invoker MCP tool" "Tutorial must document the MCP hand
 
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
+[[ -f "$EXAMPLES" ]] || fail "expected $EXAMPLES"
 [[ -f "$CLAUDE_MD" ]] || fail "expected $CLAUDE_MD"
 
 # Installed agent skills use managed invoker-* copies, not legacy unprefixed symlinks.
@@ -123,6 +125,10 @@ must_contain "$SKILL_MD" "Policy-matrix documents" "SKILL must document policy-m
 must_contain "$SKILL_MD" "verify-noop" "SKILL must explain policy-matrix degradation checks"
 must_contain "$SKILL_MD" "zero-context executable" "SKILL must require zero-context executable prompt instructions"
 must_contain "$SKILL_MD" "Review compression" "SKILL must require review compression for implementation plans"
+must_contain "$SKILL_MD" "Atomic-feature decomposition" "SKILL must document atomic-feature decomposition policy"
+must_contain "$SKILL_MD" 'every implementation task must include a `Feature:` heading' "SKILL must require a Feature heading on each implementation task"
+must_contain "$SKILL_MD" 'Slicing an already-implemented diff into reviewable pull requests is owned by `skills/make-pr/SKILL.md`' "SKILL must name make-pr as the PR-splitting owner"
+must_contain "$SKILL_MD" "lightweight feature-level check" "SKILL must retain the lightweight feature-level dependency-direction check"
 must_contain "$SKILL_MD" "Review claim:" "SKILL must require review claim metadata"
 must_contain "$SKILL_MD" "Review lane:" "SKILL must require review lane metadata"
 must_contain "$SKILL_MD" "Non-goals:" "SKILL must require non-goals metadata"
@@ -203,6 +209,15 @@ must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-c
 must_contain "$TASK_PATTERNS" "Assume zero context" "Task patterns must define zero-context prompt requirement"
 must_contain "$TASK_PATTERNS" "deterministic pass/fail expectations" "Task patterns must require deterministic prompt outcomes"
 must_contain "$TASK_PATTERNS" "Review compression contract" "Task patterns must define review compression metadata"
+must_contain "$TASK_PATTERNS" "Atomic-feature decomposition contract" "Task patterns must document atomic-feature decomposition contract"
+must_contain "$TASK_PATTERNS" "name of exactly one atomic feature" "Task patterns must require exactly one atomic feature per task"
+must_contain "$TASK_PATTERNS" 'Slicing an already-implemented diff into reviewable pull requests is owned by `skills/make-pr/SKILL.md`' "Task patterns must name make-pr as the PR-splitting owner"
+must_contain "$TASK_PATTERNS" "lightweight feature-level check" "Task patterns must retain the lightweight feature-level dependency-direction check"
+
+# Examples — atomic-feature decomposition and PR-splitting ownership
+must_contain "$EXAMPLES" "Atomic-feature decomposition" "Examples must document atomic-feature decomposition"
+must_contain "$EXAMPLES" '`Feature:`' "Examples must mention the required Feature heading"
+must_contain "$EXAMPLES" 'Slicing the resulting diff into reviewable pull requests is owned by `skills/make-pr/SKILL.md`' "Examples must name make-pr as the PR-splitting owner"
 
 echo "OK: plan-to-invoker skill contract checks passed"
 
