@@ -144,10 +144,11 @@ function parse_file_buckets(desc_text,    lines, i, line, in_files, path) {
   }
 }
 function parse_metadata(desc_lower,    tmp, parts) {
-  layer = ""
+  feature = ""
+  feature_step = ""
+  feature_step_exception = 0
   feature_state = ""
   review_lane = ""
-  layer_exception_allowed = 0
   has_acceptance_criteria = (desc_lower ~ /acceptance criteria:/)
   has_goal_heading = (desc_lower ~ /(^|\n)[ \t]*goal:/)
   has_motivation_heading = (desc_lower ~ /(^|\n)[ \t]*motivation:/)
@@ -169,10 +170,18 @@ function parse_metadata(desc_lower,    tmp, parts) {
   }
 
   tmp = desc_lower
-  sub(/^.*layer:[ \t]*/, "", tmp)
+  sub(/^.*feature:[ \t]*/, "", tmp)
   if (tmp != desc_lower) {
-    split(tmp, parts, /[^a-z0-9_]/)
-    layer = parts[1]
+    gsub(/^[ \t\r\n-]+/, "", tmp)
+    split(tmp, parts, /[^a-z0-9_-]/)
+    feature = parts[1]
+  }
+
+  tmp = desc_lower
+  sub(/^.*feature step:[ \t]*/, "", tmp)
+  if (tmp != desc_lower) {
+    split(tmp, parts, /[^0-9]/)
+    feature_step = parts[1]
   }
 
   tmp = desc_lower
@@ -182,24 +191,9 @@ function parse_metadata(desc_lower,    tmp, parts) {
     feature_state = parts[1]
   }
 
-  if (desc_lower ~ /layer exception:[ \t]*allowed/) {
-    layer_exception_allowed = 1
+  if (desc_lower ~ /feature step exception:[ \t]*allowed/) {
+    feature_step_exception = 1
   }
-}
-function layer_rank(layer_name) {
-  if (layer_name == "persistence") return 10
-  if (layer_name == "domain") return 20
-  if (layer_name == "transport") return 30
-  if (layer_name == "api") return 40
-  if (layer_name == "contact_surface") return 45
-  if (layer_name == "app_bridge") return 50
-  if (layer_name == "owner_delegation") return 60
-  if (layer_name == "ui_activation") return 70
-  if (layer_name == "app_regression") return 80
-  if (layer_name == "e2e_regression") return 90
-  if (layer_name == "ui") return 100
-  if (layer_name == "docs") return 110
-  return 0
 }
 function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   if (!in_task) return
@@ -256,10 +250,8 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   parse_metadata(desc_lower)
 
   if (enforce_layering == 1) {
-    if (layer == "") {
-      errors[++errn] = "Task \"" id "\" missing required \"Layer:\" heading in description (implementation plans require layer metadata)"
-    } else if (layer_rank(layer) == 0) {
-      errors[++errn] = "Task \"" id "\" has invalid Layer \"" layer "\"; expected one of: persistence, domain, transport, api, contact_surface, app_bridge, owner_delegation, ui_activation, app_regression, e2e_regression, ui, docs"
+    if (feature == "") {
+      errors[++errn] = "Task \"" id "\" missing required \"Feature:\" heading in description (implementation plans require feature metadata)"
     }
 
     if (feature_state == "") {
@@ -391,9 +383,10 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
 
   idx = ++taskn
   task_ids[idx] = id
-  task_layers[idx] = layer
+  task_features[idx] = feature
+  task_feature_steps[idx] = feature_step
+  task_feature_step_exceptions[idx] = feature_step_exception
   task_feature_states[idx] = feature_state
-  task_layer_exceptions[idx] = layer_exception_allowed
   task_dependencies[idx] = dependencies_csv
   task_has_command[idx] = has_command
   task_command_line[idx] = normalize_command(command_line)
@@ -636,12 +629,15 @@ END {
         if (dep_id == "") continue
         dep_index = task_id_to_index[dep_id]
         if (dep_index == 0) continue
-        dep_layer = task_layers[dep_index]
-        cur_layer = task_layers[idx]
-        if (layer_rank(cur_layer) > 0 && layer_rank(dep_layer) > 0) {
-          if (layer_rank(cur_layer) < layer_rank(dep_layer) && task_layer_exceptions[idx] != 1) {
-            errors[++errn] = "Task \"" task_ids[idx] "\" layer ordering violation: lower layer \"" cur_layer "\" depends on higher layer \"" dep_layer "\" via dependency \"" dep_id "\" (add \"Layer exception: allowed\" with rationale to override)"
-          }
+        cur_feature = task_features[idx]
+        dep_feature = task_features[dep_index]
+        if (cur_feature == "" || dep_feature == "") continue
+        if (cur_feature != dep_feature) continue
+        cur_step = task_feature_steps[idx]
+        dep_step = task_feature_steps[dep_index]
+        if (cur_step == "" || dep_step == "") continue
+        if ((cur_step + 0) < (dep_step + 0) && task_feature_step_exceptions[idx] != 1) {
+          errors[++errn] = "Task \"" task_ids[idx] "\" feature step ordering violation: feature \"" cur_feature "\" step " cur_step " depends on later step " dep_step " via dependency \"" dep_id "\" (add \"Feature step exception: allowed\" with rationale to override)"
         }
       }
     }
