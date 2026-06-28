@@ -70,6 +70,22 @@ Tests that create real `WorktreeExecutor`/`DockerExecutor` and call `.start()` r
 
 After making a change with any edit tool, **read the file back from disk** (using the Read tool or `rg` in the Shell) and verify the edit persisted before proceeding. Cursor's in-memory state can silently revert writes. If the change is missing on disk, re-apply it using the Shell tool (e.g. `python3 -c "..."` or `sed`) and verify again. When committing, always `git diff --stat` immediately before `git add` to confirm the working tree contains the expected modifications.
 
+## Comment Policy
+
+Do not add explanatory comments to product code by default.
+
+Prefer clearer names, smaller functions, or simpler control flow.
+
+Allowed comments only:
+
+- legal or license headers
+- generated-code markers
+- `eslint`, `ts-expect-error`, `ts-ignore`, `shellcheck`, or tool directives
+- non-obvious safety invariants where removing the comment would make the code risky
+- public API docs when that area already uses them
+
+Before finishing a PR, remove any comment you added unless it matches one of the allowed cases.
+
 ## Code Navigation
 
 Use LSP tools (`goToDefinition`, `findReferences`, `documentSymbol`, `workspaceSymbol`, `incomingCalls`, `outgoingCalls`, `hover`) for any task involving symbols, types, or cross-file relationships. Use Grep and Glob for literal text searches and file discovery.
