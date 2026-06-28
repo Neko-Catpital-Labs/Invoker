@@ -2746,7 +2746,8 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'invoker:resume-workflow': {
         const workflows = detachedViewerWorkflows ?? persistence.listWorkflows();
         const firstWorkflow = workflows[0] as { id?: unknown } | undefined;
-        const workflowId = typeof firstWorkflow?.id === 'string' ? firstWorkflow.id : undefined;
+        const workflowId = startupWorkflowId
+          ?? (typeof firstWorkflow?.id === 'string' ? firstWorkflow.id : undefined);
         if (!workflowId) return null;
         return { channel: 'headless.resume', request: { workflowId } };
       }
@@ -3409,11 +3410,18 @@ function createEmbeddedTerminalBackendFromConfig(
           app.quit();
           return;
         }
-        recordStartupMark('initServices.readOnly.start');
+        const owner = await discoverOwner(messageBus, 1500);
+        if (!isStandaloneCapable(owner)) {
+          process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+          process.stderr.write(`${RED}Detached viewer fallback requires a reachable owner, but no owner answered IPC.\n${RESET}`);
+          app.quit();
+          return;
+        }
+        recordStartupMark('initServices.readOnly.start', { ownerId: owner.ownerId });
         await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
         ownerMode = false;
         guiUsingDaemonOwner = false;
-        recordStartupMark('initServices.readOnly.end', { ownerMode: false });
+        recordStartupMark('initServices.readOnly.end', { ownerMode: false, ownerId: owner.ownerId });
       }
     }
 

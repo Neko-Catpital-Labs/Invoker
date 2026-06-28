@@ -11,7 +11,7 @@ function ownerTask(version: number): TaskState {
     status: 'running',
     dependencies: [],
     createdAt: new Date('2026-01-01').toISOString(),
-    config: {},
+    config: { workflowId: 'wf-1' },
     execution: {},
     taskStateVersion: version,
   } as unknown as TaskState;
@@ -47,5 +47,20 @@ describe('detached viewer cache hydration', () => {
     const merged = JSON.parse(lastKnownTaskStates.get('wf-1/task-1') ?? '{}') as { status?: string; taskStateVersion?: number };
     expect(merged.status).toBe('completed');
     expect(merged.taskStateVersion).toBe(2);
+  });
+
+  it('hydrates and clears the workflow rollup projection from the owner snapshot', () => {
+    const lastKnownTaskStates = new TaskSnapshotCache();
+    const workflowRollupProjection = new WorkflowRollupProjection();
+    seedTaskCachesFromSnapshot([ownerTask(1)], { lastKnownTaskStates, workflowRollupProjection });
+
+    const hydratedPatch = workflowRollupProjection.patchFor('wf-1');
+    expect(hydratedPatch.status).toBe('running');
+    expect(hydratedPatch.rollup.countsByStatus.running).toBe(1);
+
+    seedTaskCachesFromSnapshot([], { lastKnownTaskStates, workflowRollupProjection });
+
+    const clearedPatch = workflowRollupProjection.patchFor('wf-1');
+    expect(clearedPatch.rollup.countsByStatus.running).toBe(0);
   });
 });
