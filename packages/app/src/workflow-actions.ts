@@ -165,7 +165,19 @@ export async function approveTask(
   const task = deps.orchestrator.getTask?.(taskId);
   const fixedTask = task?.execution.pendingFixError !== undefined;
   if (fixedTask && task && deps.taskExecutor) {
-    await deps.taskExecutor.commitApprovedFix(task);
+    try {
+      await deps.taskExecutor.commitApprovedFix(task);
+    } catch (err) {
+      if (!task.config.isMergeNode || !isInvalidGitWorkspaceError(err)) {
+        throw err;
+      }
+      const msg = invalidMergeWorkspaceMessage({
+        kind: 'invalidMergeWorkspace',
+        workspacePath: task.execution.workspacePath?.trim() || undefined,
+      });
+      deps.orchestrator.revertConflictResolution(taskId, task.execution.pendingFixError ?? '', msg);
+      return { approvedTask: task, started: [], fixedTask };
+    }
   }
 
   const shouldResume =
@@ -833,12 +845,19 @@ export async function fixWithAgentAction(
   }
 
   const savedError = task.execution.error ?? '';
-  const recoveryRoute = options.recoveryRoute ?? selectFailureRecoveryRoute(task, savedError);
+  const recoveryRoute = await selectFailureRecoveryRouteForAction(task, savedError, taskExecutor, options.recoveryRoute);
+  if (recoveryRoute.kind === 'invalidMergeWorkspace') {
+    const msg = invalidMergeWorkspaceMessage(recoveryRoute);
+    const errorLabel = options.failureOutputLabel ?? `Fix with ${options.agentName ?? 'Claude'}`;
+    persistence.appendTaskOutput(taskId, `\n[${errorLabel}] ${msg}`);
+    orchestrator.revertConflictResolution(taskId, savedError, msg);
+    throw new Error(msg);
+  }
   if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
     if (options.recreateOutputLabel) {
       persistence.appendTaskOutput(
         taskId,
-        `\n[${options.recreateOutputLabel}] Startup merge conflict detected; recreating workflow ${recoveryRoute.workflowId} from a fresh base.`,
+        `\n[${options.recreateOutputLabel}] ${freshBaseRecoveryMessage(recoveryRoute)}; recreating workflow ${recoveryRoute.workflowId} from a fresh base.`,
       );
     }
     const started = await recreateWorkflowFromFreshBase(recoveryRoute.workflowId, deps);
@@ -914,7 +933,8 @@ export async function finalizeAppliedFix(
 export type FailureRecoveryRoute =
   | { kind: 'fixWithAgent' }
   | { kind: 'resolveConflict' }
-  | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string };
+  | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string }
+  | { kind: 'invalidMergeWorkspace'; workspacePath?: string };
 
 export function selectFailureRecoveryRoute(
   task: TaskState,
@@ -935,6 +955,44 @@ export function selectFailureRecoveryRoute(
   }
 
   return { kind: 'recreateWorkflowFromFreshBase', workflowId };
+}
+
+async function selectFailureRecoveryRouteForAction(
+  task: TaskState,
+  savedError: string,
+  taskExecutor: TaskRunner,
+  initialRoute?: FailureRecoveryRoute,
+): Promise<FailureRecoveryRoute> {
+  const route = initialRoute ?? selectFailureRecoveryRoute(task, savedError);
+  if (route.kind !== 'fixWithAgent' || !task.config.isMergeNode) {
+    return route;
+  }
+
+  const workspacePath = task.execution.workspacePath?.trim();
+  if (!workspacePath) {
+    return { kind: 'invalidMergeWorkspace' };
+  }
+
+  try {
+    await taskExecutor.execGitIn(['rev-parse', '--is-inside-work-tree'], workspacePath);
+    return route;
+  } catch {
+    return { kind: 'invalidMergeWorkspace', workspacePath };
+  }
+}
+
+function freshBaseRecoveryMessage(_route: Extract<FailureRecoveryRoute, { kind: 'recreateWorkflowFromFreshBase' }>): string {
+  return 'Startup merge conflict detected';
+}
+
+function invalidMergeWorkspaceMessage(route: Extract<FailureRecoveryRoute, { kind: 'invalidMergeWorkspace' }>): string {
+  const suffix = route.workspacePath ? `: ${route.workspacePath}` : '';
+  return `Cannot apply a fix because this merge gate's saved workspace is missing or is not a git repository${suffix}. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.`;
+}
+
+function isInvalidGitWorkspaceError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('not a git repository') || msg.includes('No such file or directory');
 }
 
 function tailText(value: unknown, maxChars: number = 2000): string | undefined {
