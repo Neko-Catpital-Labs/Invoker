@@ -15,7 +15,13 @@ import {
   WorkerLockHeldError,
   registerBuiltinAgents,
   type WorkerDefinition,
+  type WorkerRegistry,
 } from '@invoker/execution-engine';
+import {
+  isExternalWorkerRuntime,
+  registerExternalWorkers,
+  type ExternalWorkerRuntime,
+} from '../../app/src/external-worker-loader.js';
 import {
   IpcBus,
   TransportError,
@@ -65,6 +71,15 @@ type CliDeps = {
   runMcpServer?: () => Promise<void>;
 };
 
+type ExternalWorkerConfig = {
+  kind: string;
+  launch: {
+    executable: string;
+    args?: string[];
+    cwd?: string;
+  };
+};
+
 type CliRuntimeConfig = {
   defaultBranch?: string;
   maxConcurrency?: number;
@@ -99,6 +114,7 @@ type CliRuntimeConfig = {
     poolId: string;
     strategy?: 'enforce' | 'route';
   }>;
+  externalWorkers?: ExternalWorkerConfig[];
 };
 
 const silentLogger: Logger = {
@@ -120,7 +136,7 @@ function usage(): string {
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli setup [slack] [--check]',
     '  invoker-cli mcp',
-    '  invoker-cli worker [autofix|list]',
+    '  invoker-cli worker [kind|list]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
@@ -447,7 +463,11 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
  * Read the auto-fix policy knobs from the shared Invoker config so the CLI door
  * drives the engine with the same retry budget / agent the GUI owner uses.
  */
-function readAutoFixWorkerConfig(homeRoot: string): { autoFixRetries?: number; autoFixAgent?: string } {
+function readWorkerConfig(homeRoot: string): {
+  autoFixRetries?: number;
+  autoFixAgent?: string;
+  externalWorkers?: ExternalWorkerConfig[];
+} {
   const configPath = join(homeRoot, 'config.json');
   if (!existsSync(configPath)) return {};
   try {
@@ -455,6 +475,9 @@ function readAutoFixWorkerConfig(homeRoot: string): { autoFixRetries?: number; a
     return {
       autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
       autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
+      externalWorkers: Array.isArray(parsed.externalWorkers)
+        ? parsed.externalWorkers as ExternalWorkerConfig[]
+        : undefined,
     };
   } catch {
     return {};
@@ -465,12 +488,44 @@ function workerDisplayName(kind: string): string {
   return kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : kind;
 }
 
-function printWorkerKinds(): void {
-  const registry = registerAutoFixWorker(createWorkerRegistry());
+function printWorkerKinds(registry: WorkerRegistry): void {
   process.stdout.write('Worker kinds\n');
   for (const worker of registry.list()) {
     process.stdout.write(`  ${worker.kind} — available (${worker.note})\n`);
   }
+}
+
+function waitForShutdownSignal(): Promise<void> {
+  return new Promise<void>((resolveShutdown) => {
+    const shutdown = (): void => resolveShutdown();
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
+}
+
+async function waitForExternalWorkerShutdown(worker: ExternalWorkerRuntime): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      process.removeListener('SIGINT', shutdown);
+      process.removeListener('SIGTERM', shutdown);
+    };
+    const shutdown = (): void => {
+      cleanup();
+      resolve();
+    };
+    worker.waitForExit().then(
+      () => {
+        cleanup();
+        resolve();
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
 }
 
 /**
@@ -481,10 +536,14 @@ function printWorkerKinds(): void {
  * foreground lifetime — owner discovery, connect message, the SIGINT/SIGTERM
  * block, and a deterministic stop.
  */
-async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise<number> {
+async function runWorker(
+  definition: WorkerDefinition,
+  bus: MessageBus,
+  workerConfig: ReturnType<typeof readWorkerConfig>,
+): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
-  const { autoFixRetries, autoFixAgent } = readAutoFixWorkerConfig(homeRoot);
+  const { autoFixRetries, autoFixAgent } = workerConfig;
 
   // Single-instance guard: refuse if another worker of this kind (this door or
   // the dev `--headless worker <kind>` door) already holds the cross-process
@@ -526,11 +585,11 @@ async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise
     const ownerSuffix = owner?.ownerId ? ` to owner ${owner.ownerId}` : '';
     process.stdout.write(`${workerDisplayName(definition.kind)} worker connected${ownerSuffix}.\n`);
 
-    await new Promise<void>((resolveShutdown) => {
-      const shutdown = (): void => resolveShutdown();
-      process.once('SIGINT', shutdown);
-      process.once('SIGTERM', shutdown);
-    });
+    if (isExternalWorkerRuntime(worker)) {
+      await waitForExternalWorkerShutdown(worker);
+    } else {
+      await waitForShutdownSignal();
+    }
     await worker.stop();
   } finally {
     // Release deterministically so a clean shutdown never leaves a stale lock
@@ -557,9 +616,14 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
-      const registry = registerAutoFixWorker(createWorkerRegistry());
+      const homeRoot = resolveInvokerHomeRoot();
+      const workerConfig = readWorkerConfig(homeRoot);
+      const registry = registerExternalWorkers(
+        registerAutoFixWorker(createWorkerRegistry()),
+        workerConfig.externalWorkers,
+      );
       if (subcommand === 'list') {
-        printWorkerKinds();
+        printWorkerKinds(registry);
         return 0;
       }
       const definition = registry.get(subcommand);
@@ -568,7 +632,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
         throw new Error(`Unknown worker kind: "${subcommand}". Usage: invoker-cli worker <${knownKinds}|list>`);
       }
       bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
-      return await runWorker(definition, bus);
+      return await runWorker(definition, bus, workerConfig);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {
