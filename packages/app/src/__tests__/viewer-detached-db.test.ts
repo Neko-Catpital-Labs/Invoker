@@ -2,16 +2,13 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter } from '@invoker/data-store';
+import { openMainProcessDatabase, openDetachedViewerDatabase } from '../viewer-db-boundary.js';
 import type { Workflow } from '@invoker/data-store';
 
 /**
- * The GUI viewer is wired (main.ts initServices, detachedViewer) to back its
- * in-process services with `SQLiteAdapter.create(':memory:')` instead of opening
- * `invoker.db`. This proves the safety property that decision relies on: an
- * in-memory adapter is fully functional yet opens no database file, so it maps
- * no `-shm` wal-index — the sidecar whose truncation under a live mmap causes
- * the SIGBUS this whole stack eliminates.
+ * Detached GUI viewers must never open the shared `invoker.db` file. They use
+ * process-local placeholder persistence while renderer reads delegate to the
+ * owner over IPC.
  */
 
 const dirs: string[] = [];
@@ -32,11 +29,16 @@ const wf: Workflow = {
   updatedAt: new Date().toISOString(),
 };
 
-describe('detached viewer in-memory persistence', () => {
-  it('is usable but opens no database file (no -shm to truncate)', async () => {
+describe('detached viewer persistence boundary', () => {
+  it('ignores the real db path and opens no database file (no -shm to truncate)', async () => {
     const dir = makeDir();
     const probeDbPath = join(dir, 'invoker.db');
-    const adapter = await SQLiteAdapter.create(':memory:');
+    const adapter = await openMainProcessDatabase({
+      dbPath: probeDbPath,
+      detachedViewer: true,
+      readOnly: true,
+      exclusiveLocking: true,
+    });
     try {
       // Fully functional: schema is present and writes/reads work in memory.
       expect(adapter.listWorkflows()).toEqual([]);
@@ -56,8 +58,7 @@ describe('detached viewer in-memory persistence', () => {
   });
 
   it('does not require owner capability (it never touches the shared file)', async () => {
-    // File-backed writable opens demand ownerCapability; in-memory must not.
-    const adapter = await SQLiteAdapter.create(':memory:');
+    const adapter = await openDetachedViewerDatabase();
     try {
       expect(adapter).toBeDefined();
     } finally {

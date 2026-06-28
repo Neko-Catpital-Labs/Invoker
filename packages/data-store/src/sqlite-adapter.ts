@@ -117,6 +117,8 @@ export interface OutputChunk {
   data: string;
 }
 
+const SQLITE_EPHEMERAL_DATABASE = ':memory:';
+
 interface SQLiteAdapterOptions {
   readOnly?: boolean;
   ownerCapability?: boolean;
@@ -132,6 +134,11 @@ interface SQLiteAdapterOptions {
    */
   exclusiveLocking?: boolean;
 }
+
+export type EphemeralSQLiteAdapterOptions = Pick<
+  SQLiteAdapterOptions,
+  'outputTailLimit' | 'outputDir' | 'activityLogMaxRows'
+>;
 
 export type WorkflowMutationPriority = 'high' | 'normal';
 export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -366,14 +373,27 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   /**
+   * Open a private non-file-backed SQLite database.
+   *
+   * This is for process-local placeholder persistence only. It does not open
+   * invoker.db, does not enable WAL, and cannot create or map invoker.db-shm.
+   */
+  static async createEphemeral(options?: EphemeralSQLiteAdapterOptions): Promise<SQLiteAdapter> {
+    return SQLiteAdapter.create(SQLITE_EPHEMERAL_DATABASE, options);
+  }
+
+  /**
    * Async factory — opens or creates the database.
    * If the on-disk file is corrupted, backs it up and starts fresh.
-   * @param dbPath File path or ':memory:' (default).
+   * @param dbPath File path or the private in-memory SQLite database name (default).
    * @param options readOnly=true opens DB for read operations without schema mutation.
    *                ownerCapability=true is required to open DB in writable mode for file-backed databases.
    */
-  static async create(dbPath: string = ':memory:', options?: SQLiteAdapterOptions): Promise<SQLiteAdapter> {
-    const isFile = dbPath !== ':memory:';
+  static async create(
+    dbPath: string = SQLITE_EPHEMERAL_DATABASE,
+    options?: SQLiteAdapterOptions,
+  ): Promise<SQLiteAdapter> {
+    const isFile = dbPath !== SQLITE_EPHEMERAL_DATABASE;
     const requestWritable = options?.readOnly !== true;
 
     // Exclusive (heap wal-index, no -shm) locking is reserved for the sole

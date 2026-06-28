@@ -79,7 +79,8 @@ import {
   resolveRepoRoot,
 } from '@invoker/contracts';
 import type { ActionGraphResponse, BundledSkillsInstallMode, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
-import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository, WorkflowChannelRepository } from '@invoker/data-store';
+import { ConversationRepository, SqliteTaskRepository, WorkflowChannelRepository } from '@invoker/data-store';
+import type { SQLiteAdapter } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
   WorkspaceProbeAdapter,
@@ -119,6 +120,7 @@ import {
   createHourlySnapshot,
   resolveInvokerHomeRoot,
 } from './delete-all-snapshot.js';
+import { openMainProcessDatabase } from './viewer-db-boundary.js';
 import {
   isHeadlessMutatingCommand,
   isHeadlessReadOnlyCommand,
@@ -664,14 +666,12 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   if (!readOnly) {
     writerLock = acquireDbWriterLock(dbPath, `main:initServices pid=${process.pid}`);
   }
-  persistence = detachedViewer
-    // Private empty in-memory database: never opens invoker.db, never maps -shm.
-    // Real data reaches the renderer by delegating reads to the owner over IPC.
-    ? await SQLiteAdapter.create(':memory:')
-    : await SQLiteAdapter.create(dbPath, {
-      readOnly,
-      ownerCapability: !readOnly, // writable mode requires owner capability
-    });
+  persistence = await openMainProcessDatabase({
+    dbPath,
+    detachedViewer,
+    readOnly,
+    exclusiveLocking: process.env.INVOKER_DISABLE_EXCLUSIVE_LOCKING !== '1',
+  });
   // Upgrade root logger with DB persistence now that SQLiteAdapter is ready.
   logger = new FileAndDbLogger({ module: 'main' }, { persistence });
   const shellEnv = await initializeShellEnvironment();

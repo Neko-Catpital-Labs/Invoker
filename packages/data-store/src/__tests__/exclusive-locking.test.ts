@@ -8,8 +8,7 @@ import type { Workflow } from '../adapter.js';
 /**
  * WAL `locking_mode = EXCLUSIVE` keeps the wal-index in heap memory, so SQLite
  * never creates the `-shm` file. That sidecar is the one whose in-place
- * truncation under a live memory-map kills the process with SIGBUS
- * (see scripts/repro/repro-wal-shm-sigbus.sh). No `-shm` => no such crash.
+ * truncation under a live memory-map can kill a process with SIGBUS.
  */
 
 const dirs: string[] = [];
@@ -55,6 +54,45 @@ describe('SQLiteAdapter exclusiveLocking', () => {
       expect(existsSync(`${dbPath}-shm`)).toBe(true); // the file that, truncated under mmap, causes SIGBUS
     } finally {
       adapter.close();
+    }
+  });
+
+  it('read-only file-backed opens use the WAL shared-memory sidecar', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    try {
+      owner.saveWorkflow(wf);
+      // A read-only connection can still participate in active WAL shared state.
+      // So readOnly on the real file is not a no-shm viewer boundary.
+      const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+      try {
+        expect(reader.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
+        expect(existsSync(`${dbPath}-shm`)).toBe(true);
+      } finally {
+        reader.close();
+      }
+    } finally {
+      owner.close();
+    }
+  });
+
+  it('read-only WAL opens recreate a missing shared-memory sidecar when SQLite can create it', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    owner.saveWorkflow(wf);
+    owner.close();
+
+    rmSync(`${dbPath}-shm`, { force: true });
+    expect(existsSync(`${dbPath}-shm`)).toBe(false);
+
+    const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+    try {
+      expect(reader.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
+      expect(existsSync(`${dbPath}-shm`)).toBe(true);
+    } finally {
+      reader.close();
     }
   });
 
