@@ -3204,7 +3204,8 @@ function createEmbeddedTerminalBackendFromConfig(
       }
 
       setTimeout(() => {
-        dbPollInterval = setInterval(() => {
+        if (ownerMode) {
+          dbPollInterval = setInterval(() => {
           if (!mainWindow || mainWindow.isDestroyed()) return;
           try {
             const workflows = persistence.listWorkflows();
@@ -3329,7 +3330,8 @@ function createEmbeddedTerminalBackendFromConfig(
           } catch {
             // DB might be locked — skip this tick
           }
-        }, 2000);
+          }, 2000);
+        }
 
         activityPollInterval = setInterval(() => {
           if (!mainWindow || mainWindow.isDestroyed()) return;
