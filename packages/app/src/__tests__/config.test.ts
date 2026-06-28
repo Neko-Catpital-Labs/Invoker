@@ -132,6 +132,32 @@ describe('loadConfig', () => {
     expect(config.browser).toBe('firefox');
   });
 
+  it('defaults externalWorkers to none when absent', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultBranch: 'main' }),
+    );
+    const config = loadConfig();
+    expect(config.externalWorkers ?? []).toEqual([]);
+  });
+
+  it('reads external worker launch config from user config', () => {
+    const externalWorkers = [{
+      kind: 'preview',
+      launch: {
+        executable: '/usr/local/bin/invoker-preview-worker',
+        args: ['--stdio', '--log-level=info'],
+        cwd: '/srv/invoker',
+      },
+    }];
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ externalWorkers }),
+    );
+    const config = loadConfig();
+    expect(config.externalWorkers).toEqual(externalWorkers);
+  });
+
   it('reads imageStorage from user config', () => {
     const imageStorage = {
       provider: 'r2',
