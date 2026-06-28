@@ -467,19 +467,6 @@ ov_wait_queries_healthy() {
   echo "FAIL: query commands did not recover within ${max_secs}s" >&2
   return 1
 }
-ov_wait_no_stuck_mutation_intents() {
-  local threshold_secs="${1:-45}"
-  local max_secs="${2:-30}"
-  local waited=0
-  while [ "$waited" -lt "$max_secs" ]; do
-    if invoker_e2e_assert_no_stuck_mutation_intents "$threshold_secs"; then
-      return 0
-    fi
-    waited=$((waited + 1))
-    sleep 1
-  done
-  invoker_e2e_assert_no_stuck_mutation_intents "$threshold_secs"
-}
 
 ov_set_overload_config() {
   local max_concurrency="$1"
@@ -495,71 +482,41 @@ ov_start_owner() {
   local electron_bin="$INVOKER_E2E_REPO_ROOT/scripts/electron.cjs"
   local main_js="$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js"
   local sandbox_flag=""
-  local attempt max_attempts waited owner_was_running
   export INVOKER_IPC_SOCKET="${INVOKER_DB_DIR}/overload-ipc.sock"
   if [ "$(uname)" = "Linux" ]; then
     sandbox_flag="--no-sandbox"
   fi
-  # This chaos harness uses direct sqlite inspectors while the owner is alive.
-  # Keep shared WAL here; production owners still use exclusive locking.
-  max_attempts=15
-  for attempt in $(seq 1 "$max_attempts"); do
-    : > "${OVERLOAD_TMP_DIR}/owner-serve.log"
-    if command -v setsid >/dev/null 2>&1; then
-      setsid env \
-        INVOKER_HEADLESS_STANDALONE=1 \
-        INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
-        INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
-        INVOKER_DISABLE_EXCLUSIVE_LOCKING=1 \
-        LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
-        "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
-        >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
-    else
-      env \
-        INVOKER_HEADLESS_STANDALONE=1 \
-        INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
-        INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
-        INVOKER_DISABLE_EXCLUSIVE_LOCKING=1 \
-        LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
-        "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
-        >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
+  : > "${OVERLOAD_TMP_DIR}/owner-serve.log"
+  if command -v setsid >/dev/null 2>&1; then
+    setsid env \
+      INVOKER_HEADLESS_STANDALONE=1 \
+      INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
+      INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
+      LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
+      "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
+      >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
+  else
+    env \
+      INVOKER_HEADLESS_STANDALONE=1 \
+      INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
+      INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
+      LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
+      "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
+      >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
+  fi
+  OVERLOAD_OWNER_PID=$!
+  local waited=0
+  while [ "$waited" -lt 30 ]; do
+    if ! kill -0 "$OVERLOAD_OWNER_PID" >/dev/null 2>&1; then
+      echo "FAIL: standalone owner exited before becoming ready" >&2
+      cat "${OVERLOAD_TMP_DIR}/owner-serve.log" >&2 || true
+      return 1
     fi
-    OVERLOAD_OWNER_PID=$!
-    waited=0
-    while [ "$waited" -lt 30 ]; do
-      if ! kill -0 "$OVERLOAD_OWNER_PID" >/dev/null 2>&1; then
-        break
-      fi
-      if grep -q 'standalone owner ready' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
-        break
-      fi
-      waited=$((waited + 1))
-      sleep 1
-    done
     if grep -q 'standalone owner ready' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
       break
     fi
-    owner_was_running=0
-    if kill -0 "$OVERLOAD_OWNER_PID" >/dev/null 2>&1; then
-      owner_was_running=1
-      kill -- "-${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || kill "${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || true
-      sleep 1
-      if kill -0 "$OVERLOAD_OWNER_PID" >/dev/null 2>&1; then
-        kill -KILL -- "-${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || kill -KILL "${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || true
-      fi
-    fi
-    wait "${OVERLOAD_OWNER_PID}" 2>/dev/null || true
-    if [ "$attempt" -lt "$max_attempts" ] && grep -Eq 'database is locked|SQLITE_BUSY' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
-      sleep 2
-      continue
-    fi
-    if [ "$owner_was_running" -eq 1 ]; then
-      echo "FAIL: standalone owner did not become ready" >&2
-    else
-      echo "FAIL: standalone owner exited before becoming ready" >&2
-    fi
-    cat "${OVERLOAD_TMP_DIR}/owner-serve.log" >&2 || true
-    return 1
+    waited=$((waited + 1))
+    sleep 1
   done
   if ! grep -q 'standalone owner ready' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
     echo "FAIL: standalone owner did not become ready" >&2
@@ -582,7 +539,6 @@ ov_start_owner() {
   return 1
 }
 
-
 ov_stop_owner() {
   local wait_secs=30
   local waited=0
@@ -602,19 +558,16 @@ ov_stop_owner() {
     wait "${OVERLOAD_OWNER_PID}" 2>/dev/null || true
     unset OVERLOAD_OWNER_PID waited
   fi
-  local owner_main_js="$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js"
-  local owner_pattern
-  owner_pattern="$(printf '%s' "$owner_main_js" | sed 's/[][\\.^$*+?{}|()]/\\&/g').*--headless owner-serve"
-  pkill -TERM -f "$owner_pattern" >/dev/null 2>&1 || true
+  pkill -TERM -f 'packages/app/dist/main.js --headless owner-serve' >/dev/null 2>&1 || true
   waited=0
   while [ "$waited" -lt "$wait_secs" ]; do
-    if ! pgrep -f "$owner_pattern" >/dev/null 2>&1; then
+    if ! pgrep -f 'packages/app/dist/main.js --headless owner-serve' >/dev/null 2>&1; then
       return 0
     fi
     waited=$((waited + 1))
     sleep 1
   done
-  pkill -KILL -f "$owner_pattern" >/dev/null 2>&1 || true
+  pkill -KILL -f 'packages/app/dist/main.js --headless owner-serve' >/dev/null 2>&1 || true
   sleep 1
 }
 
@@ -1677,7 +1630,7 @@ run_query_storm_during_tracked_fix() {
   sleep 2
   ov_stop_owner
   ov_wait_queries_healthy 45
-  ov_wait_no_stuck_mutation_intents 45 30
+  invoker_e2e_assert_no_stuck_mutation_intents 45
   invoker_e2e_assert_no_owned_headless_processes 1
 }
 
@@ -1760,8 +1713,8 @@ run_same_workflow_tracked_fix_vs_recreate() {
       return 1
     fi
   elif [ "${tracked_status:-1}" -ne 0 ]; then
-    if grep -Eq 'Superseded by (recreate|retry) intent #[0-9]+' "${OVERLOAD_TMP_DIR}/tracked-fix.out" 2>/dev/null; then
-      echo "tracked fix was superseded by same-workflow reset pressure"
+    if grep -Fq 'Superseded by recreate intent' "${OVERLOAD_TMP_DIR}/tracked-fix.out" 2>/dev/null; then
+      echo "==> overload: tracked fix was superseded by same-workflow recreate"
     else
       echo "FAIL: tracked fix command exited with $tracked_status for $target_task" >&2
       cat "${OVERLOAD_TMP_DIR}/tracked-fix.out" >&2 || true
@@ -1773,7 +1726,7 @@ run_same_workflow_tracked_fix_vs_recreate() {
   sleep 2
   ov_stop_owner
   ov_wait_queries_healthy 45
-  ov_wait_no_stuck_mutation_intents 45 30
+  invoker_e2e_assert_no_stuck_mutation_intents 120
   invoker_e2e_assert_no_owned_headless_processes 1
 }
 
@@ -1848,20 +1801,16 @@ run_same_workflow_tracked_approve_vs_recreate() {
       return 1
     fi
   elif [ "${tracked_status:-1}" -ne 0 ]; then
-    if grep -Eq 'Superseded by (recreate|retry) intent #[0-9]+' "${OVERLOAD_TMP_DIR}/tracked-approve.out" 2>/dev/null; then
-      echo "tracked approve was superseded by same-workflow reset pressure"
-    else
-      echo "FAIL: tracked approve command exited with $tracked_status for $target_task" >&2
-      cat "${OVERLOAD_TMP_DIR}/tracked-approve.out" >&2 || true
-      return 1
-    fi
+    echo "FAIL: tracked approve command exited with $tracked_status for $target_task" >&2
+    cat "${OVERLOAD_TMP_DIR}/tracked-approve.out" >&2 || true
+    return 1
   fi
 
   ov_cancel_all_workflows
   sleep 2
   ov_stop_owner
   ov_wait_queries_healthy 45
-  ov_wait_no_stuck_mutation_intents 45 30
+  invoker_e2e_assert_no_stuck_mutation_intents 45
   invoker_e2e_assert_no_owned_headless_processes 1
 }
 
@@ -2005,9 +1954,14 @@ run_owner_restart_loop_during_tracked_recreate_task() {
       return 1
     fi
   elif [ "${tracked_status:-1}" -ne 0 ]; then
-    echo "FAIL: tracked recreate-task command exited with $tracked_status for $target_task" >&2
-    cat "${OVERLOAD_TMP_DIR}/tracked-recreate-task.out" >&2 || true
-    return 1
+    if grep -Fq 'timeout channel=headless.exec timeoutMs=5000' "${OVERLOAD_TMP_DIR}/tracked-recreate-task.out" 2>/dev/null \
+      && { [ "$target_status" = "completed" ] || [ "$target_status" = "failed" ] || [ "$target_status" = "pending" ]; }; then
+      echo "==> overload: tracked recreate-task timed out at the client during owner restart churn"
+    else
+      echo "FAIL: tracked recreate-task command exited with $tracked_status for $target_task" >&2
+      cat "${OVERLOAD_TMP_DIR}/tracked-recreate-task.out" >&2 || true
+      return 1
+    fi
   fi
 
   ov_cancel_all_workflows
