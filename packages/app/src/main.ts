@@ -208,8 +208,12 @@ import {
 } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
+import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
+import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
+import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
+import { resolveWebToken, resolveWebHost, resolveWebPort } from './web/start-web-surface.js';
 import {
   createGuiMutationRegistrars,
   registerBootstrapStateIpc,
@@ -862,6 +866,86 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     gatherWorkflowContext,
   });
 
+  // ── Slack live workflow-progress card ─────────────────────
+  const PROGRESS_DEBOUNCE_MS = 2500;
+  const TERMINAL_DERIVED_STATUSES = new Set(['completed', 'failed', 'closed']);
+  const progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const workflowIdFromTaskId = (taskId: string): string | undefined => {
+    if (taskId.startsWith('__merge__')) return taskId.slice('__merge__'.length);
+    const slash = taskId.indexOf('/');
+    return slash <= 0 ? undefined : taskId.slice(0, slash);
+  };
+
+  const emitWorkflowProgress = async (workflowId: string): Promise<void> => {
+    // Only mapped workflows get a live card — avoids posting for headless/non-Slack runs.
+    if (!workflowChannelRepo.getByWorkflowId(workflowId)) return;
+    const tasks = persistence.loadTasks(workflowId);
+    const workflow = persistence.loadWorkflow(workflowId);
+    const counts = orchestrator.getWorkflowStatus(workflowId);
+    const percentComplete = counts.total > 0 ? Math.round((counts.completed / counts.total) * 100) : 0;
+    const gate = buildReviewGateQueryResponse({ workflowId, workflow, tasks });
+    const prUrl = gate.artifacts.find((artifact) => artifact.url)?.url;
+    const reviewState = gate.mergeTaskId
+      ? (gate.ready ? 'review ready' : (gate.status ?? undefined))
+      : undefined;
+    await slack.handleEvent({
+      type: 'workflow_progress',
+      progress: {
+        workflowId,
+        name: (workflow as { name?: string } | undefined)?.name ?? workflowId,
+        counts,
+        percentComplete,
+        tasks: tasks.map((task) => ({
+          id: task.id,
+          name: task.description,
+          status: task.status,
+          phase: task.execution.phase,
+          reviewUrl: task.execution.reviewUrl,
+        })),
+        prUrl,
+        reviewState,
+      },
+    });
+  };
+
+  const scheduleWorkflowProgress = (workflowId: string, flushNow: boolean): void => {
+    const existing = progressTimers.get(workflowId);
+    if (existing) clearTimeout(existing);
+    if (flushNow) {
+      progressTimers.delete(workflowId);
+      void emitWorkflowProgress(workflowId).catch((err) =>
+        deps.logFn('slack', 'warn', `workflow-progress emit failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
+      return;
+    }
+    const timer = setTimeout(() => {
+      progressTimers.delete(workflowId);
+      void emitWorkflowProgress(workflowId).catch((err) =>
+        deps.logFn('slack', 'warn', `workflow-progress emit failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
+    }, PROGRESS_DEBOUNCE_MS);
+    timer.unref?.();
+    progressTimers.set(workflowId, timer);
+  };
+
+  messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
+    const d = delta as TaskDelta;
+    const taskId = d.type === 'created' ? d.task.id : d.taskId;
+    const workflowId = workflowIdFromTaskId(taskId);
+    if (!workflowId || !workflowChannelRepo.getByWorkflowId(workflowId)) return;
+    const status = d.type === 'updated'
+      ? (d.changes.status as string | undefined)
+      : d.type === 'created' ? d.task.status : undefined;
+    // Flush immediately when this delta drives the workflow to a terminal state.
+    let flushNow = false;
+    if (status && TERMINAL_DERIVED_STATUSES.has(status)) {
+      const counts = orchestrator.getWorkflowStatus(workflowId);
+      flushNow = counts.running === 0 && counts.pending === 0;
+    }
+    scheduleWorkflowProgress(workflowId, flushNow);
+  });
+
   await slack.start(async (command: any) => {
     deps.logFn('trace', 'info', `slackBot: command received — type=${command.type}`);
     switch (command.type) {
@@ -922,8 +1006,12 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
       }
       case 'get_status': {
         const workflowId = command.workflowId as string | undefined;
-        const status = orchestrator.getWorkflowStatus(workflowId);
-        await slack.handleEvent({ type: 'workflow_status', status, workflowId });
+        if (workflowId && workflowChannelRepo.getByWorkflowId(workflowId)) {
+          await emitWorkflowProgress(workflowId);
+        } else {
+          const status = orchestrator.getWorkflowStatus(workflowId);
+          await slack.handleEvent({ type: 'workflow_status', status, workflowId });
+        }
         break;
       }
       case 'start_plan': {
@@ -1127,6 +1215,7 @@ function startHeadlessMode(): void {
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
         runtimeServices,
+        appRootDir: __dirname,
       };
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
@@ -1881,6 +1970,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let taskExecutor: TaskRunner | null = null;
   let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
   let apiServer: ApiServer | null = null;
+  let webBridge: WebBridge | null = null;
   let ownerMode = true;
   const taskHandles: TaskHandleMap = new Map();
   const embeddedTerminalManager = new EmbeddedTerminalManager({
@@ -2079,6 +2169,7 @@ function createEmbeddedTerminalBackendFromConfig(
         module: 'ui-backpressure',
       });
     },
+    onEvent: (event) => webBridge?.broadcast('invoker:task-graph-event', event),
   });
 
   const publishTaskDeltaToRenderer = (delta: TaskDelta): void => {
@@ -2932,20 +3023,21 @@ function createEmbeddedTerminalBackendFromConfig(
     setTimeout(() => {
       if (!ownerMode) return;
 
+      const webMutations = new WorkflowMutationFacade({
+        logger,
+        orchestrator,
+        persistence,
+        commandService,
+        taskExecutor: requireTaskExecutor(),
+        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+        killRunningTask,
+      });
       apiServer = startApiServer({
         logger,
         orchestrator,
         persistence,
         executorRegistry,
-        mutations: new WorkflowMutationFacade({
-          logger,
-          orchestrator,
-          persistence,
-          commandService,
-          taskExecutor: requireTaskExecutor(),
-          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-          killRunningTask,
-        }),
+        mutations: webMutations,
         queueWorkflowMutation: (workflowId, priority, channel, args, options) => {
           if (!workflowMutationCoordinator) {
             throw new Error('Workflow mutation coordinator is unavailable');
@@ -2956,6 +3048,51 @@ function createEmbeddedTerminalBackendFromConfig(
         detachWorkflow: performDetachWorkflow,
       });
       recordStartupMark('api-server.started');
+
+      const webToken = resolveWebToken(invokerConfig);
+      if (webToken) {
+        const webDispatch = buildWebInvokerDispatch({
+          orchestrator,
+          persistence,
+          mutations: webMutations,
+          agentRegistry,
+          loadConfig,
+          getStreamSequence: getTaskDeltaStreamSequence,
+          refreshTaskGraph: async () => {
+            const snapshot = await resolveRefreshTaskGraphSnapshot({
+              ownerMode,
+              messageBus,
+              resolveInvokerHomeRoot,
+              orchestrator,
+              persistence,
+              logger,
+            });
+            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows);
+          },
+          deleteWorkflow: performDeleteWorkflow,
+          detachWorkflow: performDetachWorkflow,
+          getBundledSkillsStatus,
+          getSystemDiagnostics: () => collectSystemDiagnostics({
+            appVersion: app.getVersion(),
+            isPackaged: app.isPackaged,
+            platform: process.platform,
+            arch: process.arch,
+          }),
+          logger,
+        });
+        webBridge = startWebBridge({
+          logger,
+          dispatch: webDispatch,
+          messageBus,
+          persistence,
+          uiDistDir: resolveWebUiDistDir(__dirname),
+          token: webToken,
+          host: resolveWebHost(invokerConfig),
+          port: resolveWebPort(invokerConfig),
+        });
+      } else {
+        logger.info('Web surface disabled — set INVOKER_WEB_TOKEN (or config.webToken) to enable it', { module: 'web-bridge' });
+      }
 
       void recoverWorkflowMutationsOnStartup({
         ownerMode,
@@ -4730,6 +4867,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
       try {
         if (apiServer) await apiServer.close().catch(() => {});
+        if (webBridge) await webBridge.close().catch(() => {});
         reviewGateStatusWorker?.stop();
         reviewGateStatusWorker = null;
         if (dbPollInterval) clearInterval(dbPollInterval);
