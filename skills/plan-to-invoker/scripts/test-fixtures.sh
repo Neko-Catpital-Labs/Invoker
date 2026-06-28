@@ -928,32 +928,32 @@ tasks:
       - Verify app tests pass and output remains stable.
       Assume no prior context. Modify packages/app/src/main.ts and packages/app/src/headless.ts only. Pass condition: exits 0 after the bridge tests pass.
     dependencies: []
-  - id: final-regression
+  - id: verify-bridge
     description: |
       Review claim:
-      - Run final full-suite regression gate.
+      - Run focused verification for the app bridge change.
       Review lane:
       - proof
       Safety invariant:
       - This command changes no production code.
       Slice rationale:
-      - Keep the terminal full-suite gate separate from implementation.
+      - Keep terminal proof focused on the changed app bridge.
       Architectural effect:
       - No architecture change.
       Goal:
-      - Run final full-suite regression gate.
+      - Run focused verification for the app bridge change.
       Motivation:
-      - Ensure bridge changes remain stable.
+      - Prove the bridge behavior without a repo-wide regression gate.
       Alternative considerations:
-      - Option A (chosen): full repository regression.
-      - Option B: package-only checks.
+      - Option A (chosen): focused package verification.
+      - Option B: full repository regression.
       Implementation details:
-      - Execute root-level test gate after implementation task.
+      - Execute the app-package test command after the bridge implementation task.
       Non-goals:
       - Do not modify source files.
       Layer: app_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "cd packages/app && pnpm test"
     dependencies: [implement-bridge]
 EOF
 
@@ -1097,32 +1097,32 @@ tasks:
       - Verify `cd packages/execution-engine && pnpm test` exits 0.
       - Use exit code 0 as the pass condition.
     dependencies: []
-  - id: final-regression
+  - id: verify-runtime-flow
     description: |
       Review claim:
-      - Run the terminal full-suite regression gate for runtime changes.
+      - Run focused verification for the runtime flow change.
       Review lane:
       - proof
       Safety invariant:
       - This command changes no production code and depends on runtime implementation.
       Slice rationale:
-      - Terminal validation is separate from implementation work.
+      - Keep terminal proof focused on the changed execution-engine surface.
       Architectural effect:
-      - No architecture changes; validates integrated behavior.
+      - No architecture changes; validates the targeted runtime path.
       Goal:
-      - Run final full-suite regression gate.
+      - Run focused verification for the runtime flow change.
       Motivation:
-      - Ensure implementation updates remain stable.
+      - Prove the runtime behavior without a repo-wide regression gate.
       Alternative considerations:
-      - Option A (chosen): full repository regression.
-      - Option B: package-only checks.
+      - Option A (chosen): focused package verification.
+      - Option B: full repository regression.
       Implementation details:
-      - Execute root-level test gate after implementation task.
+      - Execute the execution-engine package test command after the runtime implementation task.
       Non-goals:
       - Do not modify source files.
       Layer: app_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "cd packages/execution-engine && pnpm test"
     dependencies: [implement-runtime-flow]
 EOF
 
