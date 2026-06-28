@@ -158,4 +158,82 @@ describe('Context menu (component)', () => {
     fireEvent.click(await screen.findByText('Copy Workflow ID'));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
   });
+
+  // Keyboard navigation regression tests.
+  //
+  // Reproduces a bug where opening the workflow context menu and pressing
+  // ArrowDown × 3 + Enter did not call navigator.clipboard.writeText('wf-1').
+  // Pre-fix, document-level arrow/Enter keys are absorbed by the App's
+  // graph-region handler (selectRelativeNode / openSelectedContextMenu) and
+  // never reach the open context menu, so the highlighted item is never
+  // activated.
+  describe('Keyboard navigation', () => {
+    it('workflow context menu copies workflow id with ArrowDown x3 + Enter', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await screen.findByRole('menu');
+
+      // Items: Open Workflow (0), Open PR (1), Retry Workflow (2), Copy Workflow ID (3).
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'Enter' });
+
+      await waitFor(() =>
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'),
+      );
+    });
+
+    it('workflow context menu wraps ArrowUp from first item to last menuitem', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+      await screen.findByRole('menu');
+
+      // From initial focus (Open Workflow), ArrowUp wraps to the last actionable
+      // menuitem (Copy Workflow ID). Enter then triggers the clipboard copy.
+      fireEvent.keyDown(document, { key: 'ArrowUp' });
+      fireEvent.keyDown(document, { key: 'Enter' });
+
+      await waitFor(() =>
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'),
+      );
+    });
+
+    it('task context menu activates next enabled item via ArrowDown + Enter', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      await screen.findByRole('menu');
+
+      // Pending task safe items: Restart Task (0), Open Terminal (1).
+      // ArrowDown moves focus to Open Terminal; Enter activates it.
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: 'Enter' });
+
+      await waitFor(() =>
+        expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'),
+      );
+    });
+
+    it('task context menu activates the highlighted item with Space', async () => {
+      await setup();
+      fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+      await waitFor(() => {
+        expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      });
+      fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+      await screen.findByRole('menu');
+
+      // Same path as Enter, but verifying Space is also an activation key.
+      fireEvent.keyDown(document, { key: 'ArrowDown' });
+      fireEvent.keyDown(document, { key: ' ' });
+
+      await waitFor(() =>
+        expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'),
+      );
+    });
+  });
 });
