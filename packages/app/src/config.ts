@@ -5,12 +5,14 @@
  * Override with INVOKER_REPO_CONFIG_PATH env var (for tests).
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface InvokerConfig {
   defaultBranch?: string;
+  /** Repo URL → target branch override used for new workflows and detach retargeting. */
+  repoTargetBranches?: Record<string, string>;
   /**
    * Web surface (browser mirror of the desktop app) shared-secret token.
    * When set (or via INVOKER_WEB_TOKEN), the owner process serves the UI at
@@ -254,10 +256,37 @@ function readJsonSafe(path: string): InvokerConfig {
   return parsed as InvokerConfig;
 }
 
-export function loadConfig(): InvokerConfig {
+export function resolveConfigPath(): string {
   return process.env.INVOKER_REPO_CONFIG_PATH
-    ? readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH)
-    : readJsonSafe(join(homedir(), '.invoker', 'config.json'));
+    ? resolve(process.env.INVOKER_REPO_CONFIG_PATH)
+    : join(homedir(), '.invoker', 'config.json');
+}
+
+export function loadConfig(): InvokerConfig {
+  return readJsonSafe(resolveConfigPath());
+}
+
+export function saveConfig(config: InvokerConfig, path = resolveConfigPath()): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+export function setRepoTargetBranch(repoUrl: string, branch: string, path = resolveConfigPath()): InvokerConfig {
+  const trimmedRepoUrl = repoUrl.trim();
+  const trimmedBranch = branch.trim();
+  if (trimmedRepoUrl === '') throw new Error('Repo URL is required.');
+  if (trimmedBranch === '') throw new Error('Target branch is required.');
+  const config = readJsonSafe(path);
+  const repoTargetBranches = { ...(config.repoTargetBranches ?? {}) };
+  repoTargetBranches[trimmedRepoUrl] = trimmedBranch;
+  const next = { ...config, repoTargetBranches };
+  saveConfig(next, path);
+  return next;
+}
+
+export function getRepoTargetBranch(config: InvokerConfig, repoUrl: string): string | undefined {
+  const configured = config.repoTargetBranches?.[repoUrl]?.trim();
+  return configured && configured !== '' ? configured : undefined;
 }
 
 

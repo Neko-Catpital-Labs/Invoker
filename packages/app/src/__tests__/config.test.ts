@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  getRepoTargetBranch,
   loadConfig,
   resolveEmbeddedTerminalBackendConfig,
+  setRepoTargetBranch,
 } from '../config.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -39,6 +41,25 @@ describe('loadConfig', () => {
     );
     const config = loadConfig();
     expect(config.defaultBranch).toBe('main');
+  });
+
+  it('stores repo target branch overrides', () => {
+    const configPath = join(fakeHome, '.invoker', 'config.json');
+
+    const config = setRepoTargetBranch('https://example.com/repo.git', 'main', configPath);
+
+    expect(config.repoTargetBranches?.['https://example.com/repo.git']).toBe('main');
+    expect(loadConfig().repoTargetBranches?.['https://example.com/repo.git']).toBe('main');
+  });
+
+  it('reads configured repo target branch by repo URL', () => {
+    const config = {
+      repoTargetBranches: {
+        'https://example.com/repo.git': 'release',
+      },
+    };
+
+    expect(getRepoTargetBranch(config, 'https://example.com/repo.git')).toBe('release');
   });
 
   it('throws on malformed JSON', () => {

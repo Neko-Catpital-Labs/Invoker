@@ -11,7 +11,7 @@
 
 import type { BundledSkillsInstallMode } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
-import type { Orchestrator, TaskState } from '@invoker/workflow-core';
+import { requireRemoteBranch, type Orchestrator, type TaskState } from '@invoker/workflow-core';
 import {
   TaskRunner,
   acquireWorkerLock,
@@ -40,6 +40,7 @@ import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
 } from './recovery-worker-observability.js';
+import { saveRepoTargetBranch } from './repo-target-branch.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -181,6 +182,12 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
       break;
     case 'merge-mode':
       await headlessSetMergeMode(args[1], args[2], deps);
+      break;
+    case 'target-branch':
+      await headlessSetTargetBranch(args[1], args[2], deps);
+      break;
+    case 'repo-target-branch':
+      await headlessSetRepoTargetBranch(args[1], args[2], deps);
       break;
     case 'fix-prompt':
       await headlessSetFixContext(args[1], { fixPrompt: args.slice(2).join(' ') }, deps);
@@ -594,6 +601,9 @@ ${BOLD}Configure:${RESET}
   set pool <taskId> <type> [poolMemberId]           Change execution pool (worktree|docker|ssh)
   set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)
   set merge-mode <workflowId> <mode>                  manual | automatic | external_review
+  set target-branch <workflowId> <branch>             Change one workflow target branch and rerun merge gate
+  set repo-target-branch <repoUrl|workflowId> <branch>
+                                                      Save repo target branch override after remote validation
   set fix-prompt <taskId> <text>                      Update fix-session prompt and retry
   set fix-context <taskId> <text>                     Update fix-session context and retry
   set gate-policy <taskId> <wfId> [depTaskId] <policy>
@@ -821,6 +831,52 @@ async function headlessSetMergeMode(
   }
   const wf = deps.persistence.loadWorkflow(workflowId);
   process.stdout.write(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}\n`);
+}
+
+async function headlessSetTargetBranch(
+  workflowId: string,
+  branch: string,
+  deps: HeadlessDeps,
+): Promise<void> {
+  if (!workflowId || !branch) {
+    throw new Error('Missing arguments. Usage: --headless set target-branch <workflowId> <branch>');
+  }
+  const workflow = deps.persistence.loadWorkflow(workflowId);
+  if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+  const repoUrl = workflow.repoUrl?.trim();
+  if (!repoUrl) throw new Error(`Workflow ${workflowId} has no repo URL; cannot validate target branch.`);
+  const targetBranch = requireRemoteBranch(repoUrl, branch);
+
+  deps.persistence.updateWorkflow(workflowId, { baseBranch: targetBranch });
+  deps.orchestrator.syncFromDb(workflowId);
+
+  const mergeTask = deps.persistence.loadTasks(workflowId).find((task) => task.config.isMergeNode);
+  if (mergeTask) {
+    const taskExecutor = createHeadlessExecutor(deps);
+    const envelope = makeEnvelope('set-target-branch', 'headless', 'task', { taskId: mergeTask.id });
+    const result = await deps.commandService.retryTask(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    const runnable = result.data.filter(isDispatchableLaunch);
+    if (runnable.length > 0) {
+      await taskExecutor.executeTasks(runnable);
+    }
+  }
+
+  process.stdout.write(`Target branch updated for ${workflowId}: ${targetBranch}\n`);
+}
+
+async function headlessSetRepoTargetBranch(
+  repoRef: string,
+  branch: string,
+  deps: HeadlessDeps,
+): Promise<void> {
+  if (!repoRef || !branch) {
+    throw new Error('Missing arguments. Usage: --headless set repo-target-branch <repoUrl|workflowId> <branch>');
+  }
+  const workflow = deps.persistence.loadWorkflow(repoRef);
+  const repoUrl = workflow?.repoUrl ?? repoRef;
+  const targetBranch = saveRepoTargetBranch(repoUrl, branch);
+  process.stdout.write(`Repo target branch updated for ${repoUrl}: ${targetBranch}\n`);
 }
 
 /**

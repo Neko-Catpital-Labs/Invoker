@@ -7,15 +7,22 @@
 
 import { execSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
-import type { PlanDefinition } from '@invoker/workflow-core';
-import { loadConfig } from './config.js';
+import { detectDefaultBranchRemote as detectRemoteDefaultBranch, type PlanDefinition } from '@invoker/workflow-core';
+import { getRepoTargetBranch, loadConfig } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 /** Empty / whitespace `baseBranch` in YAML (`baseBranch:`) must fall through to config + remote detection like a missing key. */
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
   const b = plan.baseBranch;
   if (typeof b === 'string' && b.trim() !== '') return b.trim();
-  return loadConfig().defaultBranch ?? (plan.repoUrl ? detectDefaultBranchRemote(plan.repoUrl) : 'main');
+  const config = loadConfig();
+  if (plan.repoUrl) {
+    return getRepoTargetBranch(config, plan.repoUrl)
+      ?? config.defaultBranch
+      ?? detectRemoteDefaultBranch(plan.repoUrl)
+      ?? 'main';
+  }
+  return config.defaultBranch ?? 'main';
 }
 
 /**
@@ -111,17 +118,7 @@ export function detectDefaultBranch(cwd?: string): string {
  * Falls back to 'main' if detection fails.
  */
 export function detectDefaultBranchRemote(repoUrl: string): string {
-  try {
-    const output = execSync(`git ls-remote --symref ${repoUrl} HEAD`, {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000,
-    }).trim();
-    // Output format: "ref: refs/heads/main\tHEAD"
-    const match = output.match(/ref:\s+refs\/heads\/(\S+)\s+HEAD/);
-    if (match) return match[1];
-  } catch {
-    // Network error or timeout
-  }
-  return 'main';
+  return detectRemoteDefaultBranch(repoUrl) ?? 'main';
 }
 
 export class PlanParseError extends Error {

@@ -23,6 +23,8 @@ import {
 import {
   Orchestrator,
   parsePlanFile,
+  requireRemoteBranch,
+  detectDefaultBranchRemote,
   type OrchestratorMessageBus,
   type PlanDefinition,
   type TaskState,
@@ -65,6 +67,7 @@ type CliDeps = {
 
 type CliRuntimeConfig = {
   defaultBranch?: string;
+  repoTargetBranches?: Record<string, string>;
   maxConcurrency?: number;
   docker?: {
     imageName?: string;
@@ -283,6 +286,18 @@ function loadRuntimeConfig(configPath?: string): CliRuntimeConfig {
   return parsed as CliRuntimeConfig;
 }
 
+function resolveRepoTargetBranchFromConfig(config: CliRuntimeConfig, repoUrl: string): string {
+  const trimmedRepoUrl = repoUrl.trim();
+  if (trimmedRepoUrl === '') throw new Error('Repo URL is required.');
+  const configuredBranch = config.repoTargetBranches?.[trimmedRepoUrl]?.trim() ?? config.defaultBranch?.trim();
+  if (configuredBranch && configuredBranch !== '') {
+    return requireRemoteBranch(trimmedRepoUrl, configuredBranch);
+  }
+  const detectedBranch = detectDefaultBranchRemote(trimmedRepoUrl);
+  if (detectedBranch) return detectedBranch;
+  throw new Error(`Unable to resolve default branch for repo ${trimmedRepoUrl}. Set a repo target branch or make the remote HEAD readable.`);
+}
+
 function isTerminalTaskStatus(status: TaskState['status']): boolean {
   return status === 'completed'
     || status === 'failed'
@@ -372,6 +387,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       executorRoutingRules: runtimeConfig.executorRoutingRules ?? [],
       defaultPoolId: runtimeConfig.defaultPoolId,
       availablePoolIds: Object.keys(runtimeConfig.executionPools ?? {}),
+      resolveRepoTargetBranch: (repoUrl) => resolveRepoTargetBranchFromConfig(loadRuntimeConfig(options.config), repoUrl),
     });
     const taskRunner = new TaskRunner({
       orchestrator,

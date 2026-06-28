@@ -13,6 +13,8 @@ export const HEADLESS_SET_SUBCOMMANDS = [
   'executor',
   'agent',
   'merge-mode',
+  'target-branch',
+  'repo-target-branch',
   'fix-prompt',
   'fix-context',
   'gate-policy',

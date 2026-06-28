@@ -109,6 +109,7 @@ import {
   type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
 } from './config.js';
+import { resolveRepoTargetBranch } from './repo-target-branch.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   assertExecutionCapacityInvariant,
@@ -744,6 +745,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
+    resolveRepoTargetBranch,
   });
   commandService = new CommandService(
     orchestrator,
@@ -1283,6 +1285,7 @@ function startHeadlessMode(): void {
               defaultPoolId: invokerConfig.defaultPoolId,
               availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
               deferRunningUntilLaunch: true,
+              resolveRepoTargetBranch,
             });
             commandService = new CommandService(
               orchestrator,
@@ -1442,6 +1445,7 @@ function startHeadlessMode(): void {
               switch (subCommand) {
                 case 'workflow':
                 case 'merge-mode':
+                case 'target-branch':
                   return {
                     workflowId: targetArg === undefined ? undefined : String(targetArg),
                     priority: 'high',
@@ -2643,6 +2647,7 @@ function createEmbeddedTerminalBackendFromConfig(
         switch (subCommand) {
           case 'workflow':
           case 'merge-mode':
+          case 'target-branch':
             return { workflowId: targetArg === undefined ? undefined : String(targetArg), priority: 'high' };
           case 'command':
           case 'prompt':
@@ -3784,6 +3789,7 @@ function createEmbeddedTerminalBackendFromConfig(
         defaultPoolId: invokerConfig.defaultPoolId,
         availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
         deferRunningUntilLaunch: true,
+        resolveRepoTargetBranch,
       });
       commandService = new CommandService(
         orchestrator,
