@@ -9,6 +9,22 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
+export interface ExternalWorkerLaunchConfig {
+  /** Executable used to start the external worker process. */
+  executable: string;
+  /** Optional argv passed after the executable. */
+  args?: string[];
+  /** Optional process working directory for the worker launch. */
+  cwd?: string;
+}
+
+export interface ExternalWorkerConfig {
+  /** Stable worker registry kind declared by the operator. */
+  kind: string;
+  /** Process invocation used by the loader to start the external worker. */
+  launch: ExternalWorkerLaunchConfig;
+}
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -231,6 +247,11 @@ export interface InvokerConfig {
     /** Routing strategy. Defaults to "enforce". */
     strategy?: 'enforce' | 'route';
   }>;
+  /**
+   * Operator-declared external workers keyed by registry kind.
+   * The loader consumes this later; absent means no external workers.
+   */
+  externalWorkers?: ExternalWorkerConfig[];
 }
 
 function readJsonSafe(path: string): InvokerConfig {
