@@ -110,6 +110,41 @@ describe('invoker-cli', () => {
     output.restore();
   });
 
+  it('lists only valid external worker config entries', async () => {
+    const previousInvokerDbDir = process.env.INVOKER_DB_DIR;
+    const homeRoot = mkdtempSync(join(tmpdir(), 'invoker-cli-worker-config-'));
+    process.env.INVOKER_DB_DIR = homeRoot;
+    writeFileSync(join(homeRoot, 'config.json'), JSON.stringify({
+      externalWorkers: [
+        { kind: 'valid-external', launch: { executable: '/usr/local/bin/valid-worker', args: ['--stdio'] } },
+        { kind: 'missing-executable', launch: { args: ['--stdio'] } },
+        { kind: 'bad-args', launch: { executable: '/usr/local/bin/bad-worker', args: [1] } },
+        null,
+      ],
+    }), 'utf8');
+    const output = captureProcessOutput();
+
+    try {
+      const code = await main(['worker', 'list'], {
+        createMessageBus: () => {
+          throw new Error('worker list should not open IPC');
+        },
+      });
+
+      expect(code).toBe(0);
+      expect(output.stdout).toContain('valid-external');
+      expect(output.stdout).not.toContain('missing-executable');
+      expect(output.stdout).not.toContain('bad-args');
+    } finally {
+      output.restore();
+      if (previousInvokerDbDir === undefined) {
+        delete process.env.INVOKER_DB_DIR;
+      } else {
+        process.env.INVOKER_DB_DIR = previousInvokerDbDir;
+      }
+    }
+  });
+
   it('rejects unknown worker kinds with a clear non-zero error', async () => {
     const output = captureProcessOutput();
 
