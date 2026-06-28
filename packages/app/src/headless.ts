@@ -19,6 +19,7 @@ import {
   WorkerLockHeldError,
 } from '@invoker/execution-engine';
 import { startApiServer } from './api-server.js';
+import { startWebSurfaceForHeadless } from './web/start-web-surface.js';
 import {
   parseMetadataValue,
   setTaskMetadata,
@@ -557,6 +558,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
     [--no-merge] [--output F]
   query task <taskId> [--output F]                    Print single task status
   query queue [--output F]                            Show queue status
+  query review-gate <prNumber|prUrl> [--output F]    Resolve a PR back to its Invoker workflow
   query action-graph [--output F]                     Print action graph source-of-truth snapshot
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
@@ -983,13 +985,15 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
   });
   wireHeadlessApproveHook(deps, taskExecutor);
 
+  const apiServerDeps = buildHeadlessApiServerDeps(deps, taskExecutor);
   const api = startApiServer({
     logger: deps.logger,
     orchestrator,
     persistence,
     executorRegistry: deps.executorRegistry,
-    ...buildHeadlessApiServerDeps(deps, taskExecutor),
+    ...apiServerDeps,
   });
+  const webSurface = startWebSurfaceForHeadless(deps, apiServerDeps);
 
   const slack = await wireSlackBot({
     executor: taskExecutor,
@@ -1003,6 +1007,7 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
   await new Promise<void>((resolve) => {
     const shutdown = async () => {
       await api.close().catch(() => {});
+      await webSurface?.close().catch(() => {});
       logFn('slack', 'info', 'Shutting down...');
       await slack.stop();
       resolve();

@@ -755,6 +755,18 @@ type KebabToCamel<S extends string> =
 /** Convert an IPC channel name to its API method name. e.g. 'invoker:load-plan' → 'loadPlan' */
 type ChannelToMethod<S extends string> = KebabToCamel<StripPrefix<S>>;
 
+/** Convert an IPC channel name to its API method name. e.g. 'invoker:get-tasks' → 'getTasks'. */
+export function channelToMethod(channel: string): string {
+  const stripped = channel.startsWith('invoker:') ? channel.slice(8) : channel;
+  return stripped.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
+/** Convert an event channel name to its `on*` subscription method. e.g. 'invoker:task-graph-event' → 'onTaskGraphEvent'. */
+export function channelToEventMethod(channel: string): string {
+  const base = channelToMethod(channel);
+  return `on${base.charAt(0).toUpperCase()}${base.slice(1)}`;
+}
+
 // ── Derived InvokerAPI ──────────────────────────────────────
 
 type InvokeChannels = typeof IpcChannels;

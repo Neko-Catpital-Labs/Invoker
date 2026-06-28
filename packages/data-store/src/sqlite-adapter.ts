@@ -25,6 +25,7 @@ import type {
   TaskStateChanges,
   Attempt,
   TaskStatus,
+  WorkflowDerivedStatus,
   WorkflowRollup,
   WorkflowRollupTaskSummary,
   ExternalDependency,
@@ -42,6 +43,7 @@ import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
   PersistenceAdapter,
+  ReviewGateLookup,
   Workflow,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
@@ -122,6 +124,13 @@ interface SQLiteAdapterOptions {
   outputDir?: string;
   /** Max retained activity_log rows; 0 disables retention. */
   activityLogMaxRows?: number;
+  /**
+   * Open WAL in exclusive locking mode: the wal-index lives in heap memory and
+   * no `-shm` file is created, making the process immune to the SIGBUS that a
+   * truncated memory-mapped `-shm` causes. Requires this process to be the SOLE
+   * opener of the database file — a concurrent open is rejected with SQLITE_BUSY.
+   */
+  exclusiveLocking?: boolean;
 }
 
 export type WorkflowMutationPriority = 'high' | 'normal';
@@ -154,6 +163,38 @@ function paramsToArgs(params: SQLiteParams = []): unknown[] {
 
 function sqlStringLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
+}
+
+/**
+ * SQLite result codes that mean the database file itself is unreadable and a
+ * fresh start is the only recovery: SQLITE_CORRUPT (11) and SQLITE_NOTADB (26).
+ * Transient/operational failures (e.g. SQLITE_BUSY=5, SQLITE_LOCKED=6,
+ * SQLITE_CANTOPEN=14) MUST NOT trigger destructive recovery: a concurrent
+ * process briefly holding a lock would otherwise rename the live database and
+ * its -wal/-shm sidecars away, losing data and (because other connections have
+ * the -shm memory-mapped) crashing them with SIGBUS.
+ */
+const SQLITE_CORRUPT = 11;
+const SQLITE_NOTADB = 26;
+// Extended result codes pack the primary code in the low 8 bits (e.g.
+// SQLITE_CORRUPT_VTAB = 267 -> 267 & 0xff = 11), so mask before comparing or
+// extended corruption variants slip through as "not corruption".
+const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
+
+/**
+ * True when `err` is a SQLite open failure caused by an unreadable database file
+ * (SQLITE_CORRUPT / SQLITE_NOTADB, including their extended variants) — the only
+ * class of failure for which destructive backup-and-recreate recovery is safe.
+ */
+export function isDatabaseCorruptionError(err: unknown): boolean {
+  const errcode = (err as { errcode?: unknown } | null)?.errcode;
+  if (typeof errcode === 'number') {
+    const primary = errcode & SQLITE_PRIMARY_RESULT_CODE_MASK;
+    return primary === SQLITE_CORRUPT || primary === SQLITE_NOTADB;
+  }
+  // Fallback for runtimes that do not surface a numeric errcode.
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return message.includes('malformed') || message.includes('not a database');
 }
 
 class NativeStatementCompat {
@@ -305,6 +346,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private lastWorkflowTaskSnapshotStats: Record<string, unknown> | null = null;
   private readonly activityLogMaxRows: number;
   private activityLogWritesSincePrune = 0;
+  private readonly exclusiveLocking: boolean;
 
   /** Use SQLiteAdapter.create() instead. */
   private constructor(db: DatabaseSync, dbPath: string | null, options?: SQLiteAdapterOptions) {
@@ -315,6 +357,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.outputTailLimit = options?.outputTailLimit ?? 100;
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
+    this.exclusiveLocking = options?.exclusiveLocking === true;
     this.configureConnection(dbPath !== null);
     if (!this.readOnly) {
       this.initSchema();
@@ -332,6 +375,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
   static async create(dbPath: string = ':memory:', options?: SQLiteAdapterOptions): Promise<SQLiteAdapter> {
     const isFile = dbPath !== ':memory:';
     const requestWritable = options?.readOnly !== true;
+
+    // Exclusive (heap wal-index, no -shm) locking is reserved for the sole
+    // opener: only the writable owner of a file-backed database may request it.
+    // A read-only or non-owner caller opting in would contend with the real
+    // owner (SQLITE_BUSY) or get a cryptic open failure.
+    if (isFile && options?.exclusiveLocking === true && (!requestWritable || !options?.ownerCapability)) {
+      throw new Error(
+        'exclusiveLocking requires the writable owner process to be the sole opener of the database file.',
+      );
+    }
 
     // Enforce owner-only writable initialization for file-backed databases
     if (isFile && requestWritable && !options?.ownerCapability) {
@@ -351,7 +404,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
       return new SQLiteAdapter(db, isFile ? dbPath : null, options);
     } catch (err) {
-      if (!isFile || options?.readOnly === true || !existsSync(dbPath)) {
+      if (!isFile || options?.readOnly === true || !existsSync(dbPath) || !isDatabaseCorruptionError(err)) {
         throw err;
       }
       const backupPath = `${dbPath}.corrupt-${Date.now()}`;
@@ -382,6 +435,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.nativeDb.exec('PRAGMA busy_timeout = 5000');
     this.nativeDb.exec('PRAGMA foreign_keys = ON');
     if (fileBacked) {
+      if (this.exclusiveLocking) {
+        // Heap wal-index (no -shm file). MUST precede `journal_mode = WAL`.
+        this.nativeDb.exec('PRAGMA locking_mode = EXCLUSIVE');
+      }
       this.nativeDb.exec('PRAGMA journal_mode = WAL');
       this.nativeDb.exec('PRAGMA synchronous = FULL');
       this.nativeDb.exec('PRAGMA wal_autocheckpoint = 1000');
@@ -1017,6 +1074,59 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const workflowIds = rows.map((row: any) => String(row.id));
     const rollups = this.loadWorkflowRollups(workflowIds);
     return rows.map((row: any) => this.rowToWorkflow(row, rollups.get(String(row.id))));
+  }
+
+  findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
+    // The PR↔workflow link lives only on the merge node, as either the bare PR
+    // number (review_id) or the full PR URL (review_url ending in /pull/<pr>).
+    const rows = this.queryAll(
+      `SELECT t.id AS mergeTaskId,
+              t.workflow_id AS workflowId,
+              t.review_id AS reviewId,
+              t.review_url AS reviewUrl,
+              t.branch AS branch,
+              t.selected_attempt_id AS selectedAttemptId,
+              t.status AS mergeTaskStatus,
+              w.generation AS workflowGeneration,
+              w.base_branch AS baseBranch
+         FROM tasks t
+         JOIN workflows w ON w.id = t.workflow_id
+        WHERE t.is_merge_node = 1 AND (t.review_id = ? OR t.review_url LIKE ?)`,
+      [pr, `%/pull/${pr}`],
+    );
+    if (rows.length === 0) return undefined;
+
+    // workflows has no status column — status is a derived rollup. Compute it
+    // per candidate so re-published PRs (multiple merge nodes) can prefer the
+    // live workflow, then the highest generation.
+    const workflowIds = [...new Set(rows.map((row) => String(row.workflowId)))];
+    const rollups = this.loadWorkflowRollups(workflowIds);
+    const TERMINAL = new Set<WorkflowDerivedStatus>(['completed', 'failed', 'closed']);
+
+    const candidates = rows.map((row) => {
+      const workflowStatus = rollups.get(String(row.workflowId))?.status ?? 'pending';
+      return { row, workflowStatus, terminal: TERMINAL.has(workflowStatus) };
+    });
+    candidates.sort((a, b) => {
+      if (a.terminal !== b.terminal) return a.terminal ? 1 : -1; // non-terminal first
+      return Number(b.row.workflowGeneration ?? 0) - Number(a.row.workflowGeneration ?? 0);
+    });
+
+    const { row, workflowStatus } = candidates[0];
+    const str = (value: unknown): string | undefined =>
+      value == null ? undefined : String(value);
+    return {
+      workflowId: String(row.workflowId),
+      mergeTaskId: String(row.mergeTaskId),
+      reviewId: str(row.reviewId),
+      reviewUrl: str(row.reviewUrl),
+      branch: str(row.branch),
+      baseBranch: str(row.baseBranch),
+      workflowStatus,
+      workflowGeneration: Number(row.workflowGeneration ?? 0),
+      mergeTaskStatus: str(row.mergeTaskStatus),
+      selectedAttemptId: str(row.selectedAttemptId),
+    };
   }
 
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[] {

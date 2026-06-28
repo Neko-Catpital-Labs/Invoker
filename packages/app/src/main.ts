@@ -208,8 +208,13 @@ import {
 } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
+import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
+import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
+import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
+import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
+import { resolveWebToken, resolveWebHost, resolveWebPort } from './web/start-web-surface.js';
 import {
   createGuiMutationRegistrars,
   registerBootstrapStateIpc,
@@ -770,6 +775,7 @@ const DEFAULT_SLACK_HARNESS_PRESETS: Record<string, { tool: 'cursor' | 'omp' | '
   'cursor+claude': { tool: 'cursor', model: 'claude' },
   'cursor+codex': { tool: 'cursor', model: 'codex' },
   'omp+claude': { tool: 'omp', model: 'claude' },
+  'omp+codex': { tool: 'omp', model: 'codex' },
   omp: { tool: 'omp' },
   codex: { tool: 'codex' },
 };
@@ -861,6 +867,86 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     gatherWorkflowContext,
   });
 
+  // ── Slack live workflow-progress card ─────────────────────
+  const PROGRESS_DEBOUNCE_MS = 2500;
+  const TERMINAL_DERIVED_STATUSES = new Set(['completed', 'failed', 'closed']);
+  const progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const workflowIdFromTaskId = (taskId: string): string | undefined => {
+    if (taskId.startsWith('__merge__')) return taskId.slice('__merge__'.length);
+    const slash = taskId.indexOf('/');
+    return slash <= 0 ? undefined : taskId.slice(0, slash);
+  };
+
+  const emitWorkflowProgress = async (workflowId: string): Promise<void> => {
+    // Only mapped workflows get a live card — avoids posting for headless/non-Slack runs.
+    if (!workflowChannelRepo.getByWorkflowId(workflowId)) return;
+    const tasks = persistence.loadTasks(workflowId);
+    const workflow = persistence.loadWorkflow(workflowId);
+    const counts = orchestrator.getWorkflowStatus(workflowId);
+    const percentComplete = counts.total > 0 ? Math.round((counts.completed / counts.total) * 100) : 0;
+    const gate = buildReviewGateQueryResponse({ workflowId, workflow, tasks });
+    const prUrl = gate.artifacts.find((artifact) => artifact.url)?.url;
+    const reviewState = gate.mergeTaskId
+      ? (gate.ready ? 'review ready' : (gate.status ?? undefined))
+      : undefined;
+    await slack.handleEvent({
+      type: 'workflow_progress',
+      progress: {
+        workflowId,
+        name: (workflow as { name?: string } | undefined)?.name ?? workflowId,
+        counts,
+        percentComplete,
+        tasks: tasks.map((task) => ({
+          id: task.id,
+          name: task.description,
+          status: task.status,
+          phase: task.execution.phase,
+          reviewUrl: task.execution.reviewUrl,
+        })),
+        prUrl,
+        reviewState,
+      },
+    });
+  };
+
+  const scheduleWorkflowProgress = (workflowId: string, flushNow: boolean): void => {
+    const existing = progressTimers.get(workflowId);
+    if (existing) clearTimeout(existing);
+    if (flushNow) {
+      progressTimers.delete(workflowId);
+      void emitWorkflowProgress(workflowId).catch((err) =>
+        deps.logFn('slack', 'warn', `workflow-progress emit failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
+      return;
+    }
+    const timer = setTimeout(() => {
+      progressTimers.delete(workflowId);
+      void emitWorkflowProgress(workflowId).catch((err) =>
+        deps.logFn('slack', 'warn', `workflow-progress emit failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
+    }, PROGRESS_DEBOUNCE_MS);
+    timer.unref?.();
+    progressTimers.set(workflowId, timer);
+  };
+
+  messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
+    const d = delta as TaskDelta;
+    const taskId = d.type === 'created' ? d.task.id : d.taskId;
+    const workflowId = workflowIdFromTaskId(taskId);
+    if (!workflowId || !workflowChannelRepo.getByWorkflowId(workflowId)) return;
+    const status = d.type === 'updated'
+      ? (d.changes.status as string | undefined)
+      : d.type === 'created' ? d.task.status : undefined;
+    // Flush immediately when this delta drives the workflow to a terminal state.
+    let flushNow = false;
+    if (status && TERMINAL_DERIVED_STATUSES.has(status)) {
+      const counts = orchestrator.getWorkflowStatus(workflowId);
+      flushNow = counts.running === 0 && counts.pending === 0;
+    }
+    scheduleWorkflowProgress(workflowId, flushNow);
+  });
+
   await slack.start(async (command: any) => {
     deps.logFn('trace', 'info', `slackBot: command received — type=${command.type}`);
     switch (command.type) {
@@ -921,8 +1007,12 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
       }
       case 'get_status': {
         const workflowId = command.workflowId as string | undefined;
-        const status = orchestrator.getWorkflowStatus(workflowId);
-        await slack.handleEvent({ type: 'workflow_status', status, workflowId });
+        if (workflowId && workflowChannelRepo.getByWorkflowId(workflowId)) {
+          await emitWorkflowProgress(workflowId);
+        } else {
+          const status = orchestrator.getWorkflowStatus(workflowId);
+          await slack.handleEvent({ type: 'workflow_status', status, workflowId });
+        }
         break;
       }
       case 'start_plan': {
@@ -1126,6 +1216,7 @@ function startHeadlessMode(): void {
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
         runtimeServices,
+        appRootDir: __dirname,
       };
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
@@ -1679,40 +1770,26 @@ function startHeadlessMode(): void {
             mode: 'standalone',
           };
         });
-        messageBus.onRequest('headless.query', async (req: unknown) => {
-          noteStandaloneOwnerActivity();
-          const { kind, reset } = req as { kind?: string; reset?: boolean };
-          if (kind === 'ui-perf') {
-            if (reset) {
-              headlessDeps.resetUiPerfStats?.();
-            }
-            return {
-              ownerMode: 'standalone',
-              ...(headlessDeps.getUiPerfStats?.() ?? {}),
-            };
-          }
-          if (kind === 'queue') {
-            return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
-          }
-          if (kind === 'workflow-status') {
-            return orchestrator.getWorkflowStatus();
-          }
-          if (kind === 'tasks' || kind === 'task-graph-refresh') {
-            if (kind === 'task-graph-refresh') {
-              orchestrator.syncAllFromDb();
-            }
-            return {
-              tasks: orchestrator.getAllTasks(),
-              workflows: persistence.listWorkflows(),
-              streamSequence: 0,
-              invokerHomeRoot: resolveInvokerHomeRoot(),
-            };
-          }
-          if (kind === 'action-graph') {
-            return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
-          }
-          throw new Error(`Unsupported headless query: ${String(kind)}`);
-        });
+        messageBus.onRequest('headless.query', async (req: unknown) =>
+          answerOwnerHeadlessQuery(req, buildOwnerReadQueryHandlers({
+            ownerModeLabel: 'standalone',
+            onActivity: noteStandaloneOwnerActivity,
+            getUiPerfStats: () => headlessDeps.getUiPerfStats?.() ?? {},
+            resetUiPerfStats: () => headlessDeps.resetUiPerfStats?.(),
+            getStreamSequence: () => 0,
+            resolveInvokerHomeRoot,
+            orchestrator,
+            persistence,
+            getActionGraphSnapshot: () =>
+              buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
+          }), {
+            orchestrator,
+            persistence,
+            invokerConfig,
+            executionAgentRegistry: headlessDeps.executionAgentRegistry,
+            getUiPerfStats: headlessDeps.getUiPerfStats,
+            resetUiPerfStats: headlessDeps.resetUiPerfStats,
+          }));
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { workflowId, traceId } = req as { workflowId: string; traceId?: string };
@@ -1880,6 +1957,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let taskExecutor: TaskRunner | null = null;
   let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
   let apiServer: ApiServer | null = null;
+  let webBridge: WebBridge | null = null;
   let ownerMode = true;
   const taskHandles: TaskHandleMap = new Map();
   const embeddedTerminalManager = new EmbeddedTerminalManager({
@@ -2078,6 +2156,7 @@ function createEmbeddedTerminalBackendFromConfig(
         module: 'ui-backpressure',
       });
     },
+    onEvent: (event) => webBridge?.broadcast('invoker:task-graph-event', event),
   });
 
   const publishTaskDeltaToRenderer = (delta: TaskDelta): void => {
@@ -2931,20 +3010,21 @@ function createEmbeddedTerminalBackendFromConfig(
     setTimeout(() => {
       if (!ownerMode) return;
 
+      const webMutations = new WorkflowMutationFacade({
+        logger,
+        orchestrator,
+        persistence,
+        commandService,
+        taskExecutor: requireTaskExecutor(),
+        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+        killRunningTask,
+      });
       apiServer = startApiServer({
         logger,
         orchestrator,
         persistence,
         executorRegistry,
-        mutations: new WorkflowMutationFacade({
-          logger,
-          orchestrator,
-          persistence,
-          commandService,
-          taskExecutor: requireTaskExecutor(),
-          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-          killRunningTask,
-        }),
+        mutations: webMutations,
         queueWorkflowMutation: (workflowId, priority, channel, args, options) => {
           if (!workflowMutationCoordinator) {
             throw new Error('Workflow mutation coordinator is unavailable');
@@ -2955,6 +3035,51 @@ function createEmbeddedTerminalBackendFromConfig(
         detachWorkflow: performDetachWorkflow,
       });
       recordStartupMark('api-server.started');
+
+      const webToken = resolveWebToken(invokerConfig);
+      if (webToken) {
+        const webDispatch = buildWebInvokerDispatch({
+          orchestrator,
+          persistence,
+          mutations: webMutations,
+          agentRegistry,
+          loadConfig,
+          getStreamSequence: getTaskDeltaStreamSequence,
+          refreshTaskGraph: async () => {
+            const snapshot = await resolveRefreshTaskGraphSnapshot({
+              ownerMode,
+              messageBus,
+              resolveInvokerHomeRoot,
+              orchestrator,
+              persistence,
+              logger,
+            });
+            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows);
+          },
+          deleteWorkflow: performDeleteWorkflow,
+          detachWorkflow: performDetachWorkflow,
+          getBundledSkillsStatus,
+          getSystemDiagnostics: () => collectSystemDiagnostics({
+            appVersion: app.getVersion(),
+            isPackaged: app.isPackaged,
+            platform: process.platform,
+            arch: process.arch,
+          }),
+          logger,
+        });
+        webBridge = startWebBridge({
+          logger,
+          dispatch: webDispatch,
+          messageBus,
+          persistence,
+          uiDistDir: resolveWebUiDistDir(__dirname),
+          token: webToken,
+          host: resolveWebHost(invokerConfig),
+          port: resolveWebPort(invokerConfig),
+        });
+      } else {
+        logger.info('Web surface disabled — set INVOKER_WEB_TOKEN (or config.webToken) to enable it', { module: 'web-bridge' });
+      }
 
       void recoverWorkflowMutationsOnStartup({
         ownerMode,
@@ -3252,39 +3377,25 @@ function createEmbeddedTerminalBackendFromConfig(
         ownerId: workflowMutationOwnerId,
         mode: 'gui',
       }));
-      messageBus.onRequest('headless.query', async (req: unknown) => {
-        const { kind, reset } = req as { kind?: string; reset?: boolean };
-        if (kind === 'ui-perf') {
-          if (reset) {
-            resetUiPerfStats();
-          }
-          return {
-            ownerMode: 'gui',
-            ...getUiPerfStats(),
-          };
-        }
-        if (kind === 'queue') {
-          return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
-        }
-        if (kind === 'workflow-status') {
-          return orchestrator.getWorkflowStatus();
-        }
-        if (kind === 'tasks' || kind === 'task-graph-refresh') {
-          if (kind === 'task-graph-refresh') {
-            orchestrator.syncAllFromDb();
-          }
-          return {
-            tasks: orchestrator.getAllTasks(),
-            workflows: persistence.listWorkflows(),
-            streamSequence: getTaskDeltaStreamSequence(),
-            invokerHomeRoot: resolveInvokerHomeRoot(),
-          };
-        }
-        if (kind === 'action-graph') {
-          return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
-        }
-        throw new Error(`Unsupported headless query: ${String(kind)}`);
-      });
+      messageBus.onRequest('headless.query', async (req: unknown) =>
+        answerOwnerHeadlessQuery(req, buildOwnerReadQueryHandlers({
+          ownerModeLabel: 'gui',
+          getUiPerfStats: () => getUiPerfStats(),
+          resetUiPerfStats: () => resetUiPerfStats(),
+          getStreamSequence: () => getTaskDeltaStreamSequence(),
+          resolveInvokerHomeRoot,
+          orchestrator,
+          persistence,
+          getActionGraphSnapshot: () =>
+            buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
+        }), {
+          orchestrator,
+          persistence,
+          invokerConfig,
+          executionAgentRegistry: agentRegistry,
+          getUiPerfStats,
+          resetUiPerfStats,
+        }));
       messageBus.onRequest('headless.run', async (req: unknown) => {
         const { planPath, traceId } = req as { planPath: string; traceId?: string };
         logger.info(
@@ -4729,6 +4840,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
       try {
         if (apiServer) await apiServer.close().catch(() => {});
+        if (webBridge) await webBridge.close().catch(() => {});
         reviewGateStatusWorker?.stop();
         reviewGateStatusWorker = null;
         if (dbPollInterval) clearInterval(dbPollInterval);
