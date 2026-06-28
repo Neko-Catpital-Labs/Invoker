@@ -42,6 +42,11 @@ import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
 } from './recovery-worker-observability.js';
+import {
+  isExternalWorkerRuntime,
+  registerExternalWorkers,
+  type ExternalWorkerRuntime,
+} from './external-worker-loader.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -421,7 +426,10 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
-  const registry = registerAutoFixWorker(createWorkerRegistry());
+  const registry = registerExternalWorkers(
+    registerAutoFixWorker(createWorkerRegistry()),
+    deps.invokerConfig?.externalWorkers,
+  );
 
   if (subCommand === 'list') {
     process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
@@ -482,7 +490,12 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
     });
-    await worker.tick('manual');
+    if (isExternalWorkerRuntime(worker)) {
+      worker.start();
+      await waitForExternalWorkerShutdown(worker);
+    } else {
+      await worker.tick('manual');
+    }
     await worker.stop();
   } finally {
     // Release deterministically so a clean run never leaves a stale lock that
@@ -491,6 +504,31 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
   const label = definition.kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : definition.kind;
   process.stdout.write(`${label} worker scan completed.\n`);
+}
+
+async function waitForExternalWorkerShutdown(worker: ExternalWorkerRuntime): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      process.removeListener('SIGINT', shutdown);
+      process.removeListener('SIGTERM', shutdown);
+    };
+    const shutdown = (): void => {
+      cleanup();
+      resolve();
+    };
+    worker.waitForExit().then(
+      () => {
+        cleanup();
+        resolve();
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
 }
 
 function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
