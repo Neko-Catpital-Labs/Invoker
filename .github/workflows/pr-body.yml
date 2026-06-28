@@ -1,0 +1,70 @@
+name: PR Body
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  NODE_VERSION: '26'
+  PR_BODY_ENFORCE_ALL: ${{ vars.PR_BODY_ENFORCE_ALL || 'false' }}
+  PR_BODY_ENFORCED_AUTHORS: ${{ vars.PR_BODY_ENFORCED_AUTHORS || 'EdbertChan' }}
+
+jobs:
+  validate:
+    name: PR Body
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout trusted base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Decide selective rollout
+        id: rollout
+        env:
+          PR_BODY_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: node scripts/pr-body-rollout.mjs
+
+      - name: Skip unenforced author
+        if: steps.rollout.outputs.enabled != 'true'
+        run: echo "PR body validation is not enforced for ${{ github.event.pull_request.user.login }} yet."
+
+      - name: Install pnpm
+        if: steps.rollout.outputs.enabled == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        if: steps.rollout.outputs.enabled == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install validator dependencies
+        if: steps.rollout.outputs.enabled == 'true'
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Fetch live PR body
+        if: steps.rollout.outputs.enabled == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number });
+            fs.writeFileSync('pr-body.md', pull.body || '', 'utf8');
+
+      - name: Validate PR body
+        if: steps.rollout.outputs.enabled == 'true'
+        run: node scripts/validate-pr-body.mjs --body-file pr-body.md

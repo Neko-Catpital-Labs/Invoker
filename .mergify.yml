@@ -21,6 +21,7 @@ queue_rules:
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
+      - check-success = PR Body
       - check-success = quality / TypeScript Types
       - check-success = required-fast / Guardrails
       - check-success = required-fast / Vitest Workspace
@@ -50,6 +51,7 @@ queue_rules:
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
+      - check-success = PR Body
       - check-success = quality / TypeScript Types
       - check-success = required-fast / Guardrails
       - check-success = required-fast / Vitest Workspace
