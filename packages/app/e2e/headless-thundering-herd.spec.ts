@@ -66,13 +66,15 @@ function parseJsonStdout(stdout: string): Record<string, unknown> {
   return JSON.parse(line) as Record<string, unknown>;
 }
 
-async function assertTaskPanelResponsive(page: Page, timeoutMs: number): Promise<void> {
-  const taskNode = page.locator('.react-flow__node[data-testid$="task-alpha"]');
-  const commandDisplay = page.locator('[data-testid="command-display"]');
+async function assertInspectorToggleResponsive(page: Page, timeoutMs: number): Promise<void> {
+  const minimizeButton = page.getByLabel('Minimize inspector');
+  const maximizeButton = page.getByLabel('Maximize inspector');
   const startedAt = Date.now();
   await expect(async () => {
-    await taskNode.click();
-    await expect(commandDisplay).toBeVisible({ timeout: 1000 });
+    await minimizeButton.click();
+    await expect(maximizeButton).toBeVisible({ timeout: 1000 });
+    await maximizeButton.click();
+    await expect(minimizeButton).toBeVisible({ timeout: 1000 });
   }).toPass({ timeout: timeoutMs });
   const interactionMs = Date.now() - startedAt;
   expect(interactionMs).toBeLessThan(timeoutMs);
@@ -127,13 +129,13 @@ test.describe('Headless thundering herd', () => {
     );
 
     const firstInteractionStartedAt = Date.now();
-    await assertTaskPanelResponsive(page, RESPONSIVE_INTERACTION_TIMEOUT_MS);
+    await assertInspectorToggleResponsive(page, RESPONSIVE_INTERACTION_TIMEOUT_MS);
     expect(Date.now() - firstInteractionStartedAt).toBeLessThan(RESPONSIVE_INTERACTION_TIMEOUT_MS);
 
     await page.waitForTimeout(1500);
 
     const secondInteractionStartedAt = Date.now();
-    await assertTaskPanelResponsive(page, RESPONSIVE_INTERACTION_TIMEOUT_MS);
+    await assertInspectorToggleResponsive(page, RESPONSIVE_INTERACTION_TIMEOUT_MS);
     expect(Date.now() - secondInteractionStartedAt).toBeLessThan(RESPONSIVE_INTERACTION_TIMEOUT_MS);
 
     const retryResults = await Promise.all(burst);
