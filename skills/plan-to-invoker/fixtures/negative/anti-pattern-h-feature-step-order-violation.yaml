@@ -1,0 +1,130 @@
+# Anti-Pattern H: Same-feature step ordering violation.
+# Expected outcome: skill-doctor fails lint-task-atomicity because an earlier
+# sub-slice of the same atomic feature depends on a later Feature step without
+# an explicit "Feature step exception: allowed" override.
+
+name: "Anti-pattern: same-feature step ordering violation"
+description: |
+  Demonstrates a feature-step ordering violation where step 1 of an atomic
+  feature depends on step 2 of the same feature without an explicit Feature
+  step exception.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/EdbertChan/Invoker
+baseBranch: master
+featureBranch: plan/anti-pattern-feature-step-order-violation
+
+tasks:
+  - id: ui-activation-step-2
+    description: |
+      Review claim:
+      - Land step 2 of the prompt-edit feature (UI activation).
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The UI change stays scoped to TaskPanel rendering.
+      Slice rationale:
+      - Step 2 of the same atomic feature should land after step 1.
+      Architectural effect:
+      - TaskPanel gains the prompt-edit activation hook.
+      Goal:
+      - Implement the UI activation step of the prompt-edit feature.
+      Motivation:
+      - Demonstrate same-feature step ordering for the fixture.
+      Alternative considerations:
+      - Option A (chosen for fixture): keep the backwards dep to prove lint catches it.
+      - Option B: rewire deps so step 1 does not depend on step 2.
+      Implementation details:
+      - Modify the TaskPanel component only.
+      Non-goals:
+      - Do not modify the contact surface here.
+      Feature: prompt-edit-bridge
+      Feature state: active
+      Feature step: 2
+      Files:
+      - packages/ui/src/components/TaskPanel.tsx
+      Change types:
+      - packages/ui/src/components/TaskPanel.tsx: modify
+      Acceptance criteria:
+      - Ensure the activation hook compiles.
+    prompt: |
+      Review claim:
+      - Land step 2 of the prompt-edit feature.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change focused on TaskPanel.
+      Slice rationale:
+      - Step 2 should land after step 1.
+      Architectural effect:
+      - TaskPanel gains the prompt-edit activation hook.
+      Goal:
+      - Implement the UI activation step of the prompt-edit feature.
+      Motivation:
+      - Demonstrate same-feature step ordering.
+      Alternative considerations:
+      - Option A (chosen for fixture): keep the backwards dep.
+      - Option B: rewire deps.
+      Implementation details:
+      - Modify packages/ui/src/components/TaskPanel.tsx to expose the activation hook.
+      Non-goals:
+      - Do not modify the contact surface.
+      Assume no prior context. Modify packages/ui/src/components/TaskPanel.tsx only. Pass condition: exits 0 after the activation hook compiles.
+    dependencies: []
+
+  - id: contact-surface-step-1
+    description: |
+      Review claim:
+      - Land step 1 of the prompt-edit feature (contact surface).
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The contact surface change stays scoped to typed renderer exports.
+      Slice rationale:
+      - Step 1 of the same atomic feature must not depend on step 2.
+      Architectural effect:
+      - The renderer contract gains a typed prompt-edit entry point.
+      Goal:
+      - Implement the contact-surface step of the prompt-edit feature.
+      Motivation:
+      - Demonstrate same-feature step ordering for the fixture.
+      Alternative considerations:
+      - Option A (chosen for fixture): keep the backwards dep on step 2.
+      - Option B: remove the backwards dep.
+      Implementation details:
+      - Modify the renderer contract file only.
+      Non-goals:
+      - Do not modify the TaskPanel here.
+      Feature: prompt-edit-bridge
+      Feature state: active
+      Feature step: 1
+      Files:
+      - packages/app/src/preload.ts
+      Change types:
+      - packages/app/src/preload.ts: modify
+      Acceptance criteria:
+      - Ensure the renderer types compile.
+    prompt: |
+      Review claim:
+      - Land step 1 of the prompt-edit feature.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change focused on the renderer contract.
+      Slice rationale:
+      - Step 1 must not depend on a later step of the same feature.
+      Architectural effect:
+      - The renderer contract gains a typed prompt-edit entry point.
+      Goal:
+      - Implement the contact-surface step of the prompt-edit feature.
+      Motivation:
+      - Demonstrate same-feature step ordering.
+      Alternative considerations:
+      - Option A (chosen for fixture): keep the backwards dep.
+      - Option B: remove the backwards dep.
+      Implementation details:
+      - Modify packages/app/src/preload.ts to expose the typed contract.
+      Non-goals:
+      - Do not modify the TaskPanel.
+      Assume no prior context. Modify packages/app/src/preload.ts only. Pass condition: exits 0 after the contract compiles.
+    dependencies: [ui-activation-step-2]
