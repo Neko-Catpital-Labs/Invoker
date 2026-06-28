@@ -658,7 +658,7 @@ export class SlackSurface implements Surface {
     // Confirm/cancel a staged action first (plain yes/no in-thread).
     if (await this.resolveConfirm(threadTs, parsed.text, say, channel)) return;
 
-    // Deterministic verb commands take priority over the planning/LLM path.
+    // Deterministic verb commands respond instantly and take priority over the planner.
     const ctrl = parseLobbyControl(parsed.text);
     if (ctrl?.kind === 'op') {
       await this.handleLobbyOp(ctrl, threadTs, channel, say);
@@ -669,15 +669,20 @@ export class SlackSurface implements Surface {
       return;
     }
 
+    // Slower paths (LLM classifier, repo checkout, planner) acknowledge receipt up front.
+    if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
+
     // Fallback classifier: only when a non-verb message looks operational.
     if (looksOperational(parsed.text)) {
       const cls = await this.classifyLobbyIntent(parsed.text, preset);
       this.log('slack', 'info', `[CLASSIFY] thread_ts=${threadTs} intent=${cls.intent}`);
       if (cls.intent === 'command') {
+        await this.clearImmediateAck(channel, threadTs);
         await this.proposeLobbyOp(cls, threadTs, channel, say);
         return;
       }
       if (cls.intent === 'question') {
+        await this.clearImmediateAck(channel, threadTs);
         await this.answerLobbyQuestion(parsed.text, preset, threadTs, say);
         return;
       }
@@ -685,16 +690,6 @@ export class SlackSurface implements Surface {
     }
 
     // Default: a plain planning conversation (drafts a plan, never auto-submits).
-
-    if (this.enableImmediateAck) {
-      try {
-        const ackResult = await say({ text: this.immediateAckMessage, thread_ts: threadTs });
-        if (ackResult?.ts) this.ackMessages.set(threadTs, ackResult.ts);
-        this.log('slack', 'info', `[ACK] Sent immediate acknowledgment (thread_ts=${threadTs})`);
-      } catch (err) {
-        this.log('slack', 'error', `[ACK] Failed to send immediate acknowledgment: ${err}`);
-      }
-    }
 
     let workingDir = this.workingDir;
     if (repoUrl && this.prepareRepoCheckout) {
@@ -725,6 +720,25 @@ export class SlackSurface implements Surface {
     });
 
     await this.handleConversationMessage(conversation, parsed.text, threadTs, say, channel);
+  }
+
+  /** Post the immediate "received it" acknowledgment and track it for in-place replacement. */
+  private async sendImmediateAck(threadTs: string, say: SayFn): Promise<void> {
+    try {
+      const res = await say({ text: this.immediateAckMessage, thread_ts: threadTs });
+      if (res?.ts) this.ackMessages.set(threadTs, res.ts);
+      this.log('slack', 'info', `[ACK] Sent immediate acknowledgment (thread_ts=${threadTs})`);
+    } catch (err) {
+      this.log('slack', 'error', `[ACK] Failed to send immediate acknowledgment: ${err}`);
+    }
+  }
+
+  /** Drop the immediate ack — used by paths that post their own reply instead of replacing it. */
+  private async clearImmediateAck(channel: string, threadTs: string): Promise<void> {
+    const ts = this.ackMessages.get(threadTs);
+    if (!ts) return;
+    this.ackMessages.delete(threadTs);
+    await this.deleteMessage(channel, ts);
   }
 
   private async classifyLobbyIntent(text: string, harness: HarnessPreset): Promise<LobbyClassification> {
