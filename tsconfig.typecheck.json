@@ -5,6 +5,7 @@
     "incremental": false,
     "noEmit": true,
     "allowImportingTsExtensions": true,
+    "lib": ["ES2024"],
     "rootDir": ".",
     "outDir": "./dist-typecheck"
   },

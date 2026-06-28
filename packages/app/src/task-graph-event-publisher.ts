@@ -19,6 +19,7 @@ export interface CreateTaskGraphEventPublisherOptions {
   stampDelta: (delta: TaskDelta) => TaskDelta;
   getStreamSequence: () => number;
   onLargeBatch?: (stats: { batchSize: number; remaining: number }) => void;
+  onEvent?: (event: TaskGraphEvent) => void;
 }
 
 export function createTaskGraphEventPublisher(
@@ -55,6 +56,7 @@ export function createTaskGraphEventPublisher(
   };
 
   const publishEvent = (event: TaskGraphEvent): void => {
+    options.onEvent?.(event);
     const mainWindow = options.getMainWindow();
     if (!mainWindow || mainWindow.isDestroyed() || !options.isUiInteractive()) {
       return;
