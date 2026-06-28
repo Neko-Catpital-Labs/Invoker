@@ -33,6 +33,8 @@ interface WorkflowGraphProps {
   coreActivityByWorkflow?: Map<string, WorkflowCoreActivity>;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowContextMenu: (event: MouseEvent, workflowId: string) => void;
+  onOpenPlan?: () => void;
+  onOpenSetup?: () => void;
   /** Fired when the user manually pans or zooms the viewport. */
   onManualViewport?: () => void;
 }
@@ -48,6 +50,117 @@ const nodeTypes = {
   workflowNode: WorkflowFlowNode,
 };
 const WATCHDOG_RECOVERY_MISS_COUNT = 3;
+
+function WorkflowGraphEmptyState({
+  onOpenPlan,
+  onOpenSetup,
+}: {
+  onOpenPlan?: () => void;
+  onOpenSetup?: () => void;
+}): JSX.Element {
+  const suggestedCommands = [
+    'plan "fix a failing test"',
+    'plan "add GitHub OAuth"',
+    'inspect repo',
+  ];
+
+  return (
+    <div
+      data-testid="workflow-empty-state"
+      className="flex h-full w-full items-center justify-center overflow-auto px-6 py-8 text-gray-200"
+    >
+      <div className="w-full max-w-3xl rounded-lg border border-gray-800 bg-gray-950/55 p-5 shadow-2xl shadow-black/20">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold text-blue-300">
+              Invoker control plane
+            </div>
+            <h2 className="mt-1 text-lg font-semibold text-white">
+              Drive Invoker from a goal
+            </h2>
+          </div>
+          <span className="rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-400">
+            First run
+          </span>
+        </div>
+
+        <div className="rounded-md border border-blue-500/40 bg-gray-900 px-4 py-3 font-mono text-sm">
+          <span className="text-emerald-300">invoker&gt;</span>
+          <span className="ml-2 text-gray-400">Describe a goal or command...</span>
+        </div>
+
+        <p className="mt-4 max-w-2xl text-sm leading-6 text-gray-300">
+          Invoker turns a goal into a reviewable plan, pauses for approval at important gates,
+          and keeps execution progress in one place. Existing YAML or JSON plans can still be
+          opened from the rail.
+        </p>
+        <p className="mt-2 text-xs text-gray-500">
+          Load a plan to render workflow graph
+        </p>
+
+        <div className="mt-5 grid gap-4 border-t border-gray-800 pt-4 sm:grid-cols-3">
+          <div>
+            <div className="text-sm font-medium text-white">1. Describe a goal</div>
+            <div className="mt-1 text-xs leading-5 text-gray-400">
+              Say what you want Invoker to change or inspect.
+            </div>
+          </div>
+          <div>
+            <div className="text-sm font-medium text-white">2. Review the plan</div>
+            <div className="mt-1 text-xs leading-5 text-gray-400">
+              Check tasks, dependencies, gates, and verification before execution.
+            </div>
+          </div>
+          <div>
+            <div className="text-sm font-medium text-white">3. Approve and run</div>
+            <div className="mt-1 text-xs leading-5 text-gray-400">
+              Follow progress, failures, approvals, and merge readiness in one place.
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <div className="text-xs font-medium text-gray-500">
+            Suggested commands
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {suggestedCommands.map((command) => (
+              <span
+                key={command}
+                className="rounded border border-gray-700 bg-gray-900 px-2 py-1 font-mono text-xs text-gray-300"
+              >
+                {command}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {(onOpenPlan || onOpenSetup) && (
+          <div className="mt-6 flex flex-wrap gap-2">
+            {onOpenPlan && (
+              <button
+                type="button"
+                onClick={onOpenPlan}
+                className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500"
+              >
+                Open Plan
+              </button>
+            )}
+            {onOpenSetup && (
+              <button
+                type="button"
+                onClick={onOpenSetup}
+                className="rounded border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-200 hover:bg-gray-800"
+              >
+                Check Setup
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 
 function workflowEdgeVisual(kind: WorkflowGraphEdge['kind']): {
@@ -114,6 +227,8 @@ function WorkflowGraphInner({
   coreActivityByWorkflow,
   onSelectWorkflow,
   onWorkflowContextMenu,
+  onOpenPlan,
+  onOpenSetup,
   onManualViewport,
 }: WorkflowGraphProps): JSX.Element {
   const { fitView, setCenter, getZoom } = useReactFlow();
@@ -308,11 +423,7 @@ function WorkflowGraphInner({
   }, [fitView, nodes.length]);
 
   if (graph.nodes.length === 0) {
-    return (
-      <div className="h-full flex items-center justify-center text-gray-500 text-sm">
-        Load a plan to render workflow graph
-      </div>
-    );
+    return <WorkflowGraphEmptyState onOpenPlan={onOpenPlan} onOpenSetup={onOpenSetup} />;
   }
 
   return (

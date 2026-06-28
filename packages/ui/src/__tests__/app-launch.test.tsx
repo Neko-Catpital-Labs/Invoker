@@ -35,12 +35,17 @@ describe('App launch (component)', () => {
 
   it('shows empty state prompt when no plan is loaded', () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-empty-state')).toBeInTheDocument();
+    expect(screen.getByText('Drive Invoker from a goal')).toBeInTheDocument();
+    expect(screen.getByText('plan "fix a failing test"')).toBeInTheDocument();
   });
 
   it('renders left rail navigation and workflow controls', () => {
-    render(<App />);
+    const { container } = render(<App />);
     expect(screen.getByTestId('rail-open-file')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-open-file')).toHaveTextContent('Open Plan');
+    expect(screen.getByTestId('rail-open-file')).toHaveAttribute('title', 'Open a YAML or JSON Invoker plan file');
+    expect(container.querySelector('input[type="file"]')).toHaveAttribute('accept', '.json,.yaml,.yml');
     expect(screen.getByTestId('rail-home')).toBeInTheDocument();
     expect(screen.getByTestId('rail-timeline')).toBeInTheDocument();
     expect(screen.getByTestId('rail-history')).toBeInTheDocument();

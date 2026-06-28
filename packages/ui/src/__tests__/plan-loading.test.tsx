@@ -66,12 +66,12 @@ describe('Plan loading (component)', () => {
 
   it('empty state disappears after tasks are loaded', async () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-empty-state')).toBeInTheDocument();
 
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
-      expect(screen.queryByText('Load a plan to render workflow graph')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('workflow-empty-state')).not.toBeInTheDocument();
     });
   });
 

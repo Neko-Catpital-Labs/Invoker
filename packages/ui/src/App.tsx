@@ -1856,6 +1856,15 @@ export function App() {
     }
   }, [refreshSystemDiagnostics]);
 
+  const handleOpenPlanFile = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleOpenSystemSetup = useCallback(() => {
+    cancelPendingSystemSetupAutoOpen();
+    setShowSystemSetup(true);
+  }, [cancelPendingSystemSetupAutoOpen]);
+
   return (
     <div className="h-screen flex flex-col bg-gray-900 text-gray-100" onClick={() => closeContextMenu()}>
       {showSystemBanner && (
@@ -1871,7 +1880,7 @@ export function App() {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
+              onClick={handleOpenSystemSetup}
               className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium transition-colors"
             >
               Open Setup
@@ -1900,10 +1909,11 @@ export function App() {
             <div className="space-y-1">
               <button
                 data-testid="rail-open-file"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={handleOpenPlanFile}
+                title="Open a YAML or JSON Invoker plan file"
                 className="w-full rounded bg-gray-700 px-2 py-1.5 text-left text-xs font-medium text-gray-100 hover:bg-gray-600"
               >
-                Open
+                Open Plan
               </button>
               {showStart && (
                 <button
@@ -2007,7 +2017,7 @@ export function App() {
           <div className="px-2">
             <button
               data-testid="rail-settings"
-              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
+              onClick={handleOpenSystemSetup}
               className="flex h-8 w-full items-center justify-center rounded text-gray-300 hover:bg-gray-800/70 hover:text-white"
               aria-label="Settings"
               title="Settings"
@@ -2061,6 +2071,8 @@ export function App() {
                     coreActivityByWorkflow={coreActivityByWorkflow}
                     onSelectWorkflow={handleWorkflowClick}
                     onWorkflowContextMenu={handleWorkflowContextMenu}
+                    onOpenPlan={handleOpenPlanFile}
+                    onOpenSetup={handleOpenSystemSetup}
                     onManualViewport={handleManualViewport}
                   />
                   {displayedSelectedWorkflowGraph !== null && (
@@ -2317,4 +2329,3 @@ export function App() {
     </div>
   );
 }
-
