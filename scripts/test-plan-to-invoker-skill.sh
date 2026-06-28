@@ -8,6 +8,7 @@ SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
+EXAMPLES="$SKILL_DIR/references/examples.md"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
@@ -99,6 +100,7 @@ must_contain "$TUTORIAL" "Invoker MCP tool" "Tutorial must document the MCP hand
 
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
+[[ -f "$EXAMPLES" ]] || fail "expected $EXAMPLES"
 [[ -f "$CLAUDE_MD" ]] || fail "expected $CLAUDE_MD"
 
 # Installed agent skills use managed invoker-* copies, not legacy unprefixed symlinks.
@@ -169,6 +171,22 @@ must_contain "$CLAUDE_MD" "Benchmark direct output" "CLAUDE.md must document ben
 must_contain "$CLAUDE_MD" "Do not run \`git remote\`, \`env\`, \`printenv\`, \`set\`" "CLAUDE.md must forbid benchmark discovery probes"
 must_contain "$CLAUDE_MD" "Do not write \`version:\` or \`metadata:\` wrappers." "CLAUDE.md must reject legacy benchmark YAML wrappers"
 must_contain "$CLAUDE_MD" "anything that can trigger an agent/autofix" "CLAUDE.md must prevent benchmark autofix-triggering tasks"
+
+must_contain "$SKILL_MD" "Atomic-feature decomposition" "SKILL must document atomic-feature decomposition policy"
+must_contain "$SKILL_MD" "naming exactly one atomic feature" "SKILL must require a Feature heading naming exactly one atomic feature"
+must_contain "$SKILL_MD" "Thin sub-slices within the same feature are optional" "SKILL must allow optional thin sub-slices within a feature"
+must_contain "$SKILL_MD" "Feature-step dependency direction" "SKILL must retain a lightweight feature-step dependency-direction check"
+must_contain "$SKILL_MD" "Slicing an implemented diff into reviewable PRs is owned by \`skills/make-pr/SKILL.md\`" "SKILL must name make-pr as the PR-splitting owner"
+
+must_contain "$TASK_PATTERNS" "Atomic-feature decomposition contract" "Task patterns must document atomic-feature decomposition contract"
+must_contain "$TASK_PATTERNS" "exactly one atomic feature" "Task patterns must require a Feature heading naming exactly one atomic feature"
+must_contain "$TASK_PATTERNS" "Thin sub-slices within the same feature are optional" "Task patterns must allow optional thin sub-slices within a feature"
+must_contain "$TASK_PATTERNS" "Feature-step dependency direction" "Task patterns must retain a lightweight feature-step dependency-direction check"
+must_contain "$TASK_PATTERNS" "Slicing an implemented diff into reviewable PRs is owned by \`skills/make-pr/SKILL.md\`" "Task patterns must name make-pr as the PR-splitting owner"
+
+must_contain "$EXAMPLES" "Atomic-feature decomposition" "Examples must document atomic-feature decomposition"
+must_contain "$EXAMPLES" "(one atomic feature per task)" "Examples must require one atomic feature per task"
+must_contain "$EXAMPLES" "Slicing an implemented diff into reviewable PRs is owned by \`skills/make-pr/SKILL.md\`" "Examples must name make-pr as the PR-splitting owner"
 
 must_contain "$SKILL_MD" "Deterministic validation gate" "SKILL must document the primary deterministic proof gate"
 must_contain "$SKILL_MD" 'Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface' "SKILL must record the primary doctor gate"
