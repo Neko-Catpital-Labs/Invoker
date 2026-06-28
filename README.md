@@ -101,6 +101,8 @@ Direct desktop downloads are also available from GitHub Releases:
 
 The macOS npm launcher uses the `.zip` app bundle asset so it does not need to mount a `.dmg`.
 
+For a local maintainer build from the latest `master` commit, including Apple Silicon `.dmg` generation and unsigned-build quarantine removal, see [docs/local-macos-release-build.md](docs/local-macos-release-build.md).
+
 For source-based packaged installs, the repo includes an installer script:
 
 ```bash
@@ -325,6 +327,7 @@ Layer rules: [ARCHITECTURE.md](ARCHITECTURE.md). Agent/repo conventions: [CLAUDE
 | [docs/tutorial-first-agent-workflow.md](docs/tutorial-first-agent-workflow.md) | Guided first run on a toy project using Codex or Claude |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Package layering, mutation boundaries, error contracts |
 | [docs/invoker-medium-article.md](docs/invoker-medium-article.md) | Product story, glossary, mapping tables |
+| [docs/local-macos-release-build.md](docs/local-macos-release-build.md) | Local Apple Silicon `.dmg` build, commit-named copies, and quarantine removal |
 | [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md) | SQLite / sql.js single writer |
 | [docs/invoker-config-example.json](docs/invoker-config-example.json) | Example `config.json` with local and remote executor settings |
 | [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md) | SSH executor setup, target fields, and plan examples |
