@@ -38,9 +38,28 @@ export interface WorkflowStatus {
   pending: number;
 }
 
+export interface WorkflowProgressTask {
+  id: string;
+  name: string;
+  status: string;
+  phase?: string;
+  reviewUrl?: string;
+}
+
+export interface WorkflowProgress {
+  workflowId: string;
+  name: string;
+  counts: WorkflowStatus;
+  percentComplete: number;
+  tasks: WorkflowProgressTask[];
+  prUrl?: string;
+  reviewState?: string;
+}
+
 export type SurfaceEvent =
   | { type: 'task_delta'; delta: TaskDelta }
   | { type: 'workflow_status'; status: WorkflowStatus; workflowId?: string }
+  | { type: 'workflow_progress'; progress: WorkflowProgress }
   | {
       type: 'workflow_created';
       workflowId: string;

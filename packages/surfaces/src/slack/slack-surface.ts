@@ -181,6 +181,8 @@ export class SlackSurface implements Surface {
   private onCommand?: CommandHandler;
   /** Maps taskId → Slack message timestamp for in-place updates. */
   private taskMessages = new Map<string, string>();
+  /** Maps workflowId → Slack message ts for the live progress status card. */
+  private progressCardTs = new Map<string, string>();
   /** Maps thread_ts → PlanConversation for ongoing plan threads. */
   private planConversations = new Map<string, PlanConversation>();
   private cursorCommand: string;
@@ -320,6 +322,21 @@ export class SlackSurface implements Surface {
       return;
     }
 
+    if (event.type === 'workflow_progress') {
+      const message = formatSurfaceEvent(event);
+      if (!message) return;
+      const workflowId = event.progress.workflowId;
+      const channel = this.resolveChannelForWorkflow(workflowId);
+      const existingTs = this.progressCardTs.get(workflowId);
+      if (existingTs) {
+        await this.updateMessage(channel, existingTs, message);
+      } else {
+        const ts = await this.postMessage(message, channel);
+        if (ts) this.progressCardTs.set(workflowId, ts);
+      }
+      return;
+    }
+
     const message = formatSurfaceEvent(event);
     if (!message) return;
 
@@ -374,6 +391,7 @@ export class SlackSurface implements Surface {
       this.planConversations.clear();
     }
     this.taskMessages.clear();
+    this.progressCardTs.clear();
     await this.app.stop();
     this.log('slack', 'info', 'Slack bot stopped');
   }
