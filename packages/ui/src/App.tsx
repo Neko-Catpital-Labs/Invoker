@@ -1070,10 +1070,7 @@ export function App() {
       }
 
       if (event.key === 'Tab') {
-        if (
-          keyboardRegion === 'workflowGraph'
-          && isWorkflowEmptyStateTabTarget(event.target, graphSurfaceRef.current)
-        ) {
+        if (isWorkflowEmptyStateTabTarget(event.target, graphSurfaceRef.current)) {
           return;
         }
         event.preventDefault();

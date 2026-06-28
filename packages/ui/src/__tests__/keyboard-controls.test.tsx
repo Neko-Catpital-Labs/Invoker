@@ -150,6 +150,25 @@ describe('Side rail controls (component)', () => {
     expect(nextEmptyAction.defaultPrevented).toBe(false);
   });
 
+  it('keeps native Tab navigation for empty-state actions after another region was active', async () => {
+    render(<App />);
+    const emptyState = await screen.findByTestId('workflow-empty-state');
+
+    key('Tab');
+    key('Tab');
+    expect(document.querySelector('[data-keyboard-region="inspector"]')).toHaveAttribute('data-keyboard-active', 'true');
+
+    const openPlan = within(emptyState).getByRole('button', { name: 'Open Plan' });
+    openPlan.focus();
+    const nextEmptyAction = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      bubbles: true,
+      cancelable: true,
+    });
+    openPlan.dispatchEvent(nextEmptyAction);
+    expect(nextEmptyAction.defaultPrevented).toBe(false);
+  });
+
   it('navigates workflow nodes with arrows and opens workflow menu with Enter', async () => {
     await renderKeyboardFixture(mock);
 
