@@ -210,6 +210,7 @@ import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
+import { answerOwnerReadQuery } from './owner-read-query.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
 import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
@@ -1769,40 +1770,26 @@ function startHeadlessMode(): void {
             mode: 'standalone',
           };
         });
-        messageBus.onRequest('headless.query', async (req: unknown) => {
-          noteStandaloneOwnerActivity();
-          const { kind, reset } = req as { kind?: string; reset?: boolean };
-          if (kind === 'ui-perf') {
-            if (reset) {
-              headlessDeps.resetUiPerfStats?.();
-            }
-            return {
-              ownerMode: 'standalone',
-              ...(headlessDeps.getUiPerfStats?.() ?? {}),
-            };
-          }
-          if (kind === 'queue') {
-            return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
-          }
-          if (kind === 'workflow-status') {
-            return orchestrator.getWorkflowStatus();
-          }
-          if (kind === 'tasks' || kind === 'task-graph-refresh') {
-            if (kind === 'task-graph-refresh') {
-              orchestrator.syncAllFromDb();
-            }
-            return {
-              tasks: orchestrator.getAllTasks(),
-              workflows: persistence.listWorkflows(),
-              streamSequence: 0,
-              invokerHomeRoot: resolveInvokerHomeRoot(),
-            };
-          }
-          if (kind === 'action-graph') {
-            return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
-          }
-          throw new Error(`Unsupported headless query: ${String(kind)}`);
-        });
+        messageBus.onRequest('headless.query', async (req: unknown) =>
+          answerOwnerReadQuery(req, {
+            ownerModeLabel: 'standalone',
+            onActivity: noteStandaloneOwnerActivity,
+            getUiPerfStats: () => headlessDeps.getUiPerfStats?.() ?? {},
+            resetUiPerfStats: () => headlessDeps.resetUiPerfStats?.(),
+            getQueueStatus: () => orchestrator.getQueueStatus() as unknown as Record<string, unknown>,
+            getWorkflowStatus: () => orchestrator.getWorkflowStatus(),
+            getTasksSnapshot: ({ refresh }) => {
+              if (refresh) orchestrator.syncAllFromDb();
+              return {
+                tasks: orchestrator.getAllTasks(),
+                workflows: persistence.listWorkflows(),
+                streamSequence: 0,
+                invokerHomeRoot: resolveInvokerHomeRoot(),
+              };
+            },
+            getActionGraphSnapshot: () =>
+              buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
+          }));
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { workflowId, traceId } = req as { workflowId: string; traceId?: string };
@@ -3390,39 +3377,25 @@ function createEmbeddedTerminalBackendFromConfig(
         ownerId: workflowMutationOwnerId,
         mode: 'gui',
       }));
-      messageBus.onRequest('headless.query', async (req: unknown) => {
-        const { kind, reset } = req as { kind?: string; reset?: boolean };
-        if (kind === 'ui-perf') {
-          if (reset) {
-            resetUiPerfStats();
-          }
-          return {
-            ownerMode: 'gui',
-            ...getUiPerfStats(),
-          };
-        }
-        if (kind === 'queue') {
-          return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
-        }
-        if (kind === 'workflow-status') {
-          return orchestrator.getWorkflowStatus();
-        }
-        if (kind === 'tasks' || kind === 'task-graph-refresh') {
-          if (kind === 'task-graph-refresh') {
-            orchestrator.syncAllFromDb();
-          }
-          return {
-            tasks: orchestrator.getAllTasks(),
-            workflows: persistence.listWorkflows(),
-            streamSequence: getTaskDeltaStreamSequence(),
-            invokerHomeRoot: resolveInvokerHomeRoot(),
-          };
-        }
-        if (kind === 'action-graph') {
-          return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
-        }
-        throw new Error(`Unsupported headless query: ${String(kind)}`);
-      });
+      messageBus.onRequest('headless.query', async (req: unknown) =>
+        answerOwnerReadQuery(req, {
+          ownerModeLabel: 'gui',
+          getUiPerfStats: () => getUiPerfStats(),
+          resetUiPerfStats: () => resetUiPerfStats(),
+          getQueueStatus: () => orchestrator.getQueueStatus() as unknown as Record<string, unknown>,
+          getWorkflowStatus: () => orchestrator.getWorkflowStatus(),
+          getTasksSnapshot: ({ refresh }) => {
+            if (refresh) orchestrator.syncAllFromDb();
+            return {
+              tasks: orchestrator.getAllTasks(),
+              workflows: persistence.listWorkflows(),
+              streamSequence: getTaskDeltaStreamSequence(),
+              invokerHomeRoot: resolveInvokerHomeRoot(),
+            };
+          },
+          getActionGraphSnapshot: () =>
+            buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
+        }));
       messageBus.onRequest('headless.run', async (req: unknown) => {
         const { planPath, traceId } = req as { planPath: string; traceId?: string };
         logger.info(
