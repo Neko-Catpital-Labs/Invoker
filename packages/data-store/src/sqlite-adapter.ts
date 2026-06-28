@@ -124,6 +124,13 @@ interface SQLiteAdapterOptions {
   outputDir?: string;
   /** Max retained activity_log rows; 0 disables retention. */
   activityLogMaxRows?: number;
+  /**
+   * Open WAL in exclusive locking mode: the wal-index lives in heap memory and
+   * no `-shm` file is created, making the process immune to the SIGBUS that a
+   * truncated memory-mapped `-shm` causes. Requires this process to be the SOLE
+   * opener of the database file — a concurrent open is rejected with SQLITE_BUSY.
+   */
+  exclusiveLocking?: boolean;
 }
 
 export type WorkflowMutationPriority = 'high' | 'normal';
@@ -339,6 +346,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private lastWorkflowTaskSnapshotStats: Record<string, unknown> | null = null;
   private readonly activityLogMaxRows: number;
   private activityLogWritesSincePrune = 0;
+  private readonly exclusiveLocking: boolean;
 
   /** Use SQLiteAdapter.create() instead. */
   private constructor(db: DatabaseSync, dbPath: string | null, options?: SQLiteAdapterOptions) {
@@ -349,6 +357,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.outputTailLimit = options?.outputTailLimit ?? 100;
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
+    this.exclusiveLocking = options?.exclusiveLocking === true;
     this.configureConnection(dbPath !== null);
     if (!this.readOnly) {
       this.initSchema();
@@ -366,6 +375,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
   static async create(dbPath: string = ':memory:', options?: SQLiteAdapterOptions): Promise<SQLiteAdapter> {
     const isFile = dbPath !== ':memory:';
     const requestWritable = options?.readOnly !== true;
+
+    // Exclusive (heap wal-index, no -shm) locking is reserved for the sole
+    // opener: only the writable owner of a file-backed database may request it.
+    // A read-only or non-owner caller opting in would contend with the real
+    // owner (SQLITE_BUSY) or get a cryptic open failure.
+    if (isFile && options?.exclusiveLocking === true && (!requestWritable || !options?.ownerCapability)) {
+      throw new Error(
+        'exclusiveLocking requires the writable owner process to be the sole opener of the database file.',
+      );
+    }
 
     // Enforce owner-only writable initialization for file-backed databases
     if (isFile && requestWritable && !options?.ownerCapability) {
@@ -416,6 +435,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.nativeDb.exec('PRAGMA busy_timeout = 5000');
     this.nativeDb.exec('PRAGMA foreign_keys = ON');
     if (fileBacked) {
+      if (this.exclusiveLocking) {
+        // Heap wal-index (no -shm file). MUST precede `journal_mode = WAL`.
+        this.nativeDb.exec('PRAGMA locking_mode = EXCLUSIVE');
+      }
       this.nativeDb.exec('PRAGMA journal_mode = WAL');
       this.nativeDb.exec('PRAGMA synchronous = FULL');
       this.nativeDb.exec('PRAGMA wal_autocheckpoint = 1000');
