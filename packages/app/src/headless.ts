@@ -13,8 +13,11 @@ import type { BundledSkillsInstallMode } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import {
+  AUTO_FIX_WORKER_KIND,
   TaskRunner,
   acquireWorkerLock,
+  createWorkerRegistry,
+  registerAutoFixWorker,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
 } from '@invoker/execution-engine';
@@ -34,7 +37,6 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
-import { createAutoFixRecoveryTick, RECOVERY_WORKER_KIND } from './workers/auto-fix-recovery.js';
 import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
 import {
   collectRecoveryWorkerStatus,
@@ -417,89 +419,78 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
   }
 }
 
-/**
- * Worker kinds exposed to the CLI.
- */
-const HEADLESS_WORKER_KINDS: ReadonlyArray<{ kind: string; available: boolean; note: string }> = [
-  {
-    kind: 'autofix',
-    available: true,
-    note: 'scans persisted failed tasks and submits normal auto-fix command intents',
-  },
-];
-
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
-  if (subCommand === 'autofix') {
-    // Single-instance guard across both doors (this dev door and the production
-    // `invoker-cli worker autofix`): refuse rather than run a recovery scan that
-    // competes with a worker already holding the cross-process lock.
-    let lock;
-    try {
-      lock = acquireWorkerLock({ kind: RECOVERY_WORKER_KIND, homeRoot: resolveInvokerHomeRoot(), logger: deps.logger });
-    } catch (err) {
-      if (err instanceof WorkerLockHeldError) {
-        // Surface via the app's throw-based error convention.
-        throw new Error(err.message);
-      }
-      throw err;
-    }
-    try {
-      const tick = createAutoFixRecoveryTick({
-        store: deps.persistence,
-        submitter: {
-          submit: (workflowId, priority, channel, mutationArgs) => (
-            deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority)
-          ),
-        },
-        logger: deps.logger,
-        defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
-        getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
-      });
-      await tick({
-        identity: { kind: RECOVERY_WORKER_KIND, instanceId: 'headless-worker-autofix' },
-        reason: 'manual',
-        tickNumber: 1,
-      });
-    } finally {
-      // Release deterministically so a clean run never leaves a stale lock that
-      // blocks the next legitimate start.
-      lock.release();
-    }
-    process.stdout.write('Auto-fix worker scan completed.\n');
-    return;
-  }
-
-  if (subCommand !== 'list' && subCommand !== 'status') {
-    throw new Error(`Unknown worker sub-command: "${subCommand}". Use: autofix, list, status`);
-  }
+  const registry = registerAutoFixWorker(createWorkerRegistry());
 
   if (subCommand === 'list') {
     process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
-    for (const worker of HEADLESS_WORKER_KINDS) {
-      const status = worker.available ? 'available' : 'unavailable';
-      process.stdout.write(`  ${worker.kind} — ${status} (${worker.note})\n`);
+    for (const worker of registry.list()) {
+      process.stdout.write(`  ${worker.kind} — available (${worker.note})\n`);
     }
     return;
   }
 
-  const flags = parseQueryFlags(args.slice(1));
-  const status = collectRecoveryWorkerStatus(deps.persistence);
-  const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
-  switch (flags.output) {
-    case 'label':
-      process.stdout.write(`${status.workerId}\n`);
-      break;
-    case 'json':
-      process.stdout.write(formatAsJson(status) + '\n');
-      break;
-    case 'jsonl':
-      process.stdout.write(formatAsJsonl([status]) + '\n');
-      break;
-    default:
-      process.stdout.write(formatRecoveryWorkerStatus(status) + '\n');
-      break;
+  if (subCommand === 'status') {
+    const flags = parseQueryFlags(args.slice(1));
+    const status = collectRecoveryWorkerStatus(deps.persistence);
+    const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+    switch (flags.output) {
+      case 'label':
+        process.stdout.write(`${status.workerId}\n`);
+        break;
+      case 'json':
+        process.stdout.write(formatAsJson(status) + '\n');
+        break;
+      case 'jsonl':
+        process.stdout.write(formatAsJsonl([status]) + '\n');
+        break;
+      default:
+        process.stdout.write(formatRecoveryWorkerStatus(status) + '\n');
+        break;
+    }
+    return;
   }
+
+  const definition = registry.get(subCommand);
+  if (!definition) {
+    const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+    throw new Error(`Unknown worker kind: "${subCommand}". Use: ${knownKinds}, list, status`);
+  }
+
+  let lock;
+  try {
+    lock = acquireWorkerLock({ kind: definition.kind, homeRoot: resolveInvokerHomeRoot(), logger: deps.logger });
+  } catch (err) {
+    if (err instanceof WorkerLockHeldError) {
+      // Surface via the app's throw-based error convention.
+      throw new Error(err.message);
+    }
+    throw err;
+  }
+  try {
+    const worker = definition.factory({
+      store: deps.persistence,
+      submitter: {
+        submit: (workflowId, priority, channel, mutationArgs) => (
+          deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority)
+        ),
+      },
+      logger: deps.logger,
+      autoFix: {
+        defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+        getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+      },
+    });
+    await worker.tick('manual');
+    await worker.stop();
+  } finally {
+    // Release deterministically so a clean run never leaves a stale lock that
+    // blocks the next legitimate start.
+    lock.release();
+  }
+  const label = definition.kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : definition.kind;
+  process.stdout.write(`${label} worker scan completed.\n`);
 }
 
 function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
@@ -609,7 +600,7 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
-  worker [autofix|list|status]                        Run/list worker kinds (autofix scans failed tasks)
+  worker [kind|list|status]                           Run/list registry worker kinds (autofix scans failed tasks)
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
