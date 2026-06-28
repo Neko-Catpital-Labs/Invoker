@@ -261,8 +261,8 @@ export interface OrchestratorPersistence {
     status: string;
     createdAt: string;
     updatedAt: string;
-    baseBranch?: string;
     repoUrl?: string;
+    baseBranch?: string;
     onFinish?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
@@ -278,8 +278,8 @@ export interface OrchestratorPersistence {
       status: string;
       createdAt: string;
       updatedAt: string;
-      baseBranch?: string;
       repoUrl?: string;
+      baseBranch?: string;
       onFinish?: string;
       mergeMode?: 'manual' | 'automatic' | 'external_review';
       externalDependencies?: ExternalDependency[];
@@ -3710,16 +3710,13 @@ export class Orchestrator {
   deleteWorkflow(workflowId: string): void {
     this.syncAllFromDb();
 
-    const deletedWorkflow = this.persistence.loadWorkflow?.(workflowId);
 
-    // 1. Detach direct dependents before the delete so they inherit the
-    // deleted workflow's parent branch instead of becoming permanently blocked
-    // on a missing prerequisite.
+    // 1. Detach direct dependents before the delete so they retarget to the
+    // repo default branch instead of becoming permanently blocked on a missing
+    // prerequisite.
     const directDependents = this.collectDirectDependentWorkflowIds(workflowId);
     for (const dependentWorkflowId of directDependents) {
-      this.detachWorkflowInternal(dependentWorkflowId, workflowId, {
-        upstreamWorkflow: deletedWorkflow,
-      });
+      this.detachWorkflowInternal(dependentWorkflowId, workflowId);
     }
 
     // 2. Collect affected tasks before DB delete (needed for deltas and scheduler cleanup)
@@ -3747,9 +3744,7 @@ export class Orchestrator {
 
   detachWorkflow(workflowId: string, upstreamWorkflowId: string): void {
     this.syncAllFromDb();
-    this.detachWorkflowInternal(workflowId, upstreamWorkflowId, {
-      upstreamWorkflow: this.persistence.loadWorkflow?.(upstreamWorkflowId),
-    });
+    this.detachWorkflowInternal(workflowId, upstreamWorkflowId);
   }
 
   /**
@@ -4466,15 +4461,10 @@ export class Orchestrator {
       .filter((t): t is TaskState => !!t);
   }
 
+
   private detachWorkflowInternal(
     workflowId: string,
     upstreamWorkflowId: string,
-    opts?: {
-      upstreamWorkflow?: {
-        baseBranch?: string;
-        featureBranch?: string;
-      };
-    },
   ): void {
     if (workflowId === upstreamWorkflowId) {
       throw new Error(`Cannot detach workflow ${workflowId} from itself`);
@@ -4537,10 +4527,17 @@ export class Orchestrator {
       detachedProvenance.push(entry);
     }
 
+    const repoUrl = targetWorkflow?.repoUrl?.trim();
+    if (!repoUrl) {
+      throw new Error(`Cannot detach workflow ${workflowId}: missing repo URL for default branch resolution.`);
+    }
+    const baseBranchAfterDetach = this.resolveRepoDefaultBranch(repoUrl);
+
     this.taskRepository.updateWorkflow(workflowId, {
       externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
       externalDependencyChanges: dependencyChanges,
       detachedExternalDependencies: detachedProvenance.length > 0 ? detachedProvenance : undefined,
+      baseBranch: baseBranchAfterDetach,
     });
 
     const eventTask = this.getMergeNode(workflowId) ?? targetTasks[0];
@@ -4555,18 +4552,6 @@ export class Orchestrator {
       upstreamWorkflowId,
       action: 'removed',
     });
-
-    const upstreamFeatureBranch = opts?.upstreamWorkflow?.featureBranch?.trim();
-    const upstreamBaseBranch = opts?.upstreamWorkflow?.baseBranch?.trim();
-    const targetBaseBranch = targetWorkflow?.baseBranch?.trim();
-    if (
-      upstreamFeatureBranch
-      && upstreamBaseBranch
-      && targetBaseBranch
-      && targetBaseBranch === upstreamFeatureBranch
-    ) {
-      this.taskRepository.updateWorkflow(workflowId, { baseBranch: upstreamBaseBranch });
-    }
 
     const affectedWorkflowIds = [workflowId, ...this.collectDownstreamWorkflowIds(workflowId)];
     for (const affectedWorkflowId of affectedWorkflowIds) {
