@@ -37,7 +37,7 @@ describe('App launch (component)', () => {
     render(<App />);
     expect(screen.getByTestId('workflow-empty-state')).toBeInTheDocument();
     expect(screen.getByText('Drive Invoker from a goal')).toBeInTheDocument();
-    expect(screen.getByText('plan "fix a failing test"')).toBeInTheDocument();
+    expect(screen.getByText('plan "Fix a failing test"')).toBeInTheDocument();
   });
 
   it('renders left rail navigation and workflow controls', () => {

@@ -112,6 +112,13 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   return Boolean(target.closest(EDITABLE_SELECTOR));
 }
 
+function isWorkflowEmptyStateTabTarget(target: EventTarget | null, graphSurface: HTMLElement | null): boolean {
+  if (!(target instanceof HTMLElement) || !graphSurface) return false;
+  const emptyState = graphSurface.querySelector<HTMLElement>('[data-testid="workflow-empty-state"]');
+  if (!emptyState) return false;
+  return target === graphSurface || emptyState.contains(target);
+}
+
 function normalizedSearchText(value: string | undefined): string {
   return (value ?? '').toLowerCase();
 }
@@ -1063,6 +1070,12 @@ export function App() {
       }
 
       if (event.key === 'Tab') {
+        if (
+          keyboardRegion === 'workflowGraph'
+          && isWorkflowEmptyStateTabTarget(event.target, graphSurfaceRef.current)
+        ) {
+          return;
+        }
         event.preventDefault();
         const currentIndex = KEYBOARD_REGION_ORDER.indexOf(keyboardRegion);
         const nextIndex = event.shiftKey

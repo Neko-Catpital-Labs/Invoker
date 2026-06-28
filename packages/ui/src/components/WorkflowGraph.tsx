@@ -59,13 +59,13 @@ function WorkflowGraphEmptyState({
   onOpenSetup?: () => void;
 }): JSX.Element {
   const suggestedCommands = [
-    'plan "fix a failing test"',
-    'plan "add GitHub OAuth"',
-    'plan "improve the README"',
+    'plan "Fix a failing test"',
+    'plan "Add a README example"',
+    'plan "Refactor auth module"',
     'inspect repo',
   ];
   const firstRunSteps = [
-    ['Describe a goal', 'Start from plain language or open an Invoker YAML/JSON plan.'],
+    ['Describe a goal', 'Tell Invoker what you want to accomplish.'],
     ['Review the plan', 'Check tasks, dependencies, gates, and verification before execution.'],
     ['Approve and run', 'Keep control at important gates before anything mutates.'],
   ];
@@ -131,8 +131,11 @@ function WorkflowGraphEmptyState({
           </div>
 
           <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-300">
-            Invoker creates a plan first, then executes with your approval. Open an existing
-            Invoker YAML or JSON plan from the rail, or start from a goal when planning is available.
+            Invoker plans first, then executes with your approval. You stay in control of every
+            change before it mutates a repo.
+          </p>
+          <p className="mt-2 max-w-3xl text-xs leading-5 text-slate-500">
+            Already have a plan? Use Open Plan to import an Invoker YAML or JSON file.
           </p>
 
           <div className="mt-4">

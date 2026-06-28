@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, type Mock } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import { CAMERA_LOCK_PREFERENCE_STORAGE_KEY } from '../lib/graph-camera.js';
@@ -123,6 +123,31 @@ describe('Side rail controls (component)', () => {
     expect(document.querySelector('[data-keyboard-region="inspector"]')).toHaveAttribute('data-keyboard-active', 'true');
     key('Tab');
     expect(document.querySelector('[data-keyboard-region="bottomBar"]')).toHaveAttribute('data-keyboard-active', 'true');
+  });
+
+  it('allows native Tab navigation inside the first-run empty state actions', async () => {
+    render(<App />);
+    const emptyState = await screen.findByTestId('workflow-empty-state');
+    const surface = screen.getByTestId('workflow-graph-surface');
+
+    surface.focus();
+    const enterEmptyActions = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      bubbles: true,
+      cancelable: true,
+    });
+    surface.dispatchEvent(enterEmptyActions);
+    expect(enterEmptyActions.defaultPrevented).toBe(false);
+
+    const openPlan = within(emptyState).getByRole('button', { name: 'Open Plan' });
+    openPlan.focus();
+    const nextEmptyAction = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      bubbles: true,
+      cancelable: true,
+    });
+    openPlan.dispatchEvent(nextEmptyAction);
+    expect(nextEmptyAction.defaultPrevented).toBe(false);
   });
 
   it('navigates workflow nodes with arrows and opens workflow menu with Enter', async () => {
