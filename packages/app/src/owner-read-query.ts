@@ -1,6 +1,8 @@
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
+import { isHeadlessReadOnlyCommand } from './headless-command-classification.js';
+import { runReadOnlyHeadlessQueryToString, type HeadlessQueryDeps } from './headless-query-list.js';
 
 /**
  * Shared dispatcher for the owner's `headless.query` IPC channel.
@@ -104,6 +106,30 @@ export function answerOwnerReadQuery(
     default:
       throw new Error(`Unsupported headless query: ${String(kind)}`);
   }
+}
+
+/**
+ * Async wrapper around {@link answerOwnerReadQuery} that also answers the
+ * generic `cli-query` kind: it runs a read-only headless command on the owner
+ * and returns its rendered text, so a non-owner caller never opens the database
+ * file. Mutating commands are refused. Every other kind falls through to the
+ * synchronous structured dispatcher.
+ */
+export async function answerOwnerHeadlessQuery(
+  req: unknown,
+  handlers: OwnerReadQueryHandlers,
+  queryDeps: HeadlessQueryDeps,
+): Promise<Record<string, unknown>> {
+  const body = (req ?? {}) as { kind?: string; args?: unknown };
+  if (body.kind === 'cli-query') {
+    const args = Array.isArray(body.args) ? body.args.map((arg) => String(arg)) : [];
+    if (!isHeadlessReadOnlyCommand(args)) {
+      throw new Error(`Refusing to delegate non-read-only command via cli-query: ${args[0] ?? '<missing>'}`);
+    }
+    handlers.onActivity?.();
+    return { output: await runReadOnlyHeadlessQueryToString(args, queryDeps) };
+  }
+  return answerOwnerReadQuery(req, handlers);
 }
 
 type ReadOrchestrator = Pick<
