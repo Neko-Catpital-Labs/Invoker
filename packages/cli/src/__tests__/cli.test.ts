@@ -6,7 +6,7 @@ import { LocalBus } from '@invoker/transport';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../index.js';
-import { HANDOFF_PROMPT_DESCRIPTION, handoffPrompt, submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
+import { HANDOFF_PROMPT_DESCRIPTION, handoffPrompt, resolveCliInvocation, submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
 
 const repoRoot = resolve(__dirname, '../../../..');
 const cliPath = resolve(repoRoot, 'packages/cli/dist/index.js');
@@ -264,6 +264,24 @@ tasks:
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('Invalid YAML');
+  });
+
+  it('resolves the compiled SEA invocation without re-prepending the executable path', () => {
+    const invocation = resolveCliInvocation('/v/invoker-cli', '/v/invoker-cli', ['run', fixturePlan, '--live', '--json']);
+
+    expect(invocation).toEqual({
+      command: '/v/invoker-cli',
+      args: ['run', fixturePlan, '--live', '--json'],
+    });
+  });
+
+  it('resolves the dev invocation by prepending the JS entry path to node', () => {
+    const invocation = resolveCliInvocation('/usr/bin/node', '/repo/dist/index.js', ['run', fixturePlan, '--json']);
+
+    expect(invocation).toEqual({
+      command: '/usr/bin/node',
+      args: ['/repo/dist/index.js', 'run', fixturePlan, '--json'],
+    });
   });
 
   it('submits MCP plans in live mode by default', async () => {
