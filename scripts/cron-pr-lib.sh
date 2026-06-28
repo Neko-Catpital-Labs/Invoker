@@ -49,26 +49,26 @@ log_line() {
 # ---------------------------------------------------------------------------
 
 _cron_lock_reap_stale() {
-  # Steal a mkdir lock only when its holder is gone. The holder records its PID
-  # in the lock dir; we reap on a dead PID and NEVER on age alone, so a healthy
-  # long run keeps the lock no matter how long it takes (age-based reaping would
-  # break mutual exclusion once a run crossed the threshold). flock has no such
-  # risk (the kernel releases the fd), so this only applies to the mkdir path.
+  # Steal a mkdir lock ONLY when its holder is gone AND the lock has gone stale
+  # by age. The holder records its PID in the lock dir and a background heartbeat
+  # refreshes the dir mtime, so a healthy long run is never reaped no matter how
+  # long it takes — age alone must never break mutual exclusion. We therefore
+  # require BOTH a dead PID and an expired mtime before reaping. flock has no
+  # such risk (the kernel releases the fd), so this only applies to the mkdir path.
   local lockdir="$1"
   local pid_file="$lockdir/pid"
-  local holder=""
+  local holder="" max_age now mtime
   [ -f "$pid_file" ] && holder="$(cat "$pid_file" 2>/dev/null || true)"
-  if [ -n "$holder" ]; then
-    kill -0 "$holder" 2>/dev/null && return 0   # holder alive — do not reap
-    rm -rf "$lockdir" 2>/dev/null || true
+  # Holder still alive — never reap, regardless of mtime/age.
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
     return 0
   fi
-  # No PID recorded (a pre-PID or garbled lock): fall back to an age threshold so
-  # a crashed legacy holder is still cleaned up eventually.
-  local max_age now mtime
+  # Holder dead (or no PID recorded): reap only once past the staleness window.
   max_age="${INVOKER_PR_CRON_LOCK_STALE_SECS:-3600}"
   now="$(date +%s)"
-  mtime="$(stat -f %m "$lockdir" 2>/dev/null || stat -c %Y "$lockdir" 2>/dev/null || echo "$now")"
+  # GNU `stat -c %Y` first (Linux owner host), BSD `stat -f %m` as the fallback;
+  # the BSD form first would mis-parse on GNU (-f means --file-system there).
+  mtime="$(stat -c %Y "$lockdir" 2>/dev/null || stat -f %m "$lockdir" 2>/dev/null || echo "$now")"
   if [ "$((now - mtime))" -ge "$max_age" ]; then
     rm -rf "$lockdir" 2>/dev/null || true
   fi
@@ -84,7 +84,8 @@ cron_lock() {
     return 0
   fi
 
-  # Portable fallback: atomic mkdir lock, reaped only on a dead holder PID.
+  # Portable fallback: atomic mkdir lock, reaped only when its holder PID is dead
+  # AND the lock is stale by age (see _cron_lock_reap_stale).
   local lockdir="${CRON_LOCK}.d"
   [ -d "$lockdir" ] && _cron_lock_reap_stale "$lockdir"
   if ! mkdir "$lockdir" 2>/dev/null; then
@@ -93,8 +94,15 @@ cron_lock() {
   fi
   printf '%s\n' "$$" > "$lockdir/pid"
   CRON_LOCK_DIR="$lockdir"
+  # Heartbeat: refresh the lock dir mtime every ~60s so a healthy long-running
+  # job keeps the lock fresh and is never reaped on age (mutual exclusion holds
+  # even for runs longer than INVOKER_PR_CRON_LOCK_STALE_SECS).
+  ( while :; do sleep 60; touch "$lockdir" 2>/dev/null || exit 0; done ) &
+  local hb_pid=$!
+  CRON_LOCK_HEARTBEAT_PID="$hb_pid"
+  # Release on exit: stop the heartbeat, drop our PID file, then remove the dir.
   # shellcheck disable=SC2064
-  trap 'rm -rf "'"$lockdir"'" 2>/dev/null || true' EXIT
+  trap 'kill "'"$hb_pid"'" 2>/dev/null || true; rm -f "'"$lockdir"'/pid" 2>/dev/null || true; rmdir "'"$lockdir"'" 2>/dev/null || true' EXIT
 }
 
 # ---------------------------------------------------------------------------
