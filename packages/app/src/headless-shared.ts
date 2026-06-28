@@ -77,6 +77,8 @@ export interface HeadlessDeps {
    * environments without an owner-mode TaskRunner (peer mode, tests).
    */
   ownerTaskRunnerProvider?: () => TaskRunner | null;
+  /** Main process dist directory (`__dirname` of main.js); used to locate the built web UI. */
+  appRootDir?: string;
 }
 
 export const RESET = '\x1b[0m';
@@ -132,7 +134,6 @@ export function buildHeadlessApiServerDeps(
     },
   };
 }
-
 export function createHeadlessExecutor(
   deps: HeadlessDeps,
   callbackOverrides?: Partial<ConstructorParameters<typeof TaskRunner>[0]['callbacks']>,
