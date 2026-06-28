@@ -2091,10 +2091,15 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     expect(remoteBranches).toContain('invoker/task-push');
   });
 
-  it('returns an error message when branch does not exist on remote', async () => {
+  it('pushes HEAD when the named local branch ref is missing', async () => {
+    execSync('git checkout --detach HEAD', { cwd: cloneDir });
+    execSync('git commit --allow-empty -m "detached task result"', { cwd: cloneDir });
+
     const err = await executor.testPushBranchToRemote(cloneDir, 'nonexistent-branch');
-    expect(err).toBeDefined();
-    expect(typeof err).toBe('string');
+    expect(err).toBeUndefined();
+
+    const remoteBranches = execSync('git branch', { cwd: originDir }).toString();
+    expect(remoteBranches).toContain('nonexistent-branch');
   });
 
   it('returns an error message when remote is unreachable', async () => {

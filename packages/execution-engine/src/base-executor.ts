@@ -857,19 +857,26 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         ? this.entries.get(executionId)?.request.inputs.branchRepoUrl
         : undefined);
       const branchRepoUrl = requestBranchRepoUrl?.trim();
+      const remote = branchRepoUrl ? BaseExecutor.BRANCH_REMOTE_NAME : 'origin';
       if (branchRepoUrl) {
         await ensureRemoteUrl({
           cwd,
-          remote: BaseExecutor.BRANCH_REMOTE_NAME,
+          remote,
           url: branchRepoUrl,
           context: { caller: `${this.type}.pushBranchToRemote`, detail: branch },
         });
-        await this.execGitSimpleWithNetworkTimeout(
-          ['push', '--force-with-lease', BaseExecutor.BRANCH_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
-          cwd,
-        );
-      } else {
-        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', 'origin', `${branch}:refs/heads/${branch}`], cwd);
+      }
+      try {
+        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', remote, `${branch}:refs/heads/${branch}`], cwd);
+      } catch (err) {
+        if (!this.isMissingSourceRefspecError(err)) throw err;
+        if (executionId) {
+          this.emitOutput(
+            executionId,
+            `[${this.type}] Local ref ${branch} is missing; pushing current HEAD to refs/heads/${branch}.\n`,
+          );
+        }
+        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', remote, `HEAD:refs/heads/${branch}`], cwd);
       }
       return undefined;
     } catch (err) {
@@ -878,6 +885,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       if (executionId) this.emitOutput(executionId, msg);
       return err instanceof Error ? err.message : String(err);
     }
+  }
+
+  private isMissingSourceRefspecError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    return /src refspec .* does not match any/i.test(message);
   }
 
   protected isTransientGitTransportError(error: string): boolean {
