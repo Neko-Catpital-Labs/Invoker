@@ -1,0 +1,143 @@
+# Anti-Pattern H: Same-feature sub-slice depends on a later Feature step
+# Expected outcome: skill-doctor fails lint-task-atomicity with a feature-step
+# direction violation because an earlier Feature step depends on a later Feature
+# step within the same atomic feature and no "Feature step exception: allowed"
+# override is present.
+
+name: "Anti-pattern: feature-step direction violation"
+description: |
+  Standalone workflow waiver:
+  - This fixture intentionally keeps two same-feature prompt sub-slices in one
+    workflow so the feature-step direction lint can reject the backward dependency.
+  Demonstrates a feature-step direction violation where a sub-slice at Feature
+  step 1 depends on a same-feature sub-slice at Feature step 2 without an
+  explicit "Feature step exception: allowed" override.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/EdbertChan/Invoker
+baseBranch: master
+featureBranch: plan/anti-pattern-feature-step-direction-violation
+
+tasks:
+  - id: prompt-edit-contract-surface
+    description: |
+      Review claim:
+      - Define the renderer contract surface for prompt editing.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The contract change is local to the renderer typing surface.
+      Slice rationale:
+      - The contract sub-slice should land before the activation sub-slice.
+      Architectural effect:
+      - Renderer typing gains a prompt-edit entry point without behavior change.
+      Goal:
+      - Define the renderer contract surface for prompt editing.
+      Motivation:
+      - Keep the contract reviewable before activation.
+      Alternative considerations:
+      - Option A (chosen): contract sub-slice first.
+      - Option B: bundle contract and activation in one sub-slice.
+      Implementation details:
+      - Update packages/ui types for the prompt-edit contract surface.
+      Non-goals:
+      - Do not activate UI behavior in this sub-slice.
+      Feature: prompt-edit
+      Feature state: active
+      Feature step: 1
+      Files:
+      - packages/ui/src/types/window-invoker.d.ts
+      Change types:
+      - packages/ui/src/types/window-invoker.d.ts: modify
+      Acceptance criteria:
+      - Pass condition: renderer types expose the prompt-edit contract.
+    prompt: |
+      Review claim:
+      - Define the renderer contract surface for prompt editing.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change scoped to packages/ui/src/types/window-invoker.d.ts.
+      Slice rationale:
+      - Activation belongs in a later same-feature sub-slice.
+      Architectural effect:
+      - Renderer typing gains a prompt-edit entry point without behavior change.
+      Goal:
+      - Define the renderer contract surface for prompt editing in
+        packages/ui/src/types/window-invoker.d.ts.
+      Motivation:
+      - Keep the contract sub-slice reviewable before activation.
+      Alternative considerations:
+      - Option A (chosen): contract sub-slice first.
+      - Option B: bundle contract and activation in one sub-slice.
+      Implementation details:
+      - Assume no prior context. Modify packages/ui/src/types/window-invoker.d.ts
+        to expose the prompt-edit contract entry point.
+      Non-goals:
+      - Do not activate UI behavior in this sub-slice.
+      Acceptance criteria:
+      - Pass condition: exits 0 after the renderer typing compiles.
+    dependencies: [prompt-edit-ui-activation]
+
+  - id: prompt-edit-ui-activation
+    description: |
+      Review claim:
+      - Activate TaskPanel prompt editing using the renderer contract surface.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Activation reuses the existing command-edit UX primitives.
+      Slice rationale:
+      - Activation should follow the contract sub-slice, not precede it.
+      Architectural effect:
+      - TaskPanel can drive the prompt-edit path through the renderer contract.
+      Goal:
+      - Activate TaskPanel prompt editing using the renderer contract surface.
+      Motivation:
+      - Land activation only after the contract is in place.
+      Alternative considerations:
+      - Option A (chosen): activation sub-slice depends on contract sub-slice.
+      - Option B: bundle activation with the contract sub-slice.
+      Implementation details:
+      - Update packages/ui/src/components/TaskPanel.tsx to call the prompt-edit
+        contract path.
+      Non-goals:
+      - Do not modify the renderer typing in this sub-slice.
+      Feature: prompt-edit
+      Feature state: active
+      Feature step: 2
+      Files:
+      - packages/ui/src/components/TaskPanel.tsx
+      Change types:
+      - packages/ui/src/components/TaskPanel.tsx: modify
+      Acceptance criteria:
+      - Pass condition: TaskPanel drives the prompt-edit contract path.
+    prompt: |
+      Review claim:
+      - Activate TaskPanel prompt editing using the renderer contract surface.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the change scoped to packages/ui/src/components/TaskPanel.tsx.
+      Slice rationale:
+      - The renderer contract sub-slice is the dependency, not the other way
+        around.
+      Architectural effect:
+      - TaskPanel can drive the prompt-edit path through the renderer contract.
+      Goal:
+      - Activate TaskPanel prompt editing using the renderer contract surface in
+        packages/ui/src/components/TaskPanel.tsx.
+      Motivation:
+      - Land activation only after the contract sub-slice is in place.
+      Alternative considerations:
+      - Option A (chosen): activation depends on contract sub-slice.
+      - Option B: bundle activation with the contract sub-slice.
+      Implementation details:
+      - Assume no prior context. Modify
+        packages/ui/src/components/TaskPanel.tsx to call the prompt-edit
+        contract path.
+      Non-goals:
+      - Do not modify the renderer typing in this sub-slice.
+      Acceptance criteria:
+      - Pass condition: exits 0 after TaskPanel drives the prompt-edit path.
+    dependencies: []

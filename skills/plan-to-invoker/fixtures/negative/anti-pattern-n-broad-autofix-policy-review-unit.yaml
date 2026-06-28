@@ -32,7 +32,7 @@ tasks:
       - Add policy contracts, scan failed tasks, validate retry and stale-state eligibility, suppress duplicate open fix intents, submit a fix-with-agent mutation intent, and cover behavior with tests.
       Non-goals:
       - Do not add a worker registry or alter non-auto-fix worker behavior.
-      Layer: domain
+      Feature: domain
       Feature state: active
       Files:
       - packages/app/src/workers/auto-fix-recovery.ts
@@ -96,7 +96,7 @@ tasks:
       - Execute root-level test gate after implementation task.
       Non-goals:
       - Do not modify source files.
-      Layer: app_regression
+      Feature: app_regression
       Feature state: active
     command: "pnpm run test:all"
     dependencies: [implement-broad-autofix-recovery-policy]
