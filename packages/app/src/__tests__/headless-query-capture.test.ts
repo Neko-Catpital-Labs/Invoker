@@ -31,6 +31,31 @@ describe('runReadOnlyHeadlessQueryToString', () => {
     }
   });
 
+  it('captures review-gate output instead of writing to process.stdout', async () => {
+    const deps = makeQueryDeps(() => []);
+    deps.persistence = {
+      ...deps.persistence,
+      findReviewGateByPr: () => ({
+        workflowId: 'wf-review',
+        reviewId: 123,
+        workflowStatus: 'running',
+        workflowGeneration: 7,
+        branch: 'stack/review',
+      }),
+    } as unknown as HeadlessQueryDeps['persistence'];
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    try {
+      const output = await runReadOnlyHeadlessQueryToString(
+        ['query', 'review-gate', '123', '--output', 'label'],
+        deps,
+      );
+      expect(output).toBe('wf-review\n');
+      expect(writeSpy).not.toHaveBeenCalled();
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
   it('maps the deprecated alias `list` to `query workflows`', async () => {
     const deps = makeQueryDeps(() => [{ id: 'wf-9' }]);
     const output = await runReadOnlyHeadlessQueryToString(['list', '--output', 'label'], deps);

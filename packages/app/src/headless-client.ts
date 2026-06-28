@@ -168,14 +168,46 @@ function isGenericDelegatableReadCommand(args: string[]): boolean {
  * owner is present, letting the caller open the database directly (it is then
  * the sole opener — safe).
  */
-async function delegateGenericReadQuery(args: string[], bus: MessageBus): Promise<boolean> {
+async function delegateGenericReadQuery(
+  args: string[],
+  bus: MessageBus,
+  refreshMessageBus?: () => Promise<MessageBus>,
+): Promise<boolean> {
   if (!isGenericDelegatableReadCommand(args)) return false;
-  const owner = await tryPingHeadlessOwner(bus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
-  if (!owner) return false;
-  const response = await tryDelegateQuery(bus, { kind: 'cli-query', args }, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
-  if (!response || typeof response.output !== 'string') return false;
-  process.stdout.write(response.output);
-  return true;
+
+  if (!refreshMessageBus) {
+    const owner = await tryPingHeadlessOwner(bus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
+    if (!owner) return false;
+  }
+
+  const resolver = refreshMessageBus
+    ? createOwnerResolver(
+      { messageBus: bus, refreshMessageBus, ensureStandaloneOwner: async () => {} },
+      { discoveryTimeoutMs: GENERIC_READ_OWNER_PING_TIMEOUT_MS },
+    )
+    : null;
+  const ownerResult = resolver
+    ? await resolver.waitForAny(READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS)
+    : { resolved: true as const, bus };
+  if (!ownerResult.resolved) return false;
+  let messageBus = ownerResult.bus;
+  const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const response = await tryDelegateQuery(
+      messageBus,
+      { kind: 'cli-query', args },
+      READ_ONLY_QUERY_REQUEST_TIMEOUT_MS,
+    );
+    if (response && typeof response.output === 'string') {
+      process.stdout.write(response.output);
+      return true;
+    }
+    if (!refreshMessageBus) break;
+    messageBus = await refreshMessageBus();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error('Live owner is present but did not serve cli-query');
 }
 
 async function delegateReadOnlyQuery(
@@ -187,7 +219,7 @@ async function delegateReadOnlyQuery(
   const isQueue = (args[0] === 'query' && args[1] === 'queue') || args[0] === 'queue';
   const isActionGraph = args[0] === 'query' && args[1] === 'action-graph';
   if (!isUiPerf && !isQueue && !isActionGraph) {
-    return delegateGenericReadQuery(args, bus);
+    return delegateGenericReadQuery(args, bus, refreshMessageBus);
   }
 
   // Use the resolver to wait for any reachable owner

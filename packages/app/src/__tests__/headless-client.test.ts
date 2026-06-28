@@ -404,6 +404,40 @@ describe('headless-client', () => {
     expect(refreshMessageBus).toHaveBeenCalled();
   }, 15_000);
 
+  it('refreshes and retries generic read queries when a live owner is not ready', async () => {
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    let queryCalls = 0;
+
+    secondBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-generic', mode: 'standalone' }));
+    secondBus.onRequest('headless.query', async () => {
+      queryCalls += 1;
+      if (queryCalls === 1) {
+        return await new Promise(() => {});
+      }
+      return { output: 'wf-1\n' };
+    });
+
+    const refreshMessageBus = vi.fn()
+      .mockResolvedValueOnce(secondBus)
+      .mockResolvedValue(secondBus);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'workflows', '--output', 'label'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      refreshMessageBus,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(queryCalls).toBe(2);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+    expect(stdout).toHaveBeenCalledWith('wf-1\n');
+    stdout.mockRestore();
+  }, 15_000);
+
   it('refreshes past a non-mutation owner before delegating a mutation', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();

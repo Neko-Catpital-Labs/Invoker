@@ -164,10 +164,10 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       if (!prNumber) throw new Error(`Could not parse a PR number from "${arg}".`);
       const record = deps.persistence.findReviewGateByPr(prNumber);
       switch (flags.output) {
-        case 'label': process.stdout.write(`${record?.workflowId ?? ''}\n`); break;
-        case 'json':  process.stdout.write(formatAsJson(record ?? {}) + '\n'); break;
-        case 'jsonl': process.stdout.write(formatAsJsonl(record ? [record] : []) + '\n'); break;
-        default:      process.stdout.write(
+        case 'label': writeOut(`${record?.workflowId ?? ''}\n`); break;
+        case 'json':  writeOut(formatAsJson(record ?? {}) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl(record ? [record] : []) + '\n'); break;
+        default:      writeOut(
           record
             ? `${record.workflowId}\t${record.reviewId ?? prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\t${record.branch ?? ''}\n`
             : `No Invoker workflow found for PR ${prNumber}.\n`,
