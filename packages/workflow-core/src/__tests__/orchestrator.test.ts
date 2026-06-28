@@ -146,12 +146,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
     }
   }
 
-  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
+  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; repoUrl?: string }> {
     return Array.from(this.workflows.values()).map((workflow) => this.withDerivedStatus(workflow));
   }
 
   loadWorkflowTaskSnapshot(): {
-    workflows: Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }>;
+    workflows: Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; repoUrl?: string }>;
     tasks: TaskState[];
     tasksByWorkflowId: Map<string, TaskState[]>;
   } {
@@ -287,6 +287,7 @@ describe('Orchestrator', () => {
   let persistence: InMemoryPersistence;
   let bus: InMemoryBus;
   let publishedDeltas: TaskDelta[];
+  const repoDefaultBranch = 'main';
 
   beforeEach(() => {
     persistence = new InMemoryPersistence();
@@ -302,6 +303,7 @@ describe('Orchestrator', () => {
       messageBus: bus,
       maxConcurrency: 3,
       logger: consoleLogger,
+      resolveRepoDefaultBranch: () => repoDefaultBranch,
     });
   });
 
@@ -2343,7 +2345,7 @@ describe('Orchestrator', () => {
           changedAt: expect.any(String),
         },
       ]);
-      expect(persistence.loadWorkflow(downstreamWfId)!.baseBranch).toBe('master');
+      expect(persistence.loadWorkflow(downstreamWfId)!.baseBranch).toBe(repoDefaultBranch);
     });
 
     it('persists status changes to DB', () => {
