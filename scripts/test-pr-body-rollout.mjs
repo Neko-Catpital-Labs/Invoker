@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { strict as assert } from 'node:assert';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -57,6 +57,31 @@ try {
   assert.match(readFileSync(outputFile, 'utf8'), /^author=octocat$/m);
 } finally {
   rmSync(outputDir, { recursive: true, force: true });
+}
+
+const spacedPathDir = mkdtempSync(join(process.cwd(), '.tmp-pr-body-rollout-path-'));
+try {
+  const scriptDir = join(spacedPathDir, 'with space');
+  mkdirSync(scriptDir);
+  const scriptPath = join(scriptDir, 'pr-body-rollout.mjs');
+  copyFileSync(new URL('pr-body-rollout.mjs', import.meta.url), scriptPath);
+
+  const result = spawnSync(process.execPath, [
+    scriptPath,
+    '--author',
+    'EdbertChan',
+    '--enforce-all',
+    'false',
+    '--authors',
+    'EdbertChan',
+  ], {
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).enabled, true);
+} finally {
+  rmSync(spacedPathDir, { recursive: true, force: true });
 }
 
 console.log('OK: PR body rollout checks passed');

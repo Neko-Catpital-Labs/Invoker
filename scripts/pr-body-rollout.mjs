@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { appendFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 const ENABLE_ALL_VALUES = new Set(['1', 'true', 'yes', 'y', 'on', 'all', 'everyone']);
 
@@ -70,6 +71,6 @@ async function main() {
   console.log(JSON.stringify(result));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }
