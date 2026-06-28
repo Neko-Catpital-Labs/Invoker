@@ -15,6 +15,9 @@ import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
+const MORE_ACTION = 'showMore';
+const MORE_ITEM_ID = '__more__';
+
 interface ContextMenuProps {
   x: number;
   y: number;
@@ -58,18 +61,35 @@ export function ContextMenu({
 
   const safeItems = availableItems.filter((item) => item.variant !== 'danger');
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
-  const hasMoreButton = dangerItems.length > 0 && !showMore;
-  const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
+  const hasMoreSentinel = dangerItems.length > 0 && !showMore;
+  const moreSentinel: MenuItem = {
+    id: MORE_ITEM_ID,
+    label: 'More',
+    enabled: true,
+    action: MORE_ACTION,
+  };
+  const navigableItems: MenuItem[] = showMore
+    ? [...safeItems, ...dangerItems]
+    : hasMoreSentinel
+      ? [...safeItems, moreSentinel]
+      : [...safeItems];
 
-  // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  const firstEnabledIndex = navigableItems.findIndex((item) => item.enabled);
 
-  // Auto-focus first enabled item on mount
+  // Initialize highlight on the first enabled item. After More expands, focus
+  // is moved deliberately in handleItemActivate; this effect only fires when
+  // firstEnabledIndex itself changes (e.g. items resolve in).
   useEffect(() => {
     if (firstEnabledIndex >= 0) {
       setFocusedIndex(firstEnabledIndex);
     }
   }, [firstEnabledIndex]);
+
+  // Pull keyboard focus to the menu container so ArrowUp/Down/Enter/Space
+  // route through handleKeyDown instead of the App-level shortcuts.
+  useEffect(() => {
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -97,7 +117,7 @@ export function ContextMenu({
     top = Math.max(0, Math.min(top, viewportHeight - rect.height));
 
     setPosition({ left, top });
-  }, [x, y]);
+  }, [x, y, showMore]);
 
   // Capture-phase outside dismissal stays reliable even if graph layers stop
   // bubbling on mouse/pointer events before they reach document listeners.
@@ -135,32 +155,42 @@ export function ContextMenu({
 
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter' && e.key !== ' ') {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      const enabledIndices = navigableItems
+        .map((item, idx) => (item.enabled ? idx : -1))
+        .filter((idx) => idx >= 0);
+      if (enabledIndices.length === 0) return;
+      const direction = e.key === 'ArrowDown' ? 1 : -1;
       const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
+      const seed = currentPos >= 0 ? currentPos : direction > 0 ? -1 : 0;
+      const nextPos = (seed + direction + enabledIndices.length) % enabledIndices.length;
       setFocusedIndex(enabledIndices[nextPos]);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      const item = renderedItems[focusedIndex];
-      if (item?.enabled) {
-        handleItemClick(item);
-      }
+      return;
+    }
+
+    const item = navigableItems[focusedIndex];
+    if (item?.enabled) {
+      handleItemActivate(item);
     }
   };
 
-  // Handle menu item click
-  const handleItemClick = (item: MenuItem) => {
+  // Activate a menu item (shared by click and keyboard).
+  const handleItemActivate = (item: MenuItem) => {
     if (!item.enabled) return;
+
+    if (item.action === MORE_ACTION) {
+      setShowMore(true);
+      // First newly visible item is the first danger entry, sitting at the
+      // index immediately after the safe items.
+      setFocusedIndex(safeItems.length);
+      return;
+    }
 
     switch (item.action) {
       case 'onRestart':
@@ -222,8 +252,26 @@ export function ContextMenu({
       onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
     >
-      {renderedItems.map((item, idx) => {
+      {navigableItems.map((item, idx) => {
         const isFocused = idx === focusedIndex;
+        if (item.id === MORE_ITEM_ID) {
+          return (
+            <div key={item.id}>
+              <div className="border-t border-gray-600 my-1" />
+              <button
+                role="menuitem"
+                className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+                  isFocused ? 'bg-gray-700' : ''
+                }`}
+                onClick={() => handleItemActivate(item)}
+                onMouseEnter={() => setFocusedIndex(idx)}
+              >
+                {item.label}
+              </button>
+            </div>
+          );
+        }
+
         const tooltip = !item.enabled && item.id === 'open-terminal'
           ? EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE
           : undefined;
@@ -239,7 +287,7 @@ export function ContextMenu({
                 item.variant,
                 item.enabled
               )} ${isFocused ? 'bg-gray-700' : ''}`}
-              onClick={() => handleItemClick(item)}
+              onClick={() => handleItemActivate(item)}
               onMouseEnter={() => setFocusedIndex(idx)}
               disabled={!item.enabled}
               title={tooltip}
@@ -249,18 +297,6 @@ export function ContextMenu({
           </div>
         );
       })}
-      {hasMoreButton && (
-        <div>
-          <div className="border-t border-gray-600 my-1" />
-          <button
-            role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
-          >
-            More
-          </button>
-        </div>
-      )}
     </div>
   );
 }
