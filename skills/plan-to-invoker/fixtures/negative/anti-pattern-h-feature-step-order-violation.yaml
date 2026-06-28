@@ -1,0 +1,44 @@
+# Anti-Pattern H: Same-feature sub-slice depends on a later Feature step
+# Expected outcome: skill-doctor fails lint-task-atomicity with a feature step ordering violation.
+
+name: "Anti-pattern: same-feature sub-slice depends on a later feature step"
+description: |
+  Demonstrates a feature-step direction violation where a same-feature sub-slice
+  at an earlier Feature step depends on a same-feature sub-slice at a later
+  Feature step without an explicit "Feature step exception: allowed".
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/EdbertChan/Invoker
+baseBranch: master
+featureBranch: plan/anti-pattern-feature-step-order-violation
+
+tasks:
+  - id: prompt-edit-bridge-followup
+    description: |
+      Continue the prompt-edit bridge sub-slice after the main bridge work.
+      Feature: prompt-edit-bridge
+      Feature step: 1
+      Feature state: active
+      Acceptance criteria:
+      - Ensure the follow-up bridge sub-slice compiles cleanly.
+    prompt: |
+      Modify packages/app/src/headless-delegation.ts to extend the prompt-edit
+      bridge follow-up sub-slice. This task is the same-feature follow-up and is
+      intentionally placed at Feature step 1 while it depends on the main bridge
+      sub-slice at Feature step 2, exercising the feature-step direction lint.
+    dependencies: [prompt-edit-bridge-main]
+
+  - id: prompt-edit-bridge-main
+    description: |
+      Add the main prompt-edit bridge sub-slice that the follow-up depends on.
+      Feature: prompt-edit-bridge
+      Feature step: 2
+      Feature state: active
+      Acceptance criteria:
+      - Ensure the main bridge sub-slice compiles cleanly.
+    prompt: |
+      Modify packages/app/src/main.ts to add the main prompt-edit bridge
+      sub-slice. This task represents the main bridge work and is placed at
+      Feature step 2 in the same Feature so the follow-up task's dependency
+      direction is recognized as a violation by the atomicity linter.
+    dependencies: []
