@@ -147,5 +147,17 @@ describe('stale downstream launch dispatch repro', () => {
       `merge task selected attempt is ${MERGE_ID}-attempt-2`,
       `dispatch attempt is ${MERGE_ID}-attempt-1`,
     ].join(' ')).toBeUndefined();
+
+    const invalidated = adapter.getEvents(MERGE_ID).find(
+      (event) => event.eventType === 'task.launch_dispatch_invalidated',
+    );
+    expect(invalidated).toBeDefined();
+    expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+      dispatchId: staleDispatch.id,
+      dispatchAttemptId: `${MERGE_ID}-attempt-1`,
+      reason: 'selected_attempt_changed',
+      currentSelectedAttemptId: `${MERGE_ID}-attempt-2`,
+      currentExecutionGeneration: 2,
+    });
   });
 });

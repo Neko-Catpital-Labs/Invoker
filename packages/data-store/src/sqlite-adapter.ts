@@ -3131,7 +3131,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const fencedUntil = new Date(
       new Date(now).getTime() + DISPATCH_LEASE_MS,
     ).toISOString();
-    return this.runTransaction(() => {
+    const invalidatedDispatches: Array<{
+      dispatchId: number;
+      taskId: string;
+      attemptId: string;
+      generation: number;
+      canAudit: boolean;
+      currentSelectedAttemptId?: string;
+      currentExecutionGeneration?: number;
+      currentTaskStatus?: string;
+      reason: string;
+      message: string;
+    }> = [];
+    const leased = this.runTransaction(() => {
       while (true) {
         const candidate = this.queryOne(
           `SELECT
@@ -3154,20 +3166,25 @@ export class SQLiteAdapter implements PersistenceAdapter {
         const candidateId = Number(candidate.id);
 
         let staleReason: string | undefined;
+        let staleReasonKey: string | undefined;
         if (!candidate.current_task_id) {
           staleReason = `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} no longer exists`;
+          staleReasonKey = 'task_missing';
         } else if (String(candidate.current_task_status) !== 'pending') {
           staleReason =
             `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} ` +
             `status is ${String(candidate.current_task_status)}`;
+          staleReasonKey = 'not_launch_ready';
         } else if (String(candidate.current_selected_attempt_id ?? '') !== String(candidate.attempt_id)) {
           staleReason =
             `Launch dispatch ${candidateId} is stale: attempt ${String(candidate.attempt_id)} ` +
             `is not the selected attempt ${String(candidate.current_selected_attempt_id ?? 'none')}`;
+          staleReasonKey = 'selected_attempt_changed';
         } else if (Number(candidate.current_execution_generation ?? 0) !== Number(candidate.generation ?? 0)) {
           staleReason =
             `Launch dispatch ${candidateId} is stale: generation ${String(candidate.generation)} ` +
             `does not match task generation ${String(candidate.current_execution_generation ?? 0)}`;
+          staleReasonKey = 'selected_attempt_changed';
         }
 
         if (staleReason) {
@@ -3182,6 +3199,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
                AND state = 'enqueued'`,
             [now, staleReason, candidateId],
           );
+          invalidatedDispatches.push({
+            dispatchId: candidateId,
+            taskId: String(candidate.task_id),
+            attemptId: String(candidate.attempt_id),
+            generation: Number(candidate.generation ?? 0),
+            canAudit: Boolean(candidate.current_task_id),
+            currentSelectedAttemptId: candidate.current_selected_attempt_id ? String(candidate.current_selected_attempt_id) : undefined,
+            currentExecutionGeneration: candidate.current_execution_generation === null || candidate.current_execution_generation === undefined
+              ? undefined
+              : Number(candidate.current_execution_generation),
+            currentTaskStatus: candidate.current_task_status ? String(candidate.current_task_status) : undefined,
+            reason: staleReasonKey ?? 'selected_attempt_changed',
+            message: staleReason,
+          });
           continue;
         }
 
@@ -3215,6 +3246,40 @@ export class SQLiteAdapter implements PersistenceAdapter {
         return dispatch;
       }
     });
+    for (const invalidated of invalidatedDispatches) {
+      if (invalidated.canAudit) {
+        this.logEvent(invalidated.taskId, 'task.launch_dispatch_invalidated', {
+          dispatchId: invalidated.dispatchId,
+          dispatchAttemptId: invalidated.attemptId,
+          dispatchGeneration: invalidated.generation,
+          currentSelectedAttemptId: invalidated.currentSelectedAttemptId,
+          currentExecutionGeneration: invalidated.currentExecutionGeneration,
+          currentTaskStatus: invalidated.currentTaskStatus,
+          reason: invalidated.reason,
+          message: invalidated.message,
+          accepted: true,
+        });
+      }
+      const releasedLeases = this.releaseExecutionResourceLeasesForTasks(
+        [invalidated.taskId],
+        invalidated.reason,
+        now,
+      );
+      if (invalidated.canAudit) {
+        for (const lease of releasedLeases) {
+          this.logEvent(invalidated.taskId, 'task.launch_dispatch_lease_released', {
+            dispatchId: invalidated.dispatchId,
+            resourceKey: lease.resourceKey,
+            resourceType: lease.resourceType,
+            holderId: lease.holderId,
+            taskId: lease.taskId,
+            reason: invalidated.reason,
+            accepted: true,
+          });
+        }
+      }
+    }
+    return leased;
   }
 
   markLaunchDispatchCompleted(id: number, nowIso?: string): boolean {

@@ -665,22 +665,30 @@ describe('LaunchDispatcher', () => {
       expect(adapter.loadLaunchDispatchById(1)?.lastError).toBeUndefined();
     });
 
-    it('abandons a dispatch row when the selected attempt changed after lease', () => {
-      const task = seedWorkflowAndTask('wf-a/t-stale', 'wf-a', {
-        selectedAttemptId: 'attempt-old',
+    it('abandons a dispatch row when the generation changed after lease', () => {
+      const task = seedWorkflowAndTask('wf-a/t-stale-generation', 'wf-a', {
+        selectedAttemptId: 'attempt-generation',
         generation: 0,
       });
       const enq = adapter.enqueueLaunchDispatch({
         taskId: task.id,
-        attemptId: 'attempt-old',
+        attemptId: 'attempt-generation',
         workflowId: 'wf-a',
         generation: 0,
       });
+      const leasedRow = {
+        ...enq,
+        state: 'leased',
+        dispatchOwner: 'owner-a',
+        leasedAt: new Date().toISOString(),
+        fencedUntil: new Date(Date.now() + 60_000).toISOString(),
+      };
+      const claimSpy = vi.spyOn(adapter, 'claimLaunchDispatchAtomic').mockReturnValue(leasedRow as any);
       const currentTask = {
         ...task,
         execution: {
           ...task.execution,
-          selectedAttemptId: 'attempt-current',
+          selectedAttemptId: 'attempt-generation',
           generation: 1,
         },
       };
@@ -702,7 +710,75 @@ describe('LaunchDispatcher', () => {
       expect(after?.state).toBe('abandoned');
       expect(after?.lastError).toMatch(/selected attempt or generation changed/);
       const events = adapter.getEvents(task.id);
-      expect(events.some((event) => event.eventType === 'task.launch_dispatch_invalidated')).toBe(true);
+      const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(invalidated).toBeDefined();
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        dispatchAttemptId: 'attempt-generation',
+        dispatchGeneration: 0,
+        selectedAttemptId: 'attempt-generation',
+        selectedGeneration: 1,
+        reason: 'selected_attempt_changed',
+      });
+      claimSpy.mockRestore();
+    });
+
+    it('abandons a dispatch row when the selected attempt changed after lease', () => {
+      const task = seedWorkflowAndTask('wf-a/t-stale-attempt', 'wf-a', {
+        selectedAttemptId: 'attempt-old',
+        generation: 0,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-old',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      const leasedRow = {
+        ...enq,
+        state: 'leased',
+        dispatchOwner: 'owner-a',
+        leasedAt: new Date().toISOString(),
+        fencedUntil: new Date(Date.now() + 60_000).toISOString(),
+      };
+      const claimSpy = vi.spyOn(adapter, 'claimLaunchDispatchAtomic').mockReturnValue(leasedRow as any);
+      const currentTask = {
+        ...task,
+        execution: {
+          ...task.execution,
+          selectedAttemptId: 'attempt-current',
+          generation: 0,
+        },
+      };
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(currentTask as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/selected attempt or generation changed/);
+      const events = adapter.getEvents(task.id);
+      const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(invalidated).toBeDefined();
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        dispatchAttemptId: 'attempt-old',
+        dispatchGeneration: 0,
+        selectedAttemptId: 'attempt-current',
+        selectedGeneration: 0,
+        reason: 'selected_attempt_changed',
+      });
+      claimSpy.mockRestore();
     });
 
     it('abandons the dispatch when readiness is blocked', () => {
