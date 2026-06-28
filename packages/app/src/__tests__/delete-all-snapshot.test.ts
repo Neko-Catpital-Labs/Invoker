@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -13,6 +14,7 @@ import { tmpdir } from 'node:os';
 import {
   createDeleteAllSnapshot,
   createHourlySnapshot,
+  pruneHourlySnapshots,
   resolveInvokerHomeRoot,
 } from '../delete-all-snapshot.js';
 
@@ -29,6 +31,7 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   }
   delete process.env.INVOKER_DB_DIR;
+  delete process.env.INVOKER_HOURLY_BACKUP_RETENTION;
 });
 
 describe('delete-all-snapshot', () => {
@@ -82,5 +85,115 @@ describe('delete-all-snapshot', () => {
 
     const snapshot = createDeleteAllSnapshot(root);
     expect(readFileSync(snapshot, 'utf-8')).toBe('restored-db');
+  });
+});
+
+function seedHourly(backupDir: string, count: number, withSidecars = false): void {
+  mkdirSync(backupDir, { recursive: true });
+  for (let i = 0; i < count; i += 1) {
+    const base = join(backupDir, `invoker.db.hourly-auto-20260101-${String(i).padStart(6, '0')}-000Z`);
+    writeFileSync(base, `main-${i}`);
+    if (withSidecars) {
+      writeFileSync(`${base}-wal`, `wal-${i}`);
+      writeFileSync(`${base}-shm`, `shm-${i}`);
+    }
+  }
+}
+
+function hourlyBaseNames(backupDir: string): string[] {
+  return readdirSync(backupDir).filter(
+    (n) => n.startsWith('invoker.db.hourly-auto-') && !n.endsWith('-wal') && !n.endsWith('-shm'),
+  );
+}
+
+describe('hourly snapshot retention', () => {
+  it('createHourlySnapshot prunes the oldest snapshots beyond the retention limit', () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+    const backupDir = join(root, 'db-backups');
+    seedHourly(backupDir, 5);
+
+    const snapshot = createHourlySnapshot(root, 3);
+
+    expect(snapshot).not.toBeNull();
+    expect(existsSync(snapshot as string)).toBe(true); // newest survives
+    expect(hourlyBaseNames(backupDir)).toHaveLength(3);
+    // the three oldest seeded snapshots were removed
+    expect(existsSync(join(backupDir, 'invoker.db.hourly-auto-20260101-000000-000Z'))).toBe(false);
+    expect(existsSync(join(backupDir, 'invoker.db.hourly-auto-20260101-000004-000Z'))).toBe(true);
+  });
+
+  it('pruneHourlySnapshots deletes the -wal/-shm sidecars of pruned snapshots', () => {
+    const root = makeDbRoot();
+    const backupDir = join(root, 'db-backups');
+    seedHourly(backupDir, 4, true);
+
+    expect(pruneHourlySnapshots(backupDir, 1)).toBe(3);
+
+    for (let i = 0; i < 3; i += 1) {
+      const base = `invoker.db.hourly-auto-20260101-${String(i).padStart(6, '0')}-000Z`;
+      expect(existsSync(join(backupDir, base))).toBe(false);
+      expect(existsSync(join(backupDir, `${base}-wal`))).toBe(false);
+      expect(existsSync(join(backupDir, `${base}-shm`))).toBe(false);
+    }
+    expect(existsSync(join(backupDir, 'invoker.db.hourly-auto-20260101-000003-000Z'))).toBe(true);
+  });
+
+  it('pruneHourlySnapshots never deletes non-hourly snapshots', () => {
+    const root = makeDbRoot();
+    const backupDir = join(root, 'db-backups');
+    seedHourly(backupDir, 3);
+    writeFileSync(join(backupDir, 'invoker.db.before-delete-all-20260101-000000-000Z'), 'keep');
+    writeFileSync(join(backupDir, 'invoker.db.before-prod-recreate-20260101-000000'), 'keep');
+
+    pruneHourlySnapshots(backupDir, 1);
+
+    expect(existsSync(join(backupDir, 'invoker.db.before-delete-all-20260101-000000-000Z'))).toBe(true);
+    expect(existsSync(join(backupDir, 'invoker.db.before-prod-recreate-20260101-000000'))).toBe(true);
+  });
+
+  it('pruneHourlySnapshots with retain <= 0 disables pruning', () => {
+    const root = makeDbRoot();
+    const backupDir = join(root, 'db-backups');
+    seedHourly(backupDir, 3);
+
+    expect(pruneHourlySnapshots(backupDir, 0)).toBe(0);
+    expect(hourlyBaseNames(backupDir)).toHaveLength(3);
+  });
+
+  it('createHourlySnapshot honors INVOKER_HOURLY_BACKUP_RETENTION', () => {
+    const root = makeDbRoot();
+    writeFileSync(join(root, 'invoker.db'), 'db-main');
+    const backupDir = join(root, 'db-backups');
+    seedHourly(backupDir, 4);
+    process.env.INVOKER_HOURLY_BACKUP_RETENTION = '2';
+
+    createHourlySnapshot(root);
+
+    expect(hourlyBaseNames(backupDir)).toHaveLength(2);
+  });
+
+  it('treats empty/blank INVOKER_HOURLY_BACKUP_RETENTION as unset, not as "disable pruning"', () => {
+    // Regression: Number('') === 0 slipped through Number.isFinite && >= 0 and
+    // disabled pruning, silently reintroducing unbounded growth. Empty/blank must
+    // behave exactly like an unset variable. Seed above the default so pruning must
+    // engage — the assertion compares blank vs unset rather than a hard-coded count.
+    const seed = 60;
+    const keptWith = (value: string | undefined): number => {
+      const root = makeDbRoot();
+      writeFileSync(join(root, 'invoker.db'), 'db-main');
+      const backupDir = join(root, 'db-backups');
+      seedHourly(backupDir, seed);
+      if (value === undefined) delete process.env.INVOKER_HOURLY_BACKUP_RETENTION;
+      else process.env.INVOKER_HOURLY_BACKUP_RETENTION = value;
+      createHourlySnapshot(root);
+      return hourlyBaseNames(backupDir).length;
+    };
+
+    const unsetKept = keptWith(undefined);
+    expect(unsetKept).toBeLessThan(seed + 1); // sanity: default pruning engaged
+    for (const blank of ['', '   ']) {
+      expect(keptWith(blank)).toBe(unsetKept); // blank == unset, NOT disabled (would keep seed + 1)
+    }
   });
 });
