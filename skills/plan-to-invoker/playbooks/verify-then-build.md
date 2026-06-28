@@ -145,7 +145,7 @@ Remove verification workflows before submitting the **implementation** plan if y
 
 Use verified facts + `references/task-patterns.md` to generate the implementation plan.
 
-Set `mergeMode: github` (GitHub PR / **GithubPR** merge gate) on the implementation YAML unless the user explicitly asked for `manual` or `automatic`.
+Set `mergeMode: external_review` (the GitHub-backed PR review gate, shown in the UI as **External review (GitHub)**) on the implementation YAML unless the user explicitly asked for `manual` or `automatic`.
 
 For prompt tasks in implementation plans, write instructions as if the remote executor has no chat history:
 

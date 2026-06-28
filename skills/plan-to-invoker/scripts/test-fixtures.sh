@@ -463,7 +463,7 @@ test_lint_rejects_multi_prompt_standalone_without_waiver() {
 name: "Invalid multi-prompt standalone workflow"
 description: "Implementation workflow with multiple prompt slices but no stack context."
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-surface
@@ -565,7 +565,7 @@ test_lint_allows_nonterminal_stack_workflow_without_test_all() {
 name: "Stack step 1 with focused verification"
 description: "First implementation workflow in a stack with focused verification."
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 featureBranch: plan/stack-step-1
 tasks:
@@ -658,7 +658,7 @@ EOF
 name: "Stack step 2 focused verification"
 description: "Terminal implementation workflow in a stack with focused verification."
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: plan/stack-step-1
 featureBranch: plan/stack-step-2
@@ -1210,7 +1210,7 @@ test_lint_requires_review_lane() {
 name: "Missing review lane"
 description: "Implementation plan missing review lane metadata."
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-owner-fallback
