@@ -5,6 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../lib/common.sh"
 
+export INVOKER_DISABLE_EXCLUSIVE_LOCKING=1
+# This harness intentionally overlaps multiple writable headless clients while
+# sampling first-5s state changes. Keep shared WAL here; production owners
+# still exercise exclusive locking separately.
 invoker_e2e_init
 trap invoker_e2e_cleanup EXIT
 
