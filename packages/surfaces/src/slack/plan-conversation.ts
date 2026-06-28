@@ -89,6 +89,22 @@ export function isConfirmation(text: string): boolean {
   return CONFIRMATION_PATTERNS.some((re) => re.test(trimmed));
 }
 
+const NEGATION_PATTERNS = [
+  /^no$/i,
+  /^n$/i,
+  /^nope$/i,
+  /^cancel$/i,
+  /^stop$/i,
+  /^abort$/i,
+  /^nvm$/i,
+  /^never ?mind$/i,
+];
+
+export function isNegation(text: string): boolean {
+  const trimmed = text.trim().replace(/[.?!]+$/, '');
+  return NEGATION_PATTERNS.some((re) => re.test(trimmed));
+}
+
 // ── System Prompt ───────────────────────────────────────────
 
 function buildSystemPrompt(defaultBranch: string, repoUrl?: string): string {
@@ -254,9 +270,9 @@ export class PlanConversation {
   }
 
   /**
-   * Send a user message and get Cursor's response.
-   * If the message is a confirmation (e.g. "yes", "go"), extracts the last
-   * YAML plan from history and submits it. Otherwise spawns the Cursor CLI.
+   * Send a user message to the planner and return its reply. Pure conversation:
+   * drafting a plan never auto-submits it — submission is an explicit step
+   * driven by the surface (the `submit` verb), so a stray "yes" can't ship a plan.
    */
   async sendMessage(userMessage: string): Promise<string> {
     const t0 = Date.now();
@@ -267,29 +283,6 @@ export class PlanConversation {
     const tInit = Date.now();
 
     this.messages.push({ role: 'user', content: userMessage });
-
-    if (isConfirmation(userMessage)) {
-      const planText = this.extractLastPlanFromMessages();
-      if (planText) {
-        this._submittedPlanText = planText;
-        this._planSubmitted = true;
-        // Extract plan name from the text for the reply message
-        const parsed = parseYaml(planText) as Record<string, unknown>;
-        const planName = (parsed?.name as string) ?? 'Untitled';
-        const reply = `Plan "${planName}" submitted for execution.`;
-        this.messages.push({ role: 'assistant', content: reply });
-        this.saveState();
-        const tEnd = Date.now();
-        this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
-        return reply;
-      }
-      const errorReply = "I couldn't find a complete YAML plan in this conversation. Could you ask me to regenerate the plan?";
-      this.messages.push({ role: 'assistant', content: errorReply });
-      this.saveState();
-      const tEnd = Date.now();
-      this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation-failed): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
-      return errorReply;
-    }
 
     const prompt = this.buildCursorPrompt();
     const tPrompt = Date.now();
@@ -315,6 +308,11 @@ export class PlanConversation {
   /** Returns true if the user confirmed and a plan was extracted. */
   get planSubmitted(): boolean {
     return this._planSubmitted;
+  }
+
+  /** Returns the last complete YAML plan drafted in this conversation, or null. */
+  getDraftedPlan(): string | null {
+    return this.extractLastPlanFromMessages();
   }
 
   /** Returns the conversation history. */

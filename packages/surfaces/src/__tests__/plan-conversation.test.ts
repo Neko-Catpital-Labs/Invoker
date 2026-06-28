@@ -476,7 +476,7 @@ describe('PlanConversation', () => {
     expect(conversation.submittedPlanText).toBeNull();
   });
 
-  it('confirmation extracts and submits the latest plan as text', async () => {
+  it('getDraftedPlan returns the latest valid plan text drafted across turns', async () => {
     const firstYaml = '```yaml\nname: "First"\ntasks:\n  - id: t1\n    description: "one"\n    dependencies: []\n```';
     const secondYaml = '```yaml\nname: "Second"\ntasks:\n  - id: t2\n    description: "two"\n    dependencies: []\n```';
 
@@ -485,36 +485,34 @@ describe('PlanConversation', () => {
     mockCursorResponse(secondYaml);
     await conversation.sendMessage('Change the name');
 
-    const reply = await conversation.sendMessage('yes');
-    expect(reply).toContain('Second');
-    expect(typeof conversation.submittedPlanText).toBe('string');
-    const plan = parsePlanText(conversation.submittedPlanText!);
+    const drafted = conversation.getDraftedPlan();
+    expect(typeof drafted).toBe('string');
+    const plan = parsePlanText(drafted!);
     expect(plan.name).toBe('Second');
-    expect(conversation.planSubmitted).toBe(true);
-    expect(mockSpawn).toHaveBeenCalledTimes(2); // not called for confirmation
-  });
-
-  it('confirmation without plan returns explicit error', async () => {
-    const reply = await conversation.sendMessage('yes');
-    expect(reply).toContain("couldn't find a complete YAML plan");
-    expect(reply).toContain('regenerate the plan');
     expect(conversation.planSubmitted).toBe(false);
-    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(conversation.submittedPlanText).toBeNull();
   });
 
-  it('confirmation with broken YAML returns error, does not call Cursor', async () => {
-    // Simulate an assistant message with invalid YAML
+  it('getDraftedPlan returns null when history has no plan', async () => {
+    expect(conversation.getDraftedPlan()).toBeNull();
+
+    // "yes" no longer auto-submits — it takes the normal planner path and spawns the CLI.
+    mockCursorResponse('What would you like to build?');
+    await conversation.sendMessage('yes');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(conversation.planSubmitted).toBe(false);
+    expect(conversation.getDraftedPlan()).toBeNull();
+  });
+
+  it('getDraftedPlan returns null when the latest plan YAML is broken', async () => {
     mockCursorResponse('Here is a plan:\n```yaml\nname: "Broken\ntasks: [invalid');
     await conversation.sendMessage('Generate a plan');
 
-    const reply = await conversation.sendMessage('yes');
-    expect(reply).toContain("couldn't find a complete YAML plan");
+    expect(conversation.getDraftedPlan()).toBeNull();
     expect(conversation.planSubmitted).toBe(false);
-    // Only 1 spawn call for the first message, not the confirmation
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
-  it('does not pick up illustrative YAML from earlier assistant messages', async () => {
+  it('getDraftedPlan does not pick up illustrative YAML from earlier assistant messages', async () => {
     const illustrativeYaml = '```yaml\nname: "Example Plan"\ntasks:\n  - id: example\n    description: "illustrative example"\n    dependencies: []\n```';
     mockCursorResponse(`Here is an example of the format:\n\n${illustrativeYaml}\n\nWant me to generate a real plan?`);
     await conversation.sendMessage('How do plans work?');
@@ -522,10 +520,9 @@ describe('PlanConversation', () => {
     mockCursorResponse('Sure, what feature would you like to build?');
     await conversation.sendMessage('Tell me more');
 
-    const reply = await conversation.sendMessage('yes');
-    expect(reply).toContain("couldn't find a complete YAML plan");
+    // The latest assistant message has no plan, so nothing complete is drafted.
+    expect(conversation.getDraftedPlan()).toBeNull();
     expect(conversation.planSubmitted).toBe(false);
-    expect(mockSpawn).toHaveBeenCalledTimes(2);
   });
 
   it('planSubmitted starts as false', () => {
@@ -535,12 +532,12 @@ describe('PlanConversation', () => {
   it('reset clears history and submitted plan text', async () => {
     mockCursorResponse(VALID_YAML_PLAN);
     await conversation.sendMessage('Generate plan');
-    await conversation.sendMessage('yes');
 
     conversation.reset();
     expect(conversation.history).toHaveLength(0);
     expect(conversation.submittedPlanText).toBeNull();
     expect(conversation.planSubmitted).toBe(false);
+    expect(conversation.getDraftedPlan()).toBeNull();
   });
 
   it('includes conversation history in prompt for multi-turn', async () => {
@@ -696,23 +693,26 @@ describe('PlanConversation instrumentation', () => {
     expect(perfLines[0]).toMatch(/total=\d+ms/);
   });
 
-  it('emits [PERF] sendMessage summary on confirmation path', async () => {
+  it('emits [PERF] sendMessage summary when a "yes" takes the normal planner path', async () => {
     const conv = createInstrumentedConversation();
     mockCursorResponse(VALID_YAML_PLAN);
     await conv.sendMessage('Generate plan');
+    mockCursorResponse('Anything else?');
     await conv.sendMessage('yes');
 
-    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage (confirmation):'));
-    expect(perfLines).toHaveLength(1);
-    expect(perfLines[0]).toMatch(/init=\d+ms/);
-    expect(perfLines[0]).toMatch(/total=\d+ms/);
+    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage:'));
+    expect(perfLines).toHaveLength(2);
+    expect(perfLines[1]).toMatch(/init=\d+ms/);
+    expect(perfLines[1]).toMatch(/cursor=\d+ms/);
+    expect(perfLines[1]).toMatch(/total=\d+ms/);
   });
 
-  it('emits [PERF] sendMessage summary on failed confirmation path', async () => {
+  it('emits [PERF] sendMessage summary for a "yes" with no drafted plan', async () => {
     const conv = createInstrumentedConversation();
+    mockCursorResponse('What would you like to build?');
     await conv.sendMessage('yes');
 
-    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage (confirmation-failed):'));
+    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage:'));
     expect(perfLines).toHaveLength(1);
     expect(perfLines[0]).toMatch(/init=\d+ms/);
     expect(perfLines[0]).toMatch(/total=\d+ms/);
@@ -795,16 +795,17 @@ describe('PlanConversation instrumentation', () => {
     expect(exitLines[0]).toMatch(/elapsed=\d+ms/);
   });
 
-  it('does not emit [CONV] on confirmation path', async () => {
+  it('emits [CONV] for a "yes" message on the normal planner path', async () => {
     const conv = createInstrumentedConversation();
     mockCursorResponse(VALID_YAML_PLAN);
     await conv.sendMessage('Generate plan');
     logSpy.mockClear();
 
+    mockCursorResponse('Anything else?');
     await conv.sendMessage('yes');
 
     const convLines = logMessages().filter(m => m.startsWith('[CONV]'));
-    expect(convLines).toHaveLength(0);
+    expect(convLines).toHaveLength(2);
   });
 
   it('reports growing historyMsgs across turns', async () => {
