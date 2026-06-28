@@ -871,6 +871,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
 
   const runWorkflowOp = async (
     op: { operation: string; target: { all: true } | { workflow: string } },
+    onProgress?: (p: { done: number; total: number; ok: number; failed: number; current?: string }) => void,
   ): Promise<{ ok: boolean; summary: string }> => {
     const all = persistence.listWorkflows();
     let workflowIds: { id: string }[];
@@ -904,7 +905,9 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
 
     let ok = 0;
     const failed: string[] = [];
+    const total = workflowIds.length;
     for (const t of workflowIds) {
+      onProgress?.({ done: ok + failed.length, total, ok, failed: failed.length, current: t.id });
       try {
         await run(t.id);
         ok++;
@@ -912,6 +915,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         failed.push(`${t.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    onProgress?.({ done: total, total, ok, failed: failed.length });
     const summary = `${op.operation}: ${ok} ok${failed.length ? `, ${failed.length} failed\n${failed.join('\n')}` : ''}`;
     return { ok: failed.length === 0, summary };
   };
