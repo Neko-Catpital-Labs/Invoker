@@ -308,6 +308,44 @@ describe('approveTask', () => {
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
+  it('surfaces corrupt merge-gate fix approvals without recreating the task', async () => {
+    const approvedTask = makeTask({
+      id: 'merge-a',
+      status: 'awaiting_approval',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {
+        pendingFixError: 'original gate failure',
+        workspacePath: '/tmp/invoker-empty-launch-placeholder',
+      },
+    });
+    const orchestrator = {
+      approve: vi.fn(),
+      getTask: vi.fn().mockReturnValue(approvedTask),
+      resumeTaskAfterFixApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const taskExecutor = {
+      commitApprovedFix: vi.fn().mockRejectedValue(new Error('git status --porcelain failed (code 128): fatal: not a git repository')),
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    const result = await approveTask('merge-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(result).toEqual({ approvedTask, fixedTask: true, started: [] });
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
+      'merge-a',
+      'original gate failure',
+      expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+    );
+    expect(orchestrator.resumeTaskAfterFixApproval).not.toHaveBeenCalled();
+    expect(orchestrator.approve).not.toHaveBeenCalled();
+    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
+  });
+
   it('commits approved fixes and returns non-merge launch claims for the caller to dispatch', async () => {
     const started = [makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } })];
     const approvedTask = makeTask({
@@ -1307,6 +1345,66 @@ describe('fixWithAgentAction', () => {
       workflowId: 'wf-1',
       started: [expect.objectContaining({ id: 'task-a', status: 'running' })],
     });
+  });
+
+  it('surfaces corrupt merge gates when the saved fix workspace is not a git repo', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        id: 'merge-a',
+        status: 'failed',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          error: 'Unable to resolve merge worktree ref "plan/old-base"',
+          workspacePath: '/tmp/invoker-empty-launch-placeholder',
+        },
+      })),
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
+      updateWorkflow: vi.fn(),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => [makeRunningTask({ id: 'merge-a', status: 'running' })]),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      beginConflictResolution: vi.fn(),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      appendTaskOutput: vi.fn(),
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
+      updateWorkflow: vi.fn(),
+      getTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
+      execGitIn: vi.fn().mockRejectedValue(new Error('fatal: not a git repository')),
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('merge-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+    }, {
+      failureOutputLabel: 'Fix with AI',
+    })).rejects.toThrow('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository');
+
+    expect(taskExecutor.execGitIn).toHaveBeenCalledWith(
+      ['rev-parse', '--is-inside-work-tree'],
+      '/tmp/invoker-empty-launch-placeholder',
+    );
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'merge-a',
+      expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+    );
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
+      'merge-a',
+      'Unable to resolve merge worktree ref "plan/old-base"',
+      expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+    );
+    expect(orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
   });
 });
 
