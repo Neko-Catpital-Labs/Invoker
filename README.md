@@ -330,6 +330,7 @@ Layer rules: [ARCHITECTURE.md](ARCHITECTURE.md). Agent/repo conventions: [CLAUDE
 | [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md) | SSH executor setup, target fields, and plan examples |
 | [docs/docker-executor.md](docs/docker-executor.md) | Docker executor configuration and runtime notes |
 | [docs/slack-native-workflows.md](docs/slack-native-workflows.md) | Plan & drive workflows from Slack: lobby mentions, harness presets, per-workflow channels |
+| [docs/web-surface.md](docs/web-surface.md) | Watch & drive workflows from a browser (HTTP+SSE) and the Slack live status card; enabling `INVOKER_WEB_TOKEN` |
 
 ## Troubleshooting
 
