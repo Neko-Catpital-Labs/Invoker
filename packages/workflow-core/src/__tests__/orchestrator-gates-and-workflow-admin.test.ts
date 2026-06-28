@@ -1438,6 +1438,40 @@ describe('Orchestrator', () => {
         },
       ]);
     });
+    it.fails('falls back managed stack base when detached upstream metadata is unavailable', () => {
+      orchestrator.loadPlan({
+        name: 'fallback-upstream',
+        baseBranch: 'master',
+        featureBranch: 'plan/fallback-upstream',
+        tasks: [{ id: 'verify-fallback', description: 'upstream prerequisite' }],
+      });
+      const upstreamWfId = sid(orchestrator, 0, 'verify-fallback').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'fallback-target',
+        baseBranch: 'plan/fallback-upstream',
+        featureBranch: 'plan/fallback-target',
+        tasks: [
+          {
+            id: 'fallback-leaf',
+            description: 'target waits on upstream',
+            externalDependencies: [{ workflowId: upstreamWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const targetTaskId = sid(orchestrator, 1, 'fallback-leaf');
+      const targetWfId = targetTaskId.split('/')[0]!;
+      const upstreamWorkflow = persistence.workflows.get(upstreamWfId)!;
+      upstreamWorkflow.baseBranch = undefined;
+      upstreamWorkflow.featureBranch = undefined;
+
+      orchestrator.detachWorkflow(targetWfId, upstreamWfId);
+
+      const targetWorkflow = persistence.loadWorkflow(targetWfId)!;
+      expect(targetWorkflow.externalDependencies).toBeUndefined();
+      expect(targetWorkflow.baseBranch).toBe('master');
+    });
+
 
     it('voids a running target workflow and its descendants back to pending without auto-starting them', () => {
       orchestrator.loadPlan({
