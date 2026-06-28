@@ -105,6 +105,15 @@ describe('loadConfig', () => {
     expect(config.autoApproveAIFixes).toBe(true);
   });
 
+  it('reads experimentalPlanner from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ experimentalPlanner: true }),
+    );
+    const config = loadConfig();
+    expect(config.experimentalPlanner).toBe(true);
+  });
+
   it('reads autoFixAgent from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),

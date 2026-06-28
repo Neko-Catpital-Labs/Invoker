@@ -59,6 +59,9 @@ export interface PlanConversationConfig {
   defaultBranch?: string;
   /** Default repo URL (e.g. "git@github.com:user/repo.git"). Used when plan YAML omits repoUrl. */
   repoUrl?: string;
+  /** EXPERIMENTAL_PLANNER: when true, steer the agent to order the plan via the
+   * experimental planner MCP tool (`plan`). The redirect server enforces the gate. */
+  experimentalPlanner?: boolean;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
 }
@@ -192,6 +195,7 @@ export class PlanConversation {
   private conversationRepo?: ConversationRepository;
   private defaultBranch?: string;
   private repoUrl?: string;
+  private experimentalPlanner?: boolean;
   private log: LogFn;
   private _initialized = false;
 
@@ -206,6 +210,7 @@ export class PlanConversation {
     this.conversationRepo = config.conversationRepo;
     this.defaultBranch = config.defaultBranch;
     this.repoUrl = config.repoUrl;
+    this.experimentalPlanner = config.experimentalPlanner;
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -350,6 +355,14 @@ export class PlanConversation {
     if (lastMessage) {
       parts.push(`\nUser's latest message:\n${lastMessage.content}`);
       parts.push('\nRespond to the latest message. If it requires a plan, explore the codebase and generate one.');
+    }
+
+    if (this.experimentalPlanner) {
+      parts.push(
+        '\n[EXPERIMENTAL_PLANNER] Before finalizing the order, call the `plan` MCP ' +
+        'tool with the conversation to get the experimental planner\'s ordered ' +
+        'features/tasks + dependency edges, and base your plan\'s ordering on it. ' +
+        'If the tool is unavailable, order the plan yourself as usual.');
     }
 
     return parts.join('\n');
