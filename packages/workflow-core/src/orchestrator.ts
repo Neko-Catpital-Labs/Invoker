@@ -34,6 +34,7 @@ import {
   type ExecutorRoutingRule,
   type HeavyweightCommandRoutingPolicy,
 } from './executor-routing.js';
+import { requireDefaultBranchRemote } from './repo-default-branch.js';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -261,6 +262,7 @@ export interface OrchestratorPersistence {
     createdAt: string;
     updatedAt: string;
     baseBranch?: string;
+    repoUrl?: string;
     onFinish?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
@@ -277,6 +279,7 @@ export interface OrchestratorPersistence {
       createdAt: string;
       updatedAt: string;
       baseBranch?: string;
+      repoUrl?: string;
       onFinish?: string;
       mergeMode?: 'manual' | 'automatic' | 'external_review';
       externalDependencies?: ExternalDependency[];
@@ -598,6 +601,8 @@ export interface OrchestratorConfig {
    * scheduler dequeue time).
    */
   deferRunningUntilLaunch?: boolean;
+  /** Resolve the target branch for a repo URL. Must throw when no safe branch is known. */
+  resolveRepoTargetBranch?: (repoUrl: string) => string;
   /**
    * When the persistence layer implements `enqueueLaunchDispatch`,
    * `drainScheduler` writes a durable `task_launch_dispatch` row for each
@@ -629,6 +634,7 @@ export class Orchestrator {
   private readonly defaultPoolId: string | undefined;
   private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
+  private readonly resolveRepoTargetBranch: (repoUrl: string) => string;
 
   private activeWorkflowIds = new Set<string>();
   private deferredTaskIds = new Set<string>();
@@ -701,6 +707,7 @@ export class Orchestrator {
     this.defaultPoolId = config.defaultPoolId;
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
+    this.resolveRepoTargetBranch = config.resolveRepoTargetBranch ?? requireDefaultBranchRemote;
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
     this.responseHandler = new ResponseHandler();
