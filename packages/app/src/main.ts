@@ -109,6 +109,7 @@ import {
   type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
 } from './config.js';
+import { slackDisabledForTests } from './slack-enablement.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   assertExecutionCapacityInvariant,
@@ -5047,6 +5048,10 @@ function createEmbeddedTerminalBackendFromConfig(
     executor: TaskRunner,
     handles: TaskHandleMap,
   ): Promise<void> {
+    if (slackDisabledForTests()) {
+      logger.info('Slack bot not started — disabled in test mode (NODE_ENV=test or INVOKER_DISABLE_SLACK=1)', { module: 'slack' });
+      return;
+    }
     const logFn = (source: string, level: string, message: string) => {
       const logMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
       logger[logMethod](message, { module: source });
