@@ -105,7 +105,7 @@ Required when the diff changes UI-impacting files. Include before/after screensh
 
 If the change is small and has no architectural impact, omit `## Architecture` rather than forcing filler.
 
-If the change touches UI-impacting files, use `skills/visual-proof/SKILL.md` first and include its screenshot/video markdown in `## Visual Proof`. UI-impacting files include `packages/ui/**`, Electron window lifecycle files, preload, main process window wiring, and app menu changes.
+If the change is UI-impacting, use `skills/visual-proof/SKILL.md` first and include its screenshot/video markdown in `## Visual Proof`. UI-impacting means the user-visible experience changes, even when no file under `packages/ui/**` changes. This includes `packages/ui/**`, Electron window lifecycle files, preload, main process window wiring, app menu changes, task status changes, task error or output text shown in panels, approval/reject behavior, workflow state shown in the DAG or inspector, and web-surface output.
 
 Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Review Claim / ## Review Lane / ## Safety Invariant / ## Slice Rationale / ## Non-goals / ## Test Plan / ## Revert Plan` as the floor, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
 
@@ -189,7 +189,7 @@ Manual `gh pr edit` is a last-resort escape hatch only when `create-pr` itself i
 - ensure revert guidance is honest
 - validate the body with `node scripts/validate-pr-body.mjs --body-file <file>`
 - for stacked PRs, update title/body through `node scripts/create-pr.mjs --update-existing ...`, not `gh pr edit`
-- for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`
+- for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`; classify by user-visible behavior, not by path alone
 
 If you include `## Architecture`, keep the diagrams renderable by GitHub Mermaid.
 Always quote labels that contain prose, punctuation, or code-ish text such as `reviewGate.artifacts[]`.
