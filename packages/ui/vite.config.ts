@@ -18,6 +18,7 @@ export default defineConfig({
     sourcemap: false, // Disable source maps to save memory
     minify: 'esbuild', // esbuild is faster and uses less memory than terser
     rollupOptions: {
+      input: { index: 'index.html', web: 'web.html' },
       output: {
         // Dependency-aware vendor splitting: bin each node_modules file into
         // a named chunk based on its resolved path. This avoids the empty
