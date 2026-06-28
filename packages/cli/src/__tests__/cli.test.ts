@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -18,10 +18,26 @@ function writeStandalonePlan(dir: string, body: string): string {
   return planPath;
 }
 
-function runCli(args: string[]) {
-  return spawnSync(process.execPath, [cliPath, ...args], {
-    cwd: repoRoot,
-    encoding: 'utf8',
+function runCli(args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.once('error', rejectRun);
+    child.once('close', (status) => {
+      resolveRun({ status, stdout, stderr });
+    });
   });
 }
 
@@ -66,17 +82,42 @@ describe('invoker-cli', () => {
     expect(lockfile).toContain('  zod@4.4.3:');
   });
 
-  it('--help exits 0', () => {
-    const result = runCli(['--help']);
+  it('--help exits 0', async () => {
+    const result = await runCli(['--help']);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('invoker-cli run <plan.yaml>');
   });
 
-  it('--help lists the MCP server command and JSON-only output contract', () => {
-    const result = runCli(['--help']);
+  it('--help lists the MCP server command and JSON-only output contract', async () => {
+    const result = await runCli(['--help']);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('invoker-cli mcp');
     expect(result.stdout).toContain('Emit only a machine-readable result summary on stdout.');
+  });
+
+  it('lists worker kinds from the registry', async () => {
+    const output = captureProcessOutput();
+
+    const code = await main(['worker', 'list'], {
+      createMessageBus: () => {
+        throw new Error('worker list should not open IPC');
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(output.stdout).toContain('Worker kinds');
+    expect(output.stdout).toContain('autofix');
+    output.restore();
+  });
+
+  it('rejects unknown worker kinds with a clear non-zero error', async () => {
+    const output = captureProcessOutput();
+
+    const code = await main(['worker', 'missing-kind']);
+
+    expect(code).toBe(1);
+    expect(output.stderr).toContain('Unknown worker kind: "missing-kind"');
+    output.restore();
   });
 
   it('mcp command starts the MCP server runner', async () => {
@@ -88,16 +129,16 @@ describe('invoker-cli', () => {
     expect(runMcpServer).toHaveBeenCalledTimes(1);
   });
 
-  it('runs the hello-world fixture with an isolated db dir', () => {
+  it('runs the hello-world fixture with an isolated db dir', async () => {
     const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-test-db-'));
-    const result = runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir]);
+    const result = await runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('hello-from-invoker-cli');
   });
 
-  it('--json emits only a workflow result object on stdout', () => {
+  it('--json emits only a workflow result object on stdout', async () => {
     const dbDir = mkdtempSync(join(tmpdir(), 'invoker-cli-json-db-'));
-    const result = runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir, '--json']);
+    const result = await runCli(['run', fixturePlan, '--standalone', '--db-dir', dbDir, '--json']);
     expect(result.status).toBe(0);
     const json = JSON.parse(result.stdout);
     expect(json.workflow.status).toBe('success');
@@ -105,11 +146,11 @@ describe('invoker-cli', () => {
     expect(result.stderr).toBe('');
   });
 
-  it('invalid YAML exits non-zero with a validation error', () => {
+  it('invalid YAML exits non-zero with a validation error', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-invalid-'));
     const invalidPlan = join(dir, 'invalid.yaml');
     writeFileSync(invalidPlan, 'name: [broken\n', 'utf8');
-    const result = runCli(['run', invalidPlan, '--standalone', '--db-dir', join(dir, 'db')]);
+    const result = await runCli(['run', invalidPlan, '--standalone', '--db-dir', join(dir, 'db')]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('Invalid YAML');
   });
@@ -212,7 +253,7 @@ tasks:
     output.restore();
   }, 60_000);
 
-  it('standalone prompt-only plans route through the execution engine', () => {
+  it('standalone prompt-only plans route through the execution engine', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-prompt-'));
     const planPath = writeStandalonePlan(dir, `name: Prompt-only standalone
 repoUrl: __REPO_ROOT__
@@ -224,7 +265,7 @@ tasks:
     executionAgent: missing-agent
 `);
 
-    const result = runCli(['run', planPath, '--standalone', '--db-dir', join(dir, 'db'), '--json']);
+    const result = await runCli(['run', planPath, '--standalone', '--db-dir', join(dir, 'db'), '--json']);
 
     expect(result.status).not.toBe(0);
     const json = JSON.parse(result.stdout);
