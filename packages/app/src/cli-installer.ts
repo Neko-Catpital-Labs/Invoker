@@ -116,6 +116,10 @@ function isWritableDir(dir: string): boolean {
   }
 }
 
+function canWriteCliTarget(cliPath: string): boolean {
+  return isWritableDir(dirname(cliPath));
+}
+
 export function selectInstallDir(
   context: CliInstallerContext,
 ): { dir: string; warning?: string } | null {
@@ -209,10 +213,11 @@ export function updateInvokerCli(context: CliInstallerContext): CliInstallResult
     if (installed?.version === context.appVersion) {
       return { ok: true, updated: false, installedTo: installed.path, status: resolveCliInstallerStatus(context) };
     }
-    // Prefer updating an existing install in place — its dir is already on
-    // the user's effective PATH.
+    // Prefer updating an existing install in place when the app can replace
+    // it. If PATH exposes a system-level install, fall back to a writable
+    // candidate instead of failing the whole install.
     let targetPath: string;
-    if (installed) {
+    if (installed && canWriteCliTarget(installed.path)) {
       targetPath = installed.path;
     } else {
       const selection = selectInstallDir(context);
