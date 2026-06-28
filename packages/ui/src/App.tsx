@@ -120,6 +120,12 @@ function isWorkflowEmptyStateTabTarget(target: EventTarget | null, graphSurface:
   return target === graphSurface || emptyState.contains(target);
 }
 
+function isFocusedWorkflowSurfaceTabTarget(target: EventTarget | null, graphSurface: HTMLElement | null): boolean {
+  if (!(target instanceof HTMLElement) || !graphSurface) return false;
+  const focusedSurface = graphSurface.querySelector<HTMLElement>('[data-testid="focused-workflow-surface"]');
+  return Boolean(focusedSurface?.contains(target));
+}
+
 function normalizedSearchText(value: string | undefined): string {
   return (value ?? '').toLowerCase();
 }
@@ -1102,7 +1108,10 @@ export function App() {
       }
 
       if (event.key === 'Tab') {
-        if (isWorkflowEmptyStateTabTarget(event.target, graphSurfaceRef.current)) {
+        if (
+          isWorkflowEmptyStateTabTarget(event.target, graphSurfaceRef.current)
+          || isFocusedWorkflowSurfaceTabTarget(event.target, graphSurfaceRef.current)
+        ) {
           return;
         }
         event.preventDefault();

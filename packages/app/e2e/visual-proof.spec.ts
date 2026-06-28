@@ -352,9 +352,25 @@ async function openContextMenu(page: Page, locator: Locator) {
   return menu;
 }
 
-async function selectWorkflowNode(page: Page, workflowId: string): Promise<void> {
+async function closeFocusedWorkflowSurface(page: Page): Promise<void> {
+  const focusedSurface = page.getByTestId('focused-workflow-surface');
+  if (!(await focusedSurface.isVisible({ timeout: 500 }).catch(() => false))) {
+    return;
+  }
+
+  await page.getByRole('button', { name: 'All runs' }).click();
+  await expect(focusedSurface).not.toBeVisible({ timeout: 5000 });
+}
+
+async function selectWorkflowNode(
+  page: Page,
+  workflowId: string,
+  options: { keepFocusedSurface?: boolean } = {},
+): Promise<void> {
   const node = workflowNode(page, workflowId);
   const miniDag = page.getByTestId('selected-workflow-mini-dag');
+
+  await closeFocusedWorkflowSurface(page);
 
   if (await miniDag.isVisible({ timeout: 500 }).catch(() => false)) {
     await page.getByTestId('workflow-graph-react-flow').click({ position: { x: 8, y: 8 } });
@@ -373,6 +389,9 @@ async function selectWorkflowNode(page: Page, workflowId: string): Promise<void>
       await node.dispatchEvent('click', { bubbles: true });
     }
     if (await miniDag.isVisible({ timeout: 1500 }).catch(() => false)) {
+      if (!options.keepFocusedSurface) {
+        await closeFocusedWorkflowSurface(page);
+      }
       return;
     }
     await page.getByRole('button', { name: 'Refresh' }).click();
@@ -380,9 +399,16 @@ async function selectWorkflowNode(page: Page, workflowId: string): Promise<void>
   }
 
   await expect(miniDag).toBeVisible({ timeout: 10000 });
+  if (!options.keepFocusedSurface) {
+    await closeFocusedWorkflowSurface(page);
+  }
 }
 
-async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<string> {
+async function loadPlanAndSelectWorkflow(
+  page: Page,
+  plan: unknown,
+  options: { keepFocusedSurface?: boolean } = {},
+): Promise<string> {
   const beforeIds = await page.evaluate(async () => {
     const workflows = await window.invoker.listWorkflows();
     return workflows.map((workflow: { id: string }) => workflow.id);
@@ -397,7 +423,7 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
   expect(workflow?.id).toBeTruthy();
   await page.getByRole('button', { name: 'Refresh' }).click();
   await page.waitForTimeout(300);
-  await selectWorkflowNode(page, workflow!.id);
+  await selectWorkflowNode(page, workflow!.id, options);
   return workflow!.id;
 }
 async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId: string, now: Date): Promise<void> {
@@ -447,7 +473,7 @@ test.describe('Visual proof capture', () => {
   });
 
   test('focused-active-run-local-graph — selected run owns the surface', async ({ page }) => {
-    await loadPlanAndSelectWorkflow(page, DAG_DETERMINISM_PLAN);
+    await loadPlanAndSelectWorkflow(page, DAG_DETERMINISM_PLAN, { keepFocusedSurface: true });
 
     const focusedSurface = page.getByTestId('focused-workflow-surface');
     await expect(focusedSurface).toBeVisible();
@@ -456,6 +482,7 @@ test.describe('Visual proof capture', () => {
     await expect(focusedSurface.getByTestId('focused-workflow-task-dag')).toBeVisible();
     await expect(focusedSurface.locator('.react-flow__node[data-testid$="task-a"]')).toBeVisible();
     await expect(focusedSurface.locator('.react-flow__node[data-testid$="task-e"]')).toBeVisible();
+    await expect(page.getByTestId('collapsible-guide-toggle')).toHaveText('Run guide');
 
     await captureScreenshot(page, 'focused-active-run-local-graph');
   });

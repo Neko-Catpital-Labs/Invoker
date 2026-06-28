@@ -212,9 +212,20 @@ async function selectWorkflowNode(page: Page, workflowId?: string): Promise<void
   await miniDag.waitFor({ state: 'visible', timeout: 10000 });
 }
 
+async function closeFocusedWorkflowSurface(page: Page): Promise<void> {
+  const focusedSurface = page.getByTestId('focused-workflow-surface');
+  if (!(await focusedSurface.isVisible({ timeout: 500 }).catch(() => false))) {
+    return;
+  }
+
+  await page.getByRole('button', { name: 'All runs' }).click();
+  await expect(focusedSurface).not.toBeVisible({ timeout: 5000 });
+}
+
 /** Select the first workflow node so the reskinned mini-DAG renders task nodes. */
 export async function selectFirstWorkflow(page: Page): Promise<void> {
   await selectWorkflowNode(page);
+  await closeFocusedWorkflowSurface(page);
 }
 
 /** Load a plan into the running app via the IPC bridge and wait for its mini-DAG to render. */
@@ -241,6 +252,7 @@ export async function loadPlan(page: Page, plan: { tasks: readonly { id: string 
   );
   await page.getByRole('button', { name: 'Refresh' }).click();
   await selectWorkflowNode(page, workflowId ?? undefined);
+  await closeFocusedWorkflowSurface(page);
   await page.locator(`.react-flow__node[data-testid$="${plan.tasks[0].id}"]`).first().waitFor({ state: 'visible', timeout: 10000 });
 }
 

@@ -39,6 +39,10 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('workflow-empty-state')).toBeInTheDocument();
     expect(screen.getByText('Drive Invoker from a goal')).toBeInTheDocument();
     expect(screen.getByText('plan "Fix a failing test"')).toBeInTheDocument();
+    expect(screen.getByTestId('collapsible-guide-toggle')).toHaveTextContent('First-run guide');
+
+    fireEvent.click(screen.getByTestId('collapsible-guide-toggle'));
+    expect(screen.getByText('Review the plan graph before starting a workflow.')).toBeInTheDocument();
   });
 
   it('renders left rail navigation and workflow controls', () => {
@@ -99,10 +103,65 @@ describe('App launch (component)', () => {
     expect(within(focusedSurface).getAllByText('Approve migration').length).toBeGreaterThan(0);
     expect(within(focusedSurface).getByText('Local task graph')).toBeInTheDocument();
     expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
+    expect(screen.getByTestId('collapsible-guide-toggle')).toHaveTextContent('Run guide');
 
     fireEvent.click(screen.getByTestId('focused-workflow-back'));
     expect(screen.queryByTestId('focused-workflow-surface')).not.toBeInTheDocument();
     expect(screen.getByTestId('workflow-node-wf-focus')).toBeInTheDocument();
+  });
+
+  it('counts all attention tasks while showing only the focused run shortlist', async () => {
+    const workflow: WorkflowMeta = {
+      id: 'wf-attention',
+      name: 'Attention run',
+      status: 'needs_input',
+      baseBranch: 'master',
+    };
+    const attentionTasks = Array.from({ length: 5 }, (_, index) => makeUITask({
+      id: `wf-attention/task-${index + 1}`,
+      description: `Needs attention ${index + 1}`,
+      workflowId: 'wf-attention',
+      status: 'awaiting_approval',
+      command: `echo ${index + 1}`,
+    }));
+    mock.setTasks(attentionTasks, [workflow]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('workflow-node-wf-attention'));
+
+    const focusedSurface = await screen.findByTestId('focused-workflow-surface');
+    await waitFor(() => {
+      const attentionLabel = within(focusedSurface).getAllByText('Needs attention')[0];
+      expect(within(attentionLabel.parentElement as HTMLElement).getByText('5')).toBeInTheDocument();
+      expect(within(focusedSurface).getByText('Needs attention 4')).toBeInTheDocument();
+      expect(within(focusedSurface).queryByText('Needs attention 5')).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps first workflow auto-selection after empty-state actions', async () => {
+    render(<App />);
+
+    const emptyState = await screen.findByTestId('workflow-empty-state');
+    fireEvent.click(within(emptyState).getByRole('button', { name: 'Open Plan' }));
+
+    const workflow: WorkflowMeta = {
+      id: 'wf-arriving',
+      name: 'Arriving workflow',
+      status: 'running',
+      baseBranch: 'master',
+    };
+    mock.setTasks([
+      makeUITask({
+        id: 'wf-arriving/task-1',
+        description: 'Arriving task',
+        workflowId: 'wf-arriving',
+        command: 'echo arriving',
+      }),
+    ], [workflow]);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Arriving task');
+    });
   });
 
   it('warns when no Claude or Codex CLI is installed', async () => {

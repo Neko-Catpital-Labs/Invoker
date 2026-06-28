@@ -5,6 +5,7 @@ import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import type { WorkflowCoreActivity } from '../lib/workflow-core-activity.js';
 import { deriveWorkflowGraph, layoutWorkflowGraph, type WorkflowGraphEdge } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
+import { CollapsibleGuideButton } from './CollapsibleGuideButton.js';
 import {
   Background,
   Controls,
@@ -50,6 +51,11 @@ const nodeTypes = {
   workflowNode: WorkflowFlowNode,
 };
 const WATCHDOG_RECOVERY_MISS_COUNT = 3;
+const FIRST_RUN_GUIDE_ITEMS = [
+  'Start from a goal in the Invoker terminal, or open an existing plan.',
+  'Check setup if local tools or helper skills are missing.',
+  'Review the plan graph before starting a workflow.',
+];
 
 function WorkflowGraphEmptyState({
   onOpenPlan,
@@ -74,6 +80,14 @@ function WorkflowGraphEmptyState({
     ['Task terminals', 'Logs stay attached to the task and run you are inspecting.'],
     ['Approvals', 'Schema, merge, and manual gates pause here for a decision.'],
   ];
+  const handleOpenPlanClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onOpenPlan?.();
+  };
+  const handleOpenSetupClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onOpenSetup?.();
+  };
 
   return (
     <div
@@ -99,7 +113,7 @@ function WorkflowGraphEmptyState({
                 {onOpenPlan && (
                   <button
                     type="button"
-                    onClick={onOpenPlan}
+                    onClick={handleOpenPlanClick}
                     className="rounded-md bg-blue-600 px-3 py-2 text-xs font-medium text-white shadow-lg shadow-blue-950/30 hover:bg-blue-500"
                   >
                     Open Plan
@@ -108,7 +122,7 @@ function WorkflowGraphEmptyState({
                 {onOpenSetup && (
                   <button
                     type="button"
-                    onClick={onOpenSetup}
+                    onClick={handleOpenSetupClick}
                     className="rounded-md border border-slate-600 bg-slate-900/80 px-3 py-2 text-xs font-medium text-slate-100 hover:bg-slate-800"
                   >
                     Check Setup
@@ -236,6 +250,7 @@ function WorkflowGraphEmptyState({
           </aside>
         </div>
       </div>
+      <CollapsibleGuideButton title="First-run guide" items={FIRST_RUN_GUIDE_ITEMS} />
     </div>
   );
 }

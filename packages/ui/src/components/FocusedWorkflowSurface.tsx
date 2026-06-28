@@ -4,6 +4,7 @@ import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import { formatStatusLabel } from '../lib/colors.js';
 import { TaskDAG } from './TaskDAG.js';
+import { CollapsibleGuideButton } from './CollapsibleGuideButton.js';
 
 interface FocusedWorkflowSurfaceProps {
   workflow: WorkflowMeta;
@@ -27,6 +28,11 @@ const ATTENTION_STATUSES: ReadonlySet<WorkflowStatus | TaskState['status']> = ne
   'needs_input',
   'review_ready',
 ]);
+const FOCUSED_RUN_GUIDE_ITEMS = [
+  'Use All runs to return to the workflow map.',
+  'Select a task in the local graph to inspect gates, logs, and available actions.',
+  'Use task terminals when you need the live output behind a node.',
+];
 
 function workflowStatusLabel(status: WorkflowStatus): string {
   return status.replaceAll('_', ' ');
@@ -67,7 +73,8 @@ export function FocusedWorkflowSurface({
 }: FocusedWorkflowSurfaceProps): JSX.Element {
   const workflowTasks = [...tasks.values()];
   const counts = countTasksByStatus(workflowTasks);
-  const needsAttention = workflowTasks.filter((task) => ATTENTION_STATUSES.has(task.status)).slice(0, 4);
+  const attentionTasks = workflowTasks.filter((task) => ATTENTION_STATUSES.has(task.status));
+  const needsAttention = attentionTasks.slice(0, 4);
   const runningCount = counts.get('running') ?? 0;
   const completedCount = (counts.get('completed') ?? 0) + (counts.get('closed') ?? 0);
   const visual = workflowStatusVisual(workflow.status);
@@ -75,7 +82,7 @@ export function FocusedWorkflowSurface({
     { label: 'Progress', value: summarizeProgress(workflowTasks), tone: 'text-slate-100' },
     { label: 'Running', value: String(runningCount), tone: runningCount > 0 ? 'text-blue-200' : 'text-slate-400' },
     { label: 'Done', value: String(completedCount), tone: completedCount > 0 ? 'text-emerald-200' : 'text-slate-400' },
-    { label: 'Needs attention', value: String(needsAttention.length), tone: needsAttention.length > 0 ? 'text-amber-200' : 'text-slate-400' },
+    { label: 'Needs attention', value: String(attentionTasks.length), tone: attentionTasks.length > 0 ? 'text-amber-200' : 'text-slate-400' },
   ];
 
   return (
@@ -243,6 +250,7 @@ export function FocusedWorkflowSurface({
           </div>
         </section>
       </div>
+      <CollapsibleGuideButton title="Run guide" items={FOCUSED_RUN_GUIDE_ITEMS} />
     </div>
   );
 }

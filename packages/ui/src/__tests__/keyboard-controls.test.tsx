@@ -169,6 +169,23 @@ describe('Side rail controls (component)', () => {
     expect(nextEmptyAction.defaultPrevented).toBe(false);
   });
 
+  it('allows native Tab navigation inside the focused workflow surface', async () => {
+    await renderKeyboardFixture(mock);
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    const backButton = await screen.findByTestId('focused-workflow-back');
+    backButton.focus();
+
+    const focusedSurfaceTab = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      bubbles: true,
+      cancelable: true,
+    });
+    backButton.dispatchEvent(focusedSurfaceTab);
+
+    expect(focusedSurfaceTab.defaultPrevented).toBe(false);
+  });
+
   it('navigates workflow nodes with arrows and opens workflow menu with Enter', async () => {
     await renderKeyboardFixture(mock);
 
