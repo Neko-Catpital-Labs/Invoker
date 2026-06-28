@@ -86,4 +86,27 @@ describe('headless worker autofix', () => {
       'normal',
     );
   });
+
+  it('lists worker kinds from the registry', async () => {
+    let stdout = '';
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: any) => {
+      stdout += chunk.toString();
+      return true;
+    });
+
+    try {
+      await runHeadless(['worker', 'list'], {} as any);
+    } finally {
+      write.mockRestore();
+    }
+
+    expect(stdout).toContain('Worker kinds');
+    expect(stdout).toContain('autofix');
+  });
+
+  it('rejects unknown worker kinds with a clear error', async () => {
+    await expect(runHeadless(['worker', 'missing-kind'], {} as any)).rejects.toThrow(
+      'Unknown worker kind: "missing-kind"',
+    );
+  });
 });
