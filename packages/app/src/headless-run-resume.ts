@@ -17,6 +17,7 @@ import {
 } from '@invoker/execution-engine';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
+import { startWebSurfaceForHeadless } from './web/start-web-surface.js';
 import {
   fixWithAgentAction,
   rebaseRetry,
@@ -94,13 +95,15 @@ export async function headlessRun(
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
 
+  const apiServerDeps = buildHeadlessApiServerDeps(deps, taskExecutor);
   const api = startApiServer({
     logger: deps.logger,
     orchestrator,
     persistence: deps.persistence,
     executorRegistry: deps.executorRegistry,
-    ...buildHeadlessApiServerDeps(deps, taskExecutor),
+    ...apiServerDeps,
   });
+  const webSurface = startWebSurfaceForHeadless(deps, apiServerDeps);
 
   const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
   orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -122,6 +125,7 @@ export async function headlessRun(
     }
     process.stdout.write('[headless] --no-track enabled: submission accepted; exiting without tracking.\n');
     await api.close().catch(() => {});
+    await webSurface?.close().catch(() => {});
     return;
   }
 
@@ -140,6 +144,7 @@ export async function headlessRun(
   }
 
   await api.close().catch(() => {});
+  await webSurface?.close().catch(() => {});
 }
 
 export async function headlessResume(
@@ -156,13 +161,15 @@ export async function headlessResume(
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
 
+  const apiServerDeps = buildHeadlessApiServerDeps(deps, taskExecutor);
   const api = startApiServer({
     logger: deps.logger,
     orchestrator,
     persistence: deps.persistence,
     executorRegistry: deps.executorRegistry,
-    ...buildHeadlessApiServerDeps(deps, taskExecutor),
+    ...apiServerDeps,
   });
+  const webSurface = startWebSurfaceForHeadless(deps, apiServerDeps);
 
   orchestrator.syncFromDb(workflowId);
   const allStarted = orchestrator.startExecution();
@@ -180,11 +187,13 @@ export async function headlessResume(
     }
     process.stdout.write('[headless] --no-track enabled: resume accepted; exiting without tracking.\n');
     await api.close().catch(() => {});
+    await webSurface?.close().catch(() => {});
     return;
   }
 
   if (allStarted.length === 0) {
     await api.close().catch(() => {});
+    await webSurface?.close().catch(() => {});
     return;
   }
 
@@ -199,6 +208,7 @@ export async function headlessResume(
   });
 
   await api.close().catch(() => {});
+  await webSurface?.close().catch(() => {});
 }
 
 export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<void> {
