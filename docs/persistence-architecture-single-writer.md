@@ -13,9 +13,12 @@ The Invoker persistence layer (SQLiteAdapter) is backed by sql.js (WASM SQLite),
 ### Acceptance Rules
 
 1. **Owner process**: GUI process (main.ts) or standalone headless process (when `INVOKER_HEADLESS_STANDALONE=1`).
-2. **Non-owner processes**: headless CLI invocations (when GUI is running).
-3. **Non-owner processes CANNOT initialize writable persistence**. Attempting to do so throws or delegates.
-4. **All non-owner mutations MUST traverse RPC** (`headless.run`, `headless.resume`, `headless.exec` channels via IpcBus).
+2. **GUI viewer** opens no shared database file. `openMainProcessDatabase({ detachedViewer: true })` returns process-local placeholder persistence, while renderer reads delegate to the owner over IPC and live updates arrive via `TASK_DELTA` / `TASK_OUTPUT`.
+3. **Non-owner processes**: headless CLI invocations (when GUI is running).
+4. **Non-owner processes CANNOT initialize writable persistence**. Attempting to do so throws or delegates.
+5. **All non-owner mutations MUST traverse RPC** (`headless.run`, `headless.resume`, `headless.exec` channels via IpcBus).
+
+Implementation note: today's placeholder is SQLite ephemeral storage via `SQLiteAdapter.createEphemeral()`. The raw SQLite `:memory:` sentinel is private to the data-store adapter so viewer startup code cannot accidentally switch back to opening `invoker.db`.
 
 ### Implementation Map
 
@@ -119,7 +122,8 @@ This table lists every mutating command path and how the owner-boundary contract
 - **Static owner-boundary guard**: `bash scripts/check-owner-boundary.sh` fails if:
   - a non-test runtime module calls `SQLiteAdapter.create(...)` outside owner modules,
   - a non-test runtime module value-imports `SQLiteAdapter` outside owner modules,
-  - owner init path in `main.ts` stops passing `ownerCapability: !readOnly`.
+  - runtime code opens raw SQLite `:memory:` instead of `SQLiteAdapter.createEphemeral()` or the viewer boundary,
+  - `main.ts` stops opening persistence through `openMainProcessDatabase()`.
 - **Included in required `test:all`** via `scripts/test-suites/required/15-owner-boundary-policy.sh`.
 
 ### Future Work
