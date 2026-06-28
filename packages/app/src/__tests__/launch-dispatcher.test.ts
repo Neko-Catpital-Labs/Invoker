@@ -665,22 +665,33 @@ describe('LaunchDispatcher', () => {
       expect(adapter.loadLaunchDispatchById(1)?.lastError).toBeUndefined();
     });
 
-    it('abandons a dispatch row when the selected attempt changed after lease', () => {
-      const task = seedWorkflowAndTask('wf-a/t-stale', 'wf-a', {
-        selectedAttemptId: 'attempt-old',
+    // The two tests below isolate the app-layer lineage guard's failure
+    // modes. The DB task row deliberately MATCHES the dispatch row's
+    // attempt id and generation, so the SQL-level stale guard in
+    // claimLaunchDispatchAtomic leases the row cleanly; only the
+    // orchestrator's in-memory view (the `getTask` mock) diverges,
+    // forcing the divergence to be caught by dispatchLineageMismatch.
+    // Each test flips exactly ONE lineage field so that removing either
+    // check would fail exactly one test.
+
+    it('does not launch when only the execution generation differs from the live task', () => {
+      const task = seedWorkflowAndTask('wf-a/t-gen', 'wf-a', {
+        selectedAttemptId: 'attempt-gen',
         generation: 0,
       });
       const enq = adapter.enqueueLaunchDispatch({
         taskId: task.id,
-        attemptId: 'attempt-old',
+        attemptId: 'attempt-gen',
         workflowId: 'wf-a',
         generation: 0,
       });
+      // Same selected attempt, newer generation: the task was reset to a
+      // fresh execution generation after the row was enqueued.
       const currentTask = {
         ...task,
         execution: {
           ...task.execution,
-          selectedAttemptId: 'attempt-current',
+          selectedAttemptId: 'attempt-gen',
           generation: 1,
         },
       };
@@ -700,9 +711,69 @@ describe('LaunchDispatcher', () => {
       expect(executeTask).not.toHaveBeenCalled();
       const after = adapter.loadLaunchDispatchById(enq.id);
       expect(after?.state).toBe('abandoned');
-      expect(after?.lastError).toMatch(/selected attempt or generation changed/);
+      expect(after?.lastError).toMatch(/does not match task generation/);
       const events = adapter.getEvents(task.id);
-      expect(events.some((event) => event.eventType === 'task.launch_dispatch_invalidated')).toBe(true);
+      const invalidated = events.find(
+        (event) => event.eventType === 'task.launch_dispatch_invalidated',
+      );
+      expect(invalidated).toBeDefined();
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'execution_generation_changed',
+        dispatchGeneration: 0,
+        selectedGeneration: 1,
+      });
+    });
+
+    it('does not launch when only the selected attempt id differs from the live task', () => {
+      const task = seedWorkflowAndTask('wf-a/t-attempt', 'wf-a', {
+        selectedAttemptId: 'attempt-old',
+        generation: 0,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-old',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      // Same generation, different selected attempt: a newer attempt was
+      // selected for the same generation after the row was enqueued.
+      const currentTask = {
+        ...task,
+        execution: {
+          ...task.execution,
+          selectedAttemptId: 'attempt-current',
+          generation: 0,
+        },
+      };
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(currentTask as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/is not the selected attempt/);
+      const events = adapter.getEvents(task.id);
+      const invalidated = events.find(
+        (event) => event.eventType === 'task.launch_dispatch_invalidated',
+      );
+      expect(invalidated).toBeDefined();
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'selected_attempt_changed',
+        dispatchAttemptId: 'attempt-old',
+        selectedAttemptId: 'attempt-current',
+      });
     });
 
     it('abandons the dispatch when readiness is blocked', () => {

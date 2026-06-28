@@ -156,11 +156,12 @@ export class LaunchDispatcher {
         }
         task = readiness.task;
       }
-      if (!this.dispatchMatchesTask(leased, task)) {
+      const mismatch = this.dispatchLineageMismatch(leased, task);
+      if (mismatch) {
         this.abandonInvalidDispatch(
           leased,
-          `Launch dispatch ${leased.id} is stale: selected attempt or generation changed`,
-          'selected_attempt_changed',
+          mismatch.message,
+          mismatch.reason,
           {
             selectedAttemptId: task.execution.selectedAttemptId,
             selectedGeneration: task.execution.generation ?? 0,
@@ -207,9 +208,39 @@ export class LaunchDispatcher {
     return this.orchestrator?.getTask?.(dispatch.taskId);
   }
 
-  private dispatchMatchesTask(dispatch: TaskLaunchDispatch, task: TaskState): boolean {
-    return task.execution.selectedAttemptId === dispatch.attemptId
-      && (task.execution.generation ?? 0) === (dispatch.generation ?? 0);
+  /**
+   * App-layer lineage check, defense-in-depth behind the SQL-level
+   * stale-candidate guard in {@link claimLaunchDispatchAtomic}: the row
+   * was validated against the DB snapshot at claim time, but the
+   * orchestrator's in-memory task view may have moved on since (a new
+   * attempt was selected, or the execution generation was bumped) before
+   * we re-resolve it here. Returns the precise divergence — attempt id is
+   * checked first, then generation — so the abandon path and its audit
+   * event can name *which* lineage field went stale, not just "something
+   * changed". Returns `undefined` when the row still matches the task.
+   */
+  private dispatchLineageMismatch(
+    dispatch: TaskLaunchDispatch,
+    task: TaskState,
+  ): { reason: string; message: string } | undefined {
+    if (task.execution.selectedAttemptId !== dispatch.attemptId) {
+      return {
+        reason: 'selected_attempt_changed',
+        message:
+          `Launch dispatch ${dispatch.id} is stale: dispatch attempt ${dispatch.attemptId} `
+          + `is not the selected attempt ${task.execution.selectedAttemptId ?? 'none'}`,
+      };
+    }
+    const taskGeneration = task.execution.generation ?? 0;
+    if (taskGeneration !== (dispatch.generation ?? 0)) {
+      return {
+        reason: 'execution_generation_changed',
+        message:
+          `Launch dispatch ${dispatch.id} is stale: dispatch generation ${dispatch.generation ?? 0} `
+          + `does not match task generation ${taskGeneration}`,
+      };
+    }
+    return undefined;
   }
 
   private abandonInvalidDispatch(
