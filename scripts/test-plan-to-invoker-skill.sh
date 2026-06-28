@@ -8,6 +8,7 @@ SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
+EXAMPLES="$SKILL_DIR/references/examples.md"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
@@ -99,6 +100,7 @@ must_contain "$TUTORIAL" "Invoker MCP tool" "Tutorial must document the MCP hand
 
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
+[[ -f "$EXAMPLES" ]] || fail "expected $EXAMPLES"
 [[ -f "$CLAUDE_MD" ]] || fail "expected $CLAUDE_MD"
 
 # Installed agent skills use managed invoker-* copies, not legacy unprefixed symlinks.
@@ -170,6 +172,11 @@ must_contain "$CLAUDE_MD" "Do not run \`git remote\`, \`env\`, \`printenv\`, \`s
 must_contain "$CLAUDE_MD" "Do not write \`version:\` or \`metadata:\` wrappers." "CLAUDE.md must reject legacy benchmark YAML wrappers"
 must_contain "$CLAUDE_MD" "anything that can trigger an agent/autofix" "CLAUDE.md must prevent benchmark autofix-triggering tasks"
 
+must_contain "$SKILL_MD" "Atomic-feature decomposition" "SKILL must document atomic-feature decomposition policy"
+must_contain "$SKILL_MD" "required \`Feature:\` heading" "SKILL must require a Feature heading per implementation task"
+must_contain "$SKILL_MD" "Slicing an already-implemented diff into reviewable PRs is owned by" "SKILL must name make-pr as the PR-splitting owner"
+must_contain "$SKILL_MD" "Feature-level dependency direction" "SKILL must keep a lightweight feature-level dependency-direction check"
+
 must_contain "$SKILL_MD" "Deterministic validation gate" "SKILL must document the primary deterministic proof gate"
 must_contain "$SKILL_MD" 'Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface' "SKILL must record the primary doctor gate"
 must_contain "$SKILL_MD" "Schema-only validation or ad hoc individual script checks are not sufficient as the review gate" "SKILL must reject incomplete primary gates"
@@ -203,6 +210,15 @@ must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-c
 must_contain "$TASK_PATTERNS" "Assume zero context" "Task patterns must define zero-context prompt requirement"
 must_contain "$TASK_PATTERNS" "deterministic pass/fail expectations" "Task patterns must require deterministic prompt outcomes"
 must_contain "$TASK_PATTERNS" "Review compression contract" "Task patterns must define review compression metadata"
+must_contain "$TASK_PATTERNS" "Atomic-feature decomposition contract" "Task patterns must document atomic-feature decomposition contract"
+must_contain "$TASK_PATTERNS" "the name of exactly one atomic feature" "Task patterns must require the Feature heading to name one atomic feature"
+must_contain "$TASK_PATTERNS" "Slicing an already-implemented diff into reviewable PRs is owned by" "Task patterns must name make-pr as the PR-splitting owner"
+must_contain "$TASK_PATTERNS" "Feature-level dependency direction" "Task patterns must keep the feature-level dependency-direction check"
+
+# Examples — atomic-feature decomposition + make-pr ownership of PR slicing
+must_contain "$EXAMPLES" "Atomic-feature decomposition" "Examples must document atomic-feature decomposition"
+must_contain "$EXAMPLES" "\`Feature:\` and \`Feature state:\` metadata" "Examples must show task-level Feature and Feature state metadata"
+must_contain "$EXAMPLES" "Slicing an already-implemented diff into reviewable PRs is owned by" "Examples must name make-pr as the PR-splitting owner"
 
 echo "OK: plan-to-invoker skill contract checks passed"
 
