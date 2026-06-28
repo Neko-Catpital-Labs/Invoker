@@ -23,6 +23,11 @@ must_contain() {
 [[ -f "$SKILL_MD" ]] || fail "expected $SKILL_MD"
 [[ -f "$REVIEW_COMPRESSION_MD" ]] || fail "expected $REVIEW_COMPRESSION_MD"
 
+# The skill must own PR splitting and route slicing decisions through review-compression.
+must_contain "$SKILL_MD" "## Splitting changes into PRs" "make-pr skill must document PR-splitting ownership"
+must_contain "$SKILL_MD" "decomposes work by atomic feature" "make-pr skill must state that planning hands the atomic-feature diff to make-pr"
+must_contain "$SKILL_MD" "\`skills/review-compression/SKILL.md\` is the slicing authority" "make-pr skill must name review-compression as the slicing authority"
+
 # The skill must pin a stack landing order, not just how to slice.
 must_contain "$SKILL_MD" "## Stack ordering" "make-pr skill must document stack landing order"
 must_contain "$SKILL_MD" "Repro/proof comes before the fix." "make-pr skill must land the repro/proof slice before the fix"
