@@ -2744,8 +2744,9 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'invoker:clear':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resume-workflow': {
-        const workflows = persistence.listWorkflows();
-        const workflowId = workflows[0]?.id;
+        const workflows = detachedViewerWorkflows ?? persistence.listWorkflows();
+        const firstWorkflow = workflows[0] as { id?: unknown } | undefined;
+        const workflowId = typeof firstWorkflow?.id === 'string' ? firstWorkflow.id : undefined;
         if (!workflowId) return null;
         return { channel: 'headless.resume', request: { workflowId } };
       }
