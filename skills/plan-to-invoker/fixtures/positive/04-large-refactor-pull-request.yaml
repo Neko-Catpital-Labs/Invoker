@@ -154,11 +154,6 @@ tasks:
     dependencies: [refactor-state-machine, verify-graph-tests]
 
   - id: verify-full-build
-    description: "Build all packages to verify no breakage"
+    description: "Build all packages to verify no breakage; serves as the focused terminal proof"
     command: "pnpm build 2>&1"
     dependencies: [verify-core-tests]
-
-  - id: final-regression
-    description: "Run the full repository test suite as the final regression gate"
-    command: "pnpm run test:all"
-    dependencies: [scaffold-package, move-types, move-dag-utils, extract-action-graph, update-graph-index, refactor-state-machine, write-graph-tests, verify-graph-tests, verify-core-tests, verify-full-build]
