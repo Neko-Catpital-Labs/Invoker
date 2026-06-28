@@ -54,6 +54,12 @@ interface TaskDAGProps {
   onManualViewport?: () => void;
   statusFilters?: Set<string>;
   runningTaskIds?: ReadonlySet<string>;
+  /**
+   * Optional React Flow node id prefix for secondary DAG instances that can be
+   * mounted beside the primary task graph. Domain task ids and callbacks remain
+   * unprefixed.
+   */
+  nodeIdPrefix?: string;
 }
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
@@ -152,7 +158,19 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds }: TaskDAGProps) {
+function TaskDAGInner({
+  tasks,
+  workflows,
+  selectedTaskId,
+  cameraCommand,
+  onTaskClick,
+  onTaskDoubleClick,
+  onTaskContextMenu,
+  onManualViewport,
+  statusFilters,
+  runningTaskIds,
+  nodeIdPrefix = '',
+}: TaskDAGProps) {
   const { fitView, setCenter, getZoom } = useReactFlow();
   const graphRootRef = useRef<HTMLDivElement>(null);
   const prevNodeCount = useRef(0);
@@ -164,6 +182,15 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const initFitFrameRef = useRef(0);
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
+  const flowNodeId = useCallback((taskId: string) => `${nodeIdPrefix}${taskId}`, [nodeIdPrefix]);
+  const flowEdgeId = useCallback((edgeId: string) => `${nodeIdPrefix}${edgeId}`, [nodeIdPrefix]);
+  const taskIdFromNode = useCallback((node: Node): string => {
+    const data = node.data as { taskId?: unknown; task?: { id?: unknown } };
+    if (typeof data.taskId === 'string') return data.taskId;
+    if (typeof data.task?.id === 'string') return data.task.id;
+    if (nodeIdPrefix && node.id.startsWith(nodeIdPrefix)) return node.id.slice(nodeIdPrefix.length);
+    return node.id;
+  }, [nodeIdPrefix]);
 
   const onInitHandler = useCallback(() => {
     initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
@@ -295,7 +322,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
         }
         const showMergeModeRow = gateKind !== 'external_review';
         allNodes.push({
-          id: task.id,
+          id: flowNodeId(task.id),
           type: 'mergeGateNode',
           position: pos,
           data: {
@@ -319,7 +346,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
         });
       } else {
         allNodes.push({
-          id: task.id,
+          id: flowNodeId(task.id),
           type: 'taskNode',
           position: pos,
           data: {
@@ -376,10 +403,12 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       const selectionActive = selectedTaskId === e.source || selectedTaskId === e.target;
       const baseOpacity = edgeDimmed ? 0.15 : e.kind === 'external' ? 0.24 : 1;
 
+      const rawEdgeId = e.id ?? `${e.kind}:${e.source}->${e.target}`;
+
       return {
-        id: e.id ?? `${e.kind}:${e.source}->${e.target}`,
-        source: e.source,
-        target: e.target,
+        id: flowEdgeId(rawEdgeId),
+        source: flowNodeId(e.source),
+        target: flowNodeId(e.target),
         type: 'bundled',
         animated: sourceStatus === 'running' && targetStatus !== 'stale' && e.kind !== 'external',
         style: {
@@ -402,7 +431,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
           label: e.kind === 'external' ? `external ${label}` : label,
           hoverStroke: edgeStyle.hoverStroke,
           hoverWidth: edgeStyle.hoverWidth,
-          routePoints: routedEdgePoints.get(e.id ?? `${e.kind}:${e.source}->${e.target}`),
+          routePoints: routedEdgePoints.get(rawEdgeId),
           external: e.kind === 'external',
           selectionActive,
         },
@@ -410,7 +439,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [activeLayout.positions, onTaskDoubleClick, rawGraph, routedEdgePoints, runningTaskIds, selectedTaskId, statusFilters, tasks, workflows]);
+  }, [activeLayout.positions, flowEdgeId, flowNodeId, onTaskDoubleClick, rawGraph, routedEdgePoints, runningTaskIds, selectedTaskId, statusFilters, tasks, workflows]);
 
   // Merge task-derived nodes with React Flow's internal dimension state.
   // Without this, each task-delta re-render creates new node objects that discard
@@ -466,7 +495,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
 
     const targetId = command.target;
     if (!targetId) return;
-    const node = nodes.find((candidate) => candidate.id === targetId);
+    const node = nodes.find((candidate) => candidate.id === flowNodeId(targetId));
     if (!node) return;
     const frame = requestAnimationFrame(() => {
       if (typeof setCenter === 'function') {
@@ -477,7 +506,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [cameraCommand, fitView, getZoom, nodes, setCenter]);
+  }, [cameraCommand, fitView, flowNodeId, getZoom, nodes, setCenter]);
 
   useEffect(() => {
     if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {
@@ -545,7 +574,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
 
   const onNodeClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
-      const task = tasks.get(node.id);
+      const task = tasks.get(taskIdFromNode(node));
       if (task && onTaskClick) {
         onTaskClick(task);
       }
@@ -560,28 +589,28 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
         }
       }
     },
-    [tasks, onTaskClick, onTaskDoubleClick],
+    [taskIdFromNode, tasks, onTaskClick, onTaskDoubleClick],
   );
 
   const onNodeDoubleClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
-      const task = tasks.get(node.id);
+      const task = tasks.get(taskIdFromNode(node));
       if (task && onTaskDoubleClick) {
         onTaskDoubleClick(task);
       }
     },
-    [tasks, onTaskDoubleClick],
+    [taskIdFromNode, tasks, onTaskDoubleClick],
   );
 
   const onNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: Node) => {
       event.preventDefault();
-      const task = tasks.get(node.id);
+      const task = tasks.get(taskIdFromNode(node));
       if (task && onTaskContextMenu) {
         onTaskContextMenu(task, event);
       }
     },
-    [tasks, onTaskContextMenu],
+    [taskIdFromNode, tasks, onTaskContextMenu],
   );
 
   if (tasks.size === 0) {

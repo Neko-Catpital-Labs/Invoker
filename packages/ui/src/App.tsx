@@ -30,6 +30,7 @@ import { SystemSetupModal } from './components/SystemSetupModal.js';
 import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
+import { FocusedWorkflowSurface } from './components/FocusedWorkflowSurface.js';
 import { groupWorkflowCoreActivity } from './lib/workflow-core-activity.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
@@ -425,6 +426,7 @@ export function App() {
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [focusedWorkflowId, setFocusedWorkflowId] = useState<string | null>(null);
   const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
@@ -698,6 +700,31 @@ export function App() {
   }, [miniDagTasks, selectedTask, selectedWorkflow, selectedWorkflowId, tasks.size, workflowSelectionDismissed]);
   const isSelectedWorkflowGraphRefreshing = displayedSelectedWorkflowGraph !== null
     && !(selectedWorkflow && miniDagTasks.size > 0);
+  const focusedWorkflowGraph = useMemo<SelectedWorkflowGraphSnapshot | null>(() => {
+    if (!focusedWorkflowId) return null;
+    const workflow = workflows.get(focusedWorkflowId)
+      ?? (displayedSelectedWorkflowGraph?.workflowId === focusedWorkflowId
+        ? displayedSelectedWorkflowGraph.workflow
+        : null);
+    if (!workflow) return null;
+    const workflowTasks = new Map<string, TaskState>();
+    for (const task of tasks.values()) {
+      if (task.config.workflowId === focusedWorkflowId) {
+        workflowTasks.set(task.id, task);
+      }
+    }
+    if (workflowTasks.size === 0 && displayedSelectedWorkflowGraph?.workflowId === focusedWorkflowId) {
+      return displayedSelectedWorkflowGraph;
+    }
+    return {
+      workflowId: focusedWorkflowId,
+      workflow,
+      tasks: workflowTasks,
+    };
+  }, [displayedSelectedWorkflowGraph, focusedWorkflowId, tasks, workflows]);
+  const isFocusedWorkflowGraphRefreshing = focusedWorkflowGraph !== null
+    && focusedWorkflowGraph.workflowId === displayedSelectedWorkflowGraph?.workflowId
+    && isSelectedWorkflowGraphRefreshing;
   const selectedTaskDagWorkflows = useMemo(() => {
     const workflowForDag = displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow;
     if (!workflowForDag || workflows.has(workflowForDag.id)) {
@@ -909,6 +936,11 @@ export function App() {
     recenterForSelection('workflow', workflowId);
     focusKeyboardRegion('workflowGraph');
   }, [focusKeyboardRegion, recenterForSelection]);
+
+  const clearFocusedWorkflow = useCallback(() => {
+    setFocusedWorkflowId(null);
+    focusKeyboardRegion('workflowGraph');
+  }, [focusKeyboardRegion]);
 
   const selectTaskById = useCallback((taskId: string) => {
     const task = tasks.get(taskId);
@@ -1267,6 +1299,7 @@ export function App() {
   const handleWorkflowClick = useCallback((workflowId: string) => {
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
+    setFocusedWorkflowId(workflowId);
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
@@ -1301,6 +1334,7 @@ export function App() {
 
     setSelectedTaskId(null);
     setSelectedWorkflowId(null);
+    setFocusedWorkflowId(null);
     setWorkflowSelectionDismissed(true);
   }, [contextMenu, workflowContextMenu]);
 
@@ -1565,7 +1599,6 @@ export function App() {
         // Parse locally just for UI display state
         const parsed = yaml.load(planText) as any;
         setPlanName(parsed?.name ?? 'Untitled Plan');
-        setOnFinish(parsed?.onFinish ?? 'merge');
         refreshTaskGraph();
       } catch (err) {
         console.error('Failed to load plan:', err);
@@ -1624,9 +1657,9 @@ export function App() {
       setHasLoadedPlan(false);
       setHasStarted(false);
       setPlanName(null);
-      setOnFinish('merge');
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
+      setFocusedWorkflowId(null);
       setModal({ type: 'none' });
       setStatusFilters(new Set<WorkflowStatus>());
     } catch (err) {
@@ -1648,6 +1681,7 @@ export function App() {
       setPlanName(null);
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
+      setFocusedWorkflowId(null);
       setModal({ type: 'none' });
     } catch (err) {
       console.error('Failed to delete workflows:', err);
@@ -2119,6 +2153,24 @@ export function App() {
                         />
                       </div>
                     </FloatingGraphPanel>
+                  )}
+                  {focusedWorkflowGraph !== null && (
+                    <div className="absolute inset-0 z-20">
+                      <FocusedWorkflowSurface
+                        workflow={focusedWorkflowGraph.workflow}
+                        tasks={focusedWorkflowGraph.tasks}
+                        workflows={selectedTaskDagWorkflows}
+                        selectedTaskId={selectedTaskId}
+                        cameraCommand={cameraCommand}
+                        runningTaskIds={runningTaskIds}
+                        isRefreshing={isFocusedWorkflowGraphRefreshing}
+                        onBackToRuns={clearFocusedWorkflow}
+                        onTaskClick={handleTaskClick}
+                        onTaskDoubleClick={handleTaskDoubleClick}
+                        onTaskContextMenu={handleTaskContextMenu}
+                        onManualViewport={handleManualViewport}
+                      />
+                    </div>
                   )}
                 </>
               )}

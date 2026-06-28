@@ -446,6 +446,20 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
   });
 
+  test('focused-active-run-local-graph — selected run owns the surface', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, DAG_DETERMINISM_PLAN);
+
+    const focusedSurface = page.getByTestId('focused-workflow-surface');
+    await expect(focusedSurface).toBeVisible();
+    await expect(focusedSurface.getByRole('heading', { name: 'DAG determinism test' })).toBeVisible();
+    await expect(focusedSurface.getByText('Local task graph')).toBeVisible();
+    await expect(focusedSurface.getByTestId('focused-workflow-task-dag')).toBeVisible();
+    await expect(focusedSurface.locator('.react-flow__node[data-testid$="task-a"]')).toBeVisible();
+    await expect(focusedSurface.locator('.react-flow__node[data-testid$="task-e"]')).toBeVisible();
+
+    await captureScreenshot(page, 'focused-active-run-local-graph');
+  });
+
   test('graph-camera-lock-navigation — task graph remains usable after keyboard and manual camera moves', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, DAG_DETERMINISM_PLAN);
     await minimizeInspectorIfVisible(page);

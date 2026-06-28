@@ -7,9 +7,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -59,6 +60,49 @@ describe('App launch (component)', () => {
     render(<App />);
     expect(screen.getByTestId('workflow-status-pill-running')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
+  });
+
+  it('opens a focused run surface from the workflow graph', async () => {
+    const workflow: WorkflowMeta = {
+      id: 'wf-focus',
+      name: 'Focused run demo',
+      status: 'running',
+      baseBranch: 'master',
+    };
+    mock.setTasks([
+      makeUITask({
+        id: 'wf-focus/plan',
+        description: 'Create plan',
+        workflowId: 'wf-focus',
+        status: 'completed',
+        command: 'echo plan',
+      }),
+      makeUITask({
+        id: 'wf-focus/approve',
+        description: 'Approve migration',
+        workflowId: 'wf-focus',
+        status: 'awaiting_approval',
+        dependencies: ['wf-focus/plan'],
+        command: 'echo approve',
+      }),
+    ], [workflow]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('workflow-node-wf-focus'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Approve migration');
+    });
+
+    const focusedSurface = await screen.findByTestId('focused-workflow-surface');
+    expect(focusedSurface).toBeInTheDocument();
+    expect(within(focusedSurface).getByRole('heading', { name: 'Focused run demo' })).toBeInTheDocument();
+    expect(within(focusedSurface).getAllByText('Approve migration').length).toBeGreaterThan(0);
+    expect(within(focusedSurface).getByText('Local task graph')).toBeInTheDocument();
+    expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('focused-workflow-back'));
+    expect(screen.queryByTestId('focused-workflow-surface')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-wf-focus')).toBeInTheDocument();
   });
 
   it('warns when no Claude or Codex CLI is installed', async () => {
