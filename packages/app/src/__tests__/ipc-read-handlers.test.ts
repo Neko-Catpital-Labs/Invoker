@@ -124,4 +124,39 @@ describe('registerReadOnlyIpcHandlers', () => {
     expectReadContextWriteToolsAreAbsent();
   });
 
+  function registerViewer(requestImpl: () => Promise<unknown>) {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: { listWorkflows: vi.fn(() => [{ id: 'LOCAL-FALLBACK' }]) } as never,
+      getOrchestrator: () => ({}) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      getOwnerMode: () => false, // viewer mode → delegates to owner
+      getMessageBus: () => ({ request: vi.fn(requestImpl) }),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 0,
+    });
+    return handlers;
+  }
+
+  it('rethrows owner errors instead of silently serving local data (timeout)', async () => {
+    const handlers = registerViewer(() =>
+      Promise.reject(Object.assign(new Error('owner timed out'), { code: 'REQUEST_TIMEOUT' })));
+    await expect(handlers.get('invoker:list-workflows')?.({})).rejects.toThrow(/owner timed out/);
+  });
+
+  it('falls back to local only when the owner has no handler', async () => {
+    const handlers = registerViewer(() =>
+      Promise.reject(Object.assign(new Error('No request handler registered for channel: headless.query'), { code: 'NO_HANDLER' })));
+    await expect(handlers.get('invoker:list-workflows')?.({})).resolves.toEqual([{ id: 'LOCAL-FALLBACK' }]);
+  });
+
 });
