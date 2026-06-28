@@ -404,12 +404,13 @@ describe('lobby verb routing', () => {
     draftedPlanForMock = null;
   });
 
-  function lobbySurface(withOp = true) {
+  function lobbySurface(withOp = true, extra: Partial<ConstructorParameters<typeof SlackSurface>[0]> = {}) {
     return new SlackSurface({
       ...baseConfig(),
       enableImmediateAck: false,
       planningCommandBuilder: () => ({ command: 'cursor', args: ['--print', 'x'] }),
       ...(withOp ? { runWorkflowOp } : {}),
+      ...extra,
     });
   }
 
@@ -576,6 +577,26 @@ describe('lobby verb routing', () => {
     const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
     await messageHandler(surface)({ event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'yes' }, say: say2 });
     expect(runWorkflowOp.mock.calls[0][0]).toEqual({ operation: 'recreate', target: { all: true } });
+  });
+
+  it('acknowledges a fuzzy operational mention immediately, before the classifier returns', async () => {
+    mockSpawn.mockImplementationOnce(() => mockProcess('{"intent":"command","operation":"recreate","target":"all"}'));
+    const surface = lobbySurface(true, { enableImmediateAck: true });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'ack-1' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> can you recreate everything please', ts: 't1', user: 'U1' }, say });
+    // Immediate "processing" receipt posts up front (then is cleared once the confirm is ready).
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Processing your request...', thread_ts: 't1' }));
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not post a processing ack for an instant verb', async () => {
+    runWorkflowOp.mockResolvedValue({ ok: true, summary: '`wf-1`: 1 running, 0 pending, 0 done, 0 failed' });
+    const surface = lobbySurface(true, { enableImmediateAck: true });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> status', ts: 't1', user: 'U1' }, say });
+    expect(say).not.toHaveBeenCalledWith(expect.objectContaining({ text: 'Processing your request...' }));
   });
 
   it('answers a question with no session, workflow, or start_plan', async () => {
