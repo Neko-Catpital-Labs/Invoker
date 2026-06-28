@@ -5,7 +5,7 @@
   "description": "Auditable multi-agent orchestration with a mutating action graph",
   "scripts": {
     "postinstall": "node scripts/electron.cjs --install-only && node scripts/fix-node-pty-spawn-helper.mjs",
-    "test": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/test-invoker-ops-skill.sh && bash scripts/test-make-pr-skill.sh && bash scripts/workspace-test.sh",
+    "test": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/test-invoker-ops-skill.sh && bash scripts/test-make-pr-skill.sh && node scripts/test-check-added-comments.mjs && bash scripts/workspace-test.sh",
     "test:high-resource": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/test-invoker-ops-skill.sh && bash scripts/test-make-pr-skill.sh && INVOKER_VITEST_HIGH_RESOURCE=1 bash scripts/workspace-test.sh",
     "test:low-resource": "pnpm run test",
     "test:low-resource:packages": "bash scripts/workspace-test.sh",
@@ -43,9 +43,10 @@
     "check:deps": "depcruise packages --config .dependency-cruiser.js",
     "check:types": "tsc -p tsconfig.typecheck.json",
     "check:large-files": "node scripts/check-large-files.mjs",
+    "check:comments": "node scripts/check-added-comments.mjs",
     "check:versions": "node scripts/check-version-sync.mjs",
     "bump-version": "node scripts/bump-version.mjs",
-    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && pnpm run check:versions && bash scripts/check-owner-boundary.sh",
+    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && pnpm run check:comments && pnpm run check:versions && bash scripts/check-owner-boundary.sh",
     "lint": "pnpm run check:all"
   },
   "pnpm": {
