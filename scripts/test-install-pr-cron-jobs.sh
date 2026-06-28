@@ -4,6 +4,7 @@
 #   - install writes both markers, */5 schedule, correct worker paths
 #   - install is idempotent (re-run keeps exactly two lines)
 #   - uninstall removes both
+#   - install/uninstall preserve unrelated crontab entries
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,6 +32,9 @@ chmod +x "$TMP/bin/crontab"
 export PATH="$TMP/bin:$PATH"
 export HOME="$TMP/home"
 
+# Preservation: an unrelated user cron entry must survive install + uninstall.
+printf '%s\n' '17 4 * * * echo keep-me # unrelated-cron' > "$CRONTAB_STORE"
+
 bash scripts/install-pr-cron-jobs.sh >/dev/null
 
 cron_now() { crontab -l 2>/dev/null || true; }
@@ -44,6 +48,8 @@ echo "$cr" | grep -F "# invoker-cron-coderabbit-address" | grep -q '^\*/5 \* \* 
   || fail "coderabbit line missing */5 schedule" "$cr"
 echo "$cr" | grep -F "# invoker-cron-pr-conflict-rebase" | grep -q '^\*/5 \* \* \* \*' \
   || fail "conflict line missing */5 schedule" "$cr"
+echo "$cr" | grep -Fq "unrelated-cron" \
+  || fail "unrelated cron entry was removed during install" "$cr"
 
 count="$(cron_now | grep -c 'invoker-cron-' || true)"
 [ "$count" -eq 2 ] || fail "expected 2 cron lines, found $count" "$(cron_now)"
@@ -55,6 +61,8 @@ count="$(cron_now | grep -c 'invoker-cron-' || true)"
 
 # Uninstall removes both.
 bash scripts/uninstall-pr-cron-jobs.sh >/dev/null
+echo "$(cron_now)" | grep -Fq "unrelated-cron" \
+  || fail "unrelated cron entry was removed during uninstall" "$(cron_now)"
 count="$(cron_now | grep -c 'invoker-cron-' || true)"
 [ "$count" -eq 0 ] || fail "after uninstall expected 0 cron lines, found $count" "$(cron_now)"
 
