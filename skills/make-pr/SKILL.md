@@ -14,6 +14,14 @@ Use this skill when the work is already done and the user wants a PR created, up
 For stacked PRs, apply `skills/review-compression/SKILL.md` before you write titles or PR bodies. If one branch mixes more than one local review claim, split the stack first.
 For decomposition or extraction refactors (splitting a large file into modules), one PR moves one cohesive unit: create the target file, move ONE function/class/phase, re-point references, keep the public surface stable. The next unit is the next PR. Bundling several extractions into one branch ("extract prepare + dispatch + finalize") is the default mistake this rule prevents — see the **Decomposition & Extraction Refactors** section of `skills/review-compression/SKILL.md`.
 
+## Splitting changes into PRs
+
+PR splitting is owned here, not by planning. `skills/plan-to-invoker/SKILL.md` decomposes work by atomic feature so each plan task lands one cohesive product change; once that implementation is done, make-pr takes the resulting diff and slices it into one review-claim PR per slice.
+
+`skills/review-compression/SKILL.md` is the slicing authority. Apply its **Boundary Rules** to decide where one PR ends and the next begins (architectural seams such as contract → handler → UI, or migration → write path → read exposure), its **Ordering Rules** to sequence the slices (evidence before change, foundation before behavior, behavior before cleanup), and its **Grouping Rules** to decide what may share a slice (e.g. generated output with the source schema, docs explaining the changed behavior) versus what must split (e.g. behavior fix plus rename, refactor plus new fields).
+
+For Invoker-on-Invoker work, publish the resulting stack through the documented `mergify stack push` flow described under **Invoker-specific publication rule** below, then update each generated stack PR through `node scripts/create-pr.mjs --update-existing` so the per-slice review-claim body lands on the right PR.
+
 ## Stack ordering
 
 Order slices so a reviewer reads the evidence before the change it justifies (see `skills/review-compression/SKILL.md` → Ordering Rules):
