@@ -380,6 +380,49 @@ importers:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2)
 
+  packages/slack-manager:
+    dependencies:
+      '@invoker/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@invoker/data-store':
+        specifier: workspace:*
+        version: link:../data-store
+      '@invoker/execution-engine':
+        specifier: workspace:*
+        version: link:../execution-engine
+      '@invoker/surfaces':
+        specifier: workspace:*
+        version: link:../surfaces
+      '@invoker/transport':
+        specifier: workspace:*
+        version: link:../transport
+      '@invoker/workflow-core':
+        specifier: workspace:*
+        version: link:../workflow-core
+      '@slack/bolt':
+        specifier: ^4.6.0
+        version: 4.6.0(@types/express@5.0.6)
+      dotenv:
+        specifier: ^16.0.0
+        version: 16.6.1
+      yaml:
+        specifier: ^2.7.0
+        version: 2.8.2
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.3
+        version: 25.3.3
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(typescript@5.9.3)(yaml@2.8.2)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2)
+
   packages/surfaces:
     dependencies:
       '@invoker/contracts':
