@@ -21,7 +21,7 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 | "Modify UI component" / "Fix layout" / "Change Electron window UI" | `prompt` + `visualProof: true` | Set `visualProof: true` at plan level; include `description` |
 | **Add visual proof E2E test case** | `prompt` | Add a test to `packages/app/e2e/visual-proof.spec.ts` that sets up the exact UI state being changed and calls `captureScreenshot(page, '<plan-slug>-<state>')`. See `skills/visual-proof/SKILL.md`. |
 | **Capture visual proof (after)** | `command` | `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` — depends on **all** implementation tasks |
-| **Invoker-on-Invoker PR publication** | repo-level workflow note | Keep `onFinish: pull_request` + `mergeMode: github`, then publish/update the commit stack with `mergify stack push` once the branch is ready |
+| **Invoker-on-Invoker PR publication** | repo-level workflow note | Keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the commit stack with `mergify stack push` once the branch is ready |
 
 Command tasks run under the platform default shell unless the command explicitly invokes another shell. Keep commands POSIX-shell portable by default. If a command needs bash-only options such as `set -o pipefail` or `set -euo pipefail`, wrap it explicitly, for example `bash -lc 'set -euo pipefail; ...'`.
 
@@ -257,7 +257,7 @@ description: |
   Constrains ApprovalModal height to 90vh and adds internal scroll.
   Architecture: uses flex-col + overflow-y-auto pattern.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 visualProof: true
 tasks:
   - id: add-visual-proof-test
