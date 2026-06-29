@@ -84,7 +84,7 @@ description: |
 When the target repo is Invoker itself, keep the plan shape normal:
 
 - `onFinish: pull_request`
-- `mergeMode: github`
+- `mergeMode: external_review`
 
 Then make the repo-specific publication step explicit: once the branch's commit stack is ready, publish/update it with `mergify stack push`.
 
@@ -137,7 +137,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 - Feature implementation → implement → focused proof → verify, `onFinish: merge`
 - Multi-step refactors → omit routing fields for default worktree execution, chained dependencies
 - Large refactors → `onFinish: pull_request`, diamond DAGs
-- Invoker-on-Invoker PR publication → keep `mergeMode: github`, then use `mergify stack push` as the repo-specific publication step
+- Invoker-on-Invoker PR publication → keep `mergeMode: external_review`, then use `mergify stack push` as the repo-specific publication step
 - Policy matrix / architecture docs → preserve row-level coverage with `coverage-map.json` and `stack-manifest.json`
 - Dependency-first layered decomposition → enforce `Layer:` + `Feature state:` metadata, preserve dependency direction, allow explicit dormant tasks
 
