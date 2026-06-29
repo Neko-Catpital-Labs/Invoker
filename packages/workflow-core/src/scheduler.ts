@@ -16,6 +16,10 @@ interface RunningJob {
   attemptId: string;
 }
 
+function copyJob(job: TaskJob): TaskJob {
+  return { ...job };
+}
+
 export class TaskScheduler {
   private queue: TaskJob[] = [];
   private running: Map<string, RunningJob> = new Map();
@@ -79,19 +83,20 @@ export class TaskScheduler {
 
   /** Add a job to the queue, sorted by priority (high first). */
   enqueue(job: TaskJob): void {
+    const queuedJob = copyJob(job);
     let low = 0;
     let high = this.queue.length;
 
     while (low < high) {
       const mid = (low + high) >>> 1;
-      if (this.queue[mid].priority >= job.priority) {
+      if (this.queue[mid].priority >= queuedJob.priority) {
         low = mid + 1;
       } else {
         high = mid;
       }
     }
 
-    this.queue.splice(low, 0, job);
+    this.queue.splice(low, 0, queuedJob);
   }
 
   /**
@@ -104,7 +109,8 @@ export class TaskScheduler {
     if (this.queue.length === 0) {
       return null;
     }
-    return this.queue.shift() ?? null;
+    const job = this.queue.shift();
+    return job ? copyJob(job) : null;
   }
 
   /**
@@ -182,9 +188,9 @@ export class TaskScheduler {
     return taskIds;
   }
 
-  /** Return a shallow copy of the internal queue (not-yet-running jobs). */
+  /** Return snapshots of the internal queue (not-yet-running jobs). */
   getQueuedJobs(): TaskJob[] {
-    return [...this.queue];
+    return this.queue.map(copyJob);
   }
 
   /** Find and remove a job from the queue by taskId. Returns true if found and removed, false otherwise. */
