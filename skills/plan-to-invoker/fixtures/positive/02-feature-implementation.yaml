@@ -1,7 +1,7 @@
 # Feature Implementation Plan
 # Source: examples.md Section 2
 # Description: A plan that adds a feature using prompt tasks for implementation and command tasks for verification.
-# Shows the standard pattern: implement → focused verification → final full-suite gate.
+# Shows the standard pattern: implement → focused verification.
 #
 # Uses `onFinish: merge` (the default) to automatically merge changes into the base branch after all tasks complete.
 # Critical pattern: Every prompt task that modifies code MUST have a corresponding command task that runs tests to verify the change.
@@ -61,8 +61,3 @@ tasks:
     description: "Verify the package builds without errors"
     command: "cd packages/utils && pnpm build 2>&1"
     dependencies: [verify-tests-pass]
-
-  - id: final-regression
-    description: "Run the full repository test suite as the final regression gate"
-    command: "pnpm run test:all"
-    dependencies: [implement-formatter, write-tests, verify-tests-pass, verify-build]
