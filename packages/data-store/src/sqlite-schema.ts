@@ -356,6 +356,7 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE workflows ADD COLUMN detached_external_dependencies TEXT',
   // execution_agent / agent_name: interchangeable agent support
   'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
+  'ALTER TABLE tasks ADD COLUMN execution_model TEXT',
   'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
   // durable audit pointers for most-recent agent session/name
   'ALTER TABLE tasks ADD COLUMN last_agent_session_id TEXT',

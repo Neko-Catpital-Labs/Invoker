@@ -1283,6 +1283,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         pool_member_id,
         docker_image,
         execution_agent,
+        execution_model,
         agent_name,
         task_state_version
       ) VALUES (
@@ -1300,6 +1301,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -1361,6 +1363,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       (cfg as { poolMemberId?: string }).poolMemberId ?? null,
       cfg.dockerImage ?? null,
       cfg.executionAgent ?? null,
+      cfg.executionModel ?? null,
       exec.agentName ?? null,
       task.taskStateVersion ?? 1,
     ]);
@@ -1401,6 +1404,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         poolMemberId: 'pool_member_id',
         dockerImage: 'docker_image',
         executionAgent: 'execution_agent',
+        executionModel: 'execution_model',
         fixPrompt: 'fix_prompt',
         fixContext: 'fix_context',
       };
