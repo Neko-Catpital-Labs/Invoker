@@ -95,6 +95,13 @@ describe('invoker-cli', () => {
     expect(result.stdout).toContain('Emit only a machine-readable result summary on stdout.');
   });
 
+  it('--help lists the planner setup command', async () => {
+    const result = await runCli(['--help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('invoker-cli setup [planner|slack]');
+    expect(result.stdout).toContain('--planner-url <url>');
+  });
+
   it('lists worker kinds from the registry', async () => {
     const output = captureProcessOutput();
 

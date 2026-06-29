@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   buildDoctorChecks,
   generateSlackManifest,
+  installExperimentalPlannerMcp,
   loadInvokerEnv,
+  readExperimentalPlannerSetup,
   REQUIRED_BOT_SCOPES,
   slackCredsFromEnv,
   upsertEnvLines,
@@ -142,6 +144,57 @@ describe('loadInvokerEnv', () => {
       restoreEnv('SLACK_SIGNING_SECRET', saved.sign);
       restoreEnv('SLACK_CHANNEL_ID', saved.chan);
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('experimental planner MCP setup', () => {
+  it('installs the redirect server and enables the Invoker flag', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-planner-setup-'));
+    const targetPath = join(dir, 'mcp.json');
+    const configPath = join(dir, 'config.json');
+    try {
+      writeFileSync(targetPath, JSON.stringify({ mcpServers: { invoker: { type: 'stdio', command: 'invoker-cli', args: ['mcp'] } } }));
+      writeFileSync(configPath, JSON.stringify({ defaultSlackHarnessPreset: 'omp' }));
+
+      const state = installExperimentalPlannerMcp({
+        targetPath,
+        configPath,
+        plannerUrl: 'http://planner.test',
+        accessToken: 'sek',
+      });
+
+      expect(state).toEqual({ targetPath, configPath, installed: true, experimentalPlanner: true });
+      const mcpConfig = JSON.parse(readFileSync(targetPath, 'utf8'));
+      expect(mcpConfig.mcpServers.invoker).toEqual({ type: 'stdio', command: 'invoker-cli', args: ['mcp'] });
+      expect(mcpConfig.mcpServers['experimental-planner']).toEqual({
+        type: 'stdio',
+        command: 'uvx',
+        args: ['invoker-planner-redirect'],
+        env: { PLANNER_URL: 'http://planner.test', PLANNER_ACCESS_TOKEN: 'sek' },
+      });
+      expect(JSON.parse(readFileSync(configPath, 'utf8')).experimentalPlanner).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('uninstalls the redirect server and disables the Invoker flag', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-planner-setup-'));
+    const targetPath = join(dir, 'mcp.json');
+    const configPath = join(dir, 'config.json');
+    try {
+      installExperimentalPlannerMcp({ targetPath, configPath });
+
+      const state = installExperimentalPlannerMcp({ targetPath, configPath, uninstall: true });
+
+      expect(state).toEqual({ targetPath, configPath, installed: false, experimentalPlanner: false });
+      const mcpConfig = JSON.parse(readFileSync(targetPath, 'utf8'));
+      expect(mcpConfig.mcpServers['experimental-planner']).toBeUndefined();
+      expect(readExperimentalPlannerSetup({ targetPath, configPath }).installed).toBe(false);
+      expect(JSON.parse(readFileSync(configPath, 'utf8')).experimentalPlanner).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
