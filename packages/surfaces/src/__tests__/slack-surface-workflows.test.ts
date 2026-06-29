@@ -404,12 +404,13 @@ describe('lobby verb routing', () => {
     draftedPlanForMock = null;
   });
 
-  function lobbySurface(withOp = true) {
+  function lobbySurface(withOp = true, extra: Partial<ConstructorParameters<typeof SlackSurface>[0]> = {}) {
     return new SlackSurface({
       ...baseConfig(),
       enableImmediateAck: false,
       planningCommandBuilder: () => ({ command: 'cursor', args: ['--print', 'x'] }),
       ...(withOp ? { runWorkflowOp } : {}),
+      ...extra,
     });
   }
 
@@ -430,7 +431,7 @@ describe('lobby verb routing', () => {
     const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
     await messageHandler(surface)({ event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'yes' }, say: say2 });
     expect(runWorkflowOp).toHaveBeenCalledTimes(1);
-    expect(runWorkflowOp).toHaveBeenCalledWith({ operation: 'recreate', target: { all: true } });
+    expect(runWorkflowOp.mock.calls[0][0]).toEqual({ operation: 'recreate', target: { all: true } });
     expect(say2).toHaveBeenCalledWith(expect.objectContaining({ text: 'recreate: 3 ok' }));
   });
 
@@ -468,7 +469,7 @@ describe('lobby verb routing', () => {
     expect(ack).toHaveBeenCalled();
     // Buttons are replaced immediately so the click is visibly acknowledged.
     expect(respond).toHaveBeenCalledWith(expect.objectContaining({ text: '✅ Approved.', replace_original: true }));
-    expect(runWorkflowOp).toHaveBeenCalledWith({ operation: 'recreate', target: { all: true } });
+    expect(runWorkflowOp.mock.calls[0][0]).toEqual({ operation: 'recreate', target: { all: true } });
     // The result posts durably in-thread via the bot client, not the expiring response_url.
     expect(app.client.chat.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'C1', thread_ts: 't1', text: 'recreate: 3 ok' }),
@@ -506,13 +507,46 @@ describe('lobby verb routing', () => {
     expect(respond).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('expired'), replace_original: true }));
   });
 
+  it('streams live progress into the thread during a bulk op (edits one message)', async () => {
+    // Drive onProgress like the host would, then resolve with a summary.
+    runWorkflowOp.mockImplementation(async (_op: unknown, onProgress?: (p: unknown) => void) => {
+      onProgress?.({ done: 0, total: 3, ok: 0, failed: 0, current: 'wf-a' });
+      onProgress?.({ done: 3, total: 3, ok: 3, failed: 0 });
+      return { ok: true, summary: 'recreate: 3 ok' };
+    });
+    const surface = lobbySurface();
+    await surface.start(async () => {});
+    const app = surface.getApp() as any;
+
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> recreate all', ts: 't1', user: 'U1' }, say });
+
+    app.client.chat.update.mockClear();
+    app.client.chat.postMessage.mockResolvedValue({ ts: 'onit-ts' });
+    await actionHandler(surface, 'lobby_confirm')({
+      action: { type: 'button', value: 't1' },
+      body: { channel: { id: 'C1' }, message: { thread_ts: 't1' } },
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // The "On it" message is edited in place with the running count, in-thread.
+    expect(app.client.chat.update).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'C1', ts: 'onit-ts', text: expect.stringContaining('3/3') }),
+    );
+    // And the final summary still posts.
+    expect(app.client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'C1', thread_ts: 't1', text: 'recreate: 3 ok' }),
+    );
+  });
+
   it('runs a single-workflow verb immediately (no confirmation)', async () => {
     runWorkflowOp.mockResolvedValue({ ok: true, summary: 'retry: 1 ok' });
     const surface = lobbySurface();
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> retry wf-123', ts: 't1', user: 'U1' }, say });
-    expect(runWorkflowOp).toHaveBeenCalledWith({ operation: 'retry', target: { workflow: 'wf-123' } });
+    expect(runWorkflowOp.mock.calls[0][0]).toEqual({ operation: 'retry', target: { workflow: 'wf-123' } });
     expect(planConversationConfigs).toHaveLength(0);
     expect(mockSpawn).not.toHaveBeenCalled();
   });
@@ -523,7 +557,7 @@ describe('lobby verb routing', () => {
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> status', ts: 't1', user: 'U1' }, say });
-    expect(runWorkflowOp).toHaveBeenCalledWith({ operation: 'status', target: { all: true } });
+    expect(runWorkflowOp.mock.calls[0][0]).toEqual({ operation: 'status', target: { all: true } });
     expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('running') }));
     expect(mockSpawn).not.toHaveBeenCalled();
   });
@@ -542,7 +576,27 @@ describe('lobby verb routing', () => {
 
     const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
     await messageHandler(surface)({ event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'yes' }, say: say2 });
-    expect(runWorkflowOp).toHaveBeenCalledWith({ operation: 'recreate', target: { all: true } });
+    expect(runWorkflowOp.mock.calls[0][0]).toEqual({ operation: 'recreate', target: { all: true } });
+  });
+
+  it('acknowledges a fuzzy operational mention immediately, before the classifier returns', async () => {
+    mockSpawn.mockImplementationOnce(() => mockProcess('{"intent":"command","operation":"recreate","target":"all"}'));
+    const surface = lobbySurface(true, { enableImmediateAck: true });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'ack-1' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> can you recreate everything please', ts: 't1', user: 'U1' }, say });
+    // Immediate "processing" receipt posts up front (then is cleared once the confirm is ready).
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Processing your request...', thread_ts: 't1' }));
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not post a processing ack for an instant verb', async () => {
+    runWorkflowOp.mockResolvedValue({ ok: true, summary: '`wf-1`: 1 running, 0 pending, 0 done, 0 failed' });
+    const surface = lobbySurface(true, { enableImmediateAck: true });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> status', ts: 't1', user: 'U1' }, say });
+    expect(say).not.toHaveBeenCalledWith(expect.objectContaining({ text: 'Processing your request...' }));
   });
 
   it('answers a question with no session, workflow, or start_plan', async () => {
