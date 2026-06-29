@@ -54,7 +54,6 @@ export const HEADLESS_COMMANDS = [
   { name: 'delete-workflow', kind: 'write', aliases: ['delete'] },
   { name: 'delete-all', kind: 'write' },
   { name: 'open-terminal', kind: 'read' },
-  { name: 'slack', kind: 'read' },
   { name: 'query-select', kind: 'read' },
   { name: 'worker', kind: 'read' },
   { name: 'list', kind: 'read' },

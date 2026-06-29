@@ -49,7 +49,6 @@ function makeDeps(overrides: Partial<HeadlessDeps>): HeadlessDeps {
       remoteTargets: {},
     } as any,
     initServices: async () => {},
-    wireSlackBot: async () => ({}),
     ...overrides,
   };
 }

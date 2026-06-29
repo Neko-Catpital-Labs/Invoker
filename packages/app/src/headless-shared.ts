@@ -43,12 +43,6 @@ export interface HeadlessDeps {
   invokerConfig: InvokerConfig;
   initServices: () => Promise<void>;
   executionAgentRegistry?: AgentRegistry;
-  wireSlackBot: (deps: {
-    executor: TaskRunner;
-    logFn: (source: string, level: string, message: string) => void;
-    approveTaskAction?: (taskId: string) => Promise<void>;
-    onPlanLoaded?: () => void;
-  }) => Promise<any>;
   getUiPerfStats?: () => Record<string, unknown>;
   resetUiPerfStats?: () => void;
   deferRunnableTasks?: (tasks: TaskState[], workflowId?: string) => void;

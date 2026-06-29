@@ -18,8 +18,6 @@ import {
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
 } from '@invoker/execution-engine';
-import { startApiServer } from './api-server.js';
-import { startWebSurfaceForHeadless } from './web/start-web-surface.js';
 import {
   parseMetadataValue,
   setTaskMetadata,
@@ -62,7 +60,6 @@ import {
   YELLOW,
   createHeadlessExecutor,
   wireHeadlessApproveHook,
-  buildHeadlessApiServerDeps,
   parseQueryFlags,
   trackHeadlessWorkflow,
   restoreWorkflowForTask,
@@ -351,9 +348,6 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'open-terminal':
       await headlessOpenTerminal(args[1], deps);
-      break;
-    case 'slack':
-      await headlessSlack(deps);
       break;
     case 'query-select':
       await headlessQuerySelect(args[1], deps);
@@ -967,52 +961,3 @@ async function headlessSetTaskMetadata(
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
 
-async function headlessSlack(deps: HeadlessDeps): Promise<void> {
-  const { orchestrator, persistence, initServices, wireSlackBot } = deps;
-
-  const logFn = (source: string, level: string, message: string) => {
-    const logMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
-    deps.logger[logMethod](message, { module: source });
-    persistence.writeActivityLog(source, level, message);
-  };
-
-  await initServices();
-
-  const taskExecutor = createHeadlessExecutor(deps, {
-    onComplete: (taskId) => {
-      logFn('exec', 'info', `Task "${taskId}" completed`);
-    },
-  });
-  wireHeadlessApproveHook(deps, taskExecutor);
-
-  const apiServerDeps = buildHeadlessApiServerDeps(deps, taskExecutor);
-  const api = startApiServer({
-    logger: deps.logger,
-    orchestrator,
-    persistence,
-    executorRegistry: deps.executorRegistry,
-    ...apiServerDeps,
-  });
-  const webSurface = startWebSurfaceForHeadless(deps, apiServerDeps);
-
-  const slack = await wireSlackBot({
-    executor: taskExecutor,
-    logFn,
-    onPlanLoaded: () => {},
-  });
-
-  logFn('slack', 'info', 'Slack bot is running (headless, using TaskRunner). Press Ctrl+C to stop.');
-
-  // Stay alive until SIGINT/SIGTERM
-  await new Promise<void>((resolve) => {
-    const shutdown = async () => {
-      await api.close().catch(() => {});
-      await webSurface?.close().catch(() => {});
-      logFn('slack', 'info', 'Shutting down...');
-      await slack.stop();
-      resolve();
-    };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
-  });
-}

@@ -44,7 +44,6 @@ describe('headless query review-gate', () => {
       repoRoot: '/fake/repo',
       invokerConfig: {} as unknown as HeadlessDeps['invokerConfig'],
       initServices: vi.fn(async () => {}),
-      wireSlackBot: vi.fn(async () => ({})),
     } as unknown as HeadlessDeps;
     stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   });

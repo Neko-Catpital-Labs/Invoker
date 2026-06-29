@@ -79,7 +79,7 @@ import {
   resolveRepoRoot,
 } from '@invoker/contracts';
 import type { ActionGraphResponse, BundledSkillsInstallMode, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
-import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository, WorkflowChannelRepository } from '@invoker/data-store';
+import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
   WorkspaceProbeAdapter,
@@ -97,8 +97,6 @@ import {
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   registerBuiltinAgents,
-  RepoPool,
-  DEFAULT_EXECUTION_AGENT,
   type AgentRegistry,
 } from '@invoker/execution-engine';
 import { FileAndDbLogger } from './logger.js';
@@ -109,7 +107,6 @@ import {
   type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
 } from './config.js';
-import { slackDisabledForTests } from './slack-enablement.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   assertExecutionCapacityInvariant,
@@ -127,7 +124,6 @@ import {
   resolveHeadlessTargetWorkflowId,
 } from './headless-command-classification.js';
 import { backupPlan } from './plan-backup.js';
-import { runStartupPrerequisites } from './startup-prerequisites.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
@@ -145,7 +141,6 @@ import {
   type HeadlessDeps,
 } from './headless.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
-import { presetToExecutionAgent, gatherWorkflowContext as gatherWorkflowContextImpl } from './slack-workflow-context.js';
 import {
   startStandaloneLaunchDispatcher,
   type StandaloneLaunchDispatcherController,
@@ -182,7 +177,6 @@ import {
 } from './cli-installer.js';
 import { resolveBundledCliPath } from './cli-helper.js';
 import { buildAppMenuTemplate } from './app-menu.js';
-import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-merge.js';
 import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
@@ -213,6 +207,7 @@ import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
+import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
 import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
@@ -779,358 +774,6 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   }
 }
 
-// ── Load @invoker/surfaces at runtime ────────────────────────
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function loadSurfaces(): any {
-  const req = createRequire(__filename);
-  return req('@invoker/surfaces');
-}
-
-// ── Shared Slack Bot Wiring ──────────────────────────────────
-
-const DEFAULT_SLACK_HARNESS_PRESETS: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }> = {
-  'cursor+claude': { tool: 'cursor', model: 'claude' },
-  'cursor+codex': { tool: 'cursor', model: 'codex' },
-  'omp+claude': { tool: 'omp', model: 'claude' },
-  'omp+codex': { tool: 'omp', model: 'codex' },
-  omp: { tool: 'omp' },
-  codex: { tool: 'codex' },
-};
-
-interface SlackBotDeps {
-  executor: TaskRunner;
-  logFn: (source: string, level: string, message: string) => void;
-  approveTaskAction?: (taskId: string) => Promise<void>;
-  onStartPlan?: () => void;
-  onPlanLoaded?: (plan: PlanDefinition) => void;
-  killRunningTask?: (taskId: string) => Promise<void>;
-}
-
-async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
-
-  const requiredVars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
-  for (const v of requiredVars) {
-    if (!process.env[v]) throw new Error(`Missing env var: ${v}. Set it in .env or environment.`);
-  }
-
-  const surfaces = loadSurfaces();
-  const repoLogger = logger.child({ module: 'conversation-repo' });
-  const conversationRepo = new ConversationRepository(persistence, {
-    info: (msg) => { repoLogger.info(msg); },
-    warn: (msg) => { repoLogger.warn(msg); },
-    error: (msg) => { repoLogger.error(msg); },
-  });
-  let repoUrl = process.env.INVOKER_REPO_URL;
-  if (!repoUrl) {
-    try {
-      repoUrl = execSync('git remote get-url origin', { cwd: repoRoot, encoding: 'utf8', timeout: 5000 }).trim();
-    } catch {
-      deps.logFn('slack', 'warn', 'Could not detect repoUrl from git remote; plans will require repoUrl in YAML');
-    }
-  }
-
-  // ── Slack-native workflow wiring ──────────────────────────
-  const planningRegistry = registerBuiltinAgents();
-  const planningCommandBuilder = (
-    opts: { tool: string; model?: string; prompt: string },
-  ): { command: string; args: string[] } =>
-    planningRegistry.getPlanningOrThrow(opts.tool).buildPlanningCommand(opts.prompt, { model: opts.model });
-
-  const planningRepoPool = new RepoPool({ cacheDir: path.join(resolveInvokerHomeRoot(), 'planning-clones') });
-  const prepareRepoCheckout = async (url: string): Promise<string> =>
-    planningRepoPool.ensureCloneThroughRepoQueue(url);
-
-  const workflowChannelRepo = new WorkflowChannelRepository(persistence);
-
-  const harnessPresets = invokerConfig.slackHarnessPresets ?? DEFAULT_SLACK_HARNESS_PRESETS;
-  const defaultHarnessPreset = invokerConfig.defaultSlackHarnessPreset ?? 'cursor+claude';
-  const registeredExecutionAgents = new Set(planningRegistry.listExecution().map((a) => a.name));
-  const resolveFallbackExecutionAgent = (presetKey?: string): string =>
-    presetToExecutionAgent(presetKey, harnessPresets, registeredExecutionAgents, DEFAULT_EXECUTION_AGENT);
-
-  const gatherWorkflowContext = (workflowId: string) =>
-    gatherWorkflowContextImpl(
-      {
-        persistence,
-        conversationRepo,
-        workflowChannelRepo,
-        agentRegistry: planningRegistry,
-        log: (level, message) => deps.logFn('slack', level, message),
-      },
-      workflowId,
-    );
-
-  const slackMutations = new WorkflowMutationFacade({
-    logger,
-    orchestrator,
-    persistence,
-    commandService,
-    taskExecutor: deps.executor,
-    autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-    killRunningTask: deps.killRunningTask,
-  });
-
-  const runWorkflowOp = async (
-    op: { operation: string; target: { all: true } | { workflow: string } },
-    onProgress?: (p: { done: number; total: number; ok: number; failed: number; current?: string }) => void,
-  ): Promise<{ ok: boolean; summary: string }> => {
-    const all = persistence.listWorkflows();
-    let workflowIds: { id: string }[];
-    if ('all' in op.target) {
-      workflowIds = all.map((w) => ({ id: w.id }));
-    } else {
-      const wanted = op.target.workflow;
-      const match = all.find((w) => w.id === wanted || w.name === wanted);
-      if (!match) return { ok: false, summary: `No workflow matching \`${wanted}\`.` };
-      workflowIds = [{ id: match.id }];
-    }
-    if (workflowIds.length === 0) return { ok: false, summary: 'No workflows found.' };
-
-    if (op.operation === 'status') {
-      const lines = workflowIds.map((t) => {
-        const s = orchestrator.getWorkflowStatus(t.id);
-        return `\`${t.id}\`: ${s.running} running, ${s.pending} pending, ${s.completed} done, ${s.failed} failed`;
-      });
-      return { ok: true, summary: lines.join('\n') };
-    }
-
-    const mutate: Record<string, (id: string) => Promise<unknown>> = {
-      recreate: (id) => slackMutations.recreateWorkflow(id),
-      'rebase-recreate': (id) => slackMutations.rebaseRecreate(id),
-      'rebase-retry': (id) => slackMutations.rebaseRetry(id),
-      retry: (id) => slackMutations.retryWorkflow(id),
-      cancel: (id) => slackMutations.cancelWorkflow(id),
-    };
-    const run = mutate[op.operation];
-    if (!run) return { ok: false, summary: `Unsupported operation \`${op.operation}\`.` };
-
-    let ok = 0;
-    const failed: string[] = [];
-    const total = workflowIds.length;
-    for (const t of workflowIds) {
-      onProgress?.({ done: ok + failed.length, total, ok, failed: failed.length, current: t.id });
-      try {
-        await run(t.id);
-        ok++;
-      } catch (err) {
-        failed.push(`${t.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    onProgress?.({ done: total, total, ok, failed: failed.length });
-    const summary = `${op.operation}: ${ok} ok${failed.length ? `, ${failed.length} failed\n${failed.join('\n')}` : ''}`;
-    return { ok: failed.length === 0, summary };
-  };
-
-  const slack = new surfaces.SlackSurface({
-    botToken: process.env.SLACK_BOT_TOKEN!,
-    appToken: process.env.SLACK_APP_TOKEN!,
-    signingSecret: process.env.SLACK_SIGNING_SECRET!,
-    channelId: process.env.SLACK_CHANNEL_ID!,
-    cursorCommand: process.env.CURSOR_COMMAND ?? 'agent',
-    model: process.env.CURSOR_MODEL,
-    workingDir: repoRoot,
-    conversationRepo,
-    defaultBranch: invokerConfig.defaultBranch,
-    repoUrl,
-    log: deps.logFn,
-    planningTimeoutSeconds: invokerConfig.planningTimeoutSeconds,
-    planningHeartbeatIntervalSeconds: invokerConfig.planningHeartbeatIntervalSeconds,
-    lobbyChannelId: process.env.SLACK_LOBBY_CHANNEL_ID ?? process.env.SLACK_CHANNEL_ID,
-    planningCommandBuilder,
-    prepareRepoCheckout,
-    harnessPresets,
-    defaultHarnessPreset,
-    repoAliases: invokerConfig.slackRepos,
-    defaultRepoUrl: invokerConfig.defaultRepoUrl ?? repoUrl,
-    workflowChannelRepo,
-    gatherWorkflowContext,
-    runWorkflowOp,
-  });
-
-  // ── Slack live workflow-progress card ─────────────────────
-  const PROGRESS_DEBOUNCE_MS = 2500;
-  const TERMINAL_DERIVED_STATUSES = new Set(['completed', 'failed', 'closed']);
-  const progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-  const workflowIdFromTaskId = (taskId: string): string | undefined => {
-    if (taskId.startsWith('__merge__')) return taskId.slice('__merge__'.length);
-    const slash = taskId.indexOf('/');
-    return slash <= 0 ? undefined : taskId.slice(0, slash);
-  };
-
-  const emitWorkflowProgress = async (workflowId: string): Promise<void> => {
-    // Only mapped workflows get a live card — avoids posting for headless/non-Slack runs.
-    if (!workflowChannelRepo.getByWorkflowId(workflowId)) return;
-    const tasks = persistence.loadTasks(workflowId);
-    const workflow = persistence.loadWorkflow(workflowId);
-    const counts = orchestrator.getWorkflowStatus(workflowId);
-    const percentComplete = counts.total > 0 ? Math.round((counts.completed / counts.total) * 100) : 0;
-    const gate = buildReviewGateQueryResponse({ workflowId, workflow, tasks });
-    const prUrl = gate.artifacts.find((artifact) => artifact.url)?.url;
-    const reviewState = gate.mergeTaskId
-      ? (gate.ready ? 'review ready' : (gate.status ?? undefined))
-      : undefined;
-    await slack.handleEvent({
-      type: 'workflow_progress',
-      progress: {
-        workflowId,
-        name: (workflow as { name?: string } | undefined)?.name ?? workflowId,
-        counts,
-        percentComplete,
-        tasks: tasks.map((task) => ({
-          id: task.id,
-          name: task.description,
-          status: task.status,
-          phase: task.execution.phase,
-          reviewUrl: task.execution.reviewUrl,
-        })),
-        prUrl,
-        reviewState,
-      },
-    });
-  };
-
-  const scheduleWorkflowProgress = (workflowId: string, flushNow: boolean): void => {
-    const existing = progressTimers.get(workflowId);
-    if (existing) clearTimeout(existing);
-    if (flushNow) {
-      progressTimers.delete(workflowId);
-      void emitWorkflowProgress(workflowId).catch((err) =>
-        deps.logFn('slack', 'warn', `workflow-progress emit failed: ${err instanceof Error ? err.message : String(err)}`),
-      );
-      return;
-    }
-    const timer = setTimeout(() => {
-      progressTimers.delete(workflowId);
-      void emitWorkflowProgress(workflowId).catch((err) =>
-        deps.logFn('slack', 'warn', `workflow-progress emit failed: ${err instanceof Error ? err.message : String(err)}`),
-      );
-    }, PROGRESS_DEBOUNCE_MS);
-    timer.unref?.();
-    progressTimers.set(workflowId, timer);
-  };
-
-  messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
-    const d = delta as TaskDelta;
-    const taskId = d.type === 'created' ? d.task.id : d.taskId;
-    const workflowId = workflowIdFromTaskId(taskId);
-    if (!workflowId || !workflowChannelRepo.getByWorkflowId(workflowId)) return;
-    const status = d.type === 'updated'
-      ? (d.changes.status as string | undefined)
-      : d.type === 'created' ? d.task.status : undefined;
-    // Flush immediately when this delta drives the workflow to a terminal state.
-    let flushNow = false;
-    if (status && TERMINAL_DERIVED_STATUSES.has(status)) {
-      const counts = orchestrator.getWorkflowStatus(workflowId);
-      flushNow = counts.running === 0 && counts.pending === 0;
-    }
-    scheduleWorkflowProgress(workflowId, flushNow);
-  });
-
-  await slack.start(async (command: any) => {
-    deps.logFn('trace', 'info', `slackBot: command received — type=${command.type}`);
-    switch (command.type) {
-      case 'approve': {
-        const taskId = command.taskId as string;
-        if (deps.approveTaskAction) {
-          await deps.approveTaskAction(taskId);
-          break;
-        }
-        await sharedApproveTask(taskId, {
-          orchestrator,
-          taskExecutor: deps.executor,
-          approve: async (approvedTaskId) => {
-            const result = await commandService.approve(
-              makeEnvelope('approve', 'surface', 'task', { taskId: approvedTaskId }),
-            );
-            if (!result.ok) throw new Error(result.error.message);
-            return result.data;
-          },
-          resumeAfterFixApproval: async (approvedTaskId) => {
-            const result = await commandService.resumeTaskAfterFixApproval(
-              makeEnvelope('approve', 'surface', 'task', { taskId: approvedTaskId }),
-            );
-            if (!result.ok) throw new Error(result.error.message);
-            return result.data;
-          },
-        });
-        break;
-      }
-      case 'reject': {
-        const env = makeEnvelope('reject', 'surface', 'task', { taskId: command.taskId as string, reason: command.reason as string | undefined });
-        const rejectResult = await commandService.reject(env);
-        if (!rejectResult.ok) throw new Error(rejectResult.error.message);
-        break;
-      }
-      case 'select_experiment': {
-        const started = orchestrator.selectExperiment(command.taskId, command.experimentId);
-        break;
-      }
-      case 'provide_input':
-        orchestrator.provideInput(command.taskId, command.input);
-        break;
-      case 'retry': {
-        const taskId = command.taskId as string;
-        const result = await commandService.retryTask(
-          makeEnvelope('retry-task', 'surface', 'task', { taskId }),
-        );
-        if (!result.ok) throw new Error(result.error.message);
-        await dispatchStartedTasksWithGlobalTopup({
-          orchestrator,
-          taskExecutor: deps.executor,
-          logger,
-          context: 'surface.retry-task',
-          started: result.data,
-          scopedTaskIds: [taskId],
-        });
-        break;
-      }
-      case 'get_status': {
-        const workflowId = command.workflowId as string | undefined;
-        if (workflowId && workflowChannelRepo.getByWorkflowId(workflowId)) {
-          await emitWorkflowProgress(workflowId);
-        } else {
-          const status = orchestrator.getWorkflowStatus(workflowId);
-          await slack.handleEvent({ type: 'workflow_status', status, workflowId });
-        }
-        break;
-      }
-      case 'start_plan': {
-        const { parsePlan } = await import('./plan-parser.js');
-        const planText = command.planText as string;
-        const plan = parsePlan(planText);
-        const harnessPreset = command.harnessPreset as string | undefined;
-        const fallbackAgent = resolveFallbackExecutionAgent(harnessPreset);
-        for (const task of plan.tasks) {
-          if (!task.executionAgent) task.executionAgent = fallbackAgent;
-        }
-        deps.logFn('trace', 'info', `slackBot: loading plan "${plan.name}" (${plan.tasks.length} tasks, defaultAgent=${fallbackAgent})`);
-        deps.onStartPlan?.();
-        deps.onPlanLoaded?.(plan);
-        backupPlan(plan, undefined, logger);
-        const before = new Set(orchestrator.getWorkflowIds());
-        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-        const workflowId = orchestrator.getWorkflowIds().find((id) => !before.has(id));
-        if (workflowId) {
-          await slack.handleEvent({
-            type: 'workflow_created',
-            workflowId,
-            requestedBy: command.requestedBy as string | undefined,
-            lobbyChannel: command.lobbyChannel as string | undefined,
-            lobbyThreadTs: command.lobbyThreadTs as string | undefined,
-            harnessPreset,
-            repoUrl: command.repoUrl as string | undefined,
-          });
-        }
-        const started = orchestrator.startExecution();
-        deps.logFn('trace', 'info', `slackBot: startExecution returned ${started.length} tasks: [${started.map((t: any) => t.id).join(', ')}]`);
-        break;
-      }
-    }
-  });
-
-  return slack;
-}
 
 // ── ANSI Helpers ─────────────────────────────────────────────
 
@@ -1274,7 +917,7 @@ function startHeadlessMode(): void {
       const headlessDeps: HeadlessDeps = {
         logger,
         orchestrator, persistence, executorRegistry, messageBus,
-        repoRoot, invokerConfig, initServices, wireSlackBot,
+        repoRoot, invokerConfig, initServices,
         commandService,
         getUiPerfStats: () => ({
           ts: new Date().toISOString(),
@@ -1922,6 +1565,13 @@ function startHeadlessMode(): void {
           getInitialTasks: () => orchestrator.getAllTasks(),
           getTask: (taskId) => orchestrator.getTask(taskId),
           logger,
+        });
+
+        startSurfaceEventRelay({
+          messageBus,
+          persistence,
+          orchestrator,
+          logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
         });
 
         reviewGateStatusWorker = startReviewGateStatusWorker({
@@ -2642,7 +2292,7 @@ function createEmbeddedTerminalBackendFromConfig(
       logger,
       orchestrator, persistence, executorRegistry, messageBus,
       commandService,
-      repoRoot, invokerConfig, initServices, wireSlackBot,
+      repoRoot, invokerConfig, initServices,
       signal: activeMutationContext?.signal,
       mutationTiming: activeMutationContext?.mutationTiming,
       cancelTask: (taskId: string) => performCancelTask(taskId),
@@ -3251,22 +2901,6 @@ function createEmbeddedTerminalBackendFromConfig(
         maybeDelayResume: maybeDelayWorkflowResumeForTest,
       });
 
-      // .env is loaded synchronously at startup; skip Slack only when required vars are still missing.
-      const slackEnvVars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
-      const slackEnvMissing = slackEnvVars.filter((v) => !process.env[v]);
-      if (slackEnvMissing.length > 0) {
-        logger.info(`Slack bot not started — missing env: ${slackEnvMissing.join(', ')}. Run \`invoker-cli setup slack\` or set them in ~/.invoker/.env`, { module: 'slack' });
-      } else {
-        for (const check of runStartupPrerequisites(
-          invokerConfig.slackHarnessPresets ?? DEFAULT_SLACK_HARNESS_PRESETS,
-          invokerConfig.defaultSlackHarnessPreset ?? 'cursor+claude',
-        )) {
-          logger.warn(`Prerequisites — ${check.name}: ${check.detail}${check.remediation ? ` (${check.remediation})` : ''}`, { module: 'prerequisites' });
-        }
-        startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
-          logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
-        });
-      }
 
       setTimeout(() => {
         if (ownerMode) {
@@ -3645,6 +3279,12 @@ function createEmbeddedTerminalBackendFromConfig(
         getInitialTasks: () => orchestrator.getAllTasks(),
         getTask: (taskId) => orchestrator.getTask(taskId),
         logger,
+      });
+      startSurfaceEventRelay({
+        messageBus,
+        persistence,
+        orchestrator,
+        logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
       });
     }
 
@@ -5043,35 +4683,4 @@ function createEmbeddedTerminalBackendFromConfig(
     },
   });
 
-  // ── Slack Bot (embedded in GUI process) ──────────────────
-  async function startSlackBot(
-    executor: TaskRunner,
-    handles: TaskHandleMap,
-  ): Promise<void> {
-    if (slackDisabledForTests()) {
-      logger.info('Slack bot not started — disabled in test mode (NODE_ENV=test or INVOKER_DISABLE_SLACK=1)', { module: 'slack' });
-      return;
-    }
-    const logFn = (source: string, level: string, message: string) => {
-      const logMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
-      logger[logMethod](message, { module: source });
-      try { persistence.writeActivityLog(source, level, message); } catch { /* db locked */ }
-    };
-
-    await wireSlackBot({
-      executor,
-      logFn,
-      approveTaskAction: async (taskId: string) => {
-        const workflowId = orchestrator.getTask(taskId)?.config.workflowId;
-        await runWorkflowMutation(workflowId, 'normal', 'surface:approve-task', [taskId], async () => {
-          await performSharedApproveTask(taskId, 'surface');
-        });
-      },
-      onStartPlan: () => handles.clear(),
-      onPlanLoaded: () => {},
-      killRunningTask,
-    });
-
-    logFn('slack', 'info', 'Slack bot started (embedded in GUI)');
-  }
 }
