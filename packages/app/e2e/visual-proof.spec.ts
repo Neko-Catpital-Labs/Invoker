@@ -64,6 +64,27 @@ const DAG_DETERMINISM_PLAN = {
   ],
 };
 
+/** Focused-run proof for the selected task detail rail and approval affordances. */
+const FOCUSED_TASK_DETAIL_PLAN = {
+  name: 'Focused task detail proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    { id: 'inspect-auth-system', description: 'Inspect auth system', command: 'echo inspect', dependencies: [] },
+    { id: 'add-oauth-routes', description: 'Add OAuth routes', command: 'echo routes', dependencies: ['inspect-auth-system'] },
+    {
+      id: 'schema-change',
+      description: 'Approve schema migration',
+      command: 'echo schema migration preview',
+      dependencies: ['add-oauth-routes'],
+      requiresManualApproval: true,
+      featureBranch: 'invoker/184/backend-auth',
+      executionAgent: 'codex',
+    },
+    { id: 'verify-and-lint', description: 'Verify and lint', command: 'echo verify', dependencies: ['schema-change'] },
+  ],
+};
+
 /** Plan for queue-relationships visual proof: one actionable task with upstream deps and downstream dependents. */
 const QUEUE_RELATIONSHIPS_PLAN = {
   name: 'Queue Relationships Visual Proof',
@@ -485,6 +506,52 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('collapsible-guide-toggle')).toHaveText('Run guide');
 
     await captureScreenshot(page, 'focused-active-run-local-graph');
+  });
+
+  test('focused-active-run-task-detail — selected task shows actionable detail rail', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, FOCUSED_TASK_DETAIL_PLAN, { keepFocusedSurface: true });
+
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'inspect-auth-system',
+        changes: { status: 'completed', execution: { startedAt: earlier, completedAt: now, exitCode: 0 } },
+      },
+      {
+        taskId: 'add-oauth-routes',
+        changes: { status: 'completed', execution: { startedAt: earlier, completedAt: now, exitCode: 0 } },
+      },
+      {
+        taskId: 'schema-change',
+        changes: {
+          status: 'awaiting_approval',
+          execution: {
+            startedAt: earlier,
+            branch: 'invoker/184/backend-auth',
+            commit: 'a71f2c2d',
+            agentName: 'codex',
+          },
+        },
+      },
+    ]);
+
+    const focusedSurface = page.getByTestId('focused-workflow-surface');
+    await expect(focusedSurface).toBeVisible();
+    const schemaNode = focusedSurface.locator('.react-flow__node[data-testid$="schema-change"]').first();
+    await expect(schemaNode).toBeVisible({ timeout: 10000 });
+    await schemaNode.click();
+
+    const detail = focusedSurface.getByTestId('focused-task-detail');
+    await expect(detail).toBeVisible({ timeout: 10000 });
+    await expect(detail.getByRole('heading', { name: 'Approve schema migration' })).toBeVisible();
+    await expect(detail.getByText('Manual gate')).toBeVisible();
+    await expect(detail.getByText('Approval required')).toBeVisible();
+    await expect(detail.getByText('invoker/184/backend-auth')).toBeVisible();
+    await expect(detail.getByTestId('focused-task-approve-button')).toBeVisible();
+    await expect(detail.getByTestId('focused-task-reject-button')).toBeVisible();
+
+    await captureScreenshot(page, 'focused-active-run-task-detail');
   });
 
   test('graph-camera-lock-navigation — task graph remains usable after keyboard and manual camera moves', async ({ page }) => {

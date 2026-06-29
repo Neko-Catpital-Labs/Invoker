@@ -1115,11 +1115,14 @@ export function App() {
           return;
         }
         event.preventDefault();
-        const currentIndex = KEYBOARD_REGION_ORDER.indexOf(keyboardRegion);
+        const regionOrder = focusedWorkflowGraph === null
+          ? KEYBOARD_REGION_ORDER
+          : KEYBOARD_REGION_ORDER.filter((region) => region !== 'inspector');
+        const currentIndex = Math.max(0, regionOrder.indexOf(keyboardRegion));
         const nextIndex = event.shiftKey
-          ? (currentIndex - 1 + KEYBOARD_REGION_ORDER.length) % KEYBOARD_REGION_ORDER.length
-          : (currentIndex + 1) % KEYBOARD_REGION_ORDER.length;
-        focusKeyboardRegion(KEYBOARD_REGION_ORDER[nextIndex]);
+          ? (currentIndex - 1 + regionOrder.length) % regionOrder.length
+          : (currentIndex + 1) % regionOrder.length;
+        focusKeyboardRegion(regionOrder[nextIndex]);
         return;
       }
 
@@ -1228,6 +1231,7 @@ export function App() {
     activateSearchResult,
     bottomStatusIndex,
     contextMenu,
+    focusedWorkflowGraph,
     focusKeyboardRegion,
     handleStatusClick,
     issueCameraCommand,
@@ -2178,6 +2182,8 @@ export function App() {
                         onTaskDoubleClick={handleTaskDoubleClick}
                         onTaskContextMenu={handleTaskContextMenu}
                         onManualViewport={handleManualViewport}
+                        onApprove={openApprovalModal}
+                        onReject={openRejectModal}
                       />
                     </div>
                   )}
@@ -2215,36 +2221,38 @@ export function App() {
             )}
           </div>
 
-          <div
-            data-keyboard-region="inspector"
-            tabIndex={0}
-            data-keyboard-active={keyboardRegion === 'inspector' ? 'true' : 'false'}
-            className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
-          >
-            <WorkflowInspector
-              workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
-              task={selectedTask}
-              workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
-              reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
-              remoteTargets={remoteTargets}
-              executionPools={executionPools}
-              executionAgents={executionAgents}
-              collapsed={inspectorCollapsed}
-              advancedExpanded={advancedMetadataExpanded}
-              actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
-              onEditType={handleEditType}
-              onEditPool={handleEditPool}
-              onEditAgent={handleEditAgent}
-              onEditPrompt={handleEditPrompt}
-              onEditCommand={handleEditCommand}
-              onApprove={openApprovalModal}
-              onReject={openRejectModal}
-              onSetMergeBranch={handleSetMergeBranch}
-              onSetMergeMode={handleSetMergeMode}
-              onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
-              onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
-            />
-          </div>
+          {focusedWorkflowGraph === null && (
+            <div
+              data-keyboard-region="inspector"
+              tabIndex={0}
+              data-keyboard-active={keyboardRegion === 'inspector' ? 'true' : 'false'}
+              className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
+            >
+              <WorkflowInspector
+                workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
+                task={selectedTask}
+                workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
+                reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
+                remoteTargets={remoteTargets}
+                executionPools={executionPools}
+                executionAgents={executionAgents}
+                collapsed={inspectorCollapsed}
+                advancedExpanded={advancedMetadataExpanded}
+                actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
+                onEditType={handleEditType}
+                onEditPool={handleEditPool}
+                onEditAgent={handleEditAgent}
+                onEditPrompt={handleEditPrompt}
+                onEditCommand={handleEditCommand}
+                onApprove={openApprovalModal}
+                onReject={openRejectModal}
+                onSetMergeBranch={handleSetMergeBranch}
+                onSetMergeMode={handleSetMergeMode}
+                onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
+                onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
+              />
+            </div>
+          )}
         </div>
       </div>
 

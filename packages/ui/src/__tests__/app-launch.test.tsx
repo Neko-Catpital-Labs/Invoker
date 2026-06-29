@@ -110,6 +110,61 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('workflow-node-wf-focus')).toBeInTheDocument();
   });
 
+  it('shows selected focused-run task details and preserves approval callbacks', async () => {
+    const workflow: WorkflowMeta = {
+      id: 'wf-focused-detail',
+      name: 'Focused detail run',
+      status: 'running',
+      baseBranch: 'master',
+      repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+    };
+    mock.setTasks([
+      makeUITask({
+        id: 'wf-focused-detail/plan',
+        description: 'Create implementation plan',
+        workflowId: 'wf-focused-detail',
+        status: 'completed',
+        command: 'echo plan',
+      }),
+      makeUITask({
+        id: 'wf-focused-detail/schema',
+        description: 'Approve schema change',
+        workflowId: 'wf-focused-detail',
+        status: 'awaiting_approval',
+        dependencies: ['wf-focused-detail/plan'],
+        config: {
+          workflowId: 'wf-focused-detail',
+          command: 'echo approve schema',
+          requiresManualApproval: true,
+          summary: 'Adds a low-risk schema index before verification continues.',
+        },
+        execution: {
+          branch: 'invoker/184/backend-auth',
+          commit: 'a71f2c2d',
+          agentName: 'codex',
+        },
+      }),
+    ], [workflow]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('workflow-node-wf-focused-detail'));
+
+    const focusedSurface = await screen.findByTestId('focused-workflow-surface');
+    fireEvent.click(await within(focusedSurface).findByTestId('rf__node-focused:wf-focused-detail/schema'));
+
+    const detail = await within(focusedSurface).findByTestId('focused-task-detail');
+    expect(within(detail).getByRole('heading', { name: 'Approve schema change' })).toBeInTheDocument();
+    expect(within(detail).getByText('Manual gate')).toBeInTheDocument();
+    expect(within(detail).getByText('Approval required')).toBeInTheDocument();
+    expect(within(detail).getByText('invoker/184/backend-auth')).toBeInTheDocument();
+
+    fireEvent.click(within(detail).getByTestId('focused-task-tab-logs'));
+    expect(within(detail).getByText('Open terminal')).toBeInTheDocument();
+
+    fireEvent.click(within(detail).getByTestId('focused-task-approve-button'));
+    expect(await screen.findByRole('heading', { name: 'Manual Approval Required' })).toBeInTheDocument();
+  });
+
   it('counts all attention tasks while showing only the focused run shortlist', async () => {
     const workflow: WorkflowMeta = {
       id: 'wf-attention',
