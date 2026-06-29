@@ -206,9 +206,13 @@ export const TEST_PLAN = {
 
 async function selectWorkflowNode(page: Page, workflowId?: string): Promise<void> {
   const miniDag = page.getByTestId('selected-workflow-mini-dag');
+  const focusedSurface = page.getByTestId('focused-workflow-surface');
   const workflowNode = workflowId ? page.getByTestId(`workflow-node-${workflowId}`) : page.locator('[data-testid^="workflow-node-"]').first();
   await workflowNode.waitFor({ state: 'attached', timeout: 10000 });
   await workflowNode.dispatchEvent('click', { bubbles: true });
+  if (await focusedSurface.isVisible({ timeout: 1500 }).catch(() => false)) {
+    await closeFocusedWorkflowSurface(page);
+  }
   await miniDag.waitFor({ state: 'visible', timeout: 10000 });
 }
 
