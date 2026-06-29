@@ -118,9 +118,8 @@ describe('owner boundary enforcement', () => {
       reader.close();
     });
 
-    it('in-memory databases bypass owner check', async () => {
-      // In-memory DBs bypass owner check (no persistent state to guard)
-      const adapter = await SQLiteAdapter.create(':memory:');
+    it('ephemeral databases bypass owner check because they never touch shared state', async () => {
+      const adapter = await SQLiteAdapter.createEphemeral();
 
       // Verify it's writable even without ownerCapability
       expect(() => adapter.saveWorkflow(testWorkflow)).not.toThrow();
