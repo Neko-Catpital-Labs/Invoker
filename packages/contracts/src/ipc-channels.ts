@@ -330,6 +330,15 @@ export interface SystemDiagnostics {
   cliInstaller?: CliInstallerStatus;
 }
 
+export type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only';
+
+export interface RuntimeStatus {
+  ownerMode: boolean;
+  readOnly: boolean;
+  mode: RuntimeMode;
+}
+
+
 // ── Embedded terminal session types ─────────────────────────
 
 /**
@@ -639,6 +648,11 @@ export const IpcChannels = {
   'invoker:get-execution-agents': {} as {
     request: [];
     response: string[];
+  },
+
+  'invoker:get-runtime-status': {} as {
+    request: [];
+    response: RuntimeStatus;
   },
 
   // Performance & Activity
