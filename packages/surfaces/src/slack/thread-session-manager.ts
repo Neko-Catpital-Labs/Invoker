@@ -113,6 +113,11 @@ export class SessionHandle {
     return this.conversation.planSubmitted;
   }
 
+  /** Returns the last complete YAML plan drafted in this conversation, or null. */
+  getDraftedPlan(): string | null {
+    return this.conversation.getDraftedPlan();
+  }
+
   /**
    * Mark the plan as submitted (terminal state).
    */
