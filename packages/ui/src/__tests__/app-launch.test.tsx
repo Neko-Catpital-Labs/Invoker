@@ -56,6 +56,30 @@ describe('App launch (component)', () => {
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
   });
 
+  it('shows a read-only banner when this window is not the write owner', async () => {
+    mock.setRuntimeStatus({
+      ownerMode: false,
+      readOnly: true,
+      mode: 'read-only',
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId('read-only-mode-banner')).toHaveTextContent(
+      'Read-only mode. This window can browse workflows, but it cannot make changes until the write owner is available.',
+    );
+  });
+
+  it('hides the read-only banner for the local write owner', async () => {
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId('read-only-mode-banner')).not.toBeInTheDocument();
+  });
+
   it('warns when no Claude or Codex CLI is installed', async () => {
     mock.api.getSystemDiagnostics = vi.fn(async () => ({
       platform: 'darwin',
