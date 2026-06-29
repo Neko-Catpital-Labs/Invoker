@@ -133,8 +133,10 @@ describe('App launch (component)', () => {
 
     const focusedSurface = await screen.findByTestId('focused-workflow-surface');
     await waitFor(() => {
-      expect(within(focusedSurface).getByText('5')).toBeInTheDocument();
-      expect(within(focusedSurface).getByText('5 tasks waiting on action.')).toBeInTheDocument();
+      const graphSection = within(focusedSurface).getByTestId('focused-workflow-graph-section');
+      const attentionStrip = within(focusedSurface).getByTestId('focused-workflow-attention-strip');
+      expect(graphSection).toHaveTextContent(/Needs attention\s*5/);
+      expect(attentionStrip).toHaveTextContent('5 tasks waiting on action.');
       expect(within(focusedSurface).getByText('Needs attention 4')).toBeInTheDocument();
       expect(within(focusedSurface).queryByText('Needs attention 5')).not.toBeInTheDocument();
     });
