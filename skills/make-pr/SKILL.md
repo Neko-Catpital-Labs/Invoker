@@ -183,6 +183,7 @@ Manual `gh pr edit` is a last-resort escape hatch only when `create-pr` itself i
 
 ## Validation
 
+- **Never publish an empty slice.** Do not create, update, or stack-push a PR when the branch has no file changes versus its base, or when any commit in the `base..HEAD` range is an empty commit (no file changes from its parent). This applies to normal `create-pr`, the `--update-existing` path, and Mergify stack publication (`mergify stack push`). Drop or fold the empty commit first; `create-pr.mjs` enforces this and will refuse before any push or GitHub API call.
 - ensure the branch is pushed
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible

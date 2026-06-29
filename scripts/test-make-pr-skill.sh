@@ -29,6 +29,11 @@ must_contain "$SKILL_MD" "Repro/proof comes before the fix." "make-pr skill must
 must_contain "$SKILL_MD" "Keep each slice green for CI" "make-pr skill must keep each ordered slice green for CI"
 must_contain "$SKILL_MD" "cleanup and docs come last" "make-pr skill must order foundation before behavior and cleanup/docs last"
 
+# The skill must forbid publishing empty PR slices before any remote mutation.
+must_contain "$SKILL_MD" "Never publish an empty slice." "make-pr skill must forbid publishing empty PR slices"
+must_contain "$SKILL_MD" "any commit in the \`base..HEAD\` range is an empty commit" "make-pr skill must reject empty commits in the base..HEAD range"
+must_contain "$SKILL_MD" "mergify stack push" "make-pr skill empty-slice rule must cover Mergify stack publication"
+
 # The ordering section delegates the rest of the rules to review-compression,
 # so that referenced section must actually exist.
 must_contain "$SKILL_MD" "Ordering Rules" "make-pr skill must point at review-compression Ordering Rules"
