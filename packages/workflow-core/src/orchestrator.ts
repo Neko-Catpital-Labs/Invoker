@@ -3707,6 +3707,17 @@ export class Orchestrator {
    * Delete a single workflow: DB first, then scheduler, memory, and publish removal deltas.
    * Follows the same DB→memory→publish pattern as writeAndSync().
    */
+  private resolveDetachDefaultBranch(
+    workflowId: string,
+    workflow: { repoUrl?: string } | undefined,
+  ): string {
+    const repoUrl = workflow?.repoUrl?.trim();
+    if (!repoUrl) {
+      throw new Error(`Cannot detach workflow ${workflowId}: missing repo URL for default branch resolution.`);
+    }
+    return this.resolveRepoDefaultBranch(repoUrl);
+  }
+
   deleteWorkflow(workflowId: string): void {
     this.syncAllFromDb();
 
@@ -3715,8 +3726,22 @@ export class Orchestrator {
     // repo default branch instead of becoming permanently blocked on a missing
     // prerequisite.
     const directDependents = this.collectDirectDependentWorkflowIds(workflowId);
+    const workflowMetadata = this.persistence.listWorkflows();
+    const directDependentBaseBranches = new Map<string, string>();
     for (const dependentWorkflowId of directDependents) {
-      this.detachWorkflowInternal(dependentWorkflowId, workflowId);
+      const dependentWorkflow = this.persistence.loadWorkflow?.(dependentWorkflowId)
+        ?? workflowMetadata.find((candidate) => candidate.id === dependentWorkflowId);
+      directDependentBaseBranches.set(
+        dependentWorkflowId,
+        this.resolveDetachDefaultBranch(dependentWorkflowId, dependentWorkflow),
+      );
+    }
+    for (const dependentWorkflowId of directDependents) {
+      this.detachWorkflowInternal(
+        dependentWorkflowId,
+        workflowId,
+        directDependentBaseBranches.get(dependentWorkflowId)!,
+      );
     }
 
     // 2. Collect affected tasks before DB delete (needed for deltas and scheduler cleanup)
@@ -4465,6 +4490,7 @@ export class Orchestrator {
   private detachWorkflowInternal(
     workflowId: string,
     upstreamWorkflowId: string,
+    baseBranchAfterDetach?: string,
   ): void {
     if (workflowId === upstreamWorkflowId) {
       throw new Error(`Cannot detach workflow ${workflowId} from itself`);
@@ -4527,17 +4553,14 @@ export class Orchestrator {
       detachedProvenance.push(entry);
     }
 
-    const repoUrl = targetWorkflow?.repoUrl?.trim();
-    if (!repoUrl) {
-      throw new Error(`Cannot detach workflow ${workflowId}: missing repo URL for default branch resolution.`);
-    }
-    const baseBranchAfterDetach = this.resolveRepoDefaultBranch(repoUrl);
+    const nextBaseBranch = baseBranchAfterDetach
+      ?? this.resolveDetachDefaultBranch(workflowId, targetWorkflow);
 
     this.taskRepository.updateWorkflow(workflowId, {
       externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
       externalDependencyChanges: dependencyChanges,
       detachedExternalDependencies: detachedProvenance.length > 0 ? detachedProvenance : undefined,
-      baseBranch: baseBranchAfterDetach,
+      baseBranch: nextBaseBranch,
     });
 
     const eventTask = this.getMergeNode(workflowId) ?? targetTasks[0];

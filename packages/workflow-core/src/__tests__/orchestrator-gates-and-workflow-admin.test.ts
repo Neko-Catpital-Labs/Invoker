@@ -1244,6 +1244,60 @@ describe('Orchestrator', () => {
       expect(downstream.config.externalDependencies).toBeUndefined();
       expect(persistence.loadWorkflow(downstreamTaskId.split('/')[0]!)!.baseBranch).toBe(repoDefaultBranch);
     });
+
+    it('fails deleteWorkflow before mutating any dependent when one missing repoUrl cannot retarget', () => {
+      orchestrator.loadPlan({
+        name: 'upstream-preflight-target',
+        baseBranch: 'main',
+        featureBranch: 'feature/upstream-preflight-target',
+        repoUrl: 'memory://upstream-preflight',
+        tasks: [{ id: 'verify-preflight', description: 'upstream prerequisite' }],
+      });
+      const upstreamTaskId = sid(orchestrator, 0, 'verify-preflight');
+      const upstreamWfId = upstreamTaskId.split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'valid-dependent',
+        baseBranch: 'feature/upstream-preflight-target',
+        featureBranch: 'feature/valid-dependent',
+        repoUrl: 'memory://valid-dependent',
+        tasks: [
+          {
+            id: 'valid-leaf',
+            description: 'valid dependent stays unchanged on preflight failure',
+            externalDependencies: [{ workflowId: upstreamWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const validWfId = sid(orchestrator, 1, 'valid-leaf').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'missing-repo-dependent',
+        baseBranch: 'feature/upstream-preflight-target',
+        featureBranch: 'feature/missing-repo-dependent',
+        repoUrl: 'memory://missing-repo-dependent',
+        tasks: [
+          {
+            id: 'missing-repo-leaf',
+            description: 'missing repo url blocks the whole delete',
+            externalDependencies: [{ workflowId: upstreamWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const missingRepoWfId = sid(orchestrator, 2, 'missing-repo-leaf').split('/')[0]!;
+      persistence.workflows.get(missingRepoWfId)!.repoUrl = undefined;
+
+      expect(() => orchestrator.deleteWorkflow(upstreamWfId)).toThrow(/missing repo URL/);
+      expect(persistence.loadWorkflow(upstreamWfId)).toBeTruthy();
+      expect(persistence.loadWorkflow(validWfId)!.externalDependencies).toEqual([
+        { workflowId: upstreamWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
+      ]);
+      expect(persistence.loadWorkflow(validWfId)!.baseBranch).toBe('feature/upstream-preflight-target');
+      expect(persistence.loadWorkflow(missingRepoWfId)!.externalDependencies).toEqual([
+        { workflowId: upstreamWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
+      ]);
+      expect(persistence.loadWorkflow(missingRepoWfId)!.baseBranch).toBe('feature/upstream-preflight-target');
+    });
   });
 
   describe('detachWorkflow', () => {

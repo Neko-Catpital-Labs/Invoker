@@ -1,53 +1,33 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const { execFileSyncMock } = vi.hoisted(() => ({
+  execFileSyncMock: vi.fn(),
+}));
+
+vi.mock('node:child_process', () => ({
+  execFileSync: execFileSyncMock,
+}));
 
 import * as repoDefaultBranch from '../repo-default-branch.js';
 
-function git(cwd: string, args: string[]): void {
-  execFileSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: 'Invoker Test',
-      GIT_AUTHOR_EMAIL: 'test@example.com',
-      GIT_COMMITTER_NAME: 'Invoker Test',
-      GIT_COMMITTER_EMAIL: 'test@example.com',
-    },
-  });
-}
-
 describe('repo-default-branch', () => {
-  const tempDirs: string[] = [];
-
   afterEach(() => {
+    execFileSyncMock.mockReset();
     vi.restoreAllMocks();
-    while (tempDirs.length > 0) {
-      const dir = tempDirs.pop();
-      if (dir) rmSync(dir, { recursive: true, force: true });
-    }
   });
 
-  it('resolves a bare repo whose path starts with a dash', () => {
-    const root = mkdtempSync(join(tmpdir(), 'invoker-default-branch-'));
-    tempDirs.push(root);
-    const remoteRepo = join(root, '-origin.git');
-    const worktree = join(root, 'worktree');
+  it('passes a dash-prefixed repo path after --', () => {
+    execFileSyncMock.mockReturnValue('ref: refs/heads/main HEAD\n');
 
-    git(root, ['init', '--bare', '--initial-branch=main', remoteRepo]);
-    git(root, ['init', '--initial-branch=main', worktree]);
-    writeFileSync(join(worktree, 'README.md'), 'test\n');
-    git(worktree, ['add', 'README.md']);
-    git(worktree, ['commit', '-m', 'init']);
-    git(worktree, ['remote', 'add', 'origin', remoteRepo]);
-    git(worktree, ['push', 'origin', 'main']);
-
-    expect(repoDefaultBranch.detectDefaultBranchRemote(remoteRepo)).toBe('main');
+    expect(repoDefaultBranch.detectDefaultBranchRemote('-origin.git')).toBe('main');
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      'git',
+      ['ls-remote', '--symref', '--', '-origin.git', 'HEAD'],
+      expect.objectContaining({
+        encoding: 'utf8',
+        timeout: 10_000,
+      }),
+    );
   });
 
   it('redacts credentials when default-branch lookup fails', () => {

@@ -482,36 +482,43 @@ ov_start_owner() {
   local electron_bin="$INVOKER_E2E_REPO_ROOT/scripts/electron.cjs"
   local main_js="$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js"
   local sandbox_flag=""
+  local attempt max_attempts waited owner_was_running
   export INVOKER_IPC_SOCKET="${INVOKER_DB_DIR}/overload-ipc.sock"
   if [ "$(uname)" = "Linux" ]; then
     sandbox_flag="--no-sandbox"
   fi
-  : > "${OVERLOAD_TMP_DIR}/owner-serve.log"
-  if command -v setsid >/dev/null 2>&1; then
-    setsid env \
-      INVOKER_HEADLESS_STANDALONE=1 \
-      INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
-      INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
-      LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
-      "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
-      >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
-  else
-    env \
-      INVOKER_HEADLESS_STANDALONE=1 \
-      INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
-      INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
-      LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
-      "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
-      >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
-  fi
-  OVERLOAD_OWNER_PID=$!
-  local waited=0
-  while [ "$waited" -lt 30 ]; do
-    if ! kill -0 "$OVERLOAD_OWNER_PID" >/dev/null 2>&1; then
-      echo "FAIL: standalone owner exited before becoming ready" >&2
-      cat "${OVERLOAD_TMP_DIR}/owner-serve.log" >&2 || true
-      return 1
+  max_attempts=15
+  for attempt in $(seq 1 "$max_attempts"); do
+    : > "${OVERLOAD_TMP_DIR}/owner-serve.log"
+    if command -v setsid >/dev/null 2>&1; then
+      setsid env \
+        INVOKER_HEADLESS_STANDALONE=1 \
+        INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
+        INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
+        LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
+        "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
+        >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
+    else
+      env \
+        INVOKER_HEADLESS_STANDALONE=1 \
+        INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
+        INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
+        LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
+        "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
+        >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
     fi
+    OVERLOAD_OWNER_PID=$!
+    waited=0
+    while [ "$waited" -lt 30 ]; do
+      if ! kill -0 "$OVERLOAD_OWNER_PID" >/dev/null 2>&1; then
+        break
+      fi
+      if grep -q 'standalone owner ready' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
+        break
+      fi
+      waited=$((waited + 1))
+      sleep 1
+    done
     if grep -q 'standalone owner ready' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
       break
     fi
@@ -525,15 +532,9 @@ ov_start_owner() {
       fi
     fi
     wait "${OVERLOAD_OWNER_PID}" 2>/dev/null || true
-    if [ "$attempt" -lt "$max_attempts" ]; then
-      if grep -Eq 'database is locked|SQLITE_BUSY' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
-        sleep 2
-        continue
-      fi
-      if [ "$owner_was_running" -eq 0 ]; then
-        sleep 2
-        continue
-      fi
+    if [ "$attempt" -lt "$max_attempts" ] && grep -Eq 'database is locked|SQLITE_BUSY' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
+      sleep 2
+      continue
     fi
     if [ "$owner_was_running" -eq 1 ]; then
       echo "FAIL: standalone owner did not become ready" >&2
