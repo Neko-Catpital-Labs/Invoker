@@ -47,6 +47,20 @@ export interface WorkflowOpResult {
   summary: string;
 }
 
+/** Incremental progress for a bulk workflow op, streamed to the surface while it runs. */
+export interface WorkflowOpProgress {
+  /** Workflows processed so far (ok + failed). */
+  done: number;
+  /** Total workflows in this op. */
+  total: number;
+  /** Succeeded so far. */
+  ok: number;
+  /** Failed so far. */
+  failed: number;
+  /** The workflow currently being processed, when known. */
+  current?: string;
+}
+
 // ── Events (Orchestrator → Surface) ────────────────────────
 
 export interface WorkflowStatus {
