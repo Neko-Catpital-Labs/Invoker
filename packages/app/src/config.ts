@@ -261,10 +261,17 @@ function readJsonSafe(path: string): InvokerConfig {
   return parsed as InvokerConfig;
 }
 
+export function resolveConfigFilePath(): string {
+  return process.env.INVOKER_REPO_CONFIG_PATH ?? join(homedir(), '.invoker', 'config.json');
+}
+
+export function resolveConfigFileState(): { path: string; exists: boolean } {
+  const path = resolveConfigFilePath();
+  return { path, exists: existsSync(path) };
+}
+
 export function loadConfig(): InvokerConfig {
-  return process.env.INVOKER_REPO_CONFIG_PATH
-    ? readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH)
-    : readJsonSafe(join(homedir(), '.invoker', 'config.json'));
+  return readJsonSafe(resolveConfigFilePath());
 }
 
 

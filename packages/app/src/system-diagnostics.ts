@@ -1,6 +1,15 @@
 import { spawnSync } from 'node:child_process';
+import { accessSync, constants, statSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 
-import type { SystemDiagnostics, SystemToolStatus } from '@invoker/contracts';
+import {
+  DEFAULT_TOOL_REQUIREMENTS,
+  assembleReadinessChecks,
+  type PlanningPresetSpec,
+  type PrerequisiteCheck,
+  type SystemDiagnostics,
+  type SystemToolStatus,
+} from '@invoker/contracts';
 
 /**
  * Exported only so the regression test in
@@ -53,6 +62,32 @@ export function detectTool(
   };
 }
 
+export function commandIsOnPath(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (command.includes('/') || command.includes('\\')) {
+    return isExecutableFile(command);
+  }
+  const pathDirs = (env.PATH ?? '').split(delimiter).filter(Boolean);
+  const extensions = process.platform === 'win32'
+    ? (env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
+    : [''];
+  for (const dir of pathDirs) {
+    for (const ext of extensions) {
+      if (isExecutableFile(join(dir, command + ext))) return true;
+    }
+  }
+  return false;
+}
+
+function isExecutableFile(candidate: string): boolean {
+  try {
+    if (!statSync(candidate).isFile()) return false;
+    accessSync(candidate, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function collectSystemDiagnostics(args: {
   appVersion: string;
   isPackaged: boolean;
@@ -60,7 +95,22 @@ export function collectSystemDiagnostics(args: {
   arch: string;
   bundledSkills?: SystemDiagnostics['bundledSkills'];
   cliInstaller?: SystemDiagnostics['cliInstaller'];
-}): SystemDiagnostics {
+  config?: { path: string; exists: boolean; error?: string };
+  presets?: Record<string, PlanningPresetSpec>;
+  defaultPreset?: string;
+}): SystemDiagnostics & { readiness: PrerequisiteCheck[] } {
+  const tools = DEFAULT_TOOL_REQUIREMENTS.map((req) =>
+    detectTool(req.id, req.name, req.command, ['--version'], req.installHint ?? '', req.required ?? false),
+  );
+
+  const readiness = assembleReadinessChecks({
+    tools: DEFAULT_TOOL_REQUIREMENTS,
+    isInstalled: commandIsOnPath,
+    config: args.config,
+    presets: args.presets,
+    defaultPreset: args.defaultPreset,
+  });
+
   return {
     platform: args.platform,
     arch: args.arch,
@@ -68,13 +118,7 @@ export function collectSystemDiagnostics(args: {
     isPackaged: args.isPackaged,
     bundledSkills: args.bundledSkills,
     cliInstaller: args.cliInstaller,
-    tools: [
-      detectTool('git', 'Git', 'git', ['--version'], 'Install Git before running workflows.', true),
-      detectTool('node', 'Node.js', 'node', ['--version'], 'Install Node.js 26 for repo-based workflows.'),
-      detectTool('pnpm', 'pnpm', 'pnpm', ['--version'], 'Install pnpm for repo-based workflows that use the default provision command.'),
-      detectTool('claude', 'Claude CLI', 'claude', ['--version'], 'Install Claude CLI if you want Claude-backed execution or fix flows.'),
-      detectTool('codex', 'Codex CLI', 'codex', ['--version'], 'Install Codex CLI if you want Codex-backed execution or fix flows.'),
-      detectTool('docker', 'Docker', 'docker', ['--version'], 'Install Docker if you want Docker executor support.'),
-    ],
+    tools,
+    readiness,
   };
 }
