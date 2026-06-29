@@ -31,7 +31,9 @@ describe('repo-default-branch', () => {
   });
 
   it('redacts credentials when default-branch lookup fails', () => {
-    vi.spyOn(repoDefaultBranch, 'detectDefaultBranchRemote').mockReturnValue(undefined);
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error('ls-remote failed');
+    });
 
     expect(() => repoDefaultBranch.requireDefaultBranchRemote('https://user:secret@example.invalid/repo.git')).toThrow(
       'Unable to resolve default branch for repo. Make the remote HEAD readable.',
