@@ -564,6 +564,34 @@ function testStackedDiffTitleRequiredForNonTrunkBase() {
   }
 }
 
+function testDiffAtomicityBlocksMixedDiff() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/atomicity-lockfile');
+    commitFile(work, 'pnpm-lock.yaml', 'lockfileVersion: 9\npackages: {}\n', 'orphaned lockfile churn');
+
+    const result = runCreatePr(work, harness, baseArgs());
+
+    assert(
+      result.status === 1,
+      `mixed diff should fail diff atomicity gate\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stderr.includes('Diff atomicity violation'),
+      `create-pr should report the diff atomicity violation\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'diff atomicity violation');
+    const ghCalls = readGhCalls(harness.ghLog);
+    assert(
+      !ghCalls.some((call) => /\/pulls\/[0-9]+$/.test(call.route)),
+      'diff atomicity violation should fail before any GitHub PATCH',
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testHelpMentionsStackUpdateFlow() {
   const harness = createHarness();
   try {
@@ -586,6 +614,7 @@ const tests = [
   testUnpublishedStackCommitsBlockUpdate,
   testCurrentBranchPrLookupFailure,
   testStackedDiffTitleRequiredForNonTrunkBase,
+  testDiffAtomicityBlocksMixedDiff,
   testHelpMentionsStackUpdateFlow,
 ];
 
