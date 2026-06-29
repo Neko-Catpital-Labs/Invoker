@@ -27,7 +27,7 @@ export interface OwnerReadQueryHandlers {
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
   getQueueStatus: () => Record<string, unknown>;
-  getWorkflowStatus: () => Record<string, unknown>;
+  getWorkflowStatus: (workflowId?: string) => Record<string, unknown>;
   getTasksSnapshot: (opts: { refresh: boolean }) => Record<string, unknown>;
   getActionGraphSnapshot: () => Record<string, unknown>;
   listWorkflows: () => unknown[];
@@ -76,7 +76,7 @@ export function answerOwnerReadQuery(
     case 'queue':
       return handlers.getQueueStatus();
     case 'workflow-status':
-      return handlers.getWorkflowStatus();
+      return handlers.getWorkflowStatus(body.workflowId);
     case 'tasks':
       return handlers.getTasksSnapshot({ refresh: false });
     case 'task-graph-refresh':
@@ -172,7 +172,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     getUiPerfStats: deps.getUiPerfStats,
     resetUiPerfStats: deps.resetUiPerfStats,
     getQueueStatus: () => orchestrator.getQueueStatus() as unknown as Record<string, unknown>,
-    getWorkflowStatus: () => orchestrator.getWorkflowStatus() as unknown as Record<string, unknown>,
+    getWorkflowStatus: (workflowId?: string) => orchestrator.getWorkflowStatus(workflowId) as unknown as Record<string, unknown>,
     getTasksSnapshot: ({ refresh }) => {
       if (refresh) orchestrator.syncAllFromDb();
       return {
