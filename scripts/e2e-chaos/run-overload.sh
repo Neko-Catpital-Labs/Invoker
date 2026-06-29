@@ -515,8 +515,33 @@ ov_start_owner() {
     if grep -q 'standalone owner ready' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
       break
     fi
-    waited=$((waited + 1))
-    sleep 1
+    owner_was_running=0
+    if kill -0 "$OVERLOAD_OWNER_PID" >/dev/null 2>&1; then
+      owner_was_running=1
+      kill -- "-${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || kill "${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || true
+      sleep 1
+      if kill -0 "$OVERLOAD_OWNER_PID" >/dev/null 2>&1; then
+        kill -KILL -- "-${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || kill -KILL "${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || true
+      fi
+    fi
+    wait "${OVERLOAD_OWNER_PID}" 2>/dev/null || true
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      if grep -Eq 'database is locked|SQLITE_BUSY' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
+        sleep 2
+        continue
+      fi
+      if [ "$owner_was_running" -eq 0 ]; then
+        sleep 2
+        continue
+      fi
+    fi
+    if [ "$owner_was_running" -eq 1 ]; then
+      echo "FAIL: standalone owner did not become ready" >&2
+    else
+      echo "FAIL: standalone owner exited before becoming ready" >&2
+    fi
+    cat "${OVERLOAD_TMP_DIR}/owner-serve.log" >&2 || true
+    return 1
   done
   if ! grep -q 'standalone owner ready' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
     echo "FAIL: standalone owner did not become ready" >&2
