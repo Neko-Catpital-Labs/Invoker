@@ -85,6 +85,7 @@ export function mapRowToTask(row: any): TaskState {
       fixPrompt: row.fix_prompt ?? undefined,
       fixContext: row.fix_context ?? undefined,
       executionAgent: row.execution_agent ?? undefined,
+      executionModel: row.execution_model ?? undefined,
     },
     execution: {
       blockedBy: row.blocked_by ?? undefined,
