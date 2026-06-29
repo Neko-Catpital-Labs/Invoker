@@ -140,6 +140,8 @@ For Mergify-managed stack PRs, this update path is REQUIRED after `mergify stack
 
 This script handles local image path upload/injection when configured. It also rejects UI-impacting diffs unless the body includes visual proof media.
 
+`create-pr.mjs` runs `scripts/lint-pr-diff-atomicity.mjs` through the PR body checker on the branch diff, the same gate CI enforces. Mixed behavior, refactor, cleanup, and test-harness work must be split into separate slices before this passes — keep each PR to one kind of change.
+
 ## Upstream-first workflow
 
 Use the canonical repository as the PR target and an explicit publish remote (typically `origin`) for branch publication.

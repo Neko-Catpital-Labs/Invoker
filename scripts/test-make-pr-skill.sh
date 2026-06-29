@@ -29,6 +29,9 @@ must_contain "$SKILL_MD" "Repro/proof comes before the fix." "make-pr skill must
 must_contain "$SKILL_MD" "Keep each slice green for CI" "make-pr skill must keep each ordered slice green for CI"
 must_contain "$SKILL_MD" "cleanup and docs come last" "make-pr skill must order foundation before behavior and cleanup/docs last"
 
+# The skill must point at the diff atomicity gate that create-pr.mjs enforces.
+must_contain "$SKILL_MD" "lint-pr-diff-atomicity.mjs" "make-pr skill must document the diff atomicity gate create-pr runs"
+
 # The ordering section delegates the rest of the rules to review-compression,
 # so that referenced section must actually exist.
 must_contain "$SKILL_MD" "Ordering Rules" "make-pr skill must point at review-compression Ordering Rules"

@@ -65,6 +65,31 @@ jobs:
             const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number });
             fs.writeFileSync('pr-body.md', pull.body || '', 'utf8');
 
+      - name: Fetch PR diff metadata
+        if: steps.rollout.outputs.enabled == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const baseSha = context.payload.pull_request.base.sha;
+            const headSha = context.payload.pull_request.head.sha;
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
+            });
+            fs.writeFileSync('changed-files.txt', files.map((file) => file.filename).join('\n'), 'utf8');
+            const { data: diff } = await github.rest.repos.compareCommitsWithBasehead({
+              owner,
+              repo,
+              basehead: `${baseSha}...${headSha}`,
+              mediaType: { format: 'diff' },
+            });
+            fs.writeFileSync('pr.diff', typeof diff === 'string' ? diff : '', 'utf8');
+
       - name: Validate PR body
         if: steps.rollout.outputs.enabled == 'true'
-        run: node scripts/validate-pr-body.mjs --body-file pr-body.md
+        run: node scripts/validate-pr-body.mjs --body-file pr-body.md --changed-files-file changed-files.txt --diff-file pr.diff
