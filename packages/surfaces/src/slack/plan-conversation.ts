@@ -108,7 +108,7 @@ A plan has this structure:
 name: "Plan Name"
 ${repoUrlLine}
 onFinish: pull_request  # "pull_request" (default), "merge", or "none"
-mergeMode: manual       # "manual" (default) or "automatic"
+mergeMode: external_review  # "external_review" = GitHub-backed review gate for reviewable implementation work; "manual" (default) = verification-only, no review; "automatic" = merge without review
 baseBranch: ${defaultBranch}        # base git branch
 featureBranch: plan/my-feature  # auto-generated from plan name if omitted
 tasks:
@@ -148,7 +148,8 @@ Rules:
 8. When ready, output the plan inside a \`\`\`yaml code block.
 9. Always include \`dependencies\` (even if empty array).
 10. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
-11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.`;
+11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.
+12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
 }
 
 // ── Dangerous Command Detection ─────────────────────────────

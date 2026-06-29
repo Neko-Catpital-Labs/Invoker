@@ -649,6 +649,19 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('do not impose Invoker-specific commands on external repos');
     expect(prompt).toContain('reserve broad/full-suite commands for the final gate only when the target repo documents such a command');
   });
+
+  it('system prompt advertises external_review as the GitHub-backed review gate', () => {
+    const conv = new PlanConversation({});
+    (conv as any).messages.push({ role: 'user', content: 'Implement a small feature' });
+    const prompt = conv.buildCursorPrompt();
+
+    // The canonical GitHub review gate must be named explicitly for reviewable plans.
+    expect(prompt).toContain('mergeMode: external_review');
+    expect(prompt).toContain('GitHub-backed review gate');
+    // Manual remains the verification-only default; automatic still documented.
+    expect(prompt).toContain('"manual" (default)');
+    expect(prompt).toContain('"automatic"');
+  });
 });
 
 describe('isDangerousCommand', () => {
