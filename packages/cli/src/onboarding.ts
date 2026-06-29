@@ -135,7 +135,10 @@ export const REQUIRED_BOT_SCOPES = [
 
 export interface SlackAppManifest {
   display_information: { name: string };
-  features: { bot_user: { display_name: string; always_online: boolean } };
+  features: {
+    bot_user: { display_name: string; always_online: boolean };
+    slash_commands?: { command: string; description: string; usage_hint?: string; should_escape?: boolean }[];
+  };
   oauth_config: { scopes: { bot: string[] } };
   settings: {
     event_subscriptions: { bot_events: string[] };
@@ -149,11 +152,21 @@ export interface SlackAppManifest {
 export function generateSlackManifest(name = 'Invoker'): SlackAppManifest {
   return {
     display_information: { name },
-    features: { bot_user: { display_name: name, always_online: true } },
+    features: {
+      bot_user: { display_name: name, always_online: true },
+      slash_commands: [
+        {
+          command: '/invoker',
+          description: 'Invoker workflow commands',
+          usage_hint: '<status|recreate|rebase|retry|cancel|submit> [all|<workflow>]',
+          should_escape: false,
+        },
+      ],
+    },
     oauth_config: { scopes: { bot: [...REQUIRED_BOT_SCOPES] } },
     settings: {
       event_subscriptions: { bot_events: ['app_mention'] },
-      interactivity: { is_enabled: false },
+      interactivity: { is_enabled: true },
       org_deploy_enabled: false,
       socket_mode_enabled: true,
       token_rotation_enabled: false,
