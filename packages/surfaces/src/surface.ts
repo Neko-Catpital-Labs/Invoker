@@ -27,6 +27,26 @@ export type SurfaceCommand =
       lobbyThreadTs?: string;
     };
 
+// ── Workflow operations (Surface → Orchestrator, lobby command routing) ──
+
+export type WorkflowOpName =
+  | 'recreate'
+  | 'rebase-recreate'
+  | 'rebase-retry'
+  | 'retry'
+  | 'status'
+  | 'cancel';
+
+export interface WorkflowOp {
+  operation: WorkflowOpName;
+  target: { all: true } | { workflow: string };
+}
+
+export interface WorkflowOpResult {
+  ok: boolean;
+  summary: string;
+}
+
 // ── Events (Orchestrator → Surface) ────────────────────────
 
 export interface WorkflowStatus {
