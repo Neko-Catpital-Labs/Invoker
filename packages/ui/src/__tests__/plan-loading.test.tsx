@@ -85,8 +85,8 @@ describe('Plan loading (component)', () => {
     screen.getByTestId('workflow-node-wf-load').click();
     await waitFor(() => {
       expect(screen.getByTestId('focused-workflow-surface')).toHaveTextContent('Loaded Workflow');
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
-      expect(screen.getByTestId('rf__node-task-beta')).toBeInTheDocument();
+      expect(screen.getByText('First test task')).toBeInTheDocument();
+      expect(screen.getByText(/^Second test task depending on alph/)).toBeInTheDocument();
     });
   });
 });
