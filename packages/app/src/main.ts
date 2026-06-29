@@ -104,6 +104,7 @@ import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
 import {
   loadConfig,
+  resolveConfigFileState,
   resolveEmbeddedTerminalBackendConfig,
   type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
@@ -2893,6 +2894,9 @@ function createEmbeddedTerminalBackendFromConfig(
             isPackaged: app.isPackaged,
             platform: process.platform,
             arch: process.arch,
+            config: resolveConfigFileState(),
+            presets: invokerConfig.slackHarnessPresets ?? DEFAULT_SLACK_HARNESS_PRESETS,
+            defaultPreset: invokerConfig.defaultSlackHarnessPreset ?? 'cursor+claude',
           }),
           logger,
         });
@@ -4516,6 +4520,9 @@ function createEmbeddedTerminalBackendFromConfig(
         arch: process.arch,
         bundledSkills: getBundledSkillsStatus(),
         cliInstaller: resolveCliInstallerStatus(buildCliInstallerContext()),
+        config: resolveConfigFileState(),
+        presets: invokerConfig.slackHarnessPresets ?? DEFAULT_SLACK_HARNESS_PRESETS,
+        defaultPreset: invokerConfig.defaultSlackHarnessPreset ?? 'cursor+claude',
       });
     });
 
