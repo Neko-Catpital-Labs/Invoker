@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { getPrBodyWarnings, validatePrBody, validatePrScope } from './validate-pr-body.mjs';
+import { getPrBodyWarnings, getReviewMetadata, validatePrBody, validatePrScope } from './validate-pr-body.mjs';
 
 function assert(condition, message) {
   if (!condition) {
@@ -765,5 +766,74 @@ assert(
   directScopeErrors.some((error) => error.includes('Review lane behavior cannot ship with docs files')),
   'direct scope validator should reject product plus docs mixing',
 );
+
+const reviewMetadata = getReviewMetadata(validMinimal);
+assert(reviewMetadata.reviewLane === 'behavior', 'getReviewMetadata should expose the normalized review lane');
+assert(reviewMetadata.reviewUnit === 'routing', 'getReviewMetadata should expose the normalized review unit');
+assert(reviewMetadata.reviewClaim.includes('Keep the owner fallback local.'), 'getReviewMetadata should expose the review claim');
+
+const mixedDiff = `diff --git a/dist/bundle.js b/dist/bundle.js
+new file mode 100644
+--- /dev/null
++++ b/dist/bundle.js
+@@ -0,0 +1,1 @@
++console.log('generated bundle');
+diff --git a/packages/app/src/feature.ts b/packages/app/src/feature.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/app/src/feature.ts
+@@ -0,0 +1,1 @@
++export const feature = true;
+`;
+
+const cleanDiff = `diff --git a/packages/app/src/feature.ts b/packages/app/src/feature.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/app/src/feature.ts
+@@ -0,0 +1,1 @@
++export const feature = true;
+`;
+
+const mixedDiffErrors = await validatePrBody(validMinimal, { diffText: mixedDiff });
+assert(
+  mixedDiffErrors.some((error) => error.includes('Diff atomicity violation')),
+  'mixed generated and hand-written diff should fail diff atomicity validation',
+);
+assert(
+  (await validatePrBody(validMinimal, { diffText: cleanDiff })).length === 0,
+  'an atomic source-only diff should pass diff atomicity validation',
+);
+assert(
+  (await validatePrBody(validMinimal)).length === 0,
+  'omitting diff text should preserve body-only validation',
+);
+
+const diffTmp = mkdtempSync(join(tmpdir(), 'pr-body-validator-diff-'));
+try {
+  const bodyPath = join(diffTmp, 'body.md');
+  const mixedDiffPath = join(diffTmp, 'mixed.diff');
+  const cleanDiffPath = join(diffTmp, 'clean.diff');
+  writeFileSync(bodyPath, validMinimal);
+  writeFileSync(mixedDiffPath, mixedDiff);
+  writeFileSync(cleanDiffPath, cleanDiff);
+
+  const mixedDiffCli = spawnSync(
+    process.execPath,
+    ['scripts/validate-pr-body.mjs', '--body-file', bodyPath, '--diff-file', mixedDiffPath],
+    { cwd: repoRoot, encoding: 'utf8' },
+  );
+  assert(mixedDiffCli.status === 1, 'CLI validator should fail on a mixed diff file');
+  assert(mixedDiffCli.stderr.includes('Diff atomicity violation'), 'CLI validator should report the diff atomicity violation');
+
+  const cleanDiffCli = spawnSync(
+    process.execPath,
+    ['scripts/validate-pr-body.mjs', '--body-file', bodyPath, '--diff-file', cleanDiffPath],
+    { cwd: repoRoot, encoding: 'utf8' },
+  );
+  assert(cleanDiffCli.status === 0, 'CLI validator should pass an atomic source-only diff file');
+  assert(cleanDiffCli.stdout.includes('PR body validation passed.'), 'CLI validator should report success for an atomic diff file');
+} finally {
+  rmSync(diffTmp, { recursive: true, force: true });
+}
 
 console.log('OK: PR body validator checks passed');
