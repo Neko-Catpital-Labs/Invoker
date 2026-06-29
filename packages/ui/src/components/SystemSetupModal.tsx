@@ -1,4 +1,32 @@
-import type { SystemDiagnostics } from '@invoker/contracts';
+import type { PrerequisiteCheck, PrerequisiteReport, PrerequisiteStatus, SystemDiagnostics } from '@invoker/contracts';
+
+type DiagnosticsWithReadiness = SystemDiagnostics & {
+  readiness?: PrerequisiteReport | PrerequisiteCheck[];
+};
+
+const readinessStatusClasses: Record<PrerequisiteStatus, { dot: string; text: string; badge: string }> = {
+  ok: {
+    dot: 'bg-green-400',
+    text: 'text-green-300',
+    badge: 'border-green-700/50 bg-green-950/30 text-green-200',
+  },
+  warn: {
+    dot: 'bg-amber-300',
+    text: 'text-amber-200',
+    badge: 'border-amber-700/50 bg-amber-950/30 text-amber-100',
+  },
+  error: {
+    dot: 'bg-red-400',
+    text: 'text-red-300',
+    badge: 'border-red-700/50 bg-red-950/30 text-red-200',
+  },
+};
+
+function getReadinessChecks(diagnostics: SystemDiagnostics | null): PrerequisiteCheck[] | undefined {
+  const readiness = (diagnostics as DiagnosticsWithReadiness | null)?.readiness;
+  if (!readiness) return undefined;
+  return Array.isArray(readiness) ? readiness : readiness.checks;
+}
 
 interface SystemSetupModalProps {
   diagnostics: SystemDiagnostics | null;
@@ -24,6 +52,7 @@ export function SystemSetupModal({
   const installedAgents = diagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed) ?? [];
   const bundledSkills = diagnostics?.bundledSkills;
   const cliInstaller = diagnostics?.cliInstaller;
+  const readinessChecks = getReadinessChecks(diagnostics);
   const canInstallBundledSkills = Boolean(bundledSkills?.available && onInstallBundledSkills);
   const helperTargets = bundledSkills
     ? [...bundledSkills.targets, ...bundledSkills.commandTargets, ...bundledSkills.mcpTargets]
@@ -246,6 +275,40 @@ export function SystemSetupModal({
                   {updateCliPending ? 'Updating…' : cliInstaller.installedVersion ? 'Update invoker-cli' : 'Install invoker-cli'}
                 </button>
               )}
+            </div>
+          )}
+
+          {readinessChecks && (
+            <div className="rounded border border-gray-700 bg-gray-950/20 overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-700 bg-gray-900">
+                <div className="text-sm font-medium text-gray-100">Readiness</div>
+              </div>
+              <div className="divide-y divide-gray-700">
+                {readinessChecks.map((check) => {
+                  const statusClasses = readinessStatusClasses[check.status];
+                  return (
+                    <div key={check.id} className="px-4 py-3">
+                      <div className="flex items-start gap-3">
+                        <span className={`mt-1.5 h-2.5 w-2.5 rounded-full ${statusClasses.dot}`} aria-hidden="true" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="text-sm font-medium text-gray-100">{check.name}</div>
+                            <span className={`rounded border px-2 py-0.5 text-xs font-medium uppercase ${statusClasses.badge}`}>
+                              {check.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-sm text-gray-400">{check.detail}</div>
+                          {check.status !== 'ok' && check.remediation && (
+                            <div className={`mt-2 text-sm ${statusClasses.text}`}>
+                              {check.remediation}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
