@@ -178,7 +178,7 @@ tasks:
       - Verify the layered prompt-edit flow after contract, bridge, and dormant UI slices exist.
       Alternative considerations:
       - Option A (chosen): add focused app and E2E regressions.
-      - Option B: rely only on the terminal full-suite gate.
+      - Option B: rely only on broad manual regression outside this focused workflow.
       Implementation details:
       - Cover IPC routing and TaskPanel prompt-edit flow deterministically.
       Layer: e2e_regression
@@ -198,7 +198,7 @@ tasks:
       - Verify the layered prompt-edit flow after contract, bridge, and dormant UI slices exist.
       Alternative considerations:
       - Option A (chosen): add focused app and E2E regressions.
-      - Option B: rely only on the terminal full-suite gate.
+      - Option B: rely only on broad manual regression outside this focused workflow.
       Implementation details:
       - Assume no prior context.
       Modify packages/app/src/__tests__/main.prompt-edit.test.ts and packages/app/e2e/prompt-edit.spec.ts.
@@ -212,33 +212,7 @@ tasks:
       - Pass condition: app-level and end-to-end prompt-edit regressions pass in CI-style runs.
     dependencies: [ui-prompt-editing-activation]
 
-  - id: final-regression
-    description: |
-      Review claim:
-      - Run the terminal full-suite regression gate for the layered prompt-edit stack.
-      Safety invariant:
-      - The command changes no production code and depends on every earlier task.
-      Slice rationale:
-      - Full-suite validation belongs at the terminal workflow layer.
-      Architectural effect:
-      - No architecture changes; validates the integrated prompt-edit stack.
-      Run the full repository test suite as the terminal regression gate.
-      Goal:
-      - Run the full repository test suite as the terminal regression gate.
-      Motivation:
-      - Validate all prompt-edit slices together after focused regressions exist.
-      Alternative considerations:
-      - Option A (chosen): one terminal full-suite gate.
-      - Option B: repeat full-suite verification in every slice.
-      Implementation details:
-      - Execute `pnpm run test:all` after every earlier task completes.
-      Layer: e2e_regression
-      Feature state: active
-      Files:
-      - none
-      Change types:
-      - none
-      Acceptance criteria:
-      - Ensure the full repository test suite passes after all prompt-edit slices land.
-    command: "pnpm run test:all"
-    dependencies: [prompt-edit-contact-surface, app-bridge-and-owner-delegation, ui-prompt-editing-activation, app-and-e2e-regressions]
+  - id: run-prompt-edit-regressions
+    description: "Run focused app and E2E prompt-edit regressions"
+    command: "pnpm --filter @invoker/app test -- src/__tests__/main.prompt-edit.test.ts && pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && pnpm --filter @invoker/app test:e2e -- prompt-edit.spec.ts"
+    dependencies: [app-and-e2e-regressions]
