@@ -59,18 +59,12 @@ importers:
       '@invoker/runtime-service':
         specifier: workspace:*
         version: link:../runtime-service
-      '@invoker/surfaces':
-        specifier: workspace:*
-        version: link:../surfaces
       '@invoker/transport':
         specifier: workspace:*
         version: link:../transport
       '@invoker/workflow-core':
         specifier: workspace:*
         version: link:../workflow-core
-      '@slack/bolt':
-        specifier: ^4.6.0
-        version: 4.6.0(@types/express@5.0.6)
       dockerode:
         specifier: ^4.0.0
         version: 4.0.9
