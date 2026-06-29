@@ -1,9 +1,23 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
 import { SharedMutationOwnerTimeoutError, runHeadlessClientCommand } from '../headless-client.js';
 
+const originalStandaloneEnv = process.env.INVOKER_HEADLESS_STANDALONE;
+
 describe('headless-client', () => {
+  beforeEach(() => {
+    delete process.env.INVOKER_HEADLESS_STANDALONE;
+  });
+
+  afterEach(() => {
+    if (originalStandaloneEnv === undefined) {
+      delete process.env.INVOKER_HEADLESS_STANDALONE;
+    } else {
+      process.env.INVOKER_HEADLESS_STANDALONE = originalStandaloneEnv;
+    }
+  });
+
   it('delegates mutating commands to a standalone-capable owner endpoint', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => ({ ok: true }));
@@ -353,7 +367,7 @@ describe('headless-client', () => {
     expect(firstExecCalls).toBe(1);
   }, 15_000);
 
-  it('falls back to the host runtime for non-mutating commands', async () => {
+  it('falls back to the host runtime for non-mutating commands and explicit standalone mode', async () => {
     const runElectronHeadless = vi.fn(async () => 0);
     const exitCode = await runHeadlessClientCommand(['query', 'workflows'], {
       messageBus: new LocalBus(),
@@ -363,6 +377,27 @@ describe('headless-client', () => {
 
     expect(exitCode).toBe(0);
     expect(runElectronHeadless).toHaveBeenCalledWith(['query', 'workflows']);
+
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+    bus.onRequest('headless.exec', ownerHandler);
+
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const standaloneRunElectronHeadless = vi.fn(async () => 7);
+
+    const standaloneExitCode = await runHeadlessClientCommand(['retry', 'wf-1', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless: standaloneRunElectronHeadless,
+    });
+
+    expect(standaloneExitCode).toBe(7);
+    expect(standaloneRunElectronHeadless).toHaveBeenCalledWith(['retry', 'wf-1', '--no-track']);
+    expect(ownerHandler).not.toHaveBeenCalled();
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
   });
 
   it('delegates query ui-perf to a reachable owner endpoint', async () => {
