@@ -6,7 +6,7 @@ export function detectDefaultBranchRemote(repoUrl: string): string | undefined {
   if (trimmed === '') return undefined;
 
   try {
-    const output = execFileSync('git', ['ls-remote', '--symref', trimmed, 'HEAD'], {
+    const output = execFileSync('git', ['ls-remote', '--symref', '--', trimmed, 'HEAD'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000,
@@ -20,6 +20,6 @@ export function detectDefaultBranchRemote(repoUrl: string): string | undefined {
 export function requireDefaultBranchRemote(repoUrl: string): string {
   const branch = detectDefaultBranchRemote(repoUrl);
   if (branch) return branch;
-  throw new Error(`Unable to resolve default branch for repo ${repoUrl}. Make the remote HEAD readable.`);
+  throw new Error('Unable to resolve default branch for repo. Make the remote HEAD readable.');
 }
 
