@@ -75,7 +75,7 @@ describe('Plan loading (component)', () => {
     });
   });
 
-  it('selecting workflow renders mini DAG for its tasks', async () => {
+  it('selecting workflow renders focused local graph for its tasks', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
 
@@ -83,6 +83,10 @@ describe('Plan loading (component)', () => {
       expect(screen.getByTestId('workflow-node-wf-load')).toBeInTheDocument();
     });
     screen.getByTestId('workflow-node-wf-load').click();
-    await waitFor(() => expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Loaded Workflow task DAG'));
+    await waitFor(() => {
+      expect(screen.getByTestId('focused-workflow-surface')).toHaveTextContent('Loaded Workflow');
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      expect(screen.getByTestId('rf__node-task-beta')).toBeInTheDocument();
+    });
   });
 });

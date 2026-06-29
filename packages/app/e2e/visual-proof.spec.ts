@@ -229,6 +229,33 @@ function taskNodeCard(page: Page, taskIdSuffix: string) {
   return page.locator(`.react-flow__node[data-testid$="${taskIdSuffix}"] > div`).first();
 }
 
+async function waitForWorkflowPlanTasks(
+  page: Page,
+  workflowId: string,
+  plan: { tasks?: readonly { id: string }[] },
+): Promise<void> {
+  const expectedTaskIds = plan.tasks?.map((task) => task.id) ?? [];
+  if (expectedTaskIds.length === 0) return;
+
+  await page.waitForFunction(
+    ({ expectedTaskIds: ids, workflowId: expectedWorkflowId }) => window.invoker.getTasks().then((result) => {
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const scopedTasks = tasks.filter((task: { id: string; workflowId?: string }) => {
+        return typeof task.workflowId === 'string' ? task.workflowId === expectedWorkflowId : true;
+      });
+
+      return ids.every((expectedTaskId) => scopedTasks.some((task: { id: string }) => {
+        const actualTaskId = String(task.id);
+        return actualTaskId === expectedTaskId
+          || actualTaskId.endsWith(`/${expectedTaskId}`)
+          || actualTaskId.endsWith(expectedTaskId);
+      }));
+    }),
+    { expectedTaskIds, workflowId },
+    { timeout: 10000 },
+  );
+}
+
 function statusProofWorkflowTaskId(status: string) {
   return `workflow-status-${status.replaceAll('_', '-')}`;
 }
@@ -369,6 +396,7 @@ async function selectWorkflowNode(
 ): Promise<void> {
   const node = workflowNode(page, workflowId);
   const miniDag = page.getByTestId('selected-workflow-mini-dag');
+  const focusedSurface = page.getByTestId('focused-workflow-surface');
 
   await closeFocusedWorkflowSurface(page);
 
@@ -384,6 +412,15 @@ async function selectWorkflowNode(
       await node.click({ force: true });
     } catch {
       await node.dispatchEvent('click', { bubbles: true });
+    }
+    if (await focusedSurface.isVisible({ timeout: 1500 }).catch(() => false)) {
+      if (options.keepFocusedSurface) {
+        return;
+      }
+      await closeFocusedWorkflowSurface(page);
+      if (await miniDag.isVisible({ timeout: 1500 }).catch(() => false)) {
+        return;
+      }
     }
     if (!(await miniDag.isVisible({ timeout: 1500 }).catch(() => false))) {
       await node.dispatchEvent('click', { bubbles: true });
@@ -421,6 +458,7 @@ async function loadPlanAndSelectWorkflow(
       ?? null;
   }, beforeIds);
   expect(workflow?.id).toBeTruthy();
+  await waitForWorkflowPlanTasks(page, workflow!.id, plan as { tasks?: readonly { id: string }[] });
   await page.getByRole('button', { name: 'Refresh' }).click();
   await page.waitForTimeout(300);
   await selectWorkflowNode(page, workflow!.id, options);
@@ -478,13 +516,31 @@ test.describe('Visual proof capture', () => {
     const focusedSurface = page.getByTestId('focused-workflow-surface');
     await expect(focusedSurface).toBeVisible();
     await expect(focusedSurface.getByRole('heading', { name: 'DAG determinism test' })).toBeVisible();
-    await expect(focusedSurface.getByText('Local task graph')).toBeVisible();
+    await expect(focusedSurface.getByTestId('focused-workflow-terminal')).toBeVisible();
+    await expect(focusedSurface.getByText('Execution graph')).toBeVisible();
     await expect(focusedSurface.getByTestId('focused-workflow-task-dag')).toBeVisible();
     await expect(focusedSurface.locator('.react-flow__node[data-testid$="task-a"]')).toBeVisible();
     await expect(focusedSurface.locator('.react-flow__node[data-testid$="task-e"]')).toBeVisible();
     await expect(page.getByTestId('collapsible-guide-toggle')).toHaveText('Run guide');
 
     await captureScreenshot(page, 'focused-active-run-local-graph');
+  });
+
+  test('focused-active-run-graph-interaction — selected task updates the inspector', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, DAG_DETERMINISM_PLAN, { keepFocusedSurface: true });
+
+    const focusedSurface = page.getByTestId('focused-workflow-surface');
+    await expect(focusedSurface).toBeVisible();
+    await focusedSurface.locator('.react-flow__node[data-testid$="task-d"]').click();
+
+    await expect(page.getByRole('heading', { name: 'Task D (depends on A, B)' })).toBeVisible();
+    await expect(page.getByText('echo d')).toBeVisible();
+
+    await focusedSurface.evaluate((surface) => {
+      surface.scrollTop = Math.min(240, surface.scrollHeight - surface.clientHeight);
+    });
+
+    await captureScreenshot(page, 'focused-active-run-graph-interaction');
   });
 
   test('graph-camera-lock-navigation — task graph remains usable after keyboard and manual camera moves', async ({ page }) => {

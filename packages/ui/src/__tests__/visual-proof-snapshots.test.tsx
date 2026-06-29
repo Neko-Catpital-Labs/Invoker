@@ -40,7 +40,7 @@ describe('Visual proof snapshots', () => {
     expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
   });
 
-  it('workflow graph with selected mini-dag', async () => {
+  it('workflow graph opens a focused run surface', async () => {
     const workflows: WorkflowMeta[] = [
       { id: 'wf-alpha', name: 'Alpha', status: 'running' },
       { id: 'wf-beta', name: 'Beta', status: 'failed' },
@@ -67,7 +67,9 @@ describe('Visual proof snapshots', () => {
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-alpha'));
     await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Alpha task DAG');
+      expect(screen.getByTestId('focused-workflow-surface')).toHaveTextContent('Alpha');
+      expect(screen.getByTestId('focused-workflow-terminal')).toHaveTextContent('Invoker terminal');
+      expect(screen.getByTestId('focused-workflow-graph-section')).toHaveTextContent('Execution graph');
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha');
     });
   });

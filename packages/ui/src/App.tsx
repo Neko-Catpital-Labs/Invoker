@@ -121,8 +121,10 @@ function isWorkflowEmptyStateTabTarget(target: EventTarget | null, graphSurface:
 }
 
 function isFocusedWorkflowSurfaceTabTarget(target: EventTarget | null, graphSurface: HTMLElement | null): boolean {
-  if (!(target instanceof HTMLElement) || !graphSurface) return false;
-  const focusedSurface = graphSurface.querySelector<HTMLElement>('[data-testid="focused-workflow-surface"]');
+  if (!(target instanceof HTMLElement)) return false;
+  const focusedSurface = target.closest<HTMLElement>('[data-testid="focused-workflow-surface"]')
+    ?? graphSurface?.querySelector<HTMLElement>('[data-testid="focused-workflow-surface"]')
+    ?? null;
   return Boolean(focusedSurface?.contains(target));
 }
 
@@ -2082,108 +2084,115 @@ export function App() {
 
         <div className="flex-1 flex overflow-hidden">
           <div className="flex-1 flex flex-col overflow-hidden">
-            <div
-              ref={graphSurfaceRef}
-              data-testid="workflow-graph-surface"
-              data-keyboard-region="workflowGraph"
-              tabIndex={0}
-              data-keyboard-active={keyboardRegion === 'workflowGraph' ? 'true' : 'false'}
-              className={`flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900 outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
-              onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
-            >
-              {viewMode === 'queue' ? (
-                <QueueView
-                  tasks={tasks}
-                  queueStatus={queueStatus}
-                  onTaskClick={handleTaskClick}
-                  onCancel={handleCancelTask}
+            {viewMode === 'dag' && focusedWorkflowGraph !== null ? (
+              <div
+                data-testid="focused-workflow-shell"
+                data-keyboard-region="workflowGraph"
+                tabIndex={0}
+                data-keyboard-active={keyboardRegion === 'workflowGraph' ? 'true' : 'false'}
+                className={`flex-1 overflow-hidden border-r border-gray-800 bg-gray-900 outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
+              >
+                <FocusedWorkflowSurface
+                  workflow={focusedWorkflowGraph.workflow}
+                  tasks={focusedWorkflowGraph.tasks}
+                  workflows={selectedTaskDagWorkflows}
                   selectedTaskId={selectedTaskId}
+                  cameraCommand={cameraCommand}
+                  runningTaskIds={runningTaskIds}
+                  isRefreshing={isFocusedWorkflowGraphRefreshing}
+                  onBackToRuns={clearFocusedWorkflow}
+                  onTaskClick={handleTaskClick}
+                  onTaskDoubleClick={handleTaskDoubleClick}
+                  onTaskContextMenu={handleTaskContextMenu}
+                  onManualViewport={handleManualViewport}
                 />
-              ) : viewMode === 'history' ? (
-                <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
-              ) : viewMode === 'timeline' ? (
-                <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
-              ) : viewMode === 'actionGraph' ? (
-                <ActionGraphView
-                  graph={actionGraph}
-                  error={actionGraphError}
-                  selectedNodeId={selectedActionNodeId}
-                  onSelectNode={(node) => {
-                    setSelectedActionNodeId(node?.id ?? null);
-                    if (node?.taskId) setSelectedTaskId(node.taskId);
-                    if (node?.workflowId) setSelectedWorkflowId(node.workflowId);
-                  }}
-                />
-              ) : (
-                <>
-                  <WorkflowGraph
-                    workflows={workflows}
-                    selectedWorkflowId={selectedWorkflow?.id ?? null}
-                    cameraCommand={cameraCommand}
-                    statusFilters={statusFilters}
-                    coreActivityByWorkflow={coreActivityByWorkflow}
-                    onSelectWorkflow={handleWorkflowClick}
-                    onWorkflowContextMenu={handleWorkflowContextMenu}
-                    onOpenPlan={handleOpenPlanFile}
-                    onOpenSetup={handleOpenSystemSetup}
-                    onManualViewport={handleManualViewport}
+              </div>
+            ) : (
+              <div
+                ref={graphSurfaceRef}
+                data-testid="workflow-graph-surface"
+                data-keyboard-region="workflowGraph"
+                tabIndex={0}
+                data-keyboard-active={keyboardRegion === 'workflowGraph' ? 'true' : 'false'}
+                className={`flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900 outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
+                onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
+              >
+                {viewMode === 'queue' ? (
+                  <QueueView
+                    tasks={tasks}
+                    queueStatus={queueStatus}
+                    onTaskClick={handleTaskClick}
+                    onCancel={handleCancelTask}
+                    selectedTaskId={selectedTaskId}
                   />
-                  {displayedSelectedWorkflowGraph !== null && (
-                    <FloatingGraphPanel
-                      key={displayedSelectedWorkflowGraph.workflow.id}
-                      testId="selected-workflow-mini-dag"
-                      dragHandleTestId="selected-workflow-mini-dag-drag-handle"
-                      title={`${displayedSelectedWorkflowGraph.workflow.name} task DAG`}
-                      boundsRef={graphSurfaceRef}
-                      contentClassName="h-[250px]"
-                    >
-                      <div
-                        data-keyboard-region="taskGraph"
-                        tabIndex={0}
-                        data-keyboard-active={keyboardRegion === 'taskGraph' ? 'true' : 'false'}
-                        className={`h-full outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-blue-300/60' : ''}`}
+                ) : viewMode === 'history' ? (
+                  <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+                ) : viewMode === 'timeline' ? (
+                  <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+                ) : viewMode === 'actionGraph' ? (
+                  <ActionGraphView
+                    graph={actionGraph}
+                    error={actionGraphError}
+                    selectedNodeId={selectedActionNodeId}
+                    onSelectNode={(node) => {
+                      setSelectedActionNodeId(node?.id ?? null);
+                      if (node?.taskId) setSelectedTaskId(node.taskId);
+                      if (node?.workflowId) setSelectedWorkflowId(node.workflowId);
+                    }}
+                  />
+                ) : (
+                  <>
+                    <WorkflowGraph
+                      workflows={workflows}
+                      selectedWorkflowId={selectedWorkflow?.id ?? null}
+                      cameraCommand={cameraCommand}
+                      statusFilters={statusFilters}
+                      coreActivityByWorkflow={coreActivityByWorkflow}
+                      onSelectWorkflow={handleWorkflowClick}
+                      onWorkflowContextMenu={handleWorkflowContextMenu}
+                      onOpenPlan={handleOpenPlanFile}
+                      onOpenSetup={handleOpenSystemSetup}
+                      onManualViewport={handleManualViewport}
+                    />
+                    {displayedSelectedWorkflowGraph !== null && (
+                      <FloatingGraphPanel
+                        key={displayedSelectedWorkflowGraph.workflow.id}
+                        testId="selected-workflow-mini-dag"
+                        dragHandleTestId="selected-workflow-mini-dag-drag-handle"
+                        title={`${displayedSelectedWorkflowGraph.workflow.name} task DAG`}
+                        boundsRef={graphSurfaceRef}
+                        contentClassName="h-[250px]"
                       >
-                        {isSelectedWorkflowGraphRefreshing && (
-                          <div data-testid="selected-workflow-mini-dag-refreshing" className="px-2 py-1 text-xs text-amber-200">
-                            Refreshing graph…
-                          </div>
-                        )}
-                        <TaskDAG
-                          tasks={displayedSelectedWorkflowGraph.tasks}
-                          workflows={selectedTaskDagWorkflows}
-                          selectedTaskId={selectedTaskId}
-                          cameraCommand={cameraCommand}
-                          onTaskClick={handleTaskClick}
-                          onTaskDoubleClick={handleTaskDoubleClick}
-                          onTaskContextMenu={handleTaskContextMenu}
-                          onManualViewport={handleManualViewport}
-                          statusFilters={new Set()}
-                          runningTaskIds={runningTaskIds}
-                        />
-                      </div>
-                    </FloatingGraphPanel>
-                  )}
-                  {focusedWorkflowGraph !== null && (
-                    <div className="absolute inset-0 z-20">
-                      <FocusedWorkflowSurface
-                        workflow={focusedWorkflowGraph.workflow}
-                        tasks={focusedWorkflowGraph.tasks}
-                        workflows={selectedTaskDagWorkflows}
-                        selectedTaskId={selectedTaskId}
-                        cameraCommand={cameraCommand}
-                        runningTaskIds={runningTaskIds}
-                        isRefreshing={isFocusedWorkflowGraphRefreshing}
-                        onBackToRuns={clearFocusedWorkflow}
-                        onTaskClick={handleTaskClick}
-                        onTaskDoubleClick={handleTaskDoubleClick}
-                        onTaskContextMenu={handleTaskContextMenu}
-                        onManualViewport={handleManualViewport}
-                      />
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
+                        <div
+                          data-keyboard-region="taskGraph"
+                          tabIndex={0}
+                          data-keyboard-active={keyboardRegion === 'taskGraph' ? 'true' : 'false'}
+                          className={`h-full outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-blue-300/60' : ''}`}
+                        >
+                          {isSelectedWorkflowGraphRefreshing && (
+                            <div data-testid="selected-workflow-mini-dag-refreshing" className="px-2 py-1 text-xs text-amber-200">
+                              Refreshing graph…
+                            </div>
+                          )}
+                          <TaskDAG
+                            tasks={displayedSelectedWorkflowGraph.tasks}
+                            workflows={selectedTaskDagWorkflows}
+                            selectedTaskId={selectedTaskId}
+                            cameraCommand={cameraCommand}
+                            onTaskClick={handleTaskClick}
+                            onTaskDoubleClick={handleTaskDoubleClick}
+                            onTaskContextMenu={handleTaskContextMenu}
+                            onManualViewport={handleManualViewport}
+                            statusFilters={new Set()}
+                            runningTaskIds={runningTaskIds}
+                          />
+                        </div>
+                      </FloatingGraphPanel>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
 
             {viewMode === 'dag' && (
               <div

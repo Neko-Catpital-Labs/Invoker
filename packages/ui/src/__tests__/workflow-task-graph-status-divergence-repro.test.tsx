@@ -64,6 +64,7 @@ async function renderWorkflow(
   });
 
   fireEvent.click(screen.getByTestId('workflow-node-wf-diverge'));
+  fireEvent.click(await screen.findByTestId('focused-workflow-back'));
 
   return screen.findByTestId('selected-workflow-mini-dag');
 }

@@ -93,21 +93,23 @@ describe('App launch (component)', () => {
 
     render(<App />);
     fireEvent.click(await screen.findByTestId('workflow-node-wf-focus'));
-    await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Approve migration');
-    });
 
     const focusedSurface = await screen.findByTestId('focused-workflow-surface');
     expect(focusedSurface).toBeInTheDocument();
     expect(within(focusedSurface).getByRole('heading', { name: 'Focused run demo' })).toBeInTheDocument();
-    expect(within(focusedSurface).getAllByText('Approve migration').length).toBeGreaterThan(0);
-    expect(within(focusedSurface).getByText('Local task graph')).toBeInTheDocument();
-    expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(focusedSurface).getAllByText('Approve migration').length).toBeGreaterThan(0);
+      expect(within(focusedSurface).getByText('Execution graph')).toBeInTheDocument();
+      expect(within(focusedSurface).getByTestId('focused-workflow-terminal')).toBeInTheDocument();
+    });
     expect(screen.getByTestId('collapsible-guide-toggle')).toHaveTextContent('Run guide');
 
     fireEvent.click(screen.getByTestId('focused-workflow-back'));
     expect(screen.queryByTestId('focused-workflow-surface')).not.toBeInTheDocument();
     expect(screen.getByTestId('workflow-node-wf-focus')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Approve migration');
+    });
   });
 
   it('counts all attention tasks while showing only the focused run shortlist', async () => {
@@ -131,8 +133,8 @@ describe('App launch (component)', () => {
 
     const focusedSurface = await screen.findByTestId('focused-workflow-surface');
     await waitFor(() => {
-      const attentionLabel = within(focusedSurface).getAllByText('Needs attention')[0];
-      expect(within(attentionLabel.parentElement as HTMLElement).getByText('5')).toBeInTheDocument();
+      expect(within(focusedSurface).getByText('5')).toBeInTheDocument();
+      expect(within(focusedSurface).getByText('5 tasks waiting on action.')).toBeInTheDocument();
       expect(within(focusedSurface).getByText('Needs attention 4')).toBeInTheDocument();
       expect(within(focusedSurface).queryByText('Needs attention 5')).not.toBeInTheDocument();
     });

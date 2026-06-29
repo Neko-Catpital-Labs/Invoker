@@ -23,6 +23,12 @@ const failedWorkflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', statu
 const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'pending', workflowId: 'wf-a', command: 'echo hello-alpha' });
 const beta = makeUITask({ id: 'task-beta', description: 'Second test task depending on alpha', status: 'pending', workflowId: 'wf-a', dependencies: ['task-alpha'], command: 'echo hello-beta' });
 
+async function openSelectedMiniDag(): Promise<HTMLElement> {
+  fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+  fireEvent.click(await screen.findByTestId('focused-workflow-back'));
+  return screen.findByTestId('selected-workflow-mini-dag');
+}
+
 describe('Task interaction (component)', () => {
   let mock: MockInvoker;
 
@@ -35,7 +41,7 @@ describe('Task interaction (component)', () => {
     mock.cleanup();
   });
 
-  it('selecting a workflow shows mini DAG and inspector content', async () => {
+  it('selecting a workflow shows focused graph and inspector content', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
 
@@ -46,7 +52,8 @@ describe('Task interaction (component)', () => {
     fireEvent.click(screen.getByTestId('rf__node-wf-a'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
+      expect(screen.getByTestId('focused-workflow-surface')).toHaveTextContent('Workflow A');
+      expect(screen.getByTestId('focused-workflow-terminal')).toBeInTheDocument();
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
     });
   });
@@ -102,10 +109,7 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
-    await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
-    });
+    await openSelectedMiniDag();
 
     fireEvent.click(screen.getByTestId('workflow-graph-react-flow'));
 
@@ -122,8 +126,7 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
-    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    const panel = await openSelectedMiniDag();
     fireEvent.click(panel);
 
     expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
@@ -138,8 +141,7 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
-    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    const panel = await openSelectedMiniDag();
     const surface = screen.getByTestId('workflow-graph-surface');
     const handle = screen.getByTestId('selected-workflow-mini-dag-drag-handle');
 
@@ -185,8 +187,7 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
-    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    const panel = await openSelectedMiniDag();
     const surface = screen.getByTestId('workflow-graph-surface');
     const handle = screen.getByTestId('selected-workflow-mini-dag-drag-handle');
 

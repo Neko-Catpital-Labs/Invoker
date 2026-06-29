@@ -33,6 +33,11 @@ const taskBeta = makeUITask({
   dependencies: ['task-alpha'],
 });
 
+async function openSelectedMiniDagFromFocusedRun(nodeTestId: string): Promise<void> {
+  fireEvent.click(screen.getByTestId(nodeTestId));
+  fireEvent.click(await screen.findByTestId('focused-workflow-back'));
+}
+
 describe('selected workflow graph metadata-gap regression', () => {
   let mock: MockInvoker;
 
@@ -54,7 +59,7 @@ describe('selected workflow graph metadata-gap regression', () => {
       expect(screen.getByTestId('workflow-node-wf-b')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    await openSelectedMiniDagFromFocusedRun('rf__node-wf-a');
 
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A task DAG');
@@ -117,7 +122,7 @@ describe('selected workflow graph metadata-gap regression', () => {
       expect(screen.getByTestId('workflow-node-wf-b')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    await openSelectedMiniDagFromFocusedRun('rf__node-wf-a');
 
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A task DAG');

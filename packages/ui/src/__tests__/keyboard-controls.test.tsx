@@ -699,14 +699,14 @@ describe('Camera lock controls (component)', () => {
     expect(fitViewMock).not.toHaveBeenCalled();
   });
 
-  it('clicking a workflow node centers it when the lock is enabled', async () => {
+  it('clicking a workflow node opens focused run mode when the lock is enabled', async () => {
     await renderAndSettle();
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-b'));
 
-    // Selecting wf-b re-centers the workflow graph on it. (A fresh mini-dag for
-    // wf-b legitimately fits once on mount, so we assert only the recenter.)
-    await waitFor(() => expect(setCenterMock).toHaveBeenCalledTimes(1));
+    await screen.findByTestId('focused-workflow-surface');
+    await flushFrame();
+    expect(setCenterMock).not.toHaveBeenCalled();
   });
 
   it('clicking a workflow node does not center when the lock is disabled', async () => {
@@ -841,9 +841,11 @@ describe('Camera lock controls (component)', () => {
       'workflow-node-wf-c': 400,
     });
 
-    // Select the rightmost node first, and wait for its recenter to fire so the
-    // pending animation frame can't leak into the assertion below.
-    fireEvent.click(screen.getByTestId('workflow-node-wf-c'));
+    // Select the rightmost node first via keyboard navigation. A mouse click now
+    // opens the focused run surface, while this test is specifically about
+    // workflow graph arrow boundaries.
+    key('ArrowRight');
+    key('ArrowRight');
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Gamma Workflow task DAG');
     });
