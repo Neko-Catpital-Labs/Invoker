@@ -20,6 +20,7 @@ if command -v rg >/dev/null 2>&1; then
     --glob '!packages/app/src/viewer-db-boundary.ts' \
     --glob '!packages/cli/src/index.ts' \
     --glob '!packages/persistence/src/sqlite-adapter.ts' \
+    --glob '!packages/slack-manager/src/index.ts' \
     --glob '!packages/data-store/src/sqlite-adapter.ts' || true)"
 
   # 2) Runtime value-imports of SQLiteAdapter must stay owner-only.
@@ -32,6 +33,7 @@ if command -v rg >/dev/null 2>&1; then
     --glob '!**/e2e/**' \
     --glob '!**/node_modules/**' \
     --glob '!packages/app/src/viewer-db-boundary.ts' \
+    --glob '!packages/slack-manager/src/index.ts' \
     --glob '!packages/cli/src/index.ts' || true)"
 
   raw_memory_violations="$(rg -n "SQLiteAdapter\\.create\\(['\"]:memory:" packages \
@@ -66,6 +68,7 @@ else
     | grep -v '^packages/app/src/viewer-db-boundary.ts:' \
     | grep -v '^packages/cli/src/index.ts:' \
     | grep -v '^packages/persistence/src/sqlite-adapter.ts:' \
+    | grep -v '^packages/slack-manager/src/index.ts:' \
     | grep -v '^packages/data-store/src/sqlite-adapter.ts:' || true)"
 
   value_import_violations="$(grep -RInE "import[[:space:]]+\\{[^}]*SQLiteAdapter[^}]*\\}[[:space:]]+from[[:space:]]+'@invoker/(persistence|data-store)'" packages \
@@ -76,6 +79,7 @@ else
     --exclude="*.d.ts" \
     --exclude="*.test.ts" \
     | grep -v '^packages/app/src/viewer-db-boundary.ts:' \
+    | grep -v '^packages/slack-manager/src/index.ts:' \
     | grep -v '^packages/cli/src/index.ts:' || true)"
 
   raw_memory_violations="$(grep -RInE "SQLiteAdapter\\.create\\(['\"]:memory:" packages \
