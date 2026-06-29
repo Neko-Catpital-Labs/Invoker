@@ -192,6 +192,7 @@ import { seedTaskCachesFromSnapshot } from './viewer-cache-hydration.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
+import { submitWorkflowMutationOrAcknowledgeDeleted } from './workflow-mutation-submit.js';
 import type { WorkflowMutationContext } from './persisted-workflow-mutation-coordinator.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
@@ -435,14 +436,17 @@ function acknowledgeNoTrackHeadlessExec(
   if (!payload.noTrack) return undefined;
 
   if (workflowId && workflowMutationCoordinator) {
-    const intentId = workflowMutationCoordinator.submit(workflowId, priority, 'headless.exec', [payload], {
+    const result = submitWorkflowMutationOrAcknowledgeDeleted(workflowId, priority, 'headless.exec', [payload], {
+      coordinator: workflowMutationCoordinator,
+      workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
+      logger,
       deferDrain: true,
     });
     logger.info(
-      `headless.exec accepted ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId}"`, intent: intentId, priority })}`,
+      `headless.exec accepted ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId}"`, intent: result.intentId, priority })}`,
       { module: 'ipc-delegate' },
     );
-    return { ok: true, accepted: true, intentId, workflowId, channel: 'headless.exec' };
+    return result;
   }
 
   const reason = !workflowId ? 'workflow-not-resolved' : 'coordinator-unavailable';
@@ -2771,8 +2775,11 @@ function createEmbeddedTerminalBackendFromConfig(
     if (!workflowMutationDispatcher.has(channel)) {
       throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
     }
-    const intentId = workflowMutationCoordinator.submit(workflowId, priority, channel, args);
-    return { ok: true, accepted: true, intentId, workflowId, channel };
+    return submitWorkflowMutationOrAcknowledgeDeleted(workflowId, priority, channel, args, {
+      coordinator: workflowMutationCoordinator,
+      workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
+      logger,
+    });
   }
 
   function registerTaskScopedGuiMutationHandler<TResult = unknown>(
