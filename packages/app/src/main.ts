@@ -4815,6 +4815,22 @@ function createEmbeddedTerminalBackendFromConfig(
       return agentRegistry.listExecution().map(a => a.name);
     });
 
+    ipcMain.handle('invoker:get-runtime-status', () => {
+      if (process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_READ_ONLY_STATUS === '1') {
+        return {
+          ownerMode: false,
+          readOnly: true,
+          mode: 'read-only',
+        };
+      }
+      const readOnly = !ownerMode && !guiUsingDaemonOwner;
+      return {
+        ownerMode,
+        readOnly,
+        mode: ownerMode ? 'local-owner' : guiUsingDaemonOwner ? 'daemon-owner' : 'read-only',
+      };
+    });
+
     ipcMain.handle('invoker:get-system-diagnostics', () => {
       return collectSystemDiagnostics({
         appVersion: app.getVersion(),

@@ -159,6 +159,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           String(args[0]),
           (args[1] as Parameters<SQLiteAdapter['searchWorkflowsAndTasks']>[1]) ?? undefined,
         );
+      case 'invoker:get-runtime-status':
+        return { ownerMode: true, readOnly: false, mode: 'local-owner' };
       case 'invoker:get-ui-perf-stats':
         return {};
       case 'invoker:report-ui-perf':
