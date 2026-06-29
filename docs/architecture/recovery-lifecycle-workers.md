@@ -8,21 +8,23 @@ The producer of a persisted workflow or task state change is responsible for pub
 
 This is a docs-only architecture note. It describes the achieved contract and does not change runtime behavior.
 
-## Resolved Overlap (Single Engine)
+## Registry-Based Workers
 
-Earlier, auto-fix ran from more than one place: a producer could schedule auto-fix directly from failure handling, and a separate worker loop could also act on the same failed state. Two engines could observe the same failure and compete over what recovery meant.
+Recovery workers are declared through a worker registry in `@invoker/execution-engine`. The registry is the single declaration surface for runnable worker kinds: each worker has a stable `kind`, an operator-facing note, and a factory that builds its runtime from injected dependencies.
 
-That overlap is now resolved. There is exactly **one** shared auto-fix worker engine, and it lives in `@invoker/execution-engine`. Both entry points drive that same single engine instead of running their own loops:
+The built-in worker is `autofix`. Both entry points resolve that same registry kind instead of owning separate loops:
 
 1. The production door: `invoker-cli worker autofix`.
 2. The dev door: `./run.sh --headless worker autofix`.
 
-Two properties keep the single engine truly single:
+External workers are operator-declared in config and registered beside built-ins by kind. A configured external worker cannot reuse an existing kind; duplicate kinds fail during registration.
 
-- **Foreground lifetime.** The worker lives and dies with its process. There is no detached or background recovery service; stopping the process stops the engine.
-- **Single-instance lock.** A cross-door lock refuses a second concurrent start. If one door already runs the engine, the other door refuses to start a second loop rather than spawning one.
+Two properties keep each worker kind truly single:
 
-A **sweep-and-assert guard** test fails the build if auto-fix is triggered from any code path outside the shared worker engine (with an allowlist for the engine itself and the sanctioned operator fix command). This locks the single-engine invariant in against future drift, so a new direct auto-fix call cannot reintroduce a second recovery path.
+- **Foreground lifetime.** A worker lives and dies with its process. There is no detached recovery service owned by Invoker.
+- **Per-kind single-instance lock.** The headless worker door acquires the lock for the selected worker kind. A second concurrent start of the same kind refuses to run, while different kinds use different lock files.
+
+A generalized sweep-and-assert guard fails the build if auto-fix is triggered from any code path outside the shared worker engine or the sanctioned operator fix command. This locks the registry boundary in place: producers publish lifecycle wakeups, and workers own recovery decisions.
 
 ## Achieved Model
 
@@ -31,7 +33,8 @@ Lifecycle events are ephemeral wakeups, not durable truth. Persisted workflow an
 ```mermaid
 flowchart LR
   PersistedChange[Persisted state change] --> Event[Lifecycle event]
-  Event --> Worker[Worker wake]
+  Event --> Registry[Worker registry]
+  Registry --> Worker[Worker wake]
   Worker --> Scan[Persisted scan]
   Scan --> Decision[Reconcile recovery need]
   Decision --> Command[Normal command submission]
@@ -77,23 +80,23 @@ On wake, a worker should:
 
 Workers may subscribe to the same lifecycle event stream. Contention is controlled by persisted state checks and command-route validation, not by assuming one subscriber receives a unique event.
 
-## Auto-Fix Worker
+## Built-In Auto-Fix Worker
 
-Automatic fix attempts are owned by a **single** shared auto-fix worker engine in `@invoker/execution-engine`. Both doors — `invoker-cli worker autofix` (production) and `./run.sh --headless worker autofix` (dev) — drive that one engine. The engine subscribes to lifecycle wakeups, scans persisted state, and decides whether an auto-fix command should be submitted.
+Automatic fix attempts are owned by the built-in `autofix` worker registered in `@invoker/execution-engine`. Both doors — `invoker-cli worker autofix` (production) and `./run.sh --headless worker autofix` (dev) — resolve the same registry definition. The worker subscribes to lifecycle wakeups, scans persisted state, and decides whether an auto-fix command should be submitted.
 
-Lifetime and concurrency are constrained so the single engine stays single:
+Lifetime and concurrency are constrained per kind:
 
 - The worker is **foreground**: it lives and dies with its process, with no detached background service.
-- A **single-instance lock** refuses a second concurrent start across both doors, so at most one recovery loop runs process-wide.
+- The **single-instance lock** is keyed by worker kind, so at most one `autofix` loop runs at a time.
 
-The engine should only act when persisted state shows that:
+The built-in worker should only act when persisted state shows that:
 
 1. The workflow or task is in a state eligible for auto-fix.
 2. No newer generation has superseded the failed state.
 3. Auto-fix policy allows another attempt.
 4. No incompatible recovery action is already in progress.
 
-When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition. A sweep-and-assert guard test fails the build if any auto-fix is triggered outside this shared worker engine.
+When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition. The generalized guard fails the build if any auto-fix trigger appears outside the shared worker engine or the operator command route.
 
 ## Operator Status
 
@@ -106,33 +109,43 @@ Operators can inspect recovery ownership and recent decisions with:
 
 The status view is audit-backed and read-only. It reports the recovery worker id, owner, last wakeup, last scan, last submitted recovery command, and the latest skip reason. Status reporting must not change recovery eligibility or command submission ordering.
 
-## External Recovery Worker
+## External Workers
 
-The external recovery worker owns integration with external recovery automation. It subscribes to lifecycle wakeups, scans persisted state, and decides whether an external recovery command should be submitted or whether an external process should be coordinated through a command route.
+External workers extend the same registry model. Operators declare `externalWorkers` in config. Each entry supplies a stable registry `kind` and a launch command:
 
-The worker should only act when persisted state shows that:
+```json
+{
+  "externalWorkers": [
+    {
+      "kind": "preview",
+      "launch": {
+        "executable": "/usr/local/bin/invoker-preview-worker",
+        "args": ["--watch"],
+        "cwd": "/path/to/workspace"
+      }
+    }
+  ]
+}
+```
 
-1. The workflow or task is in a state eligible for external recovery.
-2. The current generation still matches the observed failure.
-3. External recovery policy selects this workflow or task.
-4. Auto-fix or another recovery path has not already claimed or resolved the state.
+The external worker loader registers each configured kind with the worker registry. Starting `./run.sh --headless worker <kind>` or the equivalent CLI worker door then acquires that kind's lock, starts the configured process, and supervises its lifetime.
 
-External scripts must not be launched directly by state-transition producers. Any external recovery launch must be initiated by the external recovery worker after it has reconciled persisted state.
+The process boundary is explicit:
 
-## Cleanup Of Direct Handlers
+1. Invoker starts the configured executable with optional args and cwd.
+2. The external process owns its recovery logic.
+3. Invoker owns lifecycle supervision: inherited stdio, normal exit observation, `SIGTERM` on stop, and `SIGKILL` after the shutdown grace period.
+4. The external process must still act through normal command routes when it changes Invoker state.
 
-Later implementation slices should remove failed-delta handlers that directly schedule auto-fix or directly launch external recovery scripts. Those handlers should become lifecycle publishers only.
+External scripts must not be launched directly by state-transition producers. Producers publish lifecycle wakeups; configured external workers decide whether to react after inspecting persisted state.
 
-Cleanup should preserve these invariants:
+## Boundary Invariants
+
+The registry and guard preserve these invariants:
 
 1. State changes are persisted before lifecycle events are published.
 2. Lifecycle events are wakeups and may be replayed or missed.
 3. Persisted state remains authoritative for all recovery decisions.
 4. Recovery workers submit normal commands instead of bypassing command handling.
 5. Producers do not directly auto-fix, recreate, or launch external recovery scripts.
-
-## What I Intend To Do
-
-1. Event foundation: add lifecycle-event publication at the relevant persisted state transitions, with producers limited to publishing wakeups after durable state changes.
-2. Auto-fix worker: move automatic fix behavior behind a subscriber worker that wakes on lifecycle events, scans persisted state, and submits normal fix commands.
-3. External recovery cleanup and regression: move external recovery launch behavior behind its worker, remove direct failed-delta launch paths, and add regression coverage that proves producers publish wakeups without owning recovery.
+6. Worker kinds are registered once and locked independently.
