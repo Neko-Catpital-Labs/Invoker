@@ -1542,6 +1542,10 @@ function startHeadlessMode(): void {
             case 'retry-task':
             case 'recreate-task':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
+            case 'delete':
+            case 'delete-workflow':
+            case 'detach-workflow':
+              return { workflowId: arg0 === undefined ? undefined : String(arg0), priority: 'high' };
             case 'approve':
             case 'reject':
             case 'select':
@@ -2553,6 +2557,7 @@ function createEmbeddedTerminalBackendFromConfig(
     const envelope = makeEnvelope('delete-workflow', 'ui', 'workflow', { workflowId });
     const result = await commandService.deleteWorkflow(envelope);
     if (!result.ok) throw new Error(result.error.message);
+    requestWorkflowMetadataPublish('delete-workflow');
     logger.info(`performDeleteWorkflow end workflow="${workflowId}"`, { module: 'kill' });
   }
 
@@ -2562,6 +2567,7 @@ function createEmbeddedTerminalBackendFromConfig(
     const result = await commandService.detachWorkflow(envelope);
     if (!result.ok) throw new Error(result.error.message);
     logger.info(`performDetachWorkflow end workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    requestWorkflowMetadataPublish('detach-workflow');
   }
 
   /** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
@@ -2728,6 +2734,7 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'cancel-workflow':
       case 'delete':
       case 'delete-workflow':
+      case 'detach-workflow':
         return { workflowId: arg0, priority: 'high' };
       case 'rebase-retry':
       case 'rebase-recreate':
@@ -3932,10 +3939,6 @@ function createEmbeddedTerminalBackendFromConfig(
         logger.info(`delete-workflow: "${workflowId}"`, { module: 'ipc' });
         try {
           await performDeleteWorkflow(workflowId);
-
-          const workflows = persistence.listWorkflows();
-          lastKnownWorkflowCount = workflows.length;
-          requestWorkflowMetadataPublish('delete-workflow');
         } catch (err) {
           logger.error(`delete-workflow failed: ${err}`, { module: 'ipc' });
           throw err;
@@ -4497,6 +4500,7 @@ function createEmbeddedTerminalBackendFromConfig(
             scopedTaskIds: [mergeTask.id],
           });
         }
+        requestWorkflowMetadataPublish('set-merge-branch');
       } catch (err) {
         logger.error(`set-merge-branch failed: ${err}`, { module: 'ipc' });
         throw err;
