@@ -11,7 +11,8 @@ import type { WorkflowOpName } from '../surface.js';
 
 export type LobbyControl =
   | { kind: 'op'; operation: WorkflowOpName; target: { all: true } | { workflow: string } }
-  | { kind: 'submit' };
+  | { kind: 'submit' }
+  | { kind: 'restart' };
 
 // Verb spellings → canonical operation. Bare `rebase` means recreate-after-rebase.
 const OP_ALIASES: Record<string, WorkflowOpName> = {
@@ -30,6 +31,7 @@ const TARGET_TOKEN = /^[\w./-]+$/;
 /**
  * Parse a lobby command. Recognizes:
  *   - `submit` / `submit to invoker`
+ *   - `restart` / `restart invoker`
  *   - `<op> all` / `<op> <workflow-id-or-name>`  (op ∈ recreate|rebase|rebase-recreate|rebase-retry|retry|cancel|status)
  *   - `status` with no target → all workflows
  * Returns null for missing/ambiguous targets and for prose, so the message is
@@ -39,6 +41,7 @@ export function parseLobbyControl(text: string): LobbyControl | null {
   const trimmed = text.trim();
 
   if (/^submit(\s+to\s+invoker)?\s*[.!?]*$/i.test(trimmed)) return { kind: 'submit' };
+  if (/^restart(\s+(invoker|the\s+invoker|app|the\s+app|gui|the\s+gui))?\s*[.!?]*$/i.test(trimmed)) return { kind: 'restart' };
 
   const match = VERB_PATTERN.exec(trimmed);
   if (!match) return null;
