@@ -42,6 +42,7 @@ import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
 } from './recovery-worker-observability.js';
+import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -421,7 +422,10 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
-  const registry = registerAutoFixWorker(createWorkerRegistry());
+  const registry = registerExternalWorkersFromConfig(
+    deps.invokerConfig?.externalWorkers,
+    registerAutoFixWorker(createWorkerRegistry()),
+  );
 
   if (subCommand === 'list') {
     process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
