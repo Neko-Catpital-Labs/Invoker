@@ -12,6 +12,7 @@ import { makeEnvelope } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import {
   remoteFetchForPool,
+  DEFAULT_EXECUTION_AGENT,
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
 } from '@invoker/execution-engine';
@@ -82,10 +83,10 @@ export async function headlessRun(
   if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
 
   const { readFile } = await import('node:fs/promises');
-  const { parsePlanFile } = await import('./plan-parser.js');
+  const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
 
   const yamlSource = await readFile(planPath, 'utf-8');
-  const plan = await parsePlanFile(planPath);
+  const plan = applyConfiguredPlanDefaults(await parsePlanFile(planPath));
   const execRegistry = deps.executionAgentRegistry ?? registerBuiltinAgents();
   assertPlanExecutionAgentsRegistered(plan, execRegistry);
   backupPlan(plan, yamlSource, deps.logger);
@@ -304,7 +305,7 @@ export async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promis
   }
 
   const te = createHeadlessExecutor(deps);
-  const agent = (parsed.agentName ?? 'claude').toLowerCase();
+  const agent = (parsed.agentName ?? DEFAULT_EXECUTION_AGENT).toLowerCase();
   try {
     const result = await fixWithAgentAction(taskId, {
       logger: deps.logger,
@@ -363,7 +364,7 @@ export async function headlessResolveConflict(taskId: string, deps: HeadlessDeps
   taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
-  const agent = (agentArg ?? 'claude').toLowerCase();
+  const agent = (agentArg ?? DEFAULT_EXECUTION_AGENT).toLowerCase();
   try {
     const result = await resolveConflictAction(taskId, {
       ...deps,

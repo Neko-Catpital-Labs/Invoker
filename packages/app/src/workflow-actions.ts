@@ -22,7 +22,7 @@ import {
   parseMergeConflictError,
 } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { TaskRunner, ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
+import { DEFAULT_EXECUTION_AGENT, type TaskRunner, type ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
   isReviewGateCiContextStale,
@@ -848,7 +848,7 @@ export async function fixWithAgentAction(
   const recoveryRoute = await selectFailureRecoveryRouteForAction(task, savedError, taskExecutor, options.recoveryRoute);
   if (recoveryRoute.kind === 'invalidMergeWorkspace') {
     const msg = invalidMergeWorkspaceMessage(recoveryRoute);
-    const errorLabel = options.failureOutputLabel ?? `Fix with ${options.agentName ?? 'Claude'}`;
+    const errorLabel = options.failureOutputLabel ?? `Fix with ${options.agentName ?? 'Codex'}`;
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] ${msg}`);
     orchestrator.revertConflictResolution(taskId, savedError, msg);
     throw new Error(msg);
@@ -896,7 +896,7 @@ export async function fixWithAgentAction(
     if (err instanceof StaleLineageError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     const errorLabel = options.failureOutputLabel
-      ?? (recoveryRoute.kind === 'resolveConflict' ? 'Resolve Conflict' : `Fix with ${options.agentName ?? 'Claude'}`);
+      ?? (recoveryRoute.kind === 'resolveConflict' ? 'Resolve Conflict' : `Fix with ${options.agentName ?? 'Codex'}`);
     assertLineageCurrent(lineage, orchestrator, options.signal);
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
     assertLineageCurrent(lineage, orchestrator, options.signal);
@@ -1047,7 +1047,7 @@ function resolveAutoFixAgent(
     };
   }
   return {
-    selectedAgent: 'claude',
+    selectedAgent: DEFAULT_EXECUTION_AGENT,
     selectedAgentSource: 'default',
     configuredAutoFixAgent: undefined,
     fallbackChain: 'config(empty)->default',

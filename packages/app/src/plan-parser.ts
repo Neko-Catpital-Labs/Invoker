@@ -8,7 +8,7 @@
 import { execSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
-import { loadConfig } from './config.js';
+import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 /** Empty / whitespace `baseBranch` in YAML (`baseBranch:`) must fall through to config + remote detection like a missing key. */
@@ -34,6 +34,23 @@ export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinitio
     featureBranch,
   };
 }
+export function applyPlanExecutionAgentDefault(plan: PlanDefinition, executionAgent: string): PlanDefinition {
+  const defaultExecutionAgent = executionAgent.trim();
+  if (!defaultExecutionAgent) return plan;
+  return {
+    ...plan,
+    tasks: plan.tasks.map((task) => (
+      task.executionAgent?.trim()
+        ? task
+        : { ...task, executionAgent: defaultExecutionAgent }
+    )),
+  };
+}
+
+export function applyConfiguredPlanDefaults(plan: PlanDefinition): PlanDefinition {
+  return applyPlanExecutionAgentDefault(plan, resolveDefaultExecutionAgent(loadConfig()));
+}
+
 
 export interface RawExperimentVariant {
   id?: string;

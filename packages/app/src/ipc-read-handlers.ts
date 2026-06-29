@@ -2,7 +2,7 @@ import type { IpcMain } from 'electron';
 import type { Logger, SearchOptions } from '@invoker/contracts';
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import { DEFAULT_EXECUTION_AGENT, type AgentRegistry } from '@invoker/execution-engine';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { MessageBus } from '@invoker/transport';
 import { loadConfig } from './config.js';
@@ -194,10 +194,10 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
   });
 
   ipcMain.handle('invoker:get-agent-session', async (_event, sessionId: string, agentName?: string) => {
-    logger.info(`get-agent-session: "${sessionId}" agent="${agentName ?? 'claude'}"`, { module: 'ipc' });
+    logger.info(`get-agent-session: "${sessionId}" agent="${agentName ?? DEFAULT_EXECUTION_AGENT}"`, { module: 'ipc' });
     try {
       const orchestrator = getOrchestrator();
-      return await resolveAgentSession(sessionId, agentName ?? 'claude', agentRegistry, orchestrator.getAllTasks());
+      return await resolveAgentSession(sessionId, agentName ?? DEFAULT_EXECUTION_AGENT, agentRegistry, orchestrator.getAllTasks());
     } catch (err) {
       logger.error(`get-agent-session failed: ${err}`, { module: 'ipc' });
       return null;

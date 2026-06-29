@@ -13,7 +13,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import { DEFAULT_EXECUTION_AGENT, type AgentRegistry } from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import {
@@ -676,7 +676,7 @@ export async function headlessSession(taskId: string | undefined, deps: Pick<Hea
   if (!task) throw new Error(`Task "${taskId}" not found`);
 
   let sessionId = task.execution.agentSessionId ?? task.execution.lastAgentSessionId;
-  let agentName = task.execution.agentName ?? task.execution.lastAgentName ?? 'claude';
+  let agentName = task.execution.agentName ?? task.execution.lastAgentName ?? DEFAULT_EXECUTION_AGENT;
 
   // Fallback: if current execution dropped agentSessionId, recover the most
   // recent session from task event payloads.

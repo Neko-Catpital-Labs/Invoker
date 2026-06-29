@@ -22,6 +22,7 @@ import {
   shouldResolveViaOriginTracking,
 } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
+import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { sanitizeBranchForPath } from './git-utils.js';
 
 // Re-export for backward compatibility
@@ -443,7 +444,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       hasAgentSessionId: !!agentSessionId,
     });
 
-    const executionAgent = request.inputs.executionAgent ?? 'claude';
+    const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
     const stdinMode = this.agentRegistry && executionAgent
       ? this.agentRegistry.getOrThrow(executionAgent).stdinMode
       : (request.actionType === 'ai_task' ? 'ignore' : 'pipe');
@@ -576,7 +577,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return null;
     if (entry.agentSessionId) {
-      const agentName = entry.request.inputs.executionAgent ?? 'claude';
+      const agentName = entry.request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
@@ -605,7 +606,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
     if (meta.agentSessionId) {
       const resume = this.agentRegistry
-        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? 'claude').buildResumeArgs(meta.agentSessionId)
+        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? DEFAULT_EXECUTION_AGENT).buildResumeArgs(meta.agentSessionId)
         : { cmd: 'claude', args: ['--resume', meta.agentSessionId, '--dangerously-skip-permissions'] };
       const spec = {
         command: resume.cmd,

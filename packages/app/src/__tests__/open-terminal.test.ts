@@ -1093,7 +1093,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       expect(spec.args).toContain('--dangerously-skip-permissions');
     });
 
-    it('defaults to claude when executionAgent is undefined', () => {
+    it('defaults to codex when executionAgent is undefined', () => {
       const agentRegistry = registerBuiltinAgents();
       const wt = new WorktreeExecutor({
         worktreeBaseDir: '/tmp/wt',
@@ -1109,7 +1109,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
         // executionAgent intentionally omitted
       };
       const spec = wt.getRestoredTerminalSpec(meta);
-      expect(spec.command).toBe('claude');
+      expect(spec.command).toBe('codex');
     });
   });
 
@@ -1415,7 +1415,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     expect(resolved.spec.command).not.toBe('claude');
   });
 
-  it('fix with no agent specified → terminal defaults to claude', () => {
+  it('fix with no agent specified → terminal defaults to codex', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     const agentRegistry = registerBuiltinAgents();
     const wt = new WorktreeExecutor({
@@ -1441,10 +1441,10 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       workspacePath: persistence.getWorkspacePath('task-noagent') ?? undefined,
     };
 
-    // executionAgent is undefined → defaults to claude
+    // executionAgent is undefined → defaults to codex
     expect(meta.executionAgent).toBeUndefined();
     const spec = wt.getRestoredTerminalSpec(meta);
-    expect(spec.command).toBe('claude');
+    expect(spec.command).toBe('codex');
   });
 
   it('openExternalTerminalForTask: refuses fallback when managed workspace has no workspacePath', async () => {

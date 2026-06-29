@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults } from '../plan-parser.js';
+import { parsePlan, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { writeFileSync } from 'node:fs';
@@ -565,6 +565,25 @@ tasks:
     const plan = parsePlan(yaml);
     expect(plan.tasks[0].executionAgent).toBe('codex');
     expect(plan.tasks[1].executionAgent).toBeUndefined();
+  });
+
+  it('applies defaultExecutionAgent from config when task omits executionAgent', () => {
+    writeFileSync(isolatedConfigPath, JSON.stringify({ defaultBranch: 'main', defaultExecutionAgent: 'codex' }));
+    const yaml = `
+name: Config Agent Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: default-task
+    description: "No agent specified"
+    command: "echo hi"
+  - id: explicit-task
+    description: "Explicit agent"
+    command: "echo hi"
+    executionAgent: claude
+`;
+    const plan = applyConfiguredPlanDefaults(parsePlan(yaml));
+    expect(plan.tasks[0].executionAgent).toBe('codex');
+    expect(plan.tasks[1].executionAgent).toBe('claude');
   });
 
   it('parses executionModel from task definitions', () => {

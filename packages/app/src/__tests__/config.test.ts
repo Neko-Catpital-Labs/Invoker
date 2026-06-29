@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   loadConfig,
+  resolveDefaultExecutionAgent,
   resolveEmbeddedTerminalBackendConfig,
 } from '../config.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -122,6 +123,21 @@ describe('loadConfig', () => {
     const config = loadConfig();
     expect(config.autoFixAgent).toBe('codex');
   });
+  it('reads defaultExecutionAgent from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultExecutionAgent: 'claude' }),
+    );
+    const config = loadConfig();
+    expect(config.defaultExecutionAgent).toBe('claude');
+    expect(resolveDefaultExecutionAgent(config)).toBe('claude');
+  });
+
+  it('falls back to the built-in default execution agent', () => {
+    expect(resolveDefaultExecutionAgent({})).toBe('codex');
+    expect(resolveDefaultExecutionAgent({ defaultExecutionAgent: '   ' })).toBe('codex');
+  });
+
 
   it('reads autoFixCi from user config', () => {
     writeFileSync(

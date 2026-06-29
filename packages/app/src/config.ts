@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
 
 export interface ExternalWorkerLaunchConfig {
   /** Executable used to start the external worker process. */
@@ -62,6 +63,11 @@ export interface InvokerConfig {
    * Default: 0 (disabled).
    */
   autoFixRetries?: number;
+  /**
+   * Default execution agent for plan tasks that omit executionAgent.
+   * Default: built-in DEFAULT_EXECUTION_AGENT.
+   */
+  defaultExecutionAgent?: string;
   /**
    * When true, successful AI-applied fixes are automatically approved.
    * This skips the manual "Approve Fix" step for fix-with-agent and
@@ -287,6 +293,11 @@ export function loadConfig(): InvokerConfig {
     ? readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH)
     : readJsonSafe(join(homedir(), '.invoker', 'config.json'));
 }
+export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
+  const configured = config.defaultExecutionAgent?.trim();
+  return configured && configured.length > 0 ? configured : BUILT_IN_DEFAULT_EXECUTION_AGENT;
+}
+
 
 
 export type EmbeddedTerminalBackendConfig = 'bash' | 'pty';
