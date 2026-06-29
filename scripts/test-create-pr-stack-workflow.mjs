@@ -250,6 +250,10 @@ function commitFile(work, fileName, content, message) {
   gitQuiet(work, 'commit', '-m', message);
 }
 
+function commitEmpty(work, message) {
+  gitQuiet(work, 'commit', '--allow-empty', '-m', message);
+}
+
 function createTrackedBranch(work, branch, startPoint = 'origin/master') {
   gitQuiet(work, 'switch', '-c', branch, '--track', startPoint);
 }
@@ -564,6 +568,58 @@ function testStackedDiffTitleRequiredForNonTrunkBase() {
   }
 }
 
+function testNoFileChangesBranchRefused() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/no-changes');
+
+    const result = runCreatePr(work, harness, baseArgs());
+    assert(result.status === 1, `branch with no file changes should fail\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('has no file changes versus origin/master'), 'no-change error should name the base ref');
+    expectNoPush(harness, 'no file changes');
+    assert(readGhCalls(harness.ghLog).length === 0, 'no file changes should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testEmptyCommitOnlyRefused() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/empty-only');
+    commitEmpty(work, 'empty slice');
+
+    const result = runCreatePr(work, harness, baseArgs());
+    assert(result.status === 1, `branch with a lone empty commit should fail\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('contains an empty commit'), 'empty-commit error should explain the cause');
+    assert(result.stderr.includes('git rebase'), 'empty-commit error should include rebase recovery');
+    expectNoPush(harness, 'empty commit only');
+    assert(readGhCalls(harness.ghLog).length === 0, 'empty commit only should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testEmptyCommitMixedWithRealChangeRefused() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/empty-mixed');
+    commitFile(work, 'feature.txt', 'feature\n', 'real change');
+    commitEmpty(work, 'empty slice after real change');
+
+    const result = runCreatePr(work, harness, baseArgs());
+    assert(result.status === 1, `branch with an empty commit beside a real change should fail\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('contains an empty commit'), 'mixed empty-commit error should explain the cause');
+    expectNoPush(harness, 'empty commit mixed with real change');
+    assert(readGhCalls(harness.ghLog).length === 0, 'empty commit mixed with real change should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testHelpMentionsStackUpdateFlow() {
   const harness = createHarness();
   try {
@@ -586,6 +642,9 @@ const tests = [
   testUnpublishedStackCommitsBlockUpdate,
   testCurrentBranchPrLookupFailure,
   testStackedDiffTitleRequiredForNonTrunkBase,
+  testNoFileChangesBranchRefused,
+  testEmptyCommitOnlyRefused,
+  testEmptyCommitMixedWithRealChangeRefused,
   testHelpMentionsStackUpdateFlow,
 ];
 

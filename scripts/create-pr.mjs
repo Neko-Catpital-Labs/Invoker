@@ -482,6 +482,53 @@ function assertCleanPrBase(baseBranch) {
   );
 }
 
+function isEmptyCommit(sha) {
+  const parent = gitTextOrEmpty(['rev-parse', '--verify', `${sha}^1`]);
+  if (!parent) return false;
+  const commitTree = gitTextOrEmpty(['rev-parse', `${sha}^{tree}`]);
+  const parentTree = gitTextOrEmpty(['rev-parse', `${parent}^{tree}`]);
+  return commitTree !== '' && commitTree === parentTree;
+}
+
+function assertNonEmptyPrSlice(baseBranch) {
+  const baseRef = `origin/${baseBranch}`;
+  const currentBranch = getCurrentBranch();
+
+  const emptyCommits = revList(`${baseRef}..HEAD`).filter(isEmptyCommit);
+  if (emptyCommits.length > 0) {
+    const lines = emptyCommits.slice(0, 12).map((sha) => `  - ${shortOneLine(sha)}`);
+    const more = emptyCommits.length > 12 ? `\n  ... and ${emptyCommits.length - 12} more` : '';
+    throw new Error(
+      [
+        `Refusing to create/update PR: current branch "${currentBranch}" contains an empty commit (no file changes from its parent).`,
+        'An empty commit makes the stack history misleading.',
+        '',
+        'Empty commits:',
+        ...lines,
+        more,
+        '',
+        'Recovery:',
+        `  Drop it:    git rebase --onto ${emptyCommits[0]}^ ${emptyCommits[0]} ${currentBranch}`,
+        `  Or squash it into a real change: git rebase -i ${baseRef}`,
+      ].join('\n'),
+    );
+  }
+
+  const changedFiles = gitTextOrEmpty(['diff', '--name-only', `${baseRef}...HEAD`]);
+  if (!changedFiles) {
+    throw new Error(
+      [
+        `Refusing to create/update PR: current branch "${currentBranch}" has no file changes versus ${baseRef}.`,
+        'Publishing an empty slice wastes reviewer time.',
+        '',
+        'Recovery:',
+        '  Commit the intended changes, or',
+        '  Drop this branch if it is no longer needed.',
+      ].join('\n'),
+    );
+  }
+}
+
 function getBranchMergeRef(branch) {
   return gitTextOrEmpty(['config', '--get', `branch.${branch}.merge`]);
 }
@@ -650,6 +697,7 @@ async function main() {
   const args = parseArgs();
 
   assertCleanPrBase(args.base);
+  assertNonEmptyPrSlice(args.base);
 
   let body = '';
   if (args.bodyFile) {
