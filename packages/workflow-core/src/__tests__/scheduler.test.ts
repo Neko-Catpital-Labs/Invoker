@@ -253,17 +253,30 @@ describe('TaskScheduler', () => {
       expect(queued[1].taskId).toBe('low');
     });
 
-    it('returns shallow copy (mutating the result does not affect internal queue)', () => {
+    it('returns job snapshots (mutating inputs and results does not affect internal queue)', () => {
       const scheduler = new TaskScheduler();
+      const firstJob = { taskId: 'a', attemptId: 'a-a1', priority: 1 };
 
-      scheduler.enqueue({ taskId: 'a', attemptId: 'a-a1', priority: 1 });
+      scheduler.enqueue(firstJob);
       scheduler.enqueue({ taskId: 'b', attemptId: 'b-a1', priority: 2 });
+
+      firstJob.taskId = 'mutated-before-snapshot';
+      firstJob.attemptId = 'mutated-before-snapshot-a1';
+      firstJob.priority = 99;
 
       const copy = scheduler.getQueuedJobs();
       copy.splice(0, copy.length); // clear the returned array
 
       // Internal queue should be unaffected
       expect(scheduler.getQueuedJobs()).toHaveLength(2);
+
+      const jobCopy = scheduler.getQueuedJobs()[0];
+      jobCopy.taskId = 'mutated-after-snapshot';
+      jobCopy.attemptId = 'mutated-after-snapshot-a1';
+      jobCopy.priority = 99;
+
+      expect(scheduler.getQueuedJobs()[0]).toEqual({ taskId: 'b', attemptId: 'b-a1', priority: 2 });
+      expect(scheduler.getQueuedJobs()[1]).toEqual({ taskId: 'a', attemptId: 'a-a1', priority: 1 });
     });
   });
 
