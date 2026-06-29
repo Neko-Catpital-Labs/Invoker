@@ -144,10 +144,11 @@ function parse_file_buckets(desc_text,    lines, i, line, in_files, path) {
   }
 }
 function parse_metadata(desc_lower,    tmp, parts) {
-  layer = ""
+  feature = ""
+  feature_step = ""
   feature_state = ""
   review_lane = ""
-  layer_exception_allowed = 0
+  feature_step_exception = 0
   has_acceptance_criteria = (desc_lower ~ /acceptance criteria:/)
   has_goal_heading = (desc_lower ~ /(^|\n)[ \t]*goal:/)
   has_motivation_heading = (desc_lower ~ /(^|\n)[ \t]*motivation:/)
@@ -169,10 +170,17 @@ function parse_metadata(desc_lower,    tmp, parts) {
   }
 
   tmp = desc_lower
-  sub(/^.*layer:[ \t]*/, "", tmp)
+  sub(/^.*feature:[ \t]*/, "", tmp)
   if (tmp != desc_lower) {
-    split(tmp, parts, /[^a-z0-9_]/)
-    layer = parts[1]
+    split(tmp, parts, /[^a-z0-9_-]/)
+    feature = parts[1]
+  }
+
+  tmp = desc_lower
+  sub(/^.*feature step:[ \t]*/, "", tmp)
+  if (tmp != desc_lower) {
+    split(tmp, parts, /[^0-9]/)
+    feature_step = parts[1]
   }
 
   tmp = desc_lower
@@ -182,24 +190,9 @@ function parse_metadata(desc_lower,    tmp, parts) {
     feature_state = parts[1]
   }
 
-  if (desc_lower ~ /layer exception:[ \t]*allowed/) {
-    layer_exception_allowed = 1
+  if (desc_lower ~ /feature step exception:[ \t]*allowed/) {
+    feature_step_exception = 1
   }
-}
-function layer_rank(layer_name) {
-  if (layer_name == "persistence") return 10
-  if (layer_name == "domain") return 20
-  if (layer_name == "transport") return 30
-  if (layer_name == "api") return 40
-  if (layer_name == "contact_surface") return 45
-  if (layer_name == "app_bridge") return 50
-  if (layer_name == "owner_delegation") return 60
-  if (layer_name == "ui_activation") return 70
-  if (layer_name == "app_regression") return 80
-  if (layer_name == "e2e_regression") return 90
-  if (layer_name == "ui") return 100
-  if (layer_name == "docs") return 110
-  return 0
 }
 function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   if (!in_task) return
@@ -256,10 +249,8 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   parse_metadata(desc_lower)
 
   if (enforce_layering == 1) {
-    if (layer == "") {
-      errors[++errn] = "Task \"" id "\" missing required \"Layer:\" heading in description (implementation plans require layer metadata)"
-    } else if (layer_rank(layer) == 0) {
-      errors[++errn] = "Task \"" id "\" has invalid Layer \"" layer "\"; expected one of: persistence, domain, transport, api, contact_surface, app_bridge, owner_delegation, ui_activation, app_regression, e2e_regression, ui, docs"
+    if (feature == "") {
+      errors[++errn] = "Task \"" id "\" missing required \"Feature:\" heading in description (implementation plans require feature metadata)"
     }
 
     if (feature_state == "") {
