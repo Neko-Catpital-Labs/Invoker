@@ -21,6 +21,8 @@ describe('generateSlackManifest', () => {
     expect(m.settings.socket_mode_enabled).toBe(true);
     expect(m.settings.event_subscriptions.bot_events).toContain('app_mention');
     expect(m.features.bot_user.display_name).toBe('Invoker');
+    expect(m.settings.interactivity.is_enabled).toBe(true);
+    expect(m.features.slash_commands?.some((c) => c.command === '/invoker')).toBe(true);
   });
 });
 
