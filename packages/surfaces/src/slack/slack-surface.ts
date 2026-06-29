@@ -7,7 +7,7 @@
 
 import { App, type RespondFn } from '@slack/bolt';
 import { spawn } from 'node:child_process';
-import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, WorkflowOp, WorkflowOpResult, WorkflowOpName } from '../surface.js';
+import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, WorkflowOp, WorkflowOpResult, WorkflowOpProgress, WorkflowOpName } from '../surface.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus } from './slack-formatter.js';
@@ -81,7 +81,7 @@ export interface SlackSurfaceConfig {
   /** Gathers a workflow's planning convo + task transcripts for the in-channel assistant. */
   gatherWorkflowContext?: (workflowId: string) => Promise<WorkflowContext>;
   /** Executes a workflow operation (recreate/rebase/retry/status/cancel) and returns a summary. Injected by main.ts. */
-  runWorkflowOp?: (op: WorkflowOp) => Promise<WorkflowOpResult>;
+  runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
 }
 
 export interface HarnessPreset {
@@ -322,7 +322,7 @@ export class SlackSurface implements Surface {
   private defaultRepoUrl?: string;
   private workflowChannelRepo?: WorkflowChannelRepository;
   private gatherWorkflowContext?: (workflowId: string) => Promise<WorkflowContext>;
-  private runWorkflowOp?: (op: WorkflowOp) => Promise<WorkflowOpResult>;
+  private runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
 
   constructor(config: SlackSurfaceConfig) {
     this.app = new App({
@@ -582,7 +582,8 @@ export class SlackSurface implements Surface {
       await respond?.({ text: '✅ Approved.', replace_original: true });
       // Follow-ups post in-thread via the bot client: a response_url expires after
       // 30 minutes / 5 uses, which a long bulk op can outlast.
-      await this.executeConfirm(pending, key, this.lobbyButtonSay(body, respond));
+      const opChannel = (body as { channel?: { id?: string } })?.channel?.id;
+      await this.executeConfirm(pending, key, this.lobbyButtonSay(body, respond), opChannel);
     });
 
     this.app.action('lobby_cancel', async ({ action, ack, respond }) => {
@@ -655,9 +656,9 @@ export class SlackSurface implements Surface {
     const threadTs = event.thread_ts ?? event.ts;
 
     // Confirm/cancel a staged action first (plain yes/no in-thread).
-    if (await this.resolveConfirm(threadTs, parsed.text, say)) return;
+    if (await this.resolveConfirm(threadTs, parsed.text, say, channel)) return;
 
-    // Deterministic verb commands take priority over the planning/LLM path.
+    // Deterministic verb commands respond instantly and take priority over the planner.
     const ctrl = parseLobbyControl(parsed.text);
     if (ctrl?.kind === 'op') {
       await this.handleLobbyOp(ctrl, threadTs, channel, say);
@@ -668,15 +669,20 @@ export class SlackSurface implements Surface {
       return;
     }
 
+    // Slower paths (LLM classifier, repo checkout, planner) acknowledge receipt up front.
+    if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
+
     // Fallback classifier: only when a non-verb message looks operational.
     if (looksOperational(parsed.text)) {
       const cls = await this.classifyLobbyIntent(parsed.text, preset);
       this.log('slack', 'info', `[CLASSIFY] thread_ts=${threadTs} intent=${cls.intent}`);
       if (cls.intent === 'command') {
+        await this.clearImmediateAck(channel, threadTs);
         await this.proposeLobbyOp(cls, threadTs, channel, say);
         return;
       }
       if (cls.intent === 'question') {
+        await this.clearImmediateAck(channel, threadTs);
         await this.answerLobbyQuestion(parsed.text, preset, threadTs, say);
         return;
       }
@@ -684,16 +690,6 @@ export class SlackSurface implements Surface {
     }
 
     // Default: a plain planning conversation (drafts a plan, never auto-submits).
-
-    if (this.enableImmediateAck) {
-      try {
-        const ackResult = await say({ text: this.immediateAckMessage, thread_ts: threadTs });
-        if (ackResult?.ts) this.ackMessages.set(threadTs, ackResult.ts);
-        this.log('slack', 'info', `[ACK] Sent immediate acknowledgment (thread_ts=${threadTs})`);
-      } catch (err) {
-        this.log('slack', 'error', `[ACK] Failed to send immediate acknowledgment: ${err}`);
-      }
-    }
 
     let workingDir = this.workingDir;
     if (repoUrl && this.prepareRepoCheckout) {
@@ -726,6 +722,25 @@ export class SlackSurface implements Surface {
     await this.handleConversationMessage(conversation, parsed.text, threadTs, say, channel);
   }
 
+  /** Post the immediate "received it" acknowledgment and track it for in-place replacement. */
+  private async sendImmediateAck(threadTs: string, say: SayFn): Promise<void> {
+    try {
+      const res = await say({ text: this.immediateAckMessage, thread_ts: threadTs });
+      if (res?.ts) this.ackMessages.set(threadTs, res.ts);
+      this.log('slack', 'info', `[ACK] Sent immediate acknowledgment (thread_ts=${threadTs})`);
+    } catch (err) {
+      this.log('slack', 'error', `[ACK] Failed to send immediate acknowledgment: ${err}`);
+    }
+  }
+
+  /** Drop the immediate ack — used by paths that post their own reply instead of replacing it. */
+  private async clearImmediateAck(channel: string, threadTs: string): Promise<void> {
+    const ts = this.ackMessages.get(threadTs);
+    if (!ts) return;
+    this.ackMessages.delete(threadTs);
+    await this.deleteMessage(channel, ts);
+  }
+
   private async classifyLobbyIntent(text: string, harness: HarnessPreset): Promise<LobbyClassification> {
     let raw: string;
     try {
@@ -753,7 +768,7 @@ export class SlackSurface implements Surface {
       await this.stageConfirm(threadTs, channel, { kind: 'op', op }, `This will \`${ctrl.operation}\` ALL workflows.`, say);
       return;
     }
-    await this.runConfirmedOp(op, threadTs, say);
+    await this.runConfirmedOp(op, threadTs, say, channel);
   }
 
   /** A classifier-inferred op is fuzzy, so always confirm before running it. */
@@ -772,10 +787,26 @@ export class SlackSurface implements Surface {
     await this.stageConfirm(threadTs, channel, { kind: 'op', op }, `It sounds like you want to \`${cls.operation}\` ${label}.`, say);
   }
 
-  private async runConfirmedOp(op: WorkflowOp, threadTs: string, say: SayFn): Promise<void> {
-    await say({ text: `On it — ${this.describeOp(op)}. I'll post a summary here when it finishes.`, thread_ts: threadTs });
+  private async runConfirmedOp(op: WorkflowOp, threadTs: string, say: SayFn, channel?: string): Promise<void> {
+    const onIt = await say({ text: `On it — ${this.describeOp(op)}. I'll post a summary here when it finishes.`, thread_ts: threadTs });
+    const progressTs = onIt?.ts;
+    let lastEdit = 0;
+    const onProgress = channel && progressTs
+      ? (p: WorkflowOpProgress): void => {
+          if (p.total <= 1) return;
+          const now = Date.now();
+          if (now - lastEdit < 2000 && p.done < p.total) return;
+          lastEdit = now;
+          const icon = p.done >= p.total ? '✅' : '⏳';
+          const tail = p.failed ? `, ${p.failed} failed` : '';
+          const cur = p.current && p.done < p.total ? ` · now \`${p.current}\`` : '';
+          void this.app.client.chat
+            .update({ channel, ts: progressTs, text: `${icon} ${this.describeOp(op)} — ${p.done}/${p.total} (${p.ok} ok${tail})${cur}` })
+            .catch(() => {});
+        }
+      : undefined;
     try {
-      const result = await this.runWorkflowOp!(op);
+      const result = await this.runWorkflowOp!(op, onProgress);
       await say({ text: result.summary, thread_ts: threadTs });
     } catch (err) {
       await say({ text: `Operation failed: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
@@ -866,12 +897,12 @@ export class SlackSurface implements Surface {
 
 
   /** Resolve a staged action from a plain-text reply. Returns true if the reply was consumed. */
-  private async resolveConfirm(threadTs: string, text: string, say: SayFn): Promise<boolean> {
+  private async resolveConfirm(threadTs: string, text: string, say: SayFn, channel?: string): Promise<boolean> {
     const pending = this.pendingConfirms.get(threadTs);
     if (!pending) return false;
     if (isConfirmation(text)) {
       this.pendingConfirms.delete(threadTs);
-      await this.executeConfirm(pending, threadTs, say);
+      await this.executeConfirm(pending, threadTs, say, channel);
       return true;
     }
     if (isNegation(text)) {
@@ -885,13 +916,13 @@ export class SlackSurface implements Surface {
   }
 
   /** Run a confirmed action — a workflow op, or a plan submission. */
-  private async executeConfirm(pending: PendingConfirm, threadTs: string, say: SayFn): Promise<void> {
+  private async executeConfirm(pending: PendingConfirm, threadTs: string, say: SayFn, channel?: string): Promise<void> {
     if (pending.kind === 'op') {
       if (!this.runWorkflowOp) {
         await say({ text: 'Workflow operations are not available in this deployment.', thread_ts: threadTs });
         return;
       }
-      await this.runConfirmedOp(pending.op, threadTs, say);
+      await this.runConfirmedOp(pending.op, threadTs, say, channel);
       return;
     }
     await say({ text: 'Starting plan execution…', thread_ts: threadTs });
@@ -1220,7 +1251,7 @@ export class SlackSurface implements Surface {
       if (msg.channel && this.workflowChannelRepo?.getByChannelId(msg.channel)) return;
 
       const text = (msg.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
-      if (text && (await this.resolveConfirm(msg.thread_ts, text, say))) return;
+      if (text && (await this.resolveConfirm(msg.thread_ts, text, say, channel))) return;
 
       // Look up or recover session (don't create new sessions for random thread replies in fallback mode)
       const conversation = await this.getSession(channel, msg.thread_ts, msg.user ?? 'unknown', false);
