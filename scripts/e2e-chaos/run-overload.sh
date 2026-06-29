@@ -549,9 +549,15 @@ ov_start_owner() {
       fi
     fi
     wait "${OVERLOAD_OWNER_PID}" 2>/dev/null || true
-    if [ "$attempt" -lt "$max_attempts" ] && grep -Eq 'database is locked|SQLITE_BUSY' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
-      sleep 2
-      continue
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      if grep -Eq 'database is locked|SQLITE_BUSY' "${OVERLOAD_TMP_DIR}/owner-serve.log" 2>/dev/null; then
+        sleep 2
+        continue
+      fi
+      if [ "$owner_was_running" -eq 0 ]; then
+        sleep 2
+        continue
+      fi
     fi
     if [ "$owner_was_running" -eq 1 ]; then
       echo "FAIL: standalone owner did not become ready" >&2
