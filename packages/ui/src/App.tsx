@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ReviewGateQueryResponse, TerminalSessionDescriptor } from '@invoker/contracts';
+import type { ActionGraphNode, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
@@ -437,6 +437,7 @@ export function App() {
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
@@ -521,6 +522,7 @@ export function App() {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+    window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
 
@@ -1886,6 +1888,18 @@ export function App() {
         </div>
       )}
 
+
+      {runtimeStatus?.readOnly && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="read-only-mode-banner"
+          className="border-b border-blue-700 bg-blue-950/70 px-4 py-2 text-sm text-blue-100"
+        >
+          <span className="font-semibold text-blue-50">Read-only mode.</span>{' '}
+          This window can browse workflows, but it cannot make changes until the write owner is available.
+        </div>
+      )}
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
         <nav className="w-24 border-r border-gray-800 bg-gray-950/60 flex flex-col justify-between py-3">

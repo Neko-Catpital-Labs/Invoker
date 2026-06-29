@@ -16,7 +16,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { ActionGraphResponse, TerminalOutputEvent, WorkflowMutationAcceptedResult } from '@invoker/contracts';
+import type { ActionGraphResponse, RuntimeStatus, TerminalOutputEvent, WorkflowMutationAcceptedResult } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -33,6 +33,8 @@ export interface MockInvoker {
   fireTerminalOutput: (event: TerminalOutputEvent) => void;
   /** Replace the action graph snapshot returned by getActionGraph. */
   setActionGraph: (response: ActionGraphResponse) => void;
+  /** Replace the runtime status returned by getRuntimeStatus. */
+  setRuntimeStatus: (status: RuntimeStatus) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -53,6 +55,11 @@ export function createMockInvoker(
     stallThresholdMs: 60_000,
     nodes: [],
     edges: [],
+  };
+  let runtimeStatus: RuntimeStatus = {
+    ownerMode: true,
+    readOnly: false,
+    mode: 'local-owner',
   };
 
   const accepted = (channel: string, workflowId = 'wf-1'): WorkflowMutationAcceptedResult => ({
@@ -121,6 +128,7 @@ export function createMockInvoker(
     getRemoteTargets: vi.fn(async () => []),
     getExecutionPools: vi.fn(async () => ['mixed-local-ssh', 'pnpm-ssh']),
     getExecutionAgents: vi.fn(async () => ['claude', 'codex']),
+    getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getSystemDiagnostics: vi.fn(async () => ({
       platform: 'linux',
       arch: 'x64',
@@ -245,6 +253,10 @@ export function createMockInvoker(
   function setActionGraph(response: ActionGraphResponse) {
     actionGraphSnapshot = response;
   }
+  function setRuntimeStatus(status: RuntimeStatus) {
+    runtimeStatus = status;
+  }
+
 
   function fireDelta(delta: TaskDelta) {
     graphEventCallback?.({ type: 'delta', delta, workflowRollups: [] });
@@ -283,6 +295,7 @@ export function createMockInvoker(
     api,
     setTasks,
     setActionGraph,
+    setRuntimeStatus,
     fireDelta,
     fireGraphEvent,
     fireWorkflowsChanged,
