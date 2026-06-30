@@ -17,11 +17,23 @@ export const HANDOFF_PROMPT_DESCRIPTION = 'Plan a requested change, trigger PR s
 type SubmitSuccess = { ok: true; workflowId: string; stdout: string };
 type SubmitFailure = { ok: false; exitCode: number; stdout: string; stderr: string; error?: string };
 
+export function resolveCliInvocation(
+  execPath: string,
+  cliPath: string,
+  args: string[],
+): { command: string; args: string[] } {
+  if (!cliPath || cliPath === execPath) {
+    return { command: execPath, args };
+  }
+  return { command: execPath, args: [cliPath, ...args] };
+}
+
 function createProcessRunner(cliPath = process.argv[1] ?? ''): McpCliRunner {
   return {
     run(args, options) {
       const complete = Promise.withResolvers<{ exitCode: number; stdout: string; stderr: string }>();
-      const child = spawn(process.execPath, [cliPath, ...args], {
+      const { command, args: spawnArgs } = resolveCliInvocation(process.execPath, cliPath, args);
+      const child = spawn(command, spawnArgs, {
         cwd: options?.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
