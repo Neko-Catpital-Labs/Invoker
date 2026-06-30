@@ -1,0 +1,27 @@
+# systemd user unit for the Invoker Slack manager.
+#
+# Install via packages/slack-manager/deploy/install.sh, which substitutes
+# __REPO_ROOT__ / __NODE__ and copies this to ~/.config/systemd/user/.
+#
+# The manager is supervised INDEPENDENTLY of Invoker: Restart=always brings it
+# back if it crashes, and `loginctl enable-linger` keeps it running across
+# reboots and while the user is logged out. It in turn watches Invoker and
+# relaunches the GUI when that dies.
+
+[Unit]
+Description=Invoker Slack manager (out-of-process Slack surface)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__
+EnvironmentFile=%h/.invoker/.slack-owner.env
+ExecStart=__NODE__ packages/slack-manager/dist/index.js
+Restart=always
+RestartSec=5
+# Give the watchdog room to relaunch the GUI without systemd reaping the manager.
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
