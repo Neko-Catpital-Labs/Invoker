@@ -221,7 +221,8 @@ describe('TaskRunner', () => {
 
     const done = runner.executeTask(task);
     await vi.waitFor(() => expect(seenRequest?.inputs).toMatchObject({ executionAgent: 'omp', executionModel: 'chatgpt-5.4' }));
-    completeCallback?.({
+    await vi.waitFor(() => expect(completeCallback).toBeTypeOf('function'));
+    completeCallback({
       requestId: seenRequest.requestId,
       actionId: task.id,
       attemptId: seenRequest.attemptId,
