@@ -549,8 +549,6 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
   });
-
-
   test('dag loaded', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
@@ -1936,7 +1934,6 @@ test.describe('Visual proof capture', () => {
       });
     });
     await page.waitForTimeout(2200);
-
     // Navigate to queue view
     await selectGraphMenuItem(page, 'rail-queue');
     // Assert canonical Action Queue and Backlog headings
