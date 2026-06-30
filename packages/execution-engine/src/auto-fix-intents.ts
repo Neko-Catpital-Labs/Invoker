@@ -97,10 +97,12 @@ export function isReviewGateCiContextStale(
 
 const AUTO_FIX_FLAG = '--auto-fix';
 const REVIEW_GATE_CI_FLAG = '--review-gate-ci';
+const EXECUTION_MODEL_FLAG = '--execution-model';
 
 export interface AutoFixCommandContext {
   autoFix: boolean;
   reviewGateContext?: ReviewGateCiContext;
+  executionModel?: string;
 }
 
 export interface ParsedHeadlessFixArgs extends AutoFixCommandContext {
@@ -114,6 +116,7 @@ export function parseHeadlessFixArgs(args: readonly string[]): ParsedHeadlessFix
   let agentName: string | undefined;
   let autoFix = false;
   let reviewGateContext: ReviewGateCiContext | undefined;
+  let executionModel: string | undefined;
 
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i];
@@ -130,6 +133,14 @@ export function parseHeadlessFixArgs(args: readonly string[]): ParsedHeadlessFix
       i += 1;
       continue;
     }
+    if (token === EXECUTION_MODEL_FLAG) {
+      const model = rest[i + 1]?.trim();
+      if (model) {
+        executionModel = model;
+      }
+      i += 1;
+      continue;
+    }
     if (taskId === undefined) {
       taskId = token;
       continue;
@@ -139,7 +150,7 @@ export function parseHeadlessFixArgs(args: readonly string[]): ParsedHeadlessFix
     }
   }
 
-  return { taskId, agentName, autoFix, reviewGateContext };
+  return { taskId, agentName, autoFix, reviewGateContext, executionModel };
 }
 
 export function buildHeadlessFixArgs(
@@ -157,6 +168,10 @@ export function buildHeadlessFixArgs(
   if (context.reviewGateContext) {
     args.push(REVIEW_GATE_CI_FLAG, encodeReviewGateCiContext(context.reviewGateContext));
   }
+  const executionModel = context.executionModel?.trim();
+  if (executionModel) {
+    args.push(EXECUTION_MODEL_FLAG, executionModel);
+  }
   return args;
 }
 
@@ -164,6 +179,7 @@ export function buildHeadlessFixArgs(
 export interface FixWithAgentMutationOptions {
   autoFix?: boolean;
   reviewGateContext?: ReviewGateCiContext;
+  executionModel?: string;
 }
 
 export interface ParsedFixWithAgentMutationArgs {
@@ -179,9 +195,16 @@ export function buildFixWithAgentMutationArgs(
 ): unknown[] {
   const args: unknown[] = [taskId, agentName];
   if (options && (options.autoFix || options.reviewGateContext)) {
+    const executionModel = options.executionModel?.trim();
     args.push({
       autoFix: Boolean(options.autoFix || options.reviewGateContext),
       ...(options.reviewGateContext ? { reviewGateContext: options.reviewGateContext } : {}),
+      ...(executionModel ? { executionModel } : {}),
+    });
+  } else if (options?.executionModel?.trim()) {
+    args.push({
+      autoFix: false,
+      executionModel: options.executionModel.trim(),
     });
   }
   return args;
@@ -193,10 +216,15 @@ export function parseFixWithAgentMutationArgs(args: unknown[]): ParsedFixWithAge
   const optionsArg = args[2];
   let autoFix = false;
   let reviewGateContext: ReviewGateCiContext | undefined;
+  let executionModel: string | undefined;
 
   if (optionsArg && typeof optionsArg === 'object') {
     const candidate = optionsArg as Record<string, unknown>;
     autoFix = Boolean(candidate.autoFix);
+    if (typeof candidate.executionModel === 'string') {
+      const trimmed = candidate.executionModel.trim();
+      executionModel = trimmed.length > 0 ? trimmed : undefined;
+    }
     if (candidate.reviewGateContext) {
       const ctx = candidate.reviewGateContext;
       reviewGateContext = typeof ctx === 'string'
@@ -208,5 +236,5 @@ export function parseFixWithAgentMutationArgs(args: unknown[]): ParsedFixWithAge
     }
   }
 
-  return { taskId, agentName, context: { autoFix, reviewGateContext } };
+  return { taskId, agentName, context: { autoFix, reviewGateContext, executionModel } };
 }

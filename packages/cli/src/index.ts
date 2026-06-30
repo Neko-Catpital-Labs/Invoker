@@ -11,7 +11,7 @@ import {
   WorktreeExecutor,
   acquireWorkerLock,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
   WorkerLockHeldError,
   registerBuiltinAgents,
   type WorkerDefinition,
@@ -129,7 +129,7 @@ function usage(): string {
     '  doctor          Validate tools, config, and your default planning preset.',
     '  setup [slack]    Validate the environment, then optionally configure Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
-    '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
+    '  worker [kind|list]  Run a built-in worker or list available worker kinds.',
     '',
     'Options:',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
@@ -447,7 +447,12 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
  * Read the auto-fix policy knobs from the shared Invoker config so the CLI door
  * drives the engine with the same retry budget / agent the GUI owner uses.
  */
-function readAutoFixWorkerConfig(homeRoot: string): { autoFixRetries?: number; autoFixAgent?: string } {
+function readAutoFixWorkerConfig(homeRoot: string): {
+  autoFixRetries?: number;
+  autoFixAgent?: string;
+  autoFixExecutionModel?: string;
+  autoApproveAIFixes?: boolean;
+} {
   const configPath = join(homeRoot, 'config.json');
   if (!existsSync(configPath)) return {};
   try {
@@ -455,6 +460,8 @@ function readAutoFixWorkerConfig(homeRoot: string): { autoFixRetries?: number; a
     return {
       autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
       autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
+      autoFixExecutionModel: typeof parsed.autoFixExecutionModel === 'string' ? parsed.autoFixExecutionModel : undefined,
+      autoApproveAIFixes: typeof parsed.autoApproveAIFixes === 'boolean' ? parsed.autoApproveAIFixes : undefined,
     };
   } catch {
     return {};
@@ -462,11 +469,12 @@ function readAutoFixWorkerConfig(homeRoot: string): { autoFixRetries?: number; a
 }
 
 function workerDisplayName(kind: string): string {
+  if (kind === 'autoapprove') return 'Auto-approve';
   return kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : kind;
 }
 
 function printWorkerKinds(): void {
-  const registry = registerAutoFixWorker(createWorkerRegistry());
+  const registry = registerBuiltinWorkers(createWorkerRegistry());
   process.stdout.write('Worker kinds\n');
   for (const worker of registry.list()) {
     process.stdout.write(`  ${worker.kind} — available (${worker.note})\n`);
@@ -484,7 +492,7 @@ function printWorkerKinds(): void {
 async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
-  const { autoFixRetries, autoFixAgent } = readAutoFixWorkerConfig(homeRoot);
+  const { autoFixRetries, autoFixAgent, autoFixExecutionModel, autoApproveAIFixes } = readAutoFixWorkerConfig(homeRoot);
 
   // Single-instance guard: refuse if another worker of this kind (this door or
   // the dev `--headless worker <kind>` door) already holds the cross-process
@@ -519,6 +527,10 @@ async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise
       autoFix: {
         defaultAutoFixRetries: autoFixRetries,
         getAutoFixAgent: () => autoFixAgent,
+        getAutoFixExecutionModel: () => autoFixExecutionModel,
+      },
+      autoApprove: {
+        getAutoApproveAIFixes: () => autoApproveAIFixes,
       },
     });
 
@@ -557,7 +569,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
-      const registry = registerAutoFixWorker(createWorkerRegistry());
+      const registry = registerBuiltinWorkers(createWorkerRegistry());
       if (subcommand === 'list') {
         printWorkerKinds();
         return 0;
