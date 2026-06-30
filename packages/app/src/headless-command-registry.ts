@@ -51,6 +51,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'select', kind: 'write' },
   { name: 'cancel', kind: 'write' },
   { name: 'cancel-workflow', kind: 'write' },
+  { name: 'delete-task', kind: 'write' },
   { name: 'delete-workflow', kind: 'write', aliases: ['delete'] },
   { name: 'delete-all', kind: 'write' },
   { name: 'open-terminal', kind: 'read' },
