@@ -185,6 +185,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return mutations.recreateDownstream(String(args[0]));
       case 'invoker:cancel-task':
         return mutations.cancelTask(String(args[0]));
+      case 'invoker:delete-task':
+        return mutations.deleteTask(String(args[0]));
       case 'invoker:recreate-workflow':
         return mutations.recreateWorkflow(String(args[0]));
       case 'invoker:retry-workflow':
