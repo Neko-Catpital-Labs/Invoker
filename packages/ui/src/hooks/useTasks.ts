@@ -177,7 +177,6 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         });
       }
     });
-    window.invoker.checkPrStatuses?.();
     return request.then(() => undefined);
   }, []);
   const refreshWorkflowMetadata = useCallback((): Promise<void> => {
