@@ -25,7 +25,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
       listWorkflows: () => [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
     },
     mutations: { approveTask },
-    agentRegistry: { listExecution: () => [] },
+    agentRegistry: { listExecutionHarnesses: () => [] },
     loadConfig: () => ({}),
     getStreamSequence: () => 7,
     refreshTaskGraph: vi.fn(async () => {}),
@@ -51,6 +51,16 @@ describe('buildWebInvokerDispatch', () => {
       workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
       streamSequence: 7,
     });
+  });
+
+  it('get-execution-harnesses returns harness metadata', async () => {
+    const harnesses = [
+      { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
+    ];
+    const { dispatch } = makeDispatch({
+      agentRegistry: { listExecutionHarnesses: () => harnesses },
+    });
+    expect(await dispatch('invoker:get-execution-harnesses', [])).toEqual(harnesses);
   });
 
   it('approve routes to the mutation facade', async () => {

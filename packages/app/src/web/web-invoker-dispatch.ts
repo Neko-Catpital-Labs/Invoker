@@ -134,8 +134,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return Object.keys(deps.loadConfig().remoteTargets ?? {});
       case 'invoker:get-execution-pools':
         return Object.keys(deps.loadConfig().executionPools ?? {});
-      case 'invoker:get-execution-agents':
-        return agentRegistry.listExecution().map((a) => a.name);
+      case 'invoker:get-execution-harnesses':
+        return agentRegistry.listExecutionHarnesses();
       case 'invoker:get-system-diagnostics':
         return (
           deps.getSystemDiagnostics?.() ??

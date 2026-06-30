@@ -5,7 +5,7 @@
  * Executors look up agents by name (e.g. 'claude') at task execution time.
  */
 
-import type { ExecutionAgent, PlanningAgent } from './agent.js';
+import type { ExecutionAgent, ExecutionModelOption, PlanningAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 
 function normalizeExecutionAgentName(name: string | null | undefined): string | undefined {
@@ -77,6 +77,13 @@ export class AgentRegistry {
   listExecution(): ExecutionAgent[] {
     return [...this.executionAgents.values()];
   }
+  listExecutionHarnesses(): Array<{ name: string; supportedModels: ExecutionModelOption[] }> {
+    return this.listExecution().map((agent) => ({
+      name: agent.name,
+      supportedModels: [...(agent.supportedModels ?? [])],
+    }));
+  }
+
 
   listPlanning(): PlanningAgent[] {
     return [...this.planningAgents.values()];
