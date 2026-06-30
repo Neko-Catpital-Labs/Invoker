@@ -147,6 +147,7 @@ import {
 } from './headless.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import { presetToExecutionAgent, gatherWorkflowContext as gatherWorkflowContextImpl } from './slack-workflow-context.js';
+import { createSlackWorkflowOpRunner } from './slack-gate-policy-op.js';
 import {
   startStandaloneLaunchDispatcher,
   type StandaloneLaunchDispatcherController,
@@ -874,56 +875,11 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     killRunningTask: deps.killRunningTask,
   });
 
-  const runWorkflowOp = async (
-    op: { operation: string; target: { all: true } | { workflow: string } },
-    onProgress?: (p: { done: number; total: number; ok: number; failed: number; current?: string }) => void,
-  ): Promise<{ ok: boolean; summary: string }> => {
-    const all = persistence.listWorkflows();
-    let workflowIds: { id: string }[];
-    if ('all' in op.target) {
-      workflowIds = all.map((w) => ({ id: w.id }));
-    } else {
-      const wanted = op.target.workflow;
-      const match = all.find((w) => w.id === wanted || w.name === wanted);
-      if (!match) return { ok: false, summary: `No workflow matching \`${wanted}\`.` };
-      workflowIds = [{ id: match.id }];
-    }
-    if (workflowIds.length === 0) return { ok: false, summary: 'No workflows found.' };
-
-    if (op.operation === 'status') {
-      const lines = workflowIds.map((t) => {
-        const s = orchestrator.getWorkflowStatus(t.id);
-        return `\`${t.id}\`: ${s.running} running, ${s.pending} pending, ${s.completed} done, ${s.failed} failed`;
-      });
-      return { ok: true, summary: lines.join('\n') };
-    }
-
-    const mutate: Record<string, (id: string) => Promise<unknown>> = {
-      recreate: (id) => slackMutations.recreateWorkflow(id),
-      'rebase-recreate': (id) => slackMutations.rebaseRecreate(id),
-      'rebase-retry': (id) => slackMutations.rebaseRetry(id),
-      retry: (id) => slackMutations.retryWorkflow(id),
-      cancel: (id) => slackMutations.cancelWorkflow(id),
-    };
-    const run = mutate[op.operation];
-    if (!run) return { ok: false, summary: `Unsupported operation \`${op.operation}\`.` };
-
-    let ok = 0;
-    const failed: string[] = [];
-    const total = workflowIds.length;
-    for (const t of workflowIds) {
-      onProgress?.({ done: ok + failed.length, total, ok, failed: failed.length, current: t.id });
-      try {
-        await run(t.id);
-        ok++;
-      } catch (err) {
-        failed.push(`${t.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    onProgress?.({ done: total, total, ok, failed: failed.length });
-    const summary = `${op.operation}: ${ok} ok${failed.length ? `, ${failed.length} failed\n${failed.join('\n')}` : ''}`;
-    return { ok: failed.length === 0, summary };
-  };
+  const runWorkflowOp = createSlackWorkflowOpRunner({
+    persistence,
+    orchestrator,
+    mutations: slackMutations,
+  });
 
   const slack = new surfaces.SlackSurface({
     botToken: process.env.SLACK_BOT_TOKEN!,

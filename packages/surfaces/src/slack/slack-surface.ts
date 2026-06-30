@@ -806,7 +806,8 @@ export class SlackSurface implements Surface {
   private describeOp(op: WorkflowOp): string {
     if (op.operation === 'gate-policy') {
       const updates = op.updates.map((u) => `${u.workflowId}/${u.taskId ?? '__merge__'} -> ${u.gatePolicy}`).join(', ');
-      return `gate-policy ${op.ownerTaskId ?? op.target.workflow}: ${updates}`;
+      const target = op.ownerTaskId ?? ('all' in op.target ? 'ALL workflows' : op.target.workflow);
+      return `gate-policy ${target}: ${updates}`;
     }
     const target = 'all' in op.target ? 'ALL workflows' : `\`${op.target.workflow}\``;
     return `${op.operation} ${target}`;
