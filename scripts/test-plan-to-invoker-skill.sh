@@ -8,6 +8,7 @@ SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
+EXAMPLES="$SKILL_DIR/references/examples.md"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
@@ -99,6 +100,7 @@ must_contain "$TUTORIAL" "Invoker MCP tool" "Tutorial must document the MCP hand
 
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
+[[ -f "$EXAMPLES" ]] || fail "expected $EXAMPLES"
 [[ -f "$CLAUDE_MD" ]] || fail "expected $CLAUDE_MD"
 
 # Installed agent skills use managed invoker-* copies, not legacy unprefixed symlinks.
@@ -127,6 +129,13 @@ must_contain "$SKILL_MD" "Review claim:" "SKILL must require review claim metada
 must_contain "$SKILL_MD" "Review lane:" "SKILL must require review lane metadata"
 must_contain "$SKILL_MD" "Non-goals:" "SKILL must require non-goals metadata"
 must_contain "$SKILL_MD" "Safety invariant:" "SKILL must require safety invariant metadata"
+must_contain "$SKILL_MD" "**Atomic-feature decomposition (required for implementation plans):**" "SKILL must document atomic-feature decomposition"
+must_contain "$SKILL_MD" 'every implementation task must include `Feature:` and `Feature state:` headings' "SKILL must require Feature and Feature state headings"
+must_contain "$SKILL_MD" '`Feature:` names one atomic feature' "SKILL must define Feature as one atomic feature"
+must_contain "$SKILL_MD" "Thin sub-slices within the same feature are optional" "SKILL must allow optional thin feature sub-slices"
+must_contain "$SKILL_MD" "Slicing an already-implemented diff into reviewable PRs is owned by \`skills/make-pr/SKILL.md\`" "SKILL must name make-pr as PR-splitting owner"
+must_contain "$SKILL_MD" "**Feature-step dependency direction (required):**" "SKILL must retain feature-level dependency direction checks"
+must_contain "$SKILL_MD" "Dependency direction is checked at the feature-sub-slice granularity" "SKILL must use feature-step direction instead of layer ordering"
 must_contain "$SKILL_MD" "For benchmark/direct-output prompts with" "SKILL frontmatter must expose benchmark mode before body loading"
 must_contain "$SKILL_MD" "\"invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the installed handoff command"
 must_contain "$SKILL_MD" "\"/invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the slash handoff command"
@@ -203,6 +212,21 @@ must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-c
 must_contain "$TASK_PATTERNS" "Assume zero context" "Task patterns must define zero-context prompt requirement"
 must_contain "$TASK_PATTERNS" "deterministic pass/fail expectations" "Task patterns must require deterministic prompt outcomes"
 must_contain "$TASK_PATTERNS" "Review compression contract" "Task patterns must define review compression metadata"
+must_contain "$TASK_PATTERNS" "## Atomic-feature decomposition contract (hard requirement for implementation plans)" "Task patterns must document atomic-feature decomposition"
+must_contain "$TASK_PATTERNS" '**`Feature:`** the name of one atomic feature' "Task patterns must require Feature as the decomposition heading"
+must_contain "$TASK_PATTERNS" '**`Feature state:`** one of:' "Task patterns must keep Feature state validation documented"
+must_contain "$TASK_PATTERNS" "Thin sub-slices within the same feature are optional" "Task patterns must document optional thin sub-slices"
+must_contain "$TASK_PATTERNS" "Slicing an already-implemented diff into reviewable PRs is owned by \`skills/make-pr/SKILL.md\`" "Task patterns must name make-pr as PR-splitting owner"
+must_contain "$TASK_PATTERNS" "### Feature-step direction" "Task patterns must document feature-step direction checks"
+must_contain "$TASK_PATTERNS" "Dependency direction is checked at the feature-sub-slice granularity" "Task patterns must use feature-step direction instead of layer ordering"
+
+# Examples — atomic-feature wording and ownership must stay reflected in examples.
+must_contain "$EXAMPLES" "## 9. Atomic-feature decomposition with dormant support" "Examples must document atomic-feature decomposition"
+must_contain "$EXAMPLES" "include task-level \`Feature:\` and \`Feature state:\` metadata" "Examples must require Feature metadata"
+must_contain "$EXAMPLES" "Map each task to one atomic feature with a \`Feature:\` heading" "Examples must map each task to one atomic feature"
+must_contain "$EXAMPLES" "Thin sub-slices within the same feature are optional" "Examples must document optional thin sub-slices"
+must_contain "$EXAMPLES" "Splitting the implemented diff into reviewable PR slices is owned by \`skills/make-pr/SKILL.md\`" "Examples must name make-pr as PR-splitting owner"
+must_contain "$EXAMPLES" "feature-step dependency direction" "Examples must retain feature-level dependency direction validation"
 
 echo "OK: plan-to-invoker skill contract checks passed"
 
