@@ -113,7 +113,6 @@ describe('headless query costs', () => {
       repoRoot: '/fake/repo',
       invokerConfig: {} as any,
       initServices: vi.fn(async () => {}),
-      wireSlackBot: vi.fn(async () => ({})),
     };
     mockDeps.orchestrator.syncFromDb = vi.fn();
     mockDeps.orchestrator.getAllTasks = vi.fn(() => tasksForWf1 as any);
