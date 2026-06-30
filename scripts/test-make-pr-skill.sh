@@ -28,6 +28,8 @@ must_contain "$SKILL_MD" "## Stack ordering" "make-pr skill must document stack 
 must_contain "$SKILL_MD" "Repro/proof comes before the fix." "make-pr skill must land the repro/proof slice before the fix"
 must_contain "$SKILL_MD" "Keep each slice green for CI" "make-pr skill must keep each ordered slice green for CI"
 must_contain "$SKILL_MD" "cleanup and docs come last" "make-pr skill must order foundation before behavior and cleanup/docs last"
+must_contain "$SKILL_MD" "lint-pr-diff-atomicity.mjs" "make-pr skill must mention the diff atomicity gate"
+must_contain "$SKILL_MD" "mixes behavior, refactor, cleanup, or test-harness/proof work" "make-pr skill must tell authors to split mixed work"
 
 # The ordering section delegates the rest of the rules to review-compression,
 # so that referenced section must actually exist.
