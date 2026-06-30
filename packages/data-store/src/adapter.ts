@@ -127,6 +127,71 @@ export interface ExecutionResourceLeaseReleaseRow {
   taskId?: string;
 }
 
+export type WorkerActionStatus =
+  | 'queued'
+  | 'pending'
+  | 'running'
+  | 'needs_input'
+  | 'review_ready'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'abandoned'
+  | 'cancelled'
+  | 'canceled';
+
+export interface WorkerActionRecord {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary?: string;
+  payload?: unknown;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface WorkerActionWrite {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount?: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary?: string;
+  payload?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
+export interface WorkerActionListFilters {
+  workflowId?: string;
+  taskId?: string;
+  workerKind?: string;
+  status?: WorkerActionStatus | string;
+  limit?: number;
+}
+
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: WorkflowSaveInput): void;
@@ -154,6 +219,11 @@ export interface PersistenceAdapter {
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
   getEvents(taskId: string): TaskEvent[];
   getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
+
+  // Worker actions (durable worker-owned action state/history)
+  getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
+  upsertWorkerAction(action: WorkerActionWrite): WorkerActionRecord;
+  listWorkerActions(filters?: WorkerActionListFilters): WorkerActionRecord[];
 
   // Conversations (Slack thread-based)
   saveConversation(conversation: Conversation): void;

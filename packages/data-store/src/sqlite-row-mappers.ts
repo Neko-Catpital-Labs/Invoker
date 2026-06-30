@@ -16,7 +16,7 @@ import type {
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
 import { normalizeRunnerKind } from '@invoker/workflow-core';
-import type { Workflow } from './adapter.js';
+import type { WorkerActionRecord, Workflow } from './adapter.js';
 import type {
   TaskLaunchDispatch,
   TaskLaunchDispatchPriority,
@@ -76,6 +76,7 @@ export function mapRowToTask(row: any): TaskState {
       runnerKind: normalizeRunnerKind(row.runner_kind ?? undefined),
       ...((row.pool_member_id ?? undefined) ? { poolMemberId: row.pool_member_id } : {}),
       dockerImage: row.docker_image ?? undefined,
+      executionModel: row.execution_model ?? undefined,
       isMergeNode: row.is_merge_node === 1 ? true : undefined,
       summary: row.summary ?? undefined,
       problem: row.problem ?? undefined,
@@ -208,5 +209,38 @@ export function mapRowToWorkflowMutationLease(row: Record<string, unknown>): Wor
     leasedAt: String(row.leased_at),
     lastHeartbeatAt: String(row.last_heartbeat_at),
     leaseExpiresAt: String(row.lease_expires_at),
+  };
+}
+
+function parseWorkerActionPayload(raw: unknown): unknown {
+  if (raw === null || raw === undefined) return undefined;
+  try {
+    return JSON.parse(String(raw));
+  } catch {
+    return undefined;
+  }
+}
+
+export function mapRowToWorkerAction(row: Record<string, unknown>): WorkerActionRecord {
+  return {
+    id: String(row.id),
+    workerKind: String(row.worker_kind),
+    actionType: String(row.action_type),
+    workflowId: row.workflow_id ? String(row.workflow_id) : undefined,
+    taskId: row.task_id ? String(row.task_id) : undefined,
+    subjectType: String(row.subject_type),
+    subjectId: String(row.subject_id),
+    externalKey: String(row.external_key),
+    status: String(row.status) as WorkerActionRecord['status'],
+    attemptCount: Number(row.attempt_count ?? 0),
+    intentId: row.intent_id ? String(row.intent_id) : undefined,
+    agentName: row.agent_name ? String(row.agent_name) : undefined,
+    executionModel: row.execution_model ? String(row.execution_model) : undefined,
+    sessionId: row.session_id ? String(row.session_id) : undefined,
+    summary: row.summary ? String(row.summary) : undefined,
+    payload: parseWorkerActionPayload(row.payload_json),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    completedAt: row.completed_at ? String(row.completed_at) : undefined,
   };
 }
