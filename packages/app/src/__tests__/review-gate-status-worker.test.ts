@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { startReviewGateStatusWorker } from '../review-gate-status-worker.js';
+import { createPrStatusWorker } from '../review-gate-status-worker.js';
 
 const logger = {
   info: vi.fn(),
@@ -8,62 +8,49 @@ const logger = {
   error: vi.fn(),
   debug: vi.fn(),
   trace: vi.fn(),
+  child: vi.fn(() => logger),
 };
 
-describe('review-gate status worker', () => {
+describe('pr-status worker', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
   });
 
-  it('starts in owner mode', async () => {
+  it('polls review-gate status in owner mode', async () => {
     vi.useFakeTimers();
     const checkMergeGateStatuses = vi.fn().mockResolvedValue(undefined);
 
-    const worker = startReviewGateStatusWorker({
-      ownerMode: true,
-      getTaskExecutor: () => ({ checkMergeGateStatuses }),
+    const worker = createPrStatusWorker({
+      reviewGate: { checkMergeGateStatuses },
       logger,
       intervalMs: 1000,
+      installSignalHandlers: false,
     });
-
-    expect(worker).not.toBeNull();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(checkMergeGateStatuses).toHaveBeenCalledTimes(1);
-    worker?.stop();
-  });
-
-  it('starts in owner mode even when startup auto-run is disabled', async () => {
-    vi.useFakeTimers();
-    const checkMergeGateStatuses = vi.fn().mockResolvedValue(undefined);
-
-    const worker = startReviewGateStatusWorker({
-      ownerMode: true,
-      getTaskExecutor: () => ({ checkMergeGateStatuses }),
-      logger,
-      intervalMs: 1000,
-    });
+    worker.start();
 
     await vi.advanceTimersByTimeAsync(1000);
     expect(checkMergeGateStatuses).toHaveBeenCalledTimes(1);
-    worker?.stop();
+    await worker.stop();
   });
 
-  it('does not start in follower or read-only mode', async () => {
+  it('starts even when startup auto-run is disabled', async () => {
     vi.useFakeTimers();
     const checkMergeGateStatuses = vi.fn().mockResolvedValue(undefined);
 
-    const worker = startReviewGateStatusWorker({
-      ownerMode: false,
-      getTaskExecutor: () => ({ checkMergeGateStatuses }),
+    const worker = createPrStatusWorker({
+      reviewGate: { checkMergeGateStatuses },
       logger,
       intervalMs: 1000,
+      installSignalHandlers: false,
     });
+    worker.start();
 
-    expect(worker).toBeNull();
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(checkMergeGateStatuses).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(checkMergeGateStatuses).toHaveBeenCalledTimes(1);
+    await worker.stop();
   });
+
 
   it('does not overlap ticks', async () => {
     vi.useFakeTimers();
@@ -75,12 +62,13 @@ describe('review-gate status worker', () => {
       .mockReturnValueOnce(firstTick)
       .mockResolvedValue(undefined);
 
-    const worker = startReviewGateStatusWorker({
-      ownerMode: true,
-      getTaskExecutor: () => ({ checkMergeGateStatuses }),
+    const worker = createPrStatusWorker({
+      reviewGate: { checkMergeGateStatuses },
       logger,
       intervalMs: 1000,
+      installSignalHandlers: false,
     });
+    worker.start();
 
     await vi.advanceTimersByTimeAsync(1000);
     await vi.advanceTimersByTimeAsync(1000);
@@ -88,9 +76,9 @@ describe('review-gate status worker', () => {
 
     resolveFirst();
     await firstTick;
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(0);
     expect(checkMergeGateStatuses).toHaveBeenCalledTimes(2);
-    worker?.stop();
+    await worker.stop();
   });
 
   it('continues after a tick error', async () => {
@@ -99,33 +87,35 @@ describe('review-gate status worker', () => {
       .mockRejectedValueOnce(new Error('temporary failure'))
       .mockResolvedValue(undefined);
 
-    const worker = startReviewGateStatusWorker({
-      ownerMode: true,
-      getTaskExecutor: () => ({ checkMergeGateStatuses }),
+    const worker = createPrStatusWorker({
+      reviewGate: { checkMergeGateStatuses },
       logger,
       intervalMs: 1000,
+      installSignalHandlers: false,
     });
+    worker.start();
 
     await vi.advanceTimersByTimeAsync(1000);
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(checkMergeGateStatuses).toHaveBeenCalledTimes(2);
-    expect(logger.error).toHaveBeenCalledWith('review-gate status worker tick failed', expect.any(Object));
-    worker?.stop();
+    expect(logger.error).toHaveBeenCalledWith('[worker:pr-status] tick failed', expect.any(Object));
+    await worker.stop();
   });
 
   it('clears the interval on shutdown', async () => {
     vi.useFakeTimers();
     const checkMergeGateStatuses = vi.fn().mockResolvedValue(undefined);
 
-    const worker = startReviewGateStatusWorker({
-      ownerMode: true,
-      getTaskExecutor: () => ({ checkMergeGateStatuses }),
+    const worker = createPrStatusWorker({
+      reviewGate: { checkMergeGateStatuses },
       logger,
       intervalMs: 1000,
+      installSignalHandlers: false,
     });
+    worker.start();
 
-    worker?.stop();
+    await worker.stop();
     await vi.advanceTimersByTimeAsync(3000);
     expect(checkMergeGateStatuses).not.toHaveBeenCalled();
   });

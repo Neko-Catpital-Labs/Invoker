@@ -4,9 +4,8 @@
  *
  * Each worker is declared once as a {@link WorkerDefinition} — its `kind`, an
  * operator-facing `note`, and a `factory` that builds the worker runtime from
- * injected dependencies. Today the only built-in is the auto-fix recovery
- * worker; centralizing worker knowledge here lets future workers be declared
- * uniformly instead of being implied by a single hard-coded auto-fix branch.
+ * injected dependencies. Centralizing worker knowledge here keeps owner-mode
+ * polling and external worker commands on the same registry surface.
  */
 
 import type { Logger } from '@invoker/contracts';
@@ -17,10 +16,12 @@ import {
   type AutoFixRecoveryStore,
   type AutoFixRecoverySubmitter,
 } from './auto-fix-recovery.js';
+import { createPrStatusWorker, PR_STATUS_WORKER_KIND } from './workers/pr-status-worker.js';
 import type { WorkerRuntime } from './worker-runtime.js';
 
 /** Registry kind for the built-in auto-fix recovery worker. */
 export const AUTO_FIX_WORKER_KIND = 'autofix';
+export { PR_STATUS_WORKER_KIND };
 
 /** Auto-fix tuning handed to a worker factory. */
 export interface AutoFixWorkerConfig {
@@ -42,6 +43,8 @@ export interface WorkerRuntimeDependencies {
   messageBus?: MessageBus;
   /** Auto-fix tuning. */
   autoFix?: AutoFixWorkerConfig;
+  /** Review-gate polling surface for the PR status worker. */
+  reviewGate?: { checkMergeGateStatuses(): void | Promise<void> };
 }
 
 /** Builds a worker runtime from injected dependencies. */
@@ -84,10 +87,9 @@ export function createWorkerRegistry(): WorkerRegistry {
 }
 
 /**
- * Register the built-in auto-fix worker under {@link AUTO_FIX_WORKER_KIND},
- * reusing the existing recovery worker factory ({@link createRecoveryWorker})
- * so the runtime it builds behaves exactly as the auto-fix path always has.
- * Returns the registry so calls can be chained with {@link createWorkerRegistry}.
+ * Register the built-in workers. The legacy function name is kept so existing
+ * headless code and tests keep the same import path while the registry now
+ * includes auto-fix and pr-status entries.
  */
 export function registerAutoFixWorker(registry: WorkerRegistry): WorkerRegistry {
   registry.register({
@@ -104,6 +106,14 @@ export function registerAutoFixWorker(registry: WorkerRegistry): WorkerRegistry 
           getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
         },
       }),
+  });
+  registry.register({
+    kind: PR_STATUS_WORKER_KIND,
+    note: 'Polls review-gate PR statuses through the registered merge-gate provider.',
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime => {
+      if (!deps.reviewGate) throw new Error('pr-status worker requires reviewGate deps');
+      return createPrStatusWorker({ logger: deps.logger, reviewGate: deps.reviewGate });
+    },
   });
   return registry;
 }
