@@ -19,7 +19,7 @@ import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
 import { summarizePlanText } from './plan-summary.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
-import { buildAssistantPrompt, parseWorkflowControl } from './workflow-assistant.js';
+import { buildAssistantPrompt, parseWorkflowControl, SLACK_DIRECT_ANSWER_GUIDANCE } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
 import type { ConversationRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
 
@@ -198,8 +198,8 @@ ${text}
 }
 
 /** Q&A prompt for a lobby question: answer directly, never emit a plan. */
-function buildLobbyQuestionPrompt(text: string): string {
-  return `Answer the user's question about this repository and Invoker. Explore the codebase if needed. Do NOT generate a YAML plan and do NOT create a workflow. Question:\n${text}`;
+export function buildLobbyQuestionPrompt(text: string): string {
+  return `Answer the user's question about this repository and Invoker. Explore the codebase if needed. ${SLACK_DIRECT_ANSWER_GUIDANCE} Do NOT generate a YAML plan and do NOT create a workflow. Question:\n${text}`;
 }
 
 /** Parse the classifier's raw stdout into a validated classification; never throws. */
