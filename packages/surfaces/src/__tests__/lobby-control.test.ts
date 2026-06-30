@@ -25,6 +25,23 @@ describe('parseLobbyControl', () => {
     expect(parseLobbyControl('status my-flow')).toEqual({ kind: 'op', operation: 'status', target: { workflow: 'my-flow' } });
   });
 
+  it('parses gate-policy updates from the headless command form', () => {
+    expect(parseLobbyControl('set gate-policy wf-1/task-a wf-upstream review_ready')).toEqual({
+      kind: 'op',
+      operation: 'gate-policy',
+      target: { workflow: 'wf-1' },
+      ownerTaskId: 'wf-1/task-a',
+      updates: [{ workflowId: 'wf-upstream', taskId: '__merge__', gatePolicy: 'review_ready' }],
+    });
+    expect(parseLobbyControl('set gate-policy wf-1/task-a wf-upstream verify completed')).toEqual({
+      kind: 'op',
+      operation: 'gate-policy',
+      target: { workflow: 'wf-1' },
+      ownerTaskId: 'wf-1/task-a',
+      updates: [{ workflowId: 'wf-upstream', taskId: 'verify', gatePolicy: 'completed' }],
+    });
+  });
+
   it('defaults bare status to all; a bare mutation verb is ambiguous (null)', () => {
     expect(parseLobbyControl('status')).toEqual({ kind: 'op', operation: 'status', target: { all: true } });
     expect(parseLobbyControl('recreate')).toBeNull();
@@ -36,6 +53,7 @@ describe('parseLobbyControl', () => {
     expect(parseLobbyControl('how many workflows are running?')).toBeNull();
     expect(parseLobbyControl('add a /health endpoint')).toBeNull();
     expect(parseLobbyControl('recreate + rebase all workflows')).toBeNull();
+    expect(parseLobbyControl('set gate-policy task-a wf-upstream review_ready')).toBeNull();
     expect(parseLobbyControl('')).toBeNull();
   });
 });
