@@ -1,0 +1,121 @@
+# Anti-Pattern H: Invalid same-feature step dependency direction
+# Expected outcome: skill-doctor fails lint-task-atomicity with a feature step ordering violation.
+
+name: "Anti-pattern: earlier feature step depends on later feature step"
+description: |
+  Demonstrates a dependency direction violation where an earlier sub-slice of the
+  same atomic feature depends on a later feature step without an explicit exception.
+  Standalone workflow waiver:
+  - This negative fixture intentionally keeps two prompt slices together so it can exercise same-feature step ordering.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/EdbertChan/Invoker
+baseBranch: master
+featureBranch: plan/anti-pattern-feature-step-order-violation
+
+tasks:
+  - id: prompt-edit-contact-surface
+    description: |
+      Review claim:
+      - Add the prompt-edit contact surface after the bridge already exists.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Existing command-edit contracts remain intact while this fixture exercises ordering lint.
+      Slice rationale:
+      - This intentionally invalid slice depends on a later feature step.
+      Architectural effect:
+      - Renderer-to-app typing gains a prompt-edit entry point.
+      Goal:
+      - Add prompt-edit contact surface typing.
+      Motivation:
+      - Demonstrate that earlier feature steps cannot depend on later steps without an exception.
+      Alternative considerations:
+      - Option A (chosen): keep the invalid dependency to prove the linter.
+      - Option B: reverse the dependency order.
+      Implementation details:
+      - Modify packages/app/src/preload.ts and packages/ui/src/types/window-invoker.d.ts.
+      Non-goals:
+      - Do not add the explicit feature step exception in this fixture.
+      Feature: prompt-edit-bridge
+      Feature step: 1
+      Feature state: active
+      Files:
+      - packages/app/src/preload.ts
+      - packages/ui/src/types/window-invoker.d.ts
+      Change types:
+      - packages/app/src/preload.ts: modify
+      - packages/ui/src/types/window-invoker.d.ts: modify
+      Acceptance criteria:
+      - Ensure renderer typing exposes prompt-edit contact surface hooks.
+    prompt: |
+      Review lane:
+      - behavior
+      Goal:
+      - Add prompt-edit contact surface typing.
+      Motivation:
+      - Demonstrate that earlier feature steps cannot depend on later steps without an exception.
+      Alternative considerations:
+      - Option A (chosen): keep the invalid dependency to prove the linter.
+      - Option B: reverse the dependency order.
+      Implementation details:
+      - Assume no prior context. Modify packages/app/src/preload.ts and packages/ui/src/types/window-invoker.d.ts.
+      - Preserve command-edit contracts while exposing prompt-edit typing.
+      Non-goals:
+      - Do not add the explicit feature step exception in this fixture.
+      Acceptance criteria:
+      - Pass condition: renderer typing exposes prompt-edit contact surface hooks.
+    dependencies: [prompt-edit-app-bridge]
+
+  - id: prompt-edit-app-bridge
+    description: |
+      Review claim:
+      - Add app bridge routing for prompt-edit requests.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Bridge routing stays scoped to existing command-service mutation paths.
+      Slice rationale:
+      - This later feature step should not be required by the earlier contact-surface step.
+      Architectural effect:
+      - Prompt edits gain app-side IPC routing.
+      Goal:
+      - Add app bridge routing for prompt-edit requests.
+      Motivation:
+      - Provide the later same-feature step used by the invalid dependency.
+      Alternative considerations:
+      - Option A (chosen): keep this as the later feature step.
+      - Option B: move bridge routing before contact-surface typing.
+      Implementation details:
+      - Modify packages/app/src/main.ts and packages/app/src/headless-delegation.ts.
+      Non-goals:
+      - Do not add regression proof in this fixture.
+      Feature: prompt-edit-bridge
+      Feature step: 2
+      Feature state: active
+      Files:
+      - packages/app/src/main.ts
+      - packages/app/src/headless-delegation.ts
+      Change types:
+      - packages/app/src/main.ts: modify
+      - packages/app/src/headless-delegation.ts: modify
+      Acceptance criteria:
+      - Ensure app bridge routing handles prompt-edit requests.
+    prompt: |
+      Review lane:
+      - behavior
+      Goal:
+      - Add app bridge routing for prompt-edit requests.
+      Motivation:
+      - Provide the later same-feature step used by the invalid dependency.
+      Alternative considerations:
+      - Option A (chosen): keep this as the later feature step.
+      - Option B: move bridge routing before contact-surface typing.
+      Implementation details:
+      - Assume no prior context. Modify packages/app/src/main.ts and packages/app/src/headless-delegation.ts.
+      - Preserve command-service recreate semantics and owner-aware routing.
+      Non-goals:
+      - Do not add regression proof in this fixture.
+      Acceptance criteria:
+      - Pass condition: app bridge routing handles prompt-edit requests.
+    dependencies: []

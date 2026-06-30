@@ -36,7 +36,7 @@ Positive fixtures demonstrate valid plan patterns:
 - **04-large-refactor-pull-request.yaml** - Complex plan with diamond dependencies and `onFinish: pull_request`
 - **05-ui-change-with-visual-proof.yaml** - UI workflow that pairs visual proof with focused verification
 - **06-invoker-dogfood-mergify-stack.yaml** - Invoker-on-Invoker PR publication example with focused skill verification
-- **07-prompt-edit-layered-split-with-dormant.yaml** - Dependency-first layer split for prompt-edit bridge work, including a dormant activation slice
+- **07-prompt-edit-layered-split-with-dormant.yaml** - Dependency-first feature-step split for prompt-edit bridge work, including a dormant activation slice
 - Implementation fixtures use focused verification by default. Full-suite gates are optional and risk-based, not a validator requirement.
 
 All positive fixtures are extracted from `references/examples.md` sections 1-4.
@@ -53,8 +53,8 @@ Negative fixtures demonstrate anti-patterns and validation errors:
 - **anti-pattern-d-missing-dependencies.yaml** - Task missing dependencies field (missing_required_field)
 - **anti-pattern-e-no-verification.yaml** - Implementation without verification (policy violation)
 - **anti-pattern-f-dangerous-commands.yaml** - Dangerous commands (rm -rf, force push, etc.)
-- **anti-pattern-g-monolithic-prompt-edit-bridge.yaml** - Monolithic `wf-1777929074509-8`-shaped workflow missing required layer/state decomposition metadata (**fails `skill-doctor` lint, not YAML schema**)
-- **anti-pattern-h-layer-order-violation.yaml** - Lower architectural layer depends on a higher layer without `Layer exception: allowed` (**fails `skill-doctor` lint, not YAML schema**)
+- **anti-pattern-g-monolithic-prompt-edit-bridge.yaml** - Monolithic `wf-1777929074509-8`-shaped workflow missing required feature/state decomposition metadata (**fails `skill-doctor` lint, not YAML schema**)
+- **anti-pattern-h-feature-step-order-violation.yaml** - Earlier same-feature step depends on a later feature step without `Feature step exception: allowed` (**fails `skill-doctor` lint, not YAML schema**)
 - **anti-pattern-j-zero-context-missing-metadata.yaml** - Prompt task omits strict zero-context handoff metadata (**fails `skill-doctor` lint, not YAML schema**)
 - **anti-pattern-k-missing-review-compression.yaml** - Implementation task omits review-compression metadata (**fails `skill-doctor` lint, not YAML schema**)
 - **anti-pattern-n-broad-autofix-policy-review-unit.yaml** - #1574-shaped auto-fix policy task combines scan, validation, duplicate suppression, and submit work (**fails `skill-doctor` review-unit lint**)
