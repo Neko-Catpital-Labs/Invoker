@@ -1,3 +1,5 @@
+import type { WorkflowGatePolicy, WorkflowGatePolicyUpdate } from '../surface.js';
+
 // ── Context ──────────────────────────────────────────────────
 
 export interface WorkflowContext {
@@ -44,11 +46,61 @@ export function buildAssistantPrompt(question: string, ctx: WorkflowContext): st
 export type WorkflowControl =
   | { kind: 'status' }
   | { kind: 'approve' | 'reject' | 'retry'; task: string }
-  | { kind: 'input'; task: string; text: string };
+  | { kind: 'input'; task: string; text: string }
+  | { kind: 'gate-policy'; updates: WorkflowGatePolicyUpdate[] };
+
+const TARGET_TOKEN = /^[\w./-]+$/;
+
+function parseGatePolicy(rest: string): Extract<WorkflowControl, { kind: 'gate-policy' }> | null {
+  const withoutPolicy = rest.trim().replace(/[.!?]+$/, '').trim();
+  let gatePolicy: WorkflowGatePolicy;
+  let argsText: string;
+
+  const reviewReady = /\s+review[-_\s]+ready$/i.exec(withoutPolicy);
+  if (reviewReady) {
+    gatePolicy = 'review_ready';
+    argsText = withoutPolicy.slice(0, reviewReady.index).trim();
+  } else {
+    const completed = /\s+completed$/i.exec(withoutPolicy);
+    if (!completed) return null;
+    gatePolicy = 'completed';
+    argsText = withoutPolicy.slice(0, completed.index).trim();
+  }
+
+  const args = argsText.split(/\s+/).filter(Boolean);
+  if (args.length < 1 || args.length > 2) return null;
+  if (!args.every((arg) => TARGET_TOKEN.test(arg))) return null;
+
+  const [upstreamWorkflowToken, upstreamTaskToken] = args;
+  const update = parseGatePolicyUpdate(upstreamWorkflowToken, upstreamTaskToken, gatePolicy);
+  if (!update) return null;
+
+  return { kind: 'gate-policy', updates: [update] };
+}
+
+function parseGatePolicyUpdate(
+  upstreamWorkflowToken: string,
+  upstreamTaskToken: string | undefined,
+  gatePolicy: WorkflowGatePolicy,
+): WorkflowGatePolicyUpdate | null {
+  if (upstreamWorkflowToken.includes('/')) {
+    if (upstreamTaskToken) return null;
+    const [workflowId, taskId, ...extra] = upstreamWorkflowToken.split('/');
+    if (!workflowId || !taskId || extra.length > 0) return null;
+    return { workflowId, taskId, gatePolicy };
+  }
+
+  return upstreamTaskToken
+    ? { workflowId: upstreamWorkflowToken, taskId: upstreamTaskToken, gatePolicy }
+    : { workflowId: upstreamWorkflowToken, gatePolicy };
+}
 
 export function parseWorkflowControl(text: string): WorkflowControl | null {
   const t = text.trim();
   if (/^status\b/i.test(t)) return { kind: 'status' };
+
+  const gatePolicy = /^(?:set\s+)?gate[-\s]+policy\b([\s\S]*)$/i.exec(t);
+  if (gatePolicy) return parseGatePolicy(gatePolicy[1]);
 
   const input = /^input\s+(\S+)\s*:\s*([\s\S]+)$/i.exec(t);
   if (input) return { kind: 'input', task: input[1], text: input[2].trim() };
