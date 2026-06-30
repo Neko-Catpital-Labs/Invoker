@@ -17,6 +17,7 @@ export default defineConfig({
     '@invoker/runtime-domain',
     '@invoker/runtime-adapters',
     '@invoker/runtime-service',
+    '@invoker/surfaces',
     '@invoker/transport',
     '@invoker/execution-engine',
     'yaml',
