@@ -30,6 +30,7 @@
  *   POST   /api/tasks/:id/edit-type    body: { runnerKind, poolMemberId? }
  *   POST   /api/tasks/:id/edit-agent   body: { agent }
  *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
+ *   DELETE /api/tasks/:id
  *   POST   /api/workflows/:id/detach  body: { upstreamWorkflowId }
  *   POST   /api/workflows/:id/restart
  *   POST   /api/workflows/:id/rebase-retry
@@ -66,6 +67,7 @@ export interface ApiMutationFacade {
   cancelTask(taskId: string): Promise<CancelMutationResult>;
   retryTask(taskId: string): Promise<MutationResult>;
   recreateTask(taskId: string): Promise<MutationResult>;
+  deleteTask(taskId: string): Promise<MutationResult>;
   recreateDownstream(taskId: string): Promise<MutationResult>;
   resolveConflict(taskId: string, agentName?: string): Promise<ResolveConflictMutationResult>;
   approveTask(taskId: string): Promise<ApproveMutationResult>;
@@ -252,6 +254,19 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           return;
         }
         json(res, 200, serializeTask(task));
+        return;
+      }
+
+      // DELETE /api/tasks/:id
+      const deleteTaskMatch = path.match(/^\/api\/tasks\/([^/]+)$/);
+      if (method === 'DELETE' && deleteTaskMatch) {
+        const taskId = decodeURIComponent(deleteTaskMatch[1]);
+        try {
+          const result = await mutations.deleteTask(taskId);
+          json(res, 200, { ok: true, taskId, action: 'deleted', tasksStarted: result.runnable.length });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
         return;
       }
 
