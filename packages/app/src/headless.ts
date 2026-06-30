@@ -475,6 +475,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
+      reviewGate: { checkMergeGateStatuses: () => createHeadlessExecutor(deps).checkMergeGateStatuses() },
     });
     await worker.tick('manual');
     await worker.stop();
