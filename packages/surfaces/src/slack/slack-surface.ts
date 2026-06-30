@@ -747,7 +747,7 @@ export class SlackSurface implements Surface {
       await say({ text: 'Workflow operations are not available in this deployment.', thread_ts: threadTs });
       return;
     }
-    const op: WorkflowOp = { operation: ctrl.operation, target: ctrl.target };
+    const op = this.workflowOpFromLobbyControl(ctrl);
     // Destructive bulk mutations require explicit confirmation; status and single-workflow ops run now.
     if (ctrl.operation !== 'status' && 'all' in ctrl.target) {
       await this.stageConfirm(threadTs, channel, { kind: 'op', op }, `This will \`${ctrl.operation}\` ALL workflows.`, say);
@@ -804,8 +804,24 @@ export class SlackSurface implements Surface {
   }
 
   private describeOp(op: WorkflowOp): string {
+    if (op.operation === 'gate-policy') {
+      const updates = op.updates.map((u) => `${u.workflowId}/${u.taskId ?? '__merge__'} -> ${u.gatePolicy}`).join(', ');
+      return `gate-policy ${op.ownerTaskId ?? op.target.workflow}: ${updates}`;
+    }
     const target = 'all' in op.target ? 'ALL workflows' : `\`${op.target.workflow}\``;
     return `${op.operation} ${target}`;
+  }
+
+  private workflowOpFromLobbyControl(ctrl: Extract<LobbyControl, { kind: 'op' }>): WorkflowOp {
+    if (ctrl.operation === 'gate-policy') {
+      return {
+        operation: 'gate-policy',
+        target: ctrl.target,
+        ownerTaskId: ctrl.ownerTaskId,
+        updates: ctrl.updates,
+      };
+    }
+    return { operation: ctrl.operation, target: ctrl.target };
   }
 
   /** Submit the plan drafted in this thread, after an explicit, summarized confirmation. */
@@ -945,7 +961,7 @@ export class SlackSurface implements Surface {
       await respond({ text: 'Workflow operations are not available in this deployment.', response_type: 'ephemeral' });
       return;
     }
-    const op: WorkflowOp = { operation: ctrl.operation, target: ctrl.target };
+    const op = this.workflowOpFromLobbyControl(ctrl);
     if (ctrl.operation !== 'status' && 'all' in ctrl.target) {
       const key = `slash:${channel}:${command.user_id}:${Date.now()}`;
       this.pendingConfirms.set(key, { kind: 'op', op });

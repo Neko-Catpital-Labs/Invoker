@@ -1,3 +1,6 @@
+import type { WorkflowGatePolicyOp } from '../surface.js';
+import { parseGatePolicyOp } from './lobby-control.js';
+
 // ── Context ──────────────────────────────────────────────────
 
 export interface WorkflowContext {
@@ -44,11 +47,15 @@ export function buildAssistantPrompt(question: string, ctx: WorkflowContext): st
 export type WorkflowControl =
   | { kind: 'status' }
   | { kind: 'approve' | 'reject' | 'retry'; task: string }
-  | { kind: 'input'; task: string; text: string };
+  | { kind: 'input'; task: string; text: string }
+  | ({ kind: 'gate-policy' } & WorkflowGatePolicyOp);
 
-export function parseWorkflowControl(text: string): WorkflowControl | null {
+export function parseWorkflowControl(text: string, workflowId?: string): WorkflowControl | null {
   const t = text.trim();
   if (/^status\b/i.test(t)) return { kind: 'status' };
+
+  const gatePolicyOp = parseGatePolicyOp(t, workflowId);
+  if (gatePolicyOp) return { kind: 'gate-policy', ...gatePolicyOp };
 
   const input = /^input\s+(\S+)\s*:\s*([\s\S]+)$/i.exec(t);
   if (input) return { kind: 'input', task: input[1], text: input[2].trim() };
