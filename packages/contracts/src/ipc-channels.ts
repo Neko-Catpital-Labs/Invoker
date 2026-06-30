@@ -33,6 +33,21 @@ export interface TaskReplacementDef {
   runnerKind?: string;
   executionAgent?: string;
 }
+export interface ExecutionModelOption {
+  id: string;
+  label: string;
+}
+
+export interface ExecutionHarnessOption {
+  name: string;
+  supportedModels: ExecutionModelOption[];
+}
+
+export interface ExecutionDefaults {
+  executionAgent: string;
+  executionModel?: string;
+}
+
 
 export interface WorkflowMeta {
   id: string;
@@ -649,9 +664,13 @@ export const IpcChannels = {
     request: [];
     response: string[];
   },
-  'invoker:get-execution-agents': {} as {
+  'invoker:get-execution-harnesses': {} as {
     request: [];
-    response: string[];
+    response: ExecutionHarnessOption[];
+  },
+  'invoker:get-execution-defaults': {} as {
+    request: [];
+    response: ExecutionDefaults;
   },
 
   'invoker:get-runtime-status': {} as {
