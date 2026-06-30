@@ -549,7 +549,6 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
   });
-
   test('dag loaded', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();

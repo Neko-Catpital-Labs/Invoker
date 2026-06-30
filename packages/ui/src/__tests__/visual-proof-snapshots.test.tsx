@@ -35,8 +35,13 @@ describe('Visual proof snapshots', () => {
     render(<App />);
     expect(screen.getByText('What to expect')).toBeInTheDocument();
     expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
-    expect(screen.getByText('No runs yet')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
+    expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
+    expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.getByText('Terminal planning and graph details live here.')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
     expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
   });
 
