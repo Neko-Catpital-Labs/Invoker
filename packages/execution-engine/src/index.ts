@@ -34,6 +34,7 @@ export * from './claude-session-driver.js';
 export * from './omp-session-driver.js';
 export * from './worker-runtime.js';
 export * from './worker-registry.js';
+export * from './worker-types.js';
 export * from './worker-lock.js';
 export * from './auto-fix-recovery.js';
 export * from './auto-fix-gating.js';
