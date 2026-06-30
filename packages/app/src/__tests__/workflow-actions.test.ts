@@ -2465,4 +2465,43 @@ describe('fixWithAgentAction review-gate CI context', () => {
     );
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
   });
+
+  it('accepts review-gate context for a later artifact in a PR stack', async () => {
+    const orchestrator = makeReviewGateOrchestrator({
+      selectedAttemptId: 'attempt-1',
+      generation: 3,
+      reviewId: 'review-1',
+      branch: 'experiment/foo',
+      reviewGate: {
+        activeGeneration: 3,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [
+          { id: 'contracts', providerId: 'review-1', required: true, status: 'approved', generation: 3, headSha: 'head-a' },
+          { id: 'runtime', providerId: 'review-2', required: true, status: 'open', generation: 3, headSha: 'head-b' },
+        ],
+      },
+    });
+    const persistence = { getTaskOutput: vi.fn(() => 'output'), appendTaskOutput: vi.fn() };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'claude',
+      reviewGateContext: {
+        reviewId: 'review-2',
+        generation: 3,
+        selectedAttemptId: 'attempt-1',
+        branch: 'experiment/foo',
+        headSha: 'head-b',
+      },
+    });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledTimes(1);
+  });
 });

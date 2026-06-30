@@ -9,8 +9,20 @@ import type {
 } from './merge-gate-provider.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import { isGitRefLockRace, retryTransientGitHubCli } from './git-utils.js';
+import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
 type ExistingPullRequest = { url: string; number: number };
+
+const DEFAULT_GITHUB_CLI_TIMEOUT_MS = 60_000;
+
+function getGitHubCliTimeoutMs(): number {
+  const raw = process.env.INVOKER_GITHUB_CLI_TIMEOUT_MS?.trim();
+  if (raw === '0') return 0;
+  if (!raw) return DEFAULT_GITHUB_CLI_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_GITHUB_CLI_TIMEOUT_MS;
+  return parsed;
+}
 
 export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
@@ -238,15 +250,54 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
 
   private async exec(cmd: string, args: string[], cwd: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(cmd, args, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+      });
+      const timeoutMs = getGitHubCliTimeoutMs();
       let stdout = '';
       let stderr = '';
+      let settled = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        fn();
+      };
+
+      if (timeoutMs > 0) {
+        timeout = setTimeout(() => {
+          killProcessGroup(child, 'SIGTERM');
+          const forceKill = setTimeout(() => {
+            killProcessGroup(child, 'SIGKILL');
+          }, SIGKILL_TIMEOUT_MS);
+          forceKill.unref?.();
+          finish(() => reject(new Error(
+            `${cmd} ${args.join(' ')} exceeded GitHub CLI timeout (${timeoutMs}ms) in ${cwd}. ` +
+            'Set INVOKER_GITHUB_CLI_TIMEOUT_MS to adjust (0 = unbounded).',
+          )));
+        }, timeoutMs);
+        timeout.unref?.();
+      }
+
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
       child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code === 0) resolve(stdout.trim());
-        else reject(new Error(`${cmd} ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
+      child.on('error', (err) => {
+        finish(() => reject(err));
+      });
+      child.on('close', (code, signal) => {
+        finish(() => {
+          if (code === 0) {
+            resolve(stdout.trim());
+            return;
+          }
+          reject(new Error(
+            `${cmd} ${args.join(' ')} failed (code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}): ${stderr.trim()}`,
+          ));
+        });
       });
     });
   }

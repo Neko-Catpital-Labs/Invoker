@@ -1964,6 +1964,9 @@ export class TaskRunner {
           status: mappedStatus,
           updatedAt: new Date().toISOString(),
         };
+        if (status.headSha) {
+          return { ...next, headSha: status.headSha, ...(mappedStatus === 'open' ? { rawStatus: status.statusText } : {}) };
+        }
         if (mappedStatus === 'open') {
           return { ...next, rawStatus: status.statusText };
         }

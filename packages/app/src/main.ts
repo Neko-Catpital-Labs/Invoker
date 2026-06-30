@@ -98,7 +98,10 @@ import {
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   registerBuiltinAgents,
+  createPrStatusWorker,
+  createCiFailureWorker,
   type AgentRegistry,
+  type WorkerRuntime,
 } from '@invoker/execution-engine';
 import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
@@ -204,6 +207,7 @@ import {
   buildHeadlessFixArgs,
   listOpenFixIntentsForTask,
   parseFixWithAgentMutationArgs,
+  type ReviewGateCiContext,
 } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
@@ -224,7 +228,6 @@ import {
 } from './ipc/ipc-registration.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
-import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 import {
   buildRecoveryWorkerAuditPayload,
   classifyAutoFixRecoveryPhase,
@@ -909,7 +912,8 @@ function startHeadlessMode(): void {
     }
 
     let exitCode = 0;
-    let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
+    let prStatusWorker: WorkerRuntime | null = null;
+    let ciFailureWorker: WorkerRuntime | null = null;
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
     try {
@@ -1583,11 +1587,21 @@ function startHeadlessMode(): void {
           logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
         });
 
-        reviewGateStatusWorker = startReviewGateStatusWorker({
-          ownerMode: true,
-          getTaskExecutor: createStandaloneTaskExecutor,
+        prStatusWorker = createPrStatusWorker({
+          reviewGate: { checkMergeGateStatuses: () => createStandaloneTaskExecutor().checkMergeGateStatuses() },
           logger,
         });
+        prStatusWorker.start();
+        if (!readOnlyMode && invokerConfig.autoFixCi && workflowMutationCoordinator) {
+          ciFailureWorker = createCiFailureWorker({
+            store: persistence,
+            submitter: workflowMutationCoordinator,
+            messageBus,
+            logger,
+            getAutoFixAgent: () => loadConfig().autoFixAgent,
+          });
+          ciFailureWorker.start();
+        }
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
@@ -1607,7 +1621,8 @@ function startHeadlessMode(): void {
     } finally {
       standaloneLaunchDispatcherController?.stop();
       lifecycleEventBridge?.stop();
-      reviewGateStatusWorker?.stop();
+      await ciFailureWorker?.stop();
+      await prStatusWorker?.stop();
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
       }
@@ -1694,7 +1709,8 @@ function createEmbeddedTerminalBackendFromConfig(
   const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
-  let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
+  let prStatusWorker: WorkerRuntime | null = null;
+  let ciFailureWorker: WorkerRuntime | null = null;
   let apiServer: ApiServer | null = null;
   let webBridge: WebBridge | null = null;
   let ownerMode = true;
@@ -2007,6 +2023,7 @@ function createEmbeddedTerminalBackendFromConfig(
     taskId: string,
     agentName?: string,
     source: 'ipc' | 'auto-fix' = 'ipc',
+    reviewGateContext?: ReviewGateCiContext,
   ): Promise<TaskState[]> => {
     const task = orchestrator.getTask(taskId);
     if (!task) {
@@ -2045,6 +2062,7 @@ function createEmbeddedTerminalBackendFromConfig(
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
         failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        reviewGateContext,
         signal: activeMutationContext?.signal,
       },
     );
@@ -3305,11 +3323,23 @@ function createEmbeddedTerminalBackendFromConfig(
       });
     }
 
-    reviewGateStatusWorker = startReviewGateStatusWorker({
-      ownerMode,
-      getTaskExecutor: requireTaskExecutor,
-      logger,
-    });
+    if (ownerMode) {
+      prStatusWorker = createPrStatusWorker({
+        reviewGate: { checkMergeGateStatuses: () => requireTaskExecutor().checkMergeGateStatuses() },
+        logger,
+      });
+      prStatusWorker.start();
+      if (invokerConfig.autoFixCi && workflowMutationCoordinator) {
+        ciFailureWorker = createCiFailureWorker({
+          store: persistence,
+          submitter: workflowMutationCoordinator,
+          messageBus,
+          logger,
+          getAutoFixAgent: () => loadConfig().autoFixAgent,
+        });
+        ciFailureWorker.start();
+      }
+    }
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (!ownerMode) {
@@ -4268,11 +4298,11 @@ function createEmbeddedTerminalBackendFromConfig(
       'invoker:fix-with-agent',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
-      const taskId = String(taskIdArg);
-      const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
+      async (...fixArgs: unknown[]) => {
+      const { taskId, agentName, context } = parseFixWithAgentMutationArgs(fixArgs);
       try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
+        const source = context.autoFix ? 'auto-fix' : 'ipc';
+        const started = await executeFixWithAgentMutation(taskId, agentName, source, context.reviewGateContext);
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
@@ -4691,8 +4721,10 @@ function createEmbeddedTerminalBackendFromConfig(
       try {
         if (apiServer) await apiServer.close().catch(() => {});
         if (webBridge) await webBridge.close().catch(() => {});
-        reviewGateStatusWorker?.stop();
-        reviewGateStatusWorker = null;
+        await ciFailureWorker?.stop();
+        ciFailureWorker = null;
+        await prStatusWorker?.stop();
+        prStatusWorker = null;
         if (dbPollInterval) clearInterval(dbPollInterval);
         if (activityPollInterval) clearInterval(activityPollInterval);
         if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
