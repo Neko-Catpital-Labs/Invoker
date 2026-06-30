@@ -56,7 +56,7 @@ describe('resolveConflictAction', () => {
     expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
   });
 
-  it('auto-approves after conflict resolution when configured', async () => {
+  it('leaves conflict resolution awaiting worker approval when auto approval is configured', async () => {
     const approve = vi.fn(async () => [{ id: 'task-a', status: 'completed', config: {}, execution: {} }]);
     const getTask = orchestrator.getTask;
     orchestrator = {
@@ -78,7 +78,7 @@ describe('resolveConflictAction', () => {
     });
 
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
-    expect(approve).toHaveBeenCalledWith('task-a');
+    expect(approve).not.toHaveBeenCalled();
     expect(taskExecutorWithApprove.executeTasks).not.toHaveBeenCalled();
     expect(taskExecutorWithApprove.publishAfterFix).not.toHaveBeenCalled();
   });

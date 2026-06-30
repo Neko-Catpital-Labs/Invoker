@@ -89,6 +89,11 @@ export interface InvokerConfig {
    */
   autoFixAgent?: string;
   /**
+   * Optional execution model passed to automatic fix agent commands.
+   * Agents that do not support model selection ignore this value.
+   */
+  autoFixExecutionModel?: string;
+  /**
    * When true, failed CI checks on Invoker-created review-gate PRs can
    * trigger the same auto-fix recovery flow used for task failures.
    *

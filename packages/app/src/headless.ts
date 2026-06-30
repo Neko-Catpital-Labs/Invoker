@@ -17,7 +17,7 @@ import {
   TaskRunner,
   acquireWorkerLock,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
 } from '@invoker/execution-engine';
@@ -415,7 +415,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
-  const registry = registerAutoFixWorker(createWorkerRegistry());
+  const registry = registerBuiltinWorkers(createWorkerRegistry());
 
   if (subCommand === 'list') {
     process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
@@ -474,6 +474,10 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       autoFix: {
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+        getAutoFixExecutionModel: () => deps.invokerConfig.autoFixExecutionModel,
+      },
+      autoApprove: {
+        getAutoApproveAIFixes: () => deps.invokerConfig.autoApproveAIFixes,
       },
     });
     await worker.tick('manual');
@@ -483,7 +487,11 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     // blocks the next legitimate start.
     lock.release();
   }
-  const label = definition.kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : definition.kind;
+  const label = definition.kind === AUTO_FIX_WORKER_KIND
+    ? 'Auto-fix'
+    : definition.kind === 'autoapprove'
+      ? 'Auto-approve'
+      : definition.kind;
   process.stdout.write(`${label} worker scan completed.\n`);
 }
 
@@ -594,7 +602,7 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
-  worker [kind|list|status]                           Run/list registry worker kinds (autofix scans failed tasks)
+  worker [kind|list|status]                           Run/list registry worker kinds
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
@@ -951,4 +959,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-

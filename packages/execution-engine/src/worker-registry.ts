@@ -4,9 +4,9 @@
  *
  * Each worker is declared once as a {@link WorkerDefinition} — its `kind`, an
  * operator-facing `note`, and a `factory` that builds the worker runtime from
- * injected dependencies. Today the only built-in is the auto-fix recovery
- * worker; centralizing worker knowledge here lets future workers be declared
- * uniformly instead of being implied by a single hard-coded auto-fix branch.
+ * injected dependencies. Centralizing worker knowledge here keeps all built-in
+ * workers on one declaration path instead of scattering hard-coded branches
+ * across the app and CLI doors.
  */
 
 import type { Logger } from '@invoker/contracts';
@@ -17,7 +17,15 @@ import {
   type AutoFixRecoveryStore,
   type AutoFixRecoverySubmitter,
 } from './auto-fix-recovery.js';
+import {
+  AUTO_APPROVE_WORKER_KIND,
+  createAutoApproveWorker,
+  type AutoApproveWorkerSubmitter,
+  type AutoApproveWorkerStore,
+} from './workers/auto-approve-worker.js';
 import type { WorkerRuntime } from './worker-runtime.js';
+
+export { AUTO_APPROVE_WORKER_KIND } from './workers/auto-approve-worker.js';
 
 /** Registry kind for the built-in auto-fix recovery worker. */
 export const AUTO_FIX_WORKER_KIND = 'autofix';
@@ -28,20 +36,30 @@ export interface AutoFixWorkerConfig {
   defaultAutoFixRetries?: number;
   /** Resolves the agent that performs each auto-fix, when one is configured. */
   getAutoFixAgent?: () => string | undefined;
+  /** Resolves the execution model passed to auto-fix agent commands. */
+  getAutoFixExecutionModel?: () => string | undefined;
+}
+
+/** Auto-approval tuning handed to a worker factory. */
+export interface AutoApproveWorkerConfig {
+  /** Returns true when AI-applied fixes should be approved by the worker. */
+  getAutoApproveAIFixes?: () => boolean | undefined;
 }
 
 /** Dependencies injected into a worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore;
+  store: AutoFixRecoveryStore & AutoApproveWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
-  submitter: AutoFixRecoverySubmitter;
+  submitter: AutoFixRecoverySubmitter & AutoApproveWorkerSubmitter;
   /** Operator logger. */
   logger: Logger;
   /** Optional bus that turns lifecycle events into immediate wakeups. */
   messageBus?: MessageBus;
   /** Auto-fix tuning. */
   autoFix?: AutoFixWorkerConfig;
+  /** Auto-approval tuning. */
+  autoApprove?: AutoApproveWorkerConfig;
 }
 
 /** Builds a worker runtime from injected dependencies. */
@@ -102,8 +120,35 @@ export function registerAutoFixWorker(registry: WorkerRegistry): WorkerRegistry 
           submitter: deps.submitter,
           defaultAutoFixRetries: deps.autoFix?.defaultAutoFixRetries,
           getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
+          getAutoFixExecutionModel: deps.autoFix?.getAutoFixExecutionModel,
         },
       }),
   });
+  return registry;
+}
+
+/** Register the built-in auto-approval worker. */
+export function registerAutoApproveWorker(registry: WorkerRegistry): WorkerRegistry {
+  registry.register({
+    kind: AUTO_APPROVE_WORKER_KIND,
+    note: 'Approves AI-applied fixes that are awaiting approval when enabled.',
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createAutoApproveWorker({
+        logger: deps.logger,
+        messageBus: deps.messageBus,
+        autoApprove: {
+          store: deps.store,
+          submitter: deps.submitter,
+          getAutoApproveAIFixes: deps.autoApprove?.getAutoApproveAIFixes,
+        },
+      }),
+  });
+  return registry;
+}
+
+/** Register every built-in worker in the stable built-in order. */
+export function registerBuiltinWorkers(registry: WorkerRegistry): WorkerRegistry {
+  registerAutoFixWorker(registry);
+  registerAutoApproveWorker(registry);
   return registry;
 }
