@@ -267,7 +267,6 @@ export function WorkflowInspector({
     }
   };
 
-
   if (collapsed) {
     return (
       <aside className="h-full w-full border-l border-gray-800 bg-gray-900 flex items-start justify-center pt-3">

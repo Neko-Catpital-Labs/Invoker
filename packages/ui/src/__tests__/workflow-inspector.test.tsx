@@ -576,6 +576,28 @@ describe('WorkflowInspector', () => {
     expect(screen.getByRole('option', { name: 'gpt-5.2-preview' })).toBeInTheDocument();
   });
 
+  it('edits AI model and clears blank overrides', () => {
+    const onEditModel = vi.fn();
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ config: { workflowId: 'wf-1', prompt: 'Fix failing tests', executionModel: 'openai/gpt-5' } })}
+        collapsed={false}
+        advancedExpanded={false}
+        onEditModel={onEditModel}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('AI Model')).toBeInTheDocument();
+    const input = screen.getByTestId('execution-model-input');
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.blur(input);
+
+    expect(onEditModel).toHaveBeenCalledWith('task-1', null);
+  });
+
   it('double-click edits prompt and saves through callback', () => {
     const onEditPrompt = vi.fn();
     render(
