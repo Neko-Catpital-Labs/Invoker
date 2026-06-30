@@ -5214,10 +5214,10 @@ console.log(JSON.stringify(out));
         };
         const mergeGateProvider = {
           checkApproval: vi.fn()
-            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Approved one' })
-            .mockResolvedValueOnce({ lifecycle: 'open', rejected: false, statusText: 'Pending second' })
-            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Still approved' })
-            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Approved both' })
+            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Approved one', headSha: 'sha-one' })
+            .mockResolvedValueOnce({ lifecycle: 'open', rejected: false, statusText: 'Pending second', headSha: 'sha-two' })
+            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Still approved', headSha: 'sha-one' })
+            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Approved both', headSha: 'sha-two' })
         };
 
         const executor = new TaskRunner({
@@ -5241,8 +5241,8 @@ console.log(JSON.stringify(out));
         });
         expect(orchestrator.approve).not.toHaveBeenCalled();
         expect(task.execution.reviewGate?.artifacts).toEqual([
-          expect.objectContaining({ id: 'contracts', status: 'approved' }),
-          expect.objectContaining({ id: 'runtime', status: 'open', rawStatus: 'Pending second' }),
+          expect.objectContaining({ id: 'contracts', status: 'approved', headSha: 'sha-one' }),
+          expect.objectContaining({ id: 'runtime', status: 'open', rawStatus: 'Pending second', headSha: 'sha-two' }),
         ]);
 
         await executor.checkMergeGateStatuses();
@@ -5251,9 +5251,11 @@ console.log(JSON.stringify(out));
         expect(orchestrator.approve).toHaveBeenCalledWith('merge-stack');
         expect(executeTasks).toHaveBeenCalledWith([downstream]);
         expect(task.execution.reviewGate?.artifacts).toEqual([
-          expect.objectContaining({ id: 'contracts', status: 'approved' }),
-          expect.objectContaining({ id: 'runtime', status: 'approved' }),
+          expect.objectContaining({ id: 'contracts', status: 'approved', headSha: 'sha-one' }),
+          expect.objectContaining({ id: 'runtime', status: 'approved', headSha: 'sha-two' }),
         ]);
+        const runtimeArtifact = task.execution.reviewGate?.artifacts.find((artifact) => artifact.id === 'runtime');
+        expect(Object.prototype.hasOwnProperty.call(runtimeArtifact, 'rawStatus')).toBe(false);
       });
 
       it('marks a structured reviewGate task closed when a required artifact PR is closed', async () => {

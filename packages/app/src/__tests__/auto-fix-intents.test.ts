@@ -196,11 +196,12 @@ describe('review-gate CI context staleness', () => {
     })).toBe(false);
   });
 
-  it('flags a moved selected attempt, generation, review, or branch as stale', () => {
+  it('flags a moved selected attempt, generation, review, branch, or head SHA as stale', () => {
     expect(isReviewGateCiContextStale(ctx, { reviewId: 'review-1', generation: 2, selectedAttemptId: 'attempt-2', branch: 'experiment/foo' })).toBe(true);
     expect(isReviewGateCiContextStale(ctx, { reviewId: 'review-1', generation: 3, selectedAttemptId: 'attempt-1', branch: 'experiment/foo' })).toBe(true);
     expect(isReviewGateCiContextStale(ctx, { reviewId: 'review-2', generation: 2, selectedAttemptId: 'attempt-1', branch: 'experiment/foo' })).toBe(true);
     expect(isReviewGateCiContextStale(ctx, { reviewId: 'review-1', generation: 2, selectedAttemptId: 'attempt-1', branch: 'experiment/bar' })).toBe(true);
+    expect(isReviewGateCiContextStale({ ...ctx, headSha: 'sha-1' }, { reviewId: 'review-1', generation: 2, selectedAttemptId: 'attempt-1', branch: 'experiment/foo', headSha: 'sha-2' })).toBe(true);
   });
 
   it('defaults a missing generation to 0 when comparing', () => {
@@ -217,6 +218,7 @@ describe('review-gate CI context encode/decode', () => {
       selectedAttemptId: 'a1',
       branch: 'b1',
       headSha: 'deadbeef',
+      dedupeKey: 'ci-failure:wf-1/merge:r1:deadbeef:fingerprint',
       fixContext: 'fix the failing checks',
     };
     expect(decodeReviewGateCiContext(encodeReviewGateCiContext(ctx))).toEqual(ctx);
