@@ -54,7 +54,7 @@ export interface WorkflowControlOp {
 
 export interface WorkflowGatePolicyOp {
   operation: 'gate-policy';
-  target: { workflow: string };
+  target: WorkflowOpTarget;
   ownerTaskId?: string;
   updates: WorkflowGatePolicyUpdate[];
 }
