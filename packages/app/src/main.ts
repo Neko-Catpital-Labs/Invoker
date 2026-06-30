@@ -3451,8 +3451,8 @@ function createEmbeddedTerminalBackendFromConfig(
       return { planName: plan.name, workflowId: workflow.id };
     }
 
-    registerGuiMutationHandler('invoker:plan-from-goal', async (request: InAppPlanRequest) => (
-      planFromGoalInApp(request, {
+    registerGuiMutationHandler('invoker:plan-from-goal', async (...args: unknown[]) => (
+      planFromGoalInApp(args[0] as InAppPlanRequest, {
         config: invokerConfig,
         workingDir: repoRoot,
         loadGeneratedPlan: loadGeneratedPlanPreview,
