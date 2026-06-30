@@ -103,7 +103,7 @@ describe('App launch (component)', () => {
 
     render(<App />);
 
-    expect(await screen.findByText('No Claude or Codex CLI detected yet. Install one before running agent-backed execution tasks.')).toBeInTheDocument();
+    expect(await screen.findByText('No Claude or Codex CLI detected yet. Install one before running AI harness-backed execution tasks.')).toBeInTheDocument();
   });
 
   it('opens system setup from left rail settings', async () => {

@@ -20,6 +20,7 @@ interface WorkflowInspectorProps {
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
   onEditPool?: (taskId: string, poolId: string) => void;
   onEditAgent?: (taskId: string, agentName: string) => void;
+  onEditModel?: (taskId: string, executionModel: string | null) => void;
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onApprove?: (task: TaskState) => void;
@@ -124,6 +125,7 @@ export function WorkflowInspector({
   advancedExpanded,
   onEditPool,
   onEditAgent,
+  onEditModel,
   onEditPrompt,
   onEditCommand,
   onApprove,
@@ -138,13 +140,15 @@ export function WorkflowInspector({
   const [isEditingCommand, setIsEditingCommand] = useState(false);
   const [editCommandValue, setEditCommandValue] = useState('');
   const [branchValue, setBranchValue] = useState('');
+  const [modelValue, setModelValue] = useState('');
 
   useEffect(() => {
     setIsEditingPrompt(false);
     setEditPromptValue(task?.config.prompt ?? '');
     setIsEditingCommand(false);
     setEditCommandValue(task?.config.command ?? '');
-  }, [task?.id, task?.config.prompt, task?.config.command]);
+    setModelValue(task?.config.executionModel ?? '');
+  }, [task?.id, task?.config.prompt, task?.config.command, task?.config.executionModel]);
 
   useEffect(() => {
     setBranchValue(workflow?.baseBranch ?? task?.config.featureBranch ?? '');
@@ -224,6 +228,14 @@ export function WorkflowInspector({
       void onSetMergeBranch?.(workflow.id, trimmed);
     }
   };
+  const saveModel = () => {
+    if (!task || !onEditModel) return;
+    const trimmed = modelValue.trim();
+    if (trimmed !== (task.config.executionModel ?? '')) {
+      onEditModel(task.id, trimmed || null);
+    }
+  };
+
 
   if (collapsed) {
     return (
@@ -381,22 +393,43 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {task?.config.prompt && onEditAgent && (
-          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-xs uppercase tracking-wide text-gray-400">AI Agent</span>
-              <select
-                value={currentAgent}
-                onChange={(event) => onEditAgent(task.id, event.target.value)}
-                disabled={isTaskBusy || agentOptions.length === 0}
-                className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
-                data-testid="execution-agent-select"
-              >
-                {agentOptions.map((agentName) => (
-                  <option key={agentName} value={agentName}>{capitalize(agentName)}</option>
-                ))}
-              </select>
-            </label>
+        {task?.config.prompt && (onEditAgent || onEditModel) && (
+          <section className="rounded border border-gray-700 bg-gray-800/70 p-3 space-y-3">
+            {onEditAgent && (
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-xs uppercase tracking-wide text-gray-400">AI Harness</span>
+                <select
+                  value={currentAgent}
+                  onChange={(event) => onEditAgent(task.id, event.target.value)}
+                  disabled={isTaskBusy || agentOptions.length === 0}
+                  className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  data-testid="execution-agent-select"
+                >
+                  {agentOptions.map((agentName) => (
+                    <option key={agentName} value={agentName}>{capitalize(agentName)}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {onEditModel && (
+              <label className="flex items-center justify-between gap-3">
+                <span className="text-xs uppercase tracking-wide text-gray-400">AI Model</span>
+                <input
+                  value={modelValue}
+                  onChange={(event) => setModelValue(event.target.value)}
+                  onBlur={saveModel}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  disabled={isTaskBusy}
+                  placeholder="Default"
+                  className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 placeholder:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  data-testid="execution-model-input"
+                />
+              </label>
+            )}
           </section>
         )}
 

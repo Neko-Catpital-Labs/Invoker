@@ -56,6 +56,7 @@ describe('headless install-skills', () => {
 
     const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
     expect(output).toContain('install-skills [install|update|reinstall]          Install bundled Invoker AI helpers');
-    expect(output).toContain('set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)');
+    expect(output).toContain('set agent <taskId> <harness>                       Change AI harness (claude|codex|omp)');
+    expect(output).toContain('set model <taskId> <model>                         Change AI model and re-run; empty clears override');
   });
 });

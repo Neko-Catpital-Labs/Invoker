@@ -75,6 +75,7 @@ export interface ApiMutationFacade {
   editTaskPrompt(taskId: string, newPrompt: string): Promise<MutationResult>;
   editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): Promise<MutationResult>;
   editTaskAgent(taskId: string, agentName: string): Promise<MutationResult>;
+  editTaskModel(taskId: string, executionModel: string | null): Promise<MutationResult>;
   setTaskExternalGatePolicies(
     taskId: string,
     updates: ExternalGatePolicyUpdate[],
@@ -624,6 +625,22 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       const editTypeMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-type$/);
       if (method === 'POST' && editTypeMatch) {
         json(res, 410, { error: 'Executor selection is internal; use the headless set pool command instead.' });
+        return;
+      }
+
+      // POST /api/tasks/:id/edit-model
+      const editModelMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-model$/);
+      if (method === 'POST' && editModelMatch) {
+        const taskId = decodeURIComponent(editModelMatch[1]);
+        try {
+          const body = await readBody(req);
+          const { model } = JSON.parse(body);
+          const executionModel = typeof model === 'string' && model.trim() ? model : null;
+          const result = await mutations.editTaskModel(taskId, executionModel);
+          json(res, 200, { ok: true, taskId, action: 'model_edited', tasksStarted: result.runnable.length });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
         return;
       }
 

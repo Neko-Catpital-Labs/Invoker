@@ -111,6 +111,7 @@ interface TaskPanelProps {
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
   onEditAgent?: (taskId: string, agentName: string) => void;
+  onEditModel?: (taskId: string, executionModel: string | null) => void;
   onSetExternalGatePolicies?: (taskId: string, updates: ExternalGatePolicyUpdate[]) => Promise<void>;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   mergeMode?: string;
@@ -233,6 +234,7 @@ export function TaskPanel({
   onEditPrompt,
   onEditType,
   onEditAgent,
+  onEditModel,
   onSetExternalGatePolicies,
   onSetMergeBranch,
   mergeMode,
@@ -514,20 +516,46 @@ export function TaskPanel({
         </div>
       )}
 
-      {task.config.prompt && onEditAgent && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Agent</span>
-          <select
-            value={task.config.executionAgent ?? 'claude'}
-            onChange={(e) => onEditAgent(task.id, e.target.value)}
-            disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
-            className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            data-testid="execution-agent-select"
-          >
-            {(executionAgents ?? []).map(name => (
-              <option key={name} value={name}>{capitalize(name)} Task</option>
-            ))}
-          </select>
+      {task.config.prompt && (onEditAgent || onEditModel) && (
+        <div className="space-y-2">
+          {onEditAgent && (
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-400">AI Harness</span>
+              <select
+                value={task.config.executionAgent ?? 'claude'}
+                onChange={(e) => onEditAgent(task.id, e.target.value)}
+                disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
+                className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="execution-agent-select"
+              >
+                {(executionAgents ?? []).map(name => (
+                  <option key={name} value={name}>{capitalize(name)}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {onEditModel && (
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-400">AI Model</span>
+              <input
+                key={`${task.id}:${task.config.executionModel ?? ''}`}
+                defaultValue={task.config.executionModel ?? ''}
+                onBlur={(e) => {
+                  const trimmed = e.currentTarget.value.trim();
+                  if (trimmed !== (task.config.executionModel ?? '')) {
+                    onEditModel(task.id, trimmed || null);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+                disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
+                placeholder="Default"
+                className="bg-gray-700 text-gray-200 placeholder:text-gray-500 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="execution-model-input"
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -579,7 +607,7 @@ export function TaskPanel({
                 : 'bg-gray-700 text-gray-300'
             }`}>
               {task.config.prompt
-                ? capitalize(task.config.executionAgent ?? 'claude') + ' Task'
+                ? `${capitalize(task.config.executionAgent ?? 'claude')} Harness`
                 : 'Command'}
             </span>
           </div>

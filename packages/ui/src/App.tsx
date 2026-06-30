@@ -1765,6 +1765,19 @@ export function App() {
     },
     [invoker, trackAcceptedMutation],
   );
+  const handleEditModel = useCallback(
+    async (taskId: string, executionModel: string | null) => {
+      if (!invoker) return;
+      try {
+        const result = await invoker.editTaskModel(taskId, executionModel);
+        trackAcceptedMutation(result);
+      } catch (err) {
+        console.error('Failed to edit task model:', err);
+      }
+    },
+    [invoker, trackAcceptedMutation],
+  );
+
 
   const handleSetExternalGatePolicies = useCallback(
     async (taskId: string, updates: ExternalGatePolicyUpdate[]) => {
@@ -1868,7 +1881,7 @@ export function App() {
               : needsBundledSkillsPrompt
                 ? 'Invoker AI helpers are ready to install for Codex, Claude, Cursor, and OMP. Install them before using one-command plan handoff.'
               : installedAgentCount === 0
-                ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed execution tasks.'
+                ? 'No Claude or Codex CLI detected yet. Install one before running AI harness-backed execution tasks.'
                 : 'Review local prerequisites before running packaged workflows.'}
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -2166,6 +2179,7 @@ export function App() {
               onEditType={handleEditType}
               onEditPool={handleEditPool}
               onEditAgent={handleEditAgent}
+              onEditModel={handleEditModel}
               onEditPrompt={handleEditPrompt}
               onEditCommand={handleEditCommand}
               onApprove={openApprovalModal}

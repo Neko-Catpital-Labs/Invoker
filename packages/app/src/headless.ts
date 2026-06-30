@@ -181,6 +181,9 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     case 'agent':
       await headlessEditAgent(args[1], args[2], deps);
       break;
+    case 'model':
+      await headlessEditModel(args[1], args.slice(2).join(' '), deps);
+      break;
     case 'merge-mode':
       await headlessSetMergeMode(args[1], args[2], deps);
       break;
@@ -583,7 +586,8 @@ ${BOLD}Configure:${RESET}
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
   set pool <taskId> <type> [poolMemberId]           Change execution pool (worktree|docker|ssh)
-  set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)
+  set agent <taskId> <harness>                       Change AI harness (claude|codex|omp)
+  set model <taskId> <model>                         Change AI model and re-run; empty clears override
   set merge-mode <workflowId> <mode>                  manual | automatic | external_review
   set fix-prompt <taskId> <text>                      Update fix-session prompt and retry
   set fix-context <taskId> <text>                     Update fix-session context and retry
@@ -739,6 +743,37 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
     setExitCodeOnFailure: false,
   });
 }
+async function headlessEditModel(taskId: string, executionModel: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId) throw new Error('Missing arguments. Usage: --headless set model <taskId> <model>');
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set model');
+  if (!restored) return;
+  taskId = restored.resolvedTaskId;
+  const taskExecutor = createHeadlessExecutor(deps);
+
+  const envelope = makeEnvelope('edit-task-model', 'headless', 'task', {
+    taskId,
+    executionModel: executionModel.trim() || null,
+  });
+  const result = await deps.commandService.editTaskModel(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  const runnable = result.data.filter(isDispatchableLaunch);
+  await dispatchHeadlessRunnableTasks(deps, taskExecutor, runnable, 'edit-task-model');
+  process.stdout.write(`Edited task "${taskId}" model → "${executionModel.trim()}"\n`);
+
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: set model accepted; exiting without tracking.\n');
+    return;
+  }
+  if (runnable.length === 0) {
+    return;
+  }
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
+}
+
 
 /**
  * Headless `set merge-mode` — **retry-class** invalidation route per

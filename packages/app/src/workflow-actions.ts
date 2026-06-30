@@ -656,6 +656,14 @@ export function editTaskAgent(
 ): TaskState[] {
   return deps.orchestrator.editTaskAgent(taskId, agentName);
 }
+export function editTaskModel(
+  taskId: string,
+  executionModel: string | null,
+  deps: Pick<ActionDeps, 'orchestrator'>,
+): TaskState[] {
+  return deps.orchestrator.editTaskModel(taskId, executionModel);
+}
+
 
 export function setTaskExternalGatePolicies(
   taskId: string,

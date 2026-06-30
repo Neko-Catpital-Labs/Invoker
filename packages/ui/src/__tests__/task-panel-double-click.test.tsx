@@ -880,8 +880,8 @@ describe('TaskPanel double-click editing', () => {
       const select = screen.getByTestId('execution-agent-select');
       const options = select.querySelectorAll('option');
       expect(options).toHaveLength(2);
-      expect(options[0]).toHaveTextContent('Claude Task');
-      expect(options[1]).toHaveTextContent('Codex Task');
+      expect(options[0]).toHaveTextContent('Claude');
+      expect(options[1]).toHaveTextContent('Codex');
     });
 
     it('calls onEditAgent with selected value on change', () => {
@@ -960,7 +960,7 @@ describe('TaskPanel double-click editing', () => {
       expect(select.value).toBe('codex');
     });
 
-    it('fallback badge shows capitalized agent name when onEditAgent not provided', () => {
+    it('fallback badge shows capitalized harness name when onEditAgent not provided', () => {
       const task = {
         ...makeTask({ prompt: 'Write a test', status: 'pending' }),
         config: { prompt: 'Write a test', executionAgent: 'codex' },
@@ -978,10 +978,10 @@ describe('TaskPanel double-click editing', () => {
       );
 
       expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
-      expect(screen.getByText('Codex Task')).toBeInTheDocument();
+      expect(screen.getByText('Codex Harness')).toBeInTheDocument();
     });
 
-    it('fallback badge defaults to "Claude Task" when executionAgent unset', () => {
+    it('fallback badge defaults to "Claude Harness" when executionAgent unset', () => {
       const task = makeTask({ prompt: 'Write a test', status: 'pending' });
       render(
         <TaskPanel
@@ -995,7 +995,28 @@ describe('TaskPanel double-click editing', () => {
       );
 
       expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
-      expect(screen.getByText('Claude Task')).toBeInTheDocument();
+      expect(screen.getByText('Claude Harness')).toBeInTheDocument();
+    });
+
+    it('edits AI model on blur', () => {
+      const mockOnEditModel = vi.fn();
+      const task = makeTask({ prompt: 'Write a test', status: 'pending' });
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditModel={mockOnEditModel}
+        />,
+      );
+
+      const input = screen.getByTestId('execution-model-input');
+      fireEvent.change(input, { target: { value: 'openai/gpt-5.2' } });
+      fireEvent.blur(input);
+
+      expect(mockOnEditModel).toHaveBeenCalledWith('test-task-1', 'openai/gpt-5.2');
     });
 
     it('renders empty selector gracefully when executionAgents is empty', () => {

@@ -106,6 +106,7 @@ function createMocks() {
       editTaskCommand: vi.fn(() => [makeTask()]),
       editTaskPrompt: vi.fn(() => [makeTask()]),
       editTaskAgent: vi.fn(() => [makeTask()]),
+      editTaskModel: vi.fn(() => [makeTask()]),
       setTaskExternalGatePolicies: vi.fn(() => [makeTask()]),
       cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
       forkWorkflow: vi.fn((workflowId: string) => ({
@@ -935,6 +936,23 @@ describe('POST /api/tasks/:id/edit-agent', () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-agent', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "agent"');
+  });
+});
+
+describe('POST /api/tasks/:id/edit-model', () => {
+  it('edits task model and routes through orchestrator.editTaskModel', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-model', { model: 'openai/gpt-5.2' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.action).toBe('model_edited');
+    expect(mocks.orchestrator.editTaskModel).toHaveBeenCalledWith('task-1', 'openai/gpt-5.2');
+    expect(mocks.orchestrator.editTaskAgent).not.toHaveBeenCalled();
+  });
+
+  it('clears task model when blank', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-model', { model: '   ' });
+    expect(res.status).toBe(200);
+    expect(mocks.orchestrator.editTaskModel).toHaveBeenCalledWith('task-1', null);
   });
 });
 

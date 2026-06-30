@@ -54,7 +54,7 @@ export function SystemSetupModal({
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
           {diagnostics && installedAgents.length === 0 && (
             <div className="rounded border border-amber-600/50 bg-amber-950/40 px-4 py-3 text-sm text-amber-100">
-              No execution agent CLI is installed yet. Install Claude CLI or Codex CLI before running agent-backed tasks.
+              No AI harness CLI is installed yet. Install Claude CLI or Codex CLI before running harness-backed tasks.
             </div>
           )}
 

@@ -124,6 +124,7 @@ export function createMockInvoker(
     editTaskPrompt: vi.fn(async () => accepted('invoker:edit-task-prompt')),
     editTaskPool: vi.fn(async () => accepted('invoker:edit-task-pool')),
     editTaskAgent: vi.fn(async () => accepted('invoker:edit-task-agent')),
+    editTaskModel: vi.fn(async () => accepted('invoker:edit-task-model')),
     setTaskExternalGatePolicies: vi.fn(async () => accepted('invoker:set-task-external-gate-policies')),
     getRemoteTargets: vi.fn(async () => []),
     getExecutionPools: vi.fn(async () => ['mixed-local-ssh', 'pnpm-ssh']),
