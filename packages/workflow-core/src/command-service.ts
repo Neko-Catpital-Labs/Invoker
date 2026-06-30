@@ -422,6 +422,16 @@ export class CommandService {
     );
   }
 
+  async deleteTask(
+    envelope: CommandEnvelope<{ taskId: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'DELETE_TASK_FAILED',
+      () => this.orchestrator.deleteTask(envelope.payload.taskId),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   async cancelWorkflow(
     envelope: CommandEnvelope<{ workflowId: string }>,
   ): Promise<CommandResult<CancelResult>> {
