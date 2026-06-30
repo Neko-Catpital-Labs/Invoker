@@ -1243,12 +1243,13 @@ describe('TaskRunner', () => {
           },
           buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
         };
+        const logEvent = vi.fn().mockImplementationOnce(() => { throw new Error('telemetry down'); });
         const executor = new TaskRunner({
           orchestrator: {
             getTask: () => null,
             getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
           } as any,
-          persistence: {} as any,
+          persistence: { logEvent } as any,
           executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
           executionAgentRegistry: {
             get: (name: string) => (name === 'claude' ? claudeAgent : name === 'codex' ? codexAgent : undefined),
@@ -1266,11 +1267,38 @@ describe('TaskRunner', () => {
           featureBranch: 'plan/feature',
           workflowSummary: 'summary',
           cwd: '/tmp',
+          mergeNodeTaskId: '__merge__wf-1',
         });
 
         expect(attempts).toEqual(['claude', 'codex']);
         expect(result.agentName).toBe('codex');
         expect(result.artifacts[1].dependsOn).toEqual(['contracts']);
+        expect(logEvent).toHaveBeenCalledWith(
+          '__merge__wf-1',
+          'task.log',
+          expect.objectContaining({
+            level: 'info',
+            message: 'Preparing make-pr review stack publisher',
+            agentCount: 2,
+          }),
+        );
+        expect(logEvent).toHaveBeenCalledWith(
+          '__merge__wf-1',
+          'task.log',
+          expect.objectContaining({
+            level: 'warn',
+            message: 'claude make-pr agent failed',
+          }),
+        );
+        expect(logEvent).toHaveBeenCalledWith(
+          '__merge__wf-1',
+          'task.log',
+          expect.objectContaining({
+            level: 'info',
+            message: 'Review stack body validated',
+            artifactCount: 2,
+          }),
+        );
       } finally {
         if (originalHome === undefined) delete process.env.HOME;
         else process.env.HOME = originalHome;
