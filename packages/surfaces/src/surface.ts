@@ -37,7 +37,7 @@ export type WorkflowOpName =
   | 'status'
   | 'cancel';
 
-export interface WorkflowOp {
+export interface WorkflowControlOp {
   operation: WorkflowOpName;
   target: { all: true } | { workflow: string };
 }
@@ -55,9 +55,11 @@ export interface WorkflowGatePolicyUpdate {
 export interface WorkflowGatePolicyOp {
   operation: 'gate-policy';
   /** Downstream workflow whose external dependency gate policy is edited. */
-  target: { workflow: string };
+  target: { all: true } | { workflow: string };
   updates: WorkflowGatePolicyUpdate[];
 }
+
+export type WorkflowOp = WorkflowControlOp | WorkflowGatePolicyOp;
 
 export interface WorkflowOpResult {
   ok: boolean;
