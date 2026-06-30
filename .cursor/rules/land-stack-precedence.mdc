@@ -1,5 +1,5 @@
 ---
-description: Landing or merging a PR stack must go through the land-stack guard; never identify a PR by branch name
+description: Landing or merging a PR stack must go through the land-stack guard; never choose a PR by branch-name lookup
 alwaysApply: true
 ---
 
@@ -9,7 +9,10 @@ When the user asks to **land / merge / ship / queue** a PR or PR stack, treat
 `skills/land-stack/SKILL.md` as the source of truth. Before queueing, labeling
 (`admin-bypass`), resolving review threads, or merging **any** PR:
 
-- **Require explicit PR numbers** from the user (bottom of stack first). Never
+- **Use confirmed PR numbers** (bottom of stack first). If the user does not
+  provide them, make a best-effort read-only discovery pass by broadly listing
+  open PRs, filtering to `stack/` heads, checking local head SHAs, ordering by
+  base/head links, and suggesting the bottom-up numbers for confirmation. Never
   discover the PR to land by branch name — do not use `gh pr list --head <branch>`.
   Two different PRs can share a branch name.
 - **Run the guard, which must exit 0:**
