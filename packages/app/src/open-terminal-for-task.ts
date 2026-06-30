@@ -11,6 +11,7 @@ import {
   getEffectivePath,
   WorktreeExecutor,
   SshExecutor,
+  DEFAULT_EXECUTION_AGENT,
   type Executor,
   type ExecutorRegistry,
   type AgentRegistry,
@@ -64,7 +65,7 @@ export function repairCodexResumeSessionMeta(
   persistence: OpenTerminalPersistence,
   executionAgentRegistry?: AgentRegistry,
 ): PersistedTaskMeta {
-  const executionAgent = meta.executionAgent ?? 'claude';
+  const executionAgent = meta.executionAgent ?? DEFAULT_EXECUTION_AGENT;
   const originalSessionId = meta.agentSessionId;
   if (executionAgent !== 'codex' || !originalSessionId) return meta;
 
