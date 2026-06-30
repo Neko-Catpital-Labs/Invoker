@@ -140,6 +140,7 @@ export interface BootstrapStateIpcContext {
   getTasks: () => TaskState[];
   getWorkflows: () => unknown[];
   getInitialWorkflowId: () => string | null;
+  getRuntimeStatus: () => unknown;
   appStartedAtEpochMs: number;
   getTaskDeltaStreamSequence: () => number;
   recordStartupDuration: (
@@ -159,6 +160,7 @@ export function registerBootstrapStateIpc(context: BootstrapStateIpcContext): vo
       tasks,
       workflows,
       initialWorkflowId: context.getInitialWorkflowId(),
+      runtimeStatus: context.getRuntimeStatus(),
       appStartedAtEpochMs: context.appStartedAtEpochMs,
       streamSequence,
     };
