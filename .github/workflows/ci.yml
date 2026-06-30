@@ -21,7 +21,8 @@ env:
 
 jobs:
   build-artifacts:
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     timeout-minutes: 30
 
     steps:
@@ -59,7 +60,8 @@ jobs:
           if-no-files-found: error
 
   quality-required:
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -98,7 +100,8 @@ jobs:
 
   quality-extra:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -140,7 +143,8 @@ jobs:
   inv117-proof:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 120
@@ -206,7 +210,8 @@ jobs:
 
   required-fast:
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -275,7 +280,8 @@ jobs:
   required-fast-extra:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -352,7 +358,8 @@ jobs:
   scheduled-repros:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     timeout-minutes: 45
     name: scheduled / Fix Intent Repros
 
@@ -404,7 +411,8 @@ jobs:
 
   dry-run:
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
@@ -471,7 +479,8 @@ jobs:
 
   playwright:
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 45
@@ -604,7 +613,8 @@ jobs:
 
   ssh:
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
@@ -682,7 +692,8 @@ jobs:
 
   optional-other:
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -731,7 +742,8 @@ jobs:
   docker:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     timeout-minutes: 60
     name: docker / comprehensive
 
