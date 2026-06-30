@@ -46,4 +46,11 @@ describe('buildAssistantPrompt', () => {
     expect(prompt).toContain('what changed?');
     expect(prompt).toContain('Answer ONLY from');
   });
+
+  it('asks workflow question answers to be short ELI5 Slack prose except for clearly technical questions', () => {
+    const prompt = buildAssistantPrompt('what changed?', ctx);
+    expect(prompt).toContain('ELI5 Slack prose');
+    expect(prompt).toContain('40 words or fewer');
+    expect(prompt).toContain('clearly technical');
+  });
 });
