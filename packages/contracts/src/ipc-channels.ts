@@ -544,6 +544,10 @@ export const IpcChannels = {
     request: [taskId: string, agentName: string];
     response: WorkflowMutationAcceptedResult;
   },
+  'invoker:edit-task-model': {} as {
+    request: [taskId: string, executionModel: string | null];
+    response: WorkflowMutationAcceptedResult;
+  },
   'invoker:edit-task-prompt': {} as {
     request: [taskId: string, newPrompt: string];
     response: WorkflowMutationAcceptedResult;
