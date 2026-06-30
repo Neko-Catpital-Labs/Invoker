@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
+import type { ExecutionHarnessOption, ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import type { ActionGraphNode } from '@invoker/contracts';
@@ -13,7 +13,7 @@ interface WorkflowInspectorProps {
   reviewGate?: ReviewGateQueryResponse | null;
   remoteTargets?: string[];
   executionPools?: string[];
-  executionAgents?: string[];
+  executionHarnesses?: ExecutionHarnessOption[];
   actionNode?: ActionGraphNode | null;
   collapsed: boolean;
   advancedExpanded: boolean;
@@ -38,6 +38,30 @@ function formatStatus(value: string | undefined): string {
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
+function getHarnessOptions(
+  executionHarnesses: readonly ExecutionHarnessOption[] | undefined,
+  currentHarness: string,
+): ExecutionHarnessOption[] {
+  const byName = new Map((executionHarnesses ?? []).map((harness) => [harness.name, harness]));
+  if (currentHarness && !byName.has(currentHarness)) {
+    byName.set(currentHarness, { name: currentHarness, supportedModels: [] });
+  }
+  return [...byName.values()];
+}
+
+function getModelOptions(
+  executionHarnesses: readonly ExecutionHarnessOption[] | undefined,
+  harnessName: string,
+  currentModel: string,
+): Array<{ id: string; label: string }> {
+  const selectedHarness = executionHarnesses?.find((harness) => harness.name === harnessName);
+  const byId = new Map((selectedHarness?.supportedModels ?? []).map((model) => [model.id, model]));
+  if (currentModel && !byId.has(currentModel)) {
+    byId.set(currentModel, { id: currentModel, label: currentModel });
+  }
+  return [...byId.values()];
+}
+
 
 function mergeModeValue(value: string | undefined): MergeMode {
   return value === 'automatic' || value === 'external_review' ? value : 'manual';
@@ -119,7 +143,7 @@ export function WorkflowInspector({
   workflowTasks,
   reviewGate,
   executionPools,
-  executionAgents,
+  executionHarnesses,
   actionNode,
   collapsed,
   advancedExpanded,
@@ -170,11 +194,14 @@ export function WorkflowInspector({
   const showsWorkflowMergeDetails = Boolean(!task && workflow?.id && workflow.onFinish === 'pull_request');
   const isMergeNode = Boolean((task?.config.isMergeNode || showsWorkflowMergeDetails) && workflow?.id);
   const currentAgent = task?.config.executionAgent ?? task?.execution.agentName ?? 'claude';
-  const agentOptions = useMemo(() => {
-    const names = new Set(executionAgents ?? []);
-    names.add(currentAgent);
-    return [...names].filter(Boolean);
-  }, [currentAgent, executionAgents]);
+  const harnessOptions = useMemo(
+    () => getHarnessOptions(executionHarnesses, currentAgent),
+    [currentAgent, executionHarnesses],
+  );
+  const modelOptions = useMemo(
+    () => getModelOptions(executionHarnesses, currentAgent, modelValue),
+    [currentAgent, executionHarnesses, modelValue],
+  );
   const poolOptions = useMemo(() => {
     const ids = new Set(executionPools ?? []);
     if (task?.config.poolId) ids.add(task.config.poolId);
@@ -228,11 +255,11 @@ export function WorkflowInspector({
       void onSetMergeBranch?.(workflow.id, trimmed);
     }
   };
-  const saveModel = () => {
+  const applyModel = (nextModel: string) => {
     if (!task || !onEditModel) return;
-    const trimmed = modelValue.trim();
-    if (trimmed !== (task.config.executionModel ?? '')) {
-      onEditModel(task.id, trimmed || null);
+    setModelValue(nextModel);
+    if (nextModel !== (task.config.executionModel ?? '')) {
+      onEditModel(task.id, nextModel || null);
     }
   };
 
@@ -401,12 +428,12 @@ export function WorkflowInspector({
                 <select
                   value={currentAgent}
                   onChange={(event) => onEditAgent(task.id, event.target.value)}
-                  disabled={isTaskBusy || agentOptions.length === 0}
+                  disabled={isTaskBusy || harnessOptions.length === 0}
                   className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
                   data-testid="execution-agent-select"
                 >
-                  {agentOptions.map((agentName) => (
-                    <option key={agentName} value={agentName}>{capitalize(agentName)}</option>
+                  {harnessOptions.map((harness) => (
+                    <option key={harness.name} value={harness.name}>{capitalize(harness.name)}</option>
                   ))}
                 </select>
               </label>
@@ -414,20 +441,18 @@ export function WorkflowInspector({
             {onEditModel && (
               <label className="flex items-center justify-between gap-3">
                 <span className="text-xs uppercase tracking-wide text-gray-400">AI Model</span>
-                <input
+                <select
                   value={modelValue}
-                  onChange={(event) => setModelValue(event.target.value)}
-                  onBlur={saveModel}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.currentTarget.blur();
-                    }
-                  }}
+                  onChange={(event) => applyModel(event.target.value)}
                   disabled={isTaskBusy}
-                  placeholder="Default"
-                  className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 placeholder:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  data-testid="execution-model-input"
-                />
+                  className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  data-testid="execution-model-select"
+                >
+                  <option value="">Default</option>
+                  {modelOptions.map((model) => (
+                    <option key={model.id} value={model.id}>{model.label}</option>
+                  ))}
+                </select>
               </label>
             )}
           </section>

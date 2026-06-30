@@ -12,7 +12,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
 import type { ActionGraphNode, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, ExecutionHarnessOption, WorkflowMeta, WorkflowStatus } from './types.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
 import { useActionGraphSnapshot } from './hooks/useActionGraphSnapshot.js';
@@ -434,7 +434,7 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionPools, setExecutionPools] = useState<string[]>([]);
-  const [executionAgents, setExecutionAgents] = useState<string[]>([]);
+  const [executionHarnesses, setExecutionHarnesses] = useState<ExecutionHarnessOption[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
@@ -521,7 +521,7 @@ export function App() {
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
-    window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+    window.invoker?.getExecutionHarnesses?.().then(setExecutionHarnesses).catch(() => {});
     window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
@@ -2172,7 +2172,7 @@ export function App() {
               reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
               remoteTargets={remoteTargets}
               executionPools={executionPools}
-              executionAgents={executionAgents}
+              executionHarnesses={executionHarnesses}
               collapsed={inspectorCollapsed}
               advancedExpanded={advancedMetadataExpanded}
               actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}

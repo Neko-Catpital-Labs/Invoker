@@ -826,15 +826,19 @@ describe('TaskPanel double-click editing', () => {
     });
   });
 
-  describe('Execution agent selector', () => {
+  describe('Execution harness selector', () => {
     const mockOnEditAgent = vi.fn();
+    const executionHarnesses = [
+      { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
+      { name: 'codex', supportedModels: [{ id: 'gpt-5', label: 'GPT-5' }, { id: 'o3', label: 'o3' }] },
+    ];
 
-    it('renders agent selector for prompt tasks when onEditAgent + executionAgents provided', () => {
+    it('renders harness selector for prompt tasks when onEditAgent + executionHarnesses provided', () => {
       const task = makeTask({ prompt: 'Write a test', status: 'pending' });
       render(
         <TaskPanel
           task={task}
-          executionAgents={['claude', 'codex']}
+          executionHarnesses={executionHarnesses}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -846,12 +850,12 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.getByTestId('execution-agent-select')).toBeInTheDocument();
     });
 
-    it('does not render agent selector for command-only tasks', () => {
+    it('does not render harness selector for command-only tasks', () => {
       const task = makeTask({ command: 'echo test', status: 'pending' });
       render(
         <TaskPanel
           task={task}
-          executionAgents={['claude', 'codex']}
+          executionHarnesses={executionHarnesses}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -863,12 +867,12 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
     });
 
-    it('populates options from executionAgents prop with capitalized labels', () => {
+    it('populates options from executionHarnesses prop with capitalized labels', () => {
       const task = makeTask({ prompt: 'Write a test', status: 'pending' });
       render(
         <TaskPanel
           task={task}
-          executionAgents={['claude', 'codex']}
+          executionHarnesses={executionHarnesses}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -889,7 +893,7 @@ describe('TaskPanel double-click editing', () => {
       render(
         <TaskPanel
           task={task}
-          executionAgents={['claude', 'codex']}
+          executionHarnesses={executionHarnesses}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -908,7 +912,7 @@ describe('TaskPanel double-click editing', () => {
       render(
         <TaskPanel
           task={task}
-          executionAgents={['claude', 'codex']}
+          executionHarnesses={executionHarnesses}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -917,8 +921,7 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      const select = screen.getByTestId('execution-agent-select');
-      expect(select).toBeDisabled();
+      expect(screen.getByTestId('execution-agent-select')).toBeDisabled();
     });
 
     it('defaults to claude when executionAgent config is unset', () => {
@@ -926,7 +929,7 @@ describe('TaskPanel double-click editing', () => {
       render(
         <TaskPanel
           task={task}
-          executionAgents={['claude', 'codex']}
+          executionHarnesses={executionHarnesses}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -935,11 +938,10 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      const select = screen.getByTestId('execution-agent-select') as HTMLSelectElement;
-      expect(select.value).toBe('claude');
+      expect(screen.getByTestId('execution-agent-select')).toHaveValue('claude');
     });
 
-    it('selects current agent when executionAgent is set', () => {
+    it('selects current harness when executionAgent is set', () => {
       const task = {
         ...makeTask({ prompt: 'Write a test', status: 'pending' }),
         config: { prompt: 'Write a test', executionAgent: 'codex' },
@@ -947,7 +949,7 @@ describe('TaskPanel double-click editing', () => {
       render(
         <TaskPanel
           task={task}
-          executionAgents={['claude', 'codex']}
+          executionHarnesses={executionHarnesses}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -956,8 +958,7 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      const select = screen.getByTestId('execution-agent-select') as HTMLSelectElement;
-      expect(select.value).toBe('codex');
+      expect(screen.getByTestId('execution-agent-select')).toHaveValue('codex');
     });
 
     it('fallback badge shows capitalized harness name when onEditAgent not provided', () => {
@@ -968,12 +969,11 @@ describe('TaskPanel double-click editing', () => {
       render(
         <TaskPanel
           task={task}
-          executionAgents={['claude', 'codex']}
+          executionHarnesses={executionHarnesses}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
           onSelectExperiment={mockOnSelectExperiment}
-          // no onEditAgent
         />,
       );
 
@@ -990,7 +990,6 @@ describe('TaskPanel double-click editing', () => {
           onApprove={mockOnApprove}
           onReject={mockOnReject}
           onSelectExperiment={mockOnSelectExperiment}
-          // no onEditAgent
         />,
       );
 
@@ -998,12 +997,61 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.getByText('Claude Harness')).toBeInTheDocument();
     });
 
-    it('edits AI model on blur', () => {
-      const mockOnEditModel = vi.fn();
-      const task = makeTask({ prompt: 'Write a test', status: 'pending' });
+    it('renders harness-specific AI model choices', () => {
+      const task = {
+        ...makeTask({ prompt: 'Write a test', status: 'pending' }),
+        config: { prompt: 'Write a test', executionAgent: 'codex', executionModel: 'gpt-5' },
+      } as TaskState;
       render(
         <TaskPanel
           task={task}
+          executionHarnesses={executionHarnesses}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditModel={vi.fn()}
+        />,
+      );
+
+      const select = screen.getByTestId('execution-model-select');
+      const options = select.querySelectorAll('option');
+      expect(options).toHaveLength(3);
+      expect(options[0]).toHaveTextContent('Default');
+      expect(options[1]).toHaveTextContent('GPT-5');
+      expect(options[2]).toHaveTextContent('o3');
+    });
+
+    it('keeps a custom current model in the dropdown', () => {
+      const task = {
+        ...makeTask({ prompt: 'Write a test', status: 'pending' }),
+        config: { prompt: 'Write a test', executionAgent: 'codex', executionModel: 'gpt-5.2-preview' },
+      } as TaskState;
+      render(
+        <TaskPanel
+          task={task}
+          executionHarnesses={executionHarnesses}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditModel={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByRole('option', { name: 'gpt-5.2-preview' })).toBeInTheDocument();
+    });
+
+    it('edits AI model on change', () => {
+      const mockOnEditModel = vi.fn();
+      const task = {
+        ...makeTask({ prompt: 'Write a test', status: 'pending' }),
+        config: { prompt: 'Write a test', executionAgent: 'codex' },
+      } as TaskState;
+      render(
+        <TaskPanel
+          task={task}
+          executionHarnesses={executionHarnesses}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -1012,19 +1060,16 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      const input = screen.getByTestId('execution-model-input');
-      fireEvent.change(input, { target: { value: 'openai/gpt-5.2' } });
-      fireEvent.blur(input);
-
-      expect(mockOnEditModel).toHaveBeenCalledWith('test-task-1', 'openai/gpt-5.2');
+      fireEvent.change(screen.getByTestId('execution-model-select'), { target: { value: 'o3' } });
+      expect(mockOnEditModel).toHaveBeenCalledWith('test-task-1', 'o3');
     });
 
-    it('renders empty selector gracefully when executionAgents is empty', () => {
+    it('renders the current harness gracefully when registry is empty', () => {
       const task = makeTask({ prompt: 'Write a test', status: 'pending' });
       render(
         <TaskPanel
           task={task}
-          executionAgents={[]}
+          executionHarnesses={[]}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -1035,7 +1080,8 @@ describe('TaskPanel double-click editing', () => {
 
       const select = screen.getByTestId('execution-agent-select');
       const options = select.querySelectorAll('option');
-      expect(options).toHaveLength(0);
+      expect(options).toHaveLength(1);
+      expect(select).toHaveValue('claude');
     });
   });
 

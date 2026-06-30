@@ -68,6 +68,16 @@ export interface ExternalGatePolicyUpdate {
   taskId?: string;
   gatePolicy: 'completed' | 'review_ready';
 }
+export interface ExecutionModelOption {
+  readonly id: string;
+  readonly label: string;
+}
+
+export interface ExecutionHarnessOption {
+  readonly name: string;
+  readonly supportedModels: readonly ExecutionModelOption[];
+}
+
 
 // ── Task Config (plan-time / static fields) ────────────────
 

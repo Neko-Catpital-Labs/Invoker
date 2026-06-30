@@ -506,7 +506,10 @@ describe('WorkflowInspector', () => {
       <WorkflowInspector
         workflow={workflow}
         task={makeTask()}
-        executionAgents={['claude', 'codex']}
+        executionHarnesses={[
+          { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
+          { name: 'codex', supportedModels: [{ id: 'gpt-5', label: 'GPT-5' }] },
+        ]}
         collapsed={false}
         advancedExpanded={false}
         onEditAgent={onEditAgent}
@@ -516,16 +519,20 @@ describe('WorkflowInspector', () => {
     );
 
     expect(screen.getByText('AI Harness')).toBeInTheDocument();
-    fireEvent.change(screen.getByTestId('execution-agent-select'), { target: { value: 'claude' } });
-    expect(onEditAgent).toHaveBeenCalledWith('task-1', 'claude');
+    fireEvent.change(screen.getByTestId('execution-agent-select'), { target: { value: 'codex' } });
+    expect(onEditAgent).toHaveBeenCalledWith('task-1', 'codex');
   });
 
-  it('edits AI model and clears blank overrides', () => {
+  it('renders harness-specific AI model choices and clears to default', () => {
     const onEditModel = vi.fn();
     render(
       <WorkflowInspector
         workflow={workflow}
-        task={makeTask({ config: { workflowId: 'wf-1', prompt: 'Fix failing tests', executionModel: 'openai/gpt-5' } })}
+        task={makeTask({ config: { workflowId: 'wf-1', prompt: 'Fix failing tests', executionAgent: 'codex', executionModel: 'gpt-5' } })}
+        executionHarnesses={[
+          { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
+          { name: 'codex', supportedModels: [{ id: 'gpt-5', label: 'GPT-5' }, { id: 'o3', label: 'o3' }] },
+        ]}
         collapsed={false}
         advancedExpanded={false}
         onEditModel={onEditModel}
@@ -534,12 +541,34 @@ describe('WorkflowInspector', () => {
       />,
     );
 
-    expect(screen.getByText('AI Model')).toBeInTheDocument();
-    const input = screen.getByTestId('execution-model-input');
-    fireEvent.change(input, { target: { value: '   ' } });
-    fireEvent.blur(input);
+    const select = screen.getByTestId('execution-model-select');
+    const options = select.querySelectorAll('option');
+    expect(options).toHaveLength(3);
+    expect(options[0]).toHaveTextContent('Default');
+    expect(options[1]).toHaveTextContent('GPT-5');
+    expect(options[2]).toHaveTextContent('o3');
 
+    fireEvent.change(select, { target: { value: '' } });
     expect(onEditModel).toHaveBeenCalledWith('task-1', null);
+  });
+
+  it('keeps a custom current model in the dropdown', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ config: { workflowId: 'wf-1', prompt: 'Fix failing tests', executionAgent: 'codex', executionModel: 'gpt-5.2-preview' } })}
+        executionHarnesses={[
+          { name: 'codex', supportedModels: [{ id: 'gpt-5', label: 'GPT-5' }] },
+        ]}
+        collapsed={false}
+        advancedExpanded={false}
+        onEditModel={() => {}}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('option', { name: 'gpt-5.2-preview' })).toBeInTheDocument();
   });
 
   it('double-click edits prompt and saves through callback', () => {

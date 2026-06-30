@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import type { TaskState, ExternalDependency, ExternalGatePolicyUpdate, TaskStatus } from '../types.js';
+import type { ExecutionHarnessOption, TaskState, ExternalDependency, ExternalGatePolicyUpdate, TaskStatus } from '../types.js';
 import {
   getStatusColor,
   getEffectiveVisualStatus,
@@ -68,6 +68,30 @@ function formatElapsed(dateVal: Date | string | undefined): string {
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
+function getHarnessOptions(
+  executionHarnesses: readonly ExecutionHarnessOption[] | undefined,
+  currentHarness: string,
+): ExecutionHarnessOption[] {
+  const byName = new Map((executionHarnesses ?? []).map((harness) => [harness.name, harness]));
+  if (currentHarness && !byName.has(currentHarness)) {
+    byName.set(currentHarness, { name: currentHarness, supportedModels: [] });
+  }
+  return [...byName.values()];
+}
+
+function getModelOptions(
+  executionHarnesses: readonly ExecutionHarnessOption[] | undefined,
+  harnessName: string,
+  currentModel: string,
+): Array<{ id: string; label: string }> {
+  const selectedHarness = executionHarnesses?.find((harness) => harness.name === harnessName);
+  const byId = new Map((selectedHarness?.supportedModels ?? []).map((model) => [model.id, model]));
+  if (currentModel && !byId.has(currentModel)) {
+    byId.set(currentModel, { id: currentModel, label: currentModel });
+  }
+  return [...byId.values()];
+}
+
 
 function normalizeExternalDepTaskId(dep: Pick<ExternalDependency, 'taskId'>): string {
   return dep.taskId?.trim() || '__merge__';
@@ -102,7 +126,7 @@ interface TaskPanelProps {
   baseBranch?: string;
   workflowRepoUrl?: string;
   remoteTargets?: string[];
-  executionAgents?: string[];
+  executionHarnesses?: ExecutionHarnessOption[];
   onProvideInput: (task: TaskState) => void;
   onApprove: (task: TaskState) => void;
   onReject: (task: TaskState) => void;
@@ -225,7 +249,7 @@ export function TaskPanel({
   baseBranch,
   workflowRepoUrl,
   remoteTargets,
-  executionAgents,
+  executionHarnesses,
   onProvideInput,
   onApprove,
   onReject,
@@ -251,6 +275,7 @@ export function TaskPanel({
   const [isSavingGatePolicies, setIsSavingGatePolicies] = useState(false);
   const [gatePolicyDraft, setGatePolicyDraft] = useState<Record<string, 'completed' | 'review_ready'>>({});
   const [isSatisfiedListExpanded, setIsSatisfiedListExpanded] = useState(false);
+  const [modelValue, setModelValue] = useState(task?.config.executionModel ?? '');
   const [workspaceSetupFailures, setWorkspaceSetupFailures] = useState<string[]>([]);
 
   useEffect(() => {
@@ -258,6 +283,7 @@ export function TaskPanel({
     setEditCommandValue(task?.config.command ?? '');
     setIsEditingPrompt(false);
     setEditPromptValue(task?.config.prompt ?? '');
+    setModelValue(task?.config.executionModel ?? '');
     setBranchValue(baseBranch ?? '');
     setIsEditingGatePolicies(false);
     setIsSavingGatePolicies(false);
@@ -268,6 +294,10 @@ export function TaskPanel({
     }
     setGatePolicyDraft(nextDraft);
   }, [task?.id, baseBranch]);
+  const currentHarness = task?.config.executionAgent ?? task?.execution.agentName ?? 'claude';
+  const harnessOptions = getHarnessOptions(executionHarnesses, currentHarness);
+  const modelOptions = getModelOptions(executionHarnesses, currentHarness, modelValue);
+
 
   useEffect(() => {
     if (!task) {
@@ -522,14 +552,14 @@ export function TaskPanel({
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-400">AI Harness</span>
               <select
-                value={task.config.executionAgent ?? 'claude'}
+                value={currentHarness}
                 onChange={(e) => onEditAgent(task.id, e.target.value)}
                 disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
                 className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="execution-agent-select"
               >
-                {(executionAgents ?? []).map(name => (
-                  <option key={name} value={name}>{capitalize(name)}</option>
+                {harnessOptions.map((harness) => (
+                  <option key={harness.name} value={harness.name}>{capitalize(harness.name)}</option>
                 ))}
               </select>
             </div>
@@ -537,23 +567,24 @@ export function TaskPanel({
           {onEditModel && (
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-400">AI Model</span>
-              <input
-                key={`${task.id}:${task.config.executionModel ?? ''}`}
-                defaultValue={task.config.executionModel ?? ''}
-                onBlur={(e) => {
-                  const trimmed = e.currentTarget.value.trim();
-                  if (trimmed !== (task.config.executionModel ?? '')) {
-                    onEditModel(task.id, trimmed || null);
+              <select
+                value={modelValue}
+                onChange={(e) => {
+                  const nextModel = e.target.value;
+                  setModelValue(nextModel);
+                  if (nextModel !== (task.config.executionModel ?? '')) {
+                    onEditModel(task.id, nextModel || null);
                   }
                 }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.currentTarget.blur();
-                }}
                 disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
-                placeholder="Default"
-                className="bg-gray-700 text-gray-200 placeholder:text-gray-500 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                data-testid="execution-model-input"
-              />
+                className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="execution-model-select"
+              >
+                <option value="">Default</option>
+                {modelOptions.map((model) => (
+                  <option key={model.id} value={model.id}>{model.label}</option>
+                ))}
+              </select>
             </div>
           )}
         </div>
