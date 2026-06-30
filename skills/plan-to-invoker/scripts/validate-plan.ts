@@ -7,7 +7,9 @@
  * Output: JSON array of errors (stable keys: errorType, field, taskId, message, value)
  */
 
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, normalize, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { RawPlan, RawPlanTask, RawExperimentVariant } from '../../../packages/app/src/plan-parser.js';
 
@@ -51,6 +53,201 @@ function usesPipefailSetCommand(command: string): boolean {
 
 function isExplicitBashCommand(command: string): boolean {
   return EXPLICIT_BASH_COMMAND.test(command);
+}
+
+function findRepoRoot(startDir: string): string {
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: startDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return resolve(startDir, '../../..');
+  }
+}
+
+const PATH_BOUNDARY = String.raw`[\s\`"'()[\]{}<>:;,;&|=]`;
+const REPO_ROOT_PATH_PREFIX = String.raw`(?:\.\/|\$PWD\/|\$\{PWD\}\/|\$\(pwd\)\/)?`;
+const REPO_PATH_BODY = String.raw`(?:packages|scripts|skills|docs|plans|\.github)\/[A-Za-z0-9_./@+-]+`;
+const COMMAND_SCRIPT_BODY = String.raw`(?:${REPO_PATH_BODY}|[A-Za-z0-9_./@+-]+)\.sh`;
+const REPO_RELATIVE_PATH_REFERENCE = new RegExp(`(?:^|${PATH_BOUNDARY})${REPO_ROOT_PATH_PREFIX}(${REPO_PATH_BODY})(?=$|${PATH_BOUNDARY})`, 'g');
+const COMMAND_REQUIRED_FILE_REFERENCE = new RegExp(`(?:^|${PATH_BOUNDARY})${REPO_ROOT_PATH_PREFIX}(${COMMAND_SCRIPT_BODY})(?=$|${PATH_BOUNDARY})`, 'g');
+const PARENT_DIRECTORY_PATH_REFERENCE = new RegExp(`(?:^|${PATH_BOUNDARY})((?:${REPO_ROOT_PATH_PREFIX})(?:[A-Za-z0-9_@+.-]+\\/|\\.\\/|\\.\\.\\/)*\\.\\.(?:\\/|$)(?:[A-Za-z0-9_./@+-]+)?)(?=$|${PATH_BOUNDARY})`, 'g');
+
+function stripRepoRootPathPrefix(rawPath: string): string {
+  return rawPath.replace(/^(?:\.\/|\$PWD\/|\$\{PWD\}\/|\$\(pwd\)\/)/, '');
+}
+
+function hasParentDirectorySegment(rawPath: string): boolean {
+  return stripRepoRootPathPrefix(rawPath).split('/').includes('..');
+}
+
+function isUnsupportedParentDirectoryReference(rawPath: string): boolean {
+  const repoPath = stripRepoRootPathPrefix(rawPath);
+  const segments = repoPath.split('/').filter(Boolean);
+  return (
+    segments.includes('..')
+    && (
+      segments.some((segment) => ['packages', 'scripts', 'skills', 'docs', 'plans', '.github'].includes(segment))
+      || repoPath.endsWith('.sh')
+    )
+  );
+}
+
+function normalizedRepoPath(rawPath: string): string | null {
+  const repoPath = stripRepoRootPathPrefix(rawPath);
+  const normalizedPath = normalize(repoPath);
+  if (
+    hasParentDirectorySegment(rawPath)
+    || normalizedPath.startsWith('/')
+    || normalizedPath.endsWith('/')
+  ) {
+    return null;
+  }
+
+  return normalizedPath;
+}
+
+function referencedPathTokens(text: string, pattern: RegExp): string[] {
+  pattern.lastIndex = 0;
+  const paths = new Set<string>();
+
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    const rawPath = match[1];
+    if (!rawPath) continue;
+    paths.add(rawPath);
+  }
+
+  return [...paths];
+}
+
+function referencedRepoPaths(text: string, pattern = REPO_RELATIVE_PATH_REFERENCE): string[] {
+  const paths = new Set<string>();
+
+  for (const rawPath of referencedPathTokens(text, pattern)) {
+    const normalizedPath = normalizedRepoPath(rawPath);
+    if (normalizedPath === null) continue;
+    paths.add(normalizedPath);
+  }
+
+  return [...paths];
+}
+
+function isCommittedInHead(repoRoot: string, relativePath: string): boolean {
+  try {
+    execFileSync('git', ['cat-file', '-e', `HEAD:${relativePath}`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pushFileNotInRemoteError(
+  errors: ValidationError[],
+  taskId: string | undefined,
+  field: string,
+  path: string,
+  value: string,
+): void {
+  errors.push({
+    errorType: 'local_only_file_reference',
+    field,
+    ...(taskId ? { taskId } : {}),
+    message: `${taskId ? `Task "${taskId}"` : 'Plan'} references "${path}", but that file is not checked into the remote branch this plan will run on. Commit and push it before submission, or replace the reference with a checked-in file.`,
+    value,
+  });
+}
+
+function pushUnsupportedRelativePathError(
+  errors: ValidationError[],
+  taskId: string | undefined,
+  field: string,
+  path: string,
+  value: string,
+): void {
+  errors.push({
+    errorType: 'unsupported_relative_file_reference',
+    field,
+    ...(taskId ? { taskId } : {}),
+    message: `${taskId ? `Task "${taskId}"` : 'Plan'} uses "${path}", but Invoker plans must use repo-relative paths checked into the remote branch. Replace it with a path like "scripts/..." or remove the parent-directory traversal.`,
+    value,
+  });
+}
+
+function validateUnsupportedRelativePathReferences(
+  errors: ValidationError[],
+  taskId: string | undefined,
+  field: string,
+  value: string,
+): void {
+  for (const relativePath of referencedPathTokens(value, PARENT_DIRECTORY_PATH_REFERENCE)) {
+    if (!isUnsupportedParentDirectoryReference(relativePath)) continue;
+    pushUnsupportedRelativePathError(errors, taskId, field, relativePath, value);
+  }
+}
+
+function validateLocalOnlyFileReferences(
+  errors: ValidationError[],
+  taskId: string | undefined,
+  field: string,
+  value: string,
+  repoRoot: string,
+): void {
+  for (const referencedPath of referencedRepoPaths(value)) {
+    if (!existsSync(join(repoRoot, referencedPath))) continue;
+
+    if (!isCommittedInHead(repoRoot, referencedPath)) {
+      pushFileNotInRemoteError(errors, taskId, field, referencedPath, value);
+    }
+  }
+}
+
+function validatePlanFileReferences(
+  errors: ValidationError[],
+  taskId: string | undefined,
+  field: string,
+  value: string,
+  repoRoot: string,
+): void {
+  validateUnsupportedRelativePathReferences(errors, taskId, field, value);
+  validateLocalOnlyFileReferences(errors, taskId, field, value, repoRoot);
+}
+
+function validateRequiredCommandFiles(
+  errors: ValidationError[],
+  taskId: string,
+  field: string,
+  command: string,
+  repoRoot: string,
+): void {
+  const repoReferences = new Set(referencedRepoPaths(command));
+  for (const scriptPath of referencedRepoPaths(command, COMMAND_REQUIRED_FILE_REFERENCE)) {
+    const absolutePath = join(repoRoot, scriptPath);
+    const existsInWorktree = existsSync(absolutePath);
+    const existsInHead = isCommittedInHead(repoRoot, scriptPath);
+
+    if (existsInWorktree && !existsInHead) {
+      if (!repoReferences.has(scriptPath)) {
+        pushFileNotInRemoteError(errors, taskId, field, scriptPath, command);
+      }
+      continue;
+    }
+
+    if (!existsInWorktree && !existsInHead) {
+      errors.push({
+        errorType: 'missing_file_reference',
+        field,
+        taskId,
+        message: `Task "${taskId}" references "${scriptPath}", but that file is not checked into the remote branch this plan will run on. Commit and push it before submission, or replace the reference with a checked-in file.`,
+        value: command,
+      });
+    }
+  }
 }
 
 function extractNestedShellCommand(command: string, startIndex: number): string | null {
@@ -318,7 +515,7 @@ function validateReviewGate(reviewGate: unknown, errors: ValidationError[]): voi
   });
 }
 
-function validatePlan(yamlContent: string): ValidationError[] {
+function validatePlan(yamlContent: string, repoRoot: string): ValidationError[] {
   const errors: ValidationError[] = [];
 
   // Parse YAML
@@ -389,6 +586,10 @@ function validatePlan(yamlContent: string): ValidationError[] {
       message: `"onFinish" must be one of: ${VALID_ON_FINISH.join(', ')}`,
       value: raw.onFinish,
     });
+  }
+
+  if (typeof raw.description === 'string') {
+    validatePlanFileReferences(errors, undefined, 'description', raw.description, repoRoot);
   }
 
   if (raw.mergeMode !== undefined && !VALID_MERGE_MODE.includes(raw.mergeMode as any)) {
@@ -495,6 +696,19 @@ function validatePlan(yamlContent: string): ValidationError[] {
       });
     }
 
+    if (typeof task.description === 'string') {
+      validatePlanFileReferences(errors, taskId, 'description', task.description, repoRoot);
+    }
+
+    if (typeof task.prompt === 'string') {
+      validatePlanFileReferences(errors, taskId, 'prompt', task.prompt, repoRoot);
+    }
+
+    if (typeof task.command === 'string') {
+      validatePlanFileReferences(errors, taskId, 'command', task.command, repoRoot);
+      validateRequiredCommandFiles(errors, taskId, 'command', task.command, repoRoot);
+    }
+
     // Validate command/prompt exclusivity
     const hasCommand = task.command !== undefined && task.command !== null;
     const hasPrompt = task.prompt !== undefined && task.prompt !== null;
@@ -595,6 +809,19 @@ function validatePlan(yamlContent: string): ValidationError[] {
             });
           }
 
+          if (typeof variant.description === 'string') {
+            validatePlanFileReferences(errors, taskId, `experimentVariants[${varIndex}].description`, variant.description, repoRoot);
+          }
+
+          if (typeof variant.prompt === 'string') {
+            validatePlanFileReferences(errors, taskId, `experimentVariants[${varIndex}].prompt`, variant.prompt, repoRoot);
+          }
+
+          if (typeof variant.command === 'string') {
+            validatePlanFileReferences(errors, taskId, `experimentVariants[${varIndex}].command`, variant.command, repoRoot);
+            validateRequiredCommandFiles(errors, taskId, `experimentVariants[${varIndex}].command`, variant.command, repoRoot);
+          }
+
           if (typeof variant.command === 'string' && hasUnsafeNestedShellVariableExpansion(variant.command)) {
             pushUnsafeCommandError(errors, taskId, `experimentVariants[${varIndex}].command`, variant.command);
           }
@@ -651,7 +878,7 @@ function main() {
     process.exit(1);
   }
 
-  const errors = validatePlan(content);
+  const errors = validatePlan(content, findRepoRoot(process.cwd()));
 
   if (errors.length > 0) {
     console.error(JSON.stringify(errors, null, 2));

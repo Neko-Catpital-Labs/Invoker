@@ -75,7 +75,7 @@ description: |
 
 `Files:`, `Change types:`, and `Acceptance criteria:` are strict gates for implementation-plan prompt tasks under `skill-doctor`. Verify-only plans (`onFinish: none`) keep these headings advisory.
 
-**Bugfix repro:** Prefer `bash scripts/repro-my-bug.sh` early (expect fail) and the **same** script in the final verify task when still valid—not required for validation to pass. See `references/task-patterns.md` § *Bugfix repro*.
+**Bugfix repro:** Prefer `bash scripts/repro-my-bug.sh` early (expect fail) and the **same** script in the final verify task when still valid—not required for validation to pass. Do not reference local-only repo files or parent-directory paths like `../../..`; `skill-doctor` rejects references to files that exist locally but are not in `HEAD`, and asks for repo-relative paths checked into the target branch. See `references/task-patterns.md` § *Bugfix repro*.
 
 ---
 
