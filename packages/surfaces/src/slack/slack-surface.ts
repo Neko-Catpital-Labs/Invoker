@@ -80,7 +80,7 @@ export interface SlackSurfaceConfig {
   workflowChannelRepo?: WorkflowChannelRepository;
   /** Gathers a workflow's planning convo + task transcripts for the in-channel assistant. */
   gatherWorkflowContext?: (workflowId: string) => Promise<WorkflowContext>;
-  /** Executes a workflow operation (recreate/rebase/retry/status/cancel) and returns a summary. Injected by main.ts. */
+  /** Executes a workflow operation (recreate/rebase/retry/status/cancel/gate-policy) and returns a summary. Injected by the host. */
   runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
   /** Relaunches Invoker (host-owned). Enables the `restart` lobby verb. */
   onRestartInvoker?: () => Promise<void>;
@@ -678,7 +678,7 @@ export class SlackSurface implements Surface {
       return;
     }
     if (ctrl?.kind === 'gate-policy') {
-      await say({ text: 'Gate-policy routing is not available in this deployment yet.', thread_ts: threadTs });
+      await this.handleLobbyGatePolicy(ctrl, threadTs, channel, say);
       return;
     }
 
@@ -785,6 +785,19 @@ export class SlackSurface implements Surface {
     await this.runConfirmedOp(op, threadTs, say, channel);
   }
 
+  private async handleLobbyGatePolicy(
+    ctrl: Extract<LobbyControl, { kind: 'gate-policy' }>,
+    threadTs: string,
+    channel: string,
+    say: SayFn,
+  ): Promise<void> {
+    if (!this.runWorkflowOp) {
+      await say({ text: 'Workflow operations are not available in this deployment.', thread_ts: threadTs });
+      return;
+    }
+    await this.runConfirmedOp({ operation: 'gate-policy', target: ctrl.target, updates: ctrl.updates }, threadTs, say, channel);
+  }
+
   /** A classifier-inferred op is fuzzy, so always confirm before running it. */
   private async proposeLobbyOp(
     cls: Extract<LobbyClassification, { intent: 'command' }>,
@@ -850,7 +863,11 @@ export class SlackSurface implements Surface {
 
   private describeOp(op: WorkflowOp): string {
     const target = 'all' in op.target ? 'ALL workflows' : `\`${op.target.workflow}\``;
-    return `${op.operation} ${target}`;
+    if (op.operation !== 'gate-policy') return `${op.operation} ${target}`;
+    const updates = op.updates
+      .map((update) => `${update.workflowId}${update.taskId ? `/${update.taskId}` : ''} -> ${update.gatePolicy}`)
+      .join(', ');
+    return `gate-policy ${target}${updates ? ` (${updates})` : ''}`;
   }
 
   /** Submit the plan drafted in this thread, after an explicit, summarized confirmation. */
@@ -1021,7 +1038,16 @@ export class SlackSurface implements Surface {
       return;
     }
     if (ctrl.kind === 'gate-policy') {
-      await respond({ text: 'Gate-policy routing is not available in this deployment yet.', response_type: 'ephemeral' });
+      if (!this.runWorkflowOp) {
+        await respond({ text: 'Workflow operations are not available in this deployment.', response_type: 'ephemeral' });
+        return;
+      }
+      try {
+        const result = await this.runWorkflowOp({ operation: 'gate-policy', target: ctrl.target, updates: ctrl.updates });
+        await respond({ text: result.summary, response_type: 'ephemeral' });
+      } catch (err) {
+        await respond({ text: `Operation failed: ${err instanceof Error ? err.message : String(err)}`, response_type: 'ephemeral' });
+      }
       return;
     }
 
@@ -1172,7 +1198,15 @@ export class SlackSurface implements Surface {
         await say({ text: `Sent input to \`${scoped(ctrl.task)}\`.`, thread_ts: threadTs });
         return;
       case 'gate-policy':
-        await say({ text: 'Gate-policy routing is not available in this deployment yet.', thread_ts: threadTs });
+        if (!this.runWorkflowOp) {
+          await say({ text: 'Workflow operations are not available in this deployment.', thread_ts: threadTs });
+          return;
+        }
+        await this.runConfirmedOp({
+          operation: 'gate-policy',
+          target: { workflow: mapping.workflowId },
+          updates: ctrl.updates,
+        }, threadTs, say);
         return;
     }
   }

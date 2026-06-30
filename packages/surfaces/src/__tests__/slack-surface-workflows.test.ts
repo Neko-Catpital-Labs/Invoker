@@ -591,6 +591,27 @@ describe('lobby verb routing', () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
+  it('runs a deterministic lobby gate-policy op through workflow operations', async () => {
+    runWorkflowOp.mockResolvedValue({ ok: true, summary: 'gate-policy: 1 updated' });
+    const surface = lobbySurface();
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> gate-policy wf-down wf-upstream review_ready', ts: 't1', user: 'U1' },
+      say,
+    });
+
+    expect(runWorkflowOp.mock.calls[0][0]).toEqual({
+      operation: 'gate-policy',
+      target: { workflow: 'wf-down' },
+      updates: [{ workflowId: 'wf-upstream', gatePolicy: 'review_ready' }],
+    });
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'gate-policy: 1 updated' }));
+    expect(planConversationConfigs).toHaveLength(0);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
   it('uses the classifier only for fuzzy operational text, and always confirms before running', async () => {
     mockSpawn.mockImplementationOnce(() => mockProcess('{"intent":"command","operation":"recreate","target":"all"}'));
     runWorkflowOp.mockResolvedValue({ ok: true, summary: 'recreate: 2 ok' });
