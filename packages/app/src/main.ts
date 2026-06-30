@@ -1154,6 +1154,7 @@ function startHeadlessMode(): void {
               switch (subCommand) {
                 case 'workflow':
                 case 'merge-mode':
+                case 'workflow-gate-policy':
                   return {
                     workflowId: targetArg === undefined ? undefined : String(targetArg),
                     priority: 'high',
@@ -2368,6 +2369,7 @@ function createEmbeddedTerminalBackendFromConfig(
         switch (subCommand) {
           case 'workflow':
           case 'merge-mode':
+          case 'workflow-gate-policy':
             return { workflowId: targetArg === undefined ? undefined : String(targetArg), priority: 'high' };
           case 'command':
           case 'prompt':

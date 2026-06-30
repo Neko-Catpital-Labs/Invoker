@@ -40,6 +40,7 @@ import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
 } from './recovery-worker-observability.js';
+import { executeSlackGatePolicyOp } from './slack-gate-policy-op.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -67,6 +68,7 @@ import {
   restoreWorkflowForTask,
   restoreWorkflowForTaskUnlessDeleteAllWon,
   withRestoredTaskUnlessDeleteAllWon,
+  buildHeadlessApiServerDeps,
 } from './headless-shared.js';
 
 export { createHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
@@ -189,6 +191,9 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
       break;
     case 'gate-policy':
       await headlessSetGatePolicy(args.slice(1), deps);
+      break;
+    case 'workflow-gate-policy':
+      await headlessSetWorkflowGatePolicy(args.slice(1), deps);
       break;
     case 'workflow':
       await headlessSetWorkflowMetadata(args[1], args[2], args.slice(3).join(' '), deps);
@@ -583,6 +588,8 @@ ${BOLD}Configure:${RESET}
   set fix-context <taskId> <text>                     Update fix-session context and retry
   set gate-policy <taskId> <wfId> [depTaskId] <policy>
                                                       policy: completed | review_ready
+  set workflow-gate-policy <workflowId> <wfId> [depTaskId] <policy>
+                                                      policy: completed | review_ready
   set workflow <workflowId> <fieldPath> <value>      Safely update workflow metadata/config
   set task <taskId> <fieldPath> <value>              Safely update task metadata/config
   migrate-compat                                     Normalize persisted compatibility workflow/task state
@@ -908,6 +915,35 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
   });
 }
 
+async function headlessSetWorkflowGatePolicy(args: string[], deps: HeadlessDeps): Promise<void> {
+  const [workflowId, upstreamWorkflowId, arg3, arg4] = args;
+  if (!workflowId || !upstreamWorkflowId || !arg3) {
+    throw new Error(
+      'Missing arguments. Usage: --headless set workflow-gate-policy <workflowId> <upstreamWorkflowId> [depTaskId] <completed|review_ready>',
+    );
+  }
+
+  const hasDepTaskId = arg4 !== undefined;
+  const depTaskId = hasDepTaskId ? arg3 : undefined;
+  const gatePolicy = (hasDepTaskId ? arg4 : arg3) as 'completed' | 'review_ready';
+  if (gatePolicy !== 'completed' && gatePolicy !== 'review_ready') {
+    throw new Error(`Invalid gate policy "${String(gatePolicy)}". Expected completed|review_ready`);
+  }
+
+  const taskExecutor = createHeadlessExecutor(deps);
+  const { mutations } = buildHeadlessApiServerDeps(deps, taskExecutor);
+  const result = await executeSlackGatePolicyOp({
+    operation: 'gate-policy',
+    target: { workflow: workflowId },
+    updates: [{ workflowId: upstreamWorkflowId, ...(depTaskId ? { taskId: depTaskId } : {}), gatePolicy }],
+  }, {
+    persistence: deps.persistence,
+    mutations,
+  });
+  if (!result.ok) throw new Error(result.summary);
+  process.stdout.write(`${result.summary}\n`);
+}
+
 async function headlessSetWorkflowMetadata(
   workflowId: string,
   fieldPath: string,
@@ -951,4 +987,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-
