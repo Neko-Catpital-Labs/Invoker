@@ -16,7 +16,8 @@ env:
 jobs:
   validate:
     name: PR Body
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Runner_2_4_core
     timeout-minutes: 10
 
     steps:
