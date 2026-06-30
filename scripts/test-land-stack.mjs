@@ -103,6 +103,7 @@ test('closed PR fails open check', () => {
 test('empty input fails', () => {
   const res = analyzeStack({ hasLocalCommit: hasLocal, prs: [] });
   assert.equal(res.ok, false);
+  assert.match(check(res, 0, 'input').detail, /discover\/suggest bottom-up PR numbers/);
 });
 
 test('custom --base trunk is honored', () => {
