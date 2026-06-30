@@ -161,6 +161,7 @@ export type LobbyClassification =
   | { intent: 'plan' }
   | { intent: 'question' }
   | { intent: 'invalid-command' }
+  | { intent: 'gate-policy' }
   | { intent: 'command'; operation: WorkflowOpName; target: { all: true } | { workflow: string } };
 
 const WORKFLOW_OP_NAMES: readonly WorkflowOpName[] = [
@@ -176,9 +177,10 @@ const WORKFLOW_OP_NAMES: readonly WorkflowOpName[] = [
 function buildLobbyClassifierPrompt(text: string): string {
   return `You are a router for the Invoker orchestrator. Classify the user's Slack message into exactly one intent and reply with ONLY a single-line JSON object, no prose, no code fence, and do NOT use any tools or explore the repo.
 
-Schema: {"intent":"plan|command|question","operation":"recreate|rebase-recreate|rebase-retry|retry|status|cancel|none","target":"all|none|<workflow id or name>"}
+Schema: {"intent":"plan|command|question","operation":"recreate|rebase-recreate|rebase-retry|retry|status|cancel|gate-policy|none","target":"all|none|<workflow id or name>"}
 
 - "command": an operational request to act on EXISTING Invoker workflows (recreate, rebase, rebase+recreate, retry, cancel, or ask their status). Set operation and target. "recreate + rebase" / "rebase and recreate" => operation "rebase-recreate".
+- Gate-policy mutation requests are operational commands. Use operation "gate-policy"; target may be the downstream workflow/task if recognizable, otherwise "none".
 - "question": asking for information/an explanation/a count; answerable without changing code or workflows. operation "none", target "none".
 - "plan": a request to build, change, fix, or refactor code in a repository. operation "none", target "none".
 
@@ -186,6 +188,7 @@ Examples:
 "recreate + rebase all workflows" => {"intent":"command","operation":"rebase-recreate","target":"all"}
 "retry workflow wf-123" => {"intent":"command","operation":"retry","target":"wf-123"}
 "status" => {"intent":"command","operation":"status","target":"all"}
+"change the gate policy for wf-down/api to completed after wf-up" => {"intent":"command","operation":"gate-policy","target":"wf-down/api"}
 "how many workflows are running?" => {"intent":"question","operation":"none","target":"none"}
 "add a /health endpoint to the api" => {"intent":"plan","operation":"none","target":"none"}
 
@@ -214,6 +217,7 @@ export function parseLobbyClassification(raw: string): LobbyClassification {
   if (parsed.intent !== 'command') return { intent: 'plan' };
 
   const operation = parsed.operation;
+  if (operation === 'gate-policy') return { intent: 'gate-policy' };
   if (typeof operation !== 'string' || !WORKFLOW_OP_NAMES.includes(operation as WorkflowOpName)) {
     return { intent: 'invalid-command' };
   }
@@ -230,7 +234,12 @@ export function parseLobbyClassification(raw: string): LobbyClassification {
   return { intent: 'command', operation: op, target: { workflow: rawTarget } };
 }
 
-const OPERATIONAL_HINT = /\b(recreate|rebase|retry|retries|cancel|status|workflows?)\b/i;
+const GATE_POLICY_OPERATION_HINT = /\bgate[-\s]polic(?:y|ies)\b/i;
+const OPERATIONAL_HINT = /\b(recreate|rebase|retry|retries|cancel|status|workflows?)\b|gate[-\s]polic(?:y|ies)\b/i;
+
+function looksGatePolicyOperation(text: string): boolean {
+  return GATE_POLICY_OPERATION_HINT.test(text);
+}
 
 /** Cheap pre-filter: does a non-verb message look operational enough to spend an LLM classify? */
 export function looksOperational(text: string): boolean {
@@ -682,6 +691,10 @@ export class SlackSurface implements Surface {
       }
       if (cls.intent === 'question') {
         await this.answerLobbyQuestion(parsed.text, preset, threadTs, say);
+        return;
+      }
+      if (cls.intent === 'gate-policy' || looksGatePolicyOperation(parsed.text)) {
+        await say({ text: 'Gate-policy commands are parsed but are not routed from Slack yet.', thread_ts: threadTs });
         return;
       }
       // invalid-command / plan → fall through to a planning conversation.

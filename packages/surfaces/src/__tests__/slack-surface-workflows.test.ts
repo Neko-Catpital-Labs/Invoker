@@ -355,6 +355,11 @@ describe('parseLobbyClassification', () => {
       .toEqual({ intent: 'command', operation: 'retry', target: { workflow: 'wf-123' } });
   });
 
+  it('maps gate-policy commands to the unsupported operational path', () => {
+    expect(parseLobbyClassification('{"intent":"command","operation":"gate-policy","target":"wf-down/api"}'))
+      .toEqual({ intent: 'gate-policy' });
+  });
+
   it('defaults a targetless status command to all workflows', () => {
     expect(parseLobbyClassification('{"intent":"command","operation":"status","target":"none"}'))
       .toEqual({ intent: 'command', operation: 'status', target: { all: true } });
@@ -543,6 +548,22 @@ describe('lobby verb routing', () => {
     const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
     await messageHandler(surface)({ event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'yes' }, say: say2 });
     expect(runWorkflowOp).toHaveBeenCalledWith({ operation: 'recreate', target: { all: true } });
+  });
+
+  it('keeps fuzzy gate-policy phrasing out of planning conversations', async () => {
+    mockSpawn.mockImplementationOnce(() => mockProcess('{"intent":"command","operation":"gate-policy","target":"wf-down/api"}'));
+    const surface = lobbySurface();
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> please change the gate policy for wf-down/api to completed after wf-up', ts: 't1', user: 'U1' },
+      say,
+    });
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(planConversationConfigs).toHaveLength(0);
+    expect(runWorkflowOp).not.toHaveBeenCalled();
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Gate-policy commands') }));
   });
 
   it('answers a question with no session, workflow, or start_plan', async () => {
