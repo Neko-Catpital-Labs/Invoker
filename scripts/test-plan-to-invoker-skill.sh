@@ -8,6 +8,8 @@ SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
+EXAMPLES="$SKILL_DIR/references/examples.md"
+SCHEMA_REF="$SKILL_DIR/references/schema.md"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
@@ -42,11 +44,47 @@ must_contain_count() {
   fi
 }
 
+must_not_contain() {
+  local file="$1"
+  local needle="$2"
+  local hint="$3"
+  if grep -qF -- "$needle" "$file"; then
+    fail "$hint — unexpected in $file: $needle"
+  fi
+}
+
+must_not_match() {
+  local file="$1"
+  local pattern="$2"
+  local hint="$3"
+  if grep -Eiq -- "$pattern" "$file"; then
+    fail "$hint — unexpected pattern in $file: $pattern"
+  fi
+}
+
 must_not_exist() {
   local path="$1"
   local hint="$2"
   if [[ -e "$path" ]]; then
     fail "$hint — unexpected file exists: $path"
+  fi
+}
+
+assert_no_default_full_suite_gate() {
+  local file="$1"
+  local hint="$2"
+  local exception_pattern="explicitly asks|explicitly requested|user asks|risk|smallest honest proof"
+  local default_pattern="(default|standard|required|mandatory|blanket).*(terminal )?(full-suite|full suite|pnpm run test:all).*(gate|task|verification)"
+
+  must_not_match "$file" "Run (the )?(final |terminal )?full-suite regression gate" "$hint"
+  must_not_match "$file" "Option A \\(chosen\\):.*(pnpm run test:all|root full-suite|full-suite (verification|tests))" "$hint"
+
+  if grep -Eiq -- "$default_pattern" "$file" && ! grep -Eiq -- "$exception_pattern" "$file"; then
+    fail "$hint — full-suite verification may not be presented as the default terminal gate in $file"
+  fi
+
+  if grep -qF -- "pnpm run test:all" "$file" && ! grep -Eiq -- "$exception_pattern" "$file"; then
+    fail "$hint — pnpm run test:all may only appear as an explicit or risk-justified exception in $file"
   fi
 }
 
@@ -64,6 +102,8 @@ must_not_exist "$REPO_ROOT/.claude/commands/plan-to-invoker.md" "legacy Claude h
 must_not_exist "$REPO_ROOT/.cursor/commands/plan-to-invoker.md" "legacy Cursor handoff command copy must not drift from canonical source"
 [[ -f "$README" ]] || fail "expected $README"
 [[ -f "$TUTORIAL" ]] || fail "expected $TUTORIAL"
+[[ -f "$EXAMPLES" ]] || fail "expected $EXAMPLES"
+[[ -f "$SCHEMA_REF" ]] || fail "expected $SCHEMA_REF"
 must_contain "$CANONICAL_COMMAND" "description: Plan a change and submit it through Invoker" "Invoker handoff command must keep host command description frontmatter"
 must_contain "$CANONICAL_COMMAND" 'argument-hint: "help me plan <change>"' "Invoker handoff command must keep host argument hint frontmatter"
 must_contain "$CANONICAL_COMMAND" "invoker_validate_plan" "Invoker handoff command must validate through MCP"
@@ -162,6 +202,30 @@ must_contain "$SKILL_MD" "generate a command-only verification plan" "SKILL must
 must_contain "$SKILL_MD" "Do not generate prompt tasks, nested \`steps:\`, or implementation tasks that would call an agent or autofix." "SKILL must prevent autofix-triggering benchmark tasks"
 must_contain "$SKILL_MD" "deterministic local smoke commands" "SKILL must require local benchmark commands"
 must_contain "$SKILL_MD" "https://github.com/Neko-Catpital-Labs/Invoker.git" "SKILL must provide a non-probing Invoker repoUrl fallback"
+
+# Positive and canonical planning artifacts must not teach the obsolete default
+# of ending implementation workflows with a repo-wide full-suite gate.
+for artifact in "$SKILL_DIR"/fixtures/positive/*.yaml; do
+  [[ -f "$artifact" ]] || fail "expected positive fixture artifact: $artifact"
+  assert_no_default_full_suite_gate "$artifact" "Positive fixtures must default to focused verification"
+done
+
+for artifact in \
+  "$REPO_ROOT/plans/plan-to-invoker-deterministic-step-1-validator.yaml" \
+  "$REPO_ROOT/plans/plan-to-invoker-deterministic-step-2-doctor.template.yaml" \
+  "$REPO_ROOT/plans/plan-to-invoker-deterministic-step-3-visual-proof-cli.template.yaml" \
+  "$REPO_ROOT/plans/plan-to-invoker-deterministic-step-4-fixtures.template.yaml" \
+  "$CANONICAL_COMMAND"; do
+  [[ -f "$artifact" ]] || fail "expected canonical planning artifact: $artifact"
+  assert_no_default_full_suite_gate "$artifact" "Canonical planning artifacts must not require a default full-suite terminal gate"
+done
+
+for doc in "$SKILL_MD" "$PLAYBOOK" "$TASK_PATTERNS" "$EXAMPLES" "$SCHEMA_REF"; do
+  must_not_contain "$doc" "must end with \`pnpm run test:all\`" "Canonical docs must not require a terminal pnpm test:all gate"
+  must_not_contain "$doc" "always end with \`pnpm run test:all\`" "Canonical docs must not require a terminal pnpm test:all gate"
+  must_not_contain "$doc" "standard terminal gate" "Canonical docs must not present full-suite verification as the standard terminal gate"
+  must_not_contain "$doc" "required terminal gate" "Canonical docs must not present full-suite verification as the required terminal gate"
+done
 
 
 # Claude initial repo context — must block first-turn benchmark probes before skill listing is loaded.
