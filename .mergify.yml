@@ -12,6 +12,7 @@ queue_rules:
     merge_method: squash
     batch_size: 5
     batch_max_wait_time: 5min
+    checks_timeout: 60min
     queue_conditions:
       - base=master
       - -draft
@@ -42,6 +43,7 @@ queue_rules:
     merge_method: squash
     batch_size: 1
     batch_max_wait_time: 5min
+    checks_timeout: 60min
     queue_conditions:
       - base=master
       - -draft
