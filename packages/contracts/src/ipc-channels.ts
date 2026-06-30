@@ -537,6 +537,10 @@ export const IpcChannels = {
     request: [taskId: string];
     response: WorkflowMutationAcceptedResult;
   },
+  'invoker:delete-task': {} as {
+    request: [taskId: string];
+    response: WorkflowMutationAcceptedResult;
+  },
   'invoker:cancel-workflow': {} as {
     request: [workflowId: string];
     response: WorkflowMutationAcceptedResult;
