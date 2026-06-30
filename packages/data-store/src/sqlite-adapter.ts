@@ -1687,6 +1687,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }));
   }
 
+  deleteTask(taskId: string): void {
+    this.runTransaction(() => {
+      this.db.run('DELETE FROM task_launch_dispatch WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM execution_resource_leases WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM events WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM task_output WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM attempts WHERE node_id = ?', [taskId]);
+      this.db.run('DELETE FROM output_spool WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM tasks WHERE id = ?', [taskId]);
+    });
+    this.removeOutputFiles([taskId]);
+  }
+
   deleteAllTasks(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
