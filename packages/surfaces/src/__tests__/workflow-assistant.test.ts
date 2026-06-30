@@ -22,9 +22,33 @@ describe('parseWorkflowControl', () => {
     });
   });
 
+  it('parses gate-policy updates for the current workflow channel', () => {
+    expect(parseWorkflowControl('gate-policy wf-parent review_ready')).toEqual({
+      kind: 'gate-policy',
+      updates: [{ workflowId: 'wf-parent', gatePolicy: 'review_ready' }],
+    });
+    expect(parseWorkflowControl('set gate policy wf-parent completed')).toEqual({
+      kind: 'gate-policy',
+      updates: [{ workflowId: 'wf-parent', gatePolicy: 'completed' }],
+    });
+  });
+
+  it('parses gate-policy updates with an upstream task gate', () => {
+    expect(parseWorkflowControl('gate-policy wf-parent/api review ready')).toEqual({
+      kind: 'gate-policy',
+      updates: [{ workflowId: 'wf-parent', taskId: 'api', gatePolicy: 'review_ready' }],
+    });
+    expect(parseWorkflowControl('gate-policy wf-parent api completed')).toEqual({
+      kind: 'gate-policy',
+      updates: [{ workflowId: 'wf-parent', taskId: 'api', gatePolicy: 'completed' }],
+    });
+  });
+
   it('returns null for free-form questions', () => {
     expect(parseWorkflowControl('what did the api task change?')).toBeNull();
     expect(parseWorkflowControl('approve')).toBeNull(); // verb without a task id
+    expect(parseWorkflowControl('gate-policy review_ready')).toBeNull();
+    expect(parseWorkflowControl('gate-policy wf-parent api extra completed')).toBeNull();
   });
 });
 

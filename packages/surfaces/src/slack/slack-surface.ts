@@ -677,6 +677,10 @@ export class SlackSurface implements Surface {
       await this.handleLobbyRestart(threadTs, channel, say);
       return;
     }
+    if (ctrl?.kind === 'gate-policy') {
+      await say({ text: 'Gate-policy routing is not available in this deployment yet.', thread_ts: threadTs });
+      return;
+    }
 
     // Slower paths (LLM classifier, repo checkout, planner) acknowledge receipt up front.
     if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
@@ -1016,6 +1020,10 @@ export class SlackSurface implements Surface {
       await respond({ text: prompt, response_type: 'ephemeral', blocks: this.buildConfirmBlocks(prompt, key) as never });
       return;
     }
+    if (ctrl.kind === 'gate-policy') {
+      await respond({ text: 'Gate-policy routing is not available in this deployment yet.', response_type: 'ephemeral' });
+      return;
+    }
 
     if (!this.runWorkflowOp) {
       await respond({ text: 'Workflow operations are not available in this deployment.', response_type: 'ephemeral' });
@@ -1162,6 +1170,9 @@ export class SlackSurface implements Surface {
       case 'input':
         await this.onCommand?.({ type: 'provide_input', taskId: scoped(ctrl.task), input: ctrl.text });
         await say({ text: `Sent input to \`${scoped(ctrl.task)}\`.`, thread_ts: threadTs });
+        return;
+      case 'gate-policy':
+        await say({ text: 'Gate-policy routing is not available in this deployment yet.', thread_ts: threadTs });
         return;
     }
   }

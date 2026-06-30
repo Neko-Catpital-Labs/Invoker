@@ -34,6 +34,32 @@ describe('parseLobbyControl', () => {
     expect(parseLobbyControl('status my-flow')).toEqual({ kind: 'op', operation: 'status', target: { workflow: 'my-flow' } });
   });
 
+  it('parses gate-policy updates with explicit downstream and upstream workflows', () => {
+    expect(parseLobbyControl('gate-policy wf-child wf-parent review_ready')).toEqual({
+      kind: 'gate-policy',
+      target: { workflow: 'wf-child' },
+      updates: [{ workflowId: 'wf-parent', gatePolicy: 'review_ready' }],
+    });
+    expect(parseLobbyControl('set gate policy wf-child wf-parent completed')).toEqual({
+      kind: 'gate-policy',
+      target: { workflow: 'wf-child' },
+      updates: [{ workflowId: 'wf-parent', gatePolicy: 'completed' }],
+    });
+  });
+
+  it('parses gate-policy updates with an upstream task gate', () => {
+    expect(parseLobbyControl('gate-policy wf-child wf-parent/api review ready')).toEqual({
+      kind: 'gate-policy',
+      target: { workflow: 'wf-child' },
+      updates: [{ workflowId: 'wf-parent', taskId: 'api', gatePolicy: 'review_ready' }],
+    });
+    expect(parseLobbyControl('gate-policy wf-child wf-parent api completed')).toEqual({
+      kind: 'gate-policy',
+      target: { workflow: 'wf-child' },
+      updates: [{ workflowId: 'wf-parent', taskId: 'api', gatePolicy: 'completed' }],
+    });
+  });
+
   it('defaults bare status to all; a bare mutation verb is ambiguous (null)', () => {
     expect(parseLobbyControl('status')).toEqual({ kind: 'op', operation: 'status', target: { all: true } });
     expect(parseLobbyControl('recreate')).toBeNull();
@@ -45,6 +71,8 @@ describe('parseLobbyControl', () => {
     expect(parseLobbyControl('how many workflows are running?')).toBeNull();
     expect(parseLobbyControl('add a /health endpoint')).toBeNull();
     expect(parseLobbyControl('recreate + rebase all workflows')).toBeNull();
+    expect(parseLobbyControl('gate-policy wf-child review_ready')).toBeNull();
+    expect(parseLobbyControl('gate-policy wf-child wf-parent api extra completed')).toBeNull();
     expect(parseLobbyControl('')).toBeNull();
   });
 });
