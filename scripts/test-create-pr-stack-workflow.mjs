@@ -254,6 +254,10 @@ function commitFile(work, fileName, content, message) {
   gitQuiet(work, 'commit', '-m', message);
 }
 
+function commitEmpty(work, message) {
+  gitQuiet(work, 'commit', '--allow-empty', '-m', message);
+}
+
 function createTrackedBranch(work, branch, startPoint = 'origin/master') {
   gitQuiet(work, 'switch', '-c', branch, '--track', startPoint);
 }
@@ -298,6 +302,10 @@ function expectNoPush(harness, label) {
   assert(readLogLines(harness.pushLog).length === 0, `${label}: expected no git push attempt`);
 }
 
+function expectNoGhCalls(harness, label) {
+  assert(readGhCalls(harness.ghLog).length === 0, `${label}: expected no gh invocation`);
+}
+
 function testStaleBaseDetection() {
   const harness = createHarness();
   try {
@@ -311,6 +319,73 @@ function testStaleBaseDetection() {
     assert(result.stderr.includes('not based on the latest origin/master'), 'stale base error should name origin/master');
     assert(result.stderr.includes('git cherry-pick <commit> [<commit> ...]'), 'stale base error should include cherry-pick recovery');
     expectNoPush(harness, 'stale base detection');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testNoFileChangesBlockPrCreation() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/no-file-changes');
+
+    const result = runCreatePr(work, harness, baseArgs());
+
+    assert(result.status === 1, `no file changes should block PR creation\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('no file changes versus origin/master'),
+      `no file changes error should name the selected base\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'no file changes');
+    expectNoGhCalls(harness, 'no file changes');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testEmptyCommitAloneBlocksPrCreation() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/empty-only');
+    commitEmpty(work, 'empty slice');
+
+    const result = runCreatePr(work, harness, baseArgs());
+
+    assert(result.status === 1, `empty commit should block PR creation\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('commits with no tree diff from their first parent'),
+      `empty commit error should explain the tree-diff check\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stderr.includes('empty slice'), `empty commit error should list the offending commit\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('Drop empty commits'), `empty commit error should explain drop recovery\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('squash each empty commit'), `empty commit error should explain squash recovery\nstderr:\n${result.stderr}`);
+    expectNoPush(harness, 'empty commit alone');
+    expectNoGhCalls(harness, 'empty commit alone');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testEmptyCommitMixedWithRealChangeBlocksPrCreation() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/empty-mixed');
+    commitFile(work, 'feature.txt', 'feature\n', 'feature change');
+    commitEmpty(work, 'empty follow-up');
+
+    const result = runCreatePr(work, harness, baseArgs());
+
+    assert(result.status === 1, `mixed empty commit should block PR creation\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('commits with no tree diff from their first parent'),
+      `mixed empty commit error should explain the tree-diff check\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stderr.includes('empty follow-up'), `mixed empty commit error should list the offending commit\nstderr:\n${result.stderr}`);
+    expectNoPush(harness, 'empty commit mixed with real change');
+    expectNoGhCalls(harness, 'empty commit mixed with real change');
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
@@ -632,6 +707,9 @@ function testHelpMentionsStackUpdateFlow() {
 
 const tests = [
   testStaleBaseDetection,
+  testNoFileChangesBlockPrCreation,
+  testEmptyCommitAloneBlocksPrCreation,
+  testEmptyCommitMixedWithRealChangeBlocksPrCreation,
   testMergifyManagedCreateRefusal,
   testMergifyManagedUpdateSkipsPush,
   testMergifyManagedUpdateAcceptsLetteredTitle,
