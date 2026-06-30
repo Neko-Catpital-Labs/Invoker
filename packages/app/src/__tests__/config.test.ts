@@ -30,6 +30,10 @@ vi.mock('node:os', async (importOriginal) => {
   };
 });
 
+function writeUserConfig(value: unknown): void {
+  writeFileSync(join(fakeHome, '.invoker', 'config.json'), JSON.stringify(value));
+}
+
 describe('loadConfig', () => {
   it('returns empty config when no files exist', () => {
     const config = loadConfig();
@@ -237,7 +241,7 @@ describe('loadConfig', () => {
     expect(config.executorRoutingRules).toEqual(executorRoutingRules);
   });
 
-  it('reads remote target maxConcurrentTasks from user config', () => {
+  it('reads remote target capabilities from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({
@@ -247,24 +251,74 @@ describe('loadConfig', () => {
             user: 'invoker',
             sshKeyPath: '/tmp/key',
             maxConcurrentTasks: 2,
+            capabilities: {
+              execution: {
+                omp: {
+                  modelPolicy: {
+                    kind: 'select',
+                    models: ['anthropic/claude-opus-4', 'openai/gpt-5'],
+                    defaultModel: 'anthropic/claude-opus-4',
+                  },
+                },
+              },
+            },
           },
         },
       }),
     );
     const config = loadConfig();
     expect(config.remoteTargets?.ci1?.maxConcurrentTasks).toBe(2);
+    expect(config.remoteTargets?.ci1?.capabilities).toEqual({
+      execution: {
+        omp: {
+          modelPolicy: {
+            kind: 'select',
+            models: ['anthropic/claude-opus-4', 'openai/gpt-5'],
+            defaultModel: 'anthropic/claude-opus-4',
+          },
+        },
+      },
+    });
   });
 
-  it('reads executionPools from user config', () => {
+  it('reads execution pool member capabilities from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({
         executionPools: {
           'ssh-light': {
             members: [
-              { type: 'ssh', id: 'remote-1' },
+              {
+                type: 'ssh',
+                id: 'remote-1',
+                capabilities: {
+                  execution: {
+                    codex: { modelPolicy: { kind: 'implicit' } },
+                  },
+                },
+              },
               { type: 'ssh', id: 'remote-2' },
-              { type: 'worktree', id: 'local-fallback', maxConcurrentTasks: 2 },
+              {
+                type: 'worktree',
+                id: 'local-fallback',
+                maxConcurrentTasks: 2,
+                capabilities: {
+                  planning: {
+                    cursor: {
+                      modelPolicy: { kind: 'fixed', model: 'claude' },
+                    },
+                  },
+                  execution: {
+                    omp: {
+                      modelPolicy: {
+                        kind: 'select',
+                        models: ['anthropic/claude-opus-4', 'openai/gpt-5'],
+                        defaultModel: 'anthropic/claude-opus-4',
+                      },
+                    },
+                  },
+                },
+              },
             ],
             selectionStrategy: 'roundRobin',
             maxConcurrentTasksPerMember: 1,
@@ -275,9 +329,37 @@ describe('loadConfig', () => {
     const config = loadConfig();
     expect(config.executionPools?.['ssh-light']).toEqual({
       members: [
-        { type: 'ssh', id: 'remote-1' },
+        {
+          type: 'ssh',
+          id: 'remote-1',
+          capabilities: {
+            execution: {
+              codex: { modelPolicy: { kind: 'implicit' } },
+            },
+          },
+        },
         { type: 'ssh', id: 'remote-2' },
-        { type: 'worktree', id: 'local-fallback', maxConcurrentTasks: 2 },
+        {
+          type: 'worktree',
+          id: 'local-fallback',
+          maxConcurrentTasks: 2,
+          capabilities: {
+            planning: {
+              cursor: {
+                modelPolicy: { kind: 'fixed', model: 'claude' },
+              },
+            },
+            execution: {
+              omp: {
+                modelPolicy: {
+                  kind: 'select',
+                  models: ['anthropic/claude-opus-4', 'openai/gpt-5'],
+                  defaultModel: 'anthropic/claude-opus-4',
+                },
+              },
+            },
+          },
+        },
       ],
       selectionStrategy: 'roundRobin',
       maxConcurrentTasksPerMember: 1,
@@ -291,6 +373,226 @@ describe('loadConfig', () => {
     );
     const config = loadConfig();
     expect(config.defaultPoolId).toBe('mixed-local-ssh');
+  });
+  it('reads defaultExecution from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({
+        defaultExecution: {
+          executionAgent: 'omp',
+          executionModel: 'anthropic/claude-opus-4',
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.defaultExecution).toEqual({
+      executionAgent: 'omp',
+      executionModel: 'anthropic/claude-opus-4',
+    });
+  });
+
+  it('rejects fixed policies without a model', () => {
+    writeUserConfig({
+      remoteTargets: {
+        ci1: {
+          host: '10.0.0.1',
+          user: 'invoker',
+          sshKeyPath: '/tmp/key',
+          capabilities: {
+            execution: {
+              omp: {
+                modelPolicy: { kind: 'fixed', model: '' },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(() => loadConfig()).toThrow('remoteTargets.ci1.capabilities.execution.omp.modelPolicy.model: expected a non-empty string');
+  });
+
+  it('rejects select policies without model choices', () => {
+    writeUserConfig({
+      remoteTargets: {
+        ci1: {
+          host: '10.0.0.1',
+          user: 'invoker',
+          sshKeyPath: '/tmp/key',
+          capabilities: {
+            execution: {
+              omp: {
+                modelPolicy: {
+                  kind: 'select',
+                  models: [],
+                  defaultModel: 'anthropic/claude-opus-4',
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(() => loadConfig()).toThrow(
+      'remoteTargets.ci1.capabilities.execution.omp.modelPolicy.models: expected a non-empty array of non-empty strings',
+    );
+  });
+
+  it('rejects select policies with blank model choices', () => {
+    writeUserConfig({
+      remoteTargets: {
+        ci1: {
+          host: '10.0.0.1',
+          user: 'invoker',
+          sshKeyPath: '/tmp/key',
+          capabilities: {
+            execution: {
+              omp: {
+                modelPolicy: {
+                  kind: 'select',
+                  models: ['anthropic/claude-opus-4', ''],
+                  defaultModel: 'anthropic/claude-opus-4',
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(() => loadConfig()).toThrow(
+      'remoteTargets.ci1.capabilities.execution.omp.modelPolicy.models[1]: expected a non-empty string',
+    );
+  });
+
+  it('rejects select policies whose default is not advertised', () => {
+    writeUserConfig({
+      remoteTargets: {
+        ci1: {
+          host: '10.0.0.1',
+          user: 'invoker',
+          sshKeyPath: '/tmp/key',
+          capabilities: {
+            execution: {
+              omp: {
+                modelPolicy: {
+                  kind: 'select',
+                  models: ['anthropic/claude-opus-4'],
+                  defaultModel: 'openai/gpt-5',
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(() => loadConfig()).toThrow(
+      'remoteTargets.ci1.capabilities.execution.omp.modelPolicy.defaultModel: expected one of models',
+    );
+  });
+
+  it('rejects cursor under execution capabilities', () => {
+    writeUserConfig({
+      remoteTargets: {
+        ci1: {
+          host: '10.0.0.1',
+          user: 'invoker',
+          sshKeyPath: '/tmp/key',
+          capabilities: {
+            execution: {
+              cursor: {
+                modelPolicy: { kind: 'fixed', model: 'claude' },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(() => loadConfig()).toThrow(
+      'remoteTargets.ci1.capabilities.execution.cursor: cursor is planning-only',
+    );
+  });
+
+  it('rejects claude under planning capabilities', () => {
+    writeUserConfig({
+      executionPools: {
+        local: {
+          members: [
+            {
+              type: 'worktree',
+              id: 'local',
+              capabilities: {
+                planning: {
+                  claude: {
+                    modelPolicy: { kind: 'implicit' },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(() => loadConfig()).toThrow(
+      'executionPools.local.members[0].capabilities.planning.claude: claude is execution-only',
+    );
+  });
+
+  it('rejects codex under planning capabilities', () => {
+    writeUserConfig({
+      executionPools: {
+        local: {
+          members: [
+            {
+              type: 'worktree',
+              id: 'local',
+              capabilities: {
+                planning: {
+                  codex: {
+                    modelPolicy: { kind: 'implicit' },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(() => loadConfig()).toThrow(
+      'executionPools.local.members[0].capabilities.planning.codex: codex is execution-only',
+    );
+  });
+
+  it('rejects implicit policies with extra model payload', () => {
+    writeUserConfig({
+      remoteTargets: {
+        ci1: {
+          host: '10.0.0.1',
+          user: 'invoker',
+          sshKeyPath: '/tmp/key',
+          capabilities: {
+            execution: {
+              claude: {
+                modelPolicy: {
+                  kind: 'implicit',
+                  model: 'anthropic/claude-opus-4',
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(() => loadConfig()).toThrow(
+      'remoteTargets.ci1.capabilities.execution.claude.modelPolicy: implicit policies must not include model, models, or defaultModel',
+    );
+  });
+
+  it('rejects defaultExecution model without an agent', () => {
+    writeUserConfig({
+      defaultExecution: {
+        executionModel: 'anthropic/claude-opus-4',
+      },
+    });
+    expect(() => loadConfig()).toThrow('defaultExecution.executionModel requires defaultExecution.executionAgent');
   });
 
 
