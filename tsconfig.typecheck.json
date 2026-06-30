@@ -20,6 +20,7 @@
     "packages/runtime-service/src/**/*.ts",
     "packages/shell/src/**/*.ts",
     "packages/surfaces/src/**/*.ts",
+    "packages/slack-manager/src/**/*.ts",
     "packages/test-kit/src/**/*.ts",
     "packages/transport/src/**/*.ts",
     "packages/workflow-core/src/**/*.ts",

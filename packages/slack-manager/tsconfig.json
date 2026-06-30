@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "references": [
+    { "path": "../contracts" },
+    { "path": "../data-store" },
+    { "path": "../execution-engine" },
+    { "path": "../transport" },
+    { "path": "../workflow-core" },
+    { "path": "../surfaces" }
+  ]
+}
