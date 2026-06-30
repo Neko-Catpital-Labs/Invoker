@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   loadConfig,
   resolveDefaultExecutionAgent,
+  resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
 } from '../config.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -23,7 +24,7 @@ vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>();
   return {
     ...actual,
-    homedir: () => fakeHome,
+    homedir: () => `${actual.tmpdir()}/invoker-config-test-${process.pid}/home`,
   };
 });
 
@@ -138,6 +139,26 @@ describe('loadConfig', () => {
     expect(resolveDefaultExecutionAgent({ defaultExecutionAgent: '   ' })).toBe('codex');
   });
 
+
+  it('reads default execution settings from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' }),
+    );
+    const config = loadConfig();
+    expect(config.defaultExecutionAgent).toBe('omp');
+    expect(config.defaultExecutionModel).toBe('chatgpt-5.4');
+  });
+
+  it('resolves built-in task execution defaults when config values are blank', () => {
+    expect(resolveDefaultTaskExecutionSettings({ defaultExecutionAgent: '  ', defaultExecutionModel: '   ' })).toEqual({
+      executionAgent: 'codex',
+    });
+    expect(resolveDefaultTaskExecutionSettings({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' })).toEqual({
+      executionAgent: 'omp',
+      executionModel: 'chatgpt-5.4',
+    });
+  });
 
   it('reads autoFixCi from user config', () => {
     writeFileSync(
