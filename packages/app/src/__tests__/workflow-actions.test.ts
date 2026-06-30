@@ -492,7 +492,7 @@ describe('finalizeAppliedFix', () => {
     expect(orchestrator.approve).not.toHaveBeenCalled();
   });
 
-  it('auto-approves and returns runnable tasks when enabled', async () => {
+  it('leaves task awaiting approval even when autoApproveAIFixes is enabled', async () => {
     const started = [
       makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } }),
     ];
@@ -518,16 +518,15 @@ describe('finalizeAppliedFix', () => {
       autoApproveAIFixes: true,
     });
 
-    expect(result).toEqual({ autoApproved: true, started });
-    expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'task-a' }),
-    );
+    expect(result).toEqual({ autoApproved: false, started: [] });
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-error');
+    expect(orchestrator.approve).not.toHaveBeenCalled();
+    expect(taskExecutor.commitApprovedFix).not.toHaveBeenCalled();
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
   });
 
-  it('auto-approves and publishes post-fix merge gates when enabled', async () => {
+  it('does not inline publish post-fix merge gates when autoApproveAIFixes is enabled', async () => {
     const started = [
       makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
     ];
@@ -548,16 +547,16 @@ describe('finalizeAppliedFix', () => {
       executeTasks: vi.fn(),
     };
 
-    await finalizeAppliedFix('merge-a', 'saved-error', {
+    const result = await finalizeAppliedFix('merge-a', 'saved-error', {
       orchestrator: orchestrator as unknown as Orchestrator,
       taskExecutor: taskExecutor as unknown as TaskRunner,
       autoApproveAIFixes: true,
     });
 
-    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'merge-a' }),
-    );
-    expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
+    expect(result).toEqual({ autoApproved: false, started: [] });
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('merge-a', 'saved-error');
+    expect(taskExecutor.commitApprovedFix).not.toHaveBeenCalled();
+    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
@@ -859,10 +858,11 @@ describe('autoFixOnFailure', () => {
       }),
     );
     expect(orchestrator.retryTask).not.toHaveBeenCalled();
-    expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('merge-a', 'boom');
+    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
   });
 
-  it('retries inline when merge post-fix publish fails during auto-fix dispatch', async () => {
+  it('does not inline publish or retry merge post-fix approval during auto-fix dispatch', async () => {
     const started = [
       makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
     ];
@@ -878,8 +878,8 @@ describe('autoFixOnFailure', () => {
       { status: 'failed', execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 1: after fix returns, lineage check + finalize + approveTask (cycle 1)
       { status: 'awaiting_approval', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
-      // Phase 2: post-finalize check — task re-failed after publish
-      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict', selectedAttemptId: 'att-1', generation: 1 } },
+      // Phase 2: post-finalize check — approval is now owned by the auto-approve worker.
+      { status: 'awaiting_approval', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 3: inline retry entry + lineage capture (cycle 2)
       { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-3', generation: 3 } },
       // Phase 4: after fix returns, lineage check + finalize + approveTask (cycle 2)
@@ -942,10 +942,10 @@ describe('autoFixOnFailure', () => {
       getAutoApproveAIFixes: () => true,
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledTimes(2);
-    expect(taskExecutor.execGitIn).toHaveBeenCalledTimes(2);
-    expect(taskExecutor.publishAfterFix).toHaveBeenCalledTimes(2);
-    expect(persistence.logEvent).toHaveBeenCalledWith(
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledTimes(1);
+    expect(taskExecutor.execGitIn).toHaveBeenCalledTimes(1);
+    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
+    expect(persistence.logEvent).not.toHaveBeenCalledWith(
       'merge-a',
       'debug.auto-fix',
       expect.objectContaining({
