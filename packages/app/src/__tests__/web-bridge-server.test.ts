@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
+import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,6 +30,7 @@ interface RequestResult {
   status: number;
   headers: http.IncomingHttpHeaders;
   body: string;
+  rawBody: Buffer;
 }
 
 function request(
@@ -42,9 +44,10 @@ function request(
     (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c) => chunks.push(c as Buffer));
-      res.on('end', () =>
-        resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }),
-      );
+      res.on('end', () => {
+        const rawBody = Buffer.concat(chunks);
+        resolve({ status: res.statusCode ?? 0, headers: res.headers, body: rawBody.toString('utf8'), rawBody });
+      });
     },
   );
   req.on('error', reject);
@@ -113,6 +116,27 @@ describe('startWebBridge', () => {
     expect(dispatch).toHaveBeenCalledWith('invoker:get-status', []);
   });
 
+  it('compresses large /invoke JSON responses when the browser accepts gzip', async () => {
+    const dispatch = vi.fn(async () => ({ value: 'x'.repeat(8_000) }));
+    const { port } = await startBridge(dispatch);
+    const res = await request(port, '/invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie: `invoker_web=${TOKEN}`,
+        'accept-encoding': 'gzip',
+      },
+      body: JSON.stringify({ channel: 'invoker:get-action-graph', args: [] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-encoding']).toBe('gzip');
+    expect(JSON.parse(gunzipSync(res.rawBody).toString('utf8'))).toEqual({
+      ok: true,
+      result: { value: 'x'.repeat(8_000) },
+    });
+  });
+
   it('reports dispatch failures as { ok: false, error }', async () => {
     const dispatch = vi.fn(async () => {
       const err = new Error('nope') as Error & { code: string };
@@ -125,7 +149,21 @@ describe('startWebBridge', () => {
       headers: { 'content-type': 'application/json', cookie: `invoker_web=${TOKEN}` },
       body: JSON.stringify({ channel: 'invoker:x', args: [] }),
     });
-    expect(JSON.parse(res.body)).toEqual({ ok: false, error: { message: 'nope', code: 'unknown_channel' } });
+    expect(JSON.parse(res.body)).toEqual({ ok: false, error: { message: 'request failed', code: 'unknown_channel' } });
+  });
+
+  it('hides unexpected dispatch failure details from web responses', async () => {
+    const dispatch = vi.fn(async () => {
+      throw new Error('stack trace shaped internal failure');
+    });
+    const { port } = await startBridge(dispatch);
+    const res = await request(port, '/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: `invoker_web=${TOKEN}` },
+      body: JSON.stringify({ channel: 'invoker:get-status', args: [] }),
+    });
+
+    expect(JSON.parse(res.body)).toEqual({ ok: false, error: { message: 'internal server error' } });
   });
 
   it('streams broadcast and TASK_OUTPUT events over /events', async () => {
