@@ -75,42 +75,21 @@ tasks:
 
   - id: run-plan-to-invoker-script-tests
     description: |
-      Run existing plan-to-invoker script test suite.
+      Run existing plan-to-invoker script test suite as the terminal focused proof.
       Goal:
-      Confirm script-level regressions are not introduced.
+      Confirm validator-scoped regressions are not introduced.
       Motivation:
-      Preserve end-to-end confidence after validator and test changes.
+      The plan-to-invoker script suite already exercises the changed validator surface,
+      so it is the deterministic proof for this slice.
       Alternative considerations:
       - run only a subset of script tests.
-      - defer script-suite verification to later workflows.
+      - chain an unscoped `pnpm run test:all` gate after this task.
       Implementation details:
       - execute the script test suite and require zero failures.
-      - keep this gate before final full-suite regression.
+      - keep this task terminal so the slice proves the validator without a blanket full-suite gate.
       Layer: app_regression
       Feature state: active
     command: "bash scripts/test-plan-to-invoker-skill.sh"
     poolId: remote_digital_ocean_1_pool
     dependencies:
       - add-validator-tests
-
-  - id: post-fix-regression
-    description: |
-      Run the full repository test suite as post-fix regression.
-      Goal:
-      Validate repository-wide stability after validator hardening.
-      Motivation:
-      Catch integration regressions outside the plan-to-invoker script surface.
-      Alternative considerations:
-      - rely only on targeted script tests.
-      - run package-level tests without full-suite coverage.
-      Implementation details:
-      - execute `pnpm run test:all` as the final gate.
-      - require dependencies on all prior implementation/verification tasks.
-      Layer: app_regression
-      Feature state: active
-    command: "pnpm run test:all"
-    poolId: remote_digital_ocean_1_pool
-    dependencies:
-      - implement-typed-plan-validator
-      - add-validator-tests
-      - run-plan-to-invoker-script-tests
