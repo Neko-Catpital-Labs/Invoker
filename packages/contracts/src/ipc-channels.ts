@@ -771,6 +771,10 @@ export const IpcTestOnlyChannels = {
     request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
     response: void;
   },
+  'invoker:set-test-plan-from-goal-response': {} as {
+    request: [response: { planYaml: string; planName: string } | null];
+    response: void;
+  },
 } as const;
 
 // ── Event Channel Registry ──────────────────────────────────
