@@ -170,6 +170,7 @@ export async function resolveConflictImpl(
   taskId: string,
   savedError?: string,
   agentName?: string,
+  resolvedExecutionModel?: string,
 ): Promise<void> {
   host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'resolve-conflict-start',
@@ -216,7 +217,7 @@ export async function resolveConflictImpl(
     if (!target) {
       throw new Error(`No remote target config for "${poolMemberId}" — cannot resolve conflict on remote`);
     }
-    await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target, agentName);
+    await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target, agentName, resolvedExecutionModel);
     return;
   }
 
@@ -270,8 +271,8 @@ export async function resolveConflictImpl(
         `4. Staging the resolved files with 'git add'`,
         `5. Completing the merge with 'git commit --no-edit'`,
       ].join('\n');
-
-      await host.spawnAgentFix(prompt, cwd, agentName);
+      const executionModel = resolvedExecutionModel ?? resolveExecutionModelForAgent(task, agentName);
+      await host.spawnAgentFix(prompt, cwd, agentName, executionModel);
     }
 
     console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
@@ -358,6 +359,7 @@ async function resolveConflictRemote(
   remoteCwd: string,
   target: RemoteTargetConfig,
   agentName?: string,
+  resolvedExecutionModel?: string,
 ): Promise<void> {
   const conflictFilesList = conflictInfo.conflictFiles.join(', ');
   const prompt = [
@@ -377,7 +379,13 @@ async function resolveConflictRemote(
     ? `Merge upstream ${conflictInfo.failedBranch} — ${depTask.description}`
     : `Merge upstream ${conflictInfo.failedBranch}`;
 
-  const { shellCommand: agentCmd } = buildRemoteAgentCommand(prompt, host.agentRegistry, agentName);
+  const executionModel = resolvedExecutionModel ?? resolveExecutionModelForAgent(task, agentName);
+  const { shellCommand: agentCmd } = buildRemoteAgentCommand(
+    prompt,
+    host.agentRegistry,
+    agentName,
+    executionModel,
+  );
   const agentCmdB64 = Buffer.from(agentCmd).toString('base64');
   const mergeMsgB64 = Buffer.from(conflictMergeMsg).toString('base64');
   const envExports = buildRemoteAgentEnvExports(target.secretsFile, target.use_api_key === true);

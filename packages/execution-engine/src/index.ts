@@ -8,6 +8,7 @@ export {
   shouldResolveViaOriginTracking,
   isInvokerManagedPoolBranch,
 } from './plan-base-remote.js';
+export * from './harness-capabilities.js';
 export * from './executor.js';
 export * from './base-executor.js';
 export * from './process-utils.js';
