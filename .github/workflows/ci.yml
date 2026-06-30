@@ -468,7 +468,7 @@ jobs:
 
   playwright:
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, do2]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 45
@@ -544,7 +544,7 @@ jobs:
 
   ssh:
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, do2]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
