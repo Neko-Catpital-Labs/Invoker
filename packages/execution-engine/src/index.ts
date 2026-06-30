@@ -37,6 +37,7 @@ export * from './worker-registry.js';
 export * from './worker-lock.js';
 export * from './auto-fix-recovery.js';
 export * from './workers/pr-status-worker.js';
+export * from './workers/ci-failure-worker.js';
 export * from './auto-fix-gating.js';
 export * from './auto-fix-intents.js';
 export * from './lifecycle-events.js';

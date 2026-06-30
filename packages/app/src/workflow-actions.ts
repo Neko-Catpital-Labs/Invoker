@@ -25,6 +25,7 @@ import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner, ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
+  isCurrentReviewGateArtifactForProvider,
   isReviewGateCiContextStale,
   type ReviewGateCiContext,
   type ReviewGateLineageFields,
@@ -100,6 +101,20 @@ export function assertLineageCurrent(
       + `gen ${snapshot.generation} → ${current.generation})`,
     );
   }
+}
+
+function currentReviewGateCiLineage(task: TaskState, reviewId: string): ReviewGateLineageFields {
+  const gate = task.execution.reviewGate;
+  const artifact = gate?.artifacts.find((candidate) => (
+    isCurrentReviewGateArtifactForProvider(gate, candidate, reviewId)
+  ));
+  return {
+    generation: task.execution.generation,
+    reviewId: artifact?.providerId ?? task.execution.reviewId ?? task.execution.reviewProviderId,
+    selectedAttemptId: task.execution.selectedAttemptId,
+    branch: task.execution.branch,
+    headSha: artifact?.headSha,
+  };
 }
 
 function assertReviewGateCiContextCurrent(
@@ -841,7 +856,11 @@ export async function fixWithAgentAction(
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
   if (options.reviewGateContext) {
-    assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task.execution);
+    assertReviewGateCiContextCurrent(
+      taskId,
+      options.reviewGateContext,
+      currentReviewGateCiLineage(task, options.reviewGateContext.reviewId),
+    );
   }
 
   const savedError = task.execution.error ?? '';

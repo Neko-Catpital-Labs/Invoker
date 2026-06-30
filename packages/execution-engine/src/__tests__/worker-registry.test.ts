@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { RECOVERY_WORKER_KIND, type AutoFixRecoveryStore, type AutoFixRecoverySubmitter } from '../auto-fix-recovery.js';
 import {
   AUTO_FIX_WORKER_KIND,
+  CI_FAILURE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   createWorkerRegistry,
   registerAutoFixWorker,
@@ -46,7 +47,7 @@ describe('worker registry', () => {
   it('returns the built-in worker definitions by kind once registered', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry());
 
-    for (const kind of [AUTO_FIX_WORKER_KIND, PR_STATUS_WORKER_KIND]) {
+    for (const kind of [AUTO_FIX_WORKER_KIND, PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND]) {
       const definition = registry.get(kind);
       expect(definition).toBeDefined();
       expect(definition?.kind).toBe(kind);
@@ -57,6 +58,7 @@ describe('worker registry', () => {
     expect(registry.list().map((d) => d.kind)).toEqual([
       AUTO_FIX_WORKER_KIND,
       PR_STATUS_WORKER_KIND,
+      CI_FAILURE_WORKER_KIND,
     ]);
   });
 
@@ -77,9 +79,10 @@ describe('worker registry', () => {
     expect(runtime.isRunning()).toBe(false);
   });
 
-  it('builds registered pr-status runtime', () => {
+  it('builds registered pr-status and ci-failure runtimes', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry());
 
     expect(registry.get(PR_STATUS_WORKER_KIND)!.factory(deps()).identity.kind).toBe(PR_STATUS_WORKER_KIND);
+    expect(registry.get(CI_FAILURE_WORKER_KIND)!.factory(deps()).identity.kind).toBe(CI_FAILURE_WORKER_KIND);
   });
 });

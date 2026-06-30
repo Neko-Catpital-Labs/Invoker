@@ -17,11 +17,12 @@ import {
   type AutoFixRecoverySubmitter,
 } from './auto-fix-recovery.js';
 import { createPrStatusWorker, PR_STATUS_WORKER_KIND } from './workers/pr-status-worker.js';
+import { createCiFailureWorker, CI_FAILURE_WORKER_KIND } from './workers/ci-failure-worker.js';
 import type { WorkerRuntime } from './worker-runtime.js';
 
 /** Registry kind for the built-in auto-fix recovery worker. */
 export const AUTO_FIX_WORKER_KIND = 'autofix';
-export { PR_STATUS_WORKER_KIND };
+export { PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND };
 
 /** Auto-fix tuning handed to a worker factory. */
 export interface AutoFixWorkerConfig {
@@ -89,7 +90,7 @@ export function createWorkerRegistry(): WorkerRegistry {
 /**
  * Register the built-in workers. The legacy function name is kept so existing
  * headless code and tests keep the same import path while the registry now
- * includes auto-fix and pr-status entries.
+ * includes auto-fix, pr-status, and ci-failure entries.
  */
 export function registerAutoFixWorker(registry: WorkerRegistry): WorkerRegistry {
   registry.register({
@@ -114,6 +115,18 @@ export function registerAutoFixWorker(registry: WorkerRegistry): WorkerRegistry 
       if (!deps.reviewGate) throw new Error('pr-status worker requires reviewGate deps');
       return createPrStatusWorker({ logger: deps.logger, reviewGate: deps.reviewGate });
     },
+  });
+  registry.register({
+    kind: CI_FAILURE_WORKER_KIND,
+    note: 'Submits deduped fix-with-agent intents for current review-gate CI failures.',
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createCiFailureWorker({
+        logger: deps.logger,
+        store: deps.store,
+        submitter: deps.submitter,
+        messageBus: deps.messageBus,
+        getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
+      }),
   });
   return registry;
 }

@@ -99,6 +99,7 @@ import {
   remoteFetchForPool,
   registerBuiltinAgents,
   createPrStatusWorker,
+  createCiFailureWorker,
   type AgentRegistry,
   type WorkerRuntime,
 } from '@invoker/execution-engine';
@@ -206,6 +207,7 @@ import {
   buildHeadlessFixArgs,
   listOpenFixIntentsForTask,
   parseFixWithAgentMutationArgs,
+  type ReviewGateCiContext,
 } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
@@ -911,6 +913,7 @@ function startHeadlessMode(): void {
 
     let exitCode = 0;
     let prStatusWorker: WorkerRuntime | null = null;
+    let ciFailureWorker: WorkerRuntime | null = null;
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
     try {
@@ -1590,6 +1593,16 @@ function startHeadlessMode(): void {
             logger,
           });
           prStatusWorker.start();
+          if (invokerConfig.autoFixCi && workflowMutationCoordinator) {
+            ciFailureWorker = createCiFailureWorker({
+              store: persistence,
+              submitter: workflowMutationCoordinator,
+              messageBus,
+              logger,
+              getAutoFixAgent: () => loadConfig().autoFixAgent,
+            });
+            ciFailureWorker.start();
+          }
         }
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
@@ -1610,6 +1623,7 @@ function startHeadlessMode(): void {
     } finally {
       standaloneLaunchDispatcherController?.stop();
       lifecycleEventBridge?.stop();
+      await ciFailureWorker?.stop();
       await prStatusWorker?.stop();
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
@@ -1698,6 +1712,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
   let prStatusWorker: WorkerRuntime | null = null;
+  let ciFailureWorker: WorkerRuntime | null = null;
   let apiServer: ApiServer | null = null;
   let webBridge: WebBridge | null = null;
   let ownerMode = true;
@@ -2010,6 +2025,7 @@ function createEmbeddedTerminalBackendFromConfig(
     taskId: string,
     agentName?: string,
     source: 'ipc' | 'auto-fix' = 'ipc',
+    reviewGateContext?: ReviewGateCiContext,
   ): Promise<TaskState[]> => {
     const task = orchestrator.getTask(taskId);
     if (!task) {
@@ -2048,6 +2064,7 @@ function createEmbeddedTerminalBackendFromConfig(
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
         failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        reviewGateContext,
         signal: activeMutationContext?.signal,
       },
     );
@@ -3314,6 +3331,16 @@ function createEmbeddedTerminalBackendFromConfig(
         logger,
       });
       prStatusWorker.start();
+      if (invokerConfig.autoFixCi && workflowMutationCoordinator) {
+        ciFailureWorker = createCiFailureWorker({
+          store: persistence,
+          submitter: workflowMutationCoordinator,
+          messageBus,
+          logger,
+          getAutoFixAgent: () => loadConfig().autoFixAgent,
+        });
+        ciFailureWorker.start();
+      }
     }
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
@@ -4277,7 +4304,7 @@ function createEmbeddedTerminalBackendFromConfig(
       const { taskId, agentName, context } = parseFixWithAgentMutationArgs(fixArgs);
       try {
         const source = context.autoFix ? 'auto-fix' : 'ipc';
-        const started = await executeFixWithAgentMutation(taskId, agentName, source);
+        const started = await executeFixWithAgentMutation(taskId, agentName, source, context.reviewGateContext);
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
@@ -4696,6 +4723,8 @@ function createEmbeddedTerminalBackendFromConfig(
       try {
         if (apiServer) await apiServer.close().catch(() => {});
         if (webBridge) await webBridge.close().catch(() => {});
+        await ciFailureWorker?.stop();
+        ciFailureWorker = null;
         await prStatusWorker?.stop();
         prStatusWorker = null;
         if (dbPollInterval) clearInterval(dbPollInterval);
