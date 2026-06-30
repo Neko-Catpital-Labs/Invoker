@@ -239,6 +239,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:edit-task-pool':
       case 'invoker:replace-task':
       case 'invoker:load-plan':
+      case 'invoker:plan-from-goal':
       case 'invoker:start':
       case 'invoker:stop':
       case 'invoker:clear':

@@ -78,7 +78,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { ActionGraphResponse, BundledSkillsInstallMode, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
+import type { ActionGraphResponse, BundledSkillsInstallMode, InAppPlanRequest, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
 import { SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
@@ -127,6 +127,7 @@ import {
 } from './headless-command-classification.js';
 import { backupPlan } from './plan-backup.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
+import { planFromGoal, type GeneratedPlanPreview } from './in-app-planner.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import {
@@ -953,6 +954,28 @@ function startHeadlessMode(): void {
         return executor;
       };
 
+      const loadStandaloneGeneratedPlanPreview = async (planText: string): Promise<GeneratedPlanPreview> => {
+        const { parsePlan } = await import('./plan-parser.js');
+        const plan = parsePlan(planText);
+        logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc-delegate' });
+        backupPlan(plan, undefined, logger);
+        const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
+        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+        const workflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
+        if (!workflowId) {
+          throw new Error(`Failed to resolve workflow id for generated plan "${plan.name}"`);
+        }
+        return { planName: plan.name, workflowId };
+      };
+
+      const logStandaloneInAppPlannerMessage = (source: string, level: string, message: string): void => {
+        if (level === 'error') {
+          logger.error(message, { module: source });
+          return;
+        }
+        logger.info(message, { module: source });
+      };
+
       const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
         const { parsePlanFile } = await import('./plan-parser.js');
         const plan = await parsePlanFile(payload.planPath);
@@ -1004,12 +1027,16 @@ function startHeadlessMode(): void {
           }
           case 'invoker:load-plan': {
             const planText = String(payload.args[0] ?? '');
-            const { parsePlan } = await import('./plan-parser.js');
-            const plan = parsePlan(planText);
-            backupPlan(plan, undefined, logger);
-            orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+            await loadStandaloneGeneratedPlanPreview(planText);
             return undefined;
           }
+          case 'invoker:plan-from-goal':
+            return planFromGoal((payload.args[0] ?? {}) as InAppPlanRequest, {
+              config: invokerConfig,
+              workingDir: process.cwd(),
+              loadGeneratedPlan: loadStandaloneGeneratedPlanPreview,
+              log: logStandaloneInAppPlannerMessage,
+            });
           case 'invoker:start':
             return orchestrator.startExecution();
           case 'invoker:stop': {
@@ -2263,6 +2290,32 @@ function createEmbeddedTerminalBackendFromConfig(
     return requireWiredTaskRunner(() => taskExecutor);
   }
 
+  async function loadGeneratedPlanPreview(
+    planText: string,
+    module = 'ipc',
+  ): Promise<GeneratedPlanPreview> {
+    const { parsePlan } = await import('./plan-parser.js');
+    const plan = parsePlan(planText);
+    logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module });
+    taskHandles.clear();
+    backupPlan(plan, undefined, logger);
+    const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
+    orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+    const workflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
+    if (!workflowId) {
+      throw new Error(`Failed to resolve workflow id for generated plan "${plan.name}"`);
+    }
+    return { planName: plan.name, workflowId };
+  }
+
+  function logInAppPlannerMessage(source: string, level: string, message: string): void {
+    if (level === 'error') {
+      logger.error(message, { module: source });
+      return;
+    }
+    logger.info(message, { module: source });
+  }
+
 
   async function executeHeadlessRun(payload: HeadlessRunMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
     const { parsePlanFile } = await import('./plan-parser.js');
@@ -2465,6 +2518,8 @@ function createEmbeddedTerminalBackendFromConfig(
     const [arg0, arg1, arg2] = payload.args;
     switch (payload.channel) {
       case 'invoker:load-plan':
+        return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:plan-from-goal':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:start':
         return { channel: 'headless.gui-mutation', request: payload };
@@ -3374,12 +3429,15 @@ function createEmbeddedTerminalBackendFromConfig(
     });
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
-      const { parsePlan } = await import('./plan-parser.js');
-      const plan = parsePlan(planText);
-      logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
-      taskHandles.clear();
-      backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      await loadGeneratedPlanPreview(planText);
+    });
+    registerGuiMutationHandler('invoker:plan-from-goal', async (requestArg: unknown) => {
+      return planFromGoal((requestArg ?? {}) as InAppPlanRequest, {
+        config: invokerConfig,
+        workingDir: process.cwd(),
+        loadGeneratedPlan: (planText) => loadGeneratedPlanPreview(planText),
+        log: logInAppPlannerMessage,
+      });
     });
 
     if (process.env.NODE_ENV === 'test') {
