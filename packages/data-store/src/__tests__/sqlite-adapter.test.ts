@@ -1396,6 +1396,7 @@ describe('SQLiteAdapter', () => {
         description: 'Updated task',
         config: {
           poolId: 'some-pool',
+          executionModel: 'openai/gpt-5.2',
           fixPrompt: 'fix this',
         },
       });
@@ -1404,6 +1405,7 @@ describe('SQLiteAdapter', () => {
         description: 'Updated task',
         config: {
           poolId: 'some-pool',
+          executionModel: 'openai/gpt-5.2',
           fixPrompt: 'fix this',
         },
       });
@@ -1611,12 +1613,14 @@ describe('SQLiteAdapter', () => {
         config: {
           runnerKind: 'docker',
           dockerImage: 'node:20',
+          executionModel: 'claude-sonnet-4',
         },
       }));
 
       let [loaded] = adapter.loadTasks('wf-1');
       expect(loaded.config.runnerKind).toBe('docker');
       expect(loaded.config.dockerImage).toBe('node:20');
+      expect(loaded.config.executionModel).toBe('claude-sonnet-4');
 
       adapter.updateTask('t1', {
         config: {

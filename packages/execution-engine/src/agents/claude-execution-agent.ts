@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
+import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions } from '../agent.js';
 
 export interface ClaudeExecutionAgentConfig {
   /** Command to invoke the Claude CLI. Default: 'claude'. */
@@ -45,23 +45,27 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
     this.bundledSkillRoot = join(this.configDir, 'skills');
   }
 
-  buildCommand(fullPrompt: string): AgentCommandSpec {
+  buildCommand(fullPrompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
     const sessionId = randomUUID();
     return {
       cmd: this.command,
-      args: ['--session-id', sessionId, '--dangerously-skip-permissions', '-p', fullPrompt],
+      args: ['--session-id', sessionId, '--dangerously-skip-permissions', ...this.buildModelArgs(options.executionModel), '-p', fullPrompt],
       sessionId,
       fullPrompt,
     };
   }
 
-  buildFixCommand(prompt: string): AgentCommandSpec {
+  buildFixCommand(prompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
     const sessionId = randomUUID();
     return {
       cmd: this.fixCommand,
-      args: ['--session-id', sessionId, '-p', prompt, '--dangerously-skip-permissions'],
+      args: ['--session-id', sessionId, ...this.buildModelArgs(options.executionModel), '-p', prompt, '--dangerously-skip-permissions'],
       sessionId,
     };
+  }
+
+  private buildModelArgs(executionModel?: string): string[] {
+    return executionModel ? ['--model', executionModel] : [];
   }
 
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {

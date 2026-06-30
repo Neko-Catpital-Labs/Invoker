@@ -421,7 +421,7 @@ ${runProvisionSection}stop_bootstrap_heartbeat
       if (this.agentRegistry) {
         const agent = this.agentRegistry.getOrThrow(executionAgent);
         const fullPrompt = this.buildFullPrompt(request);
-        const spec = agent.buildCommand(fullPrompt);
+        const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         agentSessionId = spec.sessionId;
         payload = `${spec.cmd} ${spec.args.map(a => this.shellQuote(a)).join(' ')}`;
         bench('SshExecutor.payload.built', {

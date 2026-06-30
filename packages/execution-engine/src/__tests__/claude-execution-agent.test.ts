@@ -51,6 +51,21 @@ describe('ClaudeExecutionAgent', () => {
       expect(spec.args[3]).toBe('-p');
       expect(spec.args[4]).toBe('my prompt');
     });
+    it('passes executionModel through as --model', () => {
+      const agent = new ClaudeExecutionAgent();
+      const spec = agent.buildCommand('my prompt', { executionModel: 'opus' });
+
+      expect(spec.args).toEqual([
+        '--session-id',
+        spec.sessionId,
+        '--dangerously-skip-permissions',
+        '--model',
+        'opus',
+        '-p',
+        'my prompt',
+      ]);
+    });
+
   });
 
   describe('buildFixCommand', () => {
@@ -106,6 +121,21 @@ describe('ClaudeExecutionAgent', () => {
       expect(spec.args[0]).toBe('--session-id');
       expect(spec.args[1]).toBe(spec.sessionId);
     });
+    it('passes executionModel through for fix flows', () => {
+      const agent = new ClaudeExecutionAgent();
+      const spec = agent.buildFixCommand('my prompt', { executionModel: 'sonnet' });
+
+      expect(spec.args).toEqual([
+        '--session-id',
+        spec.sessionId,
+        '--model',
+        'sonnet',
+        '-p',
+        'my prompt',
+        '--dangerously-skip-permissions',
+      ]);
+    });
+
 
     it('stored sessionId matches the CLI --session-id value', () => {
       const agent = new ClaudeExecutionAgent();

@@ -2898,6 +2898,8 @@ function createEmbeddedTerminalBackendFromConfig(
         return null;
       case 'invoker:edit-task-agent':
         return { channel: 'headless.exec', request: { args: ['set', 'agent', String(arg0), String(arg1)], noTrack: true } };
+      case 'invoker:edit-task-model':
+        return { channel: 'headless.exec', request: { args: ['set', 'model', String(arg0), arg1 == null ? '' : String(arg1)], noTrack: true } };
       case 'invoker:set-task-external-gate-policies': {
         const taskId = String(arg0);
         const updates = Array.isArray(arg1) ? arg1 as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }> : [];
@@ -4787,6 +4789,32 @@ function createEmbeddedTerminalBackendFromConfig(
         throw err;
       }
     });
+    registerTaskScopedGuiMutationHandler(
+      'invoker:edit-task-model',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, executionModelArg: unknown) => {
+      const taskId = String(taskIdArg);
+      const executionModel = typeof executionModelArg === 'string' ? executionModelArg : null;
+      logger.info(`edit-task-model: "${taskId}" → "${executionModel ?? ''}"`, { module: 'ipc' });
+      try {
+        const envelope = makeEnvelope('edit-task-model', 'ui', 'task', { taskId, executionModel });
+        const result = await commandService.editTaskModel(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.edit-task-model',
+          started: result.data,
+          scopedTaskIds: [taskId],
+        });
+      } catch (err) {
+        logger.error(`edit-task-model failed: ${err}`, { module: 'ipc' });
+        throw err;
+      }
+    });
+
 
     registerTaskScopedGuiMutationHandler(
       'invoker:set-task-external-gate-policies',

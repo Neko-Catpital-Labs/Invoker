@@ -355,6 +355,7 @@ export const COLUMN_MIGRATIONS = [
   // detached_external_dependencies: read-only provenance for deps removed by detachWorkflow
   'ALTER TABLE workflows ADD COLUMN detached_external_dependencies TEXT',
   // execution_agent / agent_name: interchangeable agent support
+  'ALTER TABLE tasks ADD COLUMN execution_model TEXT',
   'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
   'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
   // durable audit pointers for most-recent agent session/name
