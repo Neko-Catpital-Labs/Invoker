@@ -277,6 +277,35 @@ export async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): 
   }
 }
 
+export async function headlessDeleteTask(taskId: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless delete-task <taskId>');
+  await withRestoredTaskUnlessDeleteAllWon(taskId, deps, 'delete-task', async (restored) => {
+    taskId = restored.resolvedTaskId;
+    const task = deps.orchestrator.getTask(taskId);
+    const workflowId = task?.config.workflowId;
+    const taskExecutor = createHeadlessExecutor(deps);
+    if (task && (task.status === 'running' || task.status === 'fixing_with_ai')) {
+      await taskExecutor.killActiveExecution(task.id);
+    }
+    if (workflowId) {
+      await taskExecutor.closeWorkflowReview(workflowId);
+    }
+    const envelope = makeEnvelope('delete-task', 'headless', 'task', { taskId });
+    const result = await deps.commandService.deleteTask(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    await finalizeMutationWithGlobalTopup({
+      orchestrator: deps.orchestrator,
+      taskExecutor,
+      logger: deps.logger,
+      context: 'headless.delete-task',
+      started: result.data,
+      scopedTaskIds: result.data.map((startedTask) => startedTask.id),
+      mutationTiming: deps.mutationTiming,
+    });
+    process.stdout.write(`Deleted task: ${taskId}\n`);
+  });
+}
+
 export async function headlessDeleteWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
   // Preempt running tasks (kill processes + cancel) — matches owner-mode bridge contract
