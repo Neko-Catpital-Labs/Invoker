@@ -16,6 +16,7 @@ import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '@invoker/w
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import type { Logger } from '@invoker/contracts';
 import { isDiscardedAttempt } from '../attempt-policy.js';
+import { buildTaskResetChanges } from '../task-reset-policy.js';
 import type { TaskStateMachine } from '../state-machine.js';
 import type { TaskScheduler } from '../scheduler.js';
 import type { TaskRepository } from '../task-repository.js';
@@ -88,17 +89,7 @@ export function autoStartReadyTasksImpl(
         taskId,
       });
       host.replaceSelectedAttempt(task, { status: 'pending' });
-      host.writeAndSync(taskId, {
-        status: 'pending',
-        execution: {
-          startedAt: undefined,
-          completedAt: undefined,
-          lastHeartbeatAt: undefined,
-          launchStartedAt: undefined,
-          launchCompletedAt: undefined,
-          phase: undefined,
-        },
-      });
+      host.writeAndSync(taskId, buildTaskResetChanges('readyUnblock'));
       task = host.stateGetTask(taskId);
       if (!task) continue;
     }
@@ -180,18 +171,7 @@ export function autoStartUnblockedTasksImpl(host: SchedulerDomainHost): TaskStat
     if (host.getExternalDependencyBlocker(task) !== undefined) continue;
 
     host.replaceSelectedAttempt(task, { status: 'pending' });
-    host.writeAndSync(task.id, {
-      status: 'pending',
-      execution: {
-        blockedBy: undefined,
-        startedAt: undefined,
-        completedAt: undefined,
-        lastHeartbeatAt: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        phase: undefined,
-      },
-    });
+    host.writeAndSync(task.id, buildTaskResetChanges('externalUnblock'));
     enqueueIfNotScheduledImpl(host, task.id);
   }
   return drainSchedulerImpl(host);
