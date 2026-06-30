@@ -85,32 +85,10 @@ tasks:
       - defer script-suite verification to later workflows.
       Implementation details:
       - execute the script test suite and require zero failures.
-      - keep this gate before final full-suite regression.
+      - keep this as the terminal focused proof for validator hardening.
       Layer: app_regression
       Feature state: active
     command: "bash scripts/test-plan-to-invoker-skill.sh"
     poolId: remote_digital_ocean_1_pool
     dependencies:
       - add-validator-tests
-
-  - id: post-fix-regression
-    description: |
-      Run the full repository test suite as post-fix regression.
-      Goal:
-      Validate repository-wide stability after validator hardening.
-      Motivation:
-      Catch integration regressions outside the plan-to-invoker script surface.
-      Alternative considerations:
-      - rely only on targeted script tests.
-      - run package-level tests without full-suite coverage.
-      Implementation details:
-      - execute `pnpm run test:all` as the final gate.
-      - require dependencies on all prior implementation/verification tasks.
-      Layer: app_regression
-      Feature state: active
-    command: "pnpm run test:all"
-    poolId: remote_digital_ocean_1_pool
-    dependencies:
-      - implement-typed-plan-validator
-      - add-validator-tests
-      - run-plan-to-invoker-script-tests

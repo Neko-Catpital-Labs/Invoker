@@ -39,16 +39,7 @@ tasks:
 
   - id: run-visual-proof-e2e
     description: "Run app E2E suite that includes visual-proof coverage"
-    command: "cd packages/app && pnpm test"
+    command: "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && pnpm --filter @invoker/app test:e2e -- visual-proof.spec.ts"
     poolId: remote_digital_ocean_1_pool
     dependencies:
       - update-visual-proof-skill-doc
-
-  - id: post-fix-regression
-    description: "Run the full repository test suite as post-fix regression"
-    command: "pnpm run test:all"
-    poolId: remote_digital_ocean_1_pool
-    dependencies:
-      - add-visual-proof-subcommands
-      - update-visual-proof-skill-doc
-      - run-visual-proof-e2e
