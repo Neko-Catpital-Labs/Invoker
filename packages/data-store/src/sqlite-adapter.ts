@@ -52,6 +52,9 @@ import type {
   Conversation,
   ConversationMessage,
   WorkflowChannel,
+  WorkerActionListFilters,
+  WorkerActionRecord,
+  WorkerActionWrite,
 } from './adapter.js';
 import {
   SCHEMA_DDL,
@@ -67,6 +70,7 @@ import {
   mapRowToTaskLaunchDispatch,
   mapRowToWorkflowMutationIntent,
   mapRowToWorkflowMutationLease,
+  mapRowToWorkerAction,
 } from './sqlite-row-mappers.js';
 import {
   taskOutputFilePath,
@@ -75,6 +79,10 @@ import {
   readSpoolLinesFromFile,
   readLastSpoolLinesFromFile,
 } from './sqlite-output-spool.js';
+
+function normalizeWorkerActionStatus(status: string): string {
+  return status === 'canceled' ? 'cancelled' : status;
+}
 
 type NativeSqlite = typeof import('node:sqlite');
 
@@ -1694,6 +1702,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
       this.db.run(`
+        DELETE FROM worker_actions WHERE workflow_id = ? OR task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId, workflowId]);
+      this.db.run(`
         DELETE FROM execution_resource_leases WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
@@ -1729,6 +1742,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM workflow_mutation_leases');
       this.db.run('DELETE FROM workflow_mutation_intents');
       this.db.run('DELETE FROM task_launch_dispatch');
+      this.db.run('DELETE FROM worker_actions');
       this.db.run('DELETE FROM execution_resource_leases');
       this.db.run('DELETE FROM events');
       this.db.run('DELETE FROM task_output');
@@ -1748,6 +1762,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
+      this.db.run(`
+        DELETE FROM worker_actions WHERE workflow_id = ? OR task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId, workflowId]);
       this.db.run(`
         DELETE FROM execution_resource_leases WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
@@ -1816,6 +1835,123 @@ export class SQLiteAdapter implements PersistenceAdapter {
       payload: row.payload ?? undefined,
       createdAt: row.created_at,
     }));
+  }
+
+  getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM worker_actions WHERE worker_kind = ? AND external_key = ?',
+      [workerKind, externalKey],
+    );
+    return row ? this.rowToWorkerAction(row) : undefined;
+  }
+
+  upsertWorkerAction(action: WorkerActionWrite): WorkerActionRecord {
+    return this.runTransaction(() => {
+      const existing = this.queryOne(
+        'SELECT id FROM worker_actions WHERE worker_kind = ? AND external_key = ?',
+        [action.workerKind, action.externalKey],
+      );
+      if (existing && String(existing.id) !== action.id) {
+        throw new Error(
+          `Worker action ${action.workerKind}/${action.externalKey} already exists with id "${String(existing.id)}"`,
+        );
+      }
+      const nowIso = new Date().toISOString();
+      const createdAt = action.createdAt ?? nowIso;
+      const updatedAt = action.updatedAt ?? nowIso;
+      const payloadJson = action.payload === undefined ? null : JSON.stringify(action.payload);
+      const status = normalizeWorkerActionStatus(action.status);
+      this.execRun(
+        `INSERT INTO worker_actions (
+          id, worker_kind, action_type, workflow_id, task_id,
+          subject_type, subject_id, external_key, status, attempt_count,
+          intent_id, agent_name, execution_model, session_id, summary,
+          payload_json, created_at, updated_at, completed_at
+        ) VALUES (
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?
+        )
+        ON CONFLICT(worker_kind, external_key) DO UPDATE SET
+          action_type = excluded.action_type,
+          workflow_id = excluded.workflow_id,
+          task_id = excluded.task_id,
+          subject_type = excluded.subject_type,
+          subject_id = excluded.subject_id,
+          status = excluded.status,
+          attempt_count = excluded.attempt_count,
+          intent_id = excluded.intent_id,
+          agent_name = excluded.agent_name,
+          execution_model = excluded.execution_model,
+          session_id = excluded.session_id,
+          summary = excluded.summary,
+          payload_json = excluded.payload_json,
+          updated_at = excluded.updated_at,
+          completed_at = excluded.completed_at`,
+        [
+          action.id,
+          action.workerKind,
+          action.actionType,
+          action.workflowId ?? null,
+          action.taskId ?? null,
+          action.subjectType,
+          action.subjectId,
+          action.externalKey,
+          status,
+          action.attemptCount ?? 0,
+          action.intentId ?? null,
+          action.agentName ?? null,
+          action.executionModel ?? null,
+          action.sessionId ?? null,
+          action.summary ?? null,
+          payloadJson,
+          createdAt,
+          updatedAt,
+          action.completedAt ?? null,
+        ],
+      );
+      const saved = this.getWorkerAction(action.workerKind, action.externalKey);
+      if (!saved) {
+        throw new Error(`Failed to persist worker action ${action.workerKind}/${action.externalKey}`);
+      }
+      return saved;
+    });
+  }
+
+  listWorkerActions(filters: WorkerActionListFilters = {}): WorkerActionRecord[] {
+    if (filters.limit !== undefined && Math.floor(filters.limit) <= 0) {
+      return [];
+    }
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filters.workflowId) {
+      where.push('workflow_id = ?');
+      params.push(filters.workflowId);
+    }
+    if (filters.taskId) {
+      where.push('task_id = ?');
+      params.push(filters.taskId);
+    }
+    if (filters.workerKind) {
+      where.push('worker_kind = ?');
+      params.push(filters.workerKind);
+    }
+    if (filters.status) {
+      where.push('status = ?');
+      params.push(normalizeWorkerActionStatus(String(filters.status)));
+    }
+    let limitSql = '';
+    if (filters.limit !== undefined) {
+      limitSql = ' LIMIT ?';
+      params.push(Math.floor(filters.limit));
+    }
+    const rows = this.queryAll(
+      `SELECT * FROM worker_actions ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''} ` +
+        `ORDER BY updated_at DESC, id ASC${limitSql}`,
+      params,
+    );
+    return rows.map((row) => this.rowToWorkerAction(row));
   }
 
   // ── Queries ─────────────────────────────────────────
@@ -3439,6 +3575,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private rowToWorkflowMutationLease(row: Record<string, unknown>): WorkflowMutationLease {
     return mapRowToWorkflowMutationLease(row);
+  }
+
+  private rowToWorkerAction(row: Record<string, unknown>): WorkerActionRecord {
+    return mapRowToWorkerAction(row);
   }
 
   private requeueWorkflowMutationLease(workflowId: string): void {
