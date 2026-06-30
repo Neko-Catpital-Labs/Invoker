@@ -109,6 +109,12 @@ If the change is UI-impacting, use `skills/visual-proof/SKILL.md` first and incl
 
 Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Review Claim / ## Review Lane / ## Safety Invariant / ## Slice Rationale / ## Non-goals / ## Test Plan / ## Revert Plan` as the floor, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
 
+## Diff atomicity gate
+
+`scripts/create-pr.mjs` computes changed files and a full-context diff, then runs `scripts/lint-pr-diff-atomicity.mjs` through the PR body checker before image upload, push, or GitHub mutation.
+
+If one branch mixes behavior, refactor, cleanup, or test-harness/proof work, split the work into separate PRs. Do not relabel the lane or weaken the checker to make a mixed branch pass.
+
 ## Command surface
 
 Preferred repo-local flow:
