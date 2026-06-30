@@ -10,6 +10,7 @@ PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
+POSITIVE_FIXTURE_DIR="$SKILL_DIR/fixtures/positive"
 CLAUDE_MD="$REPO_ROOT/CLAUDE.md"
 README="$REPO_ROOT/README.md"
 TUTORIAL="$REPO_ROOT/docs/tutorial-first-agent-workflow.md"
@@ -203,6 +204,44 @@ must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-c
 must_contain "$TASK_PATTERNS" "Assume zero context" "Task patterns must define zero-context prompt requirement"
 must_contain "$TASK_PATTERNS" "deterministic pass/fail expectations" "Task patterns must require deterministic prompt outcomes"
 must_contain "$TASK_PATTERNS" "Review compression contract" "Task patterns must define review compression metadata"
+
+# Focused-proof policy guard: positive/canonical artifacts must not normalize the
+# obsolete `pnpm run test:all` default terminal gate. Negative fixtures, anti-pattern
+# prose, and explicit risk-justified exceptions remain allowed.
+#
+# A `command:` task line in a positive fixture may opt out by marking the line
+# with `# risk-justified-full-suite-gate`. Canonical prose lines must include a
+# rejection or risk-justified-exception cue ("not", "Avoid", "anti-pattern",
+# "unless", "only when", or "Alternative considerations").
+assert_no_default_full_suite_command_in_positive_fixtures() {
+  [[ -d "$POSITIVE_FIXTURE_DIR" ]] || fail "expected positive fixture directory $POSITIVE_FIXTURE_DIR"
+  local offending
+  offending="$(grep -nE '^[[:space:]]*command:[[:space:]]*["'\''`]?[^"'\''#]*pnpm[[:space:]]+(run[[:space:]]+)?test:all' \
+    "$POSITIVE_FIXTURE_DIR"/*.yaml 2>/dev/null \
+    | grep -vF 'risk-justified-full-suite-gate' || true)"
+  if [[ -n "$offending" ]]; then
+    fail "Positive fixture corpus must not normalize a terminal \`pnpm run test:all\` command task (focused-proof policy). Offending lines:
+$offending"
+  fi
+}
+
+assert_canonical_artifact_full_suite_is_rejection_only() {
+  local file="$1"
+  [[ -e "$file" ]] || return 0
+  local offending
+  offending="$(grep -nF 'pnpm run test:all' "$file" 2>/dev/null \
+    | grep -vE '(\bnot\b|Avoid|anti-pattern|Anti-pattern|unless |only when |Alternative considerations|Option B|intentionally omitted)' \
+    || true)"
+  if [[ -n "$offending" ]]; then
+    fail "Canonical artifact $file must mention \`pnpm run test:all\` only in rejection or risk-justified-exception context (focused-proof policy). Offending lines:
+$offending"
+  fi
+}
+
+assert_no_default_full_suite_command_in_positive_fixtures
+assert_canonical_artifact_full_suite_is_rejection_only "$SKILL_MD"
+assert_canonical_artifact_full_suite_is_rejection_only "$PLAYBOOK"
+assert_canonical_artifact_full_suite_is_rejection_only "$CANONICAL_COMMAND"
 
 echo "OK: plan-to-invoker skill contract checks passed"
 
