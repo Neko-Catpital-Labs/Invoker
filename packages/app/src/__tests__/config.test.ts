@@ -106,6 +106,15 @@ describe('loadConfig', () => {
     expect(config.autoApproveAIFixes).toBe(true);
   });
 
+  it('reads autoFixExecutionModel from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ autoFixExecutionModel: 'openai/gpt-5.2' }),
+    );
+    const config = loadConfig();
+    expect(config.autoFixExecutionModel).toBe('openai/gpt-5.2');
+  });
+
   it('reads experimentalPlanner from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
@@ -304,4 +313,3 @@ describe('resolveEmbeddedTerminalBackendConfig', () => {
     )).toThrow(/Invalid embedded terminal backend/);
   });
 });
-
