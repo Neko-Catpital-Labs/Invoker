@@ -50,6 +50,10 @@ export class SqliteTaskRepository implements TaskRepository {
     this.adapter.updateTask(taskId, changes);
   }
 
+  deleteTask(taskId: string): void {
+    this.adapter.deleteTask(taskId);
+  }
+
   logEvent(taskId: string, eventType: string, payload?: unknown): void {
     this.adapter.logEvent(taskId, eventType, payload);
   }
