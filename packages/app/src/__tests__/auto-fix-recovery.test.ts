@@ -322,4 +322,40 @@ describe('auto-fix recovery scan submission', () => {
       buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
     );
   });
+
+  it('passes configured execution model through the queued command and worker action', async () => {
+    const harness = makeRecoveryPolicyHarness();
+    const actions: any[] = [];
+    (harness.options as any).getAutoFixExecutionModel = () => 'openai/gpt-5.2';
+    (harness.options.store as any).getWorkerAction = vi.fn(() => undefined);
+    (harness.options.store as any).upsertWorkerAction = vi.fn((action: any) => {
+      actions.push(action);
+      return action;
+    });
+    const tick = createAutoFixRecoveryTick(harness.options);
+
+    await tick({
+      identity: { kind: 'recovery', instanceId: 'test' },
+      reason: 'startup',
+      tickNumber: 1,
+    });
+
+    expect(harness.submit).toHaveBeenCalledWith(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', {
+        autoFix: true,
+        executionModel: 'openai/gpt-5.2',
+      }),
+    );
+    expect(actions[0]).toMatchObject({
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      status: 'queued',
+      intentId: '1',
+      agentName: 'codex',
+      executionModel: 'openai/gpt-5.2',
+    });
+  });
 });

@@ -96,6 +96,7 @@ describe('parseHeadlessFixArgs', () => {
       agentName: 'codex',
       autoFix: false,
       reviewGateContext: undefined,
+      executionModel: undefined,
     });
   });
 
@@ -105,6 +106,7 @@ describe('parseHeadlessFixArgs', () => {
       agentName: 'claude',
       autoFix: true,
       reviewGateContext: undefined,
+      executionModel: undefined,
     });
   });
 
@@ -146,6 +148,23 @@ describe('buildHeadlessFixArgs', () => {
       agentName: 'codex',
       autoFix: true,
       reviewGateContext: ctx,
+      executionModel: undefined,
+    });
+  });
+
+  it('appends execution model context that round-trips through parsing', () => {
+    const args = buildHeadlessFixArgs('wf-1/task-1', 'omp', {
+      autoFix: true,
+      executionModel: 'openai/gpt-5.2',
+    });
+
+    expect(args).toEqual(['fix', 'wf-1/task-1', 'omp', '--auto-fix', '--execution-model', 'openai/gpt-5.2']);
+    expect(parseHeadlessFixArgs(args)).toEqual({
+      taskId: 'wf-1/task-1',
+      agentName: 'omp',
+      autoFix: true,
+      reviewGateContext: undefined,
+      executionModel: 'openai/gpt-5.2',
     });
   });
 });
@@ -161,7 +180,19 @@ describe('fix-with-agent mutation options', () => {
     expect(parseFixWithAgentMutationArgs(args)).toEqual({
       taskId: 'wf-1/task-1',
       agentName: 'codex',
-      context: { autoFix: true, reviewGateContext: ctx },
+      context: { autoFix: true, reviewGateContext: ctx, executionModel: undefined },
+    });
+  });
+
+  it('round-trips execution model through structured mutation options', () => {
+    const args = buildFixWithAgentMutationArgs('wf-1/task-1', 'omp', {
+      autoFix: true,
+      executionModel: 'openai/gpt-5.2',
+    });
+    expect(parseFixWithAgentMutationArgs(args)).toEqual({
+      taskId: 'wf-1/task-1',
+      agentName: 'omp',
+      context: { autoFix: true, reviewGateContext: undefined, executionModel: 'openai/gpt-5.2' },
     });
   });
 
@@ -169,12 +200,12 @@ describe('fix-with-agent mutation options', () => {
     expect(parseFixWithAgentMutationArgs(['wf-1/task-1', 'claude'])).toEqual({
       taskId: 'wf-1/task-1',
       agentName: 'claude',
-      context: { autoFix: false, reviewGateContext: undefined },
+      context: { autoFix: false, reviewGateContext: undefined, executionModel: undefined },
     });
     expect(parseFixWithAgentMutationArgs(['wf-1/task-1'])).toEqual({
       taskId: 'wf-1/task-1',
       agentName: undefined,
-      context: { autoFix: false, reviewGateContext: undefined },
+      context: { autoFix: false, reviewGateContext: undefined, executionModel: undefined },
     });
   });
 });
@@ -231,4 +262,3 @@ describe('review-gate CI context encode/decode', () => {
     expect(decodeReviewGateCiContext(JSON.stringify({ reviewId: 'r' }))).toBeUndefined();
   });
 });
-

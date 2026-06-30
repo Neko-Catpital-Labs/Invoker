@@ -1,5 +1,7 @@
 import type { Logger } from '@invoker/contracts';
 import type {
+  WorkerActionRecord,
+  WorkerActionWrite,
   WorkflowMutationIntent,
   WorkflowMutationIntentStatus,
   WorkflowMutationPriority,
@@ -20,6 +22,7 @@ export const RECOVERY_WORKER_KIND = 'recovery';
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
 const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
+const AUTO_FIX_ACTION_WORKER_KIND = 'autofix';
 
 export interface AutoFixRecoveryStore {
   listWorkflows(): ReadonlyArray<{ id: string }>;
@@ -29,6 +32,8 @@ export interface AutoFixRecoveryStore {
     workflowId?: string,
     statuses?: WorkflowMutationIntentStatus[],
   ): WorkflowMutationIntent[];
+  getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
+  upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
 }
 
@@ -48,6 +53,7 @@ export interface AutoFixRecoveryPolicyOptions {
   logger: Logger;
   defaultAutoFixRetries?: number;
   getAutoFixAgent?: () => string | undefined;
+  getAutoFixExecutionModel?: () => string | undefined;
   getRetryBudget?: (task: TaskState) => number;
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
 }
@@ -96,6 +102,15 @@ function taskRefFromTask(task: TaskState): AutoFixRecoveryTaskRef | undefined {
     taskStateVersion: task.taskStateVersion,
     attemptId: task.execution.selectedAttemptId,
   };
+}
+
+function autoFixActionKey(ref: AutoFixRecoveryTaskRef): string {
+  return [
+    ref.taskId,
+    `g${ref.generation}`,
+    `v${ref.taskStateVersion}`,
+    `a${ref.attemptId ?? 'none'}`,
+  ].join(':');
 }
 
 function candidateFromTask(task: TaskState): AutoFixRecoveryCandidate | undefined {
@@ -182,6 +197,44 @@ function logAutoFixWorkerEvent(
     module: 'auto-fix-recovery',
     taskId,
     ...details,
+  });
+}
+
+function recordAutoFixQueuedAction(
+  options: AutoFixRecoveryPolicyOptions,
+  candidate: ValidatedAutoFixRecoveryCandidate,
+  intentId: number,
+  selectedAgent: string | undefined,
+  executionModel: string | undefined,
+): void {
+  const externalKey = autoFixActionKey(candidate);
+  const existing = options.store.getWorkerAction?.(AUTO_FIX_ACTION_WORKER_KIND, externalKey);
+  const now = new Date().toISOString();
+  options.store.upsertWorkerAction?.({
+    id: existing?.id ?? `${AUTO_FIX_ACTION_WORKER_KIND}:${externalKey}`,
+    workerKind: AUTO_FIX_ACTION_WORKER_KIND,
+    actionType: 'fix-task',
+    workflowId: candidate.workflowId,
+    taskId: candidate.taskId,
+    subjectType: 'task',
+    subjectId: candidate.taskId,
+    externalKey,
+    status: 'queued',
+    attemptCount: (existing?.attemptCount ?? 0) + 1,
+    intentId: String(intentId),
+    agentName: selectedAgent,
+    executionModel,
+    summary: 'Queued auto-fix with agent',
+    payload: {
+      channel: AUTO_FIX_COMMAND_CHANNEL,
+      source: candidate.source,
+      generation: candidate.generation,
+      taskStateVersion: candidate.taskStateVersion,
+      attemptId: candidate.attemptId ?? null,
+      autoFixAttempts: candidate.task.execution.autoFixAttempts ?? 0,
+      maxRetries: retryBudgetForTask(candidate.task, options),
+    },
+    updatedAt: now,
   });
 }
 
@@ -311,8 +364,13 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
       }
       const configuredAgent = options.getAutoFixAgent?.()?.trim();
       const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
-      const args = buildFixWithAgentMutationArgs(candidate.task.id, selectedAgent, { autoFix: true });
+      const configuredExecutionModel = options.getAutoFixExecutionModel?.()?.trim();
+      const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
+        ? configuredExecutionModel
+        : undefined;
+      const args = buildFixWithAgentMutationArgs(candidate.task.id, selectedAgent, { autoFix: true, executionModel });
       const intentId = options.submitter.submit(candidate.workflowId, 'normal', AUTO_FIX_COMMAND_CHANNEL, args);
+      recordAutoFixQueuedAction(options, candidate, intentId, selectedAgent, executionModel);
       submittedThisTick.add(candidate.taskId);
       logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-submitted', {
         workflowId: candidate.workflowId,
@@ -322,6 +380,7 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         taskStateVersion: candidate.taskStateVersion,
         attemptId: candidate.attemptId ?? null,
         agent: selectedAgent ?? null,
+        executionModel: executionModel ?? null,
         autoFixAttempts: candidate.task.execution.autoFixAttempts ?? 0,
         maxRetries: retryBudgetForTask(candidate.task, options),
       });
