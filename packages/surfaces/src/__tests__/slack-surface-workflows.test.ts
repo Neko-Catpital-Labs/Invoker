@@ -540,6 +540,35 @@ describe('lobby verb routing', () => {
     );
   });
 
+  it('confirms a restart before relaunching Invoker, then reports health', async () => {
+    const onRestartInvoker = vi.fn().mockResolvedValue(undefined);
+    const surface = lobbySurface(true, { onRestartInvoker });
+    await surface.start(async () => {});
+
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> restart', ts: 't1', user: 'U1' }, say });
+    // Destructive — staged for confirmation, nothing relaunched yet.
+    expect(onRestartInvoker).not.toHaveBeenCalled();
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('restart Invoker') }));
+
+    const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
+    await messageHandler(surface)({ event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'yes' }, say: say2 });
+    expect(onRestartInvoker).toHaveBeenCalledTimes(1);
+    expect(say2).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Invoker is back') }));
+  });
+
+  it('reports a restart failure when the relaunch throws', async () => {
+    const onRestartInvoker = vi.fn().mockRejectedValue(new Error('no display'));
+    const surface = lobbySurface(true, { onRestartInvoker });
+    await surface.start(async () => {});
+
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> restart', ts: 't1', user: 'U1' }, say });
+    const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
+    await messageHandler(surface)({ event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'yes' }, say: say2 });
+    expect(say2).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Restart failed') }));
+  });
+
   it('runs a single-workflow verb immediately (no confirmation)', async () => {
     runWorkflowOp.mockResolvedValue({ ok: true, summary: 'retry: 1 ok' });
     const surface = lobbySurface();
