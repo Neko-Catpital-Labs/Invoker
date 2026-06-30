@@ -111,6 +111,11 @@ export function createMockInvoker(
     onTaskOutput: vi.fn(() => () => {}),
     onActivityLog: vi.fn(() => () => {}),
     loadPlan: vi.fn(async () => {}),
+    planFromGoal: vi.fn(async () => ({
+      ok: true,
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    })),
     start: vi.fn(async () => taskSnapshot),
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),

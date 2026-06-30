@@ -588,8 +588,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     return (
       <div className="h-full w-full flex items-center justify-center text-gray-500">
         <div className="text-center">
-          <p>No tasks yet</p>
-          <p className="text-sm mt-1">Load a plan to create a task graph</p>
+          <p>Your plan will appear here.</p>
         </div>
       </div>
     );
