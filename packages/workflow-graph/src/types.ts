@@ -158,6 +158,7 @@ export interface ReviewGateArtifact {
   readonly updatedAt?: string;
   readonly discardedAt?: string;
   readonly discardReason?: string;
+  readonly headSha?: string;
 }
 
 export interface ReviewGateState {

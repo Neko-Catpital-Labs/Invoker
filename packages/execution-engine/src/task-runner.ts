@@ -29,6 +29,7 @@ import { DockerExecutor } from './docker-executor.js';
 import { WorktreeExecutor } from './worktree-executor.js';
 import { MergeGateExecutor } from './merge-gate-executor.js';
 import { isInvokerManagedPoolBranch } from './plan-base-remote.js';
+import { isCurrentReviewGateArtifact } from './auto-fix-intents.js';
 import { SshExecutor } from './ssh-executor.js';
 
 import {
@@ -1875,11 +1876,6 @@ export class TaskRunner {
       }
     }
   }
-  private isCurrentReviewGateArtifact(gate: ReviewGateState, artifact: ReviewGateArtifact): boolean {
-    return artifact.generation === gate.activeGeneration
-      && artifact.status !== 'discarded'
-      && !artifact.discardedAt;
-  }
 
 
   private getCurrentReviewArtifacts(task: TaskState): ReviewGateArtifact[] {
@@ -1897,7 +1893,7 @@ export class TaskRunner {
       }];
     }
 
-    return gate.artifacts.filter((artifact) => this.isCurrentReviewGateArtifact(gate, artifact));
+    return gate.artifacts.filter((artifact) => isCurrentReviewGateArtifact(gate, artifact));
   }
 
   private getCurrentRequiredReviewArtifacts(task: TaskState): ReviewGateArtifact[] {
@@ -1938,7 +1934,7 @@ export class TaskRunner {
       return false;
     }
     return currentGate.artifacts.some((artifact) =>
-      this.isCurrentReviewGateArtifact(currentGate, artifact)
+      isCurrentReviewGateArtifact(currentGate, artifact)
       && artifact.required
       && artifact.providerId === providerId,
     );
@@ -1954,7 +1950,7 @@ export class TaskRunner {
       ...gate,
       artifacts: gate.artifacts.map((artifact) => {
         if (
-          !this.isCurrentReviewGateArtifact(gate, artifact)
+          !isCurrentReviewGateArtifact(gate, artifact)
           || artifact.providerId !== providerId
         ) {
           return artifact;
@@ -1964,6 +1960,9 @@ export class TaskRunner {
           status: mappedStatus,
           updatedAt: new Date().toISOString(),
         };
+        if (status.headSha) {
+          return { ...next, headSha: status.headSha, ...(mappedStatus === 'open' ? { rawStatus: status.statusText } : {}) };
+        }
         if (mappedStatus === 'open') {
           return { ...next, rawStatus: status.statusText };
         }
@@ -1974,7 +1973,7 @@ export class TaskRunner {
 
   private reviewGateIsApproved(gate: ReviewGateState): boolean {
     const currentRequired = gate.artifacts.filter((artifact) =>
-      this.isCurrentReviewGateArtifact(gate, artifact) && artifact.required,
+      isCurrentReviewGateArtifact(gate, artifact) && artifact.required,
     );
     return currentRequired.length > 0
       && currentRequired.every((artifact) => artifact.status === 'approved');
