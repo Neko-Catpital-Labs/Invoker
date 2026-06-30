@@ -17,6 +17,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { join, normalize, sep, extname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
@@ -32,6 +33,7 @@ const SSE_PING_INTERVAL_MS = 20_000;
 const ACTIVITY_POLL_INTERVAL_MS = 2_000;
 const WORKFLOWS_POLL_INTERVAL_MS = 2_000;
 const SSE_DROP_BUFFER_BYTES = 8 * 1024 * 1024; // drop a client whose backlog exceeds this
+const JSON_COMPRESSION_MIN_BYTES = 1024;
 
 export interface WebBridgeDeps {
   logger?: Logger;
@@ -95,10 +97,26 @@ function contentTypeFor(filePath: string): string {
   return CONTENT_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream';
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
-  res.end(payload);
+function sendJson(res: ServerResponse, status: number, body: unknown, req?: IncomingMessage): void {
+  const payload = Buffer.from(JSON.stringify(body), 'utf8');
+  const headers: Record<string, string> = {
+    'content-type': 'application/json; charset=utf-8',
+    vary: 'Accept-Encoding',
+  };
+  const accepted = typeof req?.headers['accept-encoding'] === 'string' ? req.headers['accept-encoding'] : '';
+  let responseBody = payload;
+  if (payload.length >= JSON_COMPRESSION_MIN_BYTES) {
+    if (accepted.includes('br')) {
+      responseBody = brotliCompressSync(payload);
+      headers['content-encoding'] = 'br';
+    } else if (accepted.includes('gzip')) {
+      responseBody = gzipSync(payload);
+      headers['content-encoding'] = 'gzip';
+    }
+  }
+  headers['content-length'] = String(responseBody.length);
+  res.writeHead(status, headers);
+  res.end(responseBody);
 }
 
 /**
@@ -173,7 +191,7 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
       total += (chunk as Buffer).length;
       if (total > MAX_INVOKE_BODY_BYTES) {
         aborted = true;
-        sendJson(res, 413, { ok: false, error: { message: 'request body too large' } });
+        sendJson(res, 413, { ok: false, error: { message: 'request body too large' } }, req);
         req.destroy();
         return;
       }
@@ -185,21 +203,27 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     try {
       parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
     } catch {
-      sendJson(res, 400, { ok: false, error: { message: 'invalid JSON body' } });
+      sendJson(res, 400, { ok: false, error: { message: 'invalid JSON body' } }, req);
       return;
     }
     if (typeof parsed.channel !== 'string') {
-      sendJson(res, 400, { ok: false, error: { message: 'missing "channel"' } });
+      sendJson(res, 400, { ok: false, error: { message: 'missing "channel"' } }, req);
       return;
     }
     const args = Array.isArray(parsed.args) ? parsed.args : [];
     try {
       const result = await dispatch(parsed.channel, args);
-      sendJson(res, 200, { ok: true, result });
+      sendJson(res, 200, { ok: true, result }, req);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       const code = (err as { code?: string }).code;
-      sendJson(res, 200, { ok: false, error: code ? { message, code } : { message } });
+      if (code) {
+        sendJson(res, 200, { ok: false, error: { message: 'request failed', code } }, req);
+        return;
+      }
+      logger?.warn(`web invoke failed for ${parsed.channel}`, {
+        module: 'web-bridge',
+      });
+      sendJson(res, 200, { ok: false, error: { message: 'internal server error' } }, req);
     }
   };
 
