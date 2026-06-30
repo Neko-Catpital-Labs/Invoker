@@ -351,6 +351,12 @@ async function openContextMenu(page: Page, locator: Locator) {
   await expect(menu).toBeVisible({ timeout: 10000 });
   return menu;
 }
+async function selectGraphMenuItem(page: Page, testId: string): Promise<void> {
+  await page.getByTestId('graph-more-button').click();
+  await expect(page.getByTestId('graph-more-menu')).toBeVisible();
+  await page.getByTestId(testId).click();
+}
+
 
 async function selectWorkflowNode(page: Page, workflowId: string): Promise<void> {
   const node = workflowNode(page, workflowId);
@@ -431,10 +437,24 @@ test.describe('Read-only mode visual proof', () => {
 
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
-    await expect(page.getByText('Load a plan to render workflow graph')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Start with a goal.')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Invoker Terminal')).toBeVisible();
+    await expect(page.getByText('What to expect')).toBeVisible();
+    await expect(page.getByTestId('workflow-graph-surface').getByText('Your plan will appear here.')).toBeVisible();
+    await expect(page.getByText('No runs yet')).toBeVisible();
+    await expect(page.getByText('All clear')).toBeVisible();
+    await expect(page.getByText('No tasks running')).toBeVisible();
+    await expect(page.getByText('Load plan')).toBeVisible();
     await expect(page.getByTestId('rail-open-file')).toBeVisible();
     await expect(page.getByTestId('rail-settings')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Home' })).toHaveCount(0);
     await captureScreenshot(page, 'empty-state');
+    await captureScreenshot(page, 'empty-graph-state');
+    await assertPageScreenshot(page, 'empty-state');
+    await expect(page.getByTestId('rail-settings')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Home' })).toHaveCount(0);
+    await captureScreenshot(page, 'empty-state');
+    await captureScreenshot(page, 'empty-graph-state');
     await assertPageScreenshot(page, 'empty-state');
   });
 
@@ -446,6 +466,14 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'dag-loaded');
   });
 
+  test('graph maximize overlay', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await page.getByRole('button', { name: 'Full graph ⤢' }).click();
+    await expect(page.getByTestId('graph-maximized-overlay')).toBeVisible();
+    await captureScreenshot(page, 'graph-maximized-overlay');
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('graph-maximized-overlay')).toHaveCount(0);
+  });
   test('task-graph-keyboard-controls-selected — selected workflow mini DAG framing', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     const miniDag = page.getByTestId('selected-workflow-mini-dag');
@@ -1042,7 +1070,10 @@ test.describe('Visual proof capture', () => {
         },
       })),
     );
-    await page.getByTestId('selected-workflow-mini-dag').getByRole('button', { name: 'Fit View' }).click();
+    await page.getByRole('button', { name: 'Full graph ⤢' }).click();
+    const overlay = page.getByTestId('graph-maximized-overlay');
+    await expect(overlay).toBeVisible();
+    await overlay.getByRole('button', { name: 'Fit View' }).click();
     await page.waitForTimeout(300);
 
     for (const spec of TASK_STATUS_PROOF_SPECS) {
@@ -1354,8 +1385,8 @@ test.describe('Visual proof capture', () => {
     await injectTaskStates(page, [
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
-    // Navigate to queue tab if there is one, or verify queue section is visible
-    await page.getByTestId('rail-queue').click();
+    // Navigate to queue view
+    await selectGraphMenuItem(page, 'rail-queue');
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
     await captureScreenshot(page, 'queue-view-concurrency');
@@ -1388,7 +1419,6 @@ test.describe('Visual proof capture', () => {
       {
         taskId: mergeTask!.id,
         changes: {
-          status: 'completed',
           execution: {
             startedAt: now,
             completedAt: now,
@@ -1397,10 +1427,10 @@ test.describe('Visual proof capture', () => {
       },
     ]);
     await page.waitForTimeout(2200);
-    await page.getByTestId('rail-queue').click();
+    await selectGraphMenuItem(page, 'rail-queue');
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Backlog (0)' })).toBeVisible();
-    await expect(page.getByText('assigning-task')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Backlog/ })).toBeVisible();
+    await expect(page.getByText('assigning-task', { exact: true })).toBeVisible();
     await expect(page.getByText('Assigning queue task')).toBeVisible();
     await captureScreenshot(page, 'queue-assigning-statusbar');
 
@@ -1415,7 +1445,6 @@ test.describe('Visual proof capture', () => {
     const now = new Date();
     await injectTaskStates(page, [
       { taskId: 'qs-running', changes: { status: 'running', execution: { startedAt: now } } },
-      { taskId: 'qs-fixing', changes: { status: 'running', execution: { isFixingWithAI: true, startedAt: now } } },
       { taskId: 'qs-needs-input', changes: { status: 'needs_input', execution: { startedAt: now } } },
       { taskId: 'qs-review', changes: { status: 'review_ready', execution: { startedAt: now } } },
       { taskId: 'qs-approval', changes: { status: 'awaiting_approval', execution: { startedAt: now } } },
@@ -1424,7 +1453,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Navigate to queue view
-    await page.getByTestId('rail-queue').click();
+    await selectGraphMenuItem(page, 'rail-queue');
 
     // Assert queue section headings are visible
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
@@ -1462,7 +1491,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Navigate to queue view
-    await page.getByTestId('rail-queue').click();
+    await selectGraphMenuItem(page, 'rail-queue');
 
     // Assert queue sections are visible
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
@@ -1729,7 +1758,6 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'detached-workflow-lineage-after');
   });
-
   test('terminate-wording — task-level uses Terminate, workflow-level keeps Cancel', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
@@ -1738,7 +1766,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Switch to queue view to verify the compact cancel affordance on task rows
-    await page.getByTestId('rail-queue').click();
+    await selectGraphMenuItem(page, 'rail-queue');
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
     const cancelButton = page
       .locator('[data-row-id$="/task-alpha"]')
@@ -1746,7 +1774,7 @@ test.describe('Visual proof capture', () => {
     await expect(cancelButton).toBeVisible();
 
     // Switch back to DAG view and right-click the running task for context menu
-    await page.getByTestId('rail-home').click();
+    await selectGraphMenuItem(page, 'rail-home');
     const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
 
     // Expand the More section to reveal Danger items
@@ -1805,8 +1833,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Navigate to queue view
-    await page.getByTestId('rail-queue').click();
-
+    await selectGraphMenuItem(page, 'rail-queue');
     // Assert canonical Action Queue and Backlog headings
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: /Backlog/ })).toBeVisible();

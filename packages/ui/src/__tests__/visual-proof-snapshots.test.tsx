@@ -33,9 +33,17 @@ describe('Visual proof snapshots', () => {
 
   it('empty-state', () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
+    expect(screen.getByText('Start with a goal.')).toBeInTheDocument();
+    expect(screen.getByText('Invoker Terminal')).toBeInTheDocument();
+    expect(screen.getByText('What to expect')).toBeInTheDocument();
+    expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
+    expect(screen.getByText('No runs yet')).toBeInTheDocument();
+    expect(screen.getByText('All clear')).toBeInTheDocument();
+    expect(screen.getByText('No tasks running')).toBeInTheDocument();
+    expect(screen.getByText('Load plan')).toBeInTheDocument();
     expect(screen.getByTestId('rail-open-file')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
     expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
   });
 
