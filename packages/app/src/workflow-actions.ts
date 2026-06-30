@@ -22,7 +22,7 @@ import {
   parseMergeConflictError,
 } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { TaskRunner, ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
+import { DEFAULT_EXECUTION_AGENT, type TaskRunner, type ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
   isReviewGateCiContextStale,
@@ -844,11 +844,12 @@ export async function fixWithAgentAction(
     assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task.execution);
   }
 
+  const effectiveAgentName = options.agentName ?? DEFAULT_EXECUTION_AGENT;
   const savedError = task.execution.error ?? '';
   const recoveryRoute = await selectFailureRecoveryRouteForAction(task, savedError, taskExecutor, options.recoveryRoute);
   if (recoveryRoute.kind === 'invalidMergeWorkspace') {
     const msg = invalidMergeWorkspaceMessage(recoveryRoute);
-    const errorLabel = options.failureOutputLabel ?? `Fix with ${options.agentName ?? 'Claude'}`;
+    const errorLabel = options.failureOutputLabel ?? `Fix with ${effectiveAgentName}`;
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] ${msg}`);
     orchestrator.revertConflictResolution(taskId, savedError, msg);
     throw new Error(msg);
@@ -875,14 +876,14 @@ export async function fixWithAgentAction(
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
     if (recoveryRoute.kind === 'resolveConflict') {
-      await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
+      await taskExecutor.resolveConflict(taskId, persistedSavedError, effectiveAgentName);
     } else {
       const output = persistence.getTaskOutput(taskId);
       const fixContext = options.reviewGateContext?.fixContext;
       if (fixContext !== undefined) {
-        await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError, fixContext);
+        await taskExecutor.fixWithAgent(taskId, output, effectiveAgentName, persistedSavedError, fixContext);
       } else {
-        await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+        await taskExecutor.fixWithAgent(taskId, output, effectiveAgentName, persistedSavedError);
       }
     }
     assertLineageCurrent(lineage, orchestrator, options.signal);
@@ -896,7 +897,7 @@ export async function fixWithAgentAction(
     if (err instanceof StaleLineageError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     const errorLabel = options.failureOutputLabel
-      ?? (recoveryRoute.kind === 'resolveConflict' ? 'Resolve Conflict' : `Fix with ${options.agentName ?? 'Claude'}`);
+      ?? (recoveryRoute.kind === 'resolveConflict' ? 'Resolve Conflict' : `Fix with ${effectiveAgentName}`);
     assertLineageCurrent(lineage, orchestrator, options.signal);
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
     assertLineageCurrent(lineage, orchestrator, options.signal);
@@ -1047,7 +1048,7 @@ function resolveAutoFixAgent(
     };
   }
   return {
-    selectedAgent: 'claude',
+    selectedAgent: DEFAULT_EXECUTION_AGENT,
     selectedAgentSource: 'default',
     configuredAutoFixAgent: undefined,
     fallbackChain: 'config(empty)->default',
