@@ -142,6 +142,7 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
     });
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
+    expect(screen.getByText('Task terminals')).toBeInTheDocument();
     expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
   });
 

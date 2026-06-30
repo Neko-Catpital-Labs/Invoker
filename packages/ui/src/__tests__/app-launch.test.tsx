@@ -35,7 +35,13 @@ describe('App launch (component)', () => {
 
   it('shows empty state prompt when no plan is loaded', () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
+    expect(screen.getAllByText('Start with a goal.')[0]).toBeInTheDocument();
+    expect(screen.getByText('Invoker Terminal')).toBeInTheDocument();
+    expect(screen.getByText('What to expect')).toBeInTheDocument();
+    expect(screen.getAllByText('Your plan will appear here.')[0]).toBeInTheDocument();
+    expect(screen.getByText('No runs yet')).toBeInTheDocument();
+    expect(screen.getByText('All clear')).toBeInTheDocument();
+    expect(screen.getByText('No tasks running')).toBeInTheDocument();
   });
 
   it('renders left rail navigation and workflow controls', () => {
