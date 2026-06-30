@@ -119,9 +119,6 @@ test_doctor_negative_fixture() {
   local fixture_path="$1"
   local fixture_name="$(basename "$fixture_path")"
   local expected_failed_step="lint-task-atomicity"
-  if [[ "$fixture_name" == "anti-pattern-n-broad-autofix-policy-review-unit.yaml" || "$fixture_name" == "anti-pattern-o-all-in-one-autofix-review-unit.yaml" ]]; then
-    expected_failed_step="lint-review-units"
-  fi
   local output
   local stderr_file
   stderr_file="$(mktemp)"
