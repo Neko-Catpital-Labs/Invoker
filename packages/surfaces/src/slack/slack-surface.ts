@@ -19,9 +19,19 @@ import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
 import { summarizePlanText } from './plan-summary.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
-import { buildAssistantPrompt, parseWorkflowControl } from './workflow-assistant.js';
+import { buildAssistantPrompt, parseWorkflowControl, SLACK_DIRECT_ANSWER_GUIDANCE } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
 import type { ConversationRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
+
+function truncateWords(text: string, maxWords: number): string {
+  const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  if (words.length <= maxWords) return words.join(' ');
+  return `${words.slice(0, maxWords).join(' ')} ...`;
+}
+
+function asSentence(text: string): string {
+  return text.endsWith('...') || text.endsWith('…') ? text : `${text}.`;
+}
 
 // ── Config ──────────────────────────────────────────────────
 
@@ -198,8 +208,8 @@ ${text}
 }
 
 /** Q&A prompt for a lobby question: answer directly, never emit a plan. */
-function buildLobbyQuestionPrompt(text: string): string {
-  return `Answer the user's question about this repository and Invoker. Explore the codebase if needed. Do NOT generate a YAML plan and do NOT create a workflow. Question:\n${text}`;
+export function buildLobbyQuestionPrompt(text: string): string {
+  return `Answer the user's question about this repository and Invoker. Explore the codebase if needed. ${SLACK_DIRECT_ANSWER_GUIDANCE} Do NOT generate a YAML plan and do NOT create a workflow. Question:\n${text}`;
 }
 
 /** Parse the classifier's raw stdout into a validated classification; never throws. */
@@ -870,10 +880,23 @@ export class SlackSurface implements Surface {
     await this.stageConfirm(threadTs, channel, { kind: 'submit', planText, ctx, channel, lobbyThreadTs: threadTs }, this.renderPlanSummary(summary), say);
   }
 
-  /** Plain-English plan view: one numbered sentence per step — the user approves this, not YAML. */
+  /** Short plain-English plan view: the user approves this, not YAML. */
   private renderPlanSummary(summary: { name: string; steps: string[]; taskCount: number }): string {
-    const lines = summary.steps.map((step, i) => `${i + 1}. ${step}`);
-    return [`*${summary.name}* — ${summary.taskCount} step${summary.taskCount === 1 ? '' : 's'}:`, ...lines].join('\n');
+    const title = truncateWords(summary.name, 5);
+    const first = truncateWords(summary.steps[0] ?? 'Run the plan', 6);
+    const parts = [
+      `I'll start "${title}": ${summary.taskCount} step${summary.taskCount === 1 ? '' : 's'} in order.`,
+      `First: ${asSentence(first)}`,
+    ];
+
+    if (summary.steps.length > 1) {
+      parts.push(`Then: ${asSentence(truncateWords(summary.steps[1], 6))}`);
+    }
+    if (summary.steps.length > 2) {
+      parts.push(`Then ${summary.steps.length - 2} more.`);
+    }
+
+    return parts.join(' ');
   }
 
   private buildConfirmBlocks(prompt: string, confirmKey: string): unknown[] {

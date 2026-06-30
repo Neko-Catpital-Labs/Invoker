@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as child_process from 'node:child_process';
-import { SlackSurface, parsePlanningRequest, parseLobbyClassification, BUILTIN_HARNESS_PRESETS } from '../slack/slack-surface.js';
+import { SlackSurface, parsePlanningRequest, parseLobbyClassification, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
 import type { WorkflowContext } from '../slack/workflow-assistant.js';
@@ -85,6 +85,10 @@ function baseConfig() {
   return {
     botToken: 'xoxb', appToken: 'xapp', signingSecret: 's', channelId: 'CLOBBY', log: silentLog,
   };
+}
+
+function wordCount(text: string): number {
+  return text.replace(/[`*_"]/g, '').trim().split(/\s+/).filter(Boolean).length;
 }
 
 function mentionHandler(surface: SlackSurface): Function {
@@ -414,6 +418,14 @@ describe('lobby verb routing', () => {
     });
   }
 
+  it('asks lobby question answers to be short ELI5 Slack prose except for clearly technical questions', () => {
+    const prompt = buildLobbyQuestionPrompt('how many workflows are running?');
+    expect(prompt).toContain('ELI5 Slack prose');
+    expect(prompt).toContain('40 words or fewer');
+    expect(prompt).toContain('clearly technical');
+    expect(prompt).toContain('Do NOT generate a YAML plan');
+  });
+
   it('stages a bulk verb for confirmation, then runs it on a plain `yes`', async () => {
     runWorkflowOp.mockResolvedValue({ ok: true, summary: 'recreate: 3 ok' });
     const surface = lobbySurface();
@@ -661,18 +673,39 @@ describe('lobby verb routing', () => {
     expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No planning conversation') }));
   });
 
-  it('submit shows a plain-English plan summary and emits start_plan on confirmation', async () => {
+  it('submit shows a short plain-English plan summary and emits start_plan on confirmation', async () => {
     const surface = lobbySurface();
     await surface.start(async (cmd) => { received.push(cmd); });
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     // Open a planning conversation in the thread, then arm its drafted plan.
     await mentionHandler(surface)({ event: { text: '<@BOT> add a /health endpoint', ts: 't1', user: 'U1' }, say });
-    draftedPlanForMock = 'name: "Health API"\ntasks:\n  - id: t1\n    description: "Add the /health endpoint to the API"\n    dependencies: []\n';
+    draftedPlanForMock = `
+name: "Health API rollout with several detailed implementation tasks"
+tasks:
+  - id: second
+    description: "Wire the new /health route through the HTTP server without changing unrelated endpoints or middleware"
+    dependencies: [first]
+  - id: first
+    description: "Add a simple /health endpoint for uptime checks"
+    dependencies: []
+  - id: third
+    description: "Add regression coverage for healthy and unhealthy responses"
+    dependencies: [second]
+  - id: fourth
+    description: "Run the focused surface test suite and record the result"
+    dependencies: [third]
+`;
 
     const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
     await mentionHandler(surface)({ event: { text: '<@BOT> submit', thread_ts: 't1', ts: 't2', user: 'U1' }, say: say2 });
     // Shows the ELI5 step summary, does not submit yet.
-    expect(say2).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Add the /health endpoint') }));
+    const confirmationText = say2.mock.calls[0][0].text as string;
+    expect(confirmationText).toContain('steps in order');
+    expect(confirmationText).toContain('First: Add a simple /health endpoint for ...');
+    expect(confirmationText).toContain('Then: Wire the new /health route through ...');
+    expect(confirmationText).toContain('Then 2 more.');
+    expect(confirmationText).not.toContain('without changing unrelated endpoints');
+    expect(wordCount(confirmationText)).toBeLessThanOrEqual(40);
     expect(received.some((c) => c.type === 'start_plan')).toBe(false);
 
     const say3 = vi.fn().mockResolvedValue({ ts: 'c' });
