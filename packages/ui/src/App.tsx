@@ -1412,6 +1412,24 @@ export function App() {
     }
   }, [trackAcceptedMutation]);
 
+  const handleDeleteTask = useCallback(async (taskId: string) => {
+    setContextMenu(null);
+    const confirmed = window.confirm(
+      `Delete task "${taskId}"? Its dependents will use this task's upstream dependencies.`
+    );
+    if (!confirmed) return;
+    try {
+      const result = await window.invoker?.deleteTask(taskId);
+      trackAcceptedMutation(result);
+      if (selectedTaskId === taskId) {
+        setSelectedTaskId(null);
+      }
+      refreshTaskGraph();
+    } catch (err) {
+      console.error('Delete Task failed:', err);
+    }
+  }, [refreshTaskGraph, selectedTaskId, trackAcceptedMutation]);
+
   const handleDeleteWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     const confirmed = window.confirm(
@@ -2324,6 +2342,7 @@ export function App() {
           onRecreateDownstream={handleRecreateDownstream}
           onFix={handleFix}
           onCancel={handleCancelTask}
+          onDelete={handleDeleteTask}
           onClose={closeContextMenu}
           autoFocus={Boolean(contextMenu.returnFocusRegion)}
         />
