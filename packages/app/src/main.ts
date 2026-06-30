@@ -3408,14 +3408,20 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       return { planName: plan.name, workflowId: workflow.id };
     }
+    let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
 
-    registerGuiMutationHandler('invoker:plan-from-goal', async (...args: unknown[]) => (
-      planFromGoalInApp(args[0] as InAppPlanRequest, {
+
+    registerGuiMutationHandler('invoker:plan-from-goal', async (...args: unknown[]) => {
+      if (process.env.NODE_ENV === 'test' && testPlanFromGoalResponse) {
+        const loaded = await loadGeneratedPlanPreview(testPlanFromGoalResponse.planYaml);
+        return { ok: true, planName: testPlanFromGoalResponse.planName, workflowId: loaded.workflowId };
+      }
+      return planFromGoalInApp(args[0] as InAppPlanRequest, {
         config: invokerConfig,
         workingDir: repoRoot,
         loadGeneratedPlan: loadGeneratedPlanPreview,
-      })
-    ));
+      });
+    });
 
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
@@ -3461,6 +3467,12 @@ function createEmbeddedTerminalBackendFromConfig(
             return;
           }
           await injectTaskStates(updates);
+        },
+      );
+      ipcMain.handle(
+        'invoker:set-test-plan-from-goal-response',
+        async (_event, response: { planYaml: string; planName: string } | null) => {
+          testPlanFromGoalResponse = response;
         },
       );
     }

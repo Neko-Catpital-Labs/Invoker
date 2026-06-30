@@ -458,6 +458,26 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'empty-state');
   });
 
+  test('terminal planning loads graph', async ({ page }) => {
+    const plannedYaml = yamlStringify(MENU_PROOF_PLAN);
+    await page.evaluate(async ({ planYaml, planName }) => {
+      await window.invoker.setTestPlanFromGoalResponse({ planYaml, planName });
+    }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow' });
+
+    await page.getByTestId('invoker-terminal-input').fill('plan "Add README"');
+    await page.getByTestId('invoker-terminal-input').press('Enter');
+
+    await expect(page.getByText('Plan "Terminal Planned Flow" loaded. Use run to execute.')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Menu Proof Workflow');
+    await expect(page.getByText('What to expect')).toHaveCount(0);
+    await captureScreenshot(page, 'terminal-planned-graph');
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanFromGoalResponse(null);
+    });
+  });
+
   test('dag loaded', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
@@ -1758,7 +1778,7 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'detached-workflow-lineage-after');
   });
-  test('terminate-wording — task-level uses Terminate, workflow-level keeps Cancel', async ({ page }) => {
+  test('queue-action-wording — task-level uses Cancel, workflow-level keeps Cancel Workflow', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
     await injectTaskStates(page, [
@@ -1776,32 +1796,18 @@ test.describe('Visual proof capture', () => {
     await page.waitForTimeout(2200);
 
 
-    // Switch to queue view to verify the compact terminate affordance on task rows
+    // Switch to queue view to verify the compact cancel affordance on task rows
     await selectGraphMenuItem(page, 'rail-queue');
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
-    const terminateButton = page
+    const cancelButton = page
       .locator('[data-row-id$="task-alpha"]')
-      .getByRole('button', { name: 'Terminate' });
-    await expect(terminateButton).toBeVisible();
+      .getByRole('button', { name: 'Cancel task-alpha' });
+    await expect(cancelButton).toBeVisible();
 
-    // Switch back to DAG view and right-click the running task for context menu
+    // Workflow-level action keeps "Cancel Workflow".
     await selectGraphMenuItem(page, 'rail-home');
-    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
-
-    // Expand the More section to reveal Danger items
+    await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
     await page.getByRole('menuitem', { name: 'More' }).click();
-
-    // Assert task-level action uses "Terminate Task"
-    await expect(page.getByRole('menuitem', { name: 'Terminate Task' })).toBeVisible();
-
-    // Task context menu no longer owns workflow-wide actions.
-    await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toHaveCount(0);
-
-    await page.keyboard.press('Escape');
-    const workflowMenu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
-    await page.getByRole('menuitem', { name: 'More' }).click();
-
-    // Workflow-level action keeps "Cancel Workflow" (not converted)
     await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toBeVisible();
 
     await captureScreenshot(page, 'terminate-wording-task-vs-workflow');
@@ -1823,9 +1829,9 @@ test.describe('Visual proof capture', () => {
 
     const actionRow = page.locator('[data-row-id$="task-alpha"]');
     await expect(actionRow).toBeVisible();
-    // Assert the action queue row renders the compact terminate affordance
-    const terminateButton = actionRow.getByRole('button', { name: 'Terminate' });
-    await expect(terminateButton).toBeVisible();
+    // Assert the action queue row renders the compact cancel affordance
+    const cancelButton = actionRow.getByRole('button', { name: 'Cancel task-alpha' });
+    await expect(cancelButton).toBeVisible();
 
     // Assert no visible priority metadata line on the row
     await expect(actionRow.locator('text=priority:')).not.toBeVisible();
@@ -1834,7 +1840,7 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'queue-cancel-control');
   });
 
-  test('queue-action-surface-hardening — composed queue UX with labels, relationships, and terminate', async ({ page }) => {
+  test('queue-action-surface-hardening — composed queue UX with labels, relationships, and cancel', async ({ page }) => {
     await loadPlan(page, QUEUE_HARDENING_PLAN);
     const now = new Date();
     await injectTaskStates(page, [
@@ -1867,11 +1873,11 @@ test.describe('Visual proof capture', () => {
     // Assert canonical action queue labels are present
     await expect(page.locator('text=running').first()).toBeVisible();
 
-    // Assert the running task row exposes the compact terminate affordance
-    const terminateButton = page
+    // Assert the running task row exposes the compact cancel affordance
+    const cancelButton = page
       .locator('[data-row-id$="qh-running"]')
-      .getByRole('button', { name: 'Terminate' });
-    await expect(terminateButton).toBeVisible();
+      .getByRole('button', { name: 'Cancel qh-running' });
+    await expect(cancelButton).toBeVisible();
 
     // Assert downstream dependent shows its dependency in Backlog
     await expect(page.getByText('deps: qh-running')).toBeVisible();
