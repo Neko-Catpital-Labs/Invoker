@@ -157,8 +157,6 @@ Minimal example:
   "maxConcurrency": 6,
   "autoFixRetries": 3,
   "autoFixAgent": "claude",
-  "defaultExecutionAgent": "omp",
-  "defaultExecutionModel": "chatgpt-5.4",
   "autoFixCi": false,
   "remoteTargets": {
     "staging-a": {
