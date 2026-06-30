@@ -8,6 +8,15 @@ describe('parseLobbyControl', () => {
     expect(parseLobbyControl('  Submit!  ')).toEqual({ kind: 'submit' });
   });
 
+  it('parses the restart verb (with optional target words and trailing punctuation)', () => {
+    expect(parseLobbyControl('restart')).toEqual({ kind: 'restart' });
+    expect(parseLobbyControl('restart invoker')).toEqual({ kind: 'restart' });
+    expect(parseLobbyControl('  Restart!  ')).toEqual({ kind: 'restart' });
+    expect(parseLobbyControl('restart the app')).toEqual({ kind: 'restart' });
+    // Prose that merely starts with "restart" is not the verb.
+    expect(parseLobbyControl('restart the login workflow')).toBeNull();
+  });
+
   it('parses bulk ops via "all" and "all workflows"', () => {
     expect(parseLobbyControl('recreate all')).toEqual({ kind: 'op', operation: 'recreate', target: { all: true } });
     expect(parseLobbyControl('recreate all workflows')).toEqual({ kind: 'op', operation: 'recreate', target: { all: true } });

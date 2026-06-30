@@ -82,6 +82,8 @@ export interface SlackSurfaceConfig {
   gatherWorkflowContext?: (workflowId: string) => Promise<WorkflowContext>;
   /** Executes a workflow operation (recreate/rebase/retry/status/cancel) and returns a summary. Injected by main.ts. */
   runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
+  /** Relaunches Invoker (host-owned). Enables the `restart` lobby verb. */
+  onRestartInvoker?: () => Promise<void>;
 }
 
 export interface HarnessPreset {
@@ -250,7 +252,8 @@ interface ConversationLike {
 /** An action staged for a thread, awaiting a yes/no (text or button) confirmation. */
 type PendingConfirm =
   | { kind: 'op'; op: WorkflowOp }
-  | { kind: 'submit'; planText: string; ctx?: PlanningContext; channel: string; lobbyThreadTs: string };
+  | { kind: 'submit'; planText: string; ctx?: PlanningContext; channel: string; lobbyThreadTs: string }
+  | { kind: 'restart' };
 
 interface SayResult {
   ts?: string;
@@ -323,6 +326,7 @@ export class SlackSurface implements Surface {
   private workflowChannelRepo?: WorkflowChannelRepository;
   private gatherWorkflowContext?: (workflowId: string) => Promise<WorkflowContext>;
   private runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
+  private onRestartInvoker?: () => Promise<void>;
 
   constructor(config: SlackSurfaceConfig) {
     this.app = new App({
@@ -356,6 +360,7 @@ export class SlackSurface implements Surface {
     this.workflowChannelRepo = config.workflowChannelRepo;
     this.gatherWorkflowContext = config.gatherWorkflowContext;
     this.runWorkflowOp = config.runWorkflowOp;
+    this.onRestartInvoker = config.onRestartInvoker;
     this.log = config.log ?? ((source, level, msg) => {
       const fn = level === 'error' ? console.error : console.log;
       fn(`[${source}] ${msg}`);
@@ -668,6 +673,10 @@ export class SlackSurface implements Surface {
       await this.handleLobbySubmit(channel, threadTs, event.user ?? 'unknown', say);
       return;
     }
+    if (ctrl?.kind === 'restart') {
+      await this.handleLobbyRestart(threadTs, channel, say);
+      return;
+    }
 
     // Slower paths (LLM classifier, repo checkout, planner) acknowledge receipt up front.
     if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
@@ -925,6 +934,10 @@ export class SlackSurface implements Surface {
       await this.runConfirmedOp(pending.op, threadTs, say, channel);
       return;
     }
+    if (pending.kind === 'restart') {
+      await this.runConfirmedRestart(threadTs, say);
+      return;
+    }
     await say({ text: 'Starting plan execution…', thread_ts: threadTs });
     const ctx = pending.ctx;
     await this.onCommand?.({
@@ -938,6 +951,30 @@ export class SlackSurface implements Surface {
     });
     this.planningContexts.delete(pending.lobbyThreadTs);
     this.cleanupSession(pending.lobbyThreadTs, 'plan_submitted');
+  }
+
+  /** Restart Invoker on request — always confirm first (it interrupts the running app). */
+  private async handleLobbyRestart(threadTs: string, channel: string, say: SayFn): Promise<void> {
+    if (!this.onRestartInvoker) {
+      await say({ text: 'Restarting Invoker is not available in this deployment.', thread_ts: threadTs });
+      return;
+    }
+    await this.stageConfirm(threadTs, channel, { kind: 'restart' }, 'This will restart Invoker.', say);
+  }
+
+  /** Run a confirmed restart: relaunch Invoker, then report health. */
+  private async runConfirmedRestart(threadTs: string, say: SayFn): Promise<void> {
+    if (!this.onRestartInvoker) {
+      await say({ text: 'Restarting Invoker is not available in this deployment.', thread_ts: threadTs });
+      return;
+    }
+    await say({ text: 'Bringing Invoker back… :hourglass_flowing_sand:', thread_ts: threadTs });
+    try {
+      await this.onRestartInvoker();
+      await say({ text: 'Invoker is back ✅', thread_ts: threadTs });
+    } catch (err) {
+      await say({ text: `Restart failed: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
+    }
   }
 
   /** Route a deterministic verb from `/invoker` (channel-level — slash can't run in a thread). */
@@ -968,6 +1005,13 @@ export class SlackSurface implements Surface {
       const key = `slash:${channel}:${command.user_id}:${Date.now()}`;
       this.pendingConfirms.set(key, { kind: 'submit', planText, ctx, channel, lobbyThreadTs: resolved });
       const prompt = this.renderPlanSummary(summary);
+      await respond({ text: prompt, response_type: 'ephemeral', blocks: this.buildConfirmBlocks(prompt, key) as never });
+      return;
+    }
+    if (ctrl.kind === 'restart') {
+      const key = `slash:${channel}:${command.user_id}:${Date.now()}`;
+      this.pendingConfirms.set(key, { kind: 'restart' });
+      const prompt = 'This will restart Invoker.';
       await respond({ text: prompt, response_type: 'ephemeral', blocks: this.buildConfirmBlocks(prompt, key) as never });
       return;
     }
