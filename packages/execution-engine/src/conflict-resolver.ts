@@ -417,8 +417,22 @@ else
 fi
 `;
 
-  await execRemoteSsh(target, script, 'remote_conflict_fix');
-  console.log(`[resolveConflict] Successfully resolved remote conflict for ${task.id}`);
+  const sshArgs = [
+    ...buildSshConnectionArgs({
+      sshKeyPath: target.sshKeyPath,
+      port: target.port,
+      user: target.user,
+      host: target.host,
+    }, { batchMode: true }),
+    'bash', '-s',
+  ];
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('ssh', sshArgs, { stdio: ['pipe', 'inherit', 'inherit'], env: cleanElectronEnv() });
+    child.stdin?.write(script);
+    child.stdin?.end();
+    child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`ssh conflict resolve failed (exit=${code})`)));
+    child.on('error', reject);
+  });
 }
 
 /**
