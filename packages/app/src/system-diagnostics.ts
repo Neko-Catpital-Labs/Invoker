@@ -98,14 +98,18 @@ export function collectSystemDiagnostics(args: {
   config?: { path: string; exists: boolean; error?: string };
   presets?: Record<string, PlanningPresetSpec>;
   defaultPreset?: string;
+  toolDetector?: typeof detectTool;
+  isInstalled?: (command: string) => boolean;
 }): SystemDiagnostics & { readiness: PrerequisiteCheck[] } {
+  const toolDetector = args.toolDetector ?? detectTool;
+  const isInstalled = args.isInstalled ?? commandIsOnPath;
   const tools = DEFAULT_TOOL_REQUIREMENTS.map((req) =>
-    detectTool(req.id, req.name, req.command, ['--version'], req.installHint ?? '', req.required ?? false),
+    toolDetector(req.id, req.name, req.command, ['--version'], req.installHint ?? '', req.required ?? false),
   );
 
   const readiness = assembleReadinessChecks({
     tools: DEFAULT_TOOL_REQUIREMENTS,
-    isInstalled: commandIsOnPath,
+    isInstalled,
     config: args.config,
     presets: args.presets,
     defaultPreset: args.defaultPreset,

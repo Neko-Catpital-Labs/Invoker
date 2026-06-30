@@ -103,6 +103,7 @@ import {
 import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
 import {
+  DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
   resolveConfigFileState,
   resolveEmbeddedTerminalBackendConfig,

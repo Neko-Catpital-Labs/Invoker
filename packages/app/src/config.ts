@@ -265,6 +265,14 @@ export interface InvokerConfig {
    */
   externalWorkers?: ExternalWorkerConfig[];
 }
+export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
+  'cursor+claude': { tool: 'cursor', model: 'claude' },
+  'cursor+codex': { tool: 'cursor', model: 'codex' },
+  'omp+claude': { tool: 'omp', model: 'claude' },
+  'omp+codex': { tool: 'omp', model: 'codex' },
+  omp: { tool: 'omp' },
+  codex: { tool: 'codex' },
+};
 
 function readJsonSafe(path: string): InvokerConfig {
   if (!existsSync(path)) {
@@ -288,7 +296,8 @@ function readJsonSafe(path: string): InvokerConfig {
 }
 
 export function resolveConfigFilePath(): string {
-  return process.env.INVOKER_REPO_CONFIG_PATH ?? join(homedir(), '.invoker', 'config.json');
+  const override = process.env.INVOKER_REPO_CONFIG_PATH?.trim();
+  return override || join(homedir(), '.invoker', 'config.json');
 }
 
 export function resolveConfigFileState(): { path: string; exists: boolean } {
