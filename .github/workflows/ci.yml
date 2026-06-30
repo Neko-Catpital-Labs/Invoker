@@ -196,6 +196,7 @@ jobs:
           INVOKER_TEST_ALL_EXCLUDE: >-
             required/20-e2e-dry-run.sh,
             required/21-e2e-dry-run-downstream.sh,
+            required/21-e2e-dry-run-downstream-reset.sh,
             required/22-e2e-dry-run-github.sh
           TMPDIR: /tmp/invoker-tmp
         run: |
@@ -413,8 +414,10 @@ jobs:
         include:
           - name: case-1
             suite: scripts/test-suites/required/20-e2e-dry-run.sh
-          - name: case-2
+          - name: case-2a
             suite: scripts/test-suites/required/21-e2e-dry-run-downstream.sh
+          - name: case-2b
+            suite: scripts/test-suites/required/21-e2e-dry-run-downstream-reset.sh
           - name: case-4
             suite: scripts/test-suites/required/22-e2e-dry-run-github.sh
 
@@ -477,11 +480,37 @@ jobs:
       matrix:
         include:
           - name: 1-of-3
-            shard: 1/3
+            files: >-
+              e2e/visual-proof.spec.ts
+              e2e/edit-task-command.spec.ts
+              e2e/headless-thundering-herd.spec.ts
+              e2e/launching-stall-watchdog.spec.ts
+              e2e/embedded-terminal-pty.spec.ts
+              e2e/keyboard-navigation.spec.ts
+              e2e/action-graph-visual-proof.spec.ts
+              e2e/invalid-merge-workspace-visual.spec.ts
           - name: 2-of-3
-            shard: 2/3
+            files: >-
+              e2e/persistence-lifecycle.spec.ts
+              e2e/task-death-logs.spec.ts
+              e2e/restart-failed-task.spec.ts
+              e2e/task-new-attempt-reset.spec.ts
+              e2e/ui-graph-drag-performance.spec.ts
+              e2e/pending-review-gate-target-repo.proof.spec.ts
+              e2e/workflow-status-composition.spec.ts
+              e2e/startup-window-liveness.spec.ts
           - name: 3-of-3
-            shard: 3/3
+            files: >-
+              e2e/workflow-lifecycle.spec.ts
+              e2e/persistence-recovery.spec.ts
+              e2e/edit-task-prompt.spec.ts
+              e2e/fix-with-claude.spec.ts
+              e2e/fix-with-agent-transition.spec.ts
+              e2e/orphan-relaunch.spec.ts
+              e2e/gap-recovery-bench.spec.ts
+              e2e/system-setup-visual-proof.spec.ts
+              e2e/startup-nonempty-responsiveness.spec.ts
+              e2e/embedded-terminal-spawn-failure.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
@@ -526,9 +555,9 @@ jobs:
 
       - name: Run Playwright shard
         env:
-          INVOKER_PLAYWRIGHT_SHARD: ${{ matrix.shard }}
-          INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright
+          INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-${{ matrix.name }}
           INVOKER_PLAYWRIGHT_WORKERS: '1'
+          INVOKER_PLAYWRIGHT_FILES: ${{ matrix.files }}
           INVOKER_PLAYWRIGHT_ARGS: --reporter=line
         run: bash scripts/test-suites/optional/40-playwright-app.sh
 
