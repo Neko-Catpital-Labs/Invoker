@@ -550,7 +550,6 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
   });
 
-
   test('dag loaded', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
@@ -1924,7 +1923,6 @@ test.describe('Visual proof capture', () => {
       // qh-downstream stays pending with unmet dep on qh-running → Backlog
     ]);
 
-<<<<<<< HEAD
     await page.evaluate(() => {
       window.invoker.getQueueStatus = async () => ({
         maxConcurrency: 5,
@@ -1939,14 +1937,6 @@ test.describe('Visual proof capture', () => {
     await page.waitForTimeout(2200);
     // Navigate to queue view
     await selectGraphMenuItem(page, 'rail-queue');
-||||||| parent of df8d41fbc (Refresh reskin visual proof states)
-    // Navigate to queue view
-    await page.getByTestId('rail-queue').click();
-
-=======
-    // Navigate to queue view
-    await selectGraphMenuItem(page, 'rail-queue');
->>>>>>> df8d41fbc (Refresh reskin visual proof states)
     // Assert canonical Action Queue and Backlog headings
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: /Backlog/ })).toBeVisible();
