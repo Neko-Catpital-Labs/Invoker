@@ -53,13 +53,13 @@ describe('AgentRegistry', () => {
     registry.registerExecution(codex);
   });
 
-  it('defaults nullish execution agent names to claude', () => {
-    expect(registry.getOrThrow(undefined)).toBe(claude);
-    expect(registry.getOrThrow(null)).toBe(claude);
-    expect(registry.getOrThrow('')).toBe(claude);
-    expect(registry.getOrThrow('   ')).toBe(claude);
-    expect(registry.getOrThrow('null')).toBe(claude);
-    expect(registry.getOrThrow('undefined')).toBe(claude);
+  it('defaults nullish execution agent names to codex', () => {
+    expect(registry.getOrThrow(undefined)).toBe(codex);
+    expect(registry.getOrThrow(null)).toBe(codex);
+    expect(registry.getOrThrow('')).toBe(codex);
+    expect(registry.getOrThrow('   ')).toBe(codex);
+    expect(registry.getOrThrow('null')).toBe(codex);
+    expect(registry.getOrThrow('undefined')).toBe(codex);
   });
 
   it('keeps explicit valid execution agent names working', () => {
