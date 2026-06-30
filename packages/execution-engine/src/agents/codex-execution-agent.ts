@@ -12,7 +12,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
+import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions } from '../agent.js';
 
 export interface CodexExecutionAgentConfig {
   /** Command to invoke the Codex CLI. Default: 'codex'. */
@@ -47,12 +47,12 @@ export class CodexExecutionAgent implements ExecutionAgent {
     this.bundledSkillRoot = join(homedir(), '.codex', 'skills');
   }
 
-  buildCommand(fullPrompt: string): AgentCommandSpec {
+  buildCommand(fullPrompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
     const sessionId = randomUUID();
     const args = ['exec', '--json'];
     if (this.bypassApprovalsAndSandbox) args.push(...this.buildBypassArgs());
     else if (this.fullAuto) args.push('--full-auto');
-    args.push(fullPrompt);
+    args.push(...this.buildModelArgs(options.executionModel), fullPrompt);
     return { cmd: this.command, args, sessionId, fullPrompt };
   }
 
@@ -63,13 +63,17 @@ export class CodexExecutionAgent implements ExecutionAgent {
     };
   }
 
-  buildFixCommand(prompt: string): AgentCommandSpec {
+  buildFixCommand(prompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
     const sessionId = randomUUID();
     const args = ['exec', '--json'];
     if (this.bypassApprovalsAndSandbox) args.push(...this.buildBypassArgs());
     else if (this.fullAuto) args.push('--full-auto');
-    args.push(prompt);
+    args.push(...this.buildModelArgs(options.executionModel), prompt);
     return { cmd: this.command, args, sessionId };
+  }
+
+  private buildModelArgs(executionModel?: string): string[] {
+    return executionModel ? ['--model', executionModel] : [];
   }
 
   private buildBypassArgs(): string[] {
