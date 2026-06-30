@@ -1765,13 +1765,24 @@ test.describe('Visual proof capture', () => {
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
 
-    // Switch to queue view to verify the compact cancel affordance on task rows
+    await page.evaluate(() => {
+      window.invoker.getQueueStatus = async () => ({
+        maxConcurrency: 5,
+        runningCount: 1,
+        running: [{ taskId: 'task-alpha', description: 'First test task' }],
+        queued: [],
+      });
+    });
+    await page.waitForTimeout(2200);
+
+
+    // Switch to queue view to verify the compact terminate affordance on task rows
     await selectGraphMenuItem(page, 'rail-queue');
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
-    const cancelButton = page
-      .locator('[data-row-id$="/task-alpha"]')
-      .getByRole('button', { name: 'Cancel task-alpha' });
-    await expect(cancelButton).toBeVisible();
+    const terminateButton = page
+      .locator('[data-row-id$="task-alpha"]')
+      .getByRole('button', { name: 'Terminate' });
+    await expect(terminateButton).toBeVisible();
 
     // Switch back to DAG view and right-click the running task for context menu
     await selectGraphMenuItem(page, 'rail-home');
@@ -1804,15 +1815,17 @@ test.describe('Visual proof capture', () => {
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
 
+    await page.waitForTimeout(2200);
+
     // Navigate to queue view
-    await page.getByRole('button', { name: 'Queue' }).click();
+    await selectGraphMenuItem(page, 'rail-queue');
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
 
-    // Assert the action queue row renders the compact cancel affordance
     const actionRow = page.locator('[data-row-id$="task-alpha"]');
     await expect(actionRow).toBeVisible();
-    const cancelButton = actionRow.getByRole('button', { name: 'Cancel task-alpha' });
-    await expect(cancelButton).toBeVisible();
+    // Assert the action queue row renders the compact terminate affordance
+    const terminateButton = actionRow.getByRole('button', { name: 'Terminate' });
+    await expect(terminateButton).toBeVisible();
 
     // Assert no visible priority metadata line on the row
     await expect(actionRow.locator('text=priority:')).not.toBeVisible();
@@ -1832,6 +1845,19 @@ test.describe('Visual proof capture', () => {
       // qh-downstream stays pending with unmet dep on qh-running → Backlog
     ]);
 
+    await page.evaluate(() => {
+      window.invoker.getQueueStatus = async () => ({
+        maxConcurrency: 5,
+        runningCount: 2,
+        running: [
+          { taskId: 'qh-running', description: 'Running task with downstream' },
+          { taskId: 'qh-fixing', description: 'Fixing task with AI' },
+        ],
+        queued: [],
+      });
+    });
+    await page.waitForTimeout(2200);
+
     // Navigate to queue view
     await selectGraphMenuItem(page, 'rail-queue');
     // Assert canonical Action Queue and Backlog headings
@@ -1841,11 +1867,11 @@ test.describe('Visual proof capture', () => {
     // Assert canonical action queue labels are present
     await expect(page.locator('text=running').first()).toBeVisible();
 
-    // Assert the running task row exposes the compact cancel affordance
-    const cancelButton = page
-      .locator('[data-row-id$="/qh-running"]')
-      .getByRole('button', { name: 'Cancel qh-running' });
-    await expect(cancelButton).toBeVisible();
+    // Assert the running task row exposes the compact terminate affordance
+    const terminateButton = page
+      .locator('[data-row-id$="qh-running"]')
+      .getByRole('button', { name: 'Terminate' });
+    await expect(terminateButton).toBeVisible();
 
     // Assert downstream dependent shows its dependency in Backlog
     await expect(page.getByText('deps: qh-running')).toBeVisible();

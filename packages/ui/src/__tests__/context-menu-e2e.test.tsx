@@ -297,7 +297,8 @@ describe('Context menu (component)', () => {
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-1-core-activity')).toHaveTextContent('Pending: queued for launch'));
     expect(workflowNode).not.toHaveTextContent(/Rebase|Recreate|invoker:rebase-recreate/);
 
-    fireEvent.click(screen.getByText('Action Graph'));
+    fireEvent.click(screen.getByTestId('graph-more-button'));
+    fireEvent.click(await screen.findByTestId('rail-action-graph'));
     fireEvent.click(await screen.findByTestId('rf__node-intent:77'));
     expect(await screen.findByTestId('workflow-inspector-action-node')).toHaveTextContent('invoker:rebase-recreate');
   });
