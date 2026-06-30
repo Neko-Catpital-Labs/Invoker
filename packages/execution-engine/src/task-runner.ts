@@ -2238,6 +2238,33 @@ export class TaskRunner {
     const preferredName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
     const prCapableAgents = this.executionAgentRegistry.listWithCapability('make-pr');
     const orderedAgents = this.buildAgentFallbackOrder(preferredName, prCapableAgents);
+    const logProgress = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      message: string,
+      detail: Record<string, unknown> = {},
+    ) => {
+      if (!args.mergeNodeTaskId) return;
+      try {
+        const persistence = this.persistence as { logEvent?: (taskId: string, eventType: string, payload?: unknown) => void };
+        persistence.logEvent?.(args.mergeNodeTaskId, 'task.log', {
+          level,
+          message,
+          ...detail,
+        });
+      } catch (error) {
+        this.logger.warn('[pr-authoring] failed to persist task progress event', {
+          taskId: args.mergeNodeTaskId,
+          error,
+        });
+      }
+    };
+
+    logProgress('info', 'Preparing make-pr review stack publisher', {
+      featureBranch: args.featureBranch,
+      baseBranch: args.baseBranch,
+      agentCount: orderedAgents.length,
+    });
+
     const errors: string[] = [];
 
     for (const agent of orderedAgents) {
@@ -2259,11 +2286,19 @@ export class TaskRunner {
       });
 
       try {
+        logProgress('info', `Starting ${agent.name} make-pr agent`, {
+          agentName: agent.name,
+          cwd: args.cwd,
+        });
         this.logger.info(
           `[pr-authoring] review-stack publish starting agent=${agent.name} `
             + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr cwd=${args.cwd}`,
         );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
+        logProgress('info', `${agent.name} make-pr agent finished; validating output`, {
+          agentName: agent.name,
+          sessionId: result.sessionId,
+        });
         const parsedArtifacts = parseMakePrStackPublishResult(result.body);
 
         // Enforce the make-pr review-stack schema on every published body. Prefer
@@ -2300,6 +2335,10 @@ export class TaskRunner {
             `[pr-authoring] review-stack body validation failed agent=${agent.name} `
               + `errors=${bodyErrors.join('; ')}`,
           );
+          logProgress('warn', `${agent.name} published review stack failed validation`, {
+            agentName: agent.name,
+            errors: bodyErrors,
+          });
           errors.push(`${agent.name}: invalid PR body — ${bodyErrors.join('; ')}`);
           continue;
         }
@@ -2315,13 +2354,22 @@ export class TaskRunner {
           generation,
           createdAt: nowIso,
         }));
+        logProgress('info', 'Review stack body validated', {
+          agentName: agent.name,
+          artifactCount: artifacts.length,
+        });
         this.logger.info(
           `[pr-authoring] review-stack published agent=${agent.name} artifacts=${artifacts.length} `
             + 'bodies validated against make-pr schema',
         );
         return { artifacts, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
-        errors.push(`${agent.name}: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        logProgress('warn', `${agent.name} make-pr agent failed`, {
+          agentName: agent.name,
+          error: message,
+        });
+        errors.push(`${agent.name}: ${message}`);
       }
     }
 
