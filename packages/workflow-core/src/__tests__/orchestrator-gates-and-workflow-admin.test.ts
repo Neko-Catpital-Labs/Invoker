@@ -219,6 +219,13 @@ class InMemoryPersistence implements OrchestratorPersistence {
     }
   }
 
+  deleteTask(taskId: string): void {
+    const resolvedId = this.resolveBareTaskKey(taskId);
+    this.tasks.delete(resolvedId);
+    this.attempts.delete(resolvedId);
+    this.events = this.events.filter((event) => event.taskId !== resolvedId);
+  }
+
   deleteWorkflow(workflowId: string): void {
     this.workflows.delete(workflowId);
     for (const [taskId, entry] of this.tasks) {
@@ -1099,6 +1106,45 @@ describe('Orchestrator', () => {
       expect(hookSpy).toHaveBeenCalledTimes(1);
       expect(hookSpy.mock.calls[0][0].id).toBe(mergeId);
       expect(orchestrator.getTask(mergeId)!.status).toBe('completed');
+    });
+  });
+
+  describe('deleteTask', () => {
+    it('removes one task and retargets dependents to the deleted task upstreams', () => {
+      orchestrator.loadPlan({
+        name: 'task-delete-retarget',
+        tasks: [
+          { id: 'a', description: 'A' },
+          { id: 'b', description: 'B', dependencies: ['a'] },
+          { id: 'c', description: 'C', dependencies: ['b'] },
+        ],
+      });
+      const bId = sid(orchestrator, 0, 'b');
+      const cId = sid(orchestrator, 0, 'c');
+      publishedDeltas = [];
+
+      orchestrator.deleteTask(bId);
+
+      expect(orchestrator.getTask(bId)).toBeUndefined();
+      expect(persistence.getTaskEntry(bId)).toBeUndefined();
+      expect(orchestrator.getTask(cId)?.dependencies).toEqual([sid(orchestrator, 0, 'a')]);
+      expect(publishedDeltas).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'removed', taskId: bId }),
+          expect.objectContaining({ type: 'updated', taskId: cId }),
+        ]),
+      );
+    });
+
+    it('blocks deleting the last non-merge task in a workflow', () => {
+      orchestrator.loadPlan({
+        name: 'task-delete-last',
+        tasks: [{ id: 'only', description: 'Only task' }],
+      });
+      const onlyId = sid(orchestrator, 0, 'only');
+
+      expect(() => orchestrator.deleteTask(onlyId)).toThrow(/last task/);
+      expect(orchestrator.getTask(onlyId)).toBeDefined();
     });
   });
 
