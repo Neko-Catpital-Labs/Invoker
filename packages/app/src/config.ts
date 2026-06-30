@@ -64,10 +64,6 @@ export interface InvokerConfig {
    */
   autoFixRetries?: number;
   /**
-   * Default execution agent for plan tasks that omit executionAgent.
-   */
-  defaultExecutionAgent?: string;
-  /**
    * When true, successful AI-applied fixes are automatically approved.
    * This skips the manual "Approve Fix" step for fix-with-agent and
    * resolve-conflict flows.
@@ -88,6 +84,10 @@ export interface InvokerConfig {
    * then to the built-in default agent.
    */
   autoFixAgent?: string;
+  /** Default execution harness for prompt-backed tasks when the task does not override it. */
+  defaultExecutionAgent?: string;
+  /** Default execution model for prompt-backed tasks when the task does not override it. */
+  defaultExecutionModel?: string;
   /**
    * When true, failed CI checks on Invoker-created review-gate PRs can
    * trigger the same auto-fix recovery flow used for task failures.
@@ -297,6 +297,20 @@ export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
   return configured && configured.length > 0 ? configured : BUILT_IN_DEFAULT_EXECUTION_AGENT;
 }
 
+
+export interface DefaultTaskExecutionSettings {
+  executionAgent: string;
+  executionModel?: string;
+}
+
+export function resolveDefaultTaskExecutionSettings(config: InvokerConfig): DefaultTaskExecutionSettings {
+  const configuredAgent = config.defaultExecutionAgent?.trim();
+  const configuredModel = config.defaultExecutionModel?.trim();
+  return {
+    executionAgent: configuredAgent && configuredAgent.length > 0 ? configuredAgent : BUILT_IN_DEFAULT_EXECUTION_AGENT,
+    ...(configuredModel && configuredModel.length > 0 ? { executionModel: configuredModel } : {}),
+  };
+}
 
 
 export type EmbeddedTerminalBackendConfig = 'bash' | 'pty';
