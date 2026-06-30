@@ -7,7 +7,11 @@
     "allowImportingTsExtensions": true,
     "lib": ["ES2024"],
     "rootDir": ".",
-    "outDir": "./dist-typecheck"
+    "outDir": "./dist-typecheck",
+    "baseUrl": ".",
+    "paths": {
+      "@invoker/surfaces": ["packages/surfaces/src/index.ts"]
+    }
   },
   "include": [
     "packages/app/src/**/*.ts",

@@ -106,6 +106,10 @@ export interface InvokerConfig {
   slackHarnessPresets?: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }>;
   /** Default harness preset key when the message carries no `[preset]` tag. Default: 'cursor+claude'. */
   defaultSlackHarnessPreset?: string;
+  /** Named in-app planner harness presets: preset key → {tool, model}; built-ins apply when omitted. */
+  plannerHarnessPresets?: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }>;
+  /** Default in-app planner harness preset key. Default: 'cursor+claude'. */
+  defaultPlannerHarnessPreset?: string;
   /** Slack repo aliases: alias → git URL, resolved from a `[repo:<alias>]` tag. */
   slackRepos?: Record<string, string>;
   /** Repo URL used for Slack planning when the message carries no `[repo:]` tag. */

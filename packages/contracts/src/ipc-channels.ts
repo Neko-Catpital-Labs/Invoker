@@ -385,6 +385,25 @@ export interface OpenTerminalResponse {
   session?: TerminalSessionDescriptor;
 }
 
+// ── In-App Planner types ────────────────────────────────────
+
+export interface InAppPlanRequest {
+  goal: string;
+  /** Optional planner harness preset key, e.g. "cursor+claude" or "codex". */
+  preset?: string;
+}
+
+export type InAppPlanResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 // ── Search types ────────────────────────────────────────────
 
 export interface SearchResultItem {
@@ -412,6 +431,10 @@ export const IpcChannels = {
   'invoker:load-plan': {} as {
     request: [planText: string];
     response: void;
+  },
+  'invoker:plan-from-goal': {} as {
+    request: [request: InAppPlanRequest];
+    response: InAppPlanResponse;
   },
   'invoker:start': {} as {
     request: [];

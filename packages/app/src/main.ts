@@ -78,7 +78,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { ActionGraphResponse, BundledSkillsInstallMode, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
+import type { ActionGraphResponse, BundledSkillsInstallMode, InAppPlanRequest, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
@@ -3729,14 +3729,65 @@ function createEmbeddedTerminalBackendFromConfig(
       getTaskDeltaStreamSequence,
       recordStartupDuration,
     });
-    registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
-      const planText = String(planTextArg);
+
+    const resolveInAppPlannerRepoUrl = (): string | undefined => {
+      if (invokerConfig.defaultRepoUrl) return invokerConfig.defaultRepoUrl;
+      if (process.env.INVOKER_REPO_URL) return process.env.INVOKER_REPO_URL;
+      try {
+        return execSync('git remote get-url origin', { cwd: repoRoot, encoding: 'utf8', timeout: 5000 }).trim();
+      } catch {
+        return undefined;
+      }
+    };
+
+    const loadPlanPreview = async (
+      planText: string,
+    ): Promise<{ planName: string; workflowId?: string }> => {
       const { parsePlan } = await import('./plan-parser.js');
       const plan = parsePlan(planText);
       logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
       taskHandles.clear();
       backupPlan(plan, undefined, logger);
+      const beforeWorkflowIds = new Set(orchestrator.getWorkflowIds());
       orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      const workflowId = orchestrator.getWorkflowIds().find((id) => !beforeWorkflowIds.has(id));
+      return { planName: plan.name, workflowId };
+    };
+
+    const loadGeneratedPlan = async (
+      planText: string,
+    ): Promise<{ planName: string; workflowId: string }> => {
+      const loaded = await loadPlanPreview(planText);
+      if (!loaded.workflowId) throw new Error(`Loaded plan "${loaded.planName}" but no workflow was created.`);
+      return { planName: loaded.planName, workflowId: loaded.workflowId };
+    };
+
+    registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
+      await loadPlanPreview(String(planTextArg));
+    });
+
+    registerGuiMutationHandler('invoker:plan-from-goal', async (requestArg: unknown) => {
+      const { planFromGoal } = await import('./in-app-planner.js');
+      return planFromGoal(requestArg as InAppPlanRequest, {
+        workingDir: repoRoot,
+        defaultBranch: invokerConfig.defaultBranch,
+        repoUrl: resolveInAppPlannerRepoUrl(),
+        timeoutMs: (invokerConfig.planningTimeoutSeconds ?? 7_200) * 1_000,
+        experimentalPlanner: invokerConfig.experimentalPlanner,
+        plannerHarnessPresets: invokerConfig.plannerHarnessPresets,
+        defaultPlannerHarnessPreset: invokerConfig.defaultPlannerHarnessPreset,
+        planningCommandBuilder: (opts) =>
+          agentRegistry.getPlanningOrThrow(opts.tool)
+            .buildPlanningCommand(opts.prompt, { model: opts.model }),
+        loadGeneratedPlan,
+        log: (source, level, message) => {
+          const module = source || 'in-app-planner';
+          if (level === 'error') logger.error(message, { module });
+          else if (level === 'warn') logger.warn(message, { module });
+          else if (level === 'debug') logger.debug(message, { module });
+          else logger.info(message, { module });
+        },
+      });
     });
 
     if (process.env.NODE_ENV === 'test') {
