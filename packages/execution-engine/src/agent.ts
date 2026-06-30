@@ -19,7 +19,7 @@ export interface AgentCommandBuildOptions {
   executionModel?: string;
 }
 
-export const DEFAULT_EXECUTION_AGENT = 'claude';
+export const DEFAULT_EXECUTION_AGENT = 'codex';
 
 export interface ExecutionAgent {
   readonly name: string;
