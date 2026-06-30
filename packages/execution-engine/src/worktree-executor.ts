@@ -22,6 +22,7 @@ import {
   shouldResolveViaOriginTracking,
 } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
+import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { sanitizeBranchForPath } from './git-utils.js';
 
 // Re-export for backward compatibility
@@ -443,10 +444,11 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       hasAgentSessionId: !!agentSessionId,
     });
 
-    const executionAgent = request.inputs.executionAgent ?? 'claude';
-    const stdinMode = this.agentRegistry && executionAgent
+    const usesAgent = request.actionType === 'ai_task';
+    const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+    const stdinMode = usesAgent && this.agentRegistry
       ? this.agentRegistry.getOrThrow(executionAgent).stdinMode
-      : (request.actionType === 'ai_task' ? 'ignore' : 'pipe');
+      : (usesAgent ? 'ignore' : 'pipe');
     const spawnCmd = request.actionType === 'ai_task' ? (resolveExecutableOnCurrentPath(cmd) ?? cmd) : cmd;
     bench('WorktreeExecutor.spawn.before', { cmd: spawnCmd, argCount: args.length, cwd: acquired.worktreePath });
     const child = spawn(spawnCmd, args, {
@@ -482,7 +484,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       handle.agentSessionId = agentSessionId;
     }
 
-    const driver = this.agentRegistry?.getSessionDriver(executionAgent);
+    const driver = usesAgent ? this.agentRegistry?.getSessionDriver(executionAgent) : undefined;
     child.stdout?.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
       if (driver) {
@@ -576,7 +578,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return null;
     if (entry.agentSessionId) {
-      const agentName = entry.request.inputs.executionAgent ?? 'claude';
+      const agentName = entry.request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
@@ -605,7 +607,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
     if (meta.agentSessionId) {
       const resume = this.agentRegistry
-        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? 'claude').buildResumeArgs(meta.agentSessionId)
+        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? DEFAULT_EXECUTION_AGENT).buildResumeArgs(meta.agentSessionId)
         : { cmd: 'claude', args: ['--resume', meta.agentSessionId, '--dangerously-skip-permissions'] };
       const spec = {
         command: resume.cmd,
