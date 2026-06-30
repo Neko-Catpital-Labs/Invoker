@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ActionGraphResponse } from '@invoker/contracts';
 
-export function useActionGraphSnapshot(pollMs = 2000): {
+export function useActionGraphSnapshot(pollMs = 2000, enabled = true): {
   graph: ActionGraphResponse | null;
   error: string | null;
   refreshActionGraph: () => Promise<void>;
@@ -10,6 +10,7 @@ export function useActionGraphSnapshot(pollMs = 2000): {
   const [error, setError] = useState<string | null>(null);
 
   const refreshActionGraph = useCallback(async () => {
+    if (!enabled) return;
     try {
       const response = await window.invoker?.getActionGraph?.();
       if (response) {
@@ -19,12 +20,16 @@ export function useActionGraphSnapshot(pollMs = 2000): {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
+    let inFlight = false;
 
     const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         const response = await window.invoker?.getActionGraph?.();
         if (!cancelled && response) {
@@ -35,6 +40,8 @@ export function useActionGraphSnapshot(pollMs = 2000): {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
         }
+      } finally {
+        inFlight = false;
       }
     };
 
@@ -46,7 +53,7 @@ export function useActionGraphSnapshot(pollMs = 2000): {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [pollMs]);
+  }, [enabled, pollMs]);
 
   return { graph, error, refreshActionGraph };
 }
