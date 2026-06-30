@@ -8,11 +8,14 @@
 import {
   appendFileSync,
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
@@ -92,6 +95,44 @@ const nativeSqliteSpecifier = 'node:' + 'sqlite';
 function loadNativeSqlite(): Promise<NativeSqlite> {
   nativeSqlite ??= import(nativeSqliteSpecifier) as Promise<NativeSqlite>;
   return nativeSqlite;
+}
+
+const SQLITE_BACKUP_PREFIXES = ['invoker.db.hourly-auto-', 'invoker.db.before-delete-all-'];
+
+function renameSqliteDatabaseWithSidecars(dbPath: string, destinationPath: string): void {
+  renameSync(dbPath, destinationPath);
+  for (const suffix of ['-wal', '-shm']) {
+    const sidecar = `${dbPath}${suffix}`;
+    if (existsSync(sidecar)) renameSync(sidecar, `${destinationPath}${suffix}`);
+  }
+}
+
+function copySqliteDatabaseWithSidecars(sourcePath: string, destinationPath: string): void {
+  copyFileSync(sourcePath, destinationPath);
+  for (const suffix of ['-wal', '-shm']) {
+    const sidecar = `${sourcePath}${suffix}`;
+    if (existsSync(sidecar)) copyFileSync(sidecar, `${destinationPath}${suffix}`);
+  }
+}
+
+function listRecoveryBackupCandidates(dbPath: string): string[] {
+  const backupDir = join(dirname(dbPath), 'db-backups');
+  let entries: string[];
+  try {
+    entries = readdirSync(backupDir);
+  } catch {
+    return [];
+  }
+
+  return entries
+    .filter((name) =>
+      SQLITE_BACKUP_PREFIXES.some((prefix) => name.startsWith(prefix)) &&
+      !name.endsWith('-wal') &&
+      !name.endsWith('-shm')
+    )
+    .sort()
+    .reverse()
+    .map((name) => join(backupDir, name));
 }
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
@@ -373,7 +414,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.exclusiveLocking = options?.exclusiveLocking === true;
-    this.configureConnection(dbPath !== null);
+    this.configureConnection(dbPath !== null, this.readOnly);
     if (!this.readOnly) {
       this.initSchema();
       this.migrate();
@@ -392,9 +433,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   /**
    * Async factory — opens or creates the database.
-   * If the on-disk file is corrupted, backs it up and starts fresh.
+   * If the on-disk file is corrupted, quarantines it, restores the newest valid
+   * snapshot when available, and only then falls back to a fresh database.
    * @param dbPath File path or the private in-memory SQLite database name (default).
-   * @param options readOnly=true opens DB for read operations without schema mutation.
    *                ownerCapability=true is required to open DB in writable mode for file-backed databases.
    */
   static async create(
@@ -438,17 +479,44 @@ export class SQLiteAdapter implements PersistenceAdapter {
       const backupPath = `${dbPath}.corrupt-${Date.now()}`;
       console.error(
         `[SQLiteAdapter] Database corrupted (${err instanceof Error ? err.message : String(err)}). ` +
-        `Backing up to ${backupPath} and starting fresh.`,
+        `Quarantining at ${backupPath}.`,
       );
-      renameSync(dbPath, backupPath);
-      for (const suffix of ['-wal', '-shm']) {
-        const sidecar = `${dbPath}${suffix}`;
-        if (existsSync(sidecar)) renameSync(sidecar, `${backupPath}${suffix}`);
-      }
+      renameSqliteDatabaseWithSidecars(dbPath, backupPath);
+
+      const restoredFrom = await SQLiteAdapter.restoreLatestValidBackup(dbPath);
       const { DatabaseSync } = await loadNativeSqlite();
+      if (restoredFrom) {
+        console.error(`[SQLiteAdapter] Restored database from ${restoredFrom}.`);
+      } else {
+        console.error('[SQLiteAdapter] No valid database backup found; starting fresh.');
+      }
       const db = new DatabaseSync(dbPath);
       return new SQLiteAdapter(db, dbPath, options);
     }
+  }
+
+  private static async restoreLatestValidBackup(dbPath: string): Promise<string | null> {
+    const { DatabaseSync, backup } = await loadNativeSqlite();
+    for (const candidatePath of listRecoveryBackupCandidates(dbPath)) {
+      const tempDir = mkdtempSync(join(tmpdir(), 'invoker-db-recovery-'));
+      const tempDbPath = join(tempDir, 'candidate.db');
+      let candidateDb: DatabaseSync | null = null;
+      try {
+        copySqliteDatabaseWithSidecars(candidatePath, tempDbPath);
+        candidateDb = new DatabaseSync(tempDbPath);
+        const integrityRows = candidateDb.prepare('PRAGMA integrity_check').all() as Array<{ integrity_check?: unknown }>;
+        const isOk = integrityRows.length === 1 && integrityRows[0]?.integrity_check === 'ok';
+        if (!isOk) continue;
+        await backup(candidateDb, dbPath);
+        return candidatePath;
+      } catch {
+        continue;
+      } finally {
+        candidateDb?.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+    return null;
   }
 
   private resolveOutputDir(dbPath: string | null): string {
@@ -459,10 +527,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return join(invokerHome, 'task-output');
   }
 
-  private configureConnection(fileBacked: boolean): void {
+  private configureConnection(fileBacked: boolean, readOnly: boolean): void {
     this.nativeDb.exec('PRAGMA busy_timeout = 5000');
     this.nativeDb.exec('PRAGMA foreign_keys = ON');
-    if (fileBacked) {
+    if (fileBacked && !readOnly) {
       if (this.exclusiveLocking) {
         // Heap wal-index (no -shm file). MUST precede `journal_mode = WAL`.
         this.nativeDb.exec('PRAGMA locking_mode = EXCLUSIVE');

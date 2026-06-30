@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
@@ -150,6 +150,27 @@ describe('owner boundary enforcement', () => {
       );
 
       expect(afterMtime).toBe(beforeMtime);
+    });
+    it('opens a checkpointed database in read-only mode without trying to switch journal mode', async () => {
+      const writer = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+      const cleanPath = join(tmpDir, 'clean.db');
+      try {
+        writer.saveWorkflow(testWorkflow);
+        await writer.backupTo(cleanPath);
+      } finally {
+        writer.close();
+      }
+      rmSync(dbPath, { force: true });
+      rmSync(`${dbPath}-wal`, { force: true });
+      rmSync(`${dbPath}-shm`, { force: true });
+      copyFileSync(cleanPath, dbPath);
+
+      const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+      try {
+        expect(reader.loadWorkflow('wf-boundary-test')?.id).toBe('wf-boundary-test');
+      } finally {
+        reader.close();
+      }
     });
   });
 

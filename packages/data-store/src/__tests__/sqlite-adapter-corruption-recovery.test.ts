@@ -7,10 +7,12 @@ import {
   readFileSync,
   readdirSync,
   existsSync,
+  copyFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter, isDatabaseCorruptionError } from '../sqlite-adapter.js';
+import type { Workflow } from '../adapter.js';
 
 /**
  * SQLiteAdapter.create() recovers a corrupt database by renaming it (and its
@@ -82,6 +84,44 @@ describe('SQLiteAdapter.create recovery', () => {
     expect(readFileSync(join(dir, corruptBackups[0]))).toEqual(garbage); // original bytes preserved
   });
 
+
+  it('restores the newest valid backup instead of starting fresh', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    const backupDir = join(dir, 'db-backups');
+    mkdirSync(backupDir);
+    const workflow: Workflow = {
+      id: 'wf-preserved',
+      name: 'Preserved Workflow',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const original = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    try {
+      original.saveWorkflow(workflow);
+      await original.backupTo(join(backupDir, 'invoker.db.hourly-auto-20260101-010000-000Z'));
+    } finally {
+      original.close();
+    }
+    writeFileSync(join(backupDir, 'invoker.db.hourly-auto-20260101-020000-000Z'), 'newer but invalid');
+    copyFileSync(dbPath, join(dir, 'healthy-before-corrupt.db'));
+    writeFileSync(dbPath, Buffer.from('xx not a sqlite header xx '.repeat(50)));
+
+    const restored = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    try {
+      expect(restored.listWorkflows().map((wf) => wf.id)).toEqual(['wf-preserved']);
+    } finally {
+      restored.close();
+    }
+
+    const corruptBackups = readdirSync(dir).filter(
+      (name) => name.includes('.corrupt-') && !name.endsWith('-wal') && !name.endsWith('-shm'),
+    );
+    expect(corruptBackups).toHaveLength(1);
+    expect(readFileSync(join(dir, corruptBackups[0]))).not.toEqual(readFileSync(join(dir, 'healthy-before-corrupt.db')));
+  });
   it('rethrows a non-corruption open failure WITHOUT the destructive recovery', async () => {
     const dir = makeDir();
     const dbPath = join(dir, 'invoker.db');

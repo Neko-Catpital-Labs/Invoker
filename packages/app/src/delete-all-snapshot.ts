@@ -1,5 +1,6 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
 
 export { resolveInvokerHomeRoot };
@@ -10,10 +11,30 @@ function utcTimestampCompact(): string {
   return iso.replace(/[-:]/g, '').replace('T', '-').replace('.', '-');
 }
 
+function sqliteStringLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 function createDbSnapshot(
   label: string,
   invokerHomeRoot: string = resolveInvokerHomeRoot(),
 ): string | null {
+  const snapshotPath = createDbSnapshotPath(label, invokerHomeRoot);
+  if (snapshotPath === null) {
+    return null;
+  }
+
+  const dbPath = path.join(invokerHomeRoot, 'invoker.db');
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec(`VACUUM INTO ${sqliteStringLiteral(snapshotPath)}`);
+  } finally {
+    db.close();
+  }
+  return snapshotPath;
+}
+
+function createDbSnapshotPath(label: string, invokerHomeRoot: string): string | null {
   const dbPath = path.join(invokerHomeRoot, 'invoker.db');
   if (!existsSync(dbPath)) {
     return null;
@@ -23,16 +44,7 @@ function createDbSnapshot(
   mkdirSync(backupDir, { recursive: true });
 
   const stamp = utcTimestampCompact();
-  const snapshotPath = path.join(backupDir, `invoker.db.${label}-${stamp}`);
-
-  copyFileSync(dbPath, snapshotPath);
-
-  const walPath = `${dbPath}-wal`;
-  const shmPath = `${dbPath}-shm`;
-  if (existsSync(walPath)) copyFileSync(walPath, `${snapshotPath}-wal`);
-  if (existsSync(shmPath)) copyFileSync(shmPath, `${snapshotPath}-shm`);
-
-  return snapshotPath;
+  return path.join(backupDir, `invoker.db.${label}-${stamp}`);
 }
 
 /**
