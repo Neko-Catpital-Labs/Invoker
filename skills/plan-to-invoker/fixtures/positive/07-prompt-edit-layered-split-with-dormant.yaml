@@ -215,23 +215,23 @@ tasks:
   - id: final-regression
     description: |
       Review claim:
-      - Run the terminal full-suite regression gate for the layered prompt-edit stack.
+      - Run focused app-package regression proof for the layered prompt-edit stack.
       Safety invariant:
       - The command changes no production code and depends on every earlier task.
       Slice rationale:
-      - Full-suite validation belongs at the terminal workflow layer.
+      - Focused proof for the changed app surface belongs at the terminal workflow layer.
       Architectural effect:
-      - No architecture changes; validates the integrated prompt-edit stack.
-      Run the full repository test suite as the terminal regression gate.
+      - No architecture changes; exercises the integrated prompt-edit stack through the app package tests.
+      Run focused app-package proof as the terminal regression gate.
       Goal:
-      - Run the full repository test suite as the terminal regression gate.
+      - Run focused app-package proof as the terminal regression gate.
       Motivation:
-      - Validate all prompt-edit slices together after focused regressions exist.
+      - Validate all prompt-edit slices together with focused proof that exercises the changed behavior, without invoking a full-suite gate.
       Alternative considerations:
-      - Option A (chosen): one terminal full-suite gate.
-      - Option B: repeat full-suite verification in every slice.
+      - Option A (chosen): focused app-package proof for the prompt-edit path.
+      - Option B: terminal full-suite gate (`pnpm run test:all`).
       Implementation details:
-      - Execute `pnpm run test:all` after every earlier task completes.
+      - Execute `cd packages/app && pnpm test 2>&1` after every earlier task completes.
       Layer: e2e_regression
       Feature state: active
       Files:
@@ -239,6 +239,6 @@ tasks:
       Change types:
       - none
       Acceptance criteria:
-      - Ensure the full repository test suite passes after all prompt-edit slices land.
-    command: "pnpm run test:all"
+      - Ensure the focused app-package regression passes after all prompt-edit slices land.
+    command: "cd packages/app && pnpm test 2>&1"
     dependencies: [prompt-edit-contact-surface, app-bridge-and-owner-delegation, ui-prompt-editing-activation, app-and-e2e-regressions]
