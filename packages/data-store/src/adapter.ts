@@ -144,6 +144,8 @@ export interface PersistenceAdapter {
   loadWorkflowTaskSnapshot?(): WorkflowTaskSnapshot;
   /** Authoritative single-task read by ID, suitable for recovery workflows. */
   loadTask(taskId: string): TaskState | undefined;
+  /** Delete one task and its task-owned rows. */
+  deleteTask(taskId: string): void;
   getAllTaskIds(): string[];
   getAllTaskBranches(): string[];
   deleteAllTasks(workflowId: string): void;
