@@ -42,7 +42,6 @@ describe('headless delegation enforcement', () => {
       repoRoot: '/fake/repo',
       invokerConfig: {} as any,
       initServices: vi.fn(async () => {}),
-      wireSlackBot: vi.fn(async () => ({})),
     };
   });
 
