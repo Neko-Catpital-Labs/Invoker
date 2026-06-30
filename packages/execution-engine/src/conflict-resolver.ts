@@ -15,7 +15,7 @@ import type { Orchestrator } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode, parseMergeConflictError } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
-import type { ExecutionAgent } from './agent.js';
+import { DEFAULT_EXECUTION_AGENT, type ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { buildWorktreeListScript, createSshRemoteScriptError } from './ssh-git-exec.js';
@@ -173,7 +173,7 @@ export async function resolveConflictImpl(
 ): Promise<void> {
   host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'resolve-conflict-start',
-    agent: agentName ?? 'claude',
+    agent: agentName ?? DEFAULT_EXECUTION_AGENT,
     hasSavedError: savedError !== undefined,
   });
   const task = host.orchestrator.getTask(taskId);
@@ -311,7 +311,7 @@ function buildRemoteAgentCommand(
   agentRegistry?: AgentRegistry,
   agentName?: string,
 ): { shellCommand: string; sessionId: string } {
-  const name = agentName ?? 'claude';
+  const name = agentName ?? DEFAULT_EXECUTION_AGENT;
   if (agentRegistry) {
     const agent = agentRegistry.get(name);
     if (agent?.buildFixCommand) {
@@ -465,7 +465,7 @@ export async function fixWithAgentImpl(
 ): Promise<void> {
   host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'fix-with-agent-start',
-    agent: agentName ?? 'claude',
+    agent: agentName ?? DEFAULT_EXECUTION_AGENT,
     hasSavedError: savedError !== undefined,
     outputLength: taskOutput.length,
   });
@@ -510,7 +510,7 @@ export async function fixWithAgentImpl(
         repairedWorkspacePath: resolvedWorkspacePath,
       });
     }
-    const remoteAgentBin = agentName ?? 'claude';
+    const remoteAgentBin = agentName ?? DEFAULT_EXECUTION_AGENT;
     const { stdout: output, sessionId } = await spawnRemoteAgentFixImpl(
       prompt,
       resolvedWorkspacePath,
@@ -558,7 +558,7 @@ export async function fixWithAgentImpl(
   }
   const cwd = workspacePath;
 
-  const agentLabel = agentName ?? 'claude';
+  const agentLabel = agentName ?? DEFAULT_EXECUTION_AGENT;
   try {
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'fix-with-agent-spawn-local',
@@ -676,7 +676,7 @@ eval "$(echo "${agentCmdB64}" | base64 -d)"
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
       // Replace local UUID with real backend session/thread ID for resume
-      const driver = agentRegistry?.getSessionDriver(agentName ?? 'claude');
+      const driver = agentRegistry?.getSessionDriver(agentName ?? DEFAULT_EXECUTION_AGENT);
       const realId = driver?.extractSessionId?.(stdout);
       const effectiveSessionId = realId ?? sessionId;
       if (driver) {
