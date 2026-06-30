@@ -106,8 +106,8 @@ describe('Side rail controls (component)', () => {
 
   it('Clear button calls clear', async () => {
     render(<App />);
+    fireEvent.click(screen.getByTestId('graph-more-button'));
     fireEvent.click(screen.getByTestId('rail-clear'));
-
     await waitFor(() => {
       expect(mock.api.clear).toHaveBeenCalled();
     });
