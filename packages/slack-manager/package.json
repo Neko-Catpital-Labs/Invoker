@@ -1,16 +1,12 @@
 {
-  "name": "@invoker/surfaces",
-  "version": "0.0.4",
+  "name": "@invoker/slack-manager",
+  "version": "0.0.6",
+  "private": true,
   "main": "dist/index.js",
-  "types": "src/index.ts",
-  "exports": {
-    ".": {
-      "types": "./src/index.ts",
-      "default": "./dist/index.js"
-    }
-  },
+  "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsup",
+    "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
@@ -18,9 +14,12 @@
   "dependencies": {
     "@invoker/contracts": "workspace:*",
     "@invoker/data-store": "workspace:*",
+    "@invoker/execution-engine": "workspace:*",
+    "@invoker/surfaces": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*",
     "@slack/bolt": "^4.6.0",
+    "dotenv": "^16.0.0",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
