@@ -132,6 +132,26 @@ describe('SQLiteAdapter', () => {
       });
     });
 
+    it('deleteTask removes one task and leaves the workflow and sibling tasks', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+      adapter.saveAttempt(createAttempt('t1', { generation: 1 }));
+      adapter.logEvent('t1', 'task.created');
+      (adapter as any).db.run('INSERT INTO task_output (task_id, data) VALUES (?, ?)', ['t1', 'out']);
+      (adapter as any).db.run('INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)', ['t1', 0, 'out']);
+
+      adapter.deleteTask('t1');
+
+      expect(adapter.loadWorkflow('wf-1')).toBeDefined();
+      expect(adapter.loadTask('t1')).toBeUndefined();
+      expect(adapter.loadTask('t2')).toBeDefined();
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM attempts WHERE node_id = 't1'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM events WHERE task_id = 't1'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM task_output WHERE task_id = 't1'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM output_spool WHERE task_id = 't1'")).toBe(0);
+    });
+
     it('loads all workflows and tasks in one startup snapshot', () => {
       const wf2: Workflow = {
         ...testWorkflow,
