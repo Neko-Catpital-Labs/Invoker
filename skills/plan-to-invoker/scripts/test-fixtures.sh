@@ -38,6 +38,19 @@ is_doctor_negative_fixture() {
   return 1
 }
 
+expected_doctor_failed_step() {
+  local fixture_name="$1"
+  case "$fixture_name" in
+    anti-pattern-n-broad-autofix-policy-review-unit.yaml | \
+      anti-pattern-o-all-in-one-autofix-review-unit.yaml)
+      echo "lint-review-units"
+      ;;
+    *)
+      echo "lint-task-atomicity"
+      ;;
+  esac
+}
+
 run_test() {
   local test_name="$1"
   shift
@@ -118,7 +131,8 @@ test_negative_fixture() {
 test_doctor_negative_fixture() {
   local fixture_path="$1"
   local fixture_name="$(basename "$fixture_path")"
-  local expected_failed_step="lint-task-atomicity"
+  local expected_failed_step
+  expected_failed_step="$(expected_doctor_failed_step "$fixture_name")"
   local output
   local stderr_file
   stderr_file="$(mktemp)"
