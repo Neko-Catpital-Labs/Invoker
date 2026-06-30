@@ -237,7 +237,7 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'View full graph' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Full graph ⤢' }));
     expect(screen.getByTestId('graph-maximized-overlay')).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'Escape' });
