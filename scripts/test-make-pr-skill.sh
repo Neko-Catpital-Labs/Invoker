@@ -35,4 +35,11 @@ must_contain "$SKILL_MD" "Ordering Rules" "make-pr skill must point at review-co
 must_contain "$REVIEW_COMPRESSION_MD" "## Ordering Rules" "review-compression must expose the referenced Ordering Rules section"
 must_contain "$REVIEW_COMPRESSION_MD" "Evidence before change" "review-compression Ordering Rules must state evidence before change"
 
-echo "OK: make-pr skill stack-ordering contract checks passed"
+# The publication checklist must stop empty PR slices before create/update/stack publish.
+must_contain "$SKILL_MD" "has no file changes against its selected base" "make-pr skill must reject branches with no reviewable file diff"
+must_contain "$SKILL_MD" "contains an empty commit slice" "make-pr skill must reject empty commit slices"
+must_contain "$SKILL_MD" 'node scripts/create-pr.mjs`' "make-pr skill must apply the empty-slice rule to normal PR creation"
+must_contain "$SKILL_MD" "node scripts/create-pr.mjs --update-existing" "make-pr skill must apply the empty-slice rule to PR updates"
+must_contain "$SKILL_MD" "mergify stack push" "make-pr skill must apply the empty-slice rule to Mergify stack publication"
+
+echo "OK: make-pr skill contract checks passed"

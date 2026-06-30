@@ -187,6 +187,7 @@ Manual `gh pr edit` is a last-resort escape hatch only when `create-pr` itself i
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible
 - ensure revert guidance is honest
+- do not create, update, or Mergify-publish a PR when the branch has no file changes against its selected base or contains an empty commit slice; fix the branch history before using `node scripts/create-pr.mjs`, `node scripts/create-pr.mjs --update-existing ...`, or `mergify stack push`
 - validate the body with `node scripts/validate-pr-body.mjs --body-file <file>`
 - for stacked PRs, update title/body through `node scripts/create-pr.mjs --update-existing ...`, not `gh pr edit`
 - for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`; classify by user-visible behavior, not by path alone
