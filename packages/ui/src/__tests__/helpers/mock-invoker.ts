@@ -205,6 +205,7 @@ export function createMockInvoker(
     deleteAllWorkflows: vi.fn(async () => {}),
     deleteAllWorkflowsBulk: vi.fn(async () => {}),
     deleteWorkflow: vi.fn(async () => accepted('invoker:delete-workflow')),
+    deleteTask: vi.fn(async () => accepted('invoker:delete-task')),
     detachWorkflow: vi.fn(async () => {}),
     cleanupWorktrees: vi.fn(async () => ({ removed: [], errors: [] })),
     recreateWorkflow: vi.fn(async () => accepted('invoker:recreate-workflow')),
