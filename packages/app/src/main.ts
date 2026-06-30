@@ -97,6 +97,7 @@ import {
   initializeShellEnvironment,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
+  DEFAULT_EXECUTION_AGENT,
   registerBuiltinAgents,
   type AgentRegistry,
 } from '@invoker/execution-engine';
@@ -956,8 +957,8 @@ function startHeadlessMode(): void {
       };
 
       const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
-        const { parsePlanFile } = await import('./plan-parser.js');
-        const plan = await parsePlanFile(payload.planPath);
+        const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
+        const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
         backupPlan(plan, undefined, logger);
         const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
         orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -1006,8 +1007,8 @@ function startHeadlessMode(): void {
           }
           case 'invoker:load-plan': {
             const planText = String(payload.args[0] ?? '');
-            const { parsePlan } = await import('./plan-parser.js');
-            const plan = parsePlan(planText);
+            const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
+            const plan = applyConfiguredPlanDefaults(parsePlan(planText));
             backupPlan(plan, undefined, logger);
             orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
             return undefined;
@@ -1458,8 +1459,8 @@ function startHeadlessMode(): void {
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
         ): Promise<{ workflowId: string; tasks: TaskState[] }> => {
-          const { parsePlanFile } = await import('./plan-parser.js');
-          const plan = await parsePlanFile(payload.planPath);
+          const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
+          const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
           backupPlan(plan, undefined, logger);
           const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
           orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -2017,7 +2018,7 @@ function createEmbeddedTerminalBackendFromConfig(
     const savedError = task.execution.error ?? '';
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
     logger.info(
-      `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${source} route=${recoveryRoute.kind}`,
+      `fix-with-agent: "${taskId}" agent=${agentName ?? DEFAULT_EXECUTION_AGENT} source=${source} route=${recoveryRoute.kind}`,
       { module: 'ipc' },
     );
 
@@ -2046,7 +2047,7 @@ function createEmbeddedTerminalBackendFromConfig(
         agentName,
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
-        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Codex'}`,
         signal: activeMutationContext?.signal,
       },
     );
@@ -2267,8 +2268,8 @@ function createEmbeddedTerminalBackendFromConfig(
 
 
   async function executeHeadlessRun(payload: HeadlessRunMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
-    const { parsePlanFile } = await import('./plan-parser.js');
-    const plan = await parsePlanFile(payload.planPath);
+    const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
+    const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
     taskHandles.clear();
     backupPlan(plan, undefined, logger);
     const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
@@ -3379,8 +3380,8 @@ function createEmbeddedTerminalBackendFromConfig(
     });
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
-      const { parsePlan } = await import('./plan-parser.js');
-      const plan = parsePlan(planText);
+      const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
+      const plan = applyConfiguredPlanDefaults(parsePlan(planText));
       logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
       taskHandles.clear();
       backupPlan(plan, undefined, logger);
@@ -4232,7 +4233,7 @@ function createEmbeddedTerminalBackendFromConfig(
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
       logger.info(
-        `resolve-conflict: "${taskId}" agent=${agentName ?? 'claude'} source=ipc route=resolveConflictAction`,
+        `resolve-conflict: "${taskId}" agent=${agentName ?? DEFAULT_EXECUTION_AGENT} source=ipc route=resolveConflictAction`,
         { module: 'ipc' },
       );
       try {
