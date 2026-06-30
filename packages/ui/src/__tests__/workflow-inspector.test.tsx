@@ -500,7 +500,7 @@ describe('WorkflowInspector', () => {
     expect(screen.queryByText('No prompt or command available.')).not.toBeInTheDocument();
   });
 
-  it('edits AI agent from a dropdown', () => {
+  it('edits AI harness from a dropdown', () => {
     const onEditAgent = vi.fn();
     render(
       <WorkflowInspector
@@ -515,8 +515,31 @@ describe('WorkflowInspector', () => {
       />,
     );
 
+    expect(screen.getByText('AI Harness')).toBeInTheDocument();
     fireEvent.change(screen.getByTestId('execution-agent-select'), { target: { value: 'claude' } });
     expect(onEditAgent).toHaveBeenCalledWith('task-1', 'claude');
+  });
+
+  it('edits AI model and clears blank overrides', () => {
+    const onEditModel = vi.fn();
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ config: { workflowId: 'wf-1', prompt: 'Fix failing tests', executionModel: 'openai/gpt-5' } })}
+        collapsed={false}
+        advancedExpanded={false}
+        onEditModel={onEditModel}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('AI Model')).toBeInTheDocument();
+    const input = screen.getByTestId('execution-model-input');
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.blur(input);
+
+    expect(onEditModel).toHaveBeenCalledWith('task-1', null);
   });
 
   it('double-click edits prompt and saves through callback', () => {
