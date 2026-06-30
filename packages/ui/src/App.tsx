@@ -392,11 +392,12 @@ export function App() {
   const { tasks, workflows, clearTasks, refreshTaskGraph } = useTasks({
     onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
   });
+  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
   const {
     graph: actionGraph,
     error: actionGraphError,
     refreshActionGraph,
-  } = useActionGraphSnapshot();
+  } = useActionGraphSnapshot(2_000, viewMode === 'actionGraph');
   const trackAcceptedMutation = useCallback((result: unknown) => {
     if (result && typeof result === 'object' && (result as { accepted?: unknown }).accepted === true) {
       void refreshActionGraph();
@@ -426,7 +427,6 @@ export function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
   const selectedActionNode = useMemo(
     () => actionGraph?.nodes.find((node) => node.id === selectedActionNodeId) ?? null,
     [actionGraph, selectedActionNodeId],
@@ -1543,8 +1543,9 @@ export function App() {
 
   const handleRefresh = useCallback(async () => {
     await refreshTaskGraph();
+    void invoker?.checkPrStatuses?.();
     issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'manual-refresh' });
-  }, [issueCameraCommand, refreshTaskGraph]);
+  }, [invoker, issueCameraCommand, refreshTaskGraph]);
 
   // ── Plan loading ──────────────────────────────────────────
   const handleLoadPlan = useCallback(

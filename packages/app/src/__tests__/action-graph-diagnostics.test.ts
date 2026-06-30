@@ -293,6 +293,54 @@ describe('buildActionGraphDiagnostics', () => {
     );
   });
 
+  it('caps verbose diagnostic text in action graph nodes', () => {
+    const longText = 'x'.repeat(20_000);
+    const selectedAttempt = attempt({
+      id: 'attempt-a1',
+      nodeId: 'task-a',
+      error: longText,
+    });
+    const graph = buildActionGraphDiagnostics({
+      workflows: [workflow],
+      tasks: [task({
+        id: 'task-a',
+        description: longText,
+        execution: { selectedAttemptId: selectedAttempt.id },
+      })],
+      attemptsByTaskId: new Map([['task-a', [selectedAttempt]]]),
+      queueStatus: { maxConcurrency: 1, runningCount: 0, running: [], queued: [] },
+      mutationIntents: [{
+        id: 9,
+        workflowId: 'wf-1',
+        channel: 'invoker:fix-with-agent',
+        args: [],
+        priority: 'high',
+        status: 'failed',
+        createdAt: '2026-05-14T11:55:00.000Z',
+        error: longText,
+      }],
+      mutationLeases: [],
+      eventsByTaskId: new Map([['task-a', [{
+        id: 1,
+        taskId: 'task-a',
+        eventType: 'output',
+        payload: longText,
+        createdAt: '2026-05-14T11:59:00.000Z',
+      }]]]),
+      activityLogs: [],
+      stallThresholdMs: 60_000,
+      now,
+    });
+
+    const attemptNode = graph.nodes.find((node) => node.id === 'attempt:attempt-a1');
+    const intentNode = graph.nodes.find((node) => node.id === 'intent:9');
+    expect(attemptNode?.label.length).toBeLessThan(2_100);
+    expect(attemptNode?.latestError?.length).toBeLessThan(8_300);
+    expect(attemptNode?.history?.[0]?.message.length).toBeLessThan(2_100);
+    expect(intentNode?.latestError?.length).toBeLessThan(8_300);
+    expect(attemptNode?.latestError).toContain('truncated');
+  });
+
   it('skips upstream attempt edges whose source attempts are omitted', () => {
     const upstream = task({ id: 'upstream', status: 'failed' });
     const downstream = task({ id: 'downstream', status: 'pending', dependencies: ['upstream'] });
