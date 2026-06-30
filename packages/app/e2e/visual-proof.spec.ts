@@ -1077,7 +1077,7 @@ test.describe('Visual proof capture', () => {
     await page.waitForTimeout(300);
 
     for (const spec of TASK_STATUS_PROOF_SPECS) {
-      const node = taskNodeCard(page, spec.taskId);
+      const node = overlay.locator(`.react-flow__node[data-testid$="${spec.taskId}"] > div`).first();
       await expect(node).toBeVisible({ timeout: 10000 });
       await expect(node).toBeInViewport({ timeout: 10000 });
       await expect(node.getByText(spec.label, { exact: true })).toBeVisible();
