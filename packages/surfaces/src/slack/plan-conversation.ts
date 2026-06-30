@@ -127,6 +127,11 @@ onFinish: pull_request  # "pull_request" (default), "merge", or "none"
 mergeMode: external_review  # "external_review" = GitHub-backed review gate for reviewable implementation work; "manual" (default) = verification-only, no review; "automatic" = merge without review
 baseBranch: ${defaultBranch}        # base git branch
 featureBranch: plan/my-feature  # auto-generated from plan name if omitted
+reviewGate:                 # optional intended review-stack metadata, not scheduler input
+  artifacts:                # ordered GitHub PR stack intent; omit when one review artifact is enough or unknown
+    - id: implementation
+      title: Implementation
+      required: true
 tasks:
   - id: task-1
     description: "What this task does"
@@ -165,7 +170,13 @@ Rules:
 9. Always include \`dependencies\` (even if empty array).
 10. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
 11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.
-12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
+12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.
+13. Review stack semantics:
+   - One workflow plan file is only the orchestration document. Do not reason \`one plan file => one PR\`.
+   - Tasks inside a plan are execution units and dependencies, not published GitHub PRs. Do not infer PR count from task count.
+   - \`onFinish: pull_request\` only means review output is expected after workflow completion. Do not reason \`onFinish: pull_request => one PR\`.
+   - \`reviewGate.artifacts\` is the optional intended review-stack vocabulary. Use it to name ordered review artifacts when the requested review shape matters.
+   - Published GitHub PRs are the actual review outputs created by the review gate or publication workflow; they are distinct from the workflow plan file, plan tasks, and \`reviewGate.artifacts\` intent metadata.`;
 }
 
 // ── Dangerous Command Detection ─────────────────────────────

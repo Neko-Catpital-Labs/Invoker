@@ -659,6 +659,22 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('"manual" (default)');
     expect(prompt).toContain('"automatic"');
   });
+
+  it('system prompt distinguishes workflow plans, tasks, review stack intent, and published PRs', () => {
+    const conv = new PlanConversation({});
+    (conv as any).messages.push({ role: 'user', content: 'Plan this as a review stack' });
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('Review stack semantics');
+    expect(prompt).toContain('One workflow plan file is only the orchestration document');
+    expect(prompt).toContain('Do not reason `one plan file => one PR`');
+    expect(prompt).toContain('Tasks inside a plan are execution units and dependencies, not published GitHub PRs');
+    expect(prompt).toContain('Do not infer PR count from task count');
+    expect(prompt).toContain('`onFinish: pull_request` only means review output is expected');
+    expect(prompt).toContain('Do not reason `onFinish: pull_request => one PR`');
+    expect(prompt).toContain('`reviewGate.artifacts` is the optional intended review-stack vocabulary');
+    expect(prompt).toContain('Published GitHub PRs are the actual review outputs');
+  });
 });
 
 describe('isDangerousCommand', () => {
