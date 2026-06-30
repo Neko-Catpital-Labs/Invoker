@@ -109,6 +109,8 @@ export interface InvokerConfig {
   planningHeartbeatIntervalSeconds?: number;
   /** Named Slack planning harness presets: preset key → {tool, model}; built-ins apply when omitted. */
   slackHarnessPresets?: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }>;
+  plannerHarnessPresets?: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }>;
+  defaultPlannerHarnessPreset?: string;
   /** Default harness preset key when the message carries no `[preset]` tag. Default: 'cursor+claude'. */
   defaultSlackHarnessPreset?: string;
   /** Slack repo aliases: alias → git URL, resolved from a `[repo:<alias>]` tag. */
