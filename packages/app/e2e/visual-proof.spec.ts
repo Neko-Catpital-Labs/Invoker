@@ -419,6 +419,16 @@ async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId
   }
 }
 
+test.describe('Read-only mode visual proof', () => {
+  test.use({ guiOwnerMode: 'read-only-status' });
+
+  test('read-only mode banner', async ({ page }) => {
+    await expect(page.getByTestId('read-only-mode-banner')).toContainText('Read-only mode.', { timeout: 5000 });
+    await expect(page.getByTestId('read-only-mode-banner')).toContainText('This window can browse workflows');
+    await captureScreenshot(page, 'read-only-mode-banner');
+  });
+});
+
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
     await expect(page.getByText('Load a plan to render workflow graph')).toBeVisible({ timeout: 5000 });
