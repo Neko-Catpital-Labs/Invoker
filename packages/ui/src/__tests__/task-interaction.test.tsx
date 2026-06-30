@@ -130,6 +130,31 @@ describe('Task interaction (component)', () => {
     expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
   });
 
+  it('maximizes the workflow graph and closes it with Escape without clearing selection', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'View full graph' }));
+    expect(screen.getByTestId('graph-maximized-overlay')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('graph-maximized-overlay')).not.toBeInTheDocument();
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
+    });
+  });
+
   it('drags the selected workflow mini DAG by its header', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
