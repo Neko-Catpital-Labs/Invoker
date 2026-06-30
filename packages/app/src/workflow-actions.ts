@@ -833,6 +833,7 @@ export async function fixWithAgentAction(
     recreateOutputLabel?: string;
     failureOutputLabel?: string;
     reviewGateContext?: ReviewGateCiContext;
+    executionModel?: string;
     signal?: AbortSignal;
   } = {},
 ): Promise<FixWithAgentActionResult> {
@@ -875,11 +876,17 @@ export async function fixWithAgentAction(
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
     if (recoveryRoute.kind === 'resolveConflict') {
-      await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
+      if (options.executionModel !== undefined) {
+        await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName, options.executionModel);
+      } else {
+        await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
+      }
     } else {
       const output = persistence.getTaskOutput(taskId);
       const fixContext = options.reviewGateContext?.fixContext;
-      if (fixContext !== undefined) {
+      if (options.executionModel !== undefined) {
+        await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError, fixContext, options.executionModel);
+      } else if (fixContext !== undefined) {
         await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError, fixContext);
       } else {
         await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
@@ -919,13 +926,7 @@ export async function finalizeAppliedFix(
   }
   if (lineage) assertLineageCurrent(lineage, deps.orchestrator, signal);
   deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
-  if (!deps.autoApproveAIFixes) {
-    return { autoApproved: false, started: [] };
-  }
-
-  if (lineage) assertLineageCurrent(lineage, deps.orchestrator, signal);
-  const { started } = await approveTask(taskId, deps);
-  return { autoApproved: true, started };
+  return { autoApproved: false, started: [] };
 }
 
 // ── Auto-fix helpers ─────────────────────────────────────────
@@ -1122,6 +1123,7 @@ export async function autoFixOnFailure(
     taskExecutor: TaskRunner;
     mutationTiming?: WorkflowMutationTiming;
     getAutoFixAgent?: () => string | undefined;
+    getAutoFixExecutionModel?: () => string | undefined;
     getAutoApproveAIFixes?: () => boolean | undefined;
     signal?: AbortSignal;
   },
@@ -1154,6 +1156,10 @@ export async function autoFixOnFailure(
   persistence.updateTask(taskId, { execution: { autoFixAttempts: attempts } });
 
   const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
+  const configuredExecutionModel = deps.getAutoFixExecutionModel?.()?.trim();
+  const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
+    ? configuredExecutionModel
+    : undefined;
   let persistedSavedError: string | undefined;
   let lineage: TaskLineageSnapshot | undefined;
   try {
@@ -1163,6 +1169,7 @@ export async function autoFixOnFailure(
       selectedAgent: agentSelection.selectedAgent,
       selectedAgentSource: agentSelection.selectedAgentSource,
       fallbackChain: agentSelection.fallbackChain,
+      executionModel: executionModel ?? null,
     });
     persistence.appendTaskOutput(
       taskId,
@@ -1231,10 +1238,18 @@ export async function autoFixOnFailure(
       savedErrorLength: persistedSavedError.length,
     });
     if (recoveryRoute.kind === 'resolveConflict') {
-      await taskExecutor.resolveConflict(taskId, persistedSavedError, agentSelection.selectedAgent);
+      if (executionModel !== undefined) {
+        await taskExecutor.resolveConflict(taskId, persistedSavedError, agentSelection.selectedAgent, executionModel);
+      } else {
+        await taskExecutor.resolveConflict(taskId, persistedSavedError, agentSelection.selectedAgent);
+      }
     } else {
       const output = persistence.getTaskOutput(taskId);
-      await taskExecutor.fixWithAgent(taskId, output, agentSelection.selectedAgent, persistedSavedError);
+      if (executionModel !== undefined) {
+        await taskExecutor.fixWithAgent(taskId, output, agentSelection.selectedAgent, persistedSavedError, undefined, executionModel);
+      } else {
+        await taskExecutor.fixWithAgent(taskId, output, agentSelection.selectedAgent, persistedSavedError);
+      }
     }
     assertLineageCurrent(lineage, orchestrator, deps.signal);
     const postRouteStrategy = selectAutoFixPostRouteStrategy(task);
