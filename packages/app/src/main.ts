@@ -1369,15 +1369,20 @@ function startHeadlessMode(): void {
             });
             return;
           }
-          const configuredAgent = loadConfig().autoFixAgent?.trim();
+          const autoFixConfig = loadConfig();
+          const configuredAgent = autoFixConfig.autoFixAgent?.trim();
           const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+          const configuredExecutionModel = autoFixConfig.autoFixExecutionModel?.trim();
+          const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
+            ? configuredExecutionModel
+            : undefined;
           logStandaloneAutoFixDebug(taskId, 'schedule-enqueue');
           logStandaloneAutoFixDebug(taskId, 'schedule-enqueued');
           void workflowMutationCoordinator.enqueue(
             workflowId,
             'normal',
             'invoker:fix-with-agent',
-            buildFixWithAgentMutationArgs(taskId, selectedAgent, { autoFix: true }),
+            buildFixWithAgentMutationArgs(taskId, selectedAgent, { autoFix: true, executionModel }),
           )
             .then(() => {
               logStandaloneAutoFixDebug(taskId, 'schedule-dispatch-finished');
@@ -2007,6 +2012,7 @@ function createEmbeddedTerminalBackendFromConfig(
     taskId: string,
     agentName?: string,
     source: 'ipc' | 'auto-fix' = 'ipc',
+    executionModel?: string,
   ): Promise<TaskState[]> => {
     const task = orchestrator.getTask(taskId);
     if (!task) {
@@ -2045,6 +2051,7 @@ function createEmbeddedTerminalBackendFromConfig(
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
         failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        executionModel,
         signal: activeMutationContext?.signal,
       },
     );
@@ -2083,16 +2090,21 @@ function createEmbeddedTerminalBackendFromConfig(
       });
       return;
     }
-    const configuredAgent = loadConfig().autoFixAgent?.trim();
+    const autoFixConfig = loadConfig();
+    const configuredAgent = autoFixConfig.autoFixAgent?.trim();
     const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+    const configuredExecutionModel = autoFixConfig.autoFixExecutionModel?.trim();
+    const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
+      ? configuredExecutionModel
+      : undefined;
     logAutoFixDebug(taskId, 'schedule-enqueue');
     logAutoFixDebug(taskId, 'schedule-enqueued');
     void runWorkflowMutation(
       workflowId,
       'normal',
       'invoker:fix-with-agent',
-      [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
+      buildFixWithAgentMutationArgs(taskId, selectedAgent, { autoFix: true, executionModel }),
+      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix', executionModel),
     )
       .then(() => {
         logAutoFixDebug(taskId, 'schedule-dispatch-finished');
