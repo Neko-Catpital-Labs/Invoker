@@ -76,6 +76,7 @@
     "@invoker/execution-engine": "workspace:*",
     "@invoker/runtime-adapters": "workspace:*",
     "@invoker/runtime-service": "workspace:*",
+    "@invoker/surfaces": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*",
     "dockerode": "^4.0.0",

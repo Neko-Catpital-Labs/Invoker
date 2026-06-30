@@ -78,7 +78,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { ActionGraphResponse, BundledSkillsInstallMode, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
+import type { ActionGraphResponse, BundledSkillsInstallMode, InAppPlanRequest, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
 import { SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
@@ -243,6 +243,7 @@ import {
   spawnDetachedStandaloneOwner,
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
+import { planFromGoal as planFromGoalInApp } from './in-app-planner.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
 import {
   killRunningTaskExecution,
@@ -1005,6 +1006,24 @@ function startHeadlessMode(): void {
               buildCommandServiceInvalidationDeps(),
             );
             return undefined;
+          }
+          case 'invoker:plan-from-goal': {
+            return planFromGoalInApp(payload.args[0] as InAppPlanRequest, {
+              config: invokerConfig,
+              workingDir: repoRoot,
+              loadGeneratedPlan: async (planText) => {
+                const { parsePlan } = await import('./plan-parser.js');
+                const plan = parsePlan(planText);
+                const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
+                backupPlan(plan, undefined, logger);
+                orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+                const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+                if (!workflow) {
+                  throw new Error('Loaded plan did not create a workflow.');
+                }
+                return { planName: plan.name, workflowId: workflow.id };
+              },
+            });
           }
           case 'invoker:load-plan': {
             const planText = String(payload.args[0] ?? '');
@@ -2501,6 +2520,8 @@ function createEmbeddedTerminalBackendFromConfig(
     | null {
     const [arg0, arg1, arg2] = payload.args;
     switch (payload.channel) {
+      case 'invoker:plan-from-goal':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:load-plan':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:start':
@@ -3393,6 +3414,7 @@ function createEmbeddedTerminalBackendFromConfig(
       };
       try {
         persistence.writeActivityLog('ui-perf-main', 'info', JSON.stringify(snapshot));
+
       } catch {
         // DB might be locked
       }
@@ -3414,6 +3436,29 @@ function createEmbeddedTerminalBackendFromConfig(
       getTaskDeltaStreamSequence,
       recordStartupDuration,
     });
+    async function loadGeneratedPlanPreview(planText: string): Promise<{ planName: string; workflowId: string }> {
+      const { parsePlan } = await import('./plan-parser.js');
+      const plan = parsePlan(planText);
+      const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
+      logger.info(`plan-from-goal: loading "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
+      taskHandles.clear();
+      backupPlan(plan, undefined, logger);
+      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+      if (!workflow) {
+        throw new Error('Loaded plan did not create a workflow.');
+      }
+      return { planName: plan.name, workflowId: workflow.id };
+    }
+
+    registerGuiMutationHandler('invoker:plan-from-goal', async (request: InAppPlanRequest) => (
+      planFromGoalInApp(request, {
+        config: invokerConfig,
+        workingDir: repoRoot,
+        loadGeneratedPlan: loadGeneratedPlanPreview,
+      })
+    ));
+
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
       const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
