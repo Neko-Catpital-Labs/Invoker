@@ -449,17 +449,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('rail-settings')).toBeVisible();
     await expect(page.getByTestId('sidebar-home')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
-<<<<<<< HEAD
     await captureScreenshot(page, 'empty-graph-state');
-||||||| parent of df8d41fbc (Refresh reskin visual proof states)
-=======
-    await captureScreenshot(page, 'empty-graph-state');
-    await assertPageScreenshot(page, 'empty-state');
-    await expect(page.getByTestId('rail-settings')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Home' })).toHaveCount(0);
-    await captureScreenshot(page, 'empty-state');
-    await captureScreenshot(page, 'empty-graph-state');
->>>>>>> df8d41fbc (Refresh reskin visual proof states)
     await assertPageScreenshot(page, 'empty-state');
   });
 
@@ -1861,14 +1851,7 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'detached-workflow-lineage-after');
   });
-<<<<<<< HEAD
   test('queue-action-wording — task-level uses Cancel, workflow-level keeps Cancel Workflow', async ({ page }) => {
-||||||| parent of df8d41fbc (Refresh reskin visual proof states)
-
-  test('terminate-wording — task-level uses Terminate, workflow-level keeps Cancel', async ({ page }) => {
-=======
-  test('terminate-wording — task-level uses Terminate, workflow-level keeps Cancel', async ({ page }) => {
->>>>>>> df8d41fbc (Refresh reskin visual proof states)
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
     await injectTaskStates(page, [
@@ -1894,23 +1877,9 @@ test.describe('Visual proof capture', () => {
       .getByRole('button', { name: 'Cancel task-alpha' });
     await expect(cancelButton).toBeVisible();
 
-<<<<<<< HEAD
     // Workflow-level action keeps "Cancel Workflow".
     await selectGraphMenuItem(page, 'rail-home');
     await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
-||||||| parent of df8d41fbc (Refresh reskin visual proof states)
-    // Switch back to DAG view and right-click the running task for context menu
-    await page.getByTestId('rail-home').click();
-    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
-
-    // Expand the More section to reveal Danger items
-=======
-    // Switch back to DAG view and right-click the running task for context menu
-    await selectGraphMenuItem(page, 'rail-home');
-    const menu = await openContextMenu(page, page.locator('.react-flow__node[data-testid$="task-alpha"]'));
-
-    // Expand the More section to reveal Danger items
->>>>>>> df8d41fbc (Refresh reskin visual proof states)
     await page.getByRole('menuitem', { name: 'More' }).click();
     await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toBeVisible();
 
@@ -1968,7 +1937,6 @@ test.describe('Visual proof capture', () => {
       });
     });
     await page.waitForTimeout(2200);
-
     // Navigate to queue view
     await selectGraphMenuItem(page, 'rail-queue');
 ||||||| parent of df8d41fbc (Refresh reskin visual proof states)
