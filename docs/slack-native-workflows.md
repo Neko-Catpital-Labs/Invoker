@@ -74,6 +74,7 @@ CURSOR_MODEL=...                 # optional planning model override
 ```
 
 Run `invoker-cli doctor` to confirm your tools, config, and that your default preset's CLI is installed.
+The desktop System Setup panel mirrors the doctor for tool and config readiness.
 
 ## Slack app scopes
 
