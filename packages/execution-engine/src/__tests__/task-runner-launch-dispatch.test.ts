@@ -235,7 +235,12 @@ describe('TaskRunner launch-dispatch wiring', () => {
 
     await env.runner.executeTask(task, { dispatchId: 321, launchOutbox });
 
-    expect(env.orchestrator.deferTask).toHaveBeenCalledWith(task.id);
+    expect(env.orchestrator.deferTask).toHaveBeenCalledWith(task.id, expect.objectContaining({
+      reason: 'resource-limit',
+      message,
+      attemptId: task.execution.selectedAttemptId,
+      phase: task.execution.phase,
+    }));
     expect(launchOutbox.completeCalls).toEqual([321]);
     expect(launchOutbox.failCalls).toHaveLength(0);
   });
