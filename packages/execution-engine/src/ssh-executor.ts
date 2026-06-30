@@ -11,6 +11,7 @@ import { planManagedWorktree } from './managed-worktree-controller.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import type { AgentRegistry } from './agent-registry.js';
+import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
@@ -410,7 +411,10 @@ ${runProvisionSection}stop_bootstrap_heartbeat
 
     let payload: string;
     let agentSessionId: string | undefined;
-    const executionAgent = request.inputs.executionAgent ?? 'claude';
+    const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+    const effectiveAgentName = request.actionType === 'ai_task'
+      ? (this.agentRegistry ? executionAgent : 'claude')
+      : undefined;
 
     if (request.actionType === 'command') {
       const command = request.inputs.command;
@@ -772,7 +776,7 @@ ${runProvisionSection}stop_bootstrap_heartbeat
     if (!request.inputs.command && !request.inputs.prompt) {
       await this.handleProcessExit(executionId, request, remoteWt, 0, {
         branch: experimentBranch,
-        agentName: request.actionType === 'ai_task' ? request.inputs.executionAgent ?? 'claude' : undefined,
+        agentName: effectiveAgentName,
       });
       bench('SshExecutor.startManagedWorkspace.noCommand.returning', { remoteWt });
       return handle;
@@ -1071,7 +1075,7 @@ ${runProvisionSection}stop_bootstrap_heartbeat
           // Replace local UUID with real backend session/thread ID for resume,
           // then store session locally via driver (matches worktree-executor pattern).
           if (entry.agentSessionId && this.agentRegistry) {
-            const agentName = request.inputs.executionAgent ?? 'claude';
+            const agentName = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
             const driver = this.agentRegistry.getSessionDriver(agentName);
             const rawOutput = e?.outputBuffer.join('') ?? '';
             const realId = driver?.extractSessionId?.(rawOutput);
@@ -1093,7 +1097,7 @@ ${runProvisionSection}stop_bootstrap_heartbeat
               exitCode: finalExitCode,
               commitHash,
               agentSessionId: entry.agentSessionId,
-              agentName: request.actionType === 'ai_task' ? request.inputs.executionAgent ?? 'claude' : undefined,
+              agentName: effectiveAgentName,
               ...(mappedError ? { error: mappedError } : {}),
               ...(finalizeRemote && commitHash
                 ? { summary: `branch=${finalizeRemote.branch} commit=${commitHash}` }
@@ -1147,7 +1151,7 @@ ${runProvisionSection}stop_bootstrap_heartbeat
       const base = this.buildSshArgsInteractive();
       const userAtHost = base[base.length - 1]!;
       const opts = base.slice(0, -1);
-      const executionAgent = entry.request.inputs.executionAgent ?? 'claude';
+      const executionAgent = entry.request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
       const inner = this.buildRemoteTerminalInner(handle.workspacePath, handle.branch, entry.agentSessionId, executionAgent);
       return {
         command: 'ssh',
@@ -1196,7 +1200,7 @@ ${runProvisionSection}stop_bootstrap_heartbeat
     if (agentSessionId) {
       let resumeCmd: string;
       if (this.agentRegistry) {
-        const resume = this.agentRegistry.getOrThrow(executionAgent ?? 'claude').buildResumeArgs(agentSessionId);
+        const resume = this.agentRegistry.getOrThrow(executionAgent ?? DEFAULT_EXECUTION_AGENT).buildResumeArgs(agentSessionId);
         resumeCmd = [resume.cmd, ...resume.args.map(a => sshGitShellQuote(a))].join(' ');
       } else {
         resumeCmd = `claude --resume ${sshGitShellQuote(agentSessionId)} --dangerously-skip-permissions`;
