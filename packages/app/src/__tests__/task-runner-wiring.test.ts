@@ -94,6 +94,8 @@ describe('task-runner-wiring', () => {
       updateTask: vi.fn(),
       loadWorkflow: vi.fn(),
     };
+    const enqueueTaskOutput = vi.fn();
+    const flushTaskOutput = vi.fn();
 
     const runner = rebuildTaskRunner({
       orchestrator: orchestrator as any,
@@ -109,8 +111,8 @@ describe('task-runner-wiring', () => {
       },
       logger: logger as any,
       taskHandles,
-      enqueueTaskOutput: vi.fn(),
-      flushTaskOutput: vi.fn(),
+      enqueueTaskOutput,
+      flushTaskOutput,
       assertFatalExecutionCapacity: vi.fn(),
       getTaskRunner: () => currentRunner,
       setTaskRunner: (value) => { currentRunner = value; },
@@ -131,13 +133,15 @@ describe('task-runner-wiring', () => {
     expect(config.executionDefaultsProvider()).toEqual({ executionAgent: 'claude' });
     expect(loadConfig).toHaveBeenCalledTimes(3);
 
-    config.callbacks.onOutput('task-1', 'chunk');
-    expect(taskRunnerConstructor.mock.calls[0]?.[0].callbacks.onOutput).toBe(config.callbacks.onOutput);
-
     const handle = { executionId: 'exec-1', workspacePath: '/repo/wt', branch: 'feature' };
     const executor = { type: 'worktree' };
     config.callbacks.onSpawned('task-1', handle, executor);
     expect(taskHandles.get('task-1')).toEqual({ handle, executor });
+
+    config.callbacks.onOutput('task-1', 'chunk');
+    expect(config.callbacks.onOutput).toBe(taskRunnerConstructor.mock.calls[0]?.[0].callbacks.onOutput);
+    expect(enqueueTaskOutput).toHaveBeenCalledWith('task-1', 'chunk');
+    expect(flushTaskOutput).toHaveBeenCalledTimes(1);
 
     config.callbacks.onComplete('task-1', {
       status: 'completed',
@@ -145,6 +149,11 @@ describe('task-runner-wiring', () => {
       outputs: { exitCode: 0 },
     });
     expect(taskHandles.has('task-1')).toBe(false);
+    expect(flushTaskOutput).toHaveBeenCalledTimes(2);
+
+    config.callbacks.onOutput('task-1', 'late chunk');
+    expect(enqueueTaskOutput).toHaveBeenLastCalledWith('task-1', 'late chunk');
+    expect(flushTaskOutput).toHaveBeenCalledTimes(3);
 
     const heartbeatAt = new Date('2026-06-03T01:02:03.000Z');
     config.callbacks.onHeartbeat('task-1', { at: heartbeatAt, source: 'remote_workload' });

@@ -232,6 +232,59 @@ describe('TaskRunner', () => {
     });
     await done;
   });
+  it('does not apply AI execution defaults to command tasks', async () => {
+    let seenRequest: any;
+    let completeCallback: ((response: WorkResponse) => void) | undefined;
+    const executorImpl = {
+      type: 'worktree',
+      start: vi.fn().mockImplementation(async (request: any) => {
+        seenRequest = request;
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-worktree',
+          branch: `experiment/${request.actionId}-mock`,
+        };
+      }),
+      onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+        completeCallback = cb;
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: { getDefault: () => executorImpl, get: () => executorImpl, getAll: () => [executorImpl] } as any,
+      executionDefaultsProvider: () => ({ executionAgent: 'omp', executionModel: 'chatgpt-5.4' }),
+      cwd: '/tmp',
+    });
+
+    const task = makeTask({
+      id: 'command-task',
+      status: 'running',
+      config: { command: 'echo hello' },
+      execution: { generation: 3, selectedAttemptId: 'command-task-a1' },
+    });
+
+    const done = runner.executeTask(task);
+    await vi.waitFor(() => expect(seenRequest?.actionType).toBe('command'));
+    expect(seenRequest.inputs.executionAgent).toBeUndefined();
+    expect(seenRequest.inputs.executionModel).toBeUndefined();
+    await vi.waitFor(() => expect(completeCallback).toBeTypeOf('function'));
+    completeCallback({
+      requestId: seenRequest.requestId,
+      actionId: task.id,
+      attemptId: seenRequest.attemptId,
+      executionGeneration: seenRequest.executionGeneration,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await done;
+  });
 
   it('sends attemptId and executionGeneration in work requests and preserves them in responses', async () => {
     const handleWorkerResponse = vi.fn();

@@ -122,8 +122,12 @@ export async function buildWorkRequest(
   };
 
   const actionType = host.determineActionType(task);
-  const executionAgent = task.config.executionAgent?.trim() || host.getDefaultExecutionAgent();
-  const executionModel = task.config.executionModel?.trim() || host.getDefaultExecutionModel();
+  const executionAgent = actionType === 'ai_task'
+    ? (task.config.executionAgent?.trim() || host.getDefaultExecutionAgent())
+    : undefined;
+  const executionModel = actionType === 'ai_task'
+    ? (task.config.executionModel?.trim() || host.getDefaultExecutionModel())
+    : undefined;
   const request: WorkRequest = {
     requestId: randomUUID(),
     actionId: task.id,
@@ -134,8 +138,8 @@ export async function buildWorkRequest(
       description: task.description,
       command: task.config.command,
       prompt: task.config.prompt,
-      executionAgent,
-      executionModel,
+      ...(executionAgent ? { executionAgent } : {}),
+      ...(executionModel ? { executionModel } : {}),
       repoUrl,
       branchRepoUrl,
       featureBranch: task.config.featureBranch,

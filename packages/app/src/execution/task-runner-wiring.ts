@@ -108,6 +108,9 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
     callbacks: {
       onOutput: (taskId, data) => {
         deps.enqueueTaskOutput(taskId, data);
+        if (!deps.taskHandles.has(taskId)) {
+          deps.flushTaskOutput(taskId);
+        }
       },
       onLaunchFailed: (taskId, error, executor) => {
         deps.assertFatalExecutionCapacity(`launch failed ${taskId}`);

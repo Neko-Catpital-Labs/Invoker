@@ -443,7 +443,9 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       hasAgentSessionId: !!agentSessionId,
     });
 
-    const executionAgent = request.inputs.executionAgent ?? 'claude';
+    const executionAgent = request.actionType === 'ai_task'
+      ? (request.inputs.executionAgent ?? 'claude')
+      : undefined;
     const stdinMode = this.agentRegistry && executionAgent
       ? this.agentRegistry.getOrThrow(executionAgent).stdinMode
       : (request.actionType === 'ai_task' ? 'ignore' : 'pipe');
@@ -482,7 +484,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       handle.agentSessionId = agentSessionId;
     }
 
-    const driver = this.agentRegistry?.getSessionDriver(executionAgent);
+    const driver = executionAgent ? this.agentRegistry?.getSessionDriver(executionAgent) : undefined;
     child.stdout?.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
       if (driver) {

@@ -38,7 +38,9 @@ export async function dispatchExecutor(
   const { task, attemptId, request, bench, dispatchOpts } = args;
   const startGeneration = task.execution.generation ?? 0;
   const actionType = host.determineActionType(task);
-  const executionAgent = task.config.executionAgent?.trim() || host.getDefaultExecutionAgent();
+  const executionAgent = actionType === 'ai_task'
+    ? (task.config.executionAgent?.trim() || host.getDefaultExecutionAgent())
+    : undefined;
 
   const startT0 = Date.now();
   const attemptedPoolMemberKeys = new Set<string>();
