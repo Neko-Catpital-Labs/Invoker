@@ -132,6 +132,7 @@ import {
   isDiscardedAttempt,
   isOutcomeTerminalAttempt,
 } from './attempt-policy.js';
+import { buildTaskResetChanges } from './task-reset-policy.js';
 
 // ── Channel Constants ───────────────────────────────────────
 
@@ -158,30 +159,9 @@ function workflowTimestamp(): Date {
   return new Date();
 }
 /** Recreate-class reset: fresh lineage, cleared attempt/session/container metadata. */
-const RECREATE_RESET_CHANGES: TaskStateChanges = {
-  status: 'pending',
+const RECREATE_RESET_CHANGES: TaskStateChanges = buildTaskResetChanges('recreate', {
   config: { summary: undefined },
-  execution: {
-    autoFixAttempts: 0,
-    startedAt: undefined,
-    completedAt: undefined,
-    error: undefined,
-    exitCode: undefined,
-    commit: undefined,
-    branch: undefined,
-    workspacePath: undefined,
-    lastHeartbeatAt: undefined,
-    phase: undefined,
-    launchStartedAt: undefined,
-    launchCompletedAt: undefined,
-    reviewUrl: undefined,
-    reviewId: undefined,
-    reviewStatus: undefined,
-    reviewProviderId: undefined,
-    agentSessionId: undefined,
-    containerId: undefined,
-  },
-};
+});
 
 const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
 const TRACE_WORKER_RESPONSE = process.env.INVOKER_TRACE_WORKER_RESPONSE === '1';
@@ -661,37 +641,9 @@ export class Orchestrator {
    */
   private knownFreshBaseCommits = new Map<string, string>();
 
-  private static readonly DETACH_RESET_CHANGES: TaskStateChanges = {
-    status: 'pending',
+  private static readonly DETACH_RESET_CHANGES: TaskStateChanges = buildTaskResetChanges('detach', {
     config: { summary: undefined },
-    execution: {
-      autoFixAttempts: 0,
-      blockedBy: undefined,
-      startedAt: undefined,
-      completedAt: undefined,
-      error: undefined,
-      exitCode: undefined,
-      commit: undefined,
-      branch: undefined,
-      workspacePath: undefined,
-      pendingFixError: undefined,
-      inputPrompt: undefined,
-      lastHeartbeatAt: undefined,
-      phase: undefined,
-      launchStartedAt: undefined,
-      launchCompletedAt: undefined,
-      isFixingWithAI: false,
-      reviewUrl: undefined,
-      reviewId: undefined,
-      reviewStatus: undefined,
-      reviewProviderId: undefined,
-      fixedIntegrationSha: undefined,
-      fixedIntegrationRecordedAt: undefined,
-      fixedIntegrationSource: undefined,
-      agentSessionId: undefined,
-      containerId: undefined,
-    },
-  };
+  });
 
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
@@ -1297,28 +1249,9 @@ export class Orchestrator {
       supersedesAttemptId: activeAttempt?.id,
     });
 
-    const changes = this.withBumpedExecutionGeneration(task, {
-      status: 'pending',
-      execution: {
-        selectedAttemptId: freshAttempt.id,
-        phase: undefined,
-        startedAt: undefined,
-        completedAt: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        lastHeartbeatAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        branch: undefined,
-        commit: undefined,
-        inputPrompt: undefined,
-        pendingFixError: undefined,
-        agentSessionId: undefined,
-        workspacePath: undefined,
-        containerId: undefined,
-        isFixingWithAI: false,
-      },
-    });
+    const changes = this.withBumpedExecutionGeneration(task, buildTaskResetChanges('newAttempt', {
+      execution: { selectedAttemptId: freshAttempt.id },
+    }));
 
     let updated!: TaskState;
     this.taskRepository.runInTransaction(() => {
@@ -2205,26 +2138,9 @@ export class Orchestrator {
       });
     }
 
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
+    const resetChanges: TaskStateChanges = buildTaskResetChanges('retryTask', {
       config: { summary: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        pendingFixError: undefined,
-        commit: undefined,
-        lastHeartbeatAt: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        phase: undefined,
-        isFixingWithAI: false,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
-    };
+    });
     const t0 = this.stateGetTask(id)!;
     this.logger.info('[agent-session-trace] retryTask: before writeAndSync', {
       taskId: id,
@@ -2329,24 +2245,9 @@ export class Orchestrator {
     });
     this.lastInvalidationPlan = plan;
 
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
+    const resetChanges: TaskStateChanges = buildTaskResetChanges('retryWorkflow', {
       config: { summary: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        pendingFixError: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        isFixingWithAI: false,
-        // Preserve branch/commit/workspacePath — they contain valid work context
-        // Only clear error-related and timing fields
-      },
-    };
+    });
 
     const retryRootIds = allTasks
       .filter((task) => retryStatuses.has(task.status))
@@ -2519,10 +2420,9 @@ export class Orchestrator {
     });
     this.lastInvalidationPlan = plan;
 
-    const resetChanges: TaskStateChanges = {
-      ...RECREATE_RESET_CHANGES,
+    const resetChanges: TaskStateChanges = buildTaskResetChanges('recreate', {
       config: { summary: undefined, poolMemberId: undefined },
-    };
+    });
 
     this.logger.info('[orchestrator] recreateWorkflow reset', {
       workflowId,
@@ -4085,16 +3985,7 @@ export class Orchestrator {
     // Transition running → pending. A deferred launch must not retain the
     // launch-claimed phase; otherwise it can be mistaken for an actively
     // dispatchable launch with no executor owner.
-    const changes: TaskStateChanges = {
-      status: 'pending',
-      execution: {
-        startedAt: undefined,
-        lastHeartbeatAt: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-      },
-    };
+    const changes: TaskStateChanges = buildTaskResetChanges('defer');
     const deferUpdated = this.writeAndSync(id, changes);
     const delta: TaskDelta = this.buildUpdateDelta(task, deferUpdated, changes);
     this.persistence.logEvent?.(id, 'task.deferred', {
