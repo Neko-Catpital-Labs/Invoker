@@ -317,7 +317,7 @@ export interface TaskReplacementDef {
 export type { ReviewGateArtifact, ReviewGateState } from '@invoker/workflow-graph';
 export type { InvokerAPI, ClaudeMessage, AgentSessionData, ReviewGateQueryResponse } from '@invoker/contracts';
 
-import type { InvokerAPI, TerminalOutputEvent } from '@invoker/contracts';
+import type { InvokerAPI, RuntimeStatus, TerminalOutputEvent } from '@invoker/contracts';
 // ── Augment global Window ───────────────────────────────────
 
 declare global {
@@ -327,6 +327,7 @@ declare global {
       tasks?: TaskState[];
       workflows?: WorkflowMeta[];
       initialWorkflowId?: string | null;
+      runtimeStatus?: RuntimeStatus | null;
       appStartedAtEpochMs?: number;
       streamSequence?: number;
     };
