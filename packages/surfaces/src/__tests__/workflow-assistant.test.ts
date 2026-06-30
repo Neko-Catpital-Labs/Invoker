@@ -22,9 +22,25 @@ describe('parseWorkflowControl', () => {
     });
   });
 
+  it('parses gate-policy updates with a workflow-channel owner task', () => {
+    expect(parseWorkflowControl('set gate-policy api wf-up completed')).toEqual({
+      kind: 'gate-policy',
+      operation: 'gate-policy',
+      ownerTaskId: 'api',
+      updates: [{ workflowId: 'wf-up', gatePolicy: 'completed' }],
+    });
+    expect(parseWorkflowControl('gate policy api wf-up upstream-check review_ready')).toEqual({
+      kind: 'gate-policy',
+      operation: 'gate-policy',
+      ownerTaskId: 'api',
+      updates: [{ workflowId: 'wf-up', taskId: 'upstream-check', gatePolicy: 'review_ready' }],
+    });
+  });
+
   it('returns null for free-form questions', () => {
     expect(parseWorkflowControl('what did the api task change?')).toBeNull();
     expect(parseWorkflowControl('approve')).toBeNull(); // verb without a task id
+    expect(parseWorkflowControl('set gate-policy api wf-up approved')).toBeNull();
   });
 });
 

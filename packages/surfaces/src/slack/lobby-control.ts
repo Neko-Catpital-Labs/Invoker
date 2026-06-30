@@ -7,10 +7,17 @@
  * unambiguous command, so the caller falls through to conversation.
  */
 
-import type { WorkflowOpName } from '../surface.js';
+import type { WorkflowGatePolicy, WorkflowGatePolicyUpdate, WorkflowOpName } from '../surface.js';
 
 export type LobbyControl =
   | { kind: 'op'; operation: WorkflowOpName; target: { all: true } | { workflow: string } }
+  | {
+      kind: 'gate-policy';
+      operation: 'gate-policy';
+      target: { workflow: string };
+      ownerTaskId: string;
+      updates: WorkflowGatePolicyUpdate[];
+    }
   | { kind: 'submit' };
 
 // Verb spellings → canonical operation. Bare `rebase` means recreate-after-rebase.
@@ -25,13 +32,53 @@ const OP_ALIASES: Record<string, WorkflowOpName> = {
 };
 
 const VERB_PATTERN = /^(rebase-recreate|rebase-retry|recreate|rebase|retry|cancel|status)\b([\s\S]*)$/i;
+const GATE_POLICY_PATTERN = /^(?:set\s+)?gate[-\s]policy\b([\s\S]*)$/i;
 const TARGET_TOKEN = /^[\w./-]+$/;
+
+function parseGatePolicy(value: string): WorkflowGatePolicy | null {
+  const normalized = value.toLowerCase().replace(/-/g, '_');
+  return normalized === 'completed' || normalized === 'review_ready' ? normalized : null;
+}
+
+function parseLobbyGatePolicy(text: string): Extract<LobbyControl, { kind: 'gate-policy' }> | null {
+  const match = GATE_POLICY_PATTERN.exec(text);
+  if (!match) return null;
+
+  const parts = match[1].trim().replace(/[.!?]+$/, '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== 3 && parts.length !== 4) return null;
+
+  const [ownerTaskId, upstreamWorkflowId] = parts;
+  const depTaskId = parts.length === 4 ? parts[2] : undefined;
+  const policyToken = parts.length === 4 ? parts[3] : parts[2];
+  const gatePolicy = parseGatePolicy(policyToken);
+  if (!ownerTaskId || !upstreamWorkflowId || !gatePolicy) return null;
+  if (!TARGET_TOKEN.test(ownerTaskId) || !TARGET_TOKEN.test(upstreamWorkflowId)) return null;
+  if (depTaskId !== undefined && !TARGET_TOKEN.test(depTaskId)) return null;
+
+  const separator = ownerTaskId.indexOf('/');
+  if (separator <= 0 || separator === ownerTaskId.length - 1) return null;
+
+  const update: WorkflowGatePolicyUpdate = {
+    workflowId: upstreamWorkflowId,
+    ...(depTaskId === undefined ? {} : { taskId: depTaskId }),
+    gatePolicy,
+  };
+
+  return {
+    kind: 'gate-policy',
+    operation: 'gate-policy',
+    target: { workflow: ownerTaskId.slice(0, separator) },
+    ownerTaskId,
+    updates: [update],
+  };
+}
 
 /**
  * Parse a lobby command. Recognizes:
  *   - `submit` / `submit to invoker`
  *   - `<op> all` / `<op> <workflow-id-or-name>`  (op ∈ recreate|rebase|rebase-recreate|rebase-retry|retry|cancel|status)
  *   - `status` with no target → all workflows
+ *   - `set gate-policy <workflow-id>/<task-id> <upstream-workflow-id> [upstream-task-id] <completed|review_ready>`
  * Returns null for missing/ambiguous targets and for prose, so the message is
  * treated as conversation (or routed to the classifier fallback).
  */
@@ -39,6 +86,9 @@ export function parseLobbyControl(text: string): LobbyControl | null {
   const trimmed = text.trim();
 
   if (/^submit(\s+to\s+invoker)?\s*[.!?]*$/i.test(trimmed)) return { kind: 'submit' };
+
+  const gatePolicy = parseLobbyGatePolicy(trimmed);
+  if (gatePolicy) return gatePolicy;
 
   const match = VERB_PATTERN.exec(trimmed);
   if (!match) return null;
