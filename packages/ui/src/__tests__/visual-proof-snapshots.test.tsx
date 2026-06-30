@@ -33,8 +33,9 @@ describe('Visual proof snapshots', () => {
 
   it('empty-state', () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-open-file')).toBeInTheDocument();
+    expect(screen.getByText('What to expect')).toBeInTheDocument();
+    expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
+    expect(screen.getByText('No runs yet')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
     expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
   });
