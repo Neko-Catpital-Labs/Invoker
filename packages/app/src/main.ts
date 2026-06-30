@@ -106,6 +106,7 @@ import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
   resolveConfigFileState,
+  resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
   type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
@@ -4495,6 +4496,10 @@ function createEmbeddedTerminalBackendFromConfig(
 
     ipcMain.handle('invoker:get-execution-harnesses', () => {
       return agentRegistry.listExecutionHarnesses();
+    });
+
+    ipcMain.handle('invoker:get-execution-defaults', () => {
+      return resolveDefaultTaskExecutionSettings(loadConfig());
     });
 
     ipcMain.handle('invoker:get-runtime-status', () => {

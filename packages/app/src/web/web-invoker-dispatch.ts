@@ -21,7 +21,7 @@ import type {
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
-import type { InvokerConfig } from '../config.js';
+import { resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
 import type { ApiMutationFacade } from '../api-server.js';
 import { buildReviewGateQueryResponse } from '../review-gate-query.js';
 import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
@@ -136,6 +136,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return Object.keys(deps.loadConfig().executionPools ?? {});
       case 'invoker:get-execution-harnesses':
         return agentRegistry.listExecutionHarnesses();
+      case 'invoker:get-execution-defaults':
+        return resolveDefaultTaskExecutionSettings(deps.loadConfig());
       case 'invoker:get-system-diagnostics':
         return (
           deps.getSystemDiagnostics?.() ??

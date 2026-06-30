@@ -279,6 +279,10 @@ export interface TaskRunnerConfig {
     selectionStrategy?: 'roundRobin' | 'leastLoaded';
     maxConcurrentTasksPerMember?: number;
   }>;
+  executionDefaultsProvider?: () => {
+    executionAgent?: string;
+    executionModel?: string;
+  };
   /** Docker execution environment configuration from .invoker.json. */
   dockerConfig?: {
     imageName?: string;
@@ -306,6 +310,7 @@ export class TaskRunner {
   private reviewGateCiFailureInFlight = new Set<string>();
   private getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   /** @internal */ getExecutionPools: () => Record<string, ExecutionPoolConfig>;
+  private getExecutionDefaults: () => { executionAgent?: string; executionModel?: string };
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
   /** @internal */ logger: Logger;
@@ -326,6 +331,16 @@ export class TaskRunner {
   /** Config default branch (e.g. master) for workflows without baseBranch. */
   getDefaultBranchHint(): string | undefined {
     return this.defaultBranch;
+  }
+
+  /** @internal */ getDefaultExecutionAgent(): string {
+    const configured = this.getExecutionDefaults().executionAgent?.trim();
+    return configured && configured.length > 0 ? configured : DEFAULT_EXECUTION_AGENT;
+  }
+
+  /** @internal */ getDefaultExecutionModel(): string | undefined {
+    const configured = this.getExecutionDefaults().executionModel?.trim();
+    return configured && configured.length > 0 ? configured : undefined;
   }
 
   /**
@@ -409,6 +424,7 @@ export class TaskRunner {
     this.reviewGateCiFailurePublisher = config.reviewGateCiFailurePublisher;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
+    this.getExecutionDefaults = config.executionDefaultsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
     this.logger = config.logger ?? NOOP_LOGGER;
@@ -2382,7 +2398,7 @@ export class TaskRunner {
         .filter((agent): agent is string => Boolean(agent)),
     )];
     if (distinctAgents.length === 0) {
-      return DEFAULT_EXECUTION_AGENT;
+      return this.getDefaultExecutionAgent();
     }
     if (distinctAgents.length > 1) {
       console.warn(
