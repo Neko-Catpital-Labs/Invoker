@@ -91,13 +91,13 @@ expected_executed_for_mode() {
 expected_discovered_for_mode() {
   case "$MODE_KEY" in
     required)
-      printf '19'
+      printf '20'
       ;;
     extended)
-      printf '26'
+      printf '27'
       ;;
     dangerous)
-      printf '27'
+      printf '28'
       ;;
   esac
 }
