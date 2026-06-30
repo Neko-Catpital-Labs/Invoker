@@ -7,6 +7,7 @@ import { loadSecretsFile } from './secrets-loader.js';
 import { killProcessGroup, cleanElectronEnv } from './process-utils.js';
 import { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 import type { AgentRegistry } from './agent-registry.js';
+import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { traceExecution } from './exec-trace.js';
 
 const CONTAINER_STOP_TIMEOUT_S = 5;
@@ -316,8 +317,8 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     }
     log(`${TAG} Container created: ${container.id.slice(0, 12)} image=${this.imageName}`);
 
-    // Determine task command and Claude session before entry registration
-    const executionAgent = request.inputs.executionAgent ?? 'claude';
+    // Determine task command and agent session before entry registration
+    const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
     const { cmd, args: cmdArgs, agentSessionId } = this.buildCommandAndArgs(request, {
       agentRegistry: this.agentRegistry,
     });
@@ -524,7 +525,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       // Docker containers (see github.com/anthropics/claude-code/issues/20572,
       // #24068, #25286). The --resume terminal may hang after the trust prompt.
       // The automated -p (pipe) execution path is unaffected.
-      const agentName = entry.request.inputs.executionAgent ?? 'claude';
+      const agentName = entry.request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
@@ -554,7 +555,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       // Docker containers (see github.com/anthropics/claude-code/issues/20572,
       // #24068, #25286). The --resume terminal may hang after the trust prompt.
       const resume = this.agentRegistry
-        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? 'claude').buildResumeArgs(meta.agentSessionId)
+        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? DEFAULT_EXECUTION_AGENT).buildResumeArgs(meta.agentSessionId)
         : { cmd: 'claude', args: ['--resume', meta.agentSessionId, '--dangerously-skip-permissions'] };
       const resumeCmd = [resume.cmd, ...resume.args].join(' ');
       console.log(`[DockerExecutor] getRestoredTerminalSpec task="${meta.taskId}" → docker exec ${resumeCmd}`);

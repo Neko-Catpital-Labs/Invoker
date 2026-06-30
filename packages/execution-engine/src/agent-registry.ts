@@ -5,7 +5,7 @@
  * Executors look up agents by name (e.g. 'claude') at task execution time.
  */
 
-import type { ExecutionAgent, PlanningAgent } from './agent.js';
+import { DEFAULT_EXECUTION_AGENT, type ExecutionAgent, type PlanningAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 
 function normalizeExecutionAgentName(name: string | null | undefined): string | undefined {
@@ -37,13 +37,13 @@ export class AgentRegistry {
 
   get(name: string | null | undefined): ExecutionAgent | undefined {
     const normalized = normalizeExecutionAgentName(name);
-    if (!normalized) return this.executionAgents.get('claude');
+    if (!normalized) return this.executionAgents.get(DEFAULT_EXECUTION_AGENT);
     return this.executionAgents.get(normalized);
   }
 
   getOrThrow(name: string | null | undefined): ExecutionAgent {
     const normalized = normalizeExecutionAgentName(name);
-    const resolvedName = normalized ?? 'claude';
+    const resolvedName = normalized ?? DEFAULT_EXECUTION_AGENT;
     const agent = this.executionAgents.get(resolvedName);
     if (!agent) {
       throw new Error(`No execution agent registered with name "${resolvedName}". Available: [${[...this.executionAgents.keys()].join(', ')}]`);
