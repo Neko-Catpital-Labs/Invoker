@@ -4,7 +4,7 @@
  * Safely land a Mergify-managed PR stack.
  *
  * The hard rule this enforces: never act on a PR identified by branch name.
- * You pass explicit PR numbers, bottom-of-stack first. Every PR is verified
+ * You pass confirmed PR numbers, bottom-of-stack first. Every PR is verified
  * before any write happens:
  *   - its head commit SHA exists in the local clone (so it is the code you reviewed),
  *   - its head branch is a real `stack/` branch (refuses raw workflow branches),
@@ -21,8 +21,8 @@
  * PR. This guard makes that class of mistake impossible to commit by accident.
  *
  * Usage:
- *   node scripts/land-stack.mjs <pr> [<pr> ...]              # verify only (safe default)
- *   node scripts/land-stack.mjs <pr> [<pr> ...] --execute    # verify, then queue the bottom PR
+ *   node scripts/land-stack.mjs <pr> [<pr> ...]              # verify confirmed numbers (safe default)
+ *   node scripts/land-stack.mjs <pr> [<pr> ...] --execute    # re-verify, then queue the bottom PR
  *   node scripts/land-stack.mjs <pr> ... --base main         # trunk branch (default: master)
  *   node scripts/land-stack.mjs <pr> ... --stack-prefix s/   # required head-branch prefix
  *   node scripts/land-stack.mjs --help
@@ -56,7 +56,7 @@ export function analyzeStack({ prs, hasLocalCommit, trunk = TRUNK_DEFAULT, stack
   const add = (pr, name, ok, detail) => checks.push({ pr, name, ok, detail });
 
   if (!Array.isArray(prs) || prs.length === 0) {
-    add(0, 'input', false, 'no PR numbers provided — pass explicit PR numbers, bottom of stack first');
+    add(0, 'input', false, 'no PR numbers provided — discover/suggest bottom-up PR numbers, confirm them, then rerun');
     return { ok: false, checks };
   }
 
@@ -127,15 +127,17 @@ function parseArgs(argv) {
   return { prs, execute, trunk, stackPrefix, help };
 }
 
-const HELP = `land-stack — verify and land a Mergify PR stack by explicit PR number
+const HELP = `land-stack — verify and land a Mergify PR stack by confirmed PR number
 
-  node scripts/land-stack.mjs <pr> [<pr> ...]              verify only (safe default)
-  node scripts/land-stack.mjs <pr> [<pr> ...] --execute    verify, then queue the bottom PR
+  node scripts/land-stack.mjs <pr> [<pr> ...]              verify confirmed numbers (safe default)
+  node scripts/land-stack.mjs <pr> [<pr> ...] --execute    re-verify, then queue the bottom PR
   node scripts/land-stack.mjs <pr> ... --base <branch>     trunk branch (default: master)
   node scripts/land-stack.mjs <pr> ... --stack-prefix <p>  required head-branch prefix (default: stack/)
 
-Pass PR numbers bottom-of-stack first. Verification must pass before anything is
-queued. --execute adds the admin-bypass label to the bottom PR (base == trunk).`;
+Pass confirmed PR numbers bottom-of-stack first. If numbers are missing, broadly
+list open PRs, filter to stack heads, order by base/head links, ask the user to
+confirm the suggested numbers, then run this guard. Verification must pass before
+anything is queued. --execute adds the admin-bypass label to the bottom PR.`;
 
 function printReport(result) {
   const byPr = new Map();
