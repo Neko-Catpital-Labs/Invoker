@@ -123,6 +123,15 @@ function isNoHandlerError(error) {
   return /NO_HANDLER|No request handler registered|No handler registered/i.test(message);
 }
 
+function ownerHandlerUnavailableMessage(channel, error) {
+  const original = error instanceof Error ? error.message : String(error);
+  return (
+    `${channel} handler is unavailable on the IPC bus. This usually means the shared Invoker owner process is not running ` +
+    `or the transport socket is stale after an owner crash; the CLI process is only a submitter and does not run the scheduler drain. ` +
+    `Original error: ${original}`
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Stdin reader (for batch-exec)
 // ---------------------------------------------------------------------------
@@ -219,6 +228,9 @@ async function requestExecWithRetry(bus, item, options) {
       return await requestExec(bus, item, options);
     } catch (error) {
       lastError = error;
+      if (isNoHandlerError(error)) {
+        throw new Error(ownerHandlerUnavailableMessage('headless.exec', error));
+      }
       if (attempt >= attempts || !isRetryableDispatchError(error)) {
         throw error;
       }
