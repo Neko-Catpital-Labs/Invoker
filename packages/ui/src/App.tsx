@@ -2,9 +2,9 @@
  * App — Main layout for Invoker UI.
  *
  * Layout:
- * - Left rail: workflow controls and navigation
- * - Main: workflow graph / task DAG
- * - Right: workflow inspector
+ * - Left: run/status column
+ * - Main: terminal and graph
+ * - Right: empty-state tutorial or inspector
  * - Bottom: status chips and terminal drawer
  * - Modals overlay when needed
  */
@@ -349,21 +349,39 @@ function WorkflowContextMenu({
   );
 }
 
-function GearIcon(): JSX.Element {
+function EmptyGraphTutorial(): JSX.Element {
   return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 16 16"
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.6"
-    >
-      <path d="M6.9 2.2h2.2l.4 1.6a4.7 4.7 0 0 1 1.1.6l1.6-.5 1.1 1.9-1.2 1.1a4.8 4.8 0 0 1 0 1.3l1.2 1.1-1.1 1.9-1.6-.5a4.7 4.7 0 0 1-1.1.6l-.4 1.6H6.9l-.4-1.6a4.7 4.7 0 0 1-1.1-.6l-1.6.5-1.1-1.9 1.2-1.1a4.8 4.8 0 0 1 0-1.3L2.7 5.8l1.1-1.9 1.6.5a4.7 4.7 0 0 1 1.1-.6l.4-1.6Z" />
-      <circle cx="8" cy="7.5" r="1.7" />
-    </svg>
+    <aside className="h-full w-full border-l border-gray-800 bg-gray-900/90 p-4">
+      <div className="rounded-xl border border-gray-800 bg-gray-950/70 p-4">
+        <h2 className="text-sm font-semibold text-gray-100">What to expect</h2>
+        <ol className="mt-3 space-y-3 text-sm text-gray-400">
+          <li>
+            <div className="font-medium text-gray-200">1. Type a goal</div>
+            <div className="mt-1 text-xs text-gray-500">Describe the change in the terminal to generate a plan.</div>
+          </li>
+          <li>
+            <div className="font-medium text-gray-200">2. Review the plan</div>
+            <div className="mt-1 text-xs text-gray-500">Check the graph before starting work.</div>
+          </li>
+          <li>
+            <div className="font-medium text-gray-200">3. Run it</div>
+            <div className="mt-1 text-xs text-gray-500">Start the workflow when the plan looks right.</div>
+          </li>
+        </ol>
+      </div>
+    </aside>
+  );
+}
+
+function EmptyInspectorPlaceholder(): JSX.Element {
+  return (
+    <aside className="h-full w-full border-l border-gray-800 bg-gray-900/90 p-4">
+      <div className="rounded-xl border border-dashed border-gray-800 bg-gray-950/50 p-4">
+        <h2 className="text-sm font-semibold text-gray-100">No task selected</h2>
+        <p className="mt-2 text-sm text-gray-400">Select a task in the graph to see details.</p>
+        <p className="mt-2 text-xs text-gray-500">Status, logs, and actions will appear here.</p>
+      </div>
+    </aside>
   );
 }
 
@@ -418,6 +436,7 @@ export function App() {
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
+  const graphActionsMenuRef = useRef<HTMLDivElement>(null);
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
@@ -458,6 +477,7 @@ export function App() {
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  const [graphActionsMenuOpen, setGraphActionsMenuOpen] = useState(false);
   // Transient, user-visible outcome line for a confirmed workflow detach.
   const [detachNotice, setDetachNotice] = useState<string | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
@@ -1744,6 +1764,42 @@ export function App() {
   }, [tasks]);
   const showStart = hasLoadedPlan && !hasStarted;
   const showStop = hasStarted && !allSettled;
+  const showEmptyGraphTutorial = !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
+  const showInspectorPlaceholder = !showEmptyGraphTutorial && !selectedTask && !selectedWorkflow && !selectedActionNode;
+
+  useEffect(() => {
+    if (!graphActionsMenuOpen) return undefined;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (graphActionsMenuRef.current?.contains(event.target as Node)) return;
+      setGraphActionsMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setGraphActionsMenuOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [graphActionsMenuOpen]);
+
+  const selectViewMode = useCallback((nextView: 'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph') => {
+    setGraphActionsMenuOpen(false);
+    if (nextView === 'actionGraph') {
+      setViewMode('actionGraph');
+      setWorkflowSelectionDismissed(true);
+      setSelectedTaskId(null);
+      return;
+    }
+    if (nextView === 'dag') {
+      setViewMode('dag');
+      return;
+    }
+    setViewMode(nextView);
+  }, []);
 
   // ── Task actions ──────────────────────────────────────────
   const handleProvideInput = useCallback(
@@ -1988,158 +2044,41 @@ export function App() {
       )}
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
-        <nav className="w-24 border-r border-gray-800 bg-gray-950/60 flex flex-col justify-between py-3">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".json,.yaml,.yml"
-            onChange={handleFileSelect}
-            className="hidden"
-          />
-          <div className="space-y-3 px-2">
-            <div className="space-y-1">
-              <button
-                data-testid="rail-open-file"
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full rounded bg-gray-700 px-2 py-1.5 text-left text-xs font-medium text-gray-100 hover:bg-gray-600"
-              >
-                Open
-              </button>
-              {showStart && (
-                <button
-                  data-testid="rail-start"
-                  onClick={handleStart}
-                  className="w-full rounded bg-green-700 px-2 py-1.5 text-left text-xs font-medium text-white hover:bg-green-600"
-                >
-                  Start
-                </button>
-              )}
-              {showStop && (
-                <button
-                  data-testid="rail-stop"
-                  onClick={handleStop}
-                  className="w-full rounded bg-red-700 px-2 py-1.5 text-left text-xs font-medium text-white hover:bg-red-600"
-                >
-                  Stop
-                </button>
-              )}
-              {planName && (
-                <div className="truncate px-1 pt-1 text-[10px] leading-tight text-gray-500" title={planName}>
-                  {planName}
-                </div>
-              )}
-            </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,.yaml,.yml"
+          onChange={handleFileSelect}
+          className="hidden"
+        />
 
-            <div className="space-y-1">
-            <button
-              data-testid="rail-home"
-              onClick={() => {
-                setViewMode('dag');
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'dag' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              Home
-            </button>
-            <button
-              data-testid="rail-timeline"
-              onClick={() => {
-                setViewMode('timeline');
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'timeline' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              Timeline
-            </button>
-            <button
-              data-testid="rail-history"
-              onClick={() => {
-                setViewMode('history');
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'history' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              History
-            </button>
-            <button
-              data-testid="rail-action-graph"
-              onClick={() => {
-                setViewMode('actionGraph');
-                setWorkflowSelectionDismissed(true);
-                setSelectedTaskId(null);
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'actionGraph' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              Action Graph
-            </button>
-            <button
-              data-testid="rail-queue"
-              onClick={() => {
-                setViewMode('queue');
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'queue' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              Queue
-            </button>
-            </div>
-
-            <div className="space-y-1 border-t border-gray-800 pt-3">
-              <button
-                data-testid="rail-refresh"
-                onClick={handleRefresh}
-                className="w-full rounded px-2 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-800/70"
-              >
-                Refresh
-              </button>
-              <button
-                data-testid="rail-clear"
-                onClick={handleClear}
-                className="w-full rounded px-2 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-800/70"
-              >
-                Clear
-              </button>
-              <button
-                data-testid="rail-delete-history"
-                onClick={handleDeleteDB}
-                className="w-full rounded px-2 py-1.5 text-left text-xs text-red-300 hover:bg-red-950/50"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-          <div className="px-2">
-            <button
-              data-testid="rail-settings"
-              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
-              className="flex h-8 w-full items-center justify-center rounded text-gray-300 hover:bg-gray-800/70 hover:text-white"
-              aria-label="Settings"
-              title="Settings"
-            >
-              <GearIcon />
-            </button>
-          </div>
-        </nav>
+        <LeftStatusColumn
+          workflows={workflows}
+          tasks={tasks}
+          queueStatus={queueStatus}
+          planName={planName}
+          plannerBusy={plannerBusy}
+          hasStarted={hasStarted}
+          showStart={showStart}
+          showStop={showStop}
+          onOpenPlan={() => fileInputRef.current?.click()}
+          onStart={handleStart}
+          onStop={handleStop}
+          onOpenSettings={() => {
+            cancelPendingSystemSetupAutoOpen();
+            setShowSystemSetup(true);
+          }}
+          onTaskClick={handleTaskClick}
+        />
 
         <div className="flex-1 flex overflow-hidden">
-          <LeftStatusColumn
-            workflows={workflows}
-            tasks={tasks}
-            queueStatus={queueStatus}
-            planName={planName}
-            plannerBusy={plannerBusy}
-            hasStarted={hasStarted}
-            onTaskClick={handleTaskClick}
-          />
           <main className="flex-1 flex flex-col overflow-hidden bg-gray-900">
-            <div className="space-y-3 border-b border-gray-800 bg-gray-900/80 p-4">
+            <div className="border-b border-gray-800 bg-gray-900/80 p-4">
               <InvokerTerminal
                 lines={terminalLines}
                 busy={plannerBusy}
                 onSubmit={(command) => void handleTerminalSubmit(command)}
               />
-              <section className="rounded-xl border border-gray-800 bg-gray-950/70 p-4">
-                <h2 className="text-sm font-semibold text-gray-100">What to expect</h2>
-                <p className="mt-2 text-sm text-gray-400">
-                  Type a planning goal, review the graph, then run when the plan is ready.
-                </p>
-              </section>
             </div>
 
             <div className="flex-1 flex overflow-hidden">
@@ -2149,13 +2088,103 @@ export function App() {
                     <h2 className="text-sm font-semibold text-gray-100">Plan graph</h2>
                     <p className="text-xs text-gray-500">Your plan will appear here.</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setGraphMaximized(true)}
-                    className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
-                  >
-                    View full graph
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      data-testid="rail-refresh"
+                      onClick={handleRefresh}
+                      className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGraphMaximized(true)}
+                      className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+                    >
+                      Full graph ⤢
+                    </button>
+                    <div ref={graphActionsMenuRef} className="relative">
+                      <button
+                        type="button"
+                        data-testid="graph-more-button"
+                        onClick={() => setGraphActionsMenuOpen((open) => !open)}
+                        className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+                      >
+                        More ▾
+                      </button>
+                      {graphActionsMenuOpen && (
+                        <div
+                          data-testid="graph-more-menu"
+                          className="absolute right-0 top-10 z-20 w-48 rounded-lg border border-gray-700 bg-gray-950 p-1 shadow-xl"
+                        >
+                          <button
+                            type="button"
+                            data-testid="rail-home"
+                            onClick={() => selectViewMode('dag')}
+                            className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                          >
+                            Plan graph
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="rail-timeline"
+                            onClick={() => selectViewMode('timeline')}
+                            className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                          >
+                            Timeline
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="rail-history"
+                            onClick={() => selectViewMode('history')}
+                            className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                          >
+                            History
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="rail-action-graph"
+                            onClick={() => selectViewMode('actionGraph')}
+                            className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                          >
+                            Action Graph
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="rail-queue"
+                            onClick={() => selectViewMode('queue')}
+                            className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                          >
+                            Queue
+                          </button>
+                          <div className="my-1 border-t border-gray-800" />
+                          <button
+                            type="button"
+                            data-testid="rail-clear"
+                            onClick={async () => {
+                              setGraphActionsMenuOpen(false);
+                              await handleClear();
+                            }}
+                            className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                          >
+                            Clear
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="rail-delete-history"
+                            onClick={async () => {
+                              setGraphActionsMenuOpen(false);
+                              await handleDeleteDB();
+                            }}
+                            className="block w-full rounded px-3 py-2 text-left text-xs text-red-300 hover:bg-red-950/50"
+                          >
+                            Delete history
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
                 <div
                   ref={graphSurfaceRef}
@@ -2274,31 +2303,37 @@ export function App() {
                 data-keyboard-region="inspector"
                 tabIndex={0}
                 data-keyboard-active={keyboardRegion === 'inspector' ? 'true' : 'false'}
-                className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
+                className={`${showEmptyGraphTutorial || showInspectorPlaceholder ? 'w-96' : inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
               >
-                <WorkflowInspector
-                  workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
-                  task={selectedTask}
-                  workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
-                  reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
-                  remoteTargets={remoteTargets}
-                  executionPools={executionPools}
-                  executionAgents={executionAgents}
-                  collapsed={inspectorCollapsed}
-                  advancedExpanded={advancedMetadataExpanded}
-                  actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
-                  onEditType={handleEditType}
-                  onEditPool={handleEditPool}
-                  onEditAgent={handleEditAgent}
-                  onEditPrompt={handleEditPrompt}
-                  onEditCommand={handleEditCommand}
-                  onApprove={openApprovalModal}
-                  onReject={openRejectModal}
-                  onSetMergeBranch={handleSetMergeBranch}
-                  onSetMergeMode={handleSetMergeMode}
-                  onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
-                  onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
-                />
+                {showEmptyGraphTutorial ? (
+                  <EmptyGraphTutorial />
+                ) : showInspectorPlaceholder ? (
+                  <EmptyInspectorPlaceholder />
+                ) : (
+                  <WorkflowInspector
+                    workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
+                    task={selectedTask}
+                    workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
+                    reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
+                    remoteTargets={remoteTargets}
+                    executionPools={executionPools}
+                    executionAgents={executionAgents}
+                    collapsed={inspectorCollapsed}
+                    advancedExpanded={advancedMetadataExpanded}
+                    actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
+                    onEditType={handleEditType}
+                    onEditPool={handleEditPool}
+                    onEditAgent={handleEditAgent}
+                    onEditPrompt={handleEditPrompt}
+                    onEditCommand={handleEditCommand}
+                    onApprove={openApprovalModal}
+                    onReject={openRejectModal}
+                    onSetMergeBranch={handleSetMergeBranch}
+                    onSetMergeMode={handleSetMergeMode}
+                    onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
+                    onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
+                  />
+                )}
               </div>
             </div>
           </main>
