@@ -24,7 +24,7 @@ import {
   type Unsubscribe,
 } from '@invoker/transport';
 import { resolveInvokerIpcSocketPath } from '@invoker/contracts';
-import type { TaskState } from '@invoker/workflow-core';
+import type { ExternalDependency, TaskState } from '@invoker/workflow-core';
 import type { WorkflowStatus } from '@invoker/surfaces';
 
 /** A MessageBus that exposes connection readiness — i.e. an IpcBus client. */
@@ -48,7 +48,7 @@ export interface WorkflowSummary {
 
 /** A workflow's persisted record plus its tasks, as returned by `headless.query` `{kind:'workflow'}`. */
 export interface WorkflowBundle {
-  workflow: { name?: string } | undefined;
+  workflow: { name?: string; externalDependencies?: ExternalDependency[] } | undefined;
   tasks: TaskState[];
 }
 

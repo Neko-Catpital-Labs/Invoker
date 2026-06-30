@@ -63,6 +63,25 @@ describe('createRunWorkflowOp', () => {
     expect(client.exec).toHaveBeenCalledWith(['retry', 'wf-1']);
   });
 
+  it('delegates gate-policy through the workflow-scoped owner command', async () => {
+    const client = makeClient({
+      listWorkflows: vi.fn(async () => [{ id: 'wf-down', name: 'downstream' }, { id: 'wf-up', name: 'upstream' }]),
+      getWorkflowBundle: vi.fn(async () => ({
+        workflow: { externalDependencies: [{ workflowId: 'wf-up', gatePolicy: 'completed' }] },
+        tasks: [],
+      })),
+    });
+
+    const res = await createRunWorkflowOp(client, noop)({
+      operation: 'gate-policy',
+      target: { workflow: 'downstream' },
+      updates: [{ workflowId: 'upstream', gatePolicy: 'review_ready' }],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(client.exec).toHaveBeenCalledWith(['set', 'workflow-gate-policy', 'wf-down', 'wf-up', 'review_ready']);
+  });
+
   it('returns a not-found result for an unknown target', async () => {
     const client = makeClient({ listWorkflows: vi.fn(async () => [{ id: 'wf-1' }]) });
     const res = await createRunWorkflowOp(client, noop)({ operation: 'recreate', target: { workflow: 'nope' } });

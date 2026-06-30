@@ -60,6 +60,10 @@ async function runOnce(
   }
   if (ids.length === 0) return { ok: false, summary: 'No workflows found.' };
 
+  if (op.operation === 'gate-policy') {
+    return runGatePolicy(client, op, all, ids, onProgress);
+  }
+
   if (op.operation === 'status') {
     const lines = await Promise.all(ids.map(async (id) => {
       const s = await client.getWorkflowStatus(id);
@@ -87,4 +91,55 @@ async function runOnce(
   onProgress?.({ done: total, total, ok, failed: failed.length });
   const summary = `${op.operation}: ${ok} ok${failed.length ? `, ${failed.length} failed\n${failed.join('\n')}` : ''}`;
   return { ok: failed.length === 0, summary };
+}
+
+async function runGatePolicy(
+  client: InvokerClient,
+  op: Extract<WorkflowOp, { operation: 'gate-policy' }>,
+  all: Awaited<ReturnType<InvokerClient['listWorkflows']>>,
+  ids: string[],
+  onProgress?: (p: WorkflowOpProgress) => void,
+): Promise<WorkflowOpResult> {
+  const normalized: typeof op.updates = [];
+  for (const update of op.updates) {
+    const upstream = all.find((w) => w.id === update.workflowId || w.name === update.workflowId);
+    if (!upstream) return { ok: false, summary: `No upstream workflow matching \`${update.workflowId}\`.` };
+    normalized.push({ ...update, workflowId: upstream.id });
+  }
+
+  let ok = 0;
+  let changed = 0;
+  const skipped: string[] = [];
+  const failed: string[] = [];
+  const total = ids.length;
+
+  for (const id of ids) {
+    onProgress?.({ done: ok + skipped.length + failed.length, total, ok, failed: failed.length, current: id });
+    try {
+      const bundle = await client.getWorkflowBundle(id);
+      const deps = bundle.workflow?.externalDependencies ?? [];
+      const applicable = normalized.filter((update) => deps.some((dep) => (
+        dep.workflowId === update.workflowId && (dep.taskId ?? '__merge__') === (update.taskId ?? '__merge__')
+      )));
+      if (applicable.length === 0) {
+        skipped.push(id);
+        continue;
+      }
+      for (const update of applicable) {
+        const args = ['set', 'workflow-gate-policy', id, update.workflowId];
+        if (update.taskId) args.push(update.taskId);
+        args.push(update.gatePolicy);
+        await client.exec(args);
+      }
+      ok++;
+      changed += applicable.length;
+    } catch (err) {
+      if (err instanceof InvokerDownError) throw err;
+      failed.push(`${id}: ${errMessage(err)}`);
+    }
+  }
+
+  onProgress?.({ done: total, total, ok, failed: failed.length });
+  const summary = `gate-policy: ${ok} updated${changed ? `, ${changed} change(s)` : ''}${skipped.length ? `, ${skipped.length} skipped without matching dependency` : ''}${failed.length ? `, ${failed.length} failed\n${failed.join('\n')}` : ''}`;
+  return { ok: failed.length === 0 && ok > 0, summary };
 }

@@ -37,10 +37,29 @@ export type WorkflowOpName =
   | 'status'
   | 'cancel';
 
-export interface WorkflowOp {
+export interface WorkflowControlOp {
   operation: WorkflowOpName;
   target: { all: true } | { workflow: string };
 }
+
+export type WorkflowGatePolicy = 'completed' | 'review_ready';
+
+export interface WorkflowGatePolicyUpdate {
+  /** Upstream workflow whose gate policy should be changed. */
+  workflowId: string;
+  /** Upstream task gate; omitted means the workflow merge gate. */
+  taskId?: string;
+  gatePolicy: WorkflowGatePolicy;
+}
+
+export interface WorkflowGatePolicyOp {
+  operation: 'gate-policy';
+  /** Downstream workflow whose external dependency gate policy is edited. */
+  target: { all: true } | { workflow: string };
+  updates: WorkflowGatePolicyUpdate[];
+}
+
+export type WorkflowOp = WorkflowControlOp | WorkflowGatePolicyOp;
 
 export interface WorkflowOpResult {
   ok: boolean;

@@ -16,6 +16,7 @@ export const HEADLESS_SET_SUBCOMMANDS = [
   'fix-prompt',
   'fix-context',
   'gate-policy',
+  'workflow-gate-policy',
   'workflow',
   'task',
 ] as const;
