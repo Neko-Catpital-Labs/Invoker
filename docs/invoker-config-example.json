@@ -67,8 +67,6 @@
     }
   },
   "defaultPoolId": "mixed-local-ssh",
-  "defaultExecutionAgent": "omp",
-  "defaultExecutionModel": "chatgpt-5.4",
 
   "executorRoutingRules": [
     {
