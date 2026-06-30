@@ -830,6 +830,27 @@ try {
     ['scripts/validate-pr-body.mjs', '--body-file', bodyPath, '--diff-file', cleanDiffPath],
     { cwd: repoRoot, encoding: 'utf8' },
   );
+  const missingDiffFileCli = spawnSync(
+    process.execPath,
+    ['scripts/validate-pr-body.mjs', '--body-file', bodyPath, '--diff-file'],
+    { cwd: repoRoot, encoding: 'utf8' },
+  );
+  assert(missingDiffFileCli.status === 1, 'CLI validator should reject --diff-file without a path');
+  assert(
+    missingDiffFileCli.stderr.includes('--diff-file requires a file path.'),
+    'CLI validator should explain the missing --diff-file path',
+  );
+
+  const missingChangedFilesCli = spawnSync(
+    process.execPath,
+    ['scripts/validate-pr-body.mjs', '--body-file', bodyPath, '--changed-files-file', '--diff-file', cleanDiffPath],
+    { cwd: repoRoot, encoding: 'utf8' },
+  );
+  assert(missingChangedFilesCli.status === 1, 'CLI validator should reject --changed-files-file without a path');
+  assert(
+    missingChangedFilesCli.stderr.includes('--changed-files-file requires a file path.'),
+    'CLI validator should explain the missing --changed-files-file path',
+  );
   assert(cleanDiffCli.status === 0, 'CLI validator should pass an atomic source-only diff file');
   assert(cleanDiffCli.stdout.includes('PR body validation passed.'), 'CLI validator should report success for an atomic diff file');
 } finally {

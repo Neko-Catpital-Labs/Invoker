@@ -428,10 +428,18 @@ function parseArgs(argv) {
         requiresVisualProof = true;
         break;
       case '--changed-files-file':
-        changedFilesFile = argv[++i] || '';
+        changedFilesFile = argv[++i];
+        if (!changedFilesFile || changedFilesFile.startsWith('--')) {
+          console.error('--changed-files-file requires a file path.');
+          usage();
+        }
         break;
       case '--diff-file':
-        diffFile = argv[++i] || '';
+        diffFile = argv[++i];
+        if (!diffFile || diffFile.startsWith('--')) {
+          console.error('--diff-file requires a file path.');
+          usage();
+        }
         break;
       case '--help':
         usage();

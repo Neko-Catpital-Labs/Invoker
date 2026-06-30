@@ -416,8 +416,10 @@ function fullContextDiffSinceBase(baseBranch) {
       `${DEFAULT_BASE_REMOTE}/${baseBranch}...HEAD`,
       '--',
     ]);
-  } catch {
-    return '';
+  } catch (error) {
+    throw new Error(
+      `Unable to compute diff atomicity context against ${DEFAULT_BASE_REMOTE}/${baseBranch}. Fetch the base ref and retry.\n${error.message}`,
+    );
   }
 }
 

@@ -147,6 +147,10 @@ function createHarness() {
   const realGit = run('which', ['git']).trim();
 
   writeExecutable(join(binDir, 'git'), `#!/bin/sh
+if [ "$1" = "diff" ] && [ -n "$TEST_GIT_DIFF_FAIL" ]; then
+  printf '%s\n' "$TEST_GIT_DIFF_FAIL" >&2
+  exit 1
+fi
 if [ "$1" = "push" ]; then
   printf '%s\n' "$*" >> "$TEST_PUSH_LOG"
   exit 0
@@ -584,9 +588,31 @@ function testDiffAtomicityBlocksMixedDiff() {
     expectNoPush(harness, 'diff atomicity violation');
     const ghCalls = readGhCalls(harness.ghLog);
     assert(
-      !ghCalls.some((call) => /\/pulls\/[0-9]+$/.test(call.route)),
-      'diff atomicity violation should fail before any GitHub PATCH',
+      !ghCalls.some((call) => /\/pulls(?:\/[0-9]+)?$/.test(call.route)),
+      'diff atomicity violation should fail before any GitHub PR mutation',
     );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testDiffComputationFailureBlocksPrCreation() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/diff-failure');
+    commitFile(work, 'feature.txt', 'feature\n', 'feature change');
+
+    const result = runCreatePr(work, harness, baseArgs(), { TEST_GIT_DIFF_FAIL: 'simulated diff failure' });
+
+    assert(result.status === 1, `diff failure should block PR creation\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('Unable to compute diff atomicity context against origin/master'),
+      `diff failure should explain atomicity context failure\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stderr.includes('simulated diff failure'), `diff failure should include git stderr\nstderr:\n${result.stderr}`);
+    expectNoPush(harness, 'diff computation failure');
+    assert(readGhCalls(harness.ghLog).length === 0, 'diff computation failure should fail before GitHub calls');
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
@@ -615,6 +641,7 @@ const tests = [
   testCurrentBranchPrLookupFailure,
   testStackedDiffTitleRequiredForNonTrunkBase,
   testDiffAtomicityBlocksMixedDiff,
+  testDiffComputationFailureBlocksPrCreation,
   testHelpMentionsStackUpdateFlow,
 ];
 
