@@ -116,6 +116,7 @@ exit 64
       env: {
         ...process.env,
         NODE_ENV: 'test',
+        INVOKER_DISABLE_SLACK: '1',
         TZ: 'UTC',
         INVOKER_GUI_OWNER_MODE: forceReadOnlyStatus ? 'gui' : guiOwnerMode,
         INVOKER_DB_DIR: testDir,
