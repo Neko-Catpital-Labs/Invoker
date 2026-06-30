@@ -181,6 +181,57 @@ describe('TaskRunner', () => {
 
     expect(closeReview).toHaveBeenCalledWith({ identifier: 'scalar-pr', cwd: '/tmp/review-workspace' });
   });
+  it('uses configured default execution settings when task overrides are absent', async () => {
+    let seenRequest: any;
+    let completeCallback: ((response: WorkResponse) => void) | undefined;
+    const executorImpl = {
+      type: 'worktree',
+      start: vi.fn().mockImplementation(async (request: any) => {
+        seenRequest = request;
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-worktree',
+          branch: `experiment/${request.actionId}-mock`,
+        };
+      }),
+      onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+        completeCallback = cb;
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: { getDefault: () => executorImpl, get: () => executorImpl, getAll: () => [executorImpl] } as any,
+      executionDefaultsProvider: () => ({ executionAgent: 'omp', executionModel: 'chatgpt-5.4' }),
+      cwd: '/tmp',
+    });
+
+    const task = makeTask({
+      id: 'default-task',
+      status: 'running',
+      config: { prompt: 'Fix failing tests' },
+      execution: { generation: 2, selectedAttemptId: 'default-task-a1' },
+    });
+
+    const done = runner.executeTask(task);
+    await vi.waitFor(() => expect(seenRequest?.inputs).toMatchObject({ executionAgent: 'omp', executionModel: 'chatgpt-5.4' }));
+    completeCallback?.({
+      requestId: seenRequest.requestId,
+      actionId: task.id,
+      attemptId: seenRequest.attemptId,
+      executionGeneration: seenRequest.executionGeneration,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await done;
+  });
+
   it('sends attemptId and executionGeneration in work requests and preserves them in responses', async () => {
     const handleWorkerResponse = vi.fn();
     let seenRequest: any;

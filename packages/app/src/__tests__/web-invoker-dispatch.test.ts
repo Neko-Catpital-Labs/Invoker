@@ -63,6 +63,16 @@ describe('buildWebInvokerDispatch', () => {
     expect(await dispatch('invoker:get-execution-harnesses', [])).toEqual(harnesses);
   });
 
+  it('get-execution-defaults returns configured task execution defaults', async () => {
+    const { dispatch } = makeDispatch({
+      loadConfig: () => ({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' } as any),
+    });
+    expect(await dispatch('invoker:get-execution-defaults', [])).toEqual({
+      executionAgent: 'omp',
+      executionModel: 'chatgpt-5.4',
+    });
+  });
+
   it('approve routes to the mutation facade', async () => {
     const { dispatch, approveTask } = makeDispatch();
     await dispatch('invoker:approve', ['wf/x']);

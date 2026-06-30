@@ -10,6 +10,7 @@ export interface OmpExecutionAgentConfig {
 }
 
 const OMP_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
+  { id: 'chatgpt-5.4', label: 'ChatGPT 5.4' },
   { id: 'anthropic/claude-sonnet-4', label: 'Anthropic Claude Sonnet 4' },
   { id: 'anthropic/claude-opus-4', label: 'Anthropic Claude Opus 4' },
   { id: 'openai/gpt-5', label: 'OpenAI GPT-5' },
