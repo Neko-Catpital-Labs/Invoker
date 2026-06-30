@@ -262,7 +262,8 @@ function readJsonSafe(path: string): InvokerConfig {
 }
 
 export function resolveConfigFilePath(): string {
-  return process.env.INVOKER_REPO_CONFIG_PATH ?? join(homedir(), '.invoker', 'config.json');
+  const override = process.env.INVOKER_REPO_CONFIG_PATH?.trim();
+  return override || join(homedir(), '.invoker', 'config.json');
 }
 
 export function resolveConfigFileState(): { path: string; exists: boolean } {
