@@ -396,7 +396,7 @@ describe('WorkflowInspector', () => {
     const { rerender } = render(
       <WorkflowInspector
         workflow={workflow}
-        task={makeTask()}
+        task={makeTask({ config: { workflowId: 'wf-1', prompt: 'Fix failing tests' } as TaskState['config'] })}
         collapsed={true}
         advancedExpanded={false}
         onToggleCollapsed={() => {}}
@@ -408,7 +408,7 @@ describe('WorkflowInspector', () => {
     rerender(
       <WorkflowInspector
         workflow={workflow}
-        task={makeTask()}
+        task={makeTask({ config: { workflowId: 'wf-1', prompt: 'Fix failing tests' } as TaskState['config'] })}
         collapsed={false}
         advancedExpanded={false}
         onToggleCollapsed={() => {}}
@@ -505,11 +505,13 @@ describe('WorkflowInspector', () => {
     render(
       <WorkflowInspector
         workflow={workflow}
-        task={makeTask()}
+        task={makeTask({ config: { workflowId: 'wf-1', prompt: 'Fix failing tests' } as TaskState['config'] })}
         executionHarnesses={[
           { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
           { name: 'codex', supportedModels: [{ id: 'gpt-5', label: 'GPT-5' }] },
+          { name: 'omp', supportedModels: [{ id: 'chatgpt-5.4', label: 'ChatGPT 5.4' }] },
         ]}
+        executionDefaults={{ executionAgent: 'omp', executionModel: 'chatgpt-5.4' }}
         collapsed={false}
         advancedExpanded={false}
         onEditAgent={onEditAgent}
@@ -519,6 +521,7 @@ describe('WorkflowInspector', () => {
     );
 
     expect(screen.getByText('AI Harness')).toBeInTheDocument();
+    expect(screen.getByTestId('execution-agent-select')).toHaveValue('omp');
     fireEvent.change(screen.getByTestId('execution-agent-select'), { target: { value: 'codex' } });
     expect(onEditAgent).toHaveBeenCalledWith('task-1', 'codex');
   });
@@ -533,6 +536,7 @@ describe('WorkflowInspector', () => {
           { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
           { name: 'codex', supportedModels: [{ id: 'gpt-5', label: 'GPT-5' }, { id: 'o3', label: 'o3' }] },
         ]}
+        executionDefaults={{ executionAgent: 'omp', executionModel: 'chatgpt-5.4' }}
         collapsed={false}
         advancedExpanded={false}
         onEditModel={onEditModel}
@@ -544,7 +548,7 @@ describe('WorkflowInspector', () => {
     const select = screen.getByTestId('execution-model-select');
     const options = select.querySelectorAll('option');
     expect(options).toHaveLength(3);
-    expect(options[0]).toHaveTextContent('Default');
+    expect(options[0]).toHaveTextContent('Default (chatgpt-5.4)');
     expect(options[1]).toHaveTextContent('GPT-5');
     expect(options[2]).toHaveTextContent('o3');
 
@@ -560,6 +564,7 @@ describe('WorkflowInspector', () => {
         executionHarnesses={[
           { name: 'codex', supportedModels: [{ id: 'gpt-5', label: 'GPT-5' }] },
         ]}
+        executionDefaults={{ executionAgent: 'omp', executionModel: 'chatgpt-5.4' }}
         collapsed={false}
         advancedExpanded={false}
         onEditModel={() => {}}

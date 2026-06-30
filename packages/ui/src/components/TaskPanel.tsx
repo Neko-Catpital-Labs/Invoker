@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import type { ExecutionHarnessOption, TaskState, ExternalDependency, ExternalGatePolicyUpdate, TaskStatus } from '../types.js';
+import type { ExecutionDefaults, ExecutionHarnessOption, TaskState, ExternalDependency, ExternalGatePolicyUpdate, TaskStatus } from '../types.js';
 import {
   getStatusColor,
   getEffectiveVisualStatus,
@@ -66,6 +66,7 @@ function formatElapsed(dateVal: Date | string | undefined): string {
 }
 
 function capitalize(s: string): string {
+  if (s.toLowerCase() === 'omp') return 'OMP';
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 function getHarnessOptions(
@@ -127,6 +128,7 @@ interface TaskPanelProps {
   workflowRepoUrl?: string;
   remoteTargets?: string[];
   executionHarnesses?: ExecutionHarnessOption[];
+  executionDefaults?: ExecutionDefaults;
   onProvideInput: (task: TaskState) => void;
   onApprove: (task: TaskState) => void;
   onReject: (task: TaskState) => void;
@@ -250,6 +252,7 @@ export function TaskPanel({
   workflowRepoUrl,
   remoteTargets,
   executionHarnesses,
+  executionDefaults,
   onProvideInput,
   onApprove,
   onReject,
@@ -294,7 +297,8 @@ export function TaskPanel({
     }
     setGatePolicyDraft(nextDraft);
   }, [task?.id, baseBranch]);
-  const currentHarness = task?.config.executionAgent ?? task?.execution.agentName ?? 'claude';
+  const defaultModelLabel = executionDefaults?.executionModel ? `Default (${executionDefaults.executionModel})` : 'Default';
+  const currentHarness = task?.config.executionAgent ?? task?.execution.agentName ?? executionDefaults?.executionAgent ?? 'claude';
   const harnessOptions = getHarnessOptions(executionHarnesses, currentHarness);
   const modelOptions = getModelOptions(executionHarnesses, currentHarness, modelValue);
 
@@ -580,7 +584,7 @@ export function TaskPanel({
                 className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="execution-model-select"
               >
-                <option value="">Default</option>
+                <option value="">{defaultModelLabel}</option>
                 {modelOptions.map((model) => (
                   <option key={model.id} value={model.id}>{model.label}</option>
                 ))}
@@ -638,7 +642,7 @@ export function TaskPanel({
                 : 'bg-gray-700 text-gray-300'
             }`}>
               {task.config.prompt
-                ? `${capitalize(task.config.executionAgent ?? 'claude')} Harness`
+                ? `${capitalize(currentHarness)} Harness`
                 : 'Command'}
             </span>
           </div>

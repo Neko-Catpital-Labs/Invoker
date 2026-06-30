@@ -131,7 +131,9 @@ export function createMockInvoker(
     getExecutionHarnesses: vi.fn(async () => [
       { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
       { name: 'codex', supportedModels: [{ id: 'gpt-5', label: 'GPT-5' }] },
+      { name: 'omp', supportedModels: [{ id: 'chatgpt-5.4', label: 'ChatGPT 5.4' }] },
     ]),
+    getExecutionDefaults: vi.fn(async () => ({ executionAgent: 'omp', executionModel: 'chatgpt-5.4' })),
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getSystemDiagnostics: vi.fn(async () => ({
       platform: 'linux',

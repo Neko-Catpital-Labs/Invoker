@@ -78,6 +78,10 @@ export interface ExecutionHarnessOption {
   readonly supportedModels: readonly ExecutionModelOption[];
 }
 
+export interface ExecutionDefaults {
+  readonly executionAgent: string;
+  readonly executionModel?: string;
+}
 
 // ── Task Config (plan-time / static fields) ────────────────
 

@@ -831,7 +831,9 @@ describe('TaskPanel double-click editing', () => {
     const executionHarnesses = [
       { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
       { name: 'codex', supportedModels: [{ id: 'gpt-5', label: 'GPT-5' }, { id: 'o3', label: 'o3' }] },
+      { name: 'omp', supportedModels: [{ id: 'chatgpt-5.4', label: 'ChatGPT 5.4' }] },
     ];
+    const executionDefaults = { executionAgent: 'omp', executionModel: 'chatgpt-5.4' };
 
     it('renders harness selector for prompt tasks when onEditAgent + executionHarnesses provided', () => {
       const task = makeTask({ prompt: 'Write a test', status: 'pending' });
@@ -839,6 +841,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -856,6 +859,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -873,6 +877,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -883,9 +888,10 @@ describe('TaskPanel double-click editing', () => {
 
       const select = screen.getByTestId('execution-agent-select');
       const options = select.querySelectorAll('option');
-      expect(options).toHaveLength(2);
+      expect(options).toHaveLength(3);
       expect(options[0]).toHaveTextContent('Claude');
       expect(options[1]).toHaveTextContent('Codex');
+      expect(options[2]).toHaveTextContent('OMP');
     });
 
     it('calls onEditAgent with selected value on change', () => {
@@ -894,6 +900,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -913,6 +920,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -930,6 +938,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -938,7 +947,7 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      expect(screen.getByTestId('execution-agent-select')).toHaveValue('claude');
+      expect(screen.getByTestId('execution-agent-select')).toHaveValue('omp');
     });
 
     it('selects current harness when executionAgent is set', () => {
@@ -950,6 +959,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -970,6 +980,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -986,6 +997,7 @@ describe('TaskPanel double-click editing', () => {
       render(
         <TaskPanel
           task={task}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -994,7 +1006,7 @@ describe('TaskPanel double-click editing', () => {
       );
 
       expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
-      expect(screen.getByText('Claude Harness')).toBeInTheDocument();
+      expect(screen.getByText('OMP Harness')).toBeInTheDocument();
     });
 
     it('renders harness-specific AI model choices', () => {
@@ -1006,6 +1018,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -1017,7 +1030,7 @@ describe('TaskPanel double-click editing', () => {
       const select = screen.getByTestId('execution-model-select');
       const options = select.querySelectorAll('option');
       expect(options).toHaveLength(3);
-      expect(options[0]).toHaveTextContent('Default');
+      expect(options[0]).toHaveTextContent('Default (chatgpt-5.4)');
       expect(options[1]).toHaveTextContent('GPT-5');
       expect(options[2]).toHaveTextContent('o3');
     });
@@ -1031,6 +1044,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -1052,6 +1066,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={executionHarnesses}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -1070,6 +1085,7 @@ describe('TaskPanel double-click editing', () => {
         <TaskPanel
           task={task}
           executionHarnesses={[]}
+          executionDefaults={executionDefaults}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -1081,7 +1097,7 @@ describe('TaskPanel double-click editing', () => {
       const select = screen.getByTestId('execution-agent-select');
       const options = select.querySelectorAll('option');
       expect(options).toHaveLength(1);
-      expect(select).toHaveValue('claude');
+      expect(select).toHaveValue('omp');
     });
   });
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ExecutionHarnessOption, ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
+import type { ExecutionDefaults, ExecutionHarnessOption, ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import type { ActionGraphNode } from '@invoker/contracts';
@@ -14,6 +14,7 @@ interface WorkflowInspectorProps {
   remoteTargets?: string[];
   executionPools?: string[];
   executionHarnesses?: ExecutionHarnessOption[];
+  executionDefaults?: ExecutionDefaults;
   actionNode?: ActionGraphNode | null;
   collapsed: boolean;
   advancedExpanded: boolean;
@@ -36,6 +37,7 @@ function formatStatus(value: string | undefined): string {
 }
 
 function capitalize(value: string): string {
+  if (value.toLowerCase() === 'omp') return 'OMP';
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 function getHarnessOptions(
@@ -144,6 +146,7 @@ export function WorkflowInspector({
   reviewGate,
   executionPools,
   executionHarnesses,
+  executionDefaults,
   actionNode,
   collapsed,
   advancedExpanded,
@@ -193,7 +196,8 @@ export function WorkflowInspector({
   const nodeTitle = task?.description ?? workflowTitle ?? 'No node selected';
   const showsWorkflowMergeDetails = Boolean(!task && workflow?.id && workflow.onFinish === 'pull_request');
   const isMergeNode = Boolean((task?.config.isMergeNode || showsWorkflowMergeDetails) && workflow?.id);
-  const currentAgent = task?.config.executionAgent ?? task?.execution.agentName ?? 'claude';
+  const defaultModelLabel = executionDefaults?.executionModel ? `Default (${executionDefaults.executionModel})` : 'Default';
+  const currentAgent = task?.config.executionAgent ?? task?.execution.agentName ?? executionDefaults?.executionAgent ?? 'claude';
   const harnessOptions = useMemo(
     () => getHarnessOptions(executionHarnesses, currentAgent),
     [currentAgent, executionHarnesses],
@@ -448,7 +452,7 @@ export function WorkflowInspector({
                   className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
                   data-testid="execution-model-select"
                 >
-                  <option value="">Default</option>
+                  <option value="">{defaultModelLabel}</option>
                   {modelOptions.map((model) => (
                     <option key={model.id} value={model.id}>{model.label}</option>
                   ))}
