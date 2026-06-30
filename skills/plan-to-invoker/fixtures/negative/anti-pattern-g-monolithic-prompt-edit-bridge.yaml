@@ -1,13 +1,13 @@
 # Anti-Pattern G: Monolithic prompt-edit bridge workflow (wf-1777929074509-8 shape)
-# Source: dependency-first layered decomposition benchmark
+# Source: atomic-feature decomposition benchmark
 # Expected outcome: validate-plan passes schema, but skill-doctor fails lint-task-atomicity
-# due to missing Layer:/Feature state: metadata and poor review decomposition.
+# due to missing Feature: metadata and poor review decomposition.
 
 name: "Anti-pattern: monolithic GUI prompt edit bridge"
 description: |
   Mirrors the oversized shape of wf-1777929074509-8 as one implementation workflow.
   This should now fail decomposition lint because implementation tasks must include
-  Layer and Feature state metadata and be split into reviewable dependency slices.
+  Feature and Feature state metadata and be split into reviewable dependency slices.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: https://github.com/EdbertChan/Invoker
