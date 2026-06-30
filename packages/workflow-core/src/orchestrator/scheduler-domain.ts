@@ -16,7 +16,7 @@ import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '@invoker/w
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import type { Logger } from '@invoker/contracts';
 import { isDiscardedAttempt } from '../attempt-policy.js';
-import { buildTaskResetChanges } from '../task-reset-policy.js';
+import { assertResetComplete, buildTaskResetChanges } from '../task-reset-policy.js';
 import type { TaskStateMachine } from '../state-machine.js';
 import type { TaskScheduler } from '../scheduler.js';
 import type { TaskRepository } from '../task-repository.js';
@@ -89,7 +89,11 @@ export function autoStartReadyTasksImpl(
         taskId,
       });
       host.replaceSelectedAttempt(task, { status: 'pending' });
-      host.writeAndSync(taskId, buildTaskResetChanges('readyUnblock'));
+      const resetBefore = host.stateGetTask(taskId);
+      if (!resetBefore) continue;
+      const changes = buildTaskResetChanges('readyUnblock');
+      const updated = host.writeAndSync(taskId, changes);
+      assertResetComplete(resetBefore, updated, 'readyUnblock', { execution: changes.execution });
       task = host.stateGetTask(taskId);
       if (!task) continue;
     }
@@ -171,7 +175,11 @@ export function autoStartUnblockedTasksImpl(host: SchedulerDomainHost): TaskStat
     if (host.getExternalDependencyBlocker(task) !== undefined) continue;
 
     host.replaceSelectedAttempt(task, { status: 'pending' });
-    host.writeAndSync(task.id, buildTaskResetChanges('externalUnblock'));
+    const resetBefore = host.stateGetTask(task.id);
+    if (!resetBefore) continue;
+    const changes = buildTaskResetChanges('externalUnblock');
+    const updated = host.writeAndSync(task.id, changes);
+    assertResetComplete(resetBefore, updated, 'externalUnblock', { execution: changes.execution });
     enqueueIfNotScheduledImpl(host, task.id);
   }
   return drainSchedulerImpl(host);
