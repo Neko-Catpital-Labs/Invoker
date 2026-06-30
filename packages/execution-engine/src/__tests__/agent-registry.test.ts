@@ -106,7 +106,6 @@ describe('AgentRegistry', () => {
     expect(registry.getOrThrow('null')).toBe(codex);
     expect(registry.getOrThrow('undefined')).toBe(codex);
   });
-  });
 
   it('keeps explicit valid execution agent names working', () => {
     expect(registry.getOrThrow('codex')).toBe(codex);
