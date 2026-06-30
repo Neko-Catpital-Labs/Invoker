@@ -33,7 +33,8 @@ describe('Visual proof snapshots', () => {
 
   it('empty-state', () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
+    expect(screen.getByText('Invoker Terminal')).toBeInTheDocument();
+    expect(screen.getAllByText('Your plan will appear here.')[0]).toBeInTheDocument();
     expect(screen.getByTestId('rail-open-file')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
     expect(screen.queryByText('System Setup')).not.toBeInTheDocument();

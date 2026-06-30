@@ -230,10 +230,11 @@ export function TerminalDrawer({
       className={
         isMaximized
           ? 'fixed inset-0 z-40 flex min-h-0 flex-col overflow-hidden border-t border-gray-800 bg-gray-950'
-          : 'border-t border-gray-800 bg-gray-950'
+          : 'overflow-hidden rounded-lg border border-gray-800 bg-gray-950'
       }
     >
-      <div className="flex items-center gap-2 border-b border-gray-800 px-3 py-2">
+      <div className="flex items-center gap-3 border-b border-gray-800 px-3 py-2">
+        <div className="shrink-0 text-xs font-medium text-gray-300">Task terminals</div>
         <div
           role="tablist"
           data-testid="terminal-tab-strip"
