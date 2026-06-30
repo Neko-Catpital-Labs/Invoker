@@ -37,10 +37,29 @@ export type WorkflowOpName =
   | 'status'
   | 'cancel';
 
-export interface WorkflowOp {
-  operation: WorkflowOpName;
-  target: { all: true } | { workflow: string };
+export type WorkflowOpTarget = { all: true } | { workflow: string };
+
+export type WorkflowGatePolicy = 'completed' | 'review_ready';
+
+export interface WorkflowGatePolicyUpdate {
+  workflowId: string;
+  taskId?: string;
+  gatePolicy: WorkflowGatePolicy;
 }
+
+export interface WorkflowControlOp {
+  operation: WorkflowOpName;
+  target: WorkflowOpTarget;
+}
+
+export interface WorkflowGatePolicyOp {
+  operation: 'gate-policy';
+  target: { workflow: string };
+  ownerTaskId?: string;
+  updates: WorkflowGatePolicyUpdate[];
+}
+
+export type WorkflowOp = WorkflowControlOp | WorkflowGatePolicyOp;
 
 export interface WorkflowOpResult {
   ok: boolean;
