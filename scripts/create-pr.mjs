@@ -237,8 +237,8 @@ async function assertValidPrBody(body, options = {}) {
   );
 }
 
-function printPrBodyWarnings(body, changedFiles = []) {
-  const warnings = getPrBodyWarnings(body, { changedFiles });
+function printPrBodyWarnings(body, changedFiles = [], diffText = '') {
+  const warnings = getPrBodyWarnings(body, { changedFiles, diffText });
   if (warnings.length === 0) return;
 
   console.error('PR body validation warnings:');
@@ -403,6 +403,23 @@ function changedFilesSinceBase(baseBranch) {
     return output ? output.split('\n').filter(Boolean) : [];
   } catch {
     return [];
+  }
+}
+
+function fullContextDiffSinceBase(baseBranch) {
+  try {
+    return runGit([
+      'diff',
+      '--find-renames',
+      '--unified=200000',
+      '--diff-filter=ACMRTD',
+      `${DEFAULT_BASE_REMOTE}/${baseBranch}...HEAD`,
+      '--',
+    ]);
+  } catch (error) {
+    throw new Error(
+      `Unable to compute diff atomicity context against ${DEFAULT_BASE_REMOTE}/${baseBranch}. Fetch the base ref and retry.\n${error.message}`,
+    );
   }
 }
 
@@ -659,13 +676,14 @@ async function main() {
   }
 
   const changedFiles = changedFilesSinceBase(args.base);
+  const diffText = fullContextDiffSinceBase(args.base);
   const uiImpactingFiles = getUiImpactingFiles(changedFiles);
   if (uiImpactingFiles.length > 0) {
     console.error(`UI-impacting files changed; requiring visual proof: ${uiImpactingFiles.join(', ')}`);
   }
 
-  await assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles });
-  printPrBodyWarnings(body, changedFiles);
+  await assertValidPrBody(body, { requiresVisualProof: uiImpactingFiles.length > 0, changedFiles, diffText });
+  printPrBodyWarnings(body, changedFiles, diffText);
   body = await injectImages(body, args.dryRun);
 
   const currentBranch = getCurrentBranch();
