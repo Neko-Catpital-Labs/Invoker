@@ -295,6 +295,7 @@ export interface OrchestratorPersistence {
   loadAttempts(nodeId: string): Attempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  deleteTask?(taskId: string): void;
   failTaskAndAttempt?(
     taskId: string,
     taskChanges: TaskStateChanges,
@@ -551,6 +552,10 @@ export function taskRepositoryFromPersistence(p: OrchestratorPersistence): TaskR
     deleteAllWorkflows: () => p.deleteAllWorkflows?.(),
     saveTask: (wfId, t) => p.saveTask(wfId, t),
     updateTask: (id, c) => p.updateTask(id, c),
+    deleteTask: (id) => {
+      if (!p.deleteTask) throw new Error('Persistence adapter does not support deleteTask');
+      p.deleteTask(id);
+    },
     logEvent: (id, et, pl) => p.logEvent?.(id, et, pl),
     saveAttempt: (a) => partial.saveAttempt?.(a),
     updateAttempt: (id, c) => partial.updateAttempt?.(id, c),
@@ -3557,6 +3562,84 @@ export class Orchestrator {
       })
       .map((rt) => scopeLocal(rt.id));
     return this.autoStartReadyTasks(rootIds, 0, { bypassLocalDependencyReadiness: true });
+  }
+
+  deleteTask(taskId: string): TaskState[] {
+    this.refreshFromDb();
+
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task "${taskId}" not found`);
+    if (task.config.isMergeNode) throw new Error(`Cannot delete merge task "${taskId}"`);
+
+    const workflowId = task.config.workflowId;
+    if (!workflowId) throw new Error(`deleteTask: task ${taskId} has no workflowId`);
+
+    const workflowTasks = this.stateMachine
+      .getAllTasks()
+      .filter((candidate) => candidate.config.workflowId === workflowId);
+    const remainingNonMergeTasks = workflowTasks.filter(
+      (candidate) => candidate.id !== task.id && !candidate.config.isMergeNode,
+    );
+    if (remainingNonMergeTasks.length === 0) {
+      throw new Error(`Cannot delete the last task in workflow "${workflowId}"; delete the workflow instead.`);
+    }
+
+    const directDependents = workflowTasks.filter(
+      (candidate) =>
+        candidate.id !== task.id &&
+        !candidate.config.isMergeNode &&
+        candidate.dependencies.includes(task.id),
+    );
+    const upstreamDeps = task.dependencies;
+    const retargetDeltas: TaskDelta[] = [];
+
+    const retargetDependencies = (dependencies: readonly string[]): string[] => {
+      const next: string[] = [];
+      const seen = new Set<string>();
+      const add = (dependencyId: string) => {
+        if (dependencyId === task.id || dependencyId.length === 0 || seen.has(dependencyId)) return;
+        seen.add(dependencyId);
+        next.push(dependencyId);
+      };
+
+      for (const dependencyId of dependencies) {
+        if (dependencyId === task.id) {
+          for (const upstreamId of upstreamDeps) add(upstreamId);
+        } else {
+          add(dependencyId);
+        }
+      }
+      return next;
+    };
+
+    this.taskRepository.runInTransaction(() => {
+      this.invalidateLaunchArtifactsForTasks([task.id], 'task deletion');
+
+      for (const dependent of directDependents) {
+        const dependencies = retargetDependencies(dependent.dependencies);
+        const changes: TaskStateChanges = { dependencies };
+        const updated = this.writeAndSync(dependent.id, changes);
+        retargetDeltas.push(this.buildUpdateDelta(dependent, updated, changes));
+      }
+
+      this.deferredTaskIds.delete(task.id);
+      this.clearQueuedSchedulerEntries(task.id, task.execution.selectedAttemptId);
+      this.taskRepository.deleteTask(task.id);
+      this.touchWorkflow(workflowId);
+    });
+
+    this.syncAllFromDb();
+
+    for (const delta of retargetDeltas) {
+      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    }
+    this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildRemoveDelta(task));
+    this.reconcileMergeLeaves(workflowId);
+
+    const readyIds = directDependents
+      .map((dependent) => dependent.id)
+      .filter((id) => this.stateGetTask(id));
+    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
   }
 
   /**
