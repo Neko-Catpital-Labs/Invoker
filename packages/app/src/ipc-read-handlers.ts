@@ -186,7 +186,7 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     logger.info(`get-claude-session: "${sessionId}"`, { module: 'ipc' });
     try {
       const orchestrator = getOrchestrator();
-      return await resolveAgentSession(sessionId, 'claude', agentRegistry, orchestrator.getAllTasks());
+      return await resolveAgentSession(sessionId, DEFAULT_EXECUTION_AGENT, agentRegistry, orchestrator.getAllTasks());
     } catch (err) {
       logger.error(`get-claude-session failed: ${err}`, { module: 'ipc' });
       return null;
@@ -194,10 +194,11 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
   });
 
   ipcMain.handle('invoker:get-agent-session', async (_event, sessionId: string, agentName?: string) => {
-    logger.info(`get-agent-session: "${sessionId}" agent="${agentName ?? DEFAULT_EXECUTION_AGENT}"`, { module: 'ipc' });
+    const resolvedAgentName = agentName ?? DEFAULT_EXECUTION_AGENT;
+    logger.info(`get-agent-session: "${sessionId}" agent="${resolvedAgentName}"`, { module: 'ipc' });
     try {
       const orchestrator = getOrchestrator();
-      return await resolveAgentSession(sessionId, agentName ?? DEFAULT_EXECUTION_AGENT, agentRegistry, orchestrator.getAllTasks());
+      return await resolveAgentSession(sessionId, resolvedAgentName, agentRegistry, orchestrator.getAllTasks());
     } catch (err) {
       logger.error(`get-agent-session failed: ${err}`, { module: 'ipc' });
       return null;

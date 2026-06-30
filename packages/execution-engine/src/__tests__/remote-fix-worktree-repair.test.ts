@@ -118,6 +118,60 @@ branch refs/heads/${branch}
     );
   });
 
+  it('uses the resolved OMP model for repaired remote fix sessions', async () => {
+    const { spawn } = await import('node:child_process');
+    const stalePath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-b68b146f';
+    const ownerPath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-bc7a0b71';
+    const branch = 'experiment/wf-1/test-execution-engine-b68b146f';
+    const task = {
+      id: 'wf-1/test-execution-engine-omp',
+      status: 'failed' as const,
+      execution: {
+        error: 'Test failed',
+        workspacePath: stalePath,
+        branch,
+      },
+      config: {
+        command: 'pnpm test',
+        runnerKind: 'ssh' as const,
+        poolMemberId: 'remote-1',
+        executionAgent: 'omp',
+        executionModel: 'anthropic/claude-opus-4',
+      },
+    };
+
+    const { host } = makeHost(task);
+    const buildFixCommand = vi.fn((prompt: string, options?: { executionModel?: string }) => ({
+      cmd: 'omp',
+      args: ['--model', options?.executionModel ?? 'missing', '-p', prompt],
+      sessionId: 'omp-session',
+    }));
+    Object.assign(host, {
+      agentRegistry: {
+        get: () => ({ name: 'omp', buildFixCommand }),
+        getOrThrow: () => ({ name: 'omp', buildFixCommand }),
+        getSessionDriver: () => undefined,
+      },
+    });
+    const firstChild = mockSshChild(
+      `worktree ${ownerPath}
+HEAD deadbeef
+branch refs/heads/${branch}
+`,
+      0,
+    );
+    const secondChild = mockSshChild('OMP session: real-session-123\nremote fix applied', 0);
+    vi.mocked(spawn)
+      .mockReturnValueOnce(firstChild as any)
+      .mockReturnValueOnce(secondChild as any);
+
+    await fixWithAgentImpl(host, task.id, 'error output', 'omp');
+
+    expect(buildFixCommand).toHaveBeenCalledWith(
+      expect.stringContaining('Fix the underlying code issue.'),
+      { executionModel: 'anthropic/claude-opus-4' },
+    );
+  });
   it('repairs the remote workspace path before publishing an approved fix', async () => {
     const { spawn } = await import('node:child_process');
     const stalePath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-wf-1-test-execution-engine-b68b146f';

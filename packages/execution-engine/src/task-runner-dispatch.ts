@@ -39,16 +39,19 @@ export async function dispatchExecutor(
   const { task, attemptId, request, bench, dispatchOpts } = args;
   const startGeneration = task.execution.generation ?? 0;
   const actionType = host.determineActionType(task);
-  const executionAgent = task.config.executionAgent?.trim() || host.getDefaultExecutionAgent();
+
 
   const startT0 = Date.now();
   const attemptedPoolMemberKeys = new Set<string>();
   let executor!: Executor;
   let handle!: ExecutorHandle;
+  let resolvedExecution!: { executionAgent: string; executionModel?: string };
   while (true) {
     bench('selectExecutor.start');
-    executor = host.selectExecutor(task, attemptedPoolMemberKeys).executor;
+    const selectedExecutor = host.selectExecutor(task, attemptedPoolMemberKeys);
+    executor = selectedExecutor.executor;
     const poolSelectionForStart = host.pendingPoolSelections.get(task.id);
+    resolvedExecution = host.takeResolvedExecutionSelection(task.id) ?? selectedExecutor.resolvedExecution;
     if (!host.acquirePoolSelectionLease(task, attemptId, poolSelectionForStart)) {
       if (poolSelectionForStart) {
         attemptedPoolMemberKeys.add(poolSelectionForStart.memberKey);
@@ -81,6 +84,9 @@ export async function dispatchExecutor(
     bench('executor.start.before', {
       executorType: executor.type,
     });
+
+    request.inputs.executionAgent = resolvedExecution.executionAgent;
+    request.inputs.executionModel = resolvedExecution.executionModel;
     const startTimeoutMs = getExecutorStartTimeoutMs();
     const preStartHeartbeatTimer = setInterval(() => {
       const now = new Date();
@@ -268,21 +274,23 @@ export async function dispatchExecutor(
       );
     }
 
+    const poolSelection = host.pendingPoolSelections.get(task.id);
     host.logExecutorSelected(
       task,
       executor,
       handle,
       attemptId,
-      host.pendingPoolSelections.get(task.id),
+      poolSelection,
     );
 
-    const poolSelection = host.pendingPoolSelections.get(task.id);
     const selectedSshTargetId = executor.type === 'ssh'
       ? host.selectedRemoteTargetId(task, poolSelection)
       : undefined;
     const changes = {
       config: {
         runnerKind: executor.type as RunnerKind,
+        executionAgent: resolvedExecution.executionAgent,
+        executionModel: resolvedExecution.executionModel,
         ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
       },
       execution: {
@@ -290,8 +298,8 @@ export async function dispatchExecutor(
         branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
         agentSessionId: handle.agentSessionId ?? undefined,
         lastAgentSessionId: handle.agentSessionId ?? undefined,
-        agentName: actionType === 'ai_task' ? executionAgent : undefined,
-        lastAgentName: actionType === 'ai_task' ? executionAgent : undefined,
+        agentName: actionType === 'ai_task' ? resolvedExecution.executionAgent : undefined,
+        lastAgentName: actionType === 'ai_task' ? resolvedExecution.executionAgent : undefined,
         containerId: handle.containerId ?? undefined,
       },
     };
