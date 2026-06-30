@@ -1192,6 +1192,7 @@ function startHeadlessMode(): void {
             case 'cancel':
             case 'retry-task':
             case 'recreate-task':
+            case 'delete-task':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
             case 'delete':
             case 'delete-workflow':
@@ -2180,6 +2181,37 @@ function createEmbeddedTerminalBackendFromConfig(
     return cmdResult.data;
   }
 
+  async function performDeleteTask(taskId: string): Promise<void> {
+    logger.info(`performDeleteTask begin task="${taskId}"`, { module: 'kill' });
+    const task = orchestrator.getTask(taskId);
+    const workflowId = task?.config.workflowId;
+    if (task && (task.status === 'running' || task.status === 'fixing_with_ai')) {
+      await killRunningTask(task.id);
+    }
+    if (workflowId) {
+      await requireTaskExecutor().closeWorkflowReview(workflowId);
+    }
+    const envelope = makeEnvelope('delete-task', 'ui', 'task', { taskId });
+    const result = await commandService.deleteTask(envelope);
+    if (!result.ok) throw CommandError.fromResult(result.error);
+    remoteFetchForPool.enabled = false;
+    try {
+      await dispatchStartedTasksWithGlobalTopup({
+        orchestrator,
+        taskExecutor: requireTaskExecutor(),
+        logger,
+        context: 'ipc.delete-task',
+        started: result.data,
+        scopedTaskIds: result.data.map((startedTask) => startedTask.id),
+        mutationTiming: activeMutationContext?.mutationTiming,
+      });
+    } finally {
+      remoteFetchForPool.enabled = true;
+    }
+    requestWorkflowMetadataPublish('delete-task');
+    logger.info(`performDeleteTask end task="${taskId}"`, { module: 'kill' });
+  }
+
   /** Cancel all active tasks in a workflow and kill any running processes. */
   async function performCancelWorkflow(workflowId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
     logger.info(`performCancelWorkflow begin workflow="${workflowId}"`, { module: 'kill' });
@@ -2400,6 +2432,7 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'cancel':
       case 'retry-task':
       case 'recreate-task':
+      case 'delete-task':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'high' };
       case 'approve':
       case 'reject':
@@ -2487,6 +2520,8 @@ function createEmbeddedTerminalBackendFromConfig(
         return { channel: 'headless.exec', request: { args: ['delete-all'] } };
       case 'invoker:delete-all-workflows-bulk':
         return { channel: 'headless.exec', request: { args: ['delete-all'] } };
+      case 'invoker:delete-task':
+        return { channel: 'headless.exec', request: { args: ['delete-task', String(arg0)], noTrack: true } };
       case 'invoker:delete-workflow':
         return { channel: 'headless.exec', request: { args: ['delete', String(arg0)], noTrack: true } };
       case 'invoker:detach-workflow':
@@ -3582,6 +3617,22 @@ function createEmbeddedTerminalBackendFromConfig(
       lastKnownWorkflowCount = 0;
       requestWorkflowMetadataPublish('delete-all-workflows-bulk');
     });
+
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:delete-task',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
+        const taskId = String(taskIdArg);
+        logger.info(`delete-task: "${taskId}"`, { module: 'ipc' });
+        try {
+          await performDeleteTask(taskId);
+        } catch (err) {
+          logger.error(`delete-task failed: ${err}`, { module: 'ipc' });
+          throw err;
+        }
+      },
+    );
 
     registerWorkflowScopedGuiMutationHandler(
       'invoker:delete-workflow',
