@@ -43,6 +43,11 @@ export interface ExecutionHarnessOption {
   supportedModels: ExecutionModelOption[];
 }
 
+export interface ExecutionDefaults {
+  executionAgent: string;
+  executionModel?: string;
+}
+
 
 export interface WorkflowMeta {
   id: string;
@@ -662,6 +667,10 @@ export const IpcChannels = {
   'invoker:get-execution-harnesses': {} as {
     request: [];
     response: ExecutionHarnessOption[];
+  },
+  'invoker:get-execution-defaults': {} as {
+    request: [];
+    response: ExecutionDefaults;
   },
 
   'invoker:get-runtime-status': {} as {
