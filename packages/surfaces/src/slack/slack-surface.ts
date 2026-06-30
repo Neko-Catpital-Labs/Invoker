@@ -681,8 +681,6 @@ export class SlackSurface implements Surface {
     // Slower paths (LLM classifier, repo checkout, planner) acknowledge receipt up front.
     if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
 
-    // Slower paths (LLM classifier, repo checkout, planner) acknowledge receipt up front.
-    if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
 
     // Fallback classifier: only when a non-verb message looks operational.
     if (looksOperational(parsed.text)) {
