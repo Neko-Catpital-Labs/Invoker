@@ -11,6 +11,7 @@
 import { makeEnvelope } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import {
+  DEFAULT_EXECUTION_AGENT,
   remoteFetchForPool,
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
@@ -304,7 +305,7 @@ export async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promis
   }
 
   const te = createHeadlessExecutor(deps);
-  const agent = (parsed.agentName ?? 'claude').toLowerCase();
+  const agent = (parsed.agentName ?? DEFAULT_EXECUTION_AGENT).toLowerCase();
   try {
     const result = await fixWithAgentAction(taskId, {
       logger: deps.logger,
@@ -363,7 +364,7 @@ export async function headlessResolveConflict(taskId: string, deps: HeadlessDeps
   taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
-  const agent = (agentArg ?? 'claude').toLowerCase();
+  const agent = (agentArg ?? DEFAULT_EXECUTION_AGENT).toLowerCase();
   try {
     const result = await resolveConflictAction(taskId, {
       ...deps,

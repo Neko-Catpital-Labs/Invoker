@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildCancelInFlight, buildWorkflowInvalidationDeps, type Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { TaskRunner } from '@invoker/execution-engine';
+import { DEFAULT_EXECUTION_AGENT, type TaskRunner } from '@invoker/execution-engine';
 import {
   cancelWorkflow,
   recreateWorkflowFromFreshBase,
@@ -666,7 +666,7 @@ describe('autoFixOnFailure', () => {
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', DEFAULT_EXECUTION_AGENT, 'boom');
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
@@ -761,7 +761,7 @@ describe('autoFixOnFailure', () => {
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, DEFAULT_EXECUTION_AGENT);
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
@@ -803,7 +803,7 @@ describe('autoFixOnFailure', () => {
       commandService: makeCommandService(),
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, DEFAULT_EXECUTION_AGENT);
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
   });
 
@@ -1042,13 +1042,13 @@ describe('autoFixOnFailure', () => {
       getAutoFixAgent: () => '   ',
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', DEFAULT_EXECUTION_AGENT, 'boom');
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
       expect.objectContaining({
         phase: 'auto-fix-agent-selected',
-        selectedAgent: 'claude',
+        selectedAgent: DEFAULT_EXECUTION_AGENT,
         selectedAgentSource: 'default',
       }),
     );
@@ -1094,13 +1094,13 @@ describe('autoFixOnFailure', () => {
       getAutoFixAgent: () => undefined,
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, DEFAULT_EXECUTION_AGENT);
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
       expect.objectContaining({
         phase: 'auto-fix-agent-selected',
-        selectedAgent: 'claude',
+        selectedAgent: DEFAULT_EXECUTION_AGENT,
         selectedAgentSource: 'default',
       }),
     );
