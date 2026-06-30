@@ -402,8 +402,8 @@ describe('TaskRunner', () => {
         execution: {
           agentSessionId: 'sess-abc-123',
           lastAgentSessionId: 'sess-abc-123',
-          agentName: 'claude',
-          lastAgentName: 'claude',
+          agentName: 'codex',
+          lastAgentName: 'codex',
         },
       });
     });
