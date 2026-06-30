@@ -92,6 +92,7 @@ export const SCHEMA_DDL = `
         completed_at TEXT,
         execution_generation INTEGER DEFAULT 0,
         docker_image TEXT,
+        execution_model TEXT,
 
         FOREIGN KEY (workflow_id) REFERENCES workflows(id)
       );
@@ -279,6 +280,35 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_task_state
         ON task_launch_dispatch(task_id, state);
 
+      CREATE TABLE IF NOT EXISTS worker_actions (
+        id TEXT PRIMARY KEY,
+        worker_kind TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        workflow_id TEXT,
+        task_id TEXT,
+        subject_type TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        external_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        intent_id TEXT,
+        agent_name TEXT,
+        execution_model TEXT,
+        session_id TEXT,
+        summary TEXT,
+        payload_json TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        completed_at TEXT,
+        UNIQUE(worker_kind, external_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_worker_actions_task_updated
+        ON worker_actions(task_id, updated_at);
+
+      CREATE INDEX IF NOT EXISTS idx_worker_actions_workflow_status
+        ON worker_actions(workflow_id, worker_kind, status);
+
       CREATE TABLE IF NOT EXISTS execution_resource_leases (
         resource_key TEXT NOT NULL,
         resource_type TEXT NOT NULL,
@@ -372,6 +402,7 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
   'ALTER TABLE tasks ADD COLUMN fix_prompt TEXT',
   'ALTER TABLE tasks ADD COLUMN fix_context TEXT',
+  'ALTER TABLE tasks ADD COLUMN execution_model TEXT',
   'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
   'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
@@ -388,6 +419,8 @@ export const POST_MIGRATION_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_events_task_id_id ON events(task_id, id)',
   'CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id ON tasks(workflow_id)',
+  'CREATE INDEX IF NOT EXISTS idx_worker_actions_task_updated ON worker_actions(task_id, updated_at)',
+  'CREATE INDEX IF NOT EXISTS idx_worker_actions_workflow_status ON worker_actions(workflow_id, worker_kind, status)',
   'DROP INDEX IF EXISTS idx_task_launch_dispatch_active_attempt',
   `
       CREATE UNIQUE INDEX IF NOT EXISTS idx_task_launch_dispatch_active_attempt

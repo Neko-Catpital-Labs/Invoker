@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
-import type { Workflow, Conversation } from '../adapter.js';
+import type { Workflow, Conversation, WorkerActionWrite } from '../adapter.js';
 import { createAttempt } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
@@ -42,6 +42,16 @@ describe('SQLiteAdapter', () => {
 
   function workflowColumns(db: SQLiteAdapter): string[] {
     const result = (db as any).db.exec('PRAGMA table_info(workflows)') as Array<{ values: unknown[][] }>;
+    return (result[0]?.values ?? []).map((row) => String(row[1]));
+  }
+
+  function tableColumns(db: SQLiteAdapter, table: string): string[] {
+    const result = (db as any).db.exec(`PRAGMA table_info(${table})`) as Array<{ values: unknown[][] }>;
+    return (result[0]?.values ?? []).map((row) => String(row[1]));
+  }
+
+  function tableIndexes(db: SQLiteAdapter, table: string): string[] {
+    const result = (db as any).db.exec(`PRAGMA index_list(${table})`) as Array<{ values: unknown[][] }>;
     return (result[0]?.values ?? []).map((row) => String(row[1]));
   }
 
@@ -132,6 +142,21 @@ describe('SQLiteAdapter', () => {
       });
     });
 
+    it('persists executionModel through saveTask, updateTask, and loadTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('model-task', {
+        config: { executionAgent: 'omp', executionModel: 'openai/gpt-5.2' },
+      }));
+
+      expect(adapter.loadTask('model-task')?.config.executionModel).toBe('openai/gpt-5.2');
+
+      adapter.updateTask('model-task', {
+        config: { executionModel: 'anthropic/claude-sonnet-4.5' },
+      });
+
+      expect(adapter.loadTasks('wf-1')[0]?.config.executionModel).toBe('anthropic/claude-sonnet-4.5');
+    });
+
     it('loads all workflows and tasks in one startup snapshot', () => {
       const wf2: Workflow = {
         ...testWorkflow,
@@ -175,6 +200,129 @@ describe('SQLiteAdapter', () => {
       const result = (adapter as any).db.exec('PRAGMA index_list(events)') as Array<{ values: unknown[][] }>;
       const indexNames = (result[0]?.values ?? []).map((row) => String(row[1]));
       expect(indexNames).toContain('idx_events_task_id_id');
+    });
+
+    it('creates execution_model and worker_actions schema objects', () => {
+      expect(tableColumns(adapter, 'tasks')).toContain('execution_model');
+      expect(tableColumns(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
+        'id',
+        'worker_kind',
+        'action_type',
+        'workflow_id',
+        'task_id',
+        'subject_type',
+        'subject_id',
+        'external_key',
+        'status',
+        'attempt_count',
+        'intent_id',
+        'agent_name',
+        'execution_model',
+        'session_id',
+        'summary',
+        'payload_json',
+        'created_at',
+        'updated_at',
+        'completed_at',
+      ]));
+      expect(tableIndexes(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
+        'idx_worker_actions_task_updated',
+        'idx_worker_actions_workflow_status',
+      ]));
+    });
+  });
+
+  describe('worker action persistence', () => {
+    function makeWorkerAction(overrides: Partial<WorkerActionWrite> = {}): WorkerActionWrite {
+      return {
+        id: 'wa-1',
+        workerKind: 'autofix',
+        actionType: 'fix-task',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/task-1',
+        subjectType: 'task',
+        subjectId: 'wf-1/task-1',
+        externalKey: 'wf-1/task-1:g0:a1',
+        status: 'queued',
+        attemptCount: 1,
+        intentId: '42',
+        agentName: 'codex',
+        executionModel: 'gpt-5.2',
+        sessionId: 'sess-1',
+        summary: 'Queued autofix',
+        payload: { reason: 'failed-tests' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+        ...overrides,
+      };
+    }
+
+    it('upserts and reads worker actions by worker kind and external key', () => {
+      const first = adapter.upsertWorkerAction(makeWorkerAction());
+      expect(first).toMatchObject({
+        id: 'wa-1',
+        workerKind: 'autofix',
+        actionType: 'fix-task',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/task-1',
+        status: 'queued',
+        attemptCount: 1,
+        intentId: '42',
+        agentName: 'codex',
+        executionModel: 'gpt-5.2',
+        sessionId: 'sess-1',
+        summary: 'Queued autofix',
+        payload: { reason: 'failed-tests' },
+      });
+
+      const completed = adapter.upsertWorkerAction(makeWorkerAction({
+        id: 'wa-replacement-id',
+        status: 'completed',
+        attemptCount: 2,
+        summary: 'Fixed',
+        completedAt: '2026-01-01T00:05:00.000Z',
+        payload: { intentId: 42, result: 'ok' },
+        updatedAt: '2026-01-01T00:05:00.000Z',
+      }));
+
+      expect(completed.id).toBe('wa-1');
+      expect(completed.status).toBe('completed');
+      expect(completed.attemptCount).toBe(2);
+      expect(completed.completedAt).toBe('2026-01-01T00:05:00.000Z');
+      expect(completed.payload).toEqual({ intentId: 42, result: 'ok' });
+      expect(adapter.getWorkerAction('autofix', 'wf-1/task-1:g0:a1')).toEqual(completed);
+    });
+
+    it('lists worker actions with workflow, task, worker, status, and limit filters', () => {
+      adapter.upsertWorkerAction(makeWorkerAction({
+        id: 'wa-1',
+        externalKey: 'a',
+        taskId: 'wf-1/task-1',
+        status: 'completed',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+      }));
+      adapter.upsertWorkerAction(makeWorkerAction({
+        id: 'wa-2',
+        externalKey: 'b',
+        taskId: 'wf-1/task-2',
+        status: 'running',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      }));
+      adapter.upsertWorkerAction(makeWorkerAction({
+        id: 'wa-3',
+        workerKind: 'github',
+        externalKey: 'c',
+        workflowId: 'wf-2',
+        taskId: 'wf-2/task-1',
+        status: 'running',
+        updatedAt: '2026-01-01T00:00:03.000Z',
+      }));
+
+      expect(adapter.listWorkerActions({ workflowId: 'wf-1' }).map((action) => action.id)).toEqual(['wa-2', 'wa-1']);
+      expect(adapter.listWorkerActions({ taskId: 'wf-1/task-1' }).map((action) => action.id)).toEqual(['wa-1']);
+      expect(adapter.listWorkerActions({ workerKind: 'github' }).map((action) => action.id)).toEqual(['wa-3']);
+      expect(adapter.listWorkerActions({ status: 'running', limit: 1 }).map((action) => action.id)).toEqual(['wa-3']);
+      expect(adapter.listWorkerActions({ limit: 0 })).toEqual([]);
     });
   });
 

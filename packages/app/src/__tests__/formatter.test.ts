@@ -3,15 +3,17 @@ import {
   formatTaskStatus,
   formatWorkflowStatus,
   formatEventLog,
+  formatWorkerActions,
   serializeWorkflow,
   serializeTask,
   serializeEvent,
+  serializeWorkerAction,
   formatAsLabel,
   formatAsJson,
   formatAsJsonl,
 } from '../formatter.js';
 import type { TaskState } from '@invoker/workflow-core';
-import type { TaskEvent, Workflow } from '@invoker/data-store';
+import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -164,6 +166,39 @@ describe('formatEventLog', () => {
   it('handles empty events', () => {
     const output = formatEventLog([]);
     expect(output).toContain('No events recorded');
+  });
+});
+
+// ── formatWorkerActions ─────────────────────────────────────
+
+describe('formatWorkerActions', () => {
+  const action: WorkerActionRecord = {
+    id: 'wa-1',
+    workerKind: 'autofix',
+    actionType: 'fix-task',
+    workflowId: 'wf-1',
+    taskId: 'wf-1/task-1',
+    subjectType: 'task',
+    subjectId: 'wf-1/task-1',
+    externalKey: 'wf-1/task-1:g0:a1',
+    status: 'running',
+    attemptCount: 1,
+    summary: 'Retrying task',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:01:00.000Z',
+  };
+
+  it('formats worker action summaries', () => {
+    const output = formatWorkerActions([action]);
+    expect(output).toContain('Worker actions (1)');
+    expect(output).toContain('wa-1');
+    expect(output).toContain('autofix/fix-task');
+    expect(output).toContain('task=wf-1/task-1');
+    expect(output).toContain('Retrying task');
+  });
+
+  it('handles empty worker actions', () => {
+    expect(formatWorkerActions([])).toContain('No worker actions found');
   });
 });
 
@@ -331,6 +366,58 @@ describe('serializeEvent', () => {
     };
     const result = serializeEvent(event);
     expect(result).not.toHaveProperty('payload');
+  });
+});
+
+// ── serializeWorkerAction ───────────────────────────────────
+
+describe('serializeWorkerAction', () => {
+  it('returns a JSON-safe worker action object', () => {
+    const action: WorkerActionRecord = {
+      id: 'wa-1',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'completed',
+      attemptCount: 2,
+      intentId: '42',
+      agentName: 'codex',
+      executionModel: 'gpt-5.2',
+      sessionId: 'sess-1',
+      summary: 'Fixed',
+      payload: { result: 'ok' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:05:00.000Z',
+      completedAt: '2026-01-01T00:05:00.000Z',
+    };
+
+    const result = serializeWorkerAction(action);
+    expect(result).toEqual({
+      id: 'wa-1',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'completed',
+      attemptCount: 2,
+      intentId: '42',
+      agentName: 'codex',
+      executionModel: 'gpt-5.2',
+      sessionId: 'sess-1',
+      summary: 'Fixed',
+      payload: { result: 'ok' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:05:00.000Z',
+      completedAt: '2026-01-01T00:05:00.000Z',
+    });
+    expect(JSON.stringify(result)).not.toContain('\x1b');
   });
 });
 
