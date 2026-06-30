@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   loadConfig,
+  resolveConfigFilePath,
   resolveDefaultExecutionAgent,
   resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
@@ -11,12 +12,13 @@ import { tmpdir } from 'node:os';
 
 const testDir = join(tmpdir(), `invoker-config-test-${process.pid}`);
 const fakeHome = join(testDir, 'home');
-
 beforeEach(() => {
+  delete process.env.INVOKER_REPO_CONFIG_PATH;
   mkdirSync(join(fakeHome, '.invoker'), { recursive: true });
 });
 
 afterEach(() => {
+  delete process.env.INVOKER_REPO_CONFIG_PATH;
   rmSync(testDir, { recursive: true, force: true });
 });
 
@@ -291,6 +293,16 @@ describe('loadConfig', () => {
     expect(config.defaultPoolId).toBe('mixed-local-ssh');
   });
 
+
+  it('treats a blank env config path override as unset', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultBranch: 'main' }),
+    );
+    process.env.INVOKER_REPO_CONFIG_PATH = '   ';
+    expect(resolveConfigFilePath()).toBe(join(fakeHome, '.invoker', 'config.json'));
+    expect(loadConfig().defaultBranch).toBe('main');
+  });
 });
 
 describe('resolveEmbeddedTerminalBackendConfig', () => {
