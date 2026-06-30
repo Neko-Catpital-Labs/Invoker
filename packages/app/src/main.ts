@@ -4545,8 +4545,8 @@ function createEmbeddedTerminalBackendFromConfig(
       return Object.keys(loadConfig().remoteTargets ?? {});
     });
 
-    ipcMain.handle('invoker:get-execution-agents', () => {
-      return agentRegistry.listExecution().map(a => a.name);
+    ipcMain.handle('invoker:get-execution-harnesses', () => {
+      return agentRegistry.listExecutionHarnesses();
     });
 
     ipcMain.handle('invoker:get-runtime-status', () => {
