@@ -88,6 +88,10 @@ function isExecutableFile(candidate: string): boolean {
   }
 }
 
+function versionArgsForTool(id: string): string[] {
+  return id === 'ssh' ? ['-V'] : ['--version'];
+}
+
 export function collectSystemDiagnostics(args: {
   appVersion: string;
   isPackaged: boolean;
@@ -104,7 +108,7 @@ export function collectSystemDiagnostics(args: {
   const toolDetector = args.toolDetector ?? detectTool;
   const isInstalled = args.isInstalled ?? commandIsOnPath;
   const tools = DEFAULT_TOOL_REQUIREMENTS.map((req) =>
-    toolDetector(req.id, req.name, req.command, ['--version'], req.installHint ?? '', req.required ?? false),
+    toolDetector(req.id, req.name, req.command, versionArgsForTool(req.id), req.installHint ?? '', req.required ?? false),
   );
 
   const readiness = assembleReadinessChecks({

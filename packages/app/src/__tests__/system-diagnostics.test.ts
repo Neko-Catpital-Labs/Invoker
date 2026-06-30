@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { describe, expect, it, afterAll, beforeAll } from 'vitest';
+import { describe, expect, it, afterAll, beforeAll, beforeEach } from 'vitest';
 
 import { DEFAULT_TOOL_REQUIREMENTS } from '@invoker/contracts';
 
@@ -103,14 +103,19 @@ describe('commandIsOnPath — non-spawning PATH probe', () => {
 
 type CollectSystemDiagnosticsArgs = Parameters<typeof collectSystemDiagnostics>[0];
 
+const observedToolDetections: Array<{ id: string; versionArgs: string[] }> = [];
+
 const stubToolDetector: NonNullable<CollectSystemDiagnosticsArgs['toolDetector']> = (
   id,
   name,
   _command,
-  _versionArgs,
+  versionArgs,
   installHint,
   required = false,
-) => ({ id, name, required, installed: true, version: `${id}-test`, installHint });
+) => {
+  observedToolDetections.push({ id, versionArgs });
+  return { id, name, required, installed: true, version: `${id}-test`, installHint };
+};
 
 const collectWithStubbedTools = (
   overrides: Partial<CollectSystemDiagnosticsArgs> = {},
@@ -122,11 +127,18 @@ const collectWithStubbedTools = (
 });
 
 describe('collectSystemDiagnostics — shared canonical contract', () => {
+  beforeEach(() => {
+    observedToolDetections.length = 0;
+  });
   it('builds the tools array from DEFAULT_TOOL_REQUIREMENTS', () => {
     const diag = collectWithStubbedTools();
     expect(diag.tools.map((t) => t.id)).toEqual(DEFAULT_TOOL_REQUIREMENTS.map((r) => r.id));
     expect(diag.tools.map((t) => t.name)).toEqual(DEFAULT_TOOL_REQUIREMENTS.map((r) => r.name));
     expect(diag.tools.map((t) => t.version)).toEqual(DEFAULT_TOOL_REQUIREMENTS.map((r) => `${r.id}-test`));
+    expect(observedToolDetections.find((entry) => entry.id === 'ssh')?.versionArgs).toEqual(['-V']);
+    expect(observedToolDetections.filter((entry) => entry.id !== 'ssh').map((entry) => entry.versionArgs)).toEqual(
+      DEFAULT_TOOL_REQUIREMENTS.filter((req) => req.id !== 'ssh').map(() => ['--version']),
+    );
   });
 
   it('assembles a config-aware readiness report with config, planning-tools, and default-preset checks', () => {
