@@ -443,7 +443,12 @@ export class PersistedWorkflowMutationCoordinator {
     ) {
       return 'recreate';
     }
-    if (channel === 'invoker:delete-workflow' || channel === 'invoker:delete-all-workflows' || channel === 'invoker:delete-all-workflows-bulk') {
+    if (
+      channel === 'invoker:delete-workflow'
+      || channel === 'invoker:delete-task'
+      || channel === 'invoker:delete-all-workflows'
+      || channel === 'invoker:delete-all-workflows-bulk'
+    ) {
       return 'delete';
     }
     if (channel !== 'headless.exec') {
@@ -454,7 +459,7 @@ export class PersistedWorkflowMutationCoordinator {
     if (rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task' || rawArgs[0] === 'rebase-recreate') {
       return 'recreate';
     }
-    if (rawArgs[0] === 'delete' || rawArgs[0] === 'delete-workflow' || rawArgs[0] === 'delete-all') {
+    if (rawArgs[0] === 'delete' || rawArgs[0] === 'delete-workflow' || rawArgs[0] === 'delete-task' || rawArgs[0] === 'delete-all') {
       return 'delete';
     }
     return null;
@@ -467,6 +472,7 @@ export class PersistedWorkflowMutationCoordinator {
       || intent.channel === 'invoker:recreate-task'
       || intent.channel === 'invoker:rebase-retry'
       || intent.channel === 'invoker:rebase-recreate'
+      || intent.channel === 'invoker:delete-task'
       || intent.channel === 'invoker:delete-workflow'
       || intent.channel === 'invoker:delete-all-workflows'
       || intent.channel === 'invoker:delete-all-workflows-bulk'
@@ -483,7 +489,7 @@ export class PersistedWorkflowMutationCoordinator {
     if (command === 'recreate-task') {
       return true;
     }
-    if (command === 'delete' || command === 'delete-workflow' || command === 'delete-all') {
+    if (command === 'delete' || command === 'delete-workflow' || command === 'delete-task' || command === 'delete-all') {
       return true;
     }
     const isWorkflowId = /^wf-[^/]+$/.test(target);
