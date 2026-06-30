@@ -121,6 +121,9 @@ export interface TaskRepository {
   /** Apply a partial update to an existing task. */
   updateTask(taskId: string, changes: TaskStateChanges): void;
 
+  /** Delete one task and its task-owned rows. */
+  deleteTask(taskId: string): void;
+
   /** Persist a task lifecycle event for auditing / replay. */
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
 
