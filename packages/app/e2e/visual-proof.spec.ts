@@ -221,6 +221,77 @@ const SSH_TERMINAL_RESUME_PLAN = {
   ],
 };
 
+const SYSTEM_SETUP_READINESS_DIAGNOSTICS = {
+  platform: 'linux',
+  arch: 'x64',
+  appVersion: '0.0.0-visual-proof',
+  isPackaged: false,
+  tools: [
+    {
+      id: 'git',
+      name: 'Git',
+      required: true,
+      installed: true,
+      version: 'git version 2.45.0',
+      installHint: 'Install Git',
+    },
+    {
+      id: 'claude',
+      name: 'Claude CLI',
+      required: false,
+      installed: true,
+      version: 'claude 2.0.0',
+      installHint: 'Install Claude CLI',
+    },
+    {
+      id: 'codex',
+      name: 'Codex CLI',
+      required: false,
+      installed: false,
+      installHint: 'Install Codex CLI',
+    },
+  ],
+  bundledSkills: {
+    available: false,
+    promptRecommended: false,
+    managedPrefix: 'invoker-',
+    bundledSkillNames: [],
+    targets: [],
+    commandTargets: [],
+    mcpTargets: [],
+  },
+  cliInstaller: {
+    supported: false,
+    bundledVersion: '0.0.0-visual-proof',
+    upToDate: false,
+  },
+  readiness: {
+    ok: false,
+    checks: [
+      {
+        id: 'config',
+        name: 'Config file',
+        status: 'ok',
+        detail: 'Parsed /tmp/invoker-e2e/config.json',
+      },
+      {
+        id: 'planning-tools',
+        name: 'Planning tools',
+        status: 'warn',
+        detail: 'Codex preset is configured, but codex is not on PATH',
+        remediation: 'Install Codex CLI before selecting Codex-backed planning presets',
+      },
+      {
+        id: 'default-preset',
+        name: 'Default planning preset',
+        status: 'error',
+        detail: 'Default preset "cursor+codex" needs "codex", which is not on PATH',
+        remediation: 'Install codex, or set defaultSlackHarnessPreset to a preset whose tool is installed',
+      },
+    ],
+  },
+};
+
 function workflowNode(page: Page, workflowId: string) {
   return page.getByTestId(`rf__node-${workflowId}`).first();
 }
@@ -434,6 +505,30 @@ test.describe('Visual proof capture', () => {
     await expect(page.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'dag-loaded');
     await assertPageScreenshot(page, 'dag-loaded');
+  });
+
+  test('system setup readiness report shows a failing default preset check', async ({ page, electronApp }) => {
+    await electronApp.evaluate(({ ipcMain }, diagnostics) => {
+      ipcMain.removeHandler('invoker:get-system-diagnostics');
+      ipcMain.handle('invoker:get-system-diagnostics', () => diagnostics);
+    }, SYSTEM_SETUP_READINESS_DIAGNOSTICS);
+
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+    await expect(page.getByTestId('rail-settings')).toBeVisible({ timeout: 5000 });
+
+    await page.getByTestId('rail-settings').click();
+
+    await expect(page.getByRole('heading', { name: 'System Setup' })).toBeVisible();
+    await expect(page.getByText('Readiness')).toBeVisible();
+    await expect(page.getByText('Config file')).toBeVisible();
+    await expect(page.getByText('Planning tools')).toBeVisible();
+    await expect(page.getByText('Default planning preset')).toBeVisible();
+    await expect(page.getByText('Default preset "cursor+codex" needs "codex", which is not on PATH')).toBeVisible();
+    await expect(page.getByText('Install codex, or set defaultSlackHarnessPreset to a preset whose tool is installed')).toBeVisible();
+
+    await captureScreenshot(page, 'system-setup-readiness');
   });
 
   test('task-graph-keyboard-controls-selected — selected workflow mini DAG framing', async ({ page }) => {
