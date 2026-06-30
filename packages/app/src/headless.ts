@@ -96,6 +96,7 @@ import {
   headlessCancel,
   headlessCancelWorkflow,
   headlessDeleteWorkflow,
+  headlessDeleteTask,
   headlessDetachWorkflow,
   headlessOpenTerminal,
 } from './headless-approve-delete.js';
@@ -328,6 +329,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'cancel-workflow':
       await headlessCancelWorkflow(args[1], deps);
+      break;
+    case 'delete-task':
+      await headlessDeleteTask(args[1], deps);
       break;
     case 'delete':
     case 'delete-workflow':
@@ -590,8 +594,9 @@ ${BOLD}Configure:${RESET}
 ${BOLD}Lifecycle:${RESET}
   cancel <taskId>                                     Cancel task + all downstream
   cancel-workflow <workflowId>                        Cancel all active tasks in a workflow
-  delete <workflowId>                                 Delete a single workflow
-  delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
+  delete-task <taskId>                                 Delete one task and retarget dependents
+  delete <workflowId>                                  Delete a single workflow
+  delete-all                                           Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
   worker [kind|list|status]                           Run/list registry worker kinds (autofix scans failed tasks)

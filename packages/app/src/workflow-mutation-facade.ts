@@ -166,6 +166,20 @@ export class WorkflowMutationFacade {
     return this.finalizeWithTopup(started, 'facade.recreate-task', { scopedTaskIds: [taskId] });
   }
 
+  async deleteTask(taskId: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
+    if (this.deps.killRunningTask) {
+      const task = this.deps.orchestrator.getTask(taskId);
+      if (task && (task.status === 'running' || task.status === 'fixing_with_ai')) {
+        await this.deps.killRunningTask(task.id);
+      }
+    }
+    const started = await this.runViaCommandService(
+      (cs) => cs.deleteTask(makeEnvelope('facade.delete-task', 'surface', 'task', { taskId })),
+    );
+    return this.finalizeWithTopup(started, 'facade.delete-task', { scopedTaskIds: started.map((task) => task.id) });
+  }
+
   async recreateDownstream(taskId: string): Promise<MutationResult> {
     await this.closeReviewForTask(taskId);
     const started = await this.runViaCommandService(
