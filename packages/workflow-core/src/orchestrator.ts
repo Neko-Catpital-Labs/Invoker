@@ -2414,7 +2414,10 @@ export class Orchestrator {
 
   private bumpWorkflowGeneration(workflowId: string): void {
     if (!this.persistence.updateWorkflow) return;
-    const workflow = this.persistence.loadWorkflow?.(workflowId);
+    if (!this.persistence.loadWorkflow) {
+      return;
+    }
+    const workflow = this.persistence.loadWorkflow(workflowId);
     const nextGeneration = (workflow?.generation ?? 0) + 1;
     this.persistence.updateWorkflow(workflowId, { generation: nextGeneration });
     this.logger.info('[orchestrator] bumped workflow generation for recreate', {
