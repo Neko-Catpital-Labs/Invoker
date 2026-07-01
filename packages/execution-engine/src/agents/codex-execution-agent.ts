@@ -13,7 +13,6 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions, ExecutionModelOption } from '../agent.js';
-
 export interface CodexExecutionAgentConfig {
   /** Command to invoke the Codex CLI. Default: 'codex'. */
   command?: string;

@@ -101,6 +101,36 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     }
   });
 
+  it('passes executionModel through remote OMP fix commands', async () => {
+    const { spawn } = await import('node:child_process');
+    const buildFixCommand = vi.fn((prompt: string, options?: { executionModel?: string }) => ({
+      cmd: 'omp',
+      args: ['--model', options?.executionModel ?? 'missing', '-p', prompt],
+      sessionId: 'omp-local-uuid',
+    }));
+    const mockRegistry = {
+      get: () => ({ name: 'omp', buildFixCommand }),
+      getOrThrow: () => ({ name: 'omp', buildFixCommand }),
+      getSessionDriver: () => undefined,
+    } as unknown as AgentRegistry;
+
+    vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('omp output', 0) as any);
+
+    await spawnRemoteAgentFixImpl(
+      'fix the bug',
+      '/home/user/worktree',
+      { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      'omp',
+      mockRegistry,
+      'anthropic/claude-opus-4',
+    );
+
+    expect(buildFixCommand).toHaveBeenCalledWith(
+      'fix the bug',
+      { executionModel: 'anthropic/claude-opus-4' },
+    );
+  });
+
   it('calls driver.processOutput with effectiveSessionId and stdout on success', async () => {
     const { spawn } = await import('node:child_process');
     const mockProcessOutput = vi.fn(() => 'display text');

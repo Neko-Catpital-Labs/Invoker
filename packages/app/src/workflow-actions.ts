@@ -22,7 +22,7 @@ import {
   parseMergeConflictError,
 } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { TaskRunner, ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
+import { DEFAULT_EXECUTION_AGENT, type TaskRunner, type ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
   isReviewGateCiContextStale,
@@ -1047,7 +1047,7 @@ function resolveAutoFixAgent(
     };
   }
   return {
-    selectedAgent: 'claude',
+    selectedAgent: DEFAULT_EXECUTION_AGENT,
     selectedAgentSource: 'default',
     configuredAutoFixAgent: undefined,
     fallbackChain: 'config(empty)->default',
