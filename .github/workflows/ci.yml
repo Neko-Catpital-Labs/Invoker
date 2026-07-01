@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.base_ref) || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -61,7 +61,7 @@ jobs:
 
   quality-required:
     runs-on:
-      labels: Runner_2_4_core
+      labels: ${{ matrix.runner_label }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -69,8 +69,10 @@ jobs:
         include:
           - name: Dependency Cruise
             command: pnpm run check:deps
+            runner_label: Runner_2_4_core
           - name: TypeScript Types
             command: pnpm run check:types
+            runner_label: Github_Runner
 
     name: quality / ${{ matrix.name }}
 
@@ -101,7 +103,7 @@ jobs:
   quality-extra:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     runs-on:
-      labels: Runner_2_4_core
+      labels: ${{ matrix.runner_label }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -109,10 +111,13 @@ jobs:
         include:
           - name: Required Package Builds
             command: pnpm run check:required-builds
+            runner_label: Runner_2_4_core
           - name: Large File Guardrail
             command: pnpm run check:large-files
+            runner_label: Runner_1
           - name: Release Version Sync
             command: pnpm run check:versions
+            runner_label: Runner_2_4_core
 
     name: quality / ${{ matrix.name }}
 
@@ -210,7 +215,7 @@ jobs:
   required-fast:
     needs: build-artifacts
     runs-on:
-      labels: Runner_2_4_core
+      labels: ${{ matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -223,10 +228,13 @@ jobs:
               bash scripts/test-suites/required/07-invalid-config-json.sh
               bash scripts/test-suites/required/15-owner-boundary-policy.sh
               bash scripts/test-suites/required/50-verify-executor-routing.sh
+            runner_label: Runner_2_4_core
           - name: Vitest Workspace
             command: bash scripts/test-suites/required/10-vitest-workspace.sh
+            runner_label: Github_Runner
           - name: Submit Workflow Chain
             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
+            runner_label: Runner_2_4_core
 
     name: required-fast / ${{ matrix.name }}
 
@@ -280,7 +288,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on:
-      labels: Runner_2_4_core
+      labels: ${{ matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -288,16 +296,22 @@ jobs:
         include:
           - name: Branch Carry Forward
             command: bash scripts/test-suites/required/16-branch-carry-forward.sh
+            runner_label: Runner_2_4_core
           - name: Merge Gate Concurrency Repro
             command: bash scripts/test-suites/required/17-merge-gate-concurrency-repro.sh
+            runner_label: Runner_1
           - name: Start Running MECE Repros
             command: bash scripts/test-suites/required/18-start-running-mece-repros.sh
+            runner_label: Runner_2_4_core
           - name: Task New Attempt Reset Repro
             command: bash scripts/test-suites/required/19-task-new-attempt-reset-repro.sh
+            runner_label: Github_Runner
           - name: Launch Dispatch Queue Repro
             command: bash scripts/test-suites/required/25-launch-dispatch-queue-handoff-repro.sh
+            runner_label: Runner_2_4_core
           - name: Reset Rulebook Repro
             command: bash scripts/test-suites/required/26-reset-rulebook-proof.sh
+            runner_label: Runner_1
 
     name: required-fast / ${{ matrix.name }}
 
@@ -411,7 +425,7 @@ jobs:
   dry-run:
     needs: build-artifacts
     runs-on:
-      labels: Runner_2_4_core
+      labels: ${{ matrix.runner_label }}
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
@@ -421,10 +435,13 @@ jobs:
         include:
           - name: case-1
             suite: scripts/test-suites/required/20-e2e-dry-run.sh
+            runner_label: Runner_2_4_core
           - name: case-2
             suite: scripts/test-suites/required/21-e2e-dry-run-downstream.sh
+            runner_label: Github_Runner
           - name: case-4
             suite: scripts/test-suites/required/22-e2e-dry-run-github.sh
+            runner_label: Runner_2_4_core
 
     name: dry-run / ${{ matrix.name }}
 
@@ -477,7 +494,7 @@ jobs:
   playwright:
     needs: build-artifacts
     runs-on:
-      labels: Runner_2_4_core
+      labels: ${{ matrix.runner_label }}
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 45
@@ -487,10 +504,13 @@ jobs:
         include:
           - name: 1-of-3
             shard: 1/3
+            runner_label: Runner_2_4_core
           - name: 2-of-3
             shard: 2/3
+            runner_label: Runner_1
           - name: 3-of-3
             shard: 3/3
+            runner_label: Runner_2_4_core
 
     name: playwright / ${{ matrix.name }}
 
@@ -554,7 +574,7 @@ jobs:
   ssh:
     needs: build-artifacts
     runs-on:
-      labels: Runner_2_4_core
+      labels: ${{ matrix.runner_label }}
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
@@ -564,8 +584,10 @@ jobs:
         include:
           - name: shard-30
             suite: scripts/test-suites/optional/30-e2e-ssh.sh
+            runner_label: Runner_2_4_core
           - name: shard-31
             suite: scripts/test-suites/optional/31-e2e-ssh-merge.sh
+            runner_label: Github_Runner
 
     name: ssh / ${{ matrix.name }}
 
@@ -633,7 +655,7 @@ jobs:
   optional-other:
     needs: build-artifacts
     runs-on:
-      labels: Runner_2_4_core
+      labels: ${{ matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -641,8 +663,10 @@ jobs:
         include:
           - name: Worktree Provisioning
             command: bash scripts/test-suites/optional/60-worktree-provisioning.sh
+            runner_label: Runner_2_4_core
           - name: Visual Proof Validate
             command: bash scripts/test-suites/optional/70-ui-visual-proof-validate.sh
+            runner_label: Runner_1
 
     name: optional / ${{ matrix.name }}
 
