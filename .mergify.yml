@@ -28,7 +28,8 @@ queue_rules:
       - check-success = required-fast / Vitest Workspace
       - check-success = required-fast / Submit Workflow Chain
       - check-success = dry-run / case-1
-      - check-success = dry-run / case-2
+      - check-success = dry-run / case-2a
+      - check-success = dry-run / case-2b
       - check-success = dry-run / case-4
       - check-success = playwright / 1-of-3
       - check-success = playwright / 2-of-3
@@ -59,7 +60,8 @@ queue_rules:
       - check-success = required-fast / Vitest Workspace
       - check-success = required-fast / Submit Workflow Chain
       - check-success = dry-run / case-1
-      - check-success = dry-run / case-2
+      - check-success = dry-run / case-2a
+      - check-success = dry-run / case-2b
       - check-success = dry-run / case-4
       - check-success = playwright / 1-of-3
       - check-success = playwright / 2-of-3
