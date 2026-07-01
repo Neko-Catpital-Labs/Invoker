@@ -492,10 +492,9 @@ export class CommandService {
    * workflow root tasks. Thin delegate to `Orchestrator.recreateWorkflow`;
    * serialized through the workflow mutex. Step 17
    * (`docs/architecture/task-invalidation-roadmap.md`) closes the
-   * 5-method matrix on `CommandService`. Production callers that
-   * need an additional generation bump should use the app-layer
-   * wrapper (`packages/app/src/workflow-actions.ts → recreateWorkflow`)
-   * which composes the bump on top of this primitive.
+   * 5-method matrix on `CommandService`. Workflow generation bumping
+   * is owned by the orchestrator recreate method, so serialized callers
+   * do not need a second app-layer write.
    */
   async recreateWorkflow(
     envelope: CommandEnvelope<{ workflowId: string }>,
