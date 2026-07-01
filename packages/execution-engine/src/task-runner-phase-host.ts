@@ -23,6 +23,8 @@ export type TaskRunnerPhaseHost = Pick<
   | 'pendingPoolSelections'
   | 'activeExecutions'
   | 'getExecutionPools'
+  | 'getDefaultExecutionAgent'
+  | 'getDefaultExecutionModel'
   // Prepare-phase helpers
   | 'buildUpstreamContext'
   | 'collectUpstreamBranches'
