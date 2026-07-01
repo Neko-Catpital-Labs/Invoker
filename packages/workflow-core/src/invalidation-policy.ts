@@ -490,6 +490,10 @@ export interface BuildWorkflowInvalidationDepsArgs {
   orchestrator: InvalidationDepsOrchestrator;
   requireWorkflow: (workflowId: string) => InvalidationWorkflowRecord;
   killActiveExecution?: (taskId: string) => void | Promise<void>;
+  setWorkflowGeneration?: (
+    workflowId: string,
+    generation: number,
+  ) => void | Promise<void>;
   prepareFreshBase?: (
     workflowId: string,
     workflow: InvalidationWorkflowRecord,
