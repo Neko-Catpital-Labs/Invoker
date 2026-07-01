@@ -154,31 +154,21 @@ describe('owner boundary enforcement', () => {
   });
 
   describe('mutation isolation', () => {
-    it('owner can mutate while reader holds read-only connection', async () => {
-      // Create initial state
+    it('owner can mutate after a detached read-only snapshot is closed', async () => {
       const owner1 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
       owner1.saveWorkflow(testWorkflow);
       owner1.close();
 
-      // Reader opens read-only
       const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
       const before = reader.loadWorkflow('wf-boundary-test');
       expect(before!.status).toBe('pending');
       expect(before!.generation).toBe(0);
+      reader.close();
 
-      // Owner process reopens and mutates
       const owner2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
       owner2.updateWorkflow('wf-boundary-test', { generation: 1 });
       owner2.close();
 
-      // Each read is its own WAL snapshot, so an idle read-only adapter sees
-      // the latest committed owner write without holding a long-lived cursor.
-      const latest = reader.loadWorkflow('wf-boundary-test');
-      expect(latest!.generation).toBe(1);
-
-      reader.close();
-
-      // New reader sees updated data
       const reader2 = await SQLiteAdapter.create(dbPath, { readOnly: true });
       const updated = reader2.loadWorkflow('wf-boundary-test');
       expect(updated!.generation).toBe(1);

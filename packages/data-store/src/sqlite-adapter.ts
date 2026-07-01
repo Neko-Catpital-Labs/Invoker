@@ -373,7 +373,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.exclusiveLocking = options?.exclusiveLocking === true;
-    this.configureConnection(dbPath !== null);
+    this.configureConnection(dbPath !== null, this.readOnly);
     if (!this.readOnly) {
       this.initSchema();
       this.migrate();
@@ -423,10 +423,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
     }
 
+
+    if (isFile && options?.readOnly === true) {
+      const walPath = `${dbPath}-wal`;
+      const shmPath = `${dbPath}-shm`;
+      if (existsSync(walPath) || existsSync(shmPath)) {
+        throw new Error(
+          'Read-only file open refused while WAL sidecars exist. ' +
+          'Route the query through the owner process or start a standalone owner.',
+        );
+      }
+    }
     if (isFile) {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
-
     try {
       const { DatabaseSync } = await loadNativeSqlite();
       const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
@@ -459,10 +469,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return join(invokerHome, 'task-output');
   }
 
-  private configureConnection(fileBacked: boolean): void {
+  private configureConnection(fileBacked: boolean, readOnly: boolean): void {
     this.nativeDb.exec('PRAGMA busy_timeout = 5000');
     this.nativeDb.exec('PRAGMA foreign_keys = ON');
-    if (fileBacked) {
+    if (fileBacked && !readOnly) {
       if (this.exclusiveLocking) {
         // Heap wal-index (no -shm file). MUST precede `journal_mode = WAL`.
         this.nativeDb.exec('PRAGMA locking_mode = EXCLUSIVE');
