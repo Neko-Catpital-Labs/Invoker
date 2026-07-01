@@ -168,6 +168,7 @@ describe('Context menu (component)', () => {
     expect(await screen.findByText('Recreate from Task')).toBeInTheDocument();
     expect(screen.getByText('Recreate Downstream')).toBeInTheDocument();
     expect(screen.getByText('Terminate Task')).toBeInTheDocument();
+    expect(screen.getByText('Delete Task')).toBeInTheDocument();
   });
 
   it('task context menu calls recreateDownstream for workflow-owned tasks', async () => {
@@ -224,6 +225,21 @@ describe('Context menu (component)', () => {
     await waitFor(() => expect(mock.api.recreateTask).toHaveBeenCalledWith('task-alpha'));
     expect(mock.api.recreateDownstream).not.toHaveBeenCalled();
     expect(mock.api.recreateWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('task context menu deletes task', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.click(await screen.findByText('More'));
+    fireEvent.click(await screen.findByText('Delete Task'));
+
+    await waitFor(() => expect(mock.api.deleteTask).toHaveBeenCalledWith('task-alpha'));
+    expect(mock.api.deleteWorkflow).not.toHaveBeenCalled();
   });
 
   it('workflow context menu retries workflow', async () => {

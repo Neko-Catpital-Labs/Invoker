@@ -26,6 +26,7 @@ interface ContextMenuProps {
   onRecreateDownstream?: (taskId: string) => void;
   onFix?: (taskId: string, agentName: string) => void;
   onCancel?: (taskId: string) => void;
+  onDelete?: (taskId: string) => void;
   onClose: (options?: { restoreFocus?: boolean }) => void;
   autoFocus?: boolean;
 }
@@ -51,6 +52,7 @@ export function ContextMenu({
   onRecreateDownstream,
   onFix,
   onCancel,
+  onDelete,
   onClose,
   autoFocus = false,
 }: ContextMenuProps) {
@@ -70,6 +72,7 @@ export function ContextMenu({
     if (item.action === 'onRecreateDownstream' && !onRecreateDownstream) return false;
     if (item.action === 'onFix' && !onFix) return false;
     if (item.action === 'onCancel' && !onCancel) return false;
+    if (item.action === 'onDelete' && !onDelete) return false;
     return true;
   });
 
@@ -245,6 +248,9 @@ export function ContextMenu({
         break;
       case 'onCancel':
         onCancel?.(task.id);
+        break;
+      case 'onDelete':
+        onDelete?.(task.id);
         break;
     }
     onClose({ restoreFocus: autoFocus });
