@@ -452,6 +452,7 @@ export const WORKFLOWS_REBUILD_TABLE_DDL = `
         review_provider TEXT,
         external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
         external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
+        detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
         generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -463,13 +464,13 @@ export const WORKFLOWS_REBUILD_INSERT_DDL = `
       INSERT INTO workflows_new (
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, external_dependencies, external_dependency_changes,
+        review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies,
         generation, created_at, updated_at
       )
       SELECT
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, external_dependencies, external_dependency_changes,
+        review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies,
         generation, created_at, updated_at
       FROM workflows
     `;
