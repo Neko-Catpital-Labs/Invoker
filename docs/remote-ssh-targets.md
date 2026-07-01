@@ -24,7 +24,23 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile",
-      "remoteHeartbeatIntervalSeconds": 30
+      "remoteHeartbeatIntervalSeconds": 30,
+      "capabilities": {
+        "planning": {
+          "cursor": { "modelPolicy": { "kind": "fixed", "model": "claude" } }
+        },
+        "execution": {
+          "claude": { "modelPolicy": { "kind": "implicit" } },
+          "codex": { "modelPolicy": { "kind": "implicit" } },
+          "omp": {
+            "modelPolicy": {
+              "kind": "select",
+              "models": ["anthropic/claude-opus-4", "openai/gpt-5"],
+              "defaultModel": "anthropic/claude-opus-4"
+            }
+          }
+        }
+      }
     },
     "staging-server-b": {
       "host": "192.168.1.101",
@@ -52,6 +68,9 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
 | `provisionCommand` | string | no | Command run after worktree creation in managed mode |
 | `remoteHeartbeatIntervalSeconds` | number | no | Interval (seconds) for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
+| `capabilities` | object | no | Optional machine policy for planning/execution harnesses. `cursor` may only appear under `planning`; `claude` and `codex` may only appear under `execution`; `omp` may appear under either role. Each harness still declares its own `modelPolicy` (`implicit`, `fixed`, or `select`). |
+
+If `capabilities` is omitted, Invoker keeps the old unrestricted routing for that machine. Once the block exists, Invoker enforces the advertised role and model policy.
 
 ## Multiple SSH Targets
 
