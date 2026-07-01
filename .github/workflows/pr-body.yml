@@ -17,7 +17,7 @@ jobs:
   validate:
     name: PR Body
     runs-on:
-      labels: Runner_2_4_core
+      group: Default
     timeout-minutes: 10
 
     steps:
