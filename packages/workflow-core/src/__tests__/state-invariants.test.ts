@@ -58,6 +58,15 @@ describe('state invariants', () => {
 
     expect(() => assertWorkflowPatchConsistent(before, after, {})).toThrow(/without externalDependencyChanges/);
   });
+  it('rejects malformed externalDependencyChanges even without removals', () => {
+    const before = workflow({ externalDependencies: [depA] });
+    const after = workflow({ externalDependencies: [depA, depB] });
+    const patch = {
+      externalDependencyChanges: [{ before: depB }],
+    };
+
+    expect(() => assertWorkflowPatchConsistent(before, after, patch)).toThrow(/changedAt/);
+  });
 
   it('accepts a detach-style clear with before-only removal records', () => {
     const before = workflow({ externalDependencies: [depA, depB] });

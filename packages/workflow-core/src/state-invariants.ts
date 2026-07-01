@@ -121,6 +121,10 @@ export function assertWorkflowPatchConsistent(
   assertWorkflowConsistent(before);
   assertWorkflowConsistent(after);
 
+  const patchChanges = patch && hasOwn(patch, 'externalDependencyChanges')
+    ? readDependencyChanges(patch, `workflow ${before.id} patch`)
+    : [];
+
   const beforeDeps = readDependencies(before);
   if (beforeDeps.length === 0) return;
 
@@ -132,7 +136,7 @@ export function assertWorkflowPatchConsistent(
     throw new Error(`workflow ${before.id} removed externalDependencies without externalDependencyChanges`);
   }
 
-  const removals = readDependencyChanges(patch, `workflow ${before.id} patch`)
+  const removals = patchChanges
     .filter((change) => change.before !== undefined && change.after === undefined)
     .map((change) => dependencyKey(change.before!));
   const removalKeys = new Set(removals);
