@@ -14,6 +14,8 @@ All notable changes to Invoker will be documented in this file.
 - Stop treating every lobby/DM `@Invoker` mention as a build request. Mentions and a new `/invoker` slash command now recognize explicit verbs — `status`, `recreate`, `rebase`, `retry`, `cancel` (one workflow or `all`), and `submit` — and run the real workflow operation; anything else is a normal planning conversation that only becomes a workflow when you explicitly `submit`. A fuzzy operational ask falls back to an LLM classifier that proposes the action and waits for confirmation. Destructive all-workflow operations always confirm (Approve/Cancel buttons or a `yes`/`no` reply), and `submit` shows a plain-English, one-line-per-step summary of the plan to approve instead of raw YAML. The Slack app manifest now enables the `/invoker` slash command and Block Kit interactivity.
 - Stream live progress for bulk lobby workflow operations into the Slack thread: a long `recreate`/`rebase`/`cancel all` now edits one in-thread message with a running `done/total` count (and the workflow being processed) as it works, instead of going silent between the "On it…" acknowledgement and the final summary.
 
+
+- Add task deletion across the desktop app, HTTP API, and headless commands. Deleting a task now kills it first when needed, rewires direct dependents to the deleted task's upstream dependencies, and blocks deleting the last task in a workflow so users delete the whole workflow instead.
 ## 0.0.6
 
 - Make `plan-to-invoker` use focused verification by default instead of mandatory `pnpm test` or `pnpm run test:all` gates.
