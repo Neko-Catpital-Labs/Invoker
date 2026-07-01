@@ -97,7 +97,7 @@ describe('fresh-base workflow lifecycle helpers', () => {
     });
 
     expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
@@ -217,7 +217,7 @@ describe('rebaseRecreate', () => {
     });
 
     expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
@@ -1338,7 +1338,7 @@ describe('fixWithAgentAction', () => {
       'task-a',
       expect.stringContaining('Startup merge conflict detected; recreating workflow wf-1 from a fresh base.'),
     );
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
     expect(result).toEqual({
       kind: 'recreateWorkflowFromFreshBase',
@@ -1668,9 +1668,7 @@ describe('buildWorkflowInvalidationDeps', () => {
         if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
         return workflow as any;
       },
-      setWorkflowGeneration: (workflowId, generation) => {
-        persistence.updateWorkflow(workflowId, { generation });
-      },
+      
       killActiveExecution: taskExecutor?.killActiveExecution?.bind(taskExecutor),
       prepareFreshBase: taskExecutor?.preparePoolForRebaseRetry
         ? async (workflowId, workflow) => {
@@ -1719,8 +1717,8 @@ describe('buildWorkflowInvalidationDeps', () => {
 
     await deps.recreateWorkflow('wf-1');
 
-    expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
+    expect(persistence.loadWorkflow).not.toHaveBeenCalled();
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
   });
 
@@ -1740,7 +1738,7 @@ describe('buildWorkflowInvalidationDeps', () => {
 
     const result = await deps.recreateWorkflowFromFreshBase!('wf-1');
 
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',
       'https://example/repo.git',
