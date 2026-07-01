@@ -8,8 +8,10 @@
 import {
   appendFileSync,
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readSync,
@@ -362,9 +364,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private readonly activityLogMaxRows: number;
   private activityLogWritesSincePrune = 0;
   private readonly exclusiveLocking: boolean;
+  private readonly readOnlySnapshotPath: string | null;
 
   /** Use SQLiteAdapter.create() instead. */
-  private constructor(db: DatabaseSync, dbPath: string | null, options?: SQLiteAdapterOptions) {
+  private constructor(
+    db: DatabaseSync,
+    dbPath: string | null,
+    options?: SQLiteAdapterOptions,
+    readOnlySnapshotPath: string | null = null,
+  ) {
     this.nativeDb = db;
     this.db = new NativeDatabaseCompat(db);
     this.dbPath = dbPath;
@@ -373,6 +381,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.exclusiveLocking = options?.exclusiveLocking === true;
+    this.readOnlySnapshotPath = readOnlySnapshotPath;
     this.configureConnection(dbPath !== null, this.readOnly);
     if (!this.readOnly) {
       this.initSchema();
@@ -423,25 +432,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
     }
 
-
+    let readOnlySnapshotPath: string | null = null;
     if (isFile && options?.readOnly === true) {
-      const walPath = `${dbPath}-wal`;
-      const shmPath = `${dbPath}-shm`;
-      if (existsSync(walPath) || existsSync(shmPath)) {
-        throw new Error(
-          'Read-only file open refused while WAL sidecars exist. ' +
-          'Route the query through the owner process or start a standalone owner.',
-        );
-      }
-    }
-    if (isFile) {
+      readOnlySnapshotPath = SQLiteAdapter.createReadOnlySnapshot(dbPath);
+    } else if (isFile) {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
     try {
       const { DatabaseSync } = await loadNativeSqlite();
-      const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
-      return new SQLiteAdapter(db, isFile ? dbPath : null, options);
+      const openPath = readOnlySnapshotPath ?? dbPath;
+      const db = new DatabaseSync(openPath, { readOnly: options?.readOnly === true });
+      return new SQLiteAdapter(db, isFile ? dbPath : null, options, readOnlySnapshotPath);
     } catch (err) {
+      if (readOnlySnapshotPath) {
+        rmSync(dirname(readOnlySnapshotPath), { recursive: true, force: true });
+      }
       if (!isFile || options?.readOnly === true || !existsSync(dbPath) || !isDatabaseCorruptionError(err)) {
         throw err;
       }
@@ -458,6 +463,31 @@ export class SQLiteAdapter implements PersistenceAdapter {
       const { DatabaseSync } = await loadNativeSqlite();
       const db = new DatabaseSync(dbPath);
       return new SQLiteAdapter(db, dbPath, options);
+    }
+  }
+
+  private static createReadOnlySnapshot(dbPath: string): string {
+    SQLiteAdapter.assertNoWalSidecars(dbPath);
+    const snapshotDir = mkdtempSync(join(tmpdir(), 'invoker-readonly-snapshot-'));
+    const snapshotPath = join(snapshotDir, 'invoker.db');
+    try {
+      copyFileSync(dbPath, snapshotPath);
+      SQLiteAdapter.assertNoWalSidecars(dbPath);
+      return snapshotPath;
+    } catch (err) {
+      rmSync(snapshotDir, { recursive: true, force: true });
+      throw err;
+    }
+  }
+
+  private static assertNoWalSidecars(dbPath: string): void {
+    const walPath = `${dbPath}-wal`;
+    const shmPath = `${dbPath}-shm`;
+    if (existsSync(walPath) || existsSync(shmPath)) {
+      throw new Error(
+        'Read-only file open refused while WAL sidecars exist. ' +
+        'Route the query through the owner process or start a standalone owner.',
+      );
     }
   }
 
@@ -2639,10 +2669,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Lifecycle ─────────────────────────────────────────
 
   close(): void {
-    if (this.dbPath && !this.readOnly) {
-      this.checkpointWal('PASSIVE');
+    try {
+      if (this.dbPath && !this.readOnly) {
+        this.checkpointWal('PASSIVE');
+      }
+      this.db.close();
+    } finally {
+      if (this.readOnlySnapshotPath) {
+        rmSync(dirname(this.readOnlySnapshotPath), { recursive: true, force: true });
+      }
     }
-    this.db.close();
   }
 
   // ── Helpers ───────────────────────────────────────────
