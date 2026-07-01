@@ -4,4 +4,4 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 
-exec bash scripts/repro/repro-readonly-follower-live-wal.sh
+EXPECT_PATCHED_GUARD=1 exec bash scripts/repro/repro-readonly-follower-live-wal.sh
