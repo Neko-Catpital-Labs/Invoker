@@ -1004,6 +1004,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     applyPatchKeyToValidationCopy('reviewProvider');
     applyPatchKeyToValidationCopy('externalDependencies');
     applyPatchKeyToValidationCopy('externalDependencyChanges');
+    applyPatchKeyToValidationCopy('detachedExternalDependencies');
     applyPatchKeyToValidationCopy('generation');
 
     return after;
