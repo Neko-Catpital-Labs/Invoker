@@ -5,7 +5,7 @@
  */
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
-import type { TaskEvent, Workflow } from '@invoker/data-store';
+import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
 import type { NormalizedCostEvent, CostRollup } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
@@ -21,6 +21,21 @@ const CYAN = '\x1b[36m';
 const MAGENTA = '\x1b[35m';
 const DIM = '\x1b[2m';
 
+
+function escapeTerminalText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => {
+    switch (char) {
+      case '\n':
+        return '\\n';
+      case '\r':
+        return '\\r';
+      case '\t':
+        return '\\t';
+      default:
+        return `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
+    }
+  });
+}
 // ── Status Colors ────────────────────────────────────────────
 
 const STATUS_COLORS: Record<TaskStatus, string> = {
@@ -141,6 +156,30 @@ export function formatEventLog(events: TaskEvent[]): string {
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 
+  return lines.join('\n');
+}
+
+export function formatWorkerActions(actions: WorkerActionRecord[]): string {
+  if (actions.length === 0) {
+    return `${DIM}No worker actions found.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Worker actions (${actions.length})${RESET}`);
+  for (const action of actions) {
+    const id = escapeTerminalText(action.id);
+    const workerKind = escapeTerminalText(action.workerKind);
+    const actionType = escapeTerminalText(action.actionType);
+    const task = action.taskId ? ` task=${escapeTerminalText(action.taskId)}` : '';
+    const workflow = action.workflowId ? ` workflow=${escapeTerminalText(action.workflowId)}` : '';
+    const attempts = ` attempts=${action.attemptCount}`;
+    const completed = action.completedAt ? ` completed=${escapeTerminalText(action.completedAt)}` : '';
+    const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+    lines.push(
+      `  ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
+        `${workflow}${task}${attempts}${completed}${summary}`,
+    );
+  }
   return lines.join('\n');
 }
 
@@ -342,6 +381,30 @@ export function serializeEvent(event: TaskEvent): Record<string, unknown> {
     eventType: event.eventType,
     ...(event.payload != null && { payload: event.payload }),
     createdAt: event.createdAt,
+  };
+}
+
+export function serializeWorkerAction(action: WorkerActionRecord): Record<string, unknown> {
+  return {
+    id: action.id,
+    workerKind: action.workerKind,
+    actionType: action.actionType,
+    ...(action.workflowId != null && { workflowId: action.workflowId }),
+    ...(action.taskId != null && { taskId: action.taskId }),
+    subjectType: action.subjectType,
+    subjectId: action.subjectId,
+    externalKey: action.externalKey,
+    status: action.status,
+    attemptCount: action.attemptCount,
+    ...(action.intentId != null && { intentId: action.intentId }),
+    ...(action.agentName != null && { agentName: action.agentName }),
+    ...(action.executionModel != null && { executionModel: action.executionModel }),
+    ...(action.sessionId != null && { sessionId: action.sessionId }),
+    ...(action.summary != null && { summary: action.summary }),
+    ...(action.payload !== undefined && { payload: action.payload }),
+    createdAt: action.createdAt,
+    updatedAt: action.updatedAt,
+    ...(action.completedAt != null && { completedAt: action.completedAt }),
   };
 }
 
