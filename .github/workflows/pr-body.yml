@@ -4,6 +4,10 @@ on:
   pull_request_target:
     types: [opened, edited, synchronize, reopened, ready_for_review]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.base_ref) || format('pr-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: read
@@ -17,7 +21,7 @@ jobs:
   validate:
     name: PR Body
     runs-on:
-      group: Default
+      labels: Github_Runner
     timeout-minutes: 10
 
     steps:
