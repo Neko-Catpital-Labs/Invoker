@@ -84,6 +84,7 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
     executionAgentRegistry: deps.executionAgentRegistry,
     cwd: deps.repoRoot,
     defaultBranch: deps.invokerConfig.defaultBranch,
+    defaultExecution: deps.invokerConfig.defaultExecution,
     dockerConfig: {
       imageName: deps.invokerConfig.docker?.imageName,
       secretsFile: resolveSecretsFilePath(deps.invokerConfig),
