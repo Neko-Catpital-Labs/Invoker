@@ -233,6 +233,24 @@ describe('useTasks', () => {
     });
   });
 
+  it('does not check PR statuses during startup snapshot loading', async () => {
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    const checkPrStatuses = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      checkPrStatuses,
+      onTaskGraphEvent: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalledTimes(1);
+    });
+    expect(checkPrStatuses).not.toHaveBeenCalled();
+  });
+
   it('ignores a stale startup snapshot after a graph event arrives first', async () => {
     let releaseStartupSnapshot: (value: { tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[]; streamSequence: number }) => void;
     let taskGraphEventHandler: ((event: unknown) => void) | undefined;
