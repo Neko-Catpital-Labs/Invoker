@@ -15,7 +15,6 @@ import type { WorkRequest } from '@invoker/contracts';
 
 import type { Executor, ExecutorHandle } from './executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
-import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import {
   PRE_START_HEARTBEAT_INTERVAL_MS,
   getExecutorStartTimeoutMs,
@@ -39,7 +38,7 @@ export async function dispatchExecutor(
   const { task, attemptId, request, bench, dispatchOpts } = args;
   const startGeneration = task.execution.generation ?? 0;
   const actionType = host.determineActionType(task);
-  const executionAgent = task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT;
+  const executionAgent = task.config.executionAgent?.trim() || host.getDefaultExecutionAgent();
 
   const startT0 = Date.now();
   const attemptedPoolMemberKeys = new Set<string>();
