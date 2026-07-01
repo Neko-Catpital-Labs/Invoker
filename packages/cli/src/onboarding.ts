@@ -18,7 +18,15 @@ import {
 type JsonRecord = Record<string, unknown>;
 
 const EXPERIMENTAL_PLANNER_SERVER_KEY = 'experimental-planner';
-const EXPERIMENTAL_PLANNER_SERVER_SPEC = { type: 'stdio', command: 'uvx', args: ['invoker-planner-redirect'] } as const;
+const EXPERIMENTAL_PLANNER_PACKAGE_NAME = 'personal-stack-planner==0.1.0';
+const EXPERIMENTAL_PLANNER_COMMAND_NAME = 'invoker-planner-redirect';
+function experimentalPlannerServerSpec(packageSpec: string = EXPERIMENTAL_PLANNER_PACKAGE_NAME): JsonRecord {
+  return {
+    type: 'stdio',
+    command: 'uvx',
+    args: ['--from', packageSpec, EXPERIMENTAL_PLANNER_COMMAND_NAME],
+  };
+}
 
 export function invokerHomeDir(): string {
   return join(homedir(), '.invoker');
@@ -110,11 +118,14 @@ function readMutableJson(filePath: string, fallback: JsonRecord): JsonRecord {
 
 function isExperimentalPlannerServer(value: unknown): boolean {
   if (!isJsonRecord(value)) return false;
-  return value.type === EXPERIMENTAL_PLANNER_SERVER_SPEC.type
-    && value.command === EXPERIMENTAL_PLANNER_SERVER_SPEC.command
-    && Array.isArray(value.args)
-    && value.args.length === EXPERIMENTAL_PLANNER_SERVER_SPEC.args.length
-    && value.args.every((arg, index) => arg === EXPERIMENTAL_PLANNER_SERVER_SPEC.args[index]);
+  const args = value.args;
+  return value.type === 'stdio'
+    && value.command === 'uvx'
+    && Array.isArray(args)
+    && args.length === 3
+    && args[0] === '--from'
+    && typeof args[1] === 'string'
+    && args[2] === EXPERIMENTAL_PLANNER_COMMAND_NAME;
 }
 
 export interface ExperimentalPlannerSetupOptions {
@@ -123,6 +134,7 @@ export interface ExperimentalPlannerSetupOptions {
   plannerUrl?: string;
   accessToken?: string;
   uninstall?: boolean;
+  plannerPackage?: string;
 }
 
 export interface ExperimentalPlannerSetupState {
@@ -167,9 +179,8 @@ export function installExperimentalPlannerMcp(options: ExperimentalPlannerSetupO
     const env: JsonRecord = {};
     if (options.plannerUrl) env.PLANNER_URL = options.plannerUrl;
     if (options.accessToken) env.PLANNER_ACCESS_TOKEN = options.accessToken;
-    servers[EXPERIMENTAL_PLANNER_SERVER_KEY] = Object.keys(env).length > 0
-      ? { ...EXPERIMENTAL_PLANNER_SERVER_SPEC, env }
-      : { ...EXPERIMENTAL_PLANNER_SERVER_SPEC };
+    const spec = experimentalPlannerServerSpec(options.plannerPackage);
+    servers[EXPERIMENTAL_PLANNER_SERVER_KEY] = Object.keys(env).length > 0 ? { ...spec, env } : spec;
   }
 
   mcpConfig.mcpServers = servers;
@@ -443,6 +454,7 @@ interface ParsedSetupArgs {
   targetPath?: string;
   plannerUrl?: string;
   accessToken?: string;
+  plannerPackage?: string;
 }
 
 function parseSetupArgs(argv: string[]): ParsedSetupArgs {
@@ -470,6 +482,10 @@ function parseSetupArgs(argv: string[]): ParsedSetupArgs {
       const value = argv[++i];
       if (!value) throw new Error('Missing value for --access-token');
       parsed.accessToken = value;
+    } else if (arg === '--planner-package') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --planner-package');
+      parsed.plannerPackage = value;
     } else {
       throw new Error(`Unknown setup option: ${arg}`);
     }
@@ -498,6 +514,7 @@ async function maybeInstallPlanner(parsed: ParsedSetupArgs, io: SetupIO): Promis
     targetPath: parsed.targetPath,
     plannerUrl: parsed.plannerUrl,
     accessToken: parsed.accessToken ?? process.env.PLANNER_ACCESS_TOKEN,
+    plannerPackage: parsed.plannerPackage ?? process.env.INVOKER_PLANNER_PACKAGE,
     uninstall: parsed.uninstall,
   });
   if (parsed.json) {

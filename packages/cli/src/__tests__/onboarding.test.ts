@@ -170,10 +170,32 @@ describe('experimental planner MCP setup', () => {
       expect(mcpConfig.mcpServers['experimental-planner']).toEqual({
         type: 'stdio',
         command: 'uvx',
-        args: ['invoker-planner-redirect'],
+        args: ['--from', 'personal-stack-planner==0.1.0', 'invoker-planner-redirect'],
         env: { PLANNER_URL: 'http://planner.test', PLANNER_ACCESS_TOKEN: 'sek' },
       });
       expect(JSON.parse(readFileSync(configPath, 'utf8')).experimentalPlanner).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it('can pin a different planner package without changing Invoker', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-planner-setup-'));
+    const targetPath = join(dir, 'mcp.json');
+    const configPath = join(dir, 'config.json');
+    try {
+      installExperimentalPlannerMcp({
+        targetPath,
+        configPath,
+        plannerPackage: 'personal-stack-planner==0.1.1',
+      });
+
+      const mcpConfig = JSON.parse(readFileSync(targetPath, 'utf8'));
+      expect(mcpConfig.mcpServers['experimental-planner'].args).toEqual([
+        '--from',
+        'personal-stack-planner==0.1.1',
+        'invoker-planner-redirect',
+      ]);
+      expect(readExperimentalPlannerSetup({ targetPath, configPath }).installed).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

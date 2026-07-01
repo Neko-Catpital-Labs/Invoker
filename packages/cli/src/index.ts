@@ -134,6 +134,7 @@ function usage(): string {
     'Options:',
     '  --planner-url <url>   Planner service URL for `setup planner`.',
     '  --access-token <tok>  Planner service access token for `setup planner`.',
+    '  --planner-package <spec>  Planner MCP package spec for `setup planner`. Defaults to personal-stack-planner==0.1.0.',
     '  --target <path>       MCP config path for `setup planner`. Defaults to ~/.omp/agent/mcp.json.',
     '  --uninstall           Remove the experimental planner MCP entry and disable its Invoker flag.',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
