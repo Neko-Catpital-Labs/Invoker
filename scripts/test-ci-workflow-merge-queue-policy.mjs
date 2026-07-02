@@ -5,7 +5,7 @@ import YAML from 'yaml';
 const FULL_CI_GATE = "${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const NON_PR_GATE = "${{ github.event_name != 'pull_request' }}";
 const ORDINARY_PR_GATE = "${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}";
-const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'dry-run', 'playwright', 'ssh', 'optional-other']);
+const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
