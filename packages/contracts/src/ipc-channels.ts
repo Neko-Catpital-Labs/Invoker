@@ -418,6 +418,24 @@ export interface SearchOptions {
   offset?: number;
 }
 
+// ── In-app planning types ──────────────────────────────────
+
+export interface InAppPlanRequest {
+  goal: string;
+  preset?: string;
+}
+
+export type InAppPlanResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
@@ -427,6 +445,10 @@ export const IpcChannels = {
   'invoker:load-plan': {} as {
     request: [planText: string];
     response: void;
+  },
+  'invoker:plan-from-goal': {} as {
+    request: [request: InAppPlanRequest];
+    response: InAppPlanResponse;
   },
   'invoker:start': {} as {
     request: [];
