@@ -1,9 +1,17 @@
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {
   classifyReviewUnitsForPath,
   reviewUnitsForChangedFiles,
   validateReviewUnitChangedFiles,
 } from './review-unit-rules.mjs';
+
+const rootPackage = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+assert.match(
+  rootPackage.scripts.test,
+  /node scripts\/test-review-unit-classification\.mjs && bash scripts\/workspace-test\.sh/,
+  'root test must add review-unit classification before the existing workspace test contract',
+);
 
 const neutralManifests = [
   'package.json',
