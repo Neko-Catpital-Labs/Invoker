@@ -219,6 +219,7 @@ describe('ipc-registration', () => {
       getTasks: () => [{ id: 'task-1' } as any],
       getWorkflows: () => [{ id: 'workflow-1' }],
       getInitialWorkflowId: () => 'workflow-1',
+      getRuntimeStatus: () => ({ ownerMode: true, readOnly: false, mode: 'local-owner' }),
       appStartedAtEpochMs: 123,
       getTaskDeltaStreamSequence: () => 7,
       recordStartupDuration,
@@ -231,6 +232,7 @@ describe('ipc-registration', () => {
       tasks: [{ id: 'task-1' }],
       workflows: [{ id: 'workflow-1' }],
       initialWorkflowId: 'workflow-1',
+      runtimeStatus: { ownerMode: true, readOnly: false, mode: 'local-owner' },
       appStartedAtEpochMs: 123,
       streamSequence: 7,
     });
