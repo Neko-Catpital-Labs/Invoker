@@ -43,6 +43,7 @@ export interface ReviewGateCiContext {
   branch?: string;
   headSha?: string;
   fixContext?: string;
+  dedupeKey?: string;
 }
 
 export interface ReviewGateLineageFields {
@@ -50,6 +51,36 @@ export interface ReviewGateLineageFields {
   reviewId?: string;
   selectedAttemptId?: string;
   branch?: string;
+  headSha?: string;
+}
+
+export interface ReviewGateArtifactCurrencyState {
+  readonly activeGeneration: number;
+}
+
+export interface ReviewGateArtifactCurrencyFields {
+  readonly generation: number;
+  readonly status?: string;
+  readonly discardedAt?: string;
+  readonly providerId?: string;
+}
+
+export function isCurrentReviewGateArtifact(
+  gate: ReviewGateArtifactCurrencyState,
+  artifact: ReviewGateArtifactCurrencyFields,
+): boolean {
+  return artifact.generation === gate.activeGeneration
+    && artifact.status !== 'discarded'
+    && !artifact.discardedAt;
+}
+
+export function isCurrentReviewGateArtifactForProvider(
+  gate: ReviewGateArtifactCurrencyState,
+  artifact: ReviewGateArtifactCurrencyFields,
+  providerId: string,
+): boolean {
+  return isCurrentReviewGateArtifact(gate, artifact)
+    && artifact.providerId === providerId;
 }
 
 export function encodeReviewGateCiContext(context: ReviewGateCiContext): string {
@@ -80,6 +111,7 @@ export function decodeReviewGateCiContext(encoded: unknown): ReviewGateCiContext
     branch: typeof candidate.branch === 'string' ? candidate.branch : undefined,
     headSha: typeof candidate.headSha === 'string' ? candidate.headSha : undefined,
     fixContext: typeof candidate.fixContext === 'string' ? candidate.fixContext : undefined,
+    dedupeKey: typeof candidate.dedupeKey === 'string' ? candidate.dedupeKey : undefined,
   };
 }
 
@@ -91,7 +123,8 @@ export function isReviewGateCiContextStale(
     current.selectedAttemptId !== context.selectedAttemptId ||
     (current.generation ?? 0) !== context.generation ||
     current.reviewId !== context.reviewId ||
-    current.branch !== context.branch
+    current.branch !== context.branch ||
+    current.headSha !== context.headSha
   );
 }
 
