@@ -4,6 +4,10 @@ on:
   pull_request_target:
     types: [opened, edited, synchronize, reopened, ready_for_review]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.head_ref) || format('pr-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: read
@@ -16,7 +20,8 @@ env:
 jobs:
   validate:
     name: PR Body
-    runs-on: ubuntu-latest
+    runs-on:
+      labels: Github_Runner
     timeout-minutes: 10
 
     steps:
@@ -65,6 +70,24 @@ jobs:
             const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number });
             fs.writeFileSync('pr-body.md', pull.body || '', 'utf8');
 
+      - name: Fetch PR diff metadata
+        if: steps.rollout.outputs.enabled == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git fetch --no-tags --depth=1 origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+          fetched_head_sha="$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/head^{commit}")"
+          if [ "$fetched_head_sha" != "$HEAD_SHA" ]; then
+            echo "Fetched PR head ${fetched_head_sha} did not match event head ${HEAD_SHA}." >&2
+            exit 1
+          fi
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > changed-files.txt
+          git diff --find-renames --unified=200000 --diff-filter=ACMRTD "$BASE_SHA" "$HEAD_SHA" -- > pr.diff
+
       - name: Validate PR body
         if: steps.rollout.outputs.enabled == 'true'
-        run: node scripts/validate-pr-body.mjs --body-file pr-body.md
+        run: node scripts/validate-pr-body.mjs --body-file pr-body.md --changed-files-file changed-files.txt --diff-file pr.diff
