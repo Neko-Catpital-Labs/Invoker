@@ -5,7 +5,7 @@ import YAML from 'yaml';
 const FULL_CI_GATE = "${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const NON_PR_GATE = "${{ github.event_name != 'pull_request' }}";
 const ORDINARY_PR_GATE = "${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}";
-const FULL_CI_JOBS = new Set(['build-artifacts', 'required-fast', 'dry-run', 'playwright', 'ssh', 'optional-other']);
+const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'dry-run', 'playwright', 'ssh', 'optional-other']);
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
@@ -38,8 +38,6 @@ assert(!jobs['quality-required'].if, 'quality-required must run on ordinary PRs'
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
 
-assert(jobs['inv117-proof'], 'Missing inv117-proof job');
-assert(jobs['inv117-proof'].if === NON_PR_GATE, 'inv117-proof must not run on pull_request events');
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');

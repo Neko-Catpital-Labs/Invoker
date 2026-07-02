@@ -148,15 +148,18 @@ jobs:
       - name: Run quality check
         run: ${{ matrix.command }}
 
-  inv117-proof:
-    if: ${{ github.event_name != 'pull_request' }}
+  e2e-proof:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on:
-      labels: Runner_2_4_core
+    runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
-    timeout-minutes: 120
-    name: inv117 / deterministic proof
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    name: e2e-proof / shard ${{ matrix.shard }}
 
     steps:
       - name: Checkout
@@ -201,19 +204,56 @@ jobs:
           git update-ref refs/heads/main refs/remotes/origin/master || true
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
-      - name: Run INV-117 required proof contract
+      - name: Run e2e proof shard
         env:
           INVOKER_TEST_ALL_PROOF: '1'
-          INVOKER_TEST_ALL_JOBS: '1'
-          INVOKER_TEST_ALL_EXCLUDE: >-
-            required/20-e2e-dry-run.sh,
-            required/21-e2e-dry-run-downstream.sh,
-            required/21-e2e-dry-run-downstream-reset.sh,
-            required/22-e2e-dry-run-github.sh
+          INVOKER_TEST_ALL_SHARD_INDEX: ${{ matrix.shard }}
+          INVOKER_TEST_ALL_SHARD_TOTAL: '4'
+          INVOKER_TEST_ALL_STATE_FILE: ${{ github.workspace }}/proof-state.tsv
           TMPDIR: /tmp/invoker-tmp
         run: |
           mkdir -p "$TMPDIR"
           chmod 1777 "$TMPDIR"
+          bash scripts/run-all-tests.sh
+
+      - name: Upload shard proof state
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-state-${{ matrix.shard }}
+          path: ${{ github.workspace }}/proof-state.tsv
+          if-no-files-found: error
+
+  e2e-proof-aggregate:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    needs: e2e-proof
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
+    timeout-minutes: 15
+    name: e2e-proof / aggregate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Download shard proof state
+        uses: actions/download-artifact@v4
+        with:
+          pattern: proof-state-*
+          path: /tmp/shard-states
+
+      - name: Merge shard state and validate e2e proof contract
+        env:
+          INVOKER_TEST_ALL_PROOF: '1'
+          INVOKER_TEST_ALL_AGGREGATE: '1'
+          INVOKER_TEST_ALL_STATE_FILE: ${{ github.workspace }}/merged-proof-state.tsv
+        run: |
+          cat /tmp/shard-states/proof-state-*/proof-state.tsv > "$INVOKER_TEST_ALL_STATE_FILE"
           bash scripts/run-all-tests.sh
 
   required-fast:
