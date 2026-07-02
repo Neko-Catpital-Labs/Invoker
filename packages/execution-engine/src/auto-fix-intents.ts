@@ -50,6 +50,7 @@ export interface ReviewGateLineageFields {
   reviewId?: string;
   selectedAttemptId?: string;
   branch?: string;
+  headSha?: string;
 }
 
 export function encodeReviewGateCiContext(context: ReviewGateCiContext): string {
@@ -91,7 +92,8 @@ export function isReviewGateCiContextStale(
     current.selectedAttemptId !== context.selectedAttemptId ||
     (current.generation ?? 0) !== context.generation ||
     current.reviewId !== context.reviewId ||
-    current.branch !== context.branch
+    current.branch !== context.branch ||
+    current.headSha !== context.headSha
   );
 }
 
