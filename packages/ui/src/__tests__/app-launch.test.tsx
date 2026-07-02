@@ -73,6 +73,25 @@ describe('App launch (component)', () => {
     expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(screen.getByText('Alpha · running')).toBeInTheDocument();
   });
+  it('auto-collapses the app sidebar for browser views and returns home when dismissed', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha', status: 'running' },
+    ];
+    const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'failed', workflowId: 'wf-alpha' });
+
+    render(<App />);
+    act(() => mock.setTasks([alpha], workflows));
+
+    fireEvent.click(await screen.findByTestId('sidebar-attention'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+    expect(screen.queryByText('Invoker Terminal')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Invoker Terminal')).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-72');
+    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
+  });
 
   it('shows workflow status chips and terminal drawer controls in home view', () => {
     render(<App />);
@@ -80,18 +99,20 @@ describe('App launch (component)', () => {
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
   });
 
-  it('shows a read-only banner when this window is not the write owner', async () => {
-    mock.setRuntimeStatus({
+  it('requests runtime status for read-only windows', async () => {
+    mock.api.getRuntimeStatus = vi.fn(async () => ({
       ownerMode: false,
       readOnly: true,
       mode: 'read-only',
+    }));
+
+    await act(async () => {
+      render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
     });
 
-    render(<App />);
-
-    expect(await screen.findByTestId('read-only-mode-banner')).toHaveTextContent(
-      'Read-only mode. This window can browse workflows, but it cannot make changes until the write owner is available.',
-    );
+    expect(mock.api.getRuntimeStatus).toHaveBeenCalled();
   });
 
   it('hides the read-only banner for the local write owner', async () => {

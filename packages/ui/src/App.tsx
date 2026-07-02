@@ -445,6 +445,7 @@ export function App() {
   const graphActionsMenuRef = useRef<HTMLDivElement>(null);
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
@@ -470,8 +471,10 @@ export function App() {
   const [executionPools, setExecutionPools] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(
+    () => (typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__?.runtimeStatus ?? null : null),
+  );
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
-  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
@@ -1731,6 +1734,7 @@ export function App() {
       setHasStarted(false);
       setPlanName(null);
       setSidebarSurface('home');
+      setSidebarCollapsed(false);
       setViewMode('dag');
       setGraphActionsMenuOpen(false);
       setSelectedTaskId(null);
@@ -1755,6 +1759,7 @@ export function App() {
       setHasStarted(false);
       setPlanName(null);
       setSidebarSurface('home');
+      setSidebarCollapsed(false);
       setViewMode('dag');
       setGraphActionsMenuOpen(false);
       setSelectedTaskId(null);
@@ -1819,7 +1824,20 @@ export function App() {
 
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
+    setViewMode('dag');
+    if (nextSurface === 'home') {
+      setSidebarSurface('home');
+      setSidebarCollapsed(false);
+      return;
+    }
     setSidebarSurface(nextSurface);
+    setSidebarCollapsed(true);
+  }, []);
+
+  const handleDismissBrowserSurface = useCallback(() => {
+    setGraphActionsMenuOpen(false);
+    setSidebarSurface('home');
+    setSidebarCollapsed(false);
     setViewMode('dag');
   }, []);
 
@@ -2279,6 +2297,50 @@ export function App() {
     </div>
   );
 
+  const workflowsSubtitle = `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'}`;
+  const attentionSubtitle = attentionEntries.length === 0
+    ? 'Nothing needs a decision right now.'
+    : `${attentionEntries.length} item${attentionEntries.length === 1 ? '' : 's'} need attention.`;
+  const runningSubtitle = runningEntries.length === 0
+    ? 'No active tasks right now.'
+    : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`;
+
+  const browserSurfaceTitle = sidebarSurface === 'workflows'
+    ? 'Workflows'
+    : sidebarSurface === 'attention'
+      ? 'Needs Attention'
+      : 'Running';
+  const browserSurfaceSubtitle = sidebarSurface === 'workflows'
+    ? workflowsSubtitle
+    : sidebarSurface === 'attention'
+      ? attentionSubtitle
+      : runningSubtitle;
+
+  const browserSelectedTitle = sidebarSurface === 'workflows'
+    ? selectedWorkflow?.name ?? 'Select a workflow'
+    : selectedTask?.description || selectedTask?.id || 'Select an item';
+  const browserSelectedContext = sidebarSurface === 'workflows'
+    ? selectedWorkflowEntry
+      ? `${selectedWorkflowEntry.taskCount} task${selectedWorkflowEntry.taskCount === 1 ? '' : 's'}`
+      : workflowsSubtitle
+    : selectedTaskWorkflowName ?? 'No workflow';
+  const browserSelectedStatus = sidebarSurface === 'workflows'
+    ? selectedWorkflow
+      ? formatWorkflowStatus(selectedWorkflow.status)
+      : 'No workflow selected'
+    : selectedTask
+      ? formatTaskStatus(selectedTask.status)
+      : 'No item selected';
+  const browserStatusToneClass = sidebarSurface === 'running'
+    ? 'bg-blue-950/70 text-blue-100'
+    : sidebarSurface === 'attention'
+      ? 'bg-amber-950/70 text-amber-100'
+      : 'bg-gray-800 text-gray-200';
+
+  const relatedBrowserTasks = Array.from(miniDagTasks.values()).filter((task) =>
+    sidebarSurface === 'workflows' || task.id !== selectedTask?.id,
+  );
+
   const renderWorkflowsList = (): JSX.Element => (
     workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
       <div className="overflow-y-auto p-3">
@@ -2290,13 +2352,11 @@ export function App() {
                 key={entry.workflow.id}
                 type="button"
                 onClick={() => handleWorkflowClick(entry.workflow.id)}
-                className={`block w-full rounded-xl px-3 py-2 text-left transition-colors ${selected ? 'bg-gray-800 text-white' : 'text-gray-200 hover:bg-gray-900/80'}`}
+                className={`block w-full rounded-xl px-3 py-2 text-left transition-colors ${selected ? 'bg-gray-800 text-white ring-1 ring-gray-700' : 'text-gray-200 hover:bg-gray-900/80'}`}
               >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="truncate font-medium">{entry.workflow.name}</div>
-                  <div className="text-[11px] text-gray-500">{entry.taskCount}</div>
-                </div>
-                <div className="mt-1 text-xs text-gray-500">{formatWorkflowStatus(entry.workflow.status)}</div>
+                <div className="truncate font-medium">{entry.workflow.name}</div>
+                <div className="mt-1 text-xs text-gray-500">{entry.taskCount} task{entry.taskCount === 1 ? '' : 's'}</div>
+                <div className="mt-1 text-xs text-gray-400">{formatWorkflowStatus(entry.workflow.status)}</div>
               </button>
             );
           })}
@@ -2322,7 +2382,8 @@ export function App() {
                 className={`block w-full rounded-xl px-3 py-2 text-left transition-colors ${accent}`}
               >
                 <div className="truncate font-medium">{entry.task.description || entry.task.id}</div>
-                <div className="mt-1 text-xs text-gray-500">{entry.workflow?.name ?? 'No workflow'} · {formatTaskStatus(entry.task.status)}</div>
+                <div className="mt-1 text-xs text-gray-500">{entry.workflow?.name ?? 'No workflow'}</div>
+                <div className="mt-1 text-xs text-gray-400">{formatTaskStatus(entry.task.status)}</div>
               </button>
             );
           })}
@@ -2331,31 +2392,93 @@ export function App() {
     )
   );
 
+  const renderBrowserRail = (): JSX.Element => (
+    <div data-testid="browser-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
+      <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-100">{browserSurfaceTitle}</h2>
+          <p className="mt-1 text-xs text-gray-500">{browserSurfaceSubtitle}</p>
+        </div>
+        <button
+          type="button"
+          aria-label="Close browser panel"
+          data-testid="browser-rail-dismiss"
+          onClick={handleDismissBrowserSurface}
+          className="rounded-lg border border-gray-700 px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+        >
+          Close
+        </button>
+      </div>
+      <div className="min-h-0 flex-1">
+        {sidebarSurface === 'workflows'
+          ? renderWorkflowsList()
+          : sidebarSurface === 'attention'
+            ? renderTaskList(attentionEntries, 'All clear', 'Nothing needs a decision right now.', 'attention')
+            : renderTaskList(runningEntries, 'No tasks running', 'Start a run to watch live work here.', 'running')}
+      </div>
+    </div>
+  );
+
+  const renderBrowserDetailWorkspace = (): JSX.Element => (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-100">{browserSelectedTitle}</h2>
+            <p className="mt-1 text-sm text-gray-400">{browserSelectedContext}</p>
+            <div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${browserStatusToneClass}`}>
+              {browserSelectedStatus}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {renderGraphActions(true)}
+            <button
+              type="button"
+              aria-label="Return home"
+              data-testid="browser-return-home"
+              onClick={handleDismissBrowserSurface}
+              className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+            >
+              Home
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
+        <div className="min-h-0 flex-[3] overflow-hidden">
+          {renderGraphCanvas()}
+        </div>
+        <div className="border-t border-gray-800 bg-gray-950/35 px-4 py-3">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
+            {sidebarSurface === 'workflows' ? 'Visible tasks' : `More ${browserSurfaceTitle.toLowerCase()}`}
+          </h3>
+          {relatedBrowserTasks.length === 0 ? (
+            <p className="mt-2 text-sm text-gray-500">Nothing else to show here yet.</p>
+          ) : (
+            <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              {relatedBrowserTasks.slice(0, 6).map((task) => (
+                <button
+                  key={task.id}
+                  type="button"
+                  onClick={() => handleTaskClick(task)}
+                  className="rounded-lg border border-gray-800 bg-gray-900/70 px-3 py-2 text-left hover:border-gray-700 hover:bg-gray-900"
+                >
+                  <div className="truncate text-sm font-medium text-gray-200">{task.description || task.id}</div>
+                  <div className="mt-1 text-xs text-gray-500">{formatTaskStatus(task.status)}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
   const homeSubtitle = workflows.size === 0
     ? 'Your plan will appear here.'
     : selectedWorkflow
       ? `${selectedWorkflow.name} · ${formatWorkflowStatus(selectedWorkflow.status)}`
       : `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'} ready`;
-  const workflowsSubtitle = `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'}`;
-  const attentionSubtitle = attentionEntries.length === 0
-    ? 'Nothing needs a decision right now.'
-    : `${attentionEntries.length} item${attentionEntries.length === 1 ? '' : 's'} need attention.`;
-  const runningSubtitle = runningEntries.length === 0
-    ? 'No active tasks right now.'
-    : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`;
-
-  const browserGraphTitle = sidebarSurface === 'workflows'
-    ? selectedWorkflow?.name ?? 'Workflows'
-    : selectedTask?.description || selectedTask?.id || 'Plan graph';
-  const browserGraphSubtitle = sidebarSurface === 'workflows'
-    ? selectedWorkflowEntry
-      ? `${selectedWorkflowEntry.taskCount} task${selectedWorkflowEntry.taskCount === 1 ? '' : 's'} · ${formatWorkflowStatus(selectedWorkflowEntry.workflow.status)}`
-      : workflowsSubtitle
-    : selectedTask
-      ? `${selectedTaskWorkflowName ?? 'No workflow'} · ${formatTaskStatus(selectedTask.status)}`
-      : sidebarSurface === 'attention'
-        ? attentionSubtitle
-        : runningSubtitle;
   return (
     <div className="h-screen flex flex-col bg-gray-900 text-gray-100" onClick={() => closeContextMenu()}>
       {showSystemBanner && (
@@ -2385,8 +2508,6 @@ export function App() {
           </div>
         </div>
       )}
-
-
       {runtimeStatus?.readOnly && (
         <div
           role="status"
@@ -2398,6 +2519,8 @@ export function App() {
           This window can browse workflows, but it cannot make changes until the write owner is available.
         </div>
       )}
+
+
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
         <LeftStatusColumn
@@ -2405,7 +2528,9 @@ export function App() {
           tasks={tasks}
           queueStatus={queueStatus}
           selectedSurface={sidebarSurface}
+          collapsed={sidebarCollapsed}
           onSelectSurface={handleSelectSidebarSurface}
+          onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
           onOpenSettings={() => {
             cancelPendingSystemSetupAutoOpen();
             setShowSystemSetup(true);
@@ -2414,34 +2539,21 @@ export function App() {
 
         <div className="flex-1 flex overflow-hidden">
           <main className="flex-1 flex flex-col overflow-hidden bg-gray-900">
-            <div className="border-b border-gray-800 bg-gray-900/80 p-4">
-              <InvokerTerminal
-                lines={terminalLines}
-                busy={plannerBusy}
-                onSubmit={(command) => void handleTerminalSubmit(command)}
-              />
-            </div>
-
             {sidebarSurface === 'home' ? (
-              renderGraphWorkspace('Plan graph', homeSubtitle, true)
+              <>
+                <div className="border-b border-gray-800 bg-gray-900/80 p-4">
+                  <InvokerTerminal
+                    lines={terminalLines}
+                    busy={plannerBusy}
+                    onSubmit={(command) => void handleTerminalSubmit(command)}
+                  />
+                </div>
+                {renderGraphWorkspace('Plan graph', homeSubtitle, true)}
+              </>
             ) : (
               <div className="flex-1 flex overflow-hidden">
-                <div className="w-80 shrink-0 border-r border-gray-800 bg-gray-950/35">
-                  <div className="border-b border-gray-800 px-4 py-3">
-                    <h2 className="text-sm font-semibold text-gray-100">
-                      {sidebarSurface === 'workflows' ? 'Workflows' : sidebarSurface === 'attention' ? 'Needs Attention' : 'Running'}
-                    </h2>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {sidebarSurface === 'workflows' ? workflowsSubtitle : sidebarSurface === 'attention' ? attentionSubtitle : runningSubtitle}
-                    </p>
-                  </div>
-                  {sidebarSurface === 'workflows'
-                    ? renderWorkflowsList()
-                    : sidebarSurface === 'attention'
-                      ? renderTaskList(attentionEntries, 'All clear', 'Nothing needs a decision right now.', 'attention')
-                      : renderTaskList(runningEntries, 'No tasks running', 'Start a run to watch live work here.', 'running')}
-                </div>
-                {renderGraphWorkspace(browserGraphTitle, browserGraphSubtitle, false)}
+                {renderBrowserRail()}
+                {renderBrowserDetailWorkspace()}
               </div>
             )}
 
