@@ -18,6 +18,7 @@ import type {
 } from '@invoker/workflow-graph';
 
 export type { WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-graph';
+import type { ReviewGateQueryResponse } from './types.js';
 
 // ── Types used by IPC channels ──────────────────────────────
 // These were previously in packages/app/src/types.ts.
@@ -32,6 +33,21 @@ export interface TaskReplacementDef {
   runnerKind?: string;
   executionAgent?: string;
 }
+export interface ExecutionModelOption {
+  id: string;
+  label: string;
+}
+
+export interface ExecutionHarnessOption {
+  name: string;
+  supportedModels: ExecutionModelOption[];
+}
+
+export interface ExecutionDefaults {
+  executionAgent: string;
+  executionModel?: string;
+}
+
 
 export interface WorkflowMeta {
   id: string;
@@ -47,10 +63,17 @@ export interface WorkflowMeta {
   createdAt?: string;
   updatedAt?: string;
 }
+export interface WorkflowRollupPatch {
+  workflowId: string;
+  status: WorkflowDerivedStatus;
+  rollup: WorkflowRollup;
+}
+
 export type TaskGraphEvent =
   | {
       type: 'delta';
       delta: TaskDelta;
+      workflowRollups: WorkflowRollupPatch[];
     }
   | {
       type: 'snapshot';
@@ -217,6 +240,14 @@ export interface RebaseAndRetryResult {
   errors: string[];
 }
 
+export interface WorkflowMutationAcceptedResult {
+  ok: true;
+  accepted: true;
+  intentId: number;
+  workflowId: string;
+  channel: string;
+}
+
 export interface CancelResult {
   cancelled: string[];
   runningCancelled: string[];
@@ -244,6 +275,29 @@ export interface BundledSkillTargetStatus {
   installed: boolean;
   upToDate: boolean;
   installedSkillNames: string[];
+  missingSkillNames?: string[];
+  staleReason?: 'not-installed' | 'manifest-missing' | 'manifest-target-missing' | 'target-path-changed' | 'bundle-updated' | 'manifest-skill-list-changed';
+  diagnostic?: string;
+}
+
+export interface HarnessConfigState {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  installed: boolean;
+  upToDate: boolean;
+  installedCommandNames: string[];
+}
+
+export interface HarnessMcpConfigState {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  installed: boolean;
+  upToDate: boolean;
+  serverName: string;
 }
 
 export interface BundledSkillsStatus {
@@ -255,6 +309,8 @@ export interface BundledSkillsStatus {
   lastInstallAt?: string;
   lastInstallError?: string;
   targets: BundledSkillTargetStatus[];
+  commandTargets: HarnessConfigState[];
+  mcpTargets: HarnessMcpConfigState[];
 }
 
 export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
@@ -288,6 +344,15 @@ export interface SystemDiagnostics {
   bundledSkills?: BundledSkillsStatus;
   cliInstaller?: CliInstallerStatus;
 }
+
+export type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only';
+
+export interface RuntimeStatus {
+  ownerMode: boolean;
+  readOnly: boolean;
+  mode: RuntimeMode;
+}
+
 
 // ── Embedded terminal session types ─────────────────────────
 
@@ -393,11 +458,11 @@ export const IpcChannels = {
   },
   'invoker:delete-workflow': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:detach-workflow': {} as {
     request: [workflowId: string, upstreamWorkflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:load-workflow': {} as {
     request: [workflowId: string];
@@ -437,19 +502,19 @@ export const IpcChannels = {
   // Task Actions
   'invoker:provide-input': {} as {
     request: [taskId: string, input: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:approve': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:reject': {} as {
     request: [taskId: string, reason?: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:select-experiment': {} as {
     request: [taskId: string, experimentId: string | string[]];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   /**
    * @deprecated Step 13 (`docs/architecture/task-invalidation-roadmap.md`):
@@ -466,41 +531,53 @@ export const IpcChannels = {
    */
   'invoker:restart-task': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:cancel-task': {} as {
     request: [taskId: string];
-    response: CancelResult;
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:delete-task': {} as {
+    request: [taskId: string];
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:cancel-workflow': {} as {
     request: [workflowId: string];
-    response: CancelResult;
+    response: WorkflowMutationAcceptedResult;
   },
 
   // Task Editing
   'invoker:edit-task-command': {} as {
     request: [taskId: string, newCommand: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:edit-task-pool': {} as {
     request: [taskId: string, poolId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:edit-task-type': {} as {
+    request: [taskId: string, runnerKind: string, poolMemberId?: string];
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:edit-task-agent': {} as {
     request: [taskId: string, agentName: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:edit-task-model': {} as {
+    request: [taskId: string, executionModel: string | null];
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:edit-task-prompt': {} as {
     request: [taskId: string, newPrompt: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-task-external-gate-policies': {} as {
     request: [taskId: string, updates: ExternalGatePolicyUpdate[]];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:replace-task': {} as {
     request: [taskId: string, replacementTasks: TaskReplacementDef[]];
-    response: TaskState[];
+    response: WorkflowMutationAcceptedResult;
   },
 
   // Session & Agent Access
@@ -516,39 +593,44 @@ export const IpcChannels = {
   // Workflow Mutation & Merge
   'invoker:recreate-workflow': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:recreate-task': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:recreate-downstream': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:retry-workflow': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:rebase-retry': {} as {
     request: [target: string];
-    response: RebaseAndRetryResult;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:rebase-recreate': {} as {
     request: [target: string];
-    response: RebaseAndRetryResult;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-merge-branch': {} as {
     request: [workflowId: string, baseBranch: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-merge-mode': {} as {
     request: [workflowId: string, mergeMode: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:approve-merge': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
+  },
+
+  'invoker:get-review-gate': {} as {
+    request: [workflowId: string];
+    response: ReviewGateQueryResponse | null;
   },
 
   // PR & Conflict Resolution
@@ -562,11 +644,11 @@ export const IpcChannels = {
   },
   'invoker:resolve-conflict': {} as {
     request: [taskId: string, agentName?: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:fix-with-agent': {} as {
     request: [taskId: string, agentName?: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
 
   // Queue & Configuration
@@ -586,9 +668,18 @@ export const IpcChannels = {
     request: [];
     response: string[];
   },
-  'invoker:get-execution-agents': {} as {
+  'invoker:get-execution-harnesses': {} as {
     request: [];
-    response: string[];
+    response: ExecutionHarnessOption[];
+  },
+  'invoker:get-execution-defaults': {} as {
+    request: [];
+    response: ExecutionDefaults;
+  },
+
+  'invoker:get-runtime-status': {} as {
+    request: [];
+    response: RuntimeStatus;
   },
 
   // Performance & Activity
@@ -704,6 +795,18 @@ type KebabToCamel<S extends string> =
 
 /** Convert an IPC channel name to its API method name. e.g. 'invoker:load-plan' → 'loadPlan' */
 type ChannelToMethod<S extends string> = KebabToCamel<StripPrefix<S>>;
+
+/** Convert an IPC channel name to its API method name. e.g. 'invoker:get-tasks' → 'getTasks'. */
+export function channelToMethod(channel: string): string {
+  const stripped = channel.startsWith('invoker:') ? channel.slice(8) : channel;
+  return stripped.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
+/** Convert an event channel name to its `on*` subscription method. e.g. 'invoker:task-graph-event' → 'onTaskGraphEvent'. */
+export function channelToEventMethod(channel: string): string {
+  const base = channelToMethod(channel);
+  return `on${base.charAt(0).toUpperCase()}${base.slice(1)}`;
+}
 
 // ── Derived InvokerAPI ──────────────────────────────────────
 

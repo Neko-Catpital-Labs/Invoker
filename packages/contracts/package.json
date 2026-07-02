@@ -9,6 +9,11 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts",
       "require": "./src/index.ts"
+    },
+    "./ipc-channels": {
+      "types": "./src/ipc-channels.ts",
+      "import": "./src/ipc-channels.ts",
+      "require": "./src/ipc-channels.ts"
     }
   },
   "scripts": {

@@ -165,7 +165,19 @@ export async function approveTask(
   const task = deps.orchestrator.getTask?.(taskId);
   const fixedTask = task?.execution.pendingFixError !== undefined;
   if (fixedTask && task && deps.taskExecutor) {
-    await deps.taskExecutor.commitApprovedFix(task);
+    try {
+      await deps.taskExecutor.commitApprovedFix(task);
+    } catch (err) {
+      if (!task.config.isMergeNode || !isInvalidGitWorkspaceError(err)) {
+        throw err;
+      }
+      const msg = invalidMergeWorkspaceMessage({
+        kind: 'invalidMergeWorkspace',
+        workspacePath: task.execution.workspacePath?.trim() || undefined,
+      });
+      deps.orchestrator.revertConflictResolution(taskId, task.execution.pendingFixError ?? '', msg);
+      return { approvedTask: task, started: [], fixedTask };
+    }
   }
 
   const shouldResume =
@@ -833,12 +845,19 @@ export async function fixWithAgentAction(
   }
 
   const savedError = task.execution.error ?? '';
-  const recoveryRoute = options.recoveryRoute ?? selectFailureRecoveryRoute(task, savedError);
+  const recoveryRoute = await selectFailureRecoveryRouteForAction(task, savedError, taskExecutor, options.recoveryRoute);
+  if (recoveryRoute.kind === 'invalidMergeWorkspace') {
+    const msg = invalidMergeWorkspaceMessage(recoveryRoute);
+    const errorLabel = options.failureOutputLabel ?? `Fix with ${options.agentName ?? 'Claude'}`;
+    persistence.appendTaskOutput(taskId, `\n[${errorLabel}] ${msg}`);
+    orchestrator.revertConflictResolution(taskId, savedError, msg);
+    throw new Error(msg);
+  }
   if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
     if (options.recreateOutputLabel) {
       persistence.appendTaskOutput(
         taskId,
-        `\n[${options.recreateOutputLabel}] Startup merge conflict detected; recreating workflow ${recoveryRoute.workflowId} from a fresh base.`,
+        `\n[${options.recreateOutputLabel}] ${freshBaseRecoveryMessage(recoveryRoute)}; recreating workflow ${recoveryRoute.workflowId} from a fresh base.`,
       );
     }
     const started = await recreateWorkflowFromFreshBase(recoveryRoute.workflowId, deps);
@@ -914,7 +933,8 @@ export async function finalizeAppliedFix(
 export type FailureRecoveryRoute =
   | { kind: 'fixWithAgent' }
   | { kind: 'resolveConflict' }
-  | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string };
+  | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string }
+  | { kind: 'invalidMergeWorkspace'; workspacePath?: string };
 
 export function selectFailureRecoveryRoute(
   task: TaskState,
@@ -935,6 +955,44 @@ export function selectFailureRecoveryRoute(
   }
 
   return { kind: 'recreateWorkflowFromFreshBase', workflowId };
+}
+
+async function selectFailureRecoveryRouteForAction(
+  task: TaskState,
+  savedError: string,
+  taskExecutor: TaskRunner,
+  initialRoute?: FailureRecoveryRoute,
+): Promise<FailureRecoveryRoute> {
+  const route = initialRoute ?? selectFailureRecoveryRoute(task, savedError);
+  if (route.kind !== 'fixWithAgent' || !task.config.isMergeNode) {
+    return route;
+  }
+
+  const workspacePath = task.execution.workspacePath?.trim();
+  if (!workspacePath) {
+    return { kind: 'invalidMergeWorkspace' };
+  }
+
+  try {
+    await taskExecutor.execGitIn(['rev-parse', '--is-inside-work-tree'], workspacePath);
+    return route;
+  } catch {
+    return { kind: 'invalidMergeWorkspace', workspacePath };
+  }
+}
+
+function freshBaseRecoveryMessage(_route: Extract<FailureRecoveryRoute, { kind: 'recreateWorkflowFromFreshBase' }>): string {
+  return 'Startup merge conflict detected';
+}
+
+function invalidMergeWorkspaceMessage(route: Extract<FailureRecoveryRoute, { kind: 'invalidMergeWorkspace' }>): string {
+  const suffix = route.workspacePath ? `: ${route.workspacePath}` : '';
+  return `Cannot apply a fix because this merge gate's saved workspace is missing or is not a git repository${suffix}. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.`;
+}
+
+function isInvalidGitWorkspaceError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('not a git repository') || msg.includes('No such file or directory');
 }
 
 function tailText(value: unknown, maxChars: number = 2000): string | undefined {
@@ -1261,159 +1319,6 @@ export async function autoFixOnFailure(
     if (persistedSavedError !== undefined) {
       if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
       orchestrator.revertConflictResolution(taskId, persistedSavedError, detailedMsg);
-    }
-  }
-}
-
-function formatReviewGateCiSavedError(trigger: ReviewGateCiFailureTrigger): string {
-  const lines = [
-    `Review-gate CI failed for PR ${trigger.reviewId}.`,
-    `PR: ${trigger.reviewUrl}`,
-    trigger.headRef ? `Branch: ${trigger.headRef}` : undefined,
-    trigger.headSha ? `Head SHA: ${trigger.headSha}` : undefined,
-    `Status: ${trigger.statusText}`,
-    '',
-    'Failed checks:',
-    ...trigger.failedChecks.map((check) => (
-      `- ${check.name}${check.conclusion ? ` (${check.conclusion})` : ''}`
-    )),
-  ].filter((line): line is string => line !== undefined);
-  return lines.join('\n');
-}
-
-function formatReviewGateCiFixContext(trigger: ReviewGateCiFailureTrigger): string {
-  const checkLines = trigger.failedChecks.map((check) => {
-    const details = [
-      check.conclusion ? `conclusion=${check.conclusion}` : undefined,
-      check.detailsUrl ? `details=${check.detailsUrl}` : undefined,
-      check.summary ? `summary=${check.summary}` : undefined,
-    ].filter(Boolean).join(' ');
-    return `- ${check.name}${details ? `: ${details}` : ''}`;
-  });
-  return [
-    'This auto-fix was triggered by failed CI on an external review gate PR.',
-    `PR: ${trigger.reviewUrl}`,
-    `Review ID: ${trigger.reviewId}`,
-    trigger.headRef ? `PR head ref: ${trigger.headRef}` : undefined,
-    trigger.headSha ? `PR head SHA: ${trigger.headSha}` : undefined,
-    trigger.branch ? `Invoker branch: ${trigger.branch}` : undefined,
-    '',
-    'Fix the code on this task branch so the failed PR checks pass.',
-    'Preserve the original task intent and do not recreate the PR manually.',
-    '',
-    'Failed checks:',
-    ...checkLines,
-  ].filter((line): line is string => line !== undefined).join('\n');
-}
-
-function assertReviewGateTriggerCurrent(
-  trigger: ReviewGateCiFailureTrigger,
-  orchestrator: Pick<Orchestrator, 'getTask'>,
-): void {
-  const task = orchestrator.getTask(trigger.taskId);
-  if (!task) {
-    throw new StaleLineageError(`Review-gate CI auto-fix task ${trigger.taskId} no longer exists`);
-  }
-  assertReviewGateCiContextCurrent(trigger.taskId, {
-    reviewId: trigger.reviewId,
-    generation: trigger.generation,
-    selectedAttemptId: trigger.selectedAttemptId,
-    branch: trigger.branch,
-    headSha: trigger.headSha,
-  }, task.execution);
-}
-
-export async function autoFixOnReviewGateFailure(
-  trigger: ReviewGateCiFailureTrigger,
-  deps: {
-    orchestrator: Orchestrator;
-    persistence: SQLiteAdapter;
-    taskExecutor: TaskRunner;
-    getAutoFixAgent?: () => string | undefined;
-    getAutoApproveAIFixes?: () => boolean | undefined;
-    signal?: AbortSignal;
-  },
-): Promise<void> {
-  const { orchestrator, persistence, taskExecutor } = deps;
-  const task = orchestrator.getTask(trigger.taskId);
-  if (!task) return;
-  if (task.status !== 'review_ready' && task.status !== 'awaiting_approval' && task.status !== 'failed') return;
-  const max = orchestrator.getAutoFixRetryBudget(trigger.taskId);
-  if (max <= 0) return;
-  const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
-  if (attempts > max) return;
-
-  assertReviewGateTriggerCurrent(trigger, orchestrator);
-  if (deps.signal?.aborted) {
-    throw new StaleLineageError(
-      `Review-gate CI auto-fix for ${trigger.taskId} aborted: ${deps.signal.reason instanceof Error ? deps.signal.reason.message : String(deps.signal.reason ?? 'unknown')}`,
-    );
-  }
-  persistence.updateTask(trigger.taskId, { execution: { autoFixAttempts: attempts } });
-  const savedError = formatReviewGateCiSavedError(trigger);
-  const fixContext = formatReviewGateCiFixContext(trigger);
-  const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
-
-  let persistedSavedError: string | undefined;
-  let lineage: TaskLineageSnapshot | undefined;
-  try {
-    ({ savedError: persistedSavedError } = orchestrator.beginAutoFixSession(trigger.taskId, {
-      savedError,
-      expectedLineage: {
-        taskId: trigger.taskId,
-        selectedAttemptId: trigger.selectedAttemptId,
-        generation: trigger.generation,
-      },
-    }));
-    lineage = captureTaskLineage(trigger.taskId, orchestrator);
-    assertLineageCurrent(lineage, orchestrator, deps.signal);
-    persistence.logEvent?.(trigger.taskId, 'debug.auto-fix', {
-      phase: 'review-gate-ci-auto-fix-start',
-      reviewId: trigger.reviewId,
-      headSha: trigger.headSha ?? null,
-      failedCheckCount: trigger.failedChecks.length,
-      selectedAgent: agentSelection.selectedAgent,
-    });
-    const output = persistence.getTaskOutput(trigger.taskId);
-    await taskExecutor.fixWithAgent(
-      trigger.taskId,
-      output,
-      agentSelection.selectedAgent,
-      persistedSavedError,
-      fixContext,
-    );
-    assertLineageCurrent(lineage, orchestrator, deps.signal);
-    const latest = orchestrator.getTask(trigger.taskId);
-    if (!latest) throw new StaleLineageError(`Review-gate CI auto-fix task ${trigger.taskId} disappeared`);
-    await recordFixedIntegrationAnchor(trigger.taskId, latest, {
-      persistence,
-      taskExecutor,
-      orchestrator,
-      lineage,
-      signal: deps.signal,
-    });
-    assertLineageCurrent(lineage, orchestrator, deps.signal);
-    const finalizeResult = await finalizeAppliedFix(trigger.taskId, persistedSavedError, {
-      orchestrator,
-      taskExecutor,
-      autoApproveAIFixes: deps.getAutoApproveAIFixes?.() ?? true,
-    }, deps.signal, lineage);
-    persistence.logEvent?.(trigger.taskId, 'debug.auto-fix', {
-      phase: 'review-gate-ci-auto-fix-finalize',
-      autoApproved: finalizeResult.autoApproved,
-      startedCount: finalizeResult.started.length,
-    });
-  } catch (err) {
-    if (err instanceof StaleLineageError) throw err;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
-    persistence.appendTaskOutput(
-      trigger.taskId,
-      `\n[Review Gate Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`,
-    );
-    if (persistedSavedError !== undefined) {
-      if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
-      orchestrator.revertConflictResolution(trigger.taskId, persistedSavedError, msg);
     }
   }
 }

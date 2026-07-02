@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentRegistry } from '../agent-registry.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 import type { ExecutionAgent } from '../agent.js';
 
 function makeExecutionAgent(name: string, opts?: {
   bundledSkillRoot?: string;
   bundledSkills?: readonly string[];
+  supportedModels?: readonly { id: string; label: string }[];
 }): ExecutionAgent {
   return {
     name,
@@ -14,8 +16,60 @@ function makeExecutionAgent(name: string, opts?: {
     stdinMode: 'pipe',
     ...(opts?.bundledSkillRoot !== undefined && { bundledSkillRoot: opts.bundledSkillRoot }),
     ...(opts?.bundledSkills !== undefined && { bundledSkills: opts.bundledSkills }),
+    ...(opts?.supportedModels !== undefined && { supportedModels: opts.supportedModels }),
   };
 }
+
+describe('registerBuiltinAgents', () => {
+  it('registers claude, codex, and omp execution agents', () => {
+    const names = registerBuiltinAgents().listExecution().map((agent) => agent.name);
+    expect(names).toEqual(expect.arrayContaining(['claude', 'codex', 'omp']));
+  });
+
+  it('exposes curated built-in model choices per harness', () => {
+    const harnesses = registerBuiltinAgents().listExecutionHarnesses();
+    expect(harnesses).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'claude',
+        supportedModels: expect.arrayContaining([
+          { id: 'sonnet', label: 'Claude Sonnet' },
+          { id: 'opus', label: 'Claude Opus' },
+        ]),
+      }),
+      expect.objectContaining({
+        name: 'codex',
+        supportedModels: expect.arrayContaining([
+          { id: 'gpt-5', label: 'GPT-5' },
+          { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
+        ]),
+      }),
+      expect.objectContaining({
+        name: 'omp',
+        supportedModels: expect.arrayContaining([
+          { id: 'chatgpt-5.4', label: 'ChatGPT 5.4' },
+          { id: 'anthropic/claude-opus-4', label: 'Anthropic Claude Opus 4' },
+          { id: 'openai/gpt-5', label: 'OpenAI GPT-5' },
+        ]),
+      }),
+    ]));
+  });
+
+
+  it('registers cursor, omp, and codex planning agents', () => {
+    const registry = registerBuiltinAgents();
+    expect(registry.getPlanningOrThrow('cursor').name).toBe('cursor');
+    expect(registry.getPlanningOrThrow('omp').name).toBe('omp');
+    expect(registry.getPlanningOrThrow('codex').name).toBe('codex');
+  });
+
+  it('threads the planning model into the cursor command', () => {
+    const cursor = registerBuiltinAgents().getPlanningOrThrow('cursor');
+    expect(cursor.buildPlanningCommand('p', { model: 'codex' })).toEqual({
+      command: 'cursor',
+      args: ['agent', '--print', '--trust', '--model', 'codex', 'p'],
+    });
+  });
+});
 
 describe('AgentRegistry', () => {
   let registry: AgentRegistry;
@@ -30,13 +84,27 @@ describe('AgentRegistry', () => {
     registry.registerExecution(codex);
   });
 
-  it('defaults nullish execution agent names to claude', () => {
-    expect(registry.getOrThrow(undefined)).toBe(claude);
-    expect(registry.getOrThrow(null)).toBe(claude);
-    expect(registry.getOrThrow('')).toBe(claude);
-    expect(registry.getOrThrow('   ')).toBe(claude);
-    expect(registry.getOrThrow('null')).toBe(claude);
-    expect(registry.getOrThrow('undefined')).toBe(claude);
+  it('lists serializable harness metadata for the UI', () => {
+    registry = new AgentRegistry();
+    registry.registerExecution(makeExecutionAgent('claude', {
+      supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }],
+    }));
+
+    expect(registry.listExecutionHarnesses()).toEqual([
+      {
+        name: 'claude',
+        supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }],
+      },
+    ]);
+  });
+
+  it('defaults nullish execution agent names to codex', () => {
+    expect(registry.getOrThrow(undefined)).toBe(codex);
+    expect(registry.getOrThrow(null)).toBe(codex);
+    expect(registry.getOrThrow('')).toBe(codex);
+    expect(registry.getOrThrow('   ')).toBe(codex);
+    expect(registry.getOrThrow('null')).toBe(codex);
+    expect(registry.getOrThrow('undefined')).toBe(codex);
   });
 
   it('keeps explicit valid execution agent names working', () => {

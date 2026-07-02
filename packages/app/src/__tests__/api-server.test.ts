@@ -98,6 +98,7 @@ function createMocks() {
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => [makeTask()]),
       recreateTask: vi.fn(() => [makeTask()]),
+      deleteTask: vi.fn(() => [makeTask()]),
       recreateDownstream: vi.fn(() => [makeTask()]),
       retryWorkflow: vi.fn(() => [makeTask()]),
       recreateWorkflow: vi.fn(() => [makeTask()]),
@@ -163,6 +164,14 @@ function createMocks() {
           return { ok: true, data: mocks.orchestrator.recreateTask(envelope.payload.taskId) };
         } catch (err) {
           return { ok: false, error: { code: 'RECREATE_TASK_FAILED', message: (err as Error).message } };
+        }
+      }),
+      deleteTask: vi.fn(async (envelope: { payload: { taskId: string } }) => {
+        try {
+          return { ok: true, data: mocks.orchestrator.deleteTask(envelope.payload.taskId) };
+        } catch (err) {
+          const code = err instanceof OrchestratorError ? err.code : 'DELETE_TASK_FAILED';
+          return { ok: false, error: { code, message: (err as Error).message } };
         }
       }),
       recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) => {
@@ -368,6 +377,110 @@ describe('GET /api/workflows', () => {
     expect(res.body).toHaveLength(1);
     expect(res.body[0].id).toBe('wf-1');
     expect(mocks.persistence.listWorkflows).toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/workflows/:id/review-gate', () => {
+  it('returns 404 when workflow is missing', async () => {
+    mocks.persistence.loadWorkflow.mockReturnValue(undefined);
+    const res = await request(port, 'GET', '/api/workflows/missing/review-gate');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Workflow not found' });
+  });
+
+  it('returns an empty response when no merge node exists', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([makeTask({ id: 'task-1' })]);
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      workflowId: 'wf-1',
+      mergeTaskId: null,
+      status: null,
+      ready: false,
+      artifacts: [],
+      discardedArtifacts: [],
+      edges: [],
+    });
+  });
+
+  it('returns current artifacts, linear stack links, and discarded artifacts separately', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          reviewGate: {
+            activeGeneration: 2,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              { id: 'contracts', required: true, status: 'approved', generation: 2 },
+              { id: 'runtime', required: true, status: 'open', generation: 2, dependsOn: ['contracts'] },
+              { id: 'ui', required: true, status: 'open', generation: 2, dependsOn: ['contracts'] },
+              { id: 'old', required: true, status: 'discarded', generation: 1, discardedAt: '2024-01-01T00:00:00Z' },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body.artifacts.map((artifact: { id: string }) => artifact.id)).toEqual(['contracts', 'runtime', 'ui']);
+    expect(res.body.discardedArtifacts.map((artifact: { id: string }) => artifact.id)).toEqual(['old']);
+    expect(res.body.edges).toEqual([
+      { from: 'contracts', to: 'runtime' },
+      { from: 'runtime', to: 'ui' },
+    ]);
+    expect(res.body.ready).toBe(false);
+  });
+
+  it('returns ready only when all required current artifacts are approved', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          reviewGate: {
+            activeGeneration: 0,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              { id: 'contracts', required: true, status: 'approved', generation: 0 },
+              { id: 'runtime', required: true, status: 'approved', generation: 0 },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body.ready).toBe(true);
+  });
+
+  it('synthesizes a scalar fallback artifact', async () => {
+    mocks.persistence.loadTasks.mockReturnValue([
+      makeTask({
+        id: '__merge__wf-1',
+        status: 'review_ready',
+        config: { workflowId: 'wf-1', isMergeNode: true, summary: 'Review PR' },
+        execution: {
+          reviewId: '42',
+          reviewUrl: 'https://example.test/pr/42',
+          reviewStatus: 'Awaiting review',
+          reviewProviderId: '42',
+          generation: 3,
+        },
+      }),
+    ]);
+
+    const res = await request(port, 'GET', '/api/workflows/wf-1/review-gate');
+    expect(res.status).toBe(200);
+    expect(res.body.activeGeneration).toBe(3);
+    expect(res.body.artifacts).toEqual([
+      expect.objectContaining({ id: '42', url: 'https://example.test/pr/42', providerId: '42' }),
+    ]);
   });
 });
 
@@ -1059,6 +1172,30 @@ describe('POST /api/workflows/:id/rebase-recreate', () => {
     const res = await request(port, 'POST', '/api/workflows/wf-missing/rebase-recreate');
     expect(res.status).toBe(404);
     expect(res.body.error).toContain('Could not resolve workflow');
+  });
+});
+
+describe('DELETE /api/tasks/:id', () => {
+  it('deletes task via facade and returns concrete action', async () => {
+    const res = await request(port, 'DELETE', '/api/tasks/task-1');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.taskId).toBe('task-1');
+    expect(res.body.action).toBe('deleted');
+    expect(typeof res.body.tasksStarted).toBe('number');
+    expect(mocks.commandService.deleteTask).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: { taskId: 'task-1' } }),
+    );
+    expect(mocks.orchestrator.deleteTask).toHaveBeenCalledWith('task-1');
+  });
+
+  it('maps task-not-found to HTTP 404', async () => {
+    mocks.orchestrator.deleteTask.mockImplementation(() => {
+      throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, 'Task "missing" not found');
+    });
+    const res = await request(port, 'DELETE', '/api/tasks/missing');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Task "missing" not found');
   });
 });
 

@@ -101,6 +101,8 @@ Direct desktop downloads are also available from GitHub Releases:
 
 The macOS npm launcher uses the `.zip` app bundle asset so it does not need to mount a `.dmg`.
 
+For a local maintainer build from the latest `master` commit, including Apple Silicon `.dmg` generation and unsigned-build quarantine removal, see [docs/local-macos-release-build.md](docs/local-macos-release-build.md).
+
 For source-based packaged installs, the repo includes an installer script:
 
 ```bash
@@ -112,13 +114,21 @@ Tagged releases are configured to publish:
 - desktop `.dmg`, `.zip`, `.deb`, and `.AppImage`
 - `SHA256SUMS` covering release assets
 
-Packaged installs bundle the first-party Invoker skills inside the app. On first GUI launch, Invoker prompts you to install those skills into the supported global skill directories for Codex, Claude, and Cursor using `invoker-`-prefixed names so they do not overwrite existing skills. Npm launcher users can install the same bundled skills explicitly with:
+Packaged installs bundle the first-party Invoker AI helpers inside the app. Install helpers from System Setup or:
 
 ```bash
 invoker-ui --install-skills
 ```
 
-Source checkouts can install the repo skills with `bash scripts/setup-agent-skills.sh`.
+Then, in Codex, Claude, Cursor, or OMP, run:
+
+```text
+/invoker-plan-to-invoker "help me plan <change>"
+```
+
+The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+
+Source checkouts can install the repo helpers with `bash scripts/setup-agent-skills.sh`.
 
 ## First tutorial
 
@@ -259,11 +269,15 @@ tasks:
     dependencies: [api, ui]
 ```
 
-If you need to turn a product or implementation plan into an Invoker workflow, use the `invoker-plan-to-invoker` skill. If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
+If you need to turn a product or implementation plan into an Invoker workflow, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 
-Source checkouts can install prefixed skill copies with `bash scripts/setup-agent-skills.sh`. Packaged installs can install bundled skills from the first-run System Setup prompt or, for npm launcher installs, with `invoker-ui --install-skills`.
+If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
 
-Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
+Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Inspect recovery ownership and decisions with `./run.sh --headless worker status --output text|json|jsonl`. Normal `run`, `resume`, and retry commands do not start recovery loops; recovery is owned by the explicit recovery worker path. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
+
+### Auto-fix worker (single shared engine)
+
+Auto-fix recovery runs through **one** shared worker engine in `@invoker/execution-engine`. Two doors reach that same single engine: `invoker-cli worker autofix` (production) and `./run.sh --headless worker autofix` (dev). Whichever door you use, the worker is **foreground** — it lives and dies with the process, with no detached background service. A single-instance lock means only one auto-fix worker runs at a time: a second start, from either door, refuses rather than spawning a second loop. A sweep-and-assert guard test fails the build if auto-fix is ever triggered outside this shared worker engine. See [docs/architecture/recovery-lifecycle-workers.md](docs/architecture/recovery-lifecycle-workers.md).
 
 ## Architecture (at a glance)
 
@@ -313,10 +327,13 @@ Layer rules: [ARCHITECTURE.md](ARCHITECTURE.md). Agent/repo conventions: [CLAUDE
 | [docs/tutorial-first-agent-workflow.md](docs/tutorial-first-agent-workflow.md) | Guided first run on a toy project using Codex or Claude |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Package layering, mutation boundaries, error contracts |
 | [docs/invoker-medium-article.md](docs/invoker-medium-article.md) | Product story, glossary, mapping tables |
+| [docs/local-macos-release-build.md](docs/local-macos-release-build.md) | Local Apple Silicon `.dmg` build, commit-named copies, and quarantine removal |
 | [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md) | SQLite / sql.js single writer |
 | [docs/invoker-config-example.json](docs/invoker-config-example.json) | Example `config.json` with local and remote executor settings |
 | [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md) | SSH executor setup, target fields, and plan examples |
 | [docs/docker-executor.md](docs/docker-executor.md) | Docker executor configuration and runtime notes |
+| [docs/slack-native-workflows.md](docs/slack-native-workflows.md) | Plan & drive workflows from Slack: lobby mentions, harness presets, per-workflow channels |
+| [docs/web-surface.md](docs/web-surface.md) | Watch & drive workflows from a browser (HTTP+SSE) and the Slack live status card; enabling `INVOKER_WEB_TOKEN` |
 
 ## Troubleshooting
 

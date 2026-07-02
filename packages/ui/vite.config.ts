@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import MergifyReporter from '@mergifyio/vitest';
 
 // Match a node_modules path segment for a given package name (handles both
 // flat `node_modules/<pkg>` and pnpm's `node_modules/.pnpm/<pkg>@.../node_modules/<pkg>`).
@@ -17,6 +18,7 @@ export default defineConfig({
     sourcemap: false, // Disable source maps to save memory
     minify: 'esbuild', // esbuild is faster and uses less memory than terser
     rollupOptions: {
+      input: { index: 'index.html', web: 'web.html' },
       output: {
         // Dependency-aware vendor splitting: bin each node_modules file into
         // a named chunk based on its resolved path. This avoids the empty
@@ -61,5 +63,6 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
+    reporters: ['default', new MergifyReporter()],
   },
 });

@@ -15,6 +15,13 @@
   2. **Debug and report** -- Investigate and report: (a) the root cause — why the code is in the buggy state, and (b) the test gap — how the bug escaped existing tests (missing coverage, wrong assumptions, untested edge case, etc.).
   3. **Plan the fix** -- Only after completing steps 1 and 2, create the implementation plan. The plan must include a verification step that re-runs the reproduction case to confirm the fix.
 
+## Landing PR Stacks
+
+- When asked to **land / merge / ship / queue** a PR or PR stack, follow `skills/land-stack/SKILL.md`.
+- Never choose a PR by branch-name lookup (`gh pr list --head <branch>`). Two PRs can share a branch name (a raw workflow branch PR vs the intended `stack/...` PR). If PR numbers are missing, broadly list open PRs, filter to `stack/` heads, verify local head SHAs, order by base/head links, and suggest bottom-up numbers for confirmation. Land by confirmed PR number only.
+- Verify before any write: `node scripts/land-stack.mjs <pr> [<pr> ...]` must exit 0 (checks head SHA is in the local clone, head branch is a real `stack/` branch, the PRs form a proper stack, all OPEN). Land via `node scripts/land-stack.mjs <pr> ... --execute`. Do not hand-add `admin-bypass` or `gh pr merge` to bypass the guard.
+- See `.cursor/rules/land-stack-precedence.mdc` for the always-on summary.
+
 ## SQLite Command Policy
 
 - If you are considering direct SQLite commands, use the corresponding headless command instead.
@@ -62,6 +69,22 @@ Tests that create real `WorktreeExecutor`/`DockerExecutor` and call `.start()` r
 ## File Editing Discipline
 
 After making a change with any edit tool, **read the file back from disk** (using the Read tool or `rg` in the Shell) and verify the edit persisted before proceeding. Cursor's in-memory state can silently revert writes. If the change is missing on disk, re-apply it using the Shell tool (e.g. `python3 -c "..."` or `sed`) and verify again. When committing, always `git diff --stat` immediately before `git add` to confirm the working tree contains the expected modifications.
+
+## Comment Policy
+
+Do not add explanatory comments to product code by default.
+
+Prefer clearer names, smaller functions, or simpler control flow.
+
+Allowed comments only:
+
+- legal or license headers
+- generated-code markers
+- `eslint`, `ts-expect-error`, `ts-ignore`, `shellcheck`, or tool directives
+- non-obvious safety invariants where removing the comment would make the code risky
+- public API docs when that area already uses them
+
+Before finishing a PR, remove any comment you added unless it matches one of the allowed cases.
 
 ## Code Navigation
 

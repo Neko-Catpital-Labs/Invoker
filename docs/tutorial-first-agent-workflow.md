@@ -29,6 +29,8 @@ bash scripts/setup-agent-skills.sh
 pnpm run build
 ```
 
+For your own changes, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+
 Make sure at least one supported agent CLI is installed and authenticated:
 
 ```bash

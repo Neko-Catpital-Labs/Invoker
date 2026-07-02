@@ -15,6 +15,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 
 import {
+  computeWorkflowRollup,
   Orchestrator,
   type Attempt,
   type PlanDefinition,
@@ -65,14 +66,11 @@ class InMemoryPersistence implements OrchestratorPersistence {
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   attempts = new Map<string, Attempt>();
 
-  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
+  saveWorkflow(workflow: { id: string; name: string }): void {
     const now = new Date().toISOString();
-    this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
+    this.workflows.set(workflow.id, { ...workflow, status: 'pending', createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
   }
-  updateWorkflow(workflowId: string, changes: { status?: string }): void {
-    const wf = this.workflows.get(workflowId);
-    if (wf && changes.status) wf.status = changes.status;
-  }
+  updateWorkflow(_workflowId: string, _changes: { updatedAt?: string }): void {}
   saveTask(workflowId: string, task: TaskState): void {
     this.tasks.set(task.id, { workflowId, task });
   }
@@ -81,7 +79,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
   }
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
-    return Array.from(this.workflows.values());
+    return Array.from(this.workflows.values()).map((workflow) => ({ ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status }));
   }
   loadTasks(workflowId: string): TaskState[] {
     return Array.from(this.tasks.values())
@@ -1095,7 +1093,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       expect(spec.args).toContain('--dangerously-skip-permissions');
     });
 
-    it('defaults to claude when executionAgent is undefined', () => {
+    it('defaults to codex when executionAgent is undefined', () => {
       const agentRegistry = registerBuiltinAgents();
       const wt = new WorktreeExecutor({
         worktreeBaseDir: '/tmp/wt',
@@ -1111,7 +1109,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
         // executionAgent intentionally omitted
       };
       const spec = wt.getRestoredTerminalSpec(meta);
-      expect(spec.command).toBe('claude');
+      expect(spec.command).toBe('codex');
     });
   });
 
@@ -1417,7 +1415,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     expect(resolved.spec.command).not.toBe('claude');
   });
 
-  it('fix with no agent specified → terminal defaults to claude', () => {
+  it('fix with no agent specified → terminal defaults to codex', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     const agentRegistry = registerBuiltinAgents();
     const wt = new WorktreeExecutor({
@@ -1443,10 +1441,10 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       workspacePath: persistence.getWorkspacePath('task-noagent') ?? undefined,
     };
 
-    // executionAgent is undefined → defaults to claude
+    // executionAgent is undefined → defaults to codex
     expect(meta.executionAgent).toBeUndefined();
     const spec = wt.getRestoredTerminalSpec(meta);
-    expect(spec.command).toBe('claude');
+    expect(spec.command).toBe('codex');
   });
 
   it('openExternalTerminalForTask: refuses fallback when managed workspace has no workspacePath', async () => {

@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from './orchestrator.js';
+import { detectDefaultBranchRemote } from './repo-default-branch.js';
 
 export class PlanParseError extends Error {
   constructor(message: string) {
@@ -35,6 +35,7 @@ export interface RawPlanTask {
   dockerImage?: string;
   poolId?: string;
   executionAgent?: string;
+  executionModel?: string;
 }
 
 export interface RawPlan {
@@ -57,25 +58,11 @@ export interface RawPlan {
   tasks?: RawPlanTask[];
 }
 
-function detectDefaultBranchRemote(repoUrl: string): string {
-  try {
-    const output = execFileSync('git', ['ls-remote', '--symref', repoUrl, 'HEAD'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 10_000,
-    }).trim();
-    const match = output.match(/ref:\s+refs\/heads\/(\S+)\s+HEAD/);
-    if (match) return match[1];
-  } catch {
-    // Network and local-path failures fall back to the common default.
-  }
-  return 'main';
-}
 
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
   const branch = plan.baseBranch;
   if (typeof branch === 'string' && branch.trim() !== '') return branch.trim();
-  return plan.repoUrl ? detectDefaultBranchRemote(plan.repoUrl) : 'main';
+  return plan.repoUrl ? detectDefaultBranchRemote(plan.repoUrl) ?? 'main' : 'main';
 }
 
 export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinition {
@@ -206,8 +193,16 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   }
 
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
+  const seenTaskIds = new Set<string>();
   const tasks = raw.tasks.map((task, index) => {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) {
+      throw new PlanParseError(`Task at index ${index} must be an object with an "id" field`);
+    }
     if (!task.id || typeof task.id !== 'string') throw new PlanParseError(`Task at index ${index} must have an "id" field`);
+    if (seenTaskIds.has(task.id)) {
+      throw new PlanParseError(`Duplicate task id "${task.id}". Task ids must be unique within a plan.`);
+    }
+    seenTaskIds.add(task.id);
     if (!task.description || typeof task.description !== 'string') {
       throw new PlanParseError(`Task "${task.id}" must have a "description" field`);
     }
@@ -229,6 +224,10 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       );
     }
 
+    if (task.executionModel !== undefined && typeof task.executionModel !== 'string') {
+      throw new PlanParseError(`Task "${task.id}" field "executionModel" must be a string when provided`);
+    }
+
     return {
       id: task.id,
       description: task.description,
@@ -247,6 +246,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       dockerImage: task.dockerImage,
       poolId: task.poolId,
       executionAgent: task.executionAgent?.trim() || undefined,
+      executionModel: task.executionModel?.trim() || undefined,
     };
   });
 

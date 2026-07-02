@@ -10,21 +10,8 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import { IpcChannels, IpcTestOnlyChannels, IpcEventChannels } from '@invoker/contracts';
+import { IpcChannels, IpcTestOnlyChannels, IpcEventChannels, channelToMethod, channelToEventMethod } from '@invoker/contracts';
 import type { InvokerAPI } from '@invoker/contracts';
-
-// ── Runtime channel-name → method-name conversion ───────────
-// Mirrors the type-level ChannelToMethod: strip "invoker:" prefix, kebab → camelCase.
-
-function channelToMethod(channel: string): string {
-  const stripped = channel.startsWith('invoker:') ? channel.slice(8) : channel;
-  return stripped.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-}
-
-function channelToEventMethod(channel: string): string {
-  const base = channelToMethod(channel);
-  return `on${base.charAt(0).toUpperCase()}${base.slice(1)}`;
-}
 
 // ── Build the API object from the channel registries ────────
 

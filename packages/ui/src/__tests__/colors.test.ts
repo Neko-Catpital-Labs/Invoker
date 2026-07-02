@@ -129,8 +129,9 @@ describe('formatStatusLabel', () => {
 });
 
 describe('matchesStatusFilter', () => {
-  it('matches running against both running phases', () => {
-    expect(matchesStatusFilter('running', 'running_launching')).toBe(true);
+  it('keeps assigning separate from the running filter', () => {
+    expect(matchesStatusFilter('running', 'assigning')).toBe(false);
+    expect(matchesStatusFilter('assigning', 'assigning')).toBe(true);
     expect(matchesStatusFilter('running', 'running_executing')).toBe(true);
     expect(matchesStatusFilter('running', 'running')).toBe(true);
   });

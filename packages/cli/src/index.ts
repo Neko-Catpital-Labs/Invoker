@@ -1,15 +1,20 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import type { Logger } from '@invoker/contracts';
+import { resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
 import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
 import {
+  AUTO_FIX_WORKER_KIND,
   ExecutorRegistry,
   TaskRunner,
   WorktreeExecutor,
+  acquireWorkerLock,
+  createWorkerRegistry,
+  registerAutoFixWorker,
+  WorkerLockHeldError,
   registerBuiltinAgents,
+  type WorkerDefinition,
 } from '@invoker/execution-engine';
 import {
   IpcBus,
@@ -24,8 +29,10 @@ import {
   type PlanDefinition,
   type TaskState,
 } from '@invoker/workflow-core';
+import { runMcpServer } from './mcp-server.js';
+import { runDoctor, runSetup } from './onboarding.js';
 
-const VERSION = '0.0.5';
+const VERSION = '0.0.6';
 
 type CliOptions = {
   dbDir?: string;
@@ -55,17 +62,7 @@ type LiveSubmissionResult = {
 
 type CliDeps = {
   createMessageBus?: () => Promise<MessageBus> | MessageBus;
-};
-
-type DoctorCheck = {
-  name: string;
-  command: string;
-  requiredFor: string;
-  install?: {
-    brew?: string[];
-    apt?: string[];
-    npm?: string[];
-  };
+  runMcpServer?: () => Promise<void>;
 };
 
 type CliRuntimeConfig = {
@@ -104,16 +101,6 @@ type CliRuntimeConfig = {
   }>;
 };
 
-const doctorChecks: DoctorCheck[] = [
-  { name: 'git', command: 'git', requiredFor: 'repository checkout, branches, and merges', install: { brew: ['git'], apt: ['git'] } },
-  { name: 'pnpm', command: 'pnpm', requiredFor: 'workspace dependency installs and local builds', install: { brew: ['pnpm'], npm: ['pnpm'] } },
-  { name: 'gh', command: 'gh', requiredFor: 'GitHub PR and release workflows', install: { brew: ['gh'], apt: ['gh'] } },
-  { name: 'Docker', command: 'docker', requiredFor: 'container executors', install: { brew: ['docker'], apt: ['docker.io'] } },
-  { name: 'Codex CLI', command: 'codex', requiredFor: 'Codex-backed task execution', install: { npm: ['@openai/codex'] } },
-  { name: 'Claude CLI', command: 'claude', requiredFor: 'Claude-backed task execution', install: { npm: ['@anthropic-ai/claude-code'] } },
-  { name: 'ssh', command: 'ssh', requiredFor: 'remote SSH executors', install: { apt: ['openssh-client'] } },
-];
-
 const silentLogger: Logger = {
   debug() {},
   info() {},
@@ -131,101 +118,29 @@ function usage(): string {
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli doctor [--fix] [--json]',
+    '  invoker-cli setup [slack] [--check]',
+    '  invoker-cli mcp',
+    '  invoker-cli worker [autofix|list]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
-    '  doctor          Check external runtime tools used by Invoker executors.',
+    '  doctor          Validate tools, config, and your default planning preset.',
+    '  setup [slack]    Validate the environment, then optionally configure Slack.',
+    '  mcp             Start the Invoker MCP stdio server.',
+    '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
     '',
     'Options:',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
     '  --standalone     Skip IPC and run with an isolated CLI database.',
     '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
     '  --config <path>  Optional config path reserved for CLI runtime configuration.',
-    '  --json           Emit a machine-readable result summary.',
+    '  --json           Emit only a machine-readable result summary on stdout.',
     '  --fix            Best-effort install of missing doctor tools.',
     '  --help           Show this help text.',
     '  --version        Show the CLI version.',
   ].join('\n');
-}
-
-function commandExists(command: string): boolean {
-  return spawnSync('sh', ['-c', `command -v ${command} >/dev/null 2>&1`], {
-    stdio: 'ignore',
-  }).status === 0;
-}
-
-function runInstall(command: string, args: string[]): number {
-  const result = spawnSync(command, args, { stdio: 'inherit' });
-  return result.status ?? 1;
-}
-
-function installDoctorTool(check: DoctorCheck): { attempted: boolean; ok: boolean; detail: string } {
-  if (process.platform === 'darwin' && commandExists('brew') && check.install?.brew?.length) {
-    const code = runInstall('brew', ['install', ...check.install.brew]);
-    return { attempted: true, ok: code === 0, detail: `brew install ${check.install.brew.join(' ')}` };
-  }
-  if (process.platform === 'linux' && commandExists('apt-get') && check.install?.apt?.length) {
-    const runner = typeof process.getuid === 'function' && process.getuid() === 0 ? 'apt-get' : commandExists('sudo') ? 'sudo' : '';
-    if (runner) {
-      const args = runner === 'sudo'
-        ? ['apt-get', 'install', '-y', ...check.install.apt]
-        : ['install', '-y', ...check.install.apt];
-      const code = runInstall(runner, args);
-      return { attempted: true, ok: code === 0, detail: `${runner} ${args.join(' ')}` };
-    }
-  }
-  if (commandExists('npm') && check.install?.npm?.length) {
-    const code = runInstall('npm', ['install', '-g', ...check.install.npm]);
-    return { attempted: true, ok: code === 0, detail: `npm install -g ${check.install.npm.join(' ')}` };
-  }
-  return { attempted: false, ok: false, detail: 'No supported installer available' };
-}
-
-function parseDoctorArgs(argv: string[]): { fix: boolean; json: boolean } {
-  const options = { fix: false, json: false };
-  for (const arg of argv) {
-    if (arg === '--fix') options.fix = true;
-    else if (arg === '--json') options.json = true;
-    else throw new Error(`Unknown doctor option: ${arg}`);
-  }
-  return options;
-}
-
-function runDoctor(argv: string[]): number {
-  const options = parseDoctorArgs(argv);
-  const results = doctorChecks.map((check) => {
-    let available = commandExists(check.command);
-    let fix: ReturnType<typeof installDoctorTool> | undefined;
-    if (!available && options.fix) {
-      fix = installDoctorTool(check);
-      available = commandExists(check.command);
-    }
-    return {
-      name: check.name,
-      command: check.command,
-      requiredFor: check.requiredFor,
-      available,
-      fix,
-    };
-  });
-
-  if (options.json) {
-    process.stdout.write(`${JSON.stringify({ ok: results.every((result) => result.available), checks: results })}\n`);
-  } else {
-    for (const result of results) {
-      const status = result.available ? 'ok' : 'missing';
-      const fix = result.fix ? ` (${result.fix.detail}: ${result.fix.ok ? 'ok' : 'failed'})` : '';
-      process.stdout.write(`${status.padEnd(7)} ${result.command.padEnd(8)} ${result.requiredFor}${fix}\n`);
-    }
-    const missing = results.filter((result) => !result.available);
-    if (missing.length > 0) {
-      process.stdout.write('\nAuthentication-dependent setup, such as gh auth login and provider CLI login, remains manual.\n');
-    }
-  }
-
-  return results.every((result) => result.available) ? 0 : 1;
 }
 
 function parseArgs(argv: string[]): { command?: string; planPath?: string; options: CliOptions } {
@@ -435,6 +350,11 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
     ownerCapability: true,
     outputDir: join(dbDir, 'outputs'),
   });
+  const stdoutWrite = process.stdout.write;
+  if (options.json) {
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+  }
+
 
   try {
     const executionAgentRegistry = registerBuiltinAgents();
@@ -470,7 +390,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       executionAgentRegistry,
       callbacks: {
         onOutput: (taskId, data) => {
-          process.stdout.write(data);
+          if (!options.json) process.stdout.write(data);
           try {
             persistence.appendTaskOutput(taskId, data);
           } catch {
@@ -497,6 +417,9 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
       mode: 'standalone',
     };
   } finally {
+    if (options.json) {
+      process.stdout.write = stdoutWrite;
+    }
     if (previousInvokerDbDir === undefined) {
       delete process.env.INVOKER_DB_DIR;
     } else {
@@ -520,11 +443,132 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
   return bus;
 }
 
+/**
+ * Read the auto-fix policy knobs from the shared Invoker config so the CLI door
+ * drives the engine with the same retry budget / agent the GUI owner uses.
+ */
+function readAutoFixWorkerConfig(homeRoot: string): { autoFixRetries?: number; autoFixAgent?: string } {
+  const configPath = join(homeRoot, 'config.json');
+  if (!existsSync(configPath)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    return {
+      autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
+      autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function workerDisplayName(kind: string): string {
+  return kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : kind;
+}
+
+function printWorkerKinds(): void {
+  const registry = registerAutoFixWorker(createWorkerRegistry());
+  process.stdout.write('Worker kinds\n');
+  for (const worker of registry.list()) {
+    process.stdout.write(`  ${worker.kind} — available (${worker.note})\n`);
+  }
+}
+
+/**
+ * Run a registry-selected worker in the foreground. There is exactly one
+ * auto-fix engine: the built-in registry entry builds the shared
+ * `createRecoveryWorker` from `@invoker/execution-engine` instead of a private
+ * poll loop, so the two doors can never run competing scans. The CLI owns the
+ * foreground lifetime — owner discovery, connect message, the SIGINT/SIGTERM
+ * block, and a deterministic stop.
+ */
+async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise<number> {
+  const owner = await discoverLiveOwner(bus);
+  const homeRoot = resolveInvokerHomeRoot();
+  const { autoFixRetries, autoFixAgent } = readAutoFixWorkerConfig(homeRoot);
+
+  // Single-instance guard: refuse if another worker of this kind (this door or
+  // the dev `--headless worker <kind>` door) already holds the cross-process
+  // lock, rather than spawning a second recovery loop that competes over the
+  // same failed tasks.
+  let lock;
+  try {
+    lock = acquireWorkerLock({ kind: definition.kind, homeRoot, logger: silentLogger });
+  } catch (err) {
+    if (err instanceof WorkerLockHeldError) {
+      process.stderr.write(`${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
+  const persistence = await SQLiteAdapter.create(join(homeRoot, 'invoker.db'), {
+    outputDir: join(homeRoot, 'outputs'),
+  });
+
+  // Open the try before constructing/starting the worker so persistence is
+  // always closed even if construction or start throws (otherwise the SQLite
+  // handle leaks when control unwinds to main()'s catch).
+  try {
+    const worker = definition.factory({
+      logger: silentLogger,
+      messageBus: bus,
+      store: persistence,
+      submitter: {
+        submit: (workflowId, priority, channel, mutationArgs) =>
+          persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority),
+      },
+      autoFix: {
+        defaultAutoFixRetries: autoFixRetries,
+        getAutoFixAgent: () => autoFixAgent,
+      },
+    });
+
+    worker.start();
+    const ownerSuffix = owner?.ownerId ? ` to owner ${owner.ownerId}` : '';
+    process.stdout.write(`${workerDisplayName(definition.kind)} worker connected${ownerSuffix}.\n`);
+
+    await new Promise<void>((resolveShutdown) => {
+      const shutdown = (): void => resolveShutdown();
+      process.once('SIGINT', shutdown);
+      process.once('SIGTERM', shutdown);
+    });
+    await worker.stop();
+  } finally {
+    // Release deterministically so a clean shutdown never leaves a stale lock
+    // that blocks the next legitimate start.
+    lock.release();
+    persistence.close();
+  }
+  process.stdout.write(`${workerDisplayName(definition.kind)} worker stopped.\n`);
+  return 0;
+}
+
 export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps = {}): Promise<number> {
   let bus: MessageBus | undefined;
   try {
     if (argv[0] === 'doctor') {
       return runDoctor(argv.slice(1));
+    }
+    if (argv[0] === 'setup') {
+      return await runSetup(argv.slice(1));
+    }
+    if (argv[0] === 'mcp') {
+      await (deps.runMcpServer ?? runMcpServer)();
+      return 0;
+    }
+    if (argv[0] === 'worker') {
+      const subcommand = argv[1] ?? 'list';
+      const registry = registerAutoFixWorker(createWorkerRegistry());
+      if (subcommand === 'list') {
+        printWorkerKinds();
+        return 0;
+      }
+      const definition = registry.get(subcommand);
+      if (!definition) {
+        const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+        throw new Error(`Unknown worker kind: "${subcommand}". Usage: invoker-cli worker <${knownKinds}|list>`);
+      }
+      bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+      return await runWorker(definition, bus);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {

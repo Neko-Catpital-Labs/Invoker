@@ -10,6 +10,12 @@ The orchestrator is **`scripts/run-all-tests.sh`**, invoked as **`pnpm run test:
 | **`optional/`** | `pnpm run test:all:extended` or `INVOKER_TEST_ALL_EXTENDED=1` |
 | **`dangerous/`** | Same as extended **and** `INVOKER_TEST_ALL_DANGEROUS=1` (e.g. `pnpm run test:all:destructive`) — can touch real user paths / Docker |
 
+## CI merge queue lane
+
+Mergify queue PRs only run the checks listed in `.mergify.yml` `merge_conditions`.
+
+Keep extra proof, repro, and destructive coverage on normal PRs, pushes, scheduled runs, or manual runs. Do not add those extra jobs to queue PRs unless `.mergify.yml` waits for their check names.
+
 ## Naming
 
 - Use **`NN-meaningful-name.sh`** (`10-`, `20-`, …) so lexicographic order matches run order.

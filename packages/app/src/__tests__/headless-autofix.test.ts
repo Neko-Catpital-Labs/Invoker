@@ -1,8 +1,9 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { LocalBus } from '@invoker/transport';
-import { Channels } from '@invoker/transport';
-import type { MessageBus } from '@invoker/transport';
-import { runHeadless, wireHeadlessAutoFix } from '../headless.js';
+import { runHeadless } from '../headless.js';
 import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkflowMutationPriority } from '@invoker/data-store';
@@ -28,48 +29,22 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   };
 }
 
-describe('wireHeadlessAutoFix', () => {
-  it('subscribes auto-fix for failed deltas in generic headless execution paths', async () => {
-    const messageBus = new LocalBus() as MessageBus;
-    const shouldAutoFix = vi.fn((taskId: string) => taskId === 'wf-1/task-1');
-    const invokeAutoFix = vi.fn(async () => {});
-    const onError = vi.fn();
+describe('headless auto-fix cutover', () => {
+  it('does not keep hidden auto-fix wiring in normal headless command paths', () => {
+    const sources = [
+      '../headless.ts',
+      '../execution/task-runner-wiring.ts',
+    ].map((path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8'));
 
-    wireHeadlessAutoFix(
-      {
-        messageBus,
-        orchestrator: { shouldAutoFix } as any,
-        persistence: {} as any,
-      },
-      {} as any,
-      invokeAutoFix,
-      onError,
-    );
-
-    messageBus.publish(Channels.TASK_DELTA, {
-      type: 'updated',
-      taskId: 'wf-1/task-1',
-      changes: { status: 'failed' },
-    });
-    messageBus.publish(Channels.TASK_DELTA, {
-      type: 'updated',
-      taskId: 'wf-1/task-2',
-      changes: { status: 'failed' },
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-1');
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-2');
-    expect(invokeAutoFix).toHaveBeenCalledTimes(1);
-    expect(invokeAutoFix).toHaveBeenCalledWith('wf-1/task-1');
-    expect(onError).not.toHaveBeenCalled();
+    for (const source of sources) {
+      expect(source).not.toContain('wireHeadlessAutoFix');
+      expect(source).not.toContain('onReviewGateCiFailure');
+    }
   });
 });
 
 describe('headless worker autofix', () => {
-  it('runs a one-shot scan and enqueues the normal fix command intent', async () => {
+  it('runs a one-shot scan under the single-instance lock and enqueues the normal fix command intent', async () => {
     const task = makeTask();
     const enqueueWorkflowMutationIntent = vi.fn((
       _workflowId: string,
@@ -78,6 +53,11 @@ describe('headless worker autofix', () => {
       _priority: WorkflowMutationPriority,
     ) => 1);
     const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    // Point the worker lock at a throwaway home so the scan never touches the
+    // real Invoker home (the door acquires/releases the cross-process lock).
+    const homeRoot = mkdtempSync(join(tmpdir(), 'invoker-headless-autofix-'));
+    const previousDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = homeRoot;
 
     try {
       await runHeadless(['worker', 'autofix'], {
@@ -94,6 +74,9 @@ describe('headless worker autofix', () => {
       } as any);
     } finally {
       write.mockRestore();
+      if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = previousDbDir;
+      rmSync(homeRoot, { recursive: true, force: true });
     }
 
     expect(enqueueWorkflowMutationIntent).toHaveBeenCalledWith(
@@ -101,6 +84,29 @@ describe('headless worker autofix', () => {
       'invoker:fix-with-agent',
       buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
       'normal',
+    );
+  });
+
+  it('lists worker kinds from the registry', async () => {
+    let stdout = '';
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: any) => {
+      stdout += chunk.toString();
+      return true;
+    });
+
+    try {
+      await runHeadless(['worker', 'list'], {} as any);
+    } finally {
+      write.mockRestore();
+    }
+
+    expect(stdout).toContain('Worker kinds');
+    expect(stdout).toContain('autofix');
+  });
+
+  it('rejects unknown worker kinds with a clear error', async () => {
+    await expect(runHeadless(['worker', 'missing-kind'], {} as any)).rejects.toThrow(
+      'Unknown worker kind: "missing-kind"',
     );
   });
 });

@@ -463,7 +463,7 @@ test_lint_rejects_multi_prompt_standalone_without_waiver() {
 name: "Invalid multi-prompt standalone workflow"
 description: "Implementation workflow with multiple prompt slices but no stack context."
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-surface
@@ -565,7 +565,7 @@ test_lint_allows_nonterminal_stack_workflow_without_test_all() {
 name: "Stack step 1 with focused verification"
 description: "First implementation workflow in a stack with focused verification."
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 featureBranch: plan/stack-step-1
 tasks:
@@ -658,7 +658,7 @@ EOF
 name: "Stack step 2 focused verification"
 description: "Terminal implementation workflow in a stack with focused verification."
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: plan/stack-step-1
 featureBranch: plan/stack-step-2
@@ -928,32 +928,32 @@ tasks:
       - Verify app tests pass and output remains stable.
       Assume no prior context. Modify packages/app/src/main.ts and packages/app/src/headless.ts only. Pass condition: exits 0 after the bridge tests pass.
     dependencies: []
-  - id: final-regression
+  - id: verify-bridge
     description: |
       Review claim:
-      - Run final full-suite regression gate.
+      - Run focused verification for the app bridge change.
       Review lane:
       - proof
       Safety invariant:
       - This command changes no production code.
       Slice rationale:
-      - Keep the terminal full-suite gate separate from implementation.
+      - Keep terminal proof scoped to the changed package.
       Architectural effect:
       - No architecture change.
       Goal:
-      - Run final full-suite regression gate.
+      - Run focused verification for the app bridge change.
       Motivation:
-      - Ensure bridge changes remain stable.
+      - Prove the bridge wiring stays deterministic without a repo-wide gate.
       Alternative considerations:
-      - Option A (chosen): full repository regression.
-      - Option B: package-only checks.
+      - Option A (chosen): focused package-level verification.
+      - Option B: full repository regression.
       Implementation details:
-      - Execute root-level test gate after implementation task.
+      - Execute a deterministic proof command for packages/app after implementation.
       Non-goals:
       - Do not modify source files.
       Layer: app_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "cd packages/app && pnpm test"
     dependencies: [implement-bridge]
 EOF
 
@@ -1097,32 +1097,32 @@ tasks:
       - Verify `cd packages/execution-engine && pnpm test` exits 0.
       - Use exit code 0 as the pass condition.
     dependencies: []
-  - id: final-regression
+  - id: verify-runtime-flow
     description: |
       Review claim:
-      - Run the terminal full-suite regression gate for runtime changes.
+      - Run focused verification for the task-runner change.
       Review lane:
       - proof
       Safety invariant:
       - This command changes no production code and depends on runtime implementation.
       Slice rationale:
-      - Terminal validation is separate from implementation work.
+      - Terminal proof stays scoped to the changed package.
       Architectural effect:
-      - No architecture changes; validates integrated behavior.
+      - No architecture changes; validates the runtime path deterministically.
       Goal:
-      - Run final full-suite regression gate.
+      - Run focused verification for the task-runner change.
       Motivation:
-      - Ensure implementation updates remain stable.
+      - Prove the runtime updates stay deterministic without a repo-wide gate.
       Alternative considerations:
-      - Option A (chosen): full repository regression.
-      - Option B: package-only checks.
+      - Option A (chosen): focused package-level verification.
+      - Option B: full repository regression.
       Implementation details:
-      - Execute root-level test gate after implementation task.
+      - Execute a deterministic proof command for packages/execution-engine after implementation.
       Non-goals:
       - Do not modify source files.
       Layer: app_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "cd packages/execution-engine && pnpm test"
     dependencies: [implement-runtime-flow]
 EOF
 
@@ -1210,7 +1210,7 @@ test_lint_requires_review_lane() {
 name: "Missing review lane"
 description: "Implementation plan missing review lane metadata."
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-owner-fallback

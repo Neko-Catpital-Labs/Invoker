@@ -30,6 +30,7 @@
  *   POST   /api/tasks/:id/edit-type    body: { runnerKind, poolMemberId? }
  *   POST   /api/tasks/:id/edit-agent   body: { agent }
  *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
+ *   DELETE /api/tasks/:id
  *   POST   /api/workflows/:id/detach  body: { upstreamWorkflowId }
  *   POST   /api/workflows/:id/restart
  *   POST   /api/workflows/:id/rebase-retry
@@ -60,11 +61,13 @@ import type {
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { parseMetadataPatchBody, type MetadataSetResult } from './metadata-setter.js';
+import { buildReviewGateQueryResponse } from './review-gate-query.js';
 
 export interface ApiMutationFacade {
   cancelTask(taskId: string): Promise<CancelMutationResult>;
   retryTask(taskId: string): Promise<MutationResult>;
   recreateTask(taskId: string): Promise<MutationResult>;
+  deleteTask(taskId: string): Promise<MutationResult>;
   recreateDownstream(taskId: string): Promise<MutationResult>;
   resolveConflict(taskId: string, agentName?: string): Promise<ResolveConflictMutationResult>;
   approveTask(taskId: string): Promise<ApproveMutationResult>;
@@ -254,6 +257,19 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
+      // DELETE /api/tasks/:id
+      const deleteTaskMatch = path.match(/^\/api\/tasks\/([^/]+)$/);
+      if (method === 'DELETE' && deleteTaskMatch) {
+        const taskId = decodeURIComponent(deleteTaskMatch[1]);
+        try {
+          const result = await mutations.deleteTask(taskId);
+          json(res, 200, { ok: true, taskId, action: 'deleted', tasksStarted: result.runnable.length });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
       // POST /api/tasks/:id/cancel
       const cancelMatch = path.match(/^\/api\/tasks\/([^/]+)\/cancel$/);
       if (method === 'POST' && cancelMatch) {
@@ -381,6 +397,20 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       }
 
       // GET /api/workflows
+      // GET /api/workflows/:id/review-gate
+      const reviewGateMatch = path.match(/^\/api\/workflows\/([^/]+)\/review-gate$/);
+      if (method === 'GET' && reviewGateMatch) {
+        const workflowId = decodeURIComponent(reviewGateMatch[1]);
+        const workflow = persistence.loadWorkflow(workflowId);
+        if (!workflow) {
+          json(res, 404, { error: 'Workflow not found' });
+          return;
+        }
+        const tasks = persistence.loadTasks(workflowId);
+        json(res, 200, buildReviewGateQueryResponse({ workflowId, workflow, tasks }));
+        return;
+      }
+
       if (method === 'GET' && path === '/api/workflows') {
         const workflows = persistence.listWorkflows();
         json(res, 200, workflows);

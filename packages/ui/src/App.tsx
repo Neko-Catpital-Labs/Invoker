@@ -11,9 +11,11 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
+import type { ActionGraphNode, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
-import type { ActionGraphNode, TerminalSessionDescriptor } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
+import { useQueueStatus } from './hooks/useQueueStatus.js';
+import { useActionGraphSnapshot } from './hooks/useActionGraphSnapshot.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
 import { HistoryView } from './components/HistoryView.js';
@@ -28,8 +30,9 @@ import { SystemSetupModal } from './components/SystemSetupModal.js';
 import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
+import { groupWorkflowCoreActivity } from './lib/workflow-core-activity.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
-import { StatusBar } from './components/StatusBar.js';
+import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
 import {
   isExperimentSpawnPivotTask,
@@ -66,17 +69,17 @@ type SearchResult =
 
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
-const STATUS_KEY_ORDER: readonly string[] = [
+const STATUS_KEY_ORDER: readonly WorkflowStatus[] = [
   'completed',
   'running',
   'failed',
   'closed',
   'pending',
-  'needs_input',
   'review_ready',
   'awaiting_approval',
   'blocked',
   'fixing_with_ai',
+  'stale',
 ];
 const EDITABLE_SELECTOR = [
   'input',
@@ -87,6 +90,7 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] input',
   '[role="dialog"] textarea',
 ].join(',');
+const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 
 function sidebarNavOrder(item: HTMLElement): number {
   const order = Number(item.dataset.sidebarNavOrder);
@@ -124,7 +128,10 @@ interface WorkflowContextMenuProps {
   onRecreateWorkflow: (workflowId: string) => void;
   onCancelWorkflow: (workflowId: string) => void;
   onDeleteWorkflow: (workflowId: string) => void;
+  onDetachWorkflow: (workflowId: string) => void;
   onCopyWorkflowId: (workflowId: string) => void;
+  /** True when this workflow has exactly one upstream dependency that can be detached from the UI. */
+  canDetach: boolean;
   onClose: (options?: ContextMenuCloseOptions) => void;
   autoFocus?: boolean;
 }
@@ -159,7 +166,9 @@ function WorkflowContextMenu({
   onRecreateWorkflow,
   onCancelWorkflow,
   onDeleteWorkflow,
+  onDetachWorkflow,
   onCopyWorkflowId,
+  canDetach,
   onClose,
   autoFocus = false,
 }: WorkflowContextMenuProps): JSX.Element {
@@ -244,6 +253,9 @@ function WorkflowContextMenu({
           { id: 'rebase-recreate', label: 'Rebase and Recreate', className: dangerButtonClass, action: () => runAction(onRebaseRecreate) },
           { id: 'recreate-workflow', label: 'Recreate Workflow', className: dangerButtonClass, action: () => runAction(onRecreateWorkflow) },
           { id: 'cancel-workflow', label: 'Cancel Workflow', className: dangerButtonClass, action: () => runAction(onCancelWorkflow) },
+          ...(canDetach
+            ? [{ id: 'detach-workflow', label: 'Detach Upstream Workflow', className: dangerButtonClass, action: () => runAction(onDetachWorkflow) }]
+            : []),
           { id: 'delete-workflow', label: 'Delete Workflow', className: dangerButtonClass, action: () => runAction(onDeleteWorkflow) },
         ]),
   ];
@@ -380,27 +392,52 @@ export function App() {
   const { tasks, workflows, clearTasks, refreshTaskGraph } = useTasks({
     onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
   });
+  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
+  const {
+    graph: actionGraph,
+    error: actionGraphError,
+    refreshActionGraph,
+  } = useActionGraphSnapshot(2_000, viewMode === 'actionGraph');
+  const trackAcceptedMutation = useCallback((result: unknown) => {
+    if (result && typeof result === 'object' && (result as { accepted?: unknown }).accepted === true) {
+      void refreshActionGraph();
+      void refreshTaskGraph();
+    }
+  }, [refreshActionGraph, refreshTaskGraph]);
+  const coreActivityByWorkflow = useMemo(
+    () => groupWorkflowCoreActivity(actionGraph?.nodes ?? []),
+    [actionGraph],
+  );
   const invoker = useInvoker();
+  const queueStatus = useQueueStatus();
+  const runningTaskIds = useMemo(
+    () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
+    [queueStatus],
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
-  const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
-  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
-  const [selectedActionNode, setSelectedActionNode] = useState<ActionGraphNode | null>(null);
+  const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
+  const selectedActionNode = useMemo(
+    () => actionGraph?.nodes.find((node) => node.id === selectedActionNodeId) ?? null,
+    [actionGraph, selectedActionNodeId],
+  );
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionPools, setExecutionPools] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
@@ -413,6 +450,8 @@ export function App() {
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  // Transient, user-visible outcome line for a confirmed workflow detach.
+  const [detachNotice, setDetachNotice] = useState<string | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
   // Typed graph camera state. The graph viewport is user-owned after the
@@ -440,6 +479,25 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchActiveIndex, setSearchActiveIndex] = useState(0);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
+  const systemSetupAutoOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelPendingSystemSetupAutoOpen = useCallback(() => {
+    if (systemSetupAutoOpenTimerRef.current !== null) {
+      clearTimeout(systemSetupAutoOpenTimerRef.current);
+      systemSetupAutoOpenTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleSystemSetupAutoOpen = useCallback(() => {
+    cancelPendingSystemSetupAutoOpen();
+    systemSetupAutoOpenTimerRef.current = setTimeout(() => {
+      systemSetupAutoOpenTimerRef.current = null;
+      setShowSystemSetup(true);
+    }, SYSTEM_SETUP_AUTO_OPEN_DELAY_MS);
+  }, [cancelPendingSystemSetupAutoOpen]);
+
+  useEffect(() => cancelPendingSystemSetupAutoOpen, [cancelPendingSystemSetupAutoOpen]);
+
   const lastShiftAtRef = useRef(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -453,15 +511,18 @@ export function App() {
         setShowSystemBanner(true);
       }
       if (needsBundledPrompt) {
-        setShowSystemSetup(true);
+        scheduleSystemSetupAutoOpen();
+      } else {
+        cancelPendingSystemSetupAutoOpen();
       }
     }).catch(() => {});
-  }, []);
+  }, [cancelPendingSystemSetupAutoOpen, scheduleSystemSetupAutoOpen]);
 
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+    window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
 
@@ -643,6 +704,29 @@ export function App() {
   }, [displayedSelectedWorkflowGraph, selectedWorkflow, workflows]);
 
   useEffect(() => {
+    const workflowId = selectedWorkflow?.id;
+    if (!workflowId) return;
+    const getReviewGate = window.invoker?.getReviewGate;
+    if (!getReviewGate) {
+      setReviewGateByWorkflowId((prev) => ({ ...prev, [workflowId]: null }));
+      return;
+    }
+    let cancelled = false;
+    void getReviewGate(workflowId)
+      .then((reviewGate) => {
+        if (cancelled) return;
+        setReviewGateByWorkflowId((prev) => ({ ...prev, [workflowId]: reviewGate }));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setReviewGateByWorkflowId((prev) => ({ ...prev, [workflowId]: null }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedWorkflow?.id, tasks]);
+
+  useEffect(() => {
     if (!selectedWorkflowId) {
       setStickySelectedWorkflow(null);
       return;
@@ -695,13 +779,12 @@ export function App() {
   }, []);
 
   const visibleStatusKeys = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const task of tasks.values()) {
-      const key = task.status === 'awaiting_approval' && task.execution.pendingFixError ? 'fix_approval' : task.status;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+    const counts = new Map<WorkflowStatus, number>();
+    for (const workflow of workflows.values()) {
+      counts.set(workflow.status, (counts.get(workflow.status) ?? 0) + 1);
     }
     return STATUS_KEY_ORDER.filter((key) => key === 'completed' || key === 'running' || key === 'failed' || key === 'pending' || (counts.get(key) ?? 0) > 0);
-  }, [tasks]);
+  }, [workflows]);
 
   const searchResults = useMemo<SearchResult[]>(() => {
     const query = normalizedSearchText(searchQuery.trim());
@@ -1217,11 +1300,12 @@ export function App() {
     if (!invoker) return;
     setContextMenu(null);
     try {
-      await invoker.restartTask(taskId);
+      const result = await invoker.restartTask(taskId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Failed to restart task:', err);
     }
-  }, [invoker]);
+  }, [invoker, trackAcceptedMutation]);
 
   const handleOpenTerminal = useCallback(
     (taskId: string) => {
@@ -1261,71 +1345,90 @@ export function App() {
 
   const handleReplaceSubmit = useCallback(async (taskId: string, replacements: TaskReplacementDef[]) => {
     try {
-      await window.invoker?.replaceTask(taskId, replacements);
+      const result = await window.invoker?.replaceTask(taskId, replacements);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Failed to replace task:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRebaseRetry = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
       const result = await window.invoker?.rebaseRetry(workflowId);
-      if (result && !result.success) {
-        console.error('Rebase and Retry failed for some branches:', result.errors);
-      }
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Rebase and Retry failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRebaseRecreate = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
       const result = await window.invoker?.rebaseRecreate(workflowId);
-      if (result && !result.success) {
-        console.error('Rebase and Recreate failed for some branches:', result.errors);
-      }
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Rebase and Recreate failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRetryWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
-      await window.invoker?.retryWorkflow(workflowId);
+      const result = await window.invoker?.retryWorkflow(workflowId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Retry Workflow failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRecreateWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
-      await window.invoker?.recreateWorkflow(workflowId);
+      const result = await window.invoker?.recreateWorkflow(workflowId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Recreate Workflow failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRecreateTask = useCallback(async (taskId: string) => {
     setContextMenu(null);
     try {
-      await window.invoker?.recreateTask(taskId);
+      const result = await window.invoker?.recreateTask(taskId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Recreate from Task failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleRecreateDownstream = useCallback(async (taskId: string) => {
     setContextMenu(null);
     try {
-      await window.invoker?.recreateDownstream(taskId);
+      const result = await window.invoker?.recreateDownstream(taskId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Recreate Downstream failed:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
+
+  const handleDeleteTask = useCallback(async (taskId: string) => {
+    setContextMenu(null);
+    const confirmed = window.confirm(
+      `Delete task "${taskId}"? Its dependents will use this task's upstream dependencies.`
+    );
+    if (!confirmed) return;
+    try {
+      const result = await window.invoker?.deleteTask(taskId);
+      trackAcceptedMutation(result);
+      if (selectedTaskId === taskId) {
+        setSelectedTaskId(null);
+      }
+      refreshTaskGraph();
+    } catch (err) {
+      console.error('Delete Task failed:', err);
+    }
+  }, [refreshTaskGraph, selectedTaskId, trackAcceptedMutation]);
 
   const handleDeleteWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
@@ -1334,7 +1437,8 @@ export function App() {
     );
     if (!confirmed) return;
     try {
-      await window.invoker?.deleteWorkflow(workflowId);
+      const result = await window.invoker?.deleteWorkflow(workflowId);
+      trackAcceptedMutation(result);
       setSelectedTaskId(null);
       if (selectedWorkflowId === workflowId) {
         setSelectedWorkflowId(null);
@@ -1343,7 +1447,40 @@ export function App() {
     } catch (err) {
       console.error('Delete Workflow failed:', err);
     }
-  }, [refreshTaskGraph, selectedWorkflowId]);
+  }, [refreshTaskGraph, selectedWorkflowId, trackAcceptedMutation]);
+
+  const handleDetachWorkflow = useCallback(async (workflowId: string) => {
+    setWorkflowContextMenu(null);
+    const workflow = workflows.get(workflowId);
+    const deps = workflow?.externalDependencies ?? [];
+    // UI detach targets a single upstream edge so the confirmation can name
+    // both endpoints. Multi-upstream detach stays on the headless/API surface.
+    if (deps.length !== 1) return;
+    const upstreamWorkflowId = deps[0].workflowId;
+    const downstreamName = workflow?.name ?? workflowId;
+    const upstreamName = workflows.get(upstreamWorkflowId)?.name ?? upstreamWorkflowId;
+    const confirmed = window.confirm(
+      `Detach "${downstreamName}" from upstream "${upstreamName}"?\n\n` +
+      `This removes the active dependency so "${downstreamName}" no longer waits on "${upstreamName}". ` +
+      `The detached lineage stays visible in the graph. Neither workflow is deleted.`,
+    );
+    if (!confirmed) return;
+    try {
+      await window.invoker?.detachWorkflow(workflowId, upstreamWorkflowId);
+      setDetachNotice(
+        `Detached "${downstreamName}" from upstream "${upstreamName}". The active dependency was removed; detached lineage remains visible.`,
+      );
+      refreshTaskGraph();
+    } catch (err) {
+      console.error('Detach Workflow failed:', err);
+    }
+  }, [workflows, refreshTaskGraph]);
+
+  useEffect(() => {
+    if (!detachNotice) return;
+    const timer = setTimeout(() => setDetachNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [detachNotice]);
 
   const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
@@ -1359,16 +1496,15 @@ export function App() {
     }
     try {
       const hasMergeConflict = hasMergeConflictExecution(task);
-      if (hasMergeConflict) {
-        await window.invoker?.resolveConflict(taskId, agentName);
-      } else {
-        await window.invoker?.fixWithAgent(taskId, agentName);
-      }
+      const result = hasMergeConflict
+        ? await window.invoker?.resolveConflict(taskId, agentName)
+        : await window.invoker?.fixWithAgent(taskId, agentName);
+      trackAcceptedMutation(result);
       refreshTaskGraph();
     } catch (err) {
       console.error('Fix failed:', err);
     }
-  }, [tasks, refreshTaskGraph]);
+  }, [tasks, trackAcceptedMutation]);
 
   const handleCancelTask = useCallback(async (taskId: string) => {
     setContextMenu(null);
@@ -1377,11 +1513,12 @@ export function App() {
     );
     if (!confirmed) return;
     try {
-      await window.invoker?.cancelTask(taskId);
+      const result = await window.invoker?.cancelTask(taskId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Failed to cancel task:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleCancelWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
@@ -1390,11 +1527,12 @@ export function App() {
     );
     if (!confirmed) return;
     try {
-      await window.invoker?.cancelWorkflow(workflowId);
+      const result = await window.invoker?.cancelWorkflow(workflowId);
+      trackAcceptedMutation(result);
     } catch (err) {
       console.error('Failed to cancel workflow:', err);
     }
-  }, []);
+  }, [trackAcceptedMutation]);
 
   const handleOpenWorkflowPr = useCallback((workflowId: string) => {
     const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflowId);
@@ -1423,8 +1561,9 @@ export function App() {
 
   const handleRefresh = useCallback(async () => {
     await refreshTaskGraph();
+    void invoker?.checkPrStatuses?.();
     issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'manual-refresh' });
-  }, [issueCameraCommand, refreshTaskGraph]);
+  }, [invoker, issueCameraCommand, refreshTaskGraph]);
 
   // ── Plan loading ──────────────────────────────────────────
   const handleLoadPlan = useCallback(
@@ -1543,33 +1682,37 @@ export function App() {
   const handleProvideInput = useCallback(
     async (taskId: string, input: string) => {
       if (!invoker) return;
-      await invoker.provideInput(taskId, input);
+      const result = await invoker.provideInput(taskId, input);
+      trackAcceptedMutation(result);
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleApprove = useCallback(
     async (taskId: string) => {
       if (!invoker) return;
-      await invoker.approve(taskId);
+      const result = await invoker.approve(taskId);
+      trackAcceptedMutation(result);
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleReject = useCallback(
     async (taskId: string, reason?: string) => {
       if (!invoker) return;
-      await invoker.reject(taskId, reason);
+      const result = await invoker.reject(taskId, reason);
+      trackAcceptedMutation(result);
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleSelectExperiment = useCallback(
     async (taskId: string, experimentIds: string[]) => {
       if (!invoker) return;
-      await invoker.selectExperiment(taskId, experimentIds.length === 1 ? experimentIds[0] : experimentIds);
+      const result = await invoker.selectExperiment(taskId, experimentIds.length === 1 ? experimentIds[0] : experimentIds);
+      trackAcceptedMutation(result);
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Edit task command ──────────────────────────────────────
@@ -1577,12 +1720,13 @@ export function App() {
     async (taskId: string, newCommand: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskCommand(taskId, newCommand);
+        const result = await invoker.editTaskCommand(taskId, newCommand);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to edit task command:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Edit task prompt ───────────────────────────────────────
@@ -1590,12 +1734,13 @@ export function App() {
     async (taskId: string, newPrompt: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskPrompt(taskId, newPrompt);
+        const result = await invoker.editTaskPrompt(taskId, newPrompt);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to edit task prompt:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Edit task executor type ───────────────────────────────
@@ -1603,12 +1748,13 @@ export function App() {
     async (taskId: string, runnerKind: string, poolMemberId?: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskType(taskId, runnerKind, poolMemberId);
+        const result = await invoker.editTaskType(taskId, runnerKind, poolMemberId);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to edit task type:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Edit task execution pool ─────────────────────────────
@@ -1616,12 +1762,13 @@ export function App() {
     async (taskId: string, poolId: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskPool(taskId, poolId);
+        const result = await invoker.editTaskPool(taskId, poolId);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to edit task pool:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Edit task execution agent ────────────────────────────
@@ -1629,50 +1776,52 @@ export function App() {
     async (taskId: string, agentName: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskAgent(taskId, agentName);
+        const result = await invoker.editTaskAgent(taskId, agentName);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to edit task agent:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleSetExternalGatePolicies = useCallback(
     async (taskId: string, updates: ExternalGatePolicyUpdate[]) => {
       if (!invoker) return;
       try {
-        await invoker.setTaskExternalGatePolicies(taskId, updates);
+        const result = await invoker.setTaskExternalGatePolicies(taskId, updates);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to set external gate policies:', err);
       }
     },
-    [invoker],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleSetMergeBranch = useCallback(
     async (workflowId: string, baseBranch: string) => {
       if (!invoker) return;
       try {
-        await invoker.setMergeBranch(workflowId, baseBranch);
-        refreshTaskGraph();
+        const result = await invoker.setMergeBranch(workflowId, baseBranch);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to set merge branch:', err);
       }
     },
-    [invoker, refreshTaskGraph],
+    [invoker, trackAcceptedMutation],
   );
 
   const handleSetMergeMode = useCallback(
     async (workflowId: string, mergeMode: 'manual' | 'automatic' | 'external_review') => {
       if (!invoker) return;
       try {
-        await invoker.setMergeMode(workflowId, mergeMode);
-        refreshTaskGraph();
+        const result = await invoker.setMergeMode(workflowId, mergeMode);
+        trackAcceptedMutation(result);
       } catch (err) {
         console.error('Failed to set merge mode:', err);
       }
     },
-    [invoker, refreshTaskGraph],
+    [invoker, trackAcceptedMutation],
   );
 
   // ── Modal triggers ────────────────────────────────────────
@@ -1736,20 +1885,20 @@ export function App() {
             {missingRequiredTool
               ? `${missingRequiredTool.name} is missing. Invoker needs it for local workflows.`
               : needsBundledSkillsPrompt
-                ? 'Bundled Invoker skills are ready to install into Codex. Install them before using packaged skill-driven flows.'
+                ? 'Invoker AI helpers are ready to install for Codex, Claude, Cursor, and OMP. Install them before using one-command plan handoff.'
               : installedAgentCount === 0
-                ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed tasks.'
+                ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed execution tasks.'
                 : 'Review local prerequisites before running packaged workflows.'}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => setShowSystemSetup(true)}
+              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
               className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium transition-colors"
             >
               Open Setup
             </button>
             <button
-              onClick={() => setShowSystemBanner(false)}
+              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemBanner(false); }}
               className="px-2 py-1 text-amber-200 hover:text-white text-xs"
             >
               Dismiss
@@ -1758,6 +1907,18 @@ export function App() {
         </div>
       )}
 
+
+      {runtimeStatus?.readOnly && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="read-only-mode-banner"
+          className="border-b border-blue-700 bg-blue-950/70 px-4 py-2 text-sm text-blue-100"
+        >
+          <span className="font-semibold text-blue-50">Read-only mode.</span>{' '}
+          This window can browse workflows, but it cannot make changes until the write owner is available.
+        </div>
+      )}
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
         <nav className="w-24 border-r border-gray-800 bg-gray-950/60 flex flex-col justify-between py-3">
@@ -1879,7 +2040,7 @@ export function App() {
           <div className="px-2">
             <button
               data-testid="rail-settings"
-              onClick={() => setShowSystemSetup(true)}
+              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
               className="flex h-8 w-full items-center justify-center rounded text-gray-300 hover:bg-gray-800/70 hover:text-white"
               aria-label="Settings"
               title="Settings"
@@ -1903,6 +2064,7 @@ export function App() {
               {viewMode === 'queue' ? (
                 <QueueView
                   tasks={tasks}
+                  queueStatus={queueStatus}
                   onTaskClick={handleTaskClick}
                   onCancel={handleCancelTask}
                   selectedTaskId={selectedTaskId}
@@ -1913,9 +2075,11 @@ export function App() {
                 <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
               ) : viewMode === 'actionGraph' ? (
                 <ActionGraphView
-                  selectedNodeId={selectedActionNode?.id ?? null}
+                  graph={actionGraph}
+                  error={actionGraphError}
+                  selectedNodeId={selectedActionNodeId}
                   onSelectNode={(node) => {
-                    setSelectedActionNode(node);
+                    setSelectedActionNodeId(node?.id ?? null);
                     if (node?.taskId) setSelectedTaskId(node.taskId);
                     if (node?.workflowId) setSelectedWorkflowId(node.workflowId);
                   }}
@@ -1923,11 +2087,11 @@ export function App() {
               ) : (
                 <>
                   <WorkflowGraph
-                    tasks={tasks}
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
                     cameraCommand={cameraCommand}
                     statusFilters={statusFilters}
+                    coreActivityByWorkflow={coreActivityByWorkflow}
                     onSelectWorkflow={handleWorkflowClick}
                     onWorkflowContextMenu={handleWorkflowContextMenu}
                     onManualViewport={handleManualViewport}
@@ -1962,6 +2126,7 @@ export function App() {
                           onTaskContextMenu={handleTaskContextMenu}
                           onManualViewport={handleManualViewport}
                           statusFilters={new Set()}
+                          runningTaskIds={runningTaskIds}
                         />
                       </div>
                     </FloatingGraphPanel>
@@ -1977,11 +2142,11 @@ export function App() {
                 data-keyboard-active={keyboardRegion === 'bottomBar' ? 'true' : 'false'}
                 className={`outline-none ${keyboardRegion === 'bottomBar' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
               >
-                <StatusBar
-                  tasks={tasks}
+                <WorkflowStatusChips
+                  workflows={workflows}
                   activeFilters={statusFilters}
                   keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
-                  onStatusClick={(filterKey, event) => handleStatusClick(filterKey as WorkflowStatus, event)}
+                  onStatusClick={handleStatusClick}
                 />
                 <TerminalDrawer
                   state={terminalDrawerState}
@@ -2010,6 +2175,7 @@ export function App() {
               workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
               task={selectedTask}
               workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
+              reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
               remoteTargets={remoteTargets}
               executionPools={executionPools}
               executionAgents={executionAgents}
@@ -2129,7 +2295,7 @@ export function App() {
           updateCliPending={updateCliPending}
           updateCliError={updateCliError}
           onUpdateInvokerCli={handleUpdateInvokerCli}
-          onClose={() => setShowSystemSetup(false)}
+          onClose={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(false); }}
         />
       )}
 
@@ -2146,10 +2312,23 @@ export function App() {
           onRecreateWorkflow={(workflowId) => void handleRecreateWorkflow(workflowId)}
           onCancelWorkflow={(workflowId) => void handleCancelWorkflow(workflowId)}
           onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
+          onDetachWorkflow={(workflowId) => void handleDetachWorkflow(workflowId)}
+          canDetach={(workflows.get(workflowContextMenu.workflowId)?.externalDependencies?.length ?? 0) === 1}
           onCopyWorkflowId={handleCopyWorkflowId}
           onClose={closeContextMenu}
           autoFocus={Boolean(workflowContextMenu.returnFocusRegion)}
         />
+      )}
+
+      {detachNotice && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="detach-feedback"
+          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border border-gray-600 bg-gray-800 px-4 py-2 text-sm text-gray-100 shadow-xl"
+        >
+          {detachNotice}
+        </div>
       )}
 
       {contextMenu && contextMenuTask && (
@@ -2164,6 +2343,7 @@ export function App() {
           onRecreateDownstream={handleRecreateDownstream}
           onFix={handleFix}
           onCancel={handleCancelTask}
+          onDelete={handleDeleteTask}
           onClose={closeContextMenu}
           autoFocus={Boolean(contextMenu.returnFocusRegion)}
         />
@@ -2171,3 +2351,4 @@ export function App() {
     </div>
   );
 }
+

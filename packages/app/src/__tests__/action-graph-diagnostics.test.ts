@@ -71,6 +71,40 @@ describe('buildActionGraphDiagnostics', () => {
     expect(graph.edges).toContainEqual(expect.objectContaining({ source: 'action:wf-1', target: 'intent:7' }));
   });
 
+  it('creates running mutation action nodes with deterministic running duration', () => {
+    const graph = buildActionGraphDiagnostics({
+      workflows: [workflow],
+      tasks: [],
+      attemptsByTaskId: new Map(),
+      queueStatus: { maxConcurrency: 1, runningCount: 0, running: [], queued: [] },
+      mutationIntents: [{
+        id: 8,
+        workflowId: 'wf-1',
+        channel: 'invoker:rebase-recreate',
+        args: ['wf-1'],
+        priority: 'high',
+        status: 'running',
+        createdAt: '2026-05-14T11:55:00.000Z',
+        startedAt: '2026-05-14T11:58:00.000Z',
+        ownerId: 'owner-1',
+      }],
+      mutationLeases: [],
+      eventsByTaskId: new Map(),
+      activityLogs: [],
+      stallThresholdMs: 60_000,
+      now,
+    });
+
+    const intent = graph.nodes.find((node) => node.id === 'intent:8');
+    expect(intent).toEqual(expect.objectContaining({
+      type: 'mutation-intent',
+      status: 'running',
+      label: 'invoker:rebase-recreate',
+      ownerId: 'owner-1',
+    }));
+    expect(intent?.durations?.runningMs).toBe(120_000);
+  });
+
   it('marks expired mutation leases as stalled with heartbeat age', () => {
     const graph = buildActionGraphDiagnostics({
       workflows: [workflow],
@@ -138,6 +172,46 @@ describe('buildActionGraphDiagnostics', () => {
       target: 'attempt:attempt-a1',
       label: 'launch',
     }));
+  });
+
+  it('shows leased launch dispatches as running diagnostic nodes', () => {
+    const graph = buildActionGraphDiagnostics({
+      workflows: [workflow],
+      tasks: [task({ id: 'task-a', execution: { selectedAttemptId: 'attempt-a1' } })],
+      attemptsByTaskId: new Map([
+        ['task-a', [attempt({ id: 'attempt-a1', nodeId: 'task-a' })]],
+      ]),
+      queueStatus: { maxConcurrency: 1, runningCount: 0, running: [], queued: [] },
+      mutationIntents: [],
+      mutationLeases: [],
+      launchDispatches: [{
+        id: 43,
+        taskId: 'task-a',
+        attemptId: 'attempt-a1',
+        workflowId: 'wf-1',
+        state: 'leased',
+        priority: 'high',
+        enqueuedAt: '2026-05-14T11:56:00.000Z',
+        leasedAt: '2026-05-14T11:59:00.000Z',
+        fencedUntil: '2026-05-14T12:19:00.000Z',
+        attemptsCount: 1,
+        generation: 3,
+        dispatchOwner: 'owner-1',
+      } satisfies TaskLaunchDispatch],
+      eventsByTaskId: new Map(),
+      activityLogs: [],
+      stallThresholdMs: 60_000,
+      now,
+    });
+
+    const dispatch = graph.nodes.find((node) => node.id === 'launch-dispatch:43');
+    expect(dispatch).toEqual(expect.objectContaining({
+      type: 'launch-dispatch',
+      status: 'running',
+      ownerId: 'owner-1',
+    }));
+    expect(dispatch?.durations?.runningMs).toBe(60_000);
+    expect(dispatch?.durations?.leaseExpiresInMs).toBe(19 * 60_000);
   });
 
   it('links pending downstream task attempts to upstream blocker nodes', () => {
@@ -217,6 +291,54 @@ describe('buildActionGraphDiagnostics', () => {
     expect(selected?.history?.map((entry) => entry.source)).toEqual(
       Array.from({ length: 20 }, (_value, index) => `event-${index + 10}`),
     );
+  });
+
+  it('caps verbose diagnostic text in action graph nodes', () => {
+    const longText = 'x'.repeat(20_000);
+    const selectedAttempt = attempt({
+      id: 'attempt-a1',
+      nodeId: 'task-a',
+      error: longText,
+    });
+    const graph = buildActionGraphDiagnostics({
+      workflows: [workflow],
+      tasks: [task({
+        id: 'task-a',
+        description: longText,
+        execution: { selectedAttemptId: selectedAttempt.id },
+      })],
+      attemptsByTaskId: new Map([['task-a', [selectedAttempt]]]),
+      queueStatus: { maxConcurrency: 1, runningCount: 0, running: [], queued: [] },
+      mutationIntents: [{
+        id: 9,
+        workflowId: 'wf-1',
+        channel: 'invoker:fix-with-agent',
+        args: [],
+        priority: 'high',
+        status: 'failed',
+        createdAt: '2026-05-14T11:55:00.000Z',
+        error: longText,
+      }],
+      mutationLeases: [],
+      eventsByTaskId: new Map([['task-a', [{
+        id: 1,
+        taskId: 'task-a',
+        eventType: 'output',
+        payload: longText,
+        createdAt: '2026-05-14T11:59:00.000Z',
+      }]]]),
+      activityLogs: [],
+      stallThresholdMs: 60_000,
+      now,
+    });
+
+    const attemptNode = graph.nodes.find((node) => node.id === 'attempt:attempt-a1');
+    const intentNode = graph.nodes.find((node) => node.id === 'intent:9');
+    expect(attemptNode?.label.length).toBeLessThan(2_100);
+    expect(attemptNode?.latestError?.length).toBeLessThan(8_300);
+    expect(attemptNode?.history?.[0]?.message.length).toBeLessThan(2_100);
+    expect(intentNode?.latestError?.length).toBeLessThan(8_300);
+    expect(attemptNode?.latestError).toContain('truncated');
   });
 
   it('skips upstream attempt edges whose source attempts are omitted', () => {

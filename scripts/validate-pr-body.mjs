@@ -2,12 +2,14 @@
 
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
+import { collectDiffAtomicityFindings, formatDiffAtomicityFindings } from './lint-pr-diff-atomicity.mjs';
 import {
   formatReviewUnits,
   getLabelSection,
   getMarkdownSection,
   normalizeReviewUnit,
   reviewUnitsForChangedFiles,
+  validateKnownReviewBoundaries,
   validateReviewLaneUnitCompatibility,
   validateReviewUnitChangedFiles,
   validateReviewUnitFocus,
@@ -158,6 +160,17 @@ function getReviewMetadataValue(metadata, label) {
   return getLabelSection(metadata, label);
 }
 
+export function getReviewMetadata(body) {
+  const block = getReviewMetadataBlock(body);
+  return {
+    reviewClaim: getReviewMetadataValue(block.body, 'Review Claim'),
+    reviewLane: normalizeSectionValue(getReviewMetadataValue(block.body, 'Review Lane')),
+    reviewUnit: normalizeReviewUnit(getReviewMetadataValue(block.body, 'Review Unit')),
+    safetyInvariant: getReviewMetadataValue(block.body, 'Safety Invariant'),
+    sliceRationale: getReviewMetadataValue(block.body, 'Slice Rationale'),
+  };
+}
+
 function stripDetailsBlocks(text) {
   return String(text).replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, '').trim();
 }
@@ -263,6 +276,14 @@ export function getPrBodyWarnings(body, options = {}) {
     warnings.push(`PR spans ${units.length} review units: ${formatReviewUnits(units)}.`);
   }
 
+  if (options.diffText) {
+    const diffWarnings = collectDiffAtomicityFindings({ diffText: options.diffText })
+      .filter((finding) => finding.severity === 'warning');
+    for (const line of formatDiffAtomicityFindings(diffWarnings)) {
+      warnings.push(`Diff atomicity warning: ${line}`);
+    }
+  }
+
   return warnings;
 }
 
@@ -358,18 +379,33 @@ export async function validatePrBody(body, options = {}) {
       changedFiles: options.changedFiles,
       context: 'PR body',
     }));
+    errors.push(...validateKnownReviewBoundaries({
+      reviewLane,
+      changedFiles: options.changedFiles,
+      context: 'PR body',
+    }));
+  }
+
+  if (options.diffText) {
+    const fatalFindings = collectDiffAtomicityFindings({ diffText: options.diffText })
+      .filter((finding) => finding.severity === 'fatal');
+    for (const line of formatDiffAtomicityFindings(fatalFindings)) {
+      errors.push(`Diff atomicity violation: ${line}`);
+    }
   }
 
   return errors;
 }
 
 function usage() {
-  console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>) [--require-visual-proof]
+  console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>) [--require-visual-proof] [--changed-files-file <file>] [--diff-file <file>]
 
 Validates the canonical PR schema:
   Required: ## Summary with a collapsed Review metadata block, ## Non-goals, ## Test Plan, ## Revert Plan
   Optional: ## Architecture (must include ### Before and ### After when present)
-  UI changes: pass --require-visual-proof to require screenshot or video proof.`);
+  UI changes: pass --require-visual-proof to require screenshot or video proof.
+  --changed-files-file <file>  Newline-separated changed file paths for scope checks.
+  --diff-file <file>           Unified diff text to run the diff atomicity engine.`);
   process.exit(1);
 }
 
@@ -377,6 +413,8 @@ function parseArgs(argv) {
   let body = '';
   let bodyFile = '';
   let requiresVisualProof = false;
+  let changedFilesFile = '';
+  let diffFile = '';
 
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
@@ -388,6 +426,20 @@ function parseArgs(argv) {
         break;
       case '--require-visual-proof':
         requiresVisualProof = true;
+        break;
+      case '--changed-files-file':
+        changedFilesFile = argv[++i];
+        if (!changedFilesFile || changedFilesFile.startsWith('--')) {
+          console.error('--changed-files-file requires a file path.');
+          usage();
+        }
+        break;
+      case '--diff-file':
+        diffFile = argv[++i];
+        if (!diffFile || diffFile.startsWith('--')) {
+          console.error('--diff-file requires a file path.');
+          usage();
+        }
         break;
       case '--help':
         usage();
@@ -403,14 +455,18 @@ function parseArgs(argv) {
     usage();
   }
 
-  return { body, bodyFile, requiresVisualProof };
+  return { body, bodyFile, requiresVisualProof, changedFilesFile, diffFile };
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const body = args.bodyFile ? readFileSync(args.bodyFile, 'utf-8') : args.body;
-  const errors = await validatePrBody(body, { requiresVisualProof: args.requiresVisualProof });
-  const warnings = getPrBodyWarnings(body);
+  const changedFiles = args.changedFilesFile
+    ? readFileSync(args.changedFilesFile, 'utf-8').split('\n').map((line) => line.trim()).filter(Boolean)
+    : undefined;
+  const diffText = args.diffFile ? readFileSync(args.diffFile, 'utf-8') : undefined;
+  const errors = await validatePrBody(body, { requiresVisualProof: args.requiresVisualProof, changedFiles, diffText });
+  const warnings = getPrBodyWarnings(body, { changedFiles, diffText });
 
   if (errors.length > 0) {
     console.error('PR body validation failed:');

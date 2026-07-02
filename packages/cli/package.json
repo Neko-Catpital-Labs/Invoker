@@ -1,6 +1,6 @@
 {
   "name": "@invoker/cli",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Standalone Invoker command-line runner",
   "type": "module",
   "bin": {
@@ -22,7 +22,9 @@
     "@invoker/execution-engine": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*",
-    "yaml": "^2.8.2"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "yaml": "^2.8.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^25.3.3",

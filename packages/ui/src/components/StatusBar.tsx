@@ -6,19 +6,28 @@
  * Status labels are clickable to filter DAG nodes by status.
  */
 
-import type { TaskState } from '../types.js';
+import type { QueueStatus, TaskState } from '../types.js';
 import { getStatusVisual } from '../lib/status-colors.js';
 
 interface StatusBarProps {
   tasks: Map<string, TaskState>;
+  queueStatus?: QueueStatus | null;
   activeFilters?: Set<string>;
   keyboardActiveKey?: string | null;
   onStatusClick?: (filterKey: string, event: React.MouseEvent) => void;
 }
 
-export function StatusBar({ tasks, activeFilters, keyboardActiveKey, onStatusClick }: StatusBarProps) {
+export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey, onStatusClick }: StatusBarProps) {
   let completed = 0;
-  let running = 0;
+  const runningEntries = queueStatus?.running ?? [];
+  const runningTaskIds = new Set(runningEntries.map((entry) => entry.taskId));
+  const assigningTaskIds = new Set(
+    runningEntries
+      .filter((entry) => tasks.get(entry.taskId)?.execution.phase === 'launching')
+      .map((entry) => entry.taskId),
+  );
+  let assigning = assigningTaskIds.size;
+  let running = queueStatus ? Math.max(0, queueStatus.runningCount - assigning) : 0;
   let failed = 0;
   let closed = 0;
   let pending = 0;
@@ -37,7 +46,9 @@ export function StatusBar({ tasks, activeFilters, keyboardActiveKey, onStatusCli
       case 'running':
         if (task.execution.isFixingWithAI) {
           fixing++;
-        } else {
+        } else if (!queueStatus && task.execution.phase === 'launching') {
+          assigning++;
+        } else if (!queueStatus) {
           running++;
         }
         break;
@@ -51,7 +62,9 @@ export function StatusBar({ tasks, activeFilters, keyboardActiveKey, onStatusCli
         closed++;
         break;
       case 'pending':
-        pending++;
+        if (!runningTaskIds.has(task.id)) {
+          pending++;
+        }
         break;
       case 'needs_input':
         needsInput++;
@@ -109,6 +122,16 @@ export function StatusBar({ tasks, activeFilters, keyboardActiveKey, onStatusCli
         <span data-testid="workflow-status-pill-running" className="sr-only" />
         Running: <span className="font-medium">{running}</span>
       </span>
+      {assigning > 0 && (
+        <span
+          data-testid="status-bar-pill-assigning"
+          data-status-key="assigning"
+          className={`${statusTextClass('assigning')} ${filterClass('assigning')}`}
+          onClick={(e) => onStatusClick?.('assigning', e)}
+        >
+          Assigning: <span className="font-medium">{assigning}</span>
+        </span>
+      )}
       <span
         data-testid="status-bar-pill-failed"
         data-status-key="failed"
@@ -185,6 +208,11 @@ export function StatusBar({ tasks, activeFilters, keyboardActiveKey, onStatusCli
           onClick={(e) => onStatusClick?.('fixing_with_ai', e)}
         >
           Fixing: <span className="font-medium">{fixing}</span>
+        </span>
+      )}
+      {queueStatus && (
+        <span className="text-xs text-gray-400">
+          Queue capacity includes assigning and AI-fix work.
         </span>
       )}
       {fixApproval > 0 && (

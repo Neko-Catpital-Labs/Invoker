@@ -29,6 +29,19 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+// ── Workflow Channel Types (Slack workflow↔channel mapping) ─
+
+export interface WorkflowChannel {
+  workflowId: string;
+  channelId: string;
+  requestedBy?: string;
+  lobbyChannelId?: string;
+  lobbyThreadTs?: string;
+  harnessPreset?: string;
+  repoUrl?: string;
+  createdAt: string;
+}
+
 // ── Workflow Types ──────────────────────────────────────────
 
 export interface Workflow {
@@ -54,6 +67,26 @@ export interface Workflow {
   generation?: number;
   createdAt: string;
   updatedAt: string;
+}
+export type WorkflowSaveInput = Omit<Workflow, 'status' | 'rollup'>;
+
+/**
+ * Result of resolving a published PR back to its Invoker workflow via the merge
+ * node. The PR↔workflow link lives only on the `__merge__<workflowId>` task
+ * (`review_id` / `review_url`), so this is the single read-only lookup the PR
+ * cron jobs use to map a GitHub PR number to a local workflow.
+ */
+export interface ReviewGateLookup {
+  workflowId: string;
+  mergeTaskId: string;
+  reviewId?: string;
+  reviewUrl?: string;
+  branch?: string;
+  baseBranch?: string;
+  workflowStatus: WorkflowDerivedStatus;
+  workflowGeneration: number;
+  mergeTaskStatus?: string;
+  selectedAttemptId?: string;
 }
 
 export interface TaskEvent {
@@ -94,13 +127,80 @@ export interface ExecutionResourceLeaseReleaseRow {
   taskId?: string;
 }
 
+export type WorkerActionStatus =
+  | 'queued'
+  | 'pending'
+  | 'running'
+  | 'needs_input'
+  | 'review_ready'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'abandoned'
+  | 'cancelled';
+
+export interface WorkerActionRecord {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary?: string;
+  payload?: unknown;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface WorkerActionWrite {
+  /** Insert-only row id. Updates are keyed by workerKind/externalKey and reject a different id. */
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount?: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary?: string;
+  payload?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
+export interface WorkerActionListFilters {
+  workflowId?: string;
+  taskId?: string;
+  workerKind?: string;
+  status?: WorkerActionStatus | string;
+  limit?: number;
+}
+
 export interface PersistenceAdapter {
   // Workflows
-  saveWorkflow(workflow: Workflow): void;
+  saveWorkflow(workflow: WorkflowSaveInput): void;
   updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void;
   loadWorkflow(workflowId: string): Workflow | undefined;
   listWorkflows(): Workflow[];
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[];
+  /** Resolve a GitHub PR number back to its Invoker workflow via the merge node. */
+  findReviewGateByPr(pr: string): ReviewGateLookup | undefined;
 
   // Tasks
   saveTask(workflowId: string, task: TaskState): void;
@@ -109,6 +209,8 @@ export interface PersistenceAdapter {
   loadWorkflowTaskSnapshot?(): WorkflowTaskSnapshot;
   /** Authoritative single-task read by ID, suitable for recovery workflows. */
   loadTask(taskId: string): TaskState | undefined;
+  /** Delete one task and its task-owned rows. */
+  deleteTask(taskId: string): void;
   getAllTaskIds(): string[];
   getAllTaskBranches(): string[];
   deleteAllTasks(workflowId: string): void;
@@ -119,6 +221,11 @@ export interface PersistenceAdapter {
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
   getEvents(taskId: string): TaskEvent[];
   getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
+
+  // Worker actions (durable worker-owned action state/history)
+  getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
+  upsertWorkerAction(action: WorkerActionWrite): WorkerActionRecord;
+  listWorkerActions(filters?: WorkerActionListFilters): WorkerActionRecord[];
 
   // Conversations (Slack thread-based)
   saveConversation(conversation: Conversation): void;
@@ -133,6 +240,13 @@ export interface PersistenceAdapter {
   // Conversation messages
   appendMessage(threadTs: string, role: 'user' | 'assistant', content: string): void;
   loadMessages(threadTs: string): ConversationMessage[];
+
+  // Workflow channels (Slack workflow↔channel mapping)
+  saveWorkflowChannel(rec: WorkflowChannel): void;
+  loadWorkflowChannelByWorkflowId(workflowId: string): WorkflowChannel | undefined;
+  loadWorkflowChannelByChannelId(channelId: string): WorkflowChannel | undefined;
+  listWorkflowChannels(): WorkflowChannel[];
+  deleteWorkflowChannel(workflowId: string): void;
 
   // Task output (stdout/stderr persistence)
   appendTaskOutput(taskId: string, data: string): void;

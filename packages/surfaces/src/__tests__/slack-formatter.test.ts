@@ -3,6 +3,7 @@ import {
   formatTaskCreated,
   formatTaskUpdated,
   formatWorkflowStatus,
+  formatWorkflowProgress,
   formatExperimentSelection,
   formatError,
   formatSurfaceEvent,
@@ -101,6 +102,68 @@ describe('formatWorkflowStatus', () => {
       total: 0, completed: 0, failed: 0, closed: 0, running: 0, pending: 0,
     });
     expect(msg.text).toContain('0/0');
+  });
+});
+
+describe('formatWorkflowProgress', () => {
+  it('renders header with percent and counts plus one row per task including the review link', () => {
+    const msg = formatWorkflowProgress({
+      workflowId: 'wf-1',
+      name: 'My Workflow',
+      percentComplete: 50,
+      counts: { total: 4, completed: 2, failed: 0, closed: 0, running: 1, pending: 1 },
+      tasks: [
+        { id: 'build', name: 'Build', status: 'completed', reviewUrl: 'https://x/pr' },
+        { id: 'test', name: 'Test', status: 'running', phase: 'executing' },
+      ],
+    });
+
+    // Header section: name, percent, and the count emoji line.
+    const header = msg.blocks[0];
+    expect(header.type).toBe('section');
+    expect(header.text!.text).toContain('My Workflow');
+    expect(header.text!.text).toContain('50%');
+    expect(header.text!.text).toContain(':white_check_mark:2');
+    expect(header.text!.text).toContain(':large_blue_circle:1');
+
+    // Divider then the single task-rows section.
+    expect(msg.blocks[1].type).toBe('divider');
+    const rows = msg.blocks[2].text!.text;
+    expect(rows).toContain('*build*');
+    expect(rows).toContain('<https://x/pr|PR>');
+    expect(rows).toContain('*test* Running (executing)');
+
+    expect(msg.text).toContain('50%');
+    expect(msg.text).toContain('(2/4)');
+  });
+
+  it('collapses task lists longer than 40 rows', () => {
+    const tasks = Array.from({ length: 45 }, (_, i) => ({ id: `t${i}`, name: `T${i}`, status: 'pending' }));
+    const msg = formatWorkflowProgress({
+      workflowId: 'wf-2',
+      name: 'Big',
+      percentComplete: 0,
+      counts: { total: 45, completed: 0, failed: 0, closed: 0, running: 0, pending: 45 },
+      tasks,
+    });
+    const rows = msg.blocks[2].text!.text;
+    expect(rows).toContain('…and 5 more');
+  });
+
+  it('appends a footer context block when prUrl/reviewState are set', () => {
+    const msg = formatWorkflowProgress({
+      workflowId: 'wf-3',
+      name: 'WithReview',
+      percentComplete: 100,
+      counts: { total: 1, completed: 1, failed: 0, closed: 0, running: 0, pending: 0 },
+      tasks: [{ id: 'a', name: 'A', status: 'completed' }],
+      prUrl: 'https://x/pr',
+      reviewState: 'approved',
+    });
+    const footer = msg.blocks[msg.blocks.length - 1];
+    expect(footer.type).toBe('context');
+    expect((footer as any).elements[0].text).toContain('approved');
+    expect((footer as any).elements[0].text).toContain('<https://x/pr|PR>');
   });
 });
 

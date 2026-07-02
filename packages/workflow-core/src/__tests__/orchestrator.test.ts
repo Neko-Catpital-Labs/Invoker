@@ -13,7 +13,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, {
     id: string;
     name: string;
-    status: string;
     createdAt: string;
     updatedAt: string;
     repoUrl?: string;
@@ -22,22 +21,32 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    generation?: number;
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
   events: Array<{ taskId: string; eventType: string; payload?: unknown }> = [];
   updateWorkflowCalls = new Map<string, number>();
+  updateWorkflowHistory: Array<{ workflowId: string; changes: {
+    status?: string;
+    updatedAt?: string;
+    baseBranch?: string;
+    mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
+    generation?: number;
+  } }> = [];
 
   saveWorkflow(workflow: {
     id: string;
     name: string;
-    status: string;
     repoUrl?: string;
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    generation?: number;
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
@@ -49,25 +58,24 @@ class InMemoryPersistence implements OrchestratorPersistence {
       featureBranch: workflow.featureBranch,
       createdAt: (workflow as any).createdAt ?? now,
       updatedAt: (workflow as any).updatedAt ?? now,
+      generation: (workflow as any).generation ?? 0,
     });
   }
 
   updateWorkflow(
     workflowId: string,
     changes: {
-      status?: string;
       updatedAt?: string;
       baseBranch?: string;
       mergeMode?: 'manual' | 'automatic' | 'external_review';
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
+      generation?: number;
     },
   ): void {
     const wf = this.workflows.get(workflowId);
+    this.updateWorkflowHistory.push({ workflowId, changes: { ...changes } });
     this.updateWorkflowCalls.set(workflowId, (this.updateWorkflowCalls.get(workflowId) ?? 0) + 1);
-    if (wf && changes.status) {
-      wf.status = changes.status;
-    }
     if (wf && changes.updatedAt) {
       wf.updatedAt = changes.updatedAt;
     }
@@ -77,12 +85,17 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && changes.baseBranch !== undefined) {
       wf.baseBranch = changes.baseBranch;
     }
+
     if (wf && 'externalDependencies' in changes) {
       wf.externalDependencies = changes.externalDependencies;
     }
     if (wf && 'externalDependencyChanges' in changes) {
       wf.externalDependencyChanges = changes.externalDependencyChanges;
     }
+    if (wf && changes.generation !== undefined) {
+      wf.generation = changes.generation;
+    }
+
   }
 
   loadWorkflow(workflowId: string): {
@@ -92,6 +105,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     mergeMode?: 'manual' | 'automatic' | 'external_review';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
+    generation?: number;
   } | undefined {
     const wf = this.workflows.get(workflowId);
     if (!wf) return undefined;
@@ -152,12 +166,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
     }
   }
 
-  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
+  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; repoUrl?: string }> {
     return Array.from(this.workflows.values()).map((workflow) => this.withDerivedStatus(workflow));
   }
 
   loadWorkflowTaskSnapshot(): {
-    workflows: Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }>;
+    workflows: Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; repoUrl?: string }>;
     tasks: TaskState[];
     tasksByWorkflowId: Map<string, TaskState[]>;
   } {
@@ -167,12 +181,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
       workflowTasks.push(task);
       tasksByWorkflowId.set(workflowId, workflowTasks);
     }
-    const workflows = Array.from(this.workflows.values()).map((workflow) => {
-      const tasks = tasksByWorkflowId.get(workflow.id) ?? [];
-      if (tasks.length === 0) return workflow;
-      const rollup = computeWorkflowRollup(tasks);
-      return { ...workflow, status: rollup.status, rollup };
-    });
+    const workflows = Array.from(this.workflows.values()).map((workflow) => this.withDerivedStatus(workflow, tasksByWorkflowId.get(workflow.id) ?? []));
     return {
       workflows,
       tasks: Array.from(this.tasks.values()).map((entry) => entry.task),
@@ -180,9 +189,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     };
   }
 
-  private withDerivedStatus<T extends { id: string; status: string }>(workflow: T): T {
-    const tasks = this.loadTasks(workflow.id);
-    if (tasks.length === 0) return workflow;
+  private withDerivedStatus<T extends { id: string }>(workflow: T, tasks = this.loadTasks(workflow.id)): T & { status: string } {
     const rollup = computeWorkflowRollup(tasks);
     return { ...workflow, status: rollup.status, rollup };
   }
@@ -237,6 +244,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     this.tasks.clear();
   }
 }
+
 
 class CountingPersistence extends InMemoryPersistence {
   loadTasksCalls: string[] = [];
@@ -300,6 +308,7 @@ describe('Orchestrator', () => {
   let persistence: InMemoryPersistence;
   let bus: InMemoryBus;
   let publishedDeltas: TaskDelta[];
+  const repoDefaultBranch = 'main';
 
   beforeEach(() => {
     persistence = new InMemoryPersistence();
@@ -315,6 +324,7 @@ describe('Orchestrator', () => {
       messageBus: bus,
       maxConcurrency: 3,
       logger: consoleLogger,
+      resolveRepoDefaultBranch: () => repoDefaultBranch,
     });
   });
 
@@ -432,6 +442,167 @@ describe('Orchestrator', () => {
       expect(task.execution.reviewId).toBe('owner/repo#1');
       expect(task.execution.reviewStatus).toBe('Awaiting review');
     });
+
+
+    it('ignores setTaskReviewReady for a stale execution generation', () => {
+      orchestrator.loadPlan({
+        name: 'Review ready lineage',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'running',
+        execution: { generation: 2, selectedAttemptId: 'attempt-current' },
+      });
+
+      orchestrator.setTaskReviewReady(
+        mergeId,
+        { execution: { reviewId: 'owner/repo#stale', reviewUrl: 'https://example.test/stale' } },
+        { taskId: mergeId, selectedAttemptId: 'attempt-current', generation: 1 },
+      );
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.status).toBe('running');
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+    });
+
+    it('ignores setTaskReviewReady for a non-executable task with matching lineage', () => {
+      orchestrator.loadPlan({
+        name: 'Review ready non-executable',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      // Task failed on the same attempt: lineage (attempt + generation) is
+      // preserved, so the lineage guard alone would let a late review-ready
+      // write resurrect it.
+      persistence.updateTask(mergeId, {
+        status: 'failed',
+        execution: { generation: 1, selectedAttemptId: 'attempt-current' },
+      });
+
+      orchestrator.setTaskReviewReady(
+        mergeId,
+        { execution: { reviewId: 'owner/repo#late', reviewUrl: 'https://example.test/late' } },
+        { taskId: mergeId, selectedAttemptId: 'attempt-current', generation: 1 },
+      );
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.status).toBe('failed');
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+    });
+
+    it('discards review gate artifacts and clears scalar review fields on retry', () => {
+      orchestrator.loadPlan({
+        name: 'Review discard retry',
+        mergeMode: 'external_review',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'review_ready',
+        execution: {
+          generation: 3,
+          reviewId: 'owner/repo#1',
+          reviewUrl: 'https://github.com/owner/repo/pull/1',
+          reviewStatus: 'open',
+          reviewProviderId: 'owner/repo#1',
+          reviewGate: {
+            activeGeneration: 3,
+            completion: { required: 'all', status: 'approved' },
+            artifacts: [
+              {
+                id: 'contracts',
+                providerId: 'owner/repo#1',
+                url: 'https://github.com/owner/repo/pull/1',
+                required: true,
+                status: 'approved',
+                generation: 3,
+              },
+              {
+                id: 'runtime',
+                providerId: 'owner/repo#2',
+                url: 'https://github.com/owner/repo/pull/2',
+                required: true,
+                status: 'open',
+                generation: 3,
+                dependsOn: ['contracts'],
+              },
+            ],
+          },
+        },
+      });
+
+      orchestrator.retryTask(mergeId);
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+      expect(task.execution.reviewStatus).toBeUndefined();
+      expect(task.execution.reviewProviderId).toBeUndefined();
+      expect(task.execution.reviewGate?.activeGeneration).toBe(4);
+      expect(task.execution.reviewGate?.artifacts).toHaveLength(2);
+      expect(task.execution.reviewGate?.artifacts.every((artifact) => artifact.status === 'discarded')).toBe(true);
+      expect(task.execution.reviewGate?.artifacts.every((artifact) => artifact.discardReason === 'task subgraph reset to pending')).toBe(true);
+      const currentRequired = task.execution.reviewGate!.artifacts.filter((artifact) =>
+        artifact.required
+        && artifact.generation === task.execution.reviewGate!.activeGeneration
+        && artifact.status !== 'discarded'
+      );
+      expect(currentRequired).toEqual([]);
+    });
+
+    it('synthesizes a discarded artifact from scalar review fields on recreate', () => {
+      orchestrator.loadPlan({
+        name: 'Review discard recreate',
+        mergeMode: 'external_review',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${workflowId}`;
+      persistence.updateTask(mergeId, {
+        status: 'review_ready',
+        execution: {
+          generation: 5,
+          reviewId: 'owner/repo#scalar',
+          reviewUrl: 'https://github.com/owner/repo/pull/9',
+          reviewStatus: 'open',
+          reviewProviderId: 'owner/repo#scalar',
+        },
+      });
+
+      orchestrator.recreateWorkflow(workflowId);
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.execution.reviewId).toBeUndefined();
+      expect(task.execution.reviewUrl).toBeUndefined();
+      expect(task.execution.reviewStatus).toBeUndefined();
+      expect(task.execution.reviewProviderId).toBeUndefined();
+      expect(task.execution.reviewGate).toMatchObject({
+        activeGeneration: 6,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [
+          {
+            id: 'owner/repo#scalar',
+            providerId: 'owner/repo#scalar',
+            url: 'https://github.com/owner/repo/pull/9',
+            required: true,
+            status: 'discarded',
+            generation: 5,
+            discardReason: 'workflow recreation reset',
+          },
+        ],
+      });
+      expect(task.execution.reviewGate?.artifacts[0].discardedAt).toEqual(expect.any(String));
+    });
   });
 
   describe('workflow status transitions during retry paths', () => {
@@ -486,12 +657,63 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: taskId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
 
-      persistence.workflows.get(workflowId)!.status = 'failed';
 
       const restarted = orchestrator.retryTask(taskId);
 
       expect(restarted.some((task) => task.id === taskId && task.status === 'running')).toBe(true);
       expect(persistence.listWorkflows().find((workflow) => workflow.id === workflowId)?.status).toBe('running');
+    });
+
+    it('bumps workflow generation exactly once when a workflow is recreated', () => {
+      orchestrator.loadPlan({
+        name: 'Recreate workflow generation',
+        onFinish: 'none',
+        tasks: [
+          { id: 't1', description: 'First', command: 'echo 1' },
+          { id: 't2', description: 'Second', command: 'echo 2', dependencies: ['t1'] },
+        ],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      expect(persistence.loadWorkflow(workflowId)?.generation).toBe(0);
+
+      orchestrator.recreateWorkflow(workflowId);
+
+      expect(persistence.loadWorkflow(workflowId)?.generation).toBe(1);
+      const generationWrites = persistence.updateWorkflowHistory.filter(
+        (entry) => entry.workflowId === workflowId && entry.changes.generation !== undefined,
+      );
+      expect(generationWrites).toEqual([
+        { workflowId, changes: { generation: 1 } },
+      ]);
+    });
+
+    it('does not bump workflow generation when a workflow is retried', () => {
+      orchestrator.loadPlan({
+        name: 'Retry workflow generation',
+        onFinish: 'none',
+        tasks: [
+          { id: 't1', description: 'First', command: 'exit 1' },
+          { id: 't2', description: 'Second', command: 'echo 2', dependencies: ['t1'] },
+        ],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const taskId = orchestrator.getAllTasks().find(
+        (task) => task.config.workflowId === workflowId && task.id.endsWith('/t1'),
+      )!.id;
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: taskId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      orchestrator.retryWorkflow(workflowId);
+
+      expect(persistence.loadWorkflow(workflowId)?.generation).toBe(0);
+      expect(persistence.updateWorkflowHistory.some(
+        (entry) => entry.workflowId === workflowId && entry.changes.generation !== undefined,
+      )).toBe(false);
     });
 
     it('clears stale failed workflow status when a workflow is recreated', () => {
@@ -514,7 +736,6 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: taskId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
 
-      persistence.workflows.get(workflowId)!.status = 'failed';
 
       const restarted = orchestrator.recreateWorkflow(workflowId);
 
@@ -701,6 +922,62 @@ describe('Orchestrator', () => {
             taskId,
             responseAttemptId: oldAttemptId,
             activeAttemptId: currentAttemptId,
+            workerResponseStatus: 'completed',
+          }),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('rejects a completion signal when the current attemptId carries a stale executionGeneration', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        orchestrator.loadPlan({
+          name: 'reject-stale-generation-with-current-attempt',
+          onFinish: 'none',
+          tasks: [
+            { id: 'A', description: 'Root', command: 'echo A' },
+          ],
+        });
+        orchestrator.startExecution();
+        const taskId = orchestrator.getAllTasks().find((task) => task.id === 'A' || task.id.endsWith('/A'))?.id ?? 'A';
+
+        // recreateWorkflow bumps the live generation to 1 and selects a fresh
+        // attempt. The stale worker still carries the *current* attempt id but
+        // the *previous* generation (0).
+        const workflowId = orchestrator.getWorkflowIds()[0]!;
+        orchestrator.recreateWorkflow(workflowId);
+
+        const before = orchestrator.getTask(taskId)!;
+        const currentAttemptId = before.execution.selectedAttemptId;
+        expect(currentAttemptId).toBeTruthy();
+        expect(before.execution.generation).toBe(1);
+        expect(before.status).toBe('running');
+        const beforeBranch = before.execution.branch;
+        const beforeWorkspacePath = before.execution.workspacePath;
+
+        orchestrator.handleWorkerResponse(
+          makeResponse({
+            actionId: taskId,
+            attemptId: currentAttemptId,
+            executionGeneration: 0,
+            status: 'completed',
+            outputs: { exitCode: 0, branch: 'stale-branch' },
+          }),
+        );
+
+        const after = orchestrator.getTask(taskId)!;
+        expect(after.status).toBe('running');
+        expect(after.execution.selectedAttemptId).toBe(currentAttemptId);
+        expect(after.execution.branch).toBe(beforeBranch);
+        expect(after.execution.workspacePath).toBe(beforeWorkspacePath);
+        expect(warnSpy).toHaveBeenCalledWith(
+          '[worker-response] STALE_GENERATION_REJECTED',
+          expect.objectContaining({
+            taskId,
+            responseGeneration: 0,
+            activeGeneration: 1,
             workerResponseStatus: 'completed',
           }),
         );
@@ -1883,9 +2160,50 @@ describe('Orchestrator', () => {
       expect(afterPrereqTask.map((t) => t.id)).not.toContain(sid(orchestrator, 1, 'leaf-a'));
 
       orchestrator.setTaskAwaitingApproval(prereqMergeId);
-      const afterMergeAwaitingApproval = orchestrator.startExecution();
-      expect(afterMergeAwaitingApproval.map((t) => t.id)).toContain(sid(orchestrator, 1, 'leaf-a'));
       expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('running');
+    });
+
+    it('review_ready merge-gate transition unblocks downstream without mutating dependency metadata', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-public-review',
+        tasks: [{ id: 'publish-pr', description: 'Publish public PR' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'publish-pr');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-waits-on-public-pr',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for upstream public review gate',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const downstreamTaskId = sid(orchestrator, 1, 'leaf-a');
+      const downstreamWfId = downstreamTaskId.split('/')[0]!;
+      const depsBefore = (persistence.loadWorkflow(downstreamWfId)!.externalDependencies ?? [])
+        .map((dep) => ({ ...dep }));
+      const taskDepsBefore = (orchestrator.getTask(downstreamTaskId)!.config.externalDependencies ?? [])
+        .map((dep) => ({ ...dep }));
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+
+      orchestrator.setTaskReviewReady(prereqMergeId, {
+        execution: {
+          reviewId: 'owner/repo#229',
+          reviewUrl: 'https://github.com/owner/repo/pull/229',
+          reviewStatus: 'Awaiting review',
+        },
+      });
+
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('running');
+      expect(persistence.loadWorkflow(downstreamWfId)!.externalDependencies).toEqual(depsBefore);
+      expect(orchestrator.getTask(downstreamTaskId)!.config.externalDependencies ?? []).toEqual(taskDepsBefore);
+      expect(persistence.events.map((event) => event.eventType)).not.toContain('workflow.external_dependency_policy_updated');
     });
 
     it('approved merge-gate dependency keeps downstream pending when upstream is awaiting_approval', () => {
@@ -2100,7 +2418,7 @@ describe('Orchestrator', () => {
           changedAt: expect.any(String),
         },
       ]);
-      expect(persistence.loadWorkflow(downstreamWfId)!.baseBranch).toBe('master');
+      expect(persistence.loadWorkflow(downstreamWfId)!.baseBranch).toBe(repoDefaultBranch);
     });
 
     it('persists status changes to DB', () => {
@@ -6083,7 +6401,7 @@ describe('Orchestrator', () => {
       const b = new InMemoryBus();
       const wfId = 'wf-retry-status-batch';
 
-      p.saveWorkflow({ id: wfId, name: wfId, status: 'failed' });
+      p.saveWorkflow({ id: wfId, name: wfId });
       p.saveTask(wfId, {
         id: 'root',
         description: 'root',
@@ -6508,7 +6826,6 @@ describe('Orchestrator', () => {
         p.saveWorkflow({
           id: wfId,
           name: 'wf',
-          status: 'running',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         } as any);
@@ -6523,6 +6840,35 @@ describe('Orchestrator', () => {
         });
 
         expect(updateWorkflowSpy).toHaveBeenCalledWith(wfId, { baseBranch: 'main' });
+      });
+
+      it('bumps workflow generation exactly once when recreating from a fresh base', async () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-fresh-base-generation';
+        p.saveWorkflow({
+          id: wfId,
+          name: 'wf',
+          status: 'running',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          generation: 6,
+        } as any);
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        await o.recreateWorkflowFromFreshBase(wfId, {
+          refreshBase: async () => ({ branch: 'main', commit: 'sha-x' }),
+        });
+
+        expect(p.loadWorkflow(wfId)?.generation).toBe(7);
+        const generationWrites = p.updateWorkflowHistory.filter(
+          (entry) => entry.workflowId === wfId && entry.changes.generation !== undefined,
+        );
+        expect(generationWrites).toEqual([
+          { workflowId: wfId, changes: { generation: 7 } },
+        ]);
       });
 
       it('skips refreshBase invocation when no callback is supplied (degenerate caller path) and still resets', async () => {

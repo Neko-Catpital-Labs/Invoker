@@ -289,6 +289,7 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.config.poolMemberId != null) config.poolMemberId = task.config.poolMemberId;
   if (task.config.isMergeNode != null) config.isMergeNode = task.config.isMergeNode;
   if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
+  if (task.config.executionModel != null) config.executionModel = task.config.executionModel;
   if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
 
   const execution: Record<string, unknown> = {};
@@ -299,6 +300,8 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.execution.reviewUrl != null) execution.reviewUrl = task.execution.reviewUrl;
   if (task.execution.reviewId != null) execution.reviewId = task.execution.reviewId;
   if (task.execution.reviewStatus != null) execution.reviewStatus = task.execution.reviewStatus;
+  if (task.execution.reviewProviderId != null) execution.reviewProviderId = task.execution.reviewProviderId;
+  if (task.execution.reviewGate != null) execution.reviewGate = task.execution.reviewGate;
   if (task.execution.autoFixAttempts != null) execution.autoFixAttempts = task.execution.autoFixAttempts;
   if (task.execution.agentSessionId != null) execution.agentSessionId = task.execution.agentSessionId;
   if (task.execution.lastAgentSessionId != null) execution.lastAgentSessionId = task.execution.lastAgentSessionId;

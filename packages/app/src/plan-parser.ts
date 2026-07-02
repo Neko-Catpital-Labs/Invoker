@@ -8,7 +8,7 @@
 import { execSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
-import { loadConfig } from './config.js';
+import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 /** Empty / whitespace `baseBranch` in YAML (`baseBranch:`) must fall through to config + remote detection like a missing key. */
@@ -34,6 +34,31 @@ export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinitio
     featureBranch,
   };
 }
+function taskNeedsDefaultExecutionAgent(task: PlanDefinition['tasks'][number]): boolean {
+  if (typeof task.prompt === 'string' && task.prompt.trim() !== '') return true;
+  return task.experimentVariants?.some((variant) => (
+    typeof variant.prompt === 'string' && variant.prompt.trim() !== ''
+  )) ?? false;
+}
+
+export function applyPlanExecutionAgentDefault(plan: PlanDefinition, executionAgent: string): PlanDefinition {
+  const defaultExecutionAgent = executionAgent.trim();
+  if (!defaultExecutionAgent) return plan;
+  return {
+    ...plan,
+    tasks: plan.tasks.map((task) => {
+      if (task.executionAgent?.trim() || !taskNeedsDefaultExecutionAgent(task)) {
+        return task;
+      }
+      return { ...task, executionAgent: defaultExecutionAgent };
+    }),
+  };
+}
+
+export function applyConfiguredPlanDefaults(plan: PlanDefinition): PlanDefinition {
+  return applyPlanExecutionAgentDefault(plan, resolveDefaultExecutionAgent(loadConfig()));
+}
+
 
 export interface RawExperimentVariant {
   id?: string;
@@ -61,6 +86,7 @@ export interface RawPlanTask {
   dockerImage?: string;
   poolId?: string;
   executionAgent?: string;
+  executionModel?: string;
 }
 
 export interface RawPlan {
@@ -295,10 +321,18 @@ export function parsePlan(yamlContent: string): PlanDefinition {
 
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
 
+  const seenTaskIds = new Set<string>();
   const tasks = raw.tasks.map((task, index) => {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) {
+      throw new PlanParseError(`Task at index ${index} must be an object with an "id" field`);
+    }
     if (!task.id || typeof task.id !== 'string') {
       throw new PlanParseError(`Task at index ${index} must have an "id" field`);
     }
+    if (seenTaskIds.has(task.id)) {
+      throw new PlanParseError(`Duplicate task id "${task.id}". Task ids must be unique within a plan.`);
+    }
+    seenTaskIds.add(task.id);
 
     if (!task.description || typeof task.description !== 'string') {
       throw new PlanParseError(`Task "${task.id}" must have a "description" field`);
@@ -340,6 +374,10 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       command: v.command,
     }));
 
+    if (task.executionModel !== undefined && typeof task.executionModel !== 'string') {
+      throw new PlanParseError(`Task "${task.id}" field "executionModel" must be a string when provided`);
+    }
+
     return {
       id: task.id,
       description: task.description,
@@ -353,6 +391,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       dockerImage: task.dockerImage,
       poolId: task.poolId,
       executionAgent: task.executionAgent?.trim() || undefined,
+      executionModel: task.executionModel?.trim() || undefined,
     };
   });
 

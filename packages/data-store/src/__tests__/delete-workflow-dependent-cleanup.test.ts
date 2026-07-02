@@ -51,11 +51,13 @@ describe('delete/detach upstream workflow clears dependent externalDependencies'
       persistence: adapter,
       messageBus: new NoopBus(),
       maxConcurrency: 8,
+      resolveRepoDefaultBranch: () => 'main',
     });
 
     orchestrator.loadPlan({
       name: 'upstream',
       baseBranch: 'master',
+      repoUrl: 'memory://test-repo',
       featureBranch: 'feature/upstream',
       tasks: [{ id: 'leaf', description: 'upstream leaf' }],
     });
@@ -65,6 +67,7 @@ describe('delete/detach upstream workflow clears dependent externalDependencies'
     orchestrator.loadPlan({
       name: 'downstream',
       baseBranch: 'feature/upstream',
+      repoUrl: 'memory://test-repo',
       featureBranch: 'feature/downstream',
       externalDependencies: [
         { workflowId: upstreamWfId, taskId: '__merge__', requiredStatus: 'completed' },

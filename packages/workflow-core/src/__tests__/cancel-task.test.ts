@@ -9,21 +9,18 @@ import type { WorkResponse } from '@invoker/contracts';
 // ── In-Memory Persistence Mock ──────────────────────────────
 
 class InMemoryPersistence implements OrchestratorPersistence {
-  workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
+  workflows = new Map<string, { id: string; name: string; createdAt: string; updatedAt: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
   events: Array<{ taskId: string; eventType: string; payload?: unknown }> = [];
 
-  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
+  saveWorkflow(workflow: { id: string; name: string }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
   }
 
-  updateWorkflow(workflowId: string, changes: { status?: string; updatedAt?: string }): void {
+  updateWorkflow(workflowId: string, changes: { updatedAt?: string }): void {
     const wf = this.workflows.get(workflowId);
-    if (wf && changes.status) {
-      wf.status = changes.status;
-    }
     if (wf && changes.updatedAt) {
       wf.updatedAt = changes.updatedAt;
     }
@@ -48,9 +45,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
 
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
     return Array.from(this.workflows.values()).map((workflow) => {
-      const tasks = this.loadTasks(workflow.id);
-      if (tasks.length === 0) return workflow;
-      const rollup = computeWorkflowRollup(tasks);
+      const rollup = computeWorkflowRollup(this.loadTasks(workflow.id));
       return { ...workflow, status: rollup.status, rollup };
     });
   }

@@ -1,5 +1,4 @@
-import { computeWorkflowRollupFromSummaries } from '@invoker/workflow-graph';
-import type { TaskState, WorkflowMeta } from '../types.js';
+import type { WorkflowMeta } from '../types.js';
 
 export interface WorkflowGraphNode {
   id: string;
@@ -26,39 +25,8 @@ export interface WorkflowPosition {
 
 export function deriveWorkflowGraph(
   workflows: Map<string, WorkflowMeta>,
-  tasks: Map<string, TaskState>,
 ): WorkflowGraph {
-  const workflowNodes = new Map(workflows);
-  const fallbackTasksByWorkflow = new Map<string, TaskState[]>();
-
-  for (const task of tasks.values()) {
-    const workflowId = task.config.workflowId;
-    if (!workflowId || workflowNodes.has(workflowId)) continue;
-    const workflowTasks = fallbackTasksByWorkflow.get(workflowId);
-    if (workflowTasks) {
-      workflowTasks.push(task);
-    } else {
-      fallbackTasksByWorkflow.set(workflowId, [task]);
-    }
-  }
-
-  for (const [workflowId, workflowTasks] of fallbackTasksByWorkflow) {
-    const rollup = computeWorkflowRollupFromSummaries(workflowTasks.map((task) => ({
-      id: task.id,
-      description: task.description,
-      status: task.status,
-      dependencies: task.dependencies,
-      execution: task.execution,
-    })));
-    workflowNodes.set(workflowId, {
-      id: workflowId,
-      name: workflowId,
-      status: rollup.status,
-      rollup,
-    });
-  }
-
-  const nodes: WorkflowGraphNode[] = [...workflowNodes.values()].map((workflow) => ({
+  const nodes: WorkflowGraphNode[] = [...workflows.values()].map((workflow) => ({
     id: workflow.id,
     name: workflow.name,
     workflow,
@@ -68,11 +36,11 @@ export function deriveWorkflowGraph(
   const edges: WorkflowGraphEdge[] = [];
   const missingDependencies = new Set<string>();
 
-  for (const workflow of workflowNodes.values()) {
+  for (const workflow of workflows.values()) {
     const targetWorkflowId = workflow.id;
     for (const dep of workflow.externalDependencies ?? []) {
       const sourceWorkflowId = dep.workflowId;
-      if (!workflowNodes.has(sourceWorkflowId)) {
+      if (!workflows.has(sourceWorkflowId)) {
         missingDependencies.add(`${sourceWorkflowId}->${targetWorkflowId}`);
         continue;
       }
@@ -93,7 +61,7 @@ export function deriveWorkflowGraph(
       for (const dependency of [change.before, change.after]) {
         if (!dependency) continue;
         const sourceWorkflowId = dependency.workflowId;
-        if (!workflowNodes.has(sourceWorkflowId)) {
+        if (!workflows.has(sourceWorkflowId)) {
           missingDependencies.add(`${sourceWorkflowId}->${targetWorkflowId}`);
           continue;
         }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
-import { autoFixOnReviewGateFailure } from '../workflow-actions.js';
+import { publishReviewGateCiFailedLifecycleEvent } from '../lifecycle-event-bridge.js';
 import { loadConfig, resolveSecretsFilePath } from '../config.js';
 import {
   killRunningTaskExecution,
@@ -43,8 +43,8 @@ vi.mock('@invoker/execution-engine', () => {
   };
 });
 
-vi.mock('../workflow-actions.js', () => ({
-  autoFixOnReviewGateFailure: vi.fn(async () => undefined),
+vi.mock('../lifecycle-event-bridge.js', () => ({
+  publishReviewGateCiFailedLifecycleEvent: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -54,6 +54,7 @@ vi.mock('../config.js', () => ({
     autoFixAgent: 'codex',
     autoApproveAIFixes: true,
   })),
+  resolveDefaultTaskExecutionSettings: vi.fn(() => ({ executionAgent: 'claude' })),
   resolveSecretsFilePath: vi.fn(() => '/tmp/secrets.env'),
 }));
 
@@ -62,6 +63,12 @@ function createLogger() {
     info: vi.fn(),
     error: vi.fn(),
     warn: vi.fn(),
+  };
+}
+
+function createMessageBus() {
+  return {
+    publish: vi.fn(),
   };
 }
 
@@ -91,6 +98,7 @@ describe('task-runner-wiring', () => {
     const runner = rebuildTaskRunner({
       orchestrator: orchestrator as any,
       persistence: persistence as any,
+      messageBus: createMessageBus() as any,
       executorRegistry: {} as any,
       executionAgentRegistry: {} as any,
       repoRoot: '/repo',
@@ -120,7 +128,8 @@ describe('task-runner-wiring', () => {
     expect(config.dockerConfig).toEqual({ imageName: 'image', secretsFile: '/tmp/secrets.env' });
     expect(config.remoteTargetsProvider()).toEqual({ remote: { host: 'host' } });
     expect(config.executionPoolsProvider()).toEqual({ pool: { members: [] } });
-    expect(loadConfig).toHaveBeenCalledTimes(2);
+    expect(config.executionDefaultsProvider()).toEqual({ executionAgent: 'claude' });
+    expect(loadConfig).toHaveBeenCalledTimes(3);
 
     config.callbacks.onOutput('task-1', 'chunk');
     expect(taskRunnerConstructor.mock.calls[0]?.[0].callbacks.onOutput).toBe(config.callbacks.onOutput);
@@ -146,7 +155,7 @@ describe('task-runner-wiring', () => {
     });
   });
 
-  it('keeps review-gate auto-fix and approve hook routed through the current TaskRunner', async () => {
+  it('publishes review-gate failure lifecycle events and keeps approve hook routed through the current TaskRunner', async () => {
     let currentRunner: any = null;
     const orchestrator = {
       getTask: vi.fn(),
@@ -161,6 +170,7 @@ describe('task-runner-wiring', () => {
     rebuildTaskRunner({
       orchestrator: orchestrator as any,
       persistence: persistence as any,
+      messageBus: createMessageBus() as any,
       executorRegistry: {} as any,
       repoRoot: '/repo',
       invokerConfig: { autoFixCi: true },
@@ -175,10 +185,10 @@ describe('task-runner-wiring', () => {
     });
 
     const config = taskRunnerConstructor.mock.calls[0]?.[0] as any;
-    await config.onReviewGateCiFailure({ taskId: 'merge-task' });
-    expect(autoFixOnReviewGateFailure).toHaveBeenCalledWith(
+    await config.reviewGateCiFailurePublisher.publish({ taskId: 'merge-task' });
+    expect(publishReviewGateCiFailedLifecycleEvent).toHaveBeenCalledWith(
       { taskId: 'merge-task' },
-      expect.objectContaining({ taskExecutor: currentRunner }),
+      expect.objectContaining({ messageBus: expect.any(Object), getTask: expect.any(Function) }),
     );
 
     const approveHook = orchestrator.setBeforeApproveHook.mock.calls[0]?.[0];
@@ -272,6 +282,7 @@ describe('task-runner-wiring', () => {
     rebuildTaskRunner({
       orchestrator: orchestrator as any,
       persistence: { updateTask: vi.fn(), loadWorkflow: vi.fn() } as any,
+      messageBus: createMessageBus() as any,
       executorRegistry: {} as any,
       repoRoot: '/repo',
       invokerConfig: {},

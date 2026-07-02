@@ -16,7 +16,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { TerminalOutputEvent } from '@invoker/contracts';
+import type { ActionGraphResponse, RuntimeStatus, TerminalOutputEvent, WorkflowMutationAcceptedResult } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -31,6 +31,10 @@ export interface MockInvoker {
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
   /** Fire an embedded terminal output event to subscribers. */
   fireTerminalOutput: (event: TerminalOutputEvent) => void;
+  /** Replace the action graph snapshot returned by getActionGraph. */
+  setActionGraph: (response: ActionGraphResponse) => void;
+  /** Replace the runtime status returned by getRuntimeStatus. */
+  setRuntimeStatus: (status: RuntimeStatus) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -46,6 +50,25 @@ export function createMockInvoker(
   let graphEventCallback: ((event: TaskGraphEvent) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
+  let actionGraphSnapshot: ActionGraphResponse = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    stallThresholdMs: 60_000,
+    nodes: [],
+    edges: [],
+  };
+  let runtimeStatus: RuntimeStatus = {
+    ownerMode: true,
+    readOnly: false,
+    mode: 'local-owner',
+  };
+
+  const accepted = (channel: string, workflowId = 'wf-1'): WorkflowMutationAcceptedResult => ({
+    ok: true,
+    accepted: true,
+    intentId: 1,
+    workflowId,
+    channel,
+  });
 
   const api: InvokerAPI = {
     // Defer resolution one microtask so the startup snapshot is read after synchronous setTasks()
@@ -92,18 +115,20 @@ export function createMockInvoker(
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
     getStatus: vi.fn(async () => ({ total: 0, completed: 0, failed: 0, closed: 0, running: 0, pending: 0 })),
-    provideInput: vi.fn(async () => {}),
-    approve: vi.fn(async () => {}),
-    reject: vi.fn(async () => {}),
-    selectExperiment: vi.fn(async () => {}),
-    restartTask: vi.fn(async () => {}),
-    editTaskCommand: vi.fn(async () => {}),
-    editTaskPool: vi.fn(async () => {}),
-    editTaskAgent: vi.fn(async () => {}),
-    setTaskExternalGatePolicies: vi.fn(async () => {}),
+    provideInput: vi.fn(async () => accepted('invoker:provide-input')),
+    approve: vi.fn(async () => accepted('invoker:approve')),
+    reject: vi.fn(async () => accepted('invoker:reject')),
+    selectExperiment: vi.fn(async () => accepted('invoker:select-experiment')),
+    restartTask: vi.fn(async () => accepted('invoker:restart-task')),
+    editTaskCommand: vi.fn(async () => accepted('invoker:edit-task-command')),
+    editTaskPrompt: vi.fn(async () => accepted('invoker:edit-task-prompt')),
+    editTaskPool: vi.fn(async () => accepted('invoker:edit-task-pool')),
+    editTaskAgent: vi.fn(async () => accepted('invoker:edit-task-agent')),
+    setTaskExternalGatePolicies: vi.fn(async () => accepted('invoker:set-task-external-gate-policies')),
     getRemoteTargets: vi.fn(async () => []),
     getExecutionPools: vi.fn(async () => ['mixed-local-ssh', 'pnpm-ssh']),
     getExecutionAgents: vi.fn(async () => ['claude', 'codex']),
+    getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getSystemDiagnostics: vi.fn(async () => ({
       platform: 'linux',
       arch: 'x64',
@@ -120,6 +145,8 @@ export function createMockInvoker(
           { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
           { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
         ],
+        commandTargets: [],
+        mcpTargets: [],
       },
     })),
     getBundledSkillsStatus: vi.fn(async () => ({
@@ -132,6 +159,8 @@ export function createMockInvoker(
         { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
         { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
       ],
+      commandTargets: [],
+      mcpTargets: [],
     })),
     installBundledSkills: vi.fn(async () => ({
       available: false,
@@ -143,8 +172,10 @@ export function createMockInvoker(
         { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
         { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
       ],
+      commandTargets: [],
+      mcpTargets: [],
     })),
-    replaceTask: vi.fn(async () => []),
+    replaceTask: vi.fn(async () => accepted('invoker:replace-task')),
     getActivityLogs: vi.fn(async () => []),
     getEvents: vi.fn(async () => []),
     openTerminal: vi.fn(async (taskId: string) => ({
@@ -170,30 +201,34 @@ export function createMockInvoker(
     resumeWorkflow: vi.fn(async () => null),
     listWorkflows: vi.fn(async () => workflowSnapshot),
     loadWorkflow: vi.fn(async () => ({ workflow: {}, tasks: [] })),
+    getReviewGate: vi.fn(async () => null),
     deleteAllWorkflows: vi.fn(async () => {}),
     deleteAllWorkflowsBulk: vi.fn(async () => {}),
-    deleteWorkflow: vi.fn(async () => {}),
+    deleteWorkflow: vi.fn(async () => accepted('invoker:delete-workflow')),
+    deleteTask: vi.fn(async () => accepted('invoker:delete-task')),
+    detachWorkflow: vi.fn(async () => {}),
     cleanupWorktrees: vi.fn(async () => ({ removed: [], errors: [] })),
-    recreateWorkflow: vi.fn(async () => {}),
-    recreateTask: vi.fn(async () => {}),
-    recreateDownstream: vi.fn(async () => {}),
-    retryWorkflow: vi.fn(async () => {}),
-    rebaseRetry: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
-    rebaseRecreate: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
-    setMergeBranch: vi.fn(async () => {}),
-    approveMerge: vi.fn(async () => {}),
-    resolveConflict: vi.fn(async () => {}),
-    fixWithAgent: vi.fn(async () => {}),
-    setMergeMode: vi.fn(async () => {}),
+    recreateWorkflow: vi.fn(async () => accepted('invoker:recreate-workflow')),
+    recreateTask: vi.fn(async () => accepted('invoker:recreate-task')),
+    recreateDownstream: vi.fn(async () => accepted('invoker:recreate-downstream')),
+    retryWorkflow: vi.fn(async () => accepted('invoker:retry-workflow')),
+    rebaseRetry: vi.fn(async () => accepted('invoker:rebase-retry')),
+    rebaseRecreate: vi.fn(async () => accepted('invoker:rebase-recreate')),
+    setMergeBranch: vi.fn(async () => accepted('invoker:set-merge-branch')),
+    approveMerge: vi.fn(async () => accepted('invoker:approve-merge')),
+    resolveConflict: vi.fn(async () => accepted('invoker:resolve-conflict')),
+    fixWithAgent: vi.fn(async () => accepted('invoker:fix-with-agent')),
+    setMergeMode: vi.fn(async () => accepted('invoker:set-merge-mode')),
     checkPrStatuses: vi.fn(async () => {}),
-    cancelTask: vi.fn(async () => ({ cancelled: [], runningCancelled: [] })),
-    cancelWorkflow: vi.fn(async () => ({ cancelled: [], runningCancelled: [] })),
+    cancelTask: vi.fn(async () => accepted('invoker:cancel-task')),
+    cancelWorkflow: vi.fn(async () => accepted('invoker:cancel-workflow')),
     getQueueStatus: vi.fn(async () => ({
       maxConcurrency: 0,
       runningCount: 0,
       running: [],
       queued: [],
     })),
+    getActionGraph: vi.fn(async () => actionGraphSnapshot),
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
   };
@@ -211,13 +246,21 @@ export function createMockInvoker(
 
       // Fire created graph events for each task after subscribers attach.
       for (const task of tasks) {
-        graphEventCallback?.({ type: 'delta', delta: { type: 'created', task } });
+        graphEventCallback?.({ type: 'delta', delta: { type: 'created', task }, workflowRollups: [] });
       }
     });
   }
 
+  function setActionGraph(response: ActionGraphResponse) {
+    actionGraphSnapshot = response;
+  }
+  function setRuntimeStatus(status: RuntimeStatus) {
+    runtimeStatus = status;
+  }
+
+
   function fireDelta(delta: TaskDelta) {
-    graphEventCallback?.({ type: 'delta', delta });
+    graphEventCallback?.({ type: 'delta', delta, workflowRollups: [] });
   }
   function fireGraphEvent(event: TaskGraphEvent) {
     graphEventCallback?.(event);
@@ -244,12 +287,23 @@ export function createMockInvoker(
   }
 
   function cleanup() {
-    terminalOutputCallbacks.clear();
-    delete (window as unknown as { invoker?: unknown }).invoker;
+    delete (window as unknown as { invoker?: InvokerAPI }).invoker;
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
+    terminalOutputCallbacks.clear();
   }
 
-  return { api, setTasks, fireDelta, fireGraphEvent, fireWorkflowsChanged, fireTerminalOutput, install, cleanup };
+  return {
+    api,
+    setTasks,
+    setActionGraph,
+    setRuntimeStatus,
+    fireDelta,
+    fireGraphEvent,
+    fireWorkflowsChanged,
+    fireTerminalOutput,
+    install,
+    cleanup,
+  };
 }
 
 /** Create a minimal TaskState for testing. */

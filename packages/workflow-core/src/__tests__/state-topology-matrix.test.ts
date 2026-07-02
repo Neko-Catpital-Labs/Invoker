@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
-import type { TaskState, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange } from '../task-types.js';
+import { computeWorkflowRollup, type TaskState, type TaskStateChanges, type Attempt, type ExternalDependency, type ExternalDependencyChange } from '../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
 import { MUTATION_POLICIES } from '../invalidation-policy.js';
 
@@ -30,24 +30,22 @@ class InMemoryPersistence implements OrchestratorPersistence {
   saveWorkflow(workflow: {
     id: string;
     name: string;
-    status: string;
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
   }): void {
     const now = new Date().toISOString();
-    this.workflows.set(workflow.id, { ...workflow, createdAt: now, updatedAt: now });
+    this.workflows.set(workflow.id, { ...workflow, status: 'pending', createdAt: now, updatedAt: now });
   }
 
   updateWorkflow(
     workflowId: string,
     changes: {
-      status?: string;
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
     },
   ): void {
     const wf = this.workflows.get(workflowId);
-    if (wf && changes.status) wf.status = changes.status;
+    
     if (wf && 'externalDependencies' in changes) wf.externalDependencies = changes.externalDependencies;
     if (wf && 'externalDependencyChanges' in changes) {
       wf.externalDependencyChanges = changes.externalDependencyChanges;
@@ -72,11 +70,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   listWorkflows() {
-    return Array.from(this.workflows.values());
+    return Array.from(this.workflows.values()).map((workflow) => ({ ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status }));
   }
 
   loadWorkflow(workflowId: string) {
-    return this.workflows.get(workflowId);
+    const workflow = this.workflows.get(workflowId);
+    return workflow ? { ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status } : undefined;
   }
 
   loadTasks(workflowId: string): TaskState[] {

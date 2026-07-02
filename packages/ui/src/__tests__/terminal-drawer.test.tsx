@@ -79,6 +79,7 @@ vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
 vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
 
 const { App } = await import('../App.js');
+const { TerminalDrawer } = await import('../components/TerminalDrawer.js');
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'completed' }];
 const taskAlpha = makeUITask({
@@ -188,6 +189,28 @@ describe('Terminal drawer (component)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
     expect(drawer).toHaveAttribute('data-state', 'minimized');
     expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
+  });
+
+  it('bounds the maximized terminal body so xterm owns scrollback', () => {
+    const session = makeTerminalSession('task-alpha', {
+      command: 'sh',
+      args: ['-lc', 'seq 1 200'],
+    });
+
+    render(
+      <TerminalDrawer
+        state="maximized"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('terminal-drawer')).toHaveClass('min-h-0', 'overflow-hidden');
+    expect(screen.getByTestId('terminal-drawer-body')).toHaveClass('min-h-0', 'flex-1', 'overflow-hidden');
+    expect(screen.getByTestId('terminal-pane-task-alpha')).toHaveClass('overflow-hidden');
   });
 
   it('reuses an existing tab when opening the same task twice', async () => {

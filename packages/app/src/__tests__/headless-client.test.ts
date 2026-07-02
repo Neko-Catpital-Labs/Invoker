@@ -404,6 +404,40 @@ describe('headless-client', () => {
     expect(refreshMessageBus).toHaveBeenCalled();
   }, 15_000);
 
+  it('refreshes and retries generic read queries when a live owner is not ready', async () => {
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    let queryCalls = 0;
+
+    secondBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-generic', mode: 'standalone' }));
+    secondBus.onRequest('headless.query', async () => {
+      queryCalls += 1;
+      if (queryCalls === 1) {
+        return await new Promise(() => {});
+      }
+      return { output: 'wf-1\n' };
+    });
+
+    const refreshMessageBus = vi.fn()
+      .mockResolvedValueOnce(secondBus)
+      .mockResolvedValue(secondBus);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'workflows', '--output', 'label'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      refreshMessageBus,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(queryCalls).toBe(2);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+    expect(stdout).toHaveBeenCalledWith('wf-1\n');
+    stdout.mockRestore();
+  }, 15_000);
+
   it('refreshes past a non-mutation owner before delegating a mutation', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();
@@ -506,14 +540,16 @@ describe('headless-client', () => {
     stdout.mockRestore();
   });
 
-  it('does not silently fall back for query action-graph when no owner endpoint is reachable', async () => {
-    await expect(
-      runHeadlessClientCommand(['query', 'action-graph', '--output', 'json'], {
-        messageBus: new LocalBus(),
-        ensureStandaloneOwner: vi.fn(async () => {}),
-        runElectronHeadless: vi.fn(async () => 0),
-      }),
-    ).rejects.toThrow(/query action-graph requires a running shared owner process/);
+  it('falls back to direct Electron headless for query action-graph when no owner endpoint is reachable', async () => {
+    const runElectronHeadless = vi.fn(async () => 0);
+    const exitCode = await runHeadlessClientCommand(['query', 'action-graph', '--output', 'json'], {
+      messageBus: new LocalBus(),
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).toHaveBeenCalledWith(['query', 'action-graph', '--output', 'json']);
   }, 30_000);
 
   it('delegates query queue to a reachable owner endpoint', async () => {

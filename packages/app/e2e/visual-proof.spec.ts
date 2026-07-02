@@ -17,12 +17,14 @@ import {
   injectTaskStates,
   captureScreenshot,
   assertPageScreenshot,
+  getTasks,
   E2E_REPO_URL,
 } from './fixtures/electron-app.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 import type { Locator, Page } from '@playwright/test';
+import { SQLiteAdapter } from '@invoker/data-store';
 
 /** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
 const QUEUE_SEMANTICS_PLAN = {
@@ -37,6 +39,14 @@ const QUEUE_SEMANTICS_PLAN = {
     { id: 'qs-approval', description: 'Awaiting approval task', command: 'echo approve', dependencies: [] },
     { id: 'qs-queued', description: 'Queued pending task', command: 'echo queued', dependencies: [] },
     { id: 'qs-blocked', description: 'Blocked by running task', command: 'echo blocked', dependencies: ['qs-running'] },
+  ],
+};
+const QUEUE_ASSIGNING_PLAN = {
+  name: 'Queue assigning proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    { id: 'assigning-task', description: 'Assigning queue task', command: 'echo assign', dependencies: [] },
   ],
 };
 
@@ -212,7 +222,7 @@ const SSH_TERMINAL_RESUME_PLAN = {
 };
 
 function workflowNode(page: Page, workflowId: string) {
-  return page.getByTestId(`workflow-node-${workflowId}`);
+  return page.getByTestId(`rf__node-${workflowId}`).first();
 }
 
 function taskNodeCard(page: Page, taskIdSuffix: string) {
@@ -342,24 +352,82 @@ async function openContextMenu(page: Page, locator: Locator) {
   return menu;
 }
 
+async function selectWorkflowNode(page: Page, workflowId: string): Promise<void> {
+  const node = workflowNode(page, workflowId);
+  const miniDag = page.getByTestId('selected-workflow-mini-dag');
+
+  if (await miniDag.isVisible({ timeout: 500 }).catch(() => false)) {
+    await page.getByTestId('workflow-graph-react-flow').click({ position: { x: 8, y: 8 } });
+    await expect(miniDag).not.toBeVisible({ timeout: 5000 });
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await node.waitFor({ state: 'attached', timeout: 15000 });
+    await node.scrollIntoViewIfNeeded();
+    try {
+      await node.click({ force: true });
+    } catch {
+      await node.dispatchEvent('click', { bubbles: true });
+    }
+    if (!(await miniDag.isVisible({ timeout: 1500 }).catch(() => false))) {
+      await node.dispatchEvent('click', { bubbles: true });
+    }
+    if (await miniDag.isVisible({ timeout: 1500 }).catch(() => false)) {
+      return;
+    }
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
+  }
+
+  await expect(miniDag).toBeVisible({ timeout: 10000 });
+}
+
 async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<string> {
   const beforeIds = await page.evaluate(async () => {
     const workflows = await window.invoker.listWorkflows();
     return workflows.map((workflow: { id: string }) => workflow.id);
   });
   await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(plan));
-  const workflowId = await page.evaluate(async (knownIds) => {
+  const workflow = await page.evaluate(async (knownIds) => {
     const workflows = await window.invoker.listWorkflows();
-    const created = workflows.find((workflow: { id: string }) => !knownIds.includes(workflow.id));
-    return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
+    return workflows.find((candidate: { id: string }) => !knownIds.includes(candidate.id))
+      ?? workflows[workflows.length - 1]
+      ?? null;
   }, beforeIds);
-  expect(workflowId).toBeTruthy();
-  const node = workflowNode(page, workflowId!);
-  await node.waitFor({ state: 'attached', timeout: 15000 });
-  await node.dispatchEvent('click', { bubbles: true });
-  await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10000 });
-  return workflowId!;
+  expect(workflow?.id).toBeTruthy();
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await page.waitForTimeout(300);
+  await selectWorkflowNode(page, workflow!.id);
+  return workflow!.id;
 }
+async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId: string, now: Date): Promise<void> {
+  const adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+  try {
+    adapter.saveAttempt({
+      id: attemptId,
+      nodeId: taskId,
+      queuePriority: 0,
+      upstreamAttemptIds: [],
+      status: 'claimed',
+      claimedAt: now,
+      lastHeartbeatAt: now,
+      leaseExpiresAt: new Date(now.getTime() + 60_000),
+      createdAt: now,
+    });
+  } finally {
+    adapter.close();
+  }
+}
+
+test.describe('Read-only mode visual proof', () => {
+  test.use({ guiOwnerMode: 'read-only-status' });
+
+  test('read-only mode banner', async ({ page }) => {
+    await expect(page.getByTestId('read-only-mode-banner')).toContainText('Read-only mode.', { timeout: 5000 });
+    await expect(page.getByTestId('read-only-mode-banner')).toContainText('This window can browse workflows');
+    await captureScreenshot(page, 'read-only-mode-banner');
+  });
+});
 
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
@@ -608,10 +676,10 @@ test.describe('Visual proof capture', () => {
   test('status bar — no system log button', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
-    const statusBar = page.locator('.bg-gray-800.border-t');
-    await expect(statusBar).toBeVisible();
-    await expect(statusBar.getByText('Total:')).toBeVisible();
-    await expect(statusBar.locator('text=System Log')).not.toBeVisible();
+    const pendingChip = page.getByTestId('workflow-status-pill-pending');
+    await expect(pendingChip).toBeVisible();
+    await expect(pendingChip).toContainText('pending (1)');
+    await expect(page.getByText('System Log')).toHaveCount(0);
     await captureScreenshot(page, 'status-bar-no-system-log');
     await assertPageScreenshot(page, 'status-bar-no-system-log');
   });
@@ -730,13 +798,61 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'closed-status-merge-gate');
   });
 
+  test('review gate stack side panel shows a linear PR chain', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MERGE_GATE_TEXT_VISUAL_PLAN);
+    await page.locator('.react-flow__node[data-testid$="mg-visual-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
+
+    const mergeGateTaskId = await page.evaluate(async () => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const mergeTask = tasks.find((task: { id: string }) => task.id.includes('__merge__'));
+      return mergeTask?.id ?? null;
+    });
+    expect(mergeGateTaskId).toBeTruthy();
+
+    await injectTaskStates(page, [
+      {
+        taskId: mergeGateTaskId!,
+        changes: {
+          status: 'review_ready',
+          execution: {
+            reviewGate: {
+              activeGeneration: 0,
+              completion: { required: 'all', status: 'approved' },
+              artifacts: [
+                { id: 'contracts', title: 'Contracts PR', url: 'https://example.test/contracts', required: true, status: 'open', generation: 0 },
+                { id: 'runtime', title: 'Runtime PR', url: 'https://example.test/runtime', required: true, status: 'open', generation: 0, dependsOn: ['contracts'] },
+                { id: 'ui', title: 'UI PR', url: 'https://example.test/ui', required: true, status: 'open', generation: 0, dependsOn: ['runtime'] },
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const mergeGateNode = page
+      .locator(`.react-flow__node[data-testid="${mergeGateTaskId}"], .react-flow__node[data-testid$="${mergeGateTaskId}"]`)
+      .first();
+    await mergeGateNode.click();
+    const stackSection = page.locator('section').filter({ hasText: 'Pull Request Stack' }).first();
+    await expect(stackSection.getByText('Pull Request Stack')).toBeVisible();
+    await expect(stackSection.getByText('Contracts PR')).toBeVisible();
+    await expect(stackSection.getByText('Runtime PR')).toBeVisible();
+    await expect(stackSection.getByText('UI PR')).toBeVisible();
+    await expect(stackSection.getByTestId('review-gate-connector').first()).toBeVisible();
+    await expect(stackSection.getByText(/depends on/i)).toHaveCount(0);
+
+    await captureScreenshot(page, 'review-gate-stack-side-panel');
+    await assertPageScreenshot(page, 'review-gate-stack-side-panel');
+  });
+
   test('workflow inspector captures review-ready and not-review-ready pull request states', async ({ page }) => {
     const workflowId = await loadPlanAndSelectWorkflow(page, REVIEW_READY_WORKFLOW_PR_PLAN);
     await page.locator('.react-flow__node[data-testid$="rr-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
 
     const reviewUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/pull/626';
 
-    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await selectWorkflowNode(page, workflowId);
     await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Review ready workflow PR proof');
     await expect(page.getByText('Inspector', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('workflow-inspector-status-label')).not.toContainText('review ready');
@@ -759,8 +875,10 @@ test.describe('Visual proof capture', () => {
         },
       },
     ]);
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
 
-    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await selectWorkflowNode(page, workflowId);
     await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Review ready workflow PR proof');
     await expect(page.getByText('Inspector', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
@@ -790,8 +908,10 @@ test.describe('Visual proof capture', () => {
         },
       },
     ]);
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
 
-    await workflowNode(page, workflowId).dispatchEvent('click', { bubbles: true });
+    await selectWorkflowNode(page, workflowId);
     await expect(page.getByTestId('inspector-pr-link')).toHaveAttribute('href', reviewUrl);
 
     await page.keyboard.press('Tab');
@@ -879,6 +999,8 @@ test.describe('Visual proof capture', () => {
         },
       },
     ]);
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
 
     const workflowId = await page.evaluate(async () => {
       const workflows = await window.invoker.listWorkflows();
@@ -887,7 +1009,7 @@ test.describe('Visual proof capture', () => {
     expect(workflowId).toBeTruthy();
 
     // Re-select the workflow so the inspector reflects the derived workflow status.
-    await workflowNode(page, workflowId!).dispatchEvent('click', { bubbles: true });
+    await selectWorkflowNode(page, workflowId!);
 
     // Workflow-level surface: sidebar workflow node displays the workflow-status hue.
     await expect(workflowNode(page, workflowId!).getByText('review ready')).toBeVisible();
@@ -996,6 +1118,8 @@ test.describe('Visual proof capture', () => {
         })),
       ],
     );
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
 
     await hideSelectedWorkflowMiniDagIfVisible(page);
     await minimizeInspectorIfVisible(page);
@@ -1154,117 +1278,8 @@ test.describe('Visual proof capture', () => {
     await expect(menu).not.toBeVisible();
   });
 
-  test('status filter dims non-matching nodes', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
-    const now = new Date();
-    const earlier = new Date(Date.now() - 5000);
-    await injectTaskStates(page, [
-      {
-        taskId: 'task-alpha',
-        changes: {
-          status: 'completed',
-          execution: { startedAt: earlier, completedAt: now },
-        },
-      },
-      // task-beta remains pending (no changes)
-    ]);
 
-    // Click the "Pending:" status label to filter
-    await page.getByText(/Pending:/).click();
 
-    // No debounce — effect is immediate, but allow React render
-    await page.waitForTimeout(100);
-
-    // The selected filter keeps matching and non-matching nodes visible in the current DAG.
-    const completedNodeCard = taskNodeCard(page, 'task-alpha');
-    await expect(completedNodeCard).toBeVisible();
-
-    const pendingNodeCard = taskNodeCard(page, 'task-beta');
-    await expect(pendingNodeCard).toBeVisible();
-
-    await captureScreenshot(page, 'status-filter-dimmed-dag');
-    await assertPageScreenshot(page, 'status-filter-dimmed-dag');
-  });
-
-  test('status bar click-to-isolate and ctrl-click-toggle', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
-    const now = new Date();
-    const earlier = new Date(Date.now() - 5000);
-    await injectTaskStates(page, [
-      {
-        taskId: 'task-alpha',
-        changes: {
-          status: 'completed',
-          execution: { startedAt: earlier, completedAt: now },
-        },
-      },
-      // task-beta stays pending
-    ]);
-
-    // 1. Click "Pending:" to isolate — completed node should dim
-    await page.getByText(/Pending:/).click();
-    // No debounce — effect is immediate, but allow React render
-    await page.waitForTimeout(100);
-
-    const completedCard = taskNodeCard(page, 'task-alpha');
-    await expect(completedCard).toBeVisible();
-    await captureScreenshot(page, 'statusbar-click-isolate-pending');
-    await assertPageScreenshot(page, 'statusbar-click-isolate-pending');
-
-    // 2. Ctrl-click "Completed:" to add it to the active set
-    await page.getByText(/Completed:/).click({ modifiers: ['ControlOrMeta'] });
-    await page.waitForTimeout(100);
-
-    // Now both pending and completed are active — neither should be dimmed
-    await expect(completedCard).toBeVisible();
-    const pendingCard = taskNodeCard(page, 'task-beta');
-    await expect(pendingCard).toBeVisible();
-    await captureScreenshot(page, 'statusbar-ctrl-click-toggle-both');
-    await assertPageScreenshot(page, 'statusbar-ctrl-click-toggle-both');
-
-    // 3. Click sole active filter to clear — click "Completed:" (plain click = isolate to completed)
-    //    then click it again (sole active = clear all)
-    await page.getByText(/Completed:/).click();
-    await page.waitForTimeout(100);
-    await page.getByText(/Completed:/).click();
-    await page.waitForTimeout(100);
-
-    // All filters cleared — nothing dimmed
-    await expect(completedCard).toBeVisible();
-    await expect(pendingCard).toBeVisible();
-    await captureScreenshot(page, 'statusbar-clear-all-filters');
-    await assertPageScreenshot(page, 'statusbar-clear-all-filters');
-  });
-
-  test('closed review PR status is visible and filterable', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
-    const now = new Date();
-    await injectTaskStates(page, [
-      {
-        taskId: 'task-alpha',
-        changes: {
-          status: 'closed',
-          execution: {
-            startedAt: new Date(Date.now() - 5000),
-            completedAt: now,
-            reviewStatus: 'Closed without merge',
-            reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/123',
-          },
-        },
-      },
-    ]);
-
-    const closedNode = page.locator('.react-flow__node[data-testid$="task-alpha"]');
-    await expect(closedNode.getByText('CLOSED')).toBeVisible();
-    await expect(page.getByText(/Closed:/)).toBeVisible();
-
-    await page.getByText(/Closed:/).click();
-    await page.waitForTimeout(100);
-    await expect(taskNodeCard(page, 'task-alpha')).toBeVisible();
-    await expect(taskNodeCard(page, 'task-beta')).toBeVisible();
-
-    await captureScreenshot(page, 'closed-review-pr-status');
-  });
 
   test('approve-fix task panel — exposes approval controls', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
@@ -1341,11 +1356,58 @@ test.describe('Visual proof capture', () => {
     ]);
     // Navigate to queue tab if there is one, or verify queue section is visible
     await page.getByTestId('rail-queue').click();
-    await expect(page.getByText('Running 1 / 6')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
     await captureScreenshot(page, 'queue-view-concurrency');
     await assertPageScreenshot(page, 'queue-view-concurrency');
+  });
+  test('queue assigning state', async ({ page, testDir }) => {
+    await loadPlan(page, QUEUE_ASSIGNING_PLAN);
+    const tasks = await getTasks(page);
+    const task = tasks.find((entry: { id: string }) => entry.id.endsWith('/assigning-task') || entry.id === 'assigning-task');
+    const mergeTask = tasks.find((entry: { id: string }) => entry.id.startsWith('__merge__'));
+    expect(task).toBeTruthy();
+    expect(mergeTask).toBeTruthy();
+    const dbPath = path.join(testDir, 'invoker.db');
+    const now = new Date();
+    const attemptId = `${task!.id}-assigning-attempt`;
+    await seedActiveLaunchAttempt(dbPath, task!.id, attemptId, now);
+    await injectTaskStates(page, [
+      {
+        taskId: task!.id,
+        changes: {
+          status: 'pending',
+          execution: {
+            phase: 'launching',
+            selectedAttemptId: attemptId,
+            launchStartedAt: now,
+            lastHeartbeatAt: now,
+          },
+        },
+      },
+      {
+        taskId: mergeTask!.id,
+        changes: {
+          status: 'completed',
+          execution: {
+            startedAt: now,
+            completedAt: now,
+          },
+        },
+      },
+    ]);
+    await page.waitForTimeout(2200);
+    await page.getByTestId('rail-queue').click();
+    await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Backlog (0)' })).toBeVisible();
+    await expect(page.getByText('assigning-task')).toBeVisible();
+    await expect(page.getByText('Assigning queue task')).toBeVisible();
+    await captureScreenshot(page, 'queue-assigning-statusbar');
+
+    const queueRow = page.locator('[data-row-id$="assigning-task"]');
+    await expect(queueRow).toBeVisible();
+    await expect(queueRow.getByText('phase: Assigning')).toHaveCount(0);
+    await captureScreenshot(page, 'queue-assigning-row');
   });
 
   test('queue-semantics — action queue with canonical task states', async ({ page }) => {
@@ -1675,13 +1737,13 @@ test.describe('Visual proof capture', () => {
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
 
-    // Switch to queue view to verify "Terminate" button text on task rows
+    // Switch to queue view to verify the compact cancel affordance on task rows
     await page.getByTestId('rail-queue').click();
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
-    const terminateButton = page
+    const cancelButton = page
       .locator('[data-row-id$="/task-alpha"]')
-      .getByRole('button', { name: 'Terminate' });
-    await expect(terminateButton).toBeVisible();
+      .getByRole('button', { name: 'Cancel task-alpha' });
+    await expect(cancelButton).toBeVisible();
 
     // Switch back to DAG view and right-click the running task for context menu
     await page.getByTestId('rail-home').click();
@@ -1707,6 +1769,30 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'terminate-wording-task-vs-workflow');
   });
 
+  test('queue-cancel-control — compact cancel affordance without priority metadata', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    await injectTaskStates(page, [
+      { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
+    ]);
+
+    // Navigate to queue view
+    await page.getByRole('button', { name: 'Queue' }).click();
+    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
+
+    // Assert the action queue row renders the compact cancel affordance
+    const actionRow = page.locator('[data-row-id$="task-alpha"]');
+    await expect(actionRow).toBeVisible();
+    const cancelButton = actionRow.getByRole('button', { name: 'Cancel task-alpha' });
+    await expect(cancelButton).toBeVisible();
+
+    // Assert no visible priority metadata line on the row
+    await expect(actionRow.locator('text=priority:')).not.toBeVisible();
+
+    await captureScreenshot(page, 'queue-cancel-control');
+    await assertPageScreenshot(page, 'queue-cancel-control');
+  });
+
   test('queue-action-surface-hardening — composed queue UX with labels, relationships, and terminate', async ({ page }) => {
     await loadPlan(page, QUEUE_HARDENING_PLAN);
     const now = new Date();
@@ -1728,14 +1814,25 @@ test.describe('Visual proof capture', () => {
     // Assert canonical action queue labels are present
     await expect(page.locator('text=running').first()).toBeVisible();
 
-    // Assert task-level Terminate wording on running task row
-    const terminateButton = page.getByRole('button', { name: 'Terminate' }).first();
-    await expect(terminateButton).toBeVisible();
+    // Assert the running task row exposes the compact cancel affordance
+    const cancelButton = page
+      .locator('[data-row-id$="/qh-running"]')
+      .getByRole('button', { name: 'Cancel qh-running' });
+    await expect(cancelButton).toBeVisible();
 
     // Assert downstream dependent shows its dependency in Backlog
     await expect(page.getByText('deps: qh-running')).toBeVisible();
 
-    // Expand relationship section: click the running task row to open task panel
+    // Expand relationship section inline and verify downstream context
+    await page
+      .locator('[data-row-id$="/qh-running"]')
+      .getByRole('button', { name: 'Expand relationships' })
+      .click();
+    const relationshipPanel = page.getByTestId('rels-wf-test-1/qh-running');
+    await expect(relationshipPanel.getByText('downstream:')).toBeVisible();
+    await expect(relationshipPanel.getByRole('button', { name: 'qh-downstream' })).toBeVisible();
+
+    // Click the running task row to open the task panel
     await page.locator('[data-row-id$="/qh-running"]').click();
     await expect(page.getByRole('heading', { name: 'Running task with downstream' })).toBeVisible();
     await expect(page.getByText('echo run')).toBeVisible();

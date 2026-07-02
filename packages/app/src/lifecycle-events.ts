@@ -4,105 +4,37 @@ import type {
   TaskStatus,
   WorkflowDerivedStatus,
 } from '@invoker/workflow-core';
+import {
+  WORKFLOW_LIFECYCLE_EVENT_KINDS,
+  type WorkflowLifecycleEvent,
+  type WorkflowLifecycleEventKind,
+  type WorkflowLifecycleStatus,
+  type TaskLifecycleEvent,
+  type ReviewGateFailedCheck,
+  type ReviewGateCiFailedLifecycleEvent,
+  type WorkflowWakeupLifecycleEvent,
+  type RecoveryWorkerWakeupHint,
+  type RecoveryWorkerWakeupReason,
+  type WorkflowWakeupReason,
+} from '@invoker/execution-engine';
 
-export const WORKFLOW_LIFECYCLE_EVENT_KINDS = [
-  'task.created',
-  'task.updated',
-  'task.completed',
-  'task.failed',
-  'task.review_ready',
-  'task.awaiting_approval',
-  'task.needs_input',
-  'task.removed',
-  'review_gate.ci_failed',
-  'workflow.wakeup',
-] as const;
-
-export type WorkflowLifecycleEventKind = typeof WORKFLOW_LIFECYCLE_EVENT_KINDS[number];
-export type WorkflowLifecycleStatus = TaskStatus | WorkflowDerivedStatus;
-
-export interface WorkflowLifecycleEventBase {
-  readonly eventKey: string;
-  readonly kind: WorkflowLifecycleEventKind;
-  readonly workflowId: string;
-  readonly taskId?: string;
-  readonly status?: WorkflowLifecycleStatus;
-  readonly previousStatus?: TaskStatus;
-  readonly taskStateVersion?: number;
-  readonly generation: number;
-  readonly attemptId?: string;
-  readonly createdAt: string;
-  readonly recoveryWakeup: RecoveryWorkerWakeupHint;
-}
-
-export interface RecoveryWorkerWakeupHint {
-  readonly eventKey: string;
-  readonly eventKind: WorkflowLifecycleEventKind;
-  readonly workflowId: string;
-  readonly taskId?: string;
-  readonly taskStateVersion?: number;
-  readonly generation: number;
-  readonly attemptId?: string;
-  readonly createdAt: string;
-  readonly reason: RecoveryWorkerWakeupReason;
-  readonly authoritative: false;
-}
-
-export type RecoveryWorkerWakeupReason =
-  | 'task_lifecycle'
-  | 'task_failure'
-  | 'review_gate_failure'
-  | 'workflow_reconcile';
-
-export interface TaskLifecycleEvent extends WorkflowLifecycleEventBase {
-  readonly kind:
-    | 'task.created'
-    | 'task.updated'
-    | 'task.completed'
-    | 'task.failed'
-    | 'task.review_ready'
-    | 'task.awaiting_approval'
-    | 'task.needs_input'
-    | 'task.removed';
-  readonly taskId: string;
-  readonly status?: TaskStatus;
-}
-
-export interface ReviewGateFailedCheck {
-  readonly name: string;
-  readonly conclusion?: string;
-  readonly detailsUrl?: string;
-}
-
-export interface ReviewGateCiFailedLifecycleEvent extends WorkflowLifecycleEventBase {
-  readonly kind: 'review_gate.ci_failed';
-  readonly taskId: string;
-  readonly status: TaskStatus;
-  readonly reviewId: string;
-  readonly reviewUrl: string;
-  readonly headSha?: string;
-  readonly headRef?: string;
-  readonly branch?: string;
-  readonly failedChecks: readonly ReviewGateFailedCheck[];
-  readonly statusText: string;
-}
-
-export interface WorkflowWakeupLifecycleEvent extends WorkflowLifecycleEventBase {
-  readonly kind: 'workflow.wakeup';
-  readonly reason: WorkflowWakeupReason;
-  readonly status?: WorkflowDerivedStatus;
-}
-
-export type WorkflowLifecycleEvent =
-  | TaskLifecycleEvent
-  | ReviewGateCiFailedLifecycleEvent
-  | WorkflowWakeupLifecycleEvent;
-
-export type WorkflowWakeupReason =
-  | 'startup_reconcile'
-  | 'stalled_workflow_recovery'
-  | 'external_dependency_reconcile'
-  | 'manual_reconcile';
+// The lifecycle event type vocabulary moved into `@invoker/execution-engine`
+// so the auto-fix recovery engine can consume it without importing the app.
+// Re-export it here so existing `./lifecycle-events.js` importers are unchanged.
+export {
+  WORKFLOW_LIFECYCLE_EVENT_KINDS,
+  type WorkflowLifecycleEvent,
+  type WorkflowLifecycleEventKind,
+  type WorkflowLifecycleStatus,
+  type WorkflowLifecycleEventBase,
+  type TaskLifecycleEvent,
+  type ReviewGateFailedCheck,
+  type ReviewGateCiFailedLifecycleEvent,
+  type WorkflowWakeupLifecycleEvent,
+  type RecoveryWorkerWakeupHint,
+  type RecoveryWorkerWakeupReason,
+  type WorkflowWakeupReason,
+} from '@invoker/execution-engine';
 
 export interface LifecycleBuildOptions {
   readonly workflowId?: string;

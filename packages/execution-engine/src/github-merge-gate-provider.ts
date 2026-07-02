@@ -4,6 +4,7 @@ import type {
   MergeGateProvider,
   MergeGateProviderResult,
   MergeGateApprovalStatus,
+  MergeGatePrLifecycle,
   MergeGateFailedCheck,
 } from './merge-gate-provider.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
@@ -78,6 +79,19 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     ], cwd));
   }
 
+  async getReviewBody(opts: {
+    identifier: string;
+    cwd: string;
+  }): Promise<string> {
+    const { identifier, cwd } = opts;
+    const targetRepo = await this.resolveTargetRepo(cwd);
+    const stdout = await retryTransientGitHubCli(() => this.exec('gh', [
+      'api', `repos/${targetRepo}/pulls/${identifier}`,
+      '--jq', '.body',
+    ], cwd));
+    return stdout.trim();
+  }
+
   async checkApproval(opts: {
     identifier: string;
     cwd: string;
@@ -101,8 +115,8 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       statusCheckRollup?: unknown[];
     };
 
-    const approved = data.state === 'MERGED';
-    const closed = data.state === 'CLOSED';
+    const lifecycle: MergeGatePrLifecycle =
+      data.state === 'MERGED' ? 'merged' : data.state === 'CLOSED' ? 'closed' : 'open';
     const rejected = data.reviewDecision === 'CHANGES_REQUESTED';
 
     let statusText: string;
@@ -119,9 +133,8 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     }
 
     return {
-      approved,
+      lifecycle,
       rejected,
-      closed,
       statusText,
       url: data.url,
       headSha: data.headRefOid,

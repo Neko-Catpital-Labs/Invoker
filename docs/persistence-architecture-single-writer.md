@@ -2,20 +2,31 @@
 
 ## Problem
 
-The Invoker persistence layer (SQLiteAdapter) is backed by sql.js (WASM SQLite), which flushes in-memory changes to disk asynchronously. Multiple processes opening the same database file in writable mode leads to lost writes when processes flush stale buffers over each other's changes.
+The Invoker persistence layer (SQLiteAdapter, backed by `node:sqlite`) stores state in a WAL-mode SQLite database. Multiple processes opening the same file in writable mode lead to lost writes when their buffers overwrite each other's changes.
 
 ## Solution
 
 **Single-writer owner model**: exactly one process owns writable access to the database. All other processes delegate mutations via IPC or open the database in read-only mode.
+
+## Update: Sole-Owner Read Path & Exclusive Locking
+
+The owner boundary now covers **reads** as well as writes, so the writable owner can be the *only* process that opens `invoker.db`. See Linear [INV-240](https://linear.app/invokerorchestrator/issue/INV-240) for the full design and rationale.
+
+- **GUI viewer** runs against a private empty in-memory database and never opens `invoker.db`; its renderer reads delegate to the owner over IPC and live updates arrive via `TASK_DELTA` / `TASK_OUTPUT`.
+- **Read-only headless commands** delegate to the owner over IPC (`headless.query` `cli-query`) when an owner is present, and open the file directly only when none is. In that fallback path they remain read-only callers that may coexist with other readers; this does not imply exclusive ownership.
+- **The owner opens WAL in `locking_mode = EXCLUSIVE`**, keeping the wal-index in heap so no `-shm` file exists. This makes the `-shm`-truncation SIGBUS (crash report `Electron-2026-06-24-222052.ips`; repro `scripts/repro/repro-wal-shm-sigbus.sh`) impossible. Kill-switch: `INVOKER_DISABLE_EXCLUSIVE_LOCKING=1` reverts to shared-`-shm` WAL.
 
 ## Owner Boundary Contract
 
 ### Acceptance Rules
 
 1. **Owner process**: GUI process (main.ts) or standalone headless process (when `INVOKER_HEADLESS_STANDALONE=1`).
-2. **Non-owner processes**: headless CLI invocations (when GUI is running).
-3. **Non-owner processes CANNOT initialize writable persistence**. Attempting to do so throws or delegates.
-4. **All non-owner mutations MUST traverse RPC** (`headless.run`, `headless.resume`, `headless.exec` channels via IpcBus).
+2. **GUI viewer** opens no shared database file. `openMainProcessDatabase({ detachedViewer: true })` returns process-local placeholder persistence, while renderer reads delegate to the owner over IPC and live updates arrive via `TASK_DELTA` / `TASK_OUTPUT`.
+3. **Non-owner processes**: headless CLI invocations (when GUI is running).
+4. **Non-owner processes CANNOT initialize writable persistence**. Attempting to do so throws or delegates.
+5. **All non-owner mutations MUST traverse RPC** (`headless.run`, `headless.resume`, `headless.exec` channels via IpcBus).
+
+Implementation note: today's placeholder is SQLite ephemeral storage via `SQLiteAdapter.createEphemeral()`. The raw SQLite `:memory:` sentinel is private to the data-store adapter so viewer startup code cannot accidentally switch back to opening `invoker.db`.
 
 ### Implementation Map
 
@@ -67,13 +78,13 @@ This table lists every mutating command path and how the owner-boundary contract
 | `set executor` | headless.ts:841 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `set agent` | headless.ts:853 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `set merge-mode` | headless.ts:1011 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| **Headless Read-Only Commands** (never delegate, always read-only) |
-| `query workflows` | headless.ts:193 | No | Opens DB with `readOnly: true` (main.ts:386) | Safe: no writes |
-| `query tasks` | headless.ts:206 | No | Opens DB with `readOnly: true` | Safe: no writes |
-| `query task` | headless.ts:257 | No | Opens DB with `readOnly: true` | Safe: no writes |
-| `query queue` | headless.ts:272 | No | Opens DB with `readOnly: true` | Safe: no writes |
-| `query audit` | headless.ts:295 | No | Opens DB with `readOnly: true` | Safe: no writes |
-| `query session` | headless.ts:308 | No | Opens DB with `readOnly: true` | Safe: no writes |
+| **Headless Read-Only Commands** | | | | delegate to the owner when present; open `readOnly` only when none |
+| `query workflows` | headless.ts:193 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
+| `query tasks` | headless.ts:206 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
+| `query task` | headless.ts:257 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
+| `query queue` | headless.ts:272 | **Yes** (owner-required) | Owner answers over IPC | Live scheduler state; requires an owner |
+| `query audit` | headless.ts:295 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
+| `query session` | headless.ts:308 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
 | **Workflow Actions** (shared library, always called by owner) |
 | `rejectTask()` | workflow-actions.ts:54 | N/A | Called by owner (GUI/headless standalone) → orchestrator → persistence | Shared library assumes writable context |
 | `restartTask()` | workflow-actions.ts:75 | N/A | Called by owner → orchestrator → persistence | |
@@ -119,7 +130,8 @@ This table lists every mutating command path and how the owner-boundary contract
 - **Static owner-boundary guard**: `bash scripts/check-owner-boundary.sh` fails if:
   - a non-test runtime module calls `SQLiteAdapter.create(...)` outside owner modules,
   - a non-test runtime module value-imports `SQLiteAdapter` outside owner modules,
-  - owner init path in `main.ts` stops passing `ownerCapability: !readOnly`.
+  - runtime code opens raw SQLite `:memory:` instead of `SQLiteAdapter.createEphemeral()` or the viewer boundary,
+  - `main.ts` stops opening persistence through `openMainProcessDatabase()`.
 - **Included in required `test:all`** via `scripts/test-suites/required/15-owner-boundary-policy.sh`.
 
 ### Future Work

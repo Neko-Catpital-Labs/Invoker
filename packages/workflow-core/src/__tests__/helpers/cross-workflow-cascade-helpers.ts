@@ -4,14 +4,13 @@ import {
   type OrchestratorPersistence,
   type OrchestratorMessageBus,
 } from '../../orchestrator.js';
-import type { TaskState, TaskStateChanges, Attempt } from '../../task-types.js';
+import { computeWorkflowRollup, type TaskState, type TaskStateChanges, type Attempt } from '../../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
 
 export class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, {
     id: string;
     name: string;
-    status: string;
     createdAt: string;
     updatedAt: string;
     repoUrl?: string;
@@ -26,7 +25,6 @@ export class InMemoryPersistence implements OrchestratorPersistence {
   saveWorkflow(workflow: {
     id: string;
     name: string;
-    status: string;
     repoUrl?: string;
     baseBranch?: string;
     featureBranch?: string;
@@ -35,6 +33,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
       ...workflow,
+      status: 'pending',
       repoUrl: workflow.repoUrl ?? 'memory://test-repo',
       createdAt: (workflow as { createdAt?: string }).createdAt ?? now,
       updatedAt: (workflow as { updatedAt?: string }).updatedAt ?? now,
@@ -64,7 +63,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
       execution: { ...entry.task.execution, ...changes.execution },
     } as TaskState;
   }
-  listWorkflows() { return Array.from(this.workflows.values()); }
+  listWorkflows() { return Array.from(this.workflows.values()).map((workflow) => ({ ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status })); }
   loadTasks(workflowId: string): TaskState[] {
     return Array.from(this.tasks.values())
       .filter((e) => e.workflowId === workflowId)

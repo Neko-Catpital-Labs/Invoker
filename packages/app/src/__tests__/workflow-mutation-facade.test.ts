@@ -33,6 +33,7 @@ function makeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): Workflow
   const orchestrator = {
     retryTask: vi.fn(() => [makeRunningTask()]),
     recreateTask: vi.fn(() => [makeRunningTask()]),
+    deleteTask: vi.fn(() => [makeRunningTask({ id: 'task-b' })]),
     recreateDownstream: vi.fn(() => [makeRunningTask({ id: 'task-b' })]),
     cancelTask: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: [] })),
     cancelWorkflow: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
@@ -74,6 +75,7 @@ function makeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): Workflow
   const commandService = {
     retryTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.retryTask(envelope.payload.taskId) })),
     recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateTask(envelope.payload.taskId) })),
+    deleteTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.deleteTask(envelope.payload.taskId) })),
     recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateDownstream(envelope.payload.taskId) })),
     retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => ({ ok: true as const, data: orchestrator.retryWorkflow(envelope.payload.workflowId) })),
     recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => {
@@ -113,6 +115,19 @@ describe('WorkflowMutationFacade', () => {
       expect(result.runnable).toHaveLength(1);
       expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
+
+    it('closes the workflow review before task-scoped invalidation', async () => {
+      (deps.orchestrator.getTask as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeTask({ id: 'task-a', config: { workflowId: 'wf-1' } }),
+      );
+
+      await facade.retryTask('task-a');
+
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
+      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
+        (deps.commandService.retryTask as any).mock.invocationCallOrder[0],
+      );
+    });
   });
 
   describe('recreateTask', () => {
@@ -123,6 +138,42 @@ describe('WorkflowMutationFacade', () => {
       expect(result.started).toHaveLength(1);
       expect(result.runnable).toHaveLength(1);
       expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
+    });
+
+    it('closes the workflow review before task-scoped recreate', async () => {
+      (deps.orchestrator.getTask as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeTask({ id: 'task-a', config: { workflowId: 'wf-1' } }),
+      );
+
+      await facade.recreateTask('task-a');
+
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
+      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
+        (deps.commandService.recreateTask as any).mock.invocationCallOrder[0],
+      );
+    });
+  });
+
+  describe('deleteTask', () => {
+    it('kills an active target and returns accepted runnable tasks', async () => {
+      const killFn = vi.fn();
+      deps = makeDeps({
+        killRunningTask: killFn,
+        orchestrator: {
+          ...deps.orchestrator,
+          getTask: vi.fn(() => makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } })),
+        } as unknown as Orchestrator,
+      });
+      facade = new WorkflowMutationFacade(deps);
+
+      const result = await facade.deleteTask('task-a');
+
+      expect(killFn).toHaveBeenCalledWith('task-a');
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
+      expect(deps.commandService.deleteTask).toHaveBeenCalledWith(
+        expect.objectContaining({ payload: { taskId: 'task-a' } }),
+      );
+      expect(result.started).toHaveLength(1);
     });
   });
 
@@ -309,6 +360,15 @@ describe('WorkflowMutationFacade', () => {
       expect(deps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
       expect(result.started).toHaveLength(1);
     });
+
+    it('closes the workflow review before workflow-scoped recreate', async () => {
+      await facade.recreateWorkflow('wf-1');
+
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
+      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
+        (deps.commandService.recreateWorkflow as any).mock.invocationCallOrder[0],
+      );
+    });
   });
 
   describe('retryWorkflow', () => {
@@ -336,6 +396,15 @@ describe('WorkflowMutationFacade', () => {
       expect(result.started).toHaveLength(1);
       expect(result.runnable).toHaveLength(1);
       expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
+    });
+
+    it('closes the workflow review before workflow-scoped invalidation', async () => {
+      await facade.retryWorkflow('wf-1');
+
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
+      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
+        (deps.commandService.retryWorkflow as any).mock.invocationCallOrder[0],
+      );
     });
   });
 

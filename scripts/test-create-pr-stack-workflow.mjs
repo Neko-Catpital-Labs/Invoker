@@ -55,6 +55,51 @@ Stack publishing stays separate from unrelated cleanup.
 - Data migration? No
 `;
 
+const ROUTING_BODY = `## Summary
+
+This branch only changes invalidation routing.
+
+<details>
+<summary>Review metadata</summary>
+
+Review Claim:
+
+Keep invalidation routing local.
+
+Review Lane:
+
+- behavior
+
+Review Unit:
+
+- routing
+
+Safety Invariant:
+
+Only invalidation routing changes.
+
+Slice Rationale:
+
+Keep app exposure separate from core runtime behavior.
+
+</details>
+
+## Non-goals
+
+- Do not add docs or proof changes in this slice.
+
+## Test Plan
+
+- [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
+
+## Revert Plan
+
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+`;
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -102,6 +147,10 @@ function createHarness() {
   const realGit = run('which', ['git']).trim();
 
   writeExecutable(join(binDir, 'git'), `#!/bin/sh
+if [ "$1" = "diff" ] && [ -n "$TEST_GIT_DIFF_FAIL" ]; then
+  printf '%s\n' "$TEST_GIT_DIFF_FAIL" >&2
+  exit 1
+fi
 if [ "$1" = "push" ]; then
   printf '%s\n' "$*" >> "$TEST_PUSH_LOG"
   exit 0
@@ -199,9 +248,14 @@ function createRepo(harness) {
 }
 
 function commitFile(work, fileName, content, message) {
+  mkdirSync(dirname(join(work, fileName)), { recursive: true });
   writeFileSync(join(work, fileName), content);
   git(work, 'add', fileName);
   gitQuiet(work, 'commit', '-m', message);
+}
+
+function commitEmpty(work, message) {
+  gitQuiet(work, 'commit', '--allow-empty', '-m', message);
 }
 
 function createTrackedBranch(work, branch, startPoint = 'origin/master') {
@@ -240,12 +294,16 @@ function baseArgs() {
   return ['--title', 'test title', '--base', 'master', '--body-file', 'pr-body.md'];
 }
 
-function stackTitleArgs(base = 'master') {
-  return ['--title', '[Graph Blanking](1) Preserve graph blanking', '--base', base, '--body-file', 'pr-body.md'];
+function stackTitleArgs(base = 'master', title = '[Graph Blanking](1) Preserve graph blanking') {
+  return ['--title', title, '--base', base, '--body-file', 'pr-body.md'];
 }
 
 function expectNoPush(harness, label) {
   assert(readLogLines(harness.pushLog).length === 0, `${label}: expected no git push attempt`);
+}
+
+function expectNoGhCalls(harness, label) {
+  assert(readGhCalls(harness.ghLog).length === 0, `${label}: expected no gh invocation`);
 }
 
 function testStaleBaseDetection() {
@@ -261,6 +319,73 @@ function testStaleBaseDetection() {
     assert(result.stderr.includes('not based on the latest origin/master'), 'stale base error should name origin/master');
     assert(result.stderr.includes('git cherry-pick <commit> [<commit> ...]'), 'stale base error should include cherry-pick recovery');
     expectNoPush(harness, 'stale base detection');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testNoFileChangesBlockPrCreation() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/no-file-changes');
+
+    const result = runCreatePr(work, harness, baseArgs());
+
+    assert(result.status === 1, `no file changes should block PR creation\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('no file changes versus origin/master'),
+      `no file changes error should name the selected base\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'no file changes');
+    expectNoGhCalls(harness, 'no file changes');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testEmptyCommitAloneBlocksPrCreation() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/empty-only');
+    commitEmpty(work, 'empty slice');
+
+    const result = runCreatePr(work, harness, baseArgs());
+
+    assert(result.status === 1, `empty commit should block PR creation\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('commits with no tree diff from their first parent'),
+      `empty commit error should explain the tree-diff check\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stderr.includes('empty slice'), `empty commit error should list the offending commit\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('Drop empty commits'), `empty commit error should explain drop recovery\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('squash each empty commit'), `empty commit error should explain squash recovery\nstderr:\n${result.stderr}`);
+    expectNoPush(harness, 'empty commit alone');
+    expectNoGhCalls(harness, 'empty commit alone');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testEmptyCommitMixedWithRealChangeBlocksPrCreation() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/empty-mixed');
+    commitFile(work, 'feature.txt', 'feature\n', 'feature change');
+    commitEmpty(work, 'empty follow-up');
+
+    const result = runCreatePr(work, harness, baseArgs());
+
+    assert(result.status === 1, `mixed empty commit should block PR creation\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('commits with no tree diff from their first parent'),
+      `mixed empty commit error should explain the tree-diff check\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stderr.includes('empty follow-up'), `mixed empty commit error should list the offending commit\nstderr:\n${result.stderr}`);
+    expectNoPush(harness, 'empty commit mixed with real change');
+    expectNoGhCalls(harness, 'empty commit mixed with real change');
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
@@ -322,6 +447,49 @@ function testMergifyManagedUpdateSkipsPush() {
     assert(Boolean(patchCall), 'managed update should patch the existing PR');
     assert(patchCall.stdin.includes('"title":"[Graph Blanking](1) Preserve graph blanking"'), 'managed update patch should include title');
     assert(patchCall.stdin.includes('## Summary'), 'managed update patch should include PR body');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+function testMergifyManagedUpdateAcceptsLetteredTitle() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-lettered-update';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Iletter0001');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      ...stackTitleArgs('master', '[Graph Blanking](3a) Split follow-up slice'),
+      '--update-existing',
+    ], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 43,
+          html_url: 'https://example.com/pull/43',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/43' }),
+    });
+
+    const ghLog = existsSync(harness.ghLog) ? readFileSync(harness.ghLog, 'utf-8') : '';
+    assert(
+      result.status === 0,
+      `managed stack update should accept a lettered title\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\ngh log:\n${ghLog}`,
+    );
+    assert(
+      result.stdout.trim() === 'https://example.com/pull/43',
+      `managed stack update should print updated PR URL for lettered titles\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\ngh log:\n${ghLog}`,
+    );
+    expectNoPush(harness, 'managed lettered update skip push');
+
+    const ghCalls = readGhCalls(harness.ghLog);
+    const patchCall = ghCalls.find((call) => call.route.endsWith('/pulls/43'));
+    assert(Boolean(patchCall), 'managed lettered update should patch the existing PR');
+    assert(patchCall.stdin.includes('"title":"[Graph Blanking](3a) Split follow-up slice"'), 'managed lettered update patch should include lettered title');
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
@@ -421,6 +589,40 @@ function testCurrentBranchPrLookupFailure() {
   }
 }
 
+{
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'stack/example/3-routing');
+    setManagedBranchConfig(work, 'stack/example/3-routing');
+    writeFileSync(join(work, 'pr-body-routing.md'), ROUTING_BODY);
+    commitFile(work, 'packages/workflow-core/src/orchestrator.ts', 'export const orchestrator = true;\n', 'routing core');
+    commitFile(work, 'packages/execution-engine/src/task-runner.ts', 'export const runner = true;\n', 'routing engine');
+    commitFile(work, 'packages/app/src/workflow-mutation-facade.ts', 'export const facade = true;\n', 'activation surface');
+
+    const result = runCreatePr(work, harness, [
+      '--title', '[Example](3) Routing slice',
+      '--base', 'master',
+      '--body-file', 'pr-body-routing.md',
+      '--update-existing',
+    ], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 42,
+          title: '[Example](3) Routing slice',
+          headRefName: 'stack/example/3-routing',
+          baseRefName: 'stack/example/2-previous',
+        },
+      ]),
+    });
+
+    assert(result.status === 1, 'managed stack update should reject mixed routing and activation-surface slice');
+    assert(result.stderr.includes('Review Unit "routing" cannot ship with activation-surface files'), 'stack update should explain mixed review units');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testStackedDiffTitleRequiredForNonTrunkBase() {
   const harness = createHarness();
   try {
@@ -441,6 +643,56 @@ function testStackedDiffTitleRequiredForNonTrunkBase() {
   }
 }
 
+function testDiffAtomicityBlocksMixedDiff() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/atomicity-lockfile');
+    commitFile(work, 'pnpm-lock.yaml', 'lockfileVersion: 9\npackages: {}\n', 'orphaned lockfile churn');
+
+    const result = runCreatePr(work, harness, baseArgs());
+
+    assert(
+      result.status === 1,
+      `mixed diff should fail diff atomicity gate\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stderr.includes('Diff atomicity violation'),
+      `create-pr should report the diff atomicity violation\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'diff atomicity violation');
+    const ghCalls = readGhCalls(harness.ghLog);
+    assert(
+      !ghCalls.some((call) => /\/pulls(?:\/[0-9]+)?$/.test(call.route)),
+      'diff atomicity violation should fail before any GitHub PR mutation',
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testDiffComputationFailureBlocksPrCreation() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/diff-failure');
+    commitFile(work, 'feature.txt', 'feature\n', 'feature change');
+
+    const result = runCreatePr(work, harness, baseArgs(), { TEST_GIT_DIFF_FAIL: 'simulated diff failure' });
+
+    assert(result.status === 1, `diff failure should block PR creation\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('Unable to compute diff atomicity context against origin/master'),
+      `diff failure should explain atomicity context failure\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stderr.includes('simulated diff failure'), `diff failure should include git stderr\nstderr:\n${result.stderr}`);
+    expectNoPush(harness, 'diff computation failure');
+    assert(readGhCalls(harness.ghLog).length === 0, 'diff computation failure should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testHelpMentionsStackUpdateFlow() {
   const harness = createHarness();
   try {
@@ -455,13 +707,19 @@ function testHelpMentionsStackUpdateFlow() {
 
 const tests = [
   testStaleBaseDetection,
+  testNoFileChangesBlockPrCreation,
+  testEmptyCommitAloneBlocksPrCreation,
+  testEmptyCommitMixedWithRealChangeBlocksPrCreation,
   testMergifyManagedCreateRefusal,
   testMergifyManagedUpdateSkipsPush,
+  testMergifyManagedUpdateAcceptsLetteredTitle,
   testMergifyManagedUpdateRejectsPlainTitle,
   testMergifyManagedUpdateRejectsNestedTitle,
   testUnpublishedStackCommitsBlockUpdate,
   testCurrentBranchPrLookupFailure,
   testStackedDiffTitleRequiredForNonTrunkBase,
+  testDiffAtomicityBlocksMixedDiff,
+  testDiffComputationFailureBlocksPrCreation,
   testHelpMentionsStackUpdateFlow,
 ];
 

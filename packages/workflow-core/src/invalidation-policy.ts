@@ -31,6 +31,7 @@ export type MutationKey =
   | 'command'
   | 'prompt'
   | 'executionAgent'
+  | 'executionModel'
   | 'runnerKind'
   | 'poolMemberId'
   | 'selectedExperiment'
@@ -47,6 +48,7 @@ export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>
   command:               { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   prompt:                { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   executionAgent:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
+  executionModel:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   runnerKind:          { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
   poolMemberId:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   selectedExperiment:    { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
@@ -487,8 +489,11 @@ export interface InvalidationWorkflowRecord {
 export interface BuildWorkflowInvalidationDepsArgs {
   orchestrator: InvalidationDepsOrchestrator;
   requireWorkflow: (workflowId: string) => InvalidationWorkflowRecord;
-  setWorkflowGeneration: (workflowId: string, generation: number) => void;
   killActiveExecution?: (taskId: string) => void | Promise<void>;
+  setWorkflowGeneration?: (
+    workflowId: string,
+    generation: number,
+  ) => void | Promise<void>;
   prepareFreshBase?: (
     workflowId: string,
     workflow: InvalidationWorkflowRecord,
@@ -503,14 +508,6 @@ export interface BuildWorkflowInvalidationDepsArgs {
   ) => TaskState[] | Promise<TaskState[]>;
 }
 
-function bumpWorkflowGeneration(
-  workflowId: string,
-  deps: Pick<BuildWorkflowInvalidationDepsArgs, 'requireWorkflow' | 'setWorkflowGeneration'>,
-): InvalidationWorkflowRecord {
-  const workflow = deps.requireWorkflow(workflowId);
-  deps.setWorkflowGeneration(workflowId, (workflow.generation ?? 0) + 1);
-  return workflow;
-}
 
 function defaultCascadeDownstream(
   orchestrator: InvalidationDepsOrchestrator,
@@ -537,12 +534,9 @@ export function buildWorkflowInvalidationDeps(
     recreateTask: (taskId) => deps.orchestrator.recreateTask(taskId),
     recreateDownstream: (taskId) => deps.orchestrator.recreateDownstream(taskId),
     retryWorkflow: (workflowId) => deps.orchestrator.retryWorkflow(workflowId),
-    recreateWorkflow: (workflowId) => {
-      bumpWorkflowGeneration(workflowId, deps);
-      return deps.orchestrator.recreateWorkflow(workflowId);
-    },
+    recreateWorkflow: (workflowId) => deps.orchestrator.recreateWorkflow(workflowId),
     recreateWorkflowFromFreshBase: async (workflowId) => {
-      const workflow = bumpWorkflowGeneration(workflowId, deps);
+      const workflow = deps.requireWorkflow(workflowId);
       const freshBase = await deps.prepareFreshBase?.(workflowId, workflow);
       return deps.orchestrator.recreateWorkflowFromFreshBase(workflowId, {
         refreshBase: async () => freshBase,
@@ -593,6 +587,5 @@ export function buildOrchestratorOnlyInvalidationDeps(
   return buildWorkflowInvalidationDeps({
     orchestrator,
     requireWorkflow: () => ({}),
-    setWorkflowGeneration: () => {},
   });
 }

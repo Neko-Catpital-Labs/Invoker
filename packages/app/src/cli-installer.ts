@@ -51,13 +51,18 @@ function searchDirs(context: CliInstallerContext): string[] {
   // one location (used by the hermetic e2e scripts).
   const override = context.env.INVOKER_CLI_INSTALL_DIR;
   if (override) return [override];
-  const dirs = [
-    ...defaultCandidateInstallDirs(context),
-    ...pathDirs(context),
-    '/usr/local/bin',
-    '/opt/homebrew/bin',
-    join(context.homeDir, '.local', 'bin'),
-  ];
+  const dirs = context.candidateInstallDirs
+    ? [
+        ...context.candidateInstallDirs,
+        ...pathDirs(context),
+      ]
+    : [
+        ...defaultCandidateInstallDirs(context),
+        ...pathDirs(context),
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+        join(context.homeDir, '.local', 'bin'),
+      ];
   return [...new Set(dirs)];
 }
 
@@ -109,6 +114,10 @@ function isWritableDir(dir: string): boolean {
   } catch {
     return false;
   }
+}
+
+function canWriteCliTarget(cliPath: string): boolean {
+  return isWritableDir(dirname(cliPath));
 }
 
 export function selectInstallDir(
@@ -204,10 +213,11 @@ export function updateInvokerCli(context: CliInstallerContext): CliInstallResult
     if (installed?.version === context.appVersion) {
       return { ok: true, updated: false, installedTo: installed.path, status: resolveCliInstallerStatus(context) };
     }
-    // Prefer updating an existing install in place — its dir is already on
-    // the user's effective PATH.
+    // Prefer updating an existing install in place when the app can replace
+    // it. If PATH exposes a system-level install, fall back to a writable
+    // candidate instead of failing the whole install.
     let targetPath: string;
-    if (installed) {
+    if (installed && canWriteCliTarget(installed.path)) {
       targetPath = installed.path;
     } else {
       const selection = selectInstallDir(context);

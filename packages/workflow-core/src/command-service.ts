@@ -265,6 +265,16 @@ export class CommandService {
     );
   }
 
+  async editTaskModel(
+    envelope: CommandEnvelope<{ taskId: string; executionModel: string | null }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'EDIT_TASK_MODEL_FAILED',
+      () => this.orchestrator.editTaskModel(envelope.payload.taskId, envelope.payload.executionModel),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   /**
    * Edit the merge mode of a workflow's merge node — **retry-class**
    * invalidation route per Step 9 of the task-invalidation roadmap
@@ -412,6 +422,16 @@ export class CommandService {
     );
   }
 
+  async deleteTask(
+    envelope: CommandEnvelope<{ taskId: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'DELETE_TASK_FAILED',
+      () => this.orchestrator.deleteTask(envelope.payload.taskId),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   async cancelWorkflow(
     envelope: CommandEnvelope<{ workflowId: string }>,
   ): Promise<CommandResult<CancelResult>> {
@@ -472,10 +492,9 @@ export class CommandService {
    * workflow root tasks. Thin delegate to `Orchestrator.recreateWorkflow`;
    * serialized through the workflow mutex. Step 17
    * (`docs/architecture/task-invalidation-roadmap.md`) closes the
-   * 5-method matrix on `CommandService`. Production callers that
-   * need an additional generation bump should use the app-layer
-   * wrapper (`packages/app/src/workflow-actions.ts → recreateWorkflow`)
-   * which composes the bump on top of this primitive.
+   * 5-method matrix on `CommandService`. Workflow generation bumping
+   * is owned by the orchestrator recreate method, so serialized callers
+   * do not need a second app-layer write.
    */
   async recreateWorkflow(
     envelope: CommandEnvelope<{ workflowId: string }>,

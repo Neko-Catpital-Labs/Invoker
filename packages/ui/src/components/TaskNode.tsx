@@ -13,13 +13,14 @@
 import { Handle, Position } from '@xyflow/react';
 import type { MouseEvent } from 'react';
 import type { TaskState } from '../types.js';
-import { getStatusColor, getEffectiveVisualStatus, getRunningPhaseLabel } from '../lib/colors.js';
+import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
 
 interface TaskNodeData {
   task: TaskState;
   label?: string;
   dimmed?: boolean;
   selected?: boolean;
+  runningLike?: boolean;
   onDoubleClick?: (task: TaskState) => void;
   [key: string]: unknown;
 }
@@ -28,30 +29,34 @@ interface TaskNodeProps {
   data: TaskNodeData;
 }
 
+const TASK_NODE_STATUS_LABELS: Record<string, string> = {
+  assigning: 'ASSIGNING',
+  awaiting_approval: 'APPROVE',
+  fix_approval: 'APPROVE FIX',
+  fixing_with_ai: 'FIXING WITH AI',
+  running: 'RUNNING',
+  running_executing: 'RUNNING · EXECUTING',
+};
+
+function getTaskNodeStatusLabel(task: TaskState, visualStatus: string): string {
+  if (task.config.isReconciliation && task.status === 'needs_input') return 'SELECT';
+  return TASK_NODE_STATUS_LABELS[visualStatus] ?? task.status.toUpperCase();
+}
+
 export function TaskNode({ data }: TaskNodeProps) {
   const { task } = data;
   const dimmed = data.dimmed ?? false;
   const selected = data.selected ?? false;
-  const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
+  const visualStatus = getEffectiveVisualStatus(task.status, task.execution, { runningLike: data.runningLike });
   const colors = getStatusColor(visualStatus);
 
   const isAnimated =
+    data.runningLike === true ||
     task.status === 'running' ||
     task.status === 'needs_input' ||
     task.status === 'awaiting_approval';
 
-  const statusLabel =
-    visualStatus === 'fixing_with_ai'
-      ? 'FIXING WITH AI'
-      : visualStatus === 'fix_approval'
-        ? 'APPROVE FIX'
-        : task.status === 'running' && task.execution.phase
-          ? `RUNNING · ${(getRunningPhaseLabel(task.execution.phase) ?? task.execution.phase).toUpperCase()}`
-        : task.status === 'awaiting_approval'
-          ? 'APPROVE'
-          : task.config.isReconciliation && task.status === 'needs_input'
-            ? 'SELECT'
-            : task.status.toUpperCase();
+  const statusLabel = getTaskNodeStatusLabel(task, visualStatus);
 
   const isStale = task.status === 'stale';
   const dotClass = `${colors.dot} ${isAnimated ? 'pulse-strong' : ''}`;

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Continuously retry workflow work that is not complete/review-ready,
 # retry failed tasks once,
-# auto-fix still-failed tasks with Codex up to three times per task,
+# auto-fix still-failed tasks with the configured agent (default codex) up to three times per task,
 # recover stale AI-fix sessions and stale running tasks after restarts,
 # approve AI-fix approval gates,
 # clear stale explicit SSH host pins left by prior pool-routed attempts,
@@ -28,6 +28,8 @@ APPROVE_FIXES=true
 LOCALIZE_SSH=false
 SELF_TEST=false
 MAX_FIX_ATTEMPTS=3
+FIX_AGENT="${INVOKER_RETRY_PENDING_AUTOFIX_FIX_AGENT:-codex}"
+case "$FIX_AGENT" in claude|codex|omp) ;; *) echo "Invalid INVOKER_RETRY_PENDING_AUTOFIX_FIX_AGENT: $FIX_AGENT (expected claude|codex|omp)" >&2; exit 2 ;; esac
 RECOVER_STALE_AI_STATES=true
 STALE_AI_STATE_SECONDS=300
 STALE_ACTIVE_QUEUE_SECONDS=300
@@ -57,7 +59,7 @@ Usage: scripts/retry-pending-autofix-failed.sh [options]
 Loop actions:
   - run `retry <workflowId>` for every workflow not completed or review_ready
   - run `retry-task <taskId>` once for every failed task
-  - run `fix <taskId> codex` for failed tasks already retried by this loop, up to three times per task
+  - run `fix <taskId> <agent>` (agent from --fix-agent, default codex) for failed tasks already retried by this loop, up to three times per task
   - recover stale fixing_with_ai tasks after restarts
   - investigate stale running tasks that no longer have launch progress
   - retry infrastructure failures with a cooldown instead of sending them to Codex
@@ -78,8 +80,9 @@ Options:
   --no-retry-incomplete         Do not retry workflows unless completed or review_ready
   --no-resume-pending           Deprecated alias for --no-retry-incomplete
   --no-retry-failed             Do not retry failed tasks before autofix
-  --no-autofix-failed           Do not submit Codex fixes for failed tasks
-  --max-fix-attempts <n>        Per-task Codex fix cap; max 3, 0 disables fixes (default: 3)
+  --no-autofix-failed           Do not submit AI fixes for failed tasks
+  --max-fix-attempts <n>        Per-task AI fix cap; max 3, 0 disables fixes (default: 3)
+  --fix-agent <agent>           AI agent used for fixes: claude|codex|omp (default: codex)
   --no-recover-stale-ai-states  Do not recover stale fixing_with_ai tasks
   --stale-ai-state-age <seconds> Age before AI states are treated as restart-stale (default: 300)
   --stale-active-queue-age <sec> Age before queue-active pending tasks are investigated (default: 300)
@@ -162,6 +165,11 @@ while [[ $# -gt 0 ]]; do
       MAX_FIX_ATTEMPTS="${2:-}"
       positive_int_or_zero "$MAX_FIX_ATTEMPTS" || { echo "Invalid --max-fix-attempts: $MAX_FIX_ATTEMPTS" >&2; exit 2; }
       [ "$MAX_FIX_ATTEMPTS" -le 3 ] || { echo "Invalid --max-fix-attempts: $MAX_FIX_ATTEMPTS (max: 3)" >&2; exit 2; }
+      shift 2
+      ;;
+    --fix-agent)
+      FIX_AGENT="${2:-}"
+      case "$FIX_AGENT" in claude|codex|omp) ;; *) echo "Invalid --fix-agent: $FIX_AGENT (expected claude|codex|omp)" >&2; exit 2 ;; esac
       shift 2
       ;;
     --no-recover-stale-ai-states)
@@ -2174,7 +2182,7 @@ run_cycle() {
   fi
 
   if [ "$AUTOFIX_FAILED" = true ] && [ -s "$failed_tasks_file" ]; then
-    echo "submitting Codex fixes for failed tasks"
+    echo "submitting $FIX_AGENT fixes for failed tasks"
     while IFS= read -r target; do
       [ -n "$target" ] || continue
       local target_wf
@@ -2214,7 +2222,7 @@ run_cycle() {
         echo "  skip fix $target (fix submitted recently)"
         continue
       fi
-      dispatch_no_track fix "$target" "$FIX_COOLDOWN_SECONDS" "$now_epoch" fix "$target" codex \
+      dispatch_no_track fix "$target" "$FIX_COOLDOWN_SECONDS" "$now_epoch" fix "$target" "$FIX_AGENT" \
         || failures=$((failures + 1))
     done < "$failed_tasks_file"
   fi
@@ -2421,6 +2429,7 @@ SELFTEST_CODEX
     LOCALIZE_COOLDOWN_SECONDS=60
     FIX_DEDUPE_SECONDS=300
     INFRA_RETRY_COOLDOWN_SECONDS=300
+    FIX_AGENT=codex
     RESUME_DEDUPE_SECONDS=60
     LAST_DISPATCH_SUBMITTED=false
     SKIP_SLEEP_AFTER_CYCLE=false
@@ -3166,6 +3175,7 @@ echo "retry/autofix loop starting"
 echo "dryRun=$DRY_RUN interval=${INTERVAL_SECONDS}s maxCycles=$MAX_CYCLES includeMerge=$INCLUDE_MERGE"
 echo "retryIncompleteWorkflows=$RETRY_INCOMPLETE_WORKFLOWS retryFailed=$RETRY_FAILED autofixFailed=$AUTOFIX_FAILED maxFixAttempts=$MAX_FIX_ATTEMPTS recoverStaleAiStates=$RECOVER_STALE_AI_STATES staleAiStateAge=${STALE_AI_STATE_SECONDS}s staleActiveQueueAge=${STALE_ACTIVE_QUEUE_SECONDS}s approveFixes=$APPROVE_FIXES localizeSsh=$LOCALIZE_SSH"
 echo "investigatePending=$INVESTIGATE_PENDING investigateCooldown=${INVESTIGATE_COOLDOWN_SECONDS}s resetStateAfterRepair=$RESET_STATE_AFTER_REPAIR queryTimeout=${QUERY_TIMEOUT_SECONDS}s ipcFallbackToStandalone=$IPC_FALLBACK_TO_STANDALONE codexCommand=$CODEX_COMMAND"
+echo "fixAgent=$FIX_AGENT"
 
 cycle=1
 overall_failures=0

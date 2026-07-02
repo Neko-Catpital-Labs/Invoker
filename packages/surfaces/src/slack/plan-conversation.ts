@@ -22,11 +22,31 @@ export interface ConversationMessage {
   content: string;
 }
 
+export type PlanningCommandBuilder = (opts: {
+  tool: string;
+  model?: string;
+  prompt: string;
+}) => { command: string; args: string[] };
+
+export function defaultPlanningCommand(
+  cursorCommand: string,
+  opts: { model?: string; prompt: string },
+): { command: string; args: string[] } {
+  const args = ['--print'];
+  if (opts.model) args.push('--model', opts.model);
+  args.push(opts.prompt);
+  return { command: cursorCommand, args };
+}
+
 export interface PlanConversationConfig {
   /** Command to invoke the agent CLI. Default: 'agent'. */
   cursorCommand?: string;
+  /** Planning tool name (e.g. 'cursor', 'omp', 'codex') passed to the builder. */
+  tool?: string;
   /** Model to use (e.g. 'auto', 'sonnet-4'). Omit to use the CLI default. */
   model?: string;
+  /** Injected builder that maps {tool, model, prompt} → CLI command + args. */
+  planningCommandBuilder?: PlanningCommandBuilder;
   /** Root directory for codebase exploration. */
   workingDir?: string;
   /** Subprocess timeout in milliseconds. Default: 300000 (5 minutes). */
@@ -39,6 +59,9 @@ export interface PlanConversationConfig {
   defaultBranch?: string;
   /** Default repo URL (e.g. "git@github.com:user/repo.git"). Used when plan YAML omits repoUrl. */
   repoUrl?: string;
+  /** EXPERIMENTAL_PLANNER: when true, steer the agent to order the plan via the
+   * experimental planner MCP tool (`plan`). The redirect server enforces the gate. */
+  experimentalPlanner?: boolean;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
 }
@@ -66,6 +89,22 @@ export function isConfirmation(text: string): boolean {
   return CONFIRMATION_PATTERNS.some((re) => re.test(trimmed));
 }
 
+const NEGATION_PATTERNS = [
+  /^no$/i,
+  /^n$/i,
+  /^nope$/i,
+  /^cancel$/i,
+  /^stop$/i,
+  /^abort$/i,
+  /^nvm$/i,
+  /^never ?mind$/i,
+];
+
+export function isNegation(text: string): boolean {
+  const trimmed = text.trim().replace(/[.?!]+$/, '');
+  return NEGATION_PATTERNS.some((re) => re.test(trimmed));
+}
+
 // ── System Prompt ───────────────────────────────────────────
 
 function buildSystemPrompt(defaultBranch: string, repoUrl?: string): string {
@@ -85,7 +124,7 @@ A plan has this structure:
 name: "Plan Name"
 ${repoUrlLine}
 onFinish: pull_request  # "pull_request" (default), "merge", or "none"
-mergeMode: manual       # "manual" (default) or "automatic"
+mergeMode: external_review  # "external_review" = GitHub-backed review gate for reviewable implementation work; "manual" (default) = verification-only, no review; "automatic" = merge without review
 baseBranch: ${defaultBranch}        # base git branch
 featureBranch: plan/my-feature  # auto-generated from plan name if omitted
 tasks:
@@ -105,8 +144,11 @@ tasks:
 
 Rules:
 1. Explore the codebase first (list directories, read key files). Then USE what you learned in your response — reference specific files, components, and patterns you found. Do NOT give generic responses that ignore the code you read.
-2. After exploring, generate the YAML plan directly. Do NOT ask clarifying questions unless absolutely necessary — prefer making reasonable assumptions based on the code you read.
-3. Keep plans focused — 3-8 tasks maximum.
+2. For ambiguous implementation requests, tiny nits, or broad "make this better" requests, do a brief scoping pass before YAML:
+   - State concise assumptions based on the repository evidence you found.
+   - Show a short plan preview with the likely review slice(s) and verification commands.
+   - Ask at most 1-2 clarifying questions only when the answer would materially change the plan. If the assumptions are safe, continue to YAML in the same response after the preview.
+3. Keep plans focused — 3-8 tasks maximum. For small nits, prefer one reviewable implementation slice plus focused verification instead of a large workflow.
 4. File-count guidance is a soft heuristic, not a hard validator gate. Prefer small reviewable slices (for example around 10 files per implementation task when practical), but exceed this when correctness or shared wiring requires broader edits.
 5. Each task should have either a \`command\` or a \`prompt\`, not both.
 6. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` discovered from the target repo (e.g. that repo's package scripts, build commands, or focused checks such as \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
@@ -122,7 +164,8 @@ Rules:
 8. When ready, output the plan inside a \`\`\`yaml code block.
 9. Always include \`dependencies\` (even if empty array).
 10. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
-11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.`;
+11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.
+12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
 }
 
 // ── Dangerous Command Detection ─────────────────────────────
@@ -157,7 +200,9 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 export class PlanConversation {
   private cursorCommand: string;
+  private tool?: string;
   private model?: string;
+  private planningCommandBuilder?: PlanningCommandBuilder;
   private messages: ConversationMessage[] = [];
   private _submittedPlanText: string | null = null;
   private _planSubmitted = false;
@@ -167,18 +212,22 @@ export class PlanConversation {
   private conversationRepo?: ConversationRepository;
   private defaultBranch?: string;
   private repoUrl?: string;
+  private experimentalPlanner?: boolean;
   private log: LogFn;
   private _initialized = false;
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
+    this.tool = config.tool;
     this.model = config.model;
+    this.planningCommandBuilder = config.planningCommandBuilder;
     this.workingDir = config.workingDir;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.threadTs = config.threadTs;
     this.conversationRepo = config.conversationRepo;
     this.defaultBranch = config.defaultBranch;
     this.repoUrl = config.repoUrl;
+    this.experimentalPlanner = config.experimentalPlanner;
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -222,9 +271,9 @@ export class PlanConversation {
   }
 
   /**
-   * Send a user message and get Cursor's response.
-   * If the message is a confirmation (e.g. "yes", "go"), extracts the last
-   * YAML plan from history and submits it. Otherwise spawns the Cursor CLI.
+   * Send a user message to the planner and return its reply. Pure conversation:
+   * drafting a plan never auto-submits it — submission is an explicit step
+   * driven by the surface (the `submit` verb), so a stray "yes" can't ship a plan.
    */
   async sendMessage(userMessage: string): Promise<string> {
     const t0 = Date.now();
@@ -236,34 +285,11 @@ export class PlanConversation {
 
     this.messages.push({ role: 'user', content: userMessage });
 
-    if (isConfirmation(userMessage)) {
-      const planText = this.extractLastPlanFromMessages();
-      if (planText) {
-        this._submittedPlanText = planText;
-        this._planSubmitted = true;
-        // Extract plan name from the text for the reply message
-        const parsed = parseYaml(planText) as Record<string, unknown>;
-        const planName = (parsed?.name as string) ?? 'Untitled';
-        const reply = `Plan "${planName}" submitted for execution.`;
-        this.messages.push({ role: 'assistant', content: reply });
-        this.saveState();
-        const tEnd = Date.now();
-        this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
-        return reply;
-      }
-      const errorReply = "I couldn't find a complete YAML plan in this conversation. Could you ask me to regenerate the plan?";
-      this.messages.push({ role: 'assistant', content: errorReply });
-      this.saveState();
-      const tEnd = Date.now();
-      this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation-failed): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
-      return errorReply;
-    }
-
     const prompt = this.buildCursorPrompt();
     const tPrompt = Date.now();
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: promptLen=${prompt.length}, historyMsgs=${this.messages.length - 1}, promptPreview="${prompt.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
-    const response = await this.spawnCursor(prompt);
+    const response = await this.spawnPlanner(prompt);
     const tCursor = Date.now();
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, responsePreview="${response.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
@@ -283,6 +309,11 @@ export class PlanConversation {
   /** Returns true if the user confirmed and a plan was extracted. */
   get planSubmitted(): boolean {
     return this._planSubmitted;
+  }
+
+  /** Returns the last complete YAML plan drafted in this conversation, or null. */
+  getDraftedPlan(): string | null {
+    return this.extractLastPlanFromMessages();
   }
 
   /** Returns the conversation history. */
@@ -325,18 +356,27 @@ export class PlanConversation {
       parts.push('\nRespond to the latest message. If it requires a plan, explore the codebase and generate one.');
     }
 
+    if (this.experimentalPlanner) {
+      parts.push(
+        '\n[EXPERIMENTAL_PLANNER] Before finalizing the order, call the `plan` MCP ' +
+        'tool with the conversation to get the experimental planner\'s ordered ' +
+        'features/tasks + dependency edges, and base your plan\'s ordering on it. ' +
+        'If the tool is unavailable, order the plan yourself as usual.');
+    }
+
     return parts.join('\n');
   }
 
-  // ── Cursor CLI Subprocess ─────────────────────────────
+  // ── Planner CLI Subprocess ─────────────────────────────
 
-  spawnCursor(prompt: string): Promise<string> {
+  spawnPlanner(prompt: string): Promise<string> {
     const spawnStart = Date.now();
+    const { command, args } = this.planningCommandBuilder
+      ? this.planningCommandBuilder({ tool: this.tool ?? 'cursor', model: this.model, prompt })
+      : defaultPlanningCommand(this.cursorCommand, { model: this.model, prompt });
+    const plannerLabel = this.tool ?? command;
     return new Promise((resolve, reject) => {
-      const args = ['--print'];
-      if (this.model) args.push('--model', this.model);
-      args.push(prompt);
-      const child = spawn(this.cursorCommand, args, {
+      const child = spawn(command, args, {
         cwd: this.workingDir ?? process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
@@ -347,7 +387,7 @@ export class PlanConversation {
       let stdoutChunks = 0;
       let stderrChunks = 0;
 
-      this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, cmd="${this.cursorCommand} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}`);
+      this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, cmd="${command} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}`);
 
       child.stdout?.on('data', (chunk: Buffer) => {
         const chunkStr = chunk.toString();
@@ -366,7 +406,7 @@ export class PlanConversation {
       const timer = setTimeout(() => {
         this.log('plan-conversation', 'error', `[PERF] cursor_timeout: pid=${child.pid ?? 'none'}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, stderrTail="${stderr.slice(-500).replace(/\n/g, '\\n')}"`);
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
-        reject(new Error(`Cursor CLI timed out after ${this.timeoutMs}ms`));
+        reject(new Error(`${plannerLabel} timed out after ${this.timeoutMs}ms`));
       }, this.timeoutMs);
 
       child.on('close', (code) => {
@@ -376,13 +416,13 @@ export class PlanConversation {
           resolve(stdout.trim() || '(no output)');
         } else {
           const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';
-          reject(new Error(`Cursor CLI exited with code ${code}: ${errMsg}`));
+          reject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`));
         }
       });
 
       child.on('error', (err) => {
         clearTimeout(timer);
-        reject(new Error(`Failed to spawn Cursor CLI: ${err.message}`));
+        reject(new Error(`Failed to spawn ${plannerLabel}: ${err.message}`));
       });
     });
   }

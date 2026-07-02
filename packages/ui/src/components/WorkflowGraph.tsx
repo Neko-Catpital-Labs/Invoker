@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
-import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
+import type { WorkflowMeta, WorkflowStatus } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
+import type { WorkflowCoreActivity } from '../lib/workflow-core-activity.js';
 import { deriveWorkflowGraph, layoutWorkflowGraph, type WorkflowGraphEdge } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
 import {
@@ -20,7 +21,6 @@ import {
 import '@xyflow/react/dist/style.css';
 
 interface WorkflowGraphProps {
-  tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   selectedWorkflowId: string | null;
   /**
@@ -30,6 +30,7 @@ interface WorkflowGraphProps {
    */
   cameraCommand?: GraphCameraCommand | null;
   statusFilters: Set<WorkflowStatus>;
+  coreActivityByWorkflow?: Map<string, WorkflowCoreActivity>;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowContextMenu: (event: MouseEvent, workflowId: string) => void;
   /** Fired when the user manually pans or zooms the viewport. */
@@ -40,6 +41,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   workflow: WorkflowMeta;
   selected: boolean;
   dimmed: boolean;
+  coreActivity?: WorkflowCoreActivity;
 }
 
 const nodeTypes = {
@@ -90,6 +92,7 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
         workflow={data.workflow}
         selected={data.selected}
         dimmed={data.dimmed}
+        coreActivity={data.coreActivity}
         onClick={() => {}}
         onContextMenu={() => {}}
       />
@@ -104,11 +107,11 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
 }
 
 function WorkflowGraphInner({
-  tasks,
   workflows,
   selectedWorkflowId,
   cameraCommand,
   statusFilters,
+  coreActivityByWorkflow,
   onSelectWorkflow,
   onWorkflowContextMenu,
   onManualViewport,
@@ -124,10 +127,10 @@ function WorkflowGraphInner({
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
     const startedAt = performance.now();
-    const nextGraph = deriveWorkflowGraph(workflows, tasks);
+    const nextGraph = deriveWorkflowGraph(workflows);
     graphMetricsRef.current.deriveMs = performance.now() - startedAt;
     return nextGraph;
-  }, [workflows, tasks]);
+  }, [workflows]);
   const positions = useMemo(() => {
     const startedAt = performance.now();
     const nextPositions = layoutWorkflowGraph(graph);
@@ -151,12 +154,13 @@ function WorkflowGraphInner({
           workflow: node.workflow,
           selected: selectedWorkflowId === node.id,
           dimmed,
+          coreActivity: coreActivityByWorkflow?.get(node.id),
         },
       };
     });
     graphMetricsRef.current.objectsMs = performance.now() - startedAt;
     return nextNodes;
-  }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
+  }, [coreActivityByWorkflow, graph.nodes, positions, selectedWorkflowId, statusFilters]);
 
   const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => {
     const visual = workflowEdgeVisual(edge.kind);

@@ -23,7 +23,6 @@ import {
   fixWithAgentAction,
   finalizeAppliedFix,
   autoFixOnFailure,
-  autoFixOnReviewGateFailure,
   selectFailureRecoveryRoute,
   deleteAllWorkflows,
   resolveConflictAction,
@@ -98,7 +97,7 @@ describe('fresh-base workflow lifecycle helpers', () => {
     });
 
     expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
@@ -218,7 +217,7 @@ describe('rebaseRecreate', () => {
     });
 
     expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
@@ -307,6 +306,44 @@ describe('approveTask', () => {
     expect(orchestrator.approve).not.toHaveBeenCalled();
     expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
+  });
+
+  it('surfaces corrupt merge-gate fix approvals without recreating the task', async () => {
+    const approvedTask = makeTask({
+      id: 'merge-a',
+      status: 'awaiting_approval',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {
+        pendingFixError: 'original gate failure',
+        workspacePath: '/tmp/invoker-empty-launch-placeholder',
+      },
+    });
+    const orchestrator = {
+      approve: vi.fn(),
+      getTask: vi.fn().mockReturnValue(approvedTask),
+      resumeTaskAfterFixApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const taskExecutor = {
+      commitApprovedFix: vi.fn().mockRejectedValue(new Error('git status --porcelain failed (code 128): fatal: not a git repository')),
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    const result = await approveTask('merge-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(result).toEqual({ approvedTask, fixedTask: true, started: [] });
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
+      'merge-a',
+      'original gate failure',
+      expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+    );
+    expect(orchestrator.resumeTaskAfterFixApproval).not.toHaveBeenCalled();
+    expect(orchestrator.approve).not.toHaveBeenCalled();
+    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
   });
 
   it('commits approved fixes and returns non-merge launch claims for the caller to dispatch', async () => {
@@ -1301,13 +1338,73 @@ describe('fixWithAgentAction', () => {
       'task-a',
       expect.stringContaining('Startup merge conflict detected; recreating workflow wf-1 from a fresh base.'),
     );
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
     expect(result).toEqual({
       kind: 'recreateWorkflowFromFreshBase',
       workflowId: 'wf-1',
       started: [expect.objectContaining({ id: 'task-a', status: 'running' })],
     });
+  });
+
+  it('surfaces corrupt merge gates when the saved fix workspace is not a git repo', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        id: 'merge-a',
+        status: 'failed',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          error: 'Unable to resolve merge worktree ref "plan/old-base"',
+          workspacePath: '/tmp/invoker-empty-launch-placeholder',
+        },
+      })),
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
+      updateWorkflow: vi.fn(),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => [makeRunningTask({ id: 'merge-a', status: 'running' })]),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      beginConflictResolution: vi.fn(),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      appendTaskOutput: vi.fn(),
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
+      updateWorkflow: vi.fn(),
+      getTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
+      execGitIn: vi.fn().mockRejectedValue(new Error('fatal: not a git repository')),
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('merge-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+    }, {
+      failureOutputLabel: 'Fix with AI',
+    })).rejects.toThrow('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository');
+
+    expect(taskExecutor.execGitIn).toHaveBeenCalledWith(
+      ['rev-parse', '--is-inside-work-tree'],
+      '/tmp/invoker-empty-launch-placeholder',
+    );
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'merge-a',
+      expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+    );
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
+      'merge-a',
+      'Unable to resolve merge worktree ref "plan/old-base"',
+      expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+    );
+    expect(orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
   });
 });
 
@@ -1571,9 +1668,7 @@ describe('buildWorkflowInvalidationDeps', () => {
         if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
         return workflow as any;
       },
-      setWorkflowGeneration: (workflowId, generation) => {
-        persistence.updateWorkflow(workflowId, { generation });
-      },
+      
       killActiveExecution: taskExecutor?.killActiveExecution?.bind(taskExecutor),
       prepareFreshBase: taskExecutor?.preparePoolForRebaseRetry
         ? async (workflowId, workflow) => {
@@ -1622,8 +1717,8 @@ describe('buildWorkflowInvalidationDeps', () => {
 
     await deps.recreateWorkflow('wf-1');
 
-    expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
+    expect(persistence.loadWorkflow).not.toHaveBeenCalled();
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
   });
 
@@ -1643,7 +1738,7 @@ describe('buildWorkflowInvalidationDeps', () => {
 
     const result = await deps.recreateWorkflowFromFreshBase!('wf-1');
 
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',
       'https://example/repo.git',
@@ -2264,107 +2359,6 @@ describe('autoFixOnFailure lineage guard', () => {
 
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).not.toHaveBeenCalled();
-  });
-});
-
-describe('autoFixOnReviewGateFailure', () => {
-  const trigger = {
-    taskId: 'merge-a',
-    workflowId: 'wf-1',
-    reviewId: '123',
-    reviewUrl: 'https://github.com/owner/repo/pull/123',
-    headSha: 'abc123',
-    headRef: 'feature/ci-red',
-    branch: 'feature/ci-red',
-    selectedAttemptId: 'att-1',
-    generation: 7,
-    statusText: 'CI failed',
-    failedChecks: [
-      { name: 'test-all', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/runs/1' },
-    ],
-  };
-
-  it('starts a review-gate fix session and passes CI context to the fix agent', async () => {
-    const task = makeTask({
-      id: 'merge-a',
-      status: 'review_ready',
-      config: { workflowId: 'wf-1', isMergeNode: true },
-      execution: {
-        autoFixAttempts: 0,
-        workspacePath: '/tmp/merge-a',
-        branch: 'feature/ci-red',
-        reviewId: '123',
-        selectedAttemptId: 'att-1',
-        generation: 7,
-      },
-    });
-    const orchestrator = {
-      getTask: vi.fn(() => task),
-      getAutoFixRetryBudget: vi.fn(() => 3),
-      beginAutoFixSession: vi.fn(() => ({ savedError: 'Review-gate CI failed' })),
-      setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
-    };
-    const persistence = {
-      updateTask: vi.fn(),
-      getTaskOutput: vi.fn(() => 'prior task output'),
-      appendTaskOutput: vi.fn(),
-      logEvent: vi.fn(),
-    };
-    const taskExecutor = {
-      fixWithAgent: vi.fn().mockResolvedValue(undefined),
-      execGitIn: vi.fn().mockResolvedValue('fixed-sha\n'),
-    };
-
-    await autoFixOnReviewGateFailure(trigger, {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-      getAutoFixAgent: () => 'codex',
-      getAutoApproveAIFixes: () => false,
-    });
-
-    expect(orchestrator.beginAutoFixSession).toHaveBeenCalledWith(
-      'merge-a',
-      expect.objectContaining({ savedError: expect.stringContaining('Review-gate CI failed') }),
-    );
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
-      'merge-a',
-      'prior task output',
-      'codex',
-      'Review-gate CI failed',
-      expect.stringContaining('This auto-fix was triggered by failed CI'),
-    );
-    expect(taskExecutor.fixWithAgent.mock.calls[0]?.[4]).toContain('test-all');
-    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('merge-a', 'Review-gate CI failed');
-  });
-
-  it('does not start when review-gate lineage is stale', async () => {
-    const staleTask = makeTask({
-      id: 'merge-a',
-      status: 'review_ready',
-      config: { workflowId: 'wf-1', isMergeNode: true },
-      execution: {
-        branch: 'feature/ci-red',
-        reviewId: '123',
-        selectedAttemptId: 'att-2',
-        generation: 8,
-      },
-    });
-    const orchestrator = {
-      getTask: vi.fn(() => staleTask),
-      getAutoFixRetryBudget: vi.fn(() => 3),
-      beginAutoFixSession: vi.fn(),
-      setFixAwaitingApproval: vi.fn(),
-    };
-
-    await expect(autoFixOnReviewGateFailure(trigger, {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: { updateTask: vi.fn() } as unknown as SQLiteAdapter,
-      taskExecutor: { fixWithAgent: vi.fn() } as unknown as TaskRunner,
-    })).rejects.toThrow(StaleLineageError);
-
-    expect(orchestrator.beginAutoFixSession).not.toHaveBeenCalled();
   });
 });
 

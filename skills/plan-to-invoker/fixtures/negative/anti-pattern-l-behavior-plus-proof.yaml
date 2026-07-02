@@ -1,7 +1,7 @@
 name: "Invalid behavior lane mixed with repro"
 description: "Implementation workflow that incorrectly mixes behavior work with repro files."
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-owner-refresh-fallback

@@ -2,10 +2,11 @@
 name: plan-to-invoker
 description: >
   Convert a plan into an Invoker YAML plan file. Trigger: "convert to invoker",
-  "submit to invoker", "create invoker plan", "/plan-to-invoker", or turning
-  a plan file into Invoker tasks. For benchmark/direct-output prompts with
-  "Required output path", write a complete YAML document directly to that
-  literal path; it must start with top-level name, onFinish, mergeMode,
+  "submit to invoker", "create invoker plan", "invoker-plan-to-invoker",
+  "/invoker-plan-to-invoker", "/plan-to-invoker", or turning a plan file into
+  Invoker tasks. For benchmark/direct-output prompts with "Required output path",
+  write a complete YAML document directly to that literal path; it must start
+  with top-level name, onFinish, mergeMode,
   repoUrl, and tasks, never version or metadata wrappers, and must not scan,
   validate, submit, or discover env vars.
 ---
@@ -53,6 +54,19 @@ tasks:
 
 For implementation benchmark plans, switch `onFinish` and `mergeMode` only when the prompt clearly requires a PR/submission workflow, and include task metadata from the prompt itself rather than discovering local references.
 
+## Harness handoff mode
+
+Use this mode when invoked by the installed command or MCP prompt.
+
+- First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
+- Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
+- Prefer the MCP tools `invoker_validate_plan` and `invoker_submit_plan` when available.
+- In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before submission.
+- Outside an Invoker source checkout, `invoker_validate_plan` is the deterministic validation gate.
+
+- If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
+- If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
+
 ## Intended flow (do not skip steps)
 
 1. Discuss scope/risk with the user.
@@ -84,11 +98,11 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Cross-layer dependency direction (required):** Dependency DAGs must flow from lower/foundational layers toward higher/integration layers. If a lower-layer task depends on a higher-layer task, mark an explicit exception in the task description with `Layer exception: allowed` and a rationale.
 
-**Experiment artifact persistence rule (required when prompt tasks design experiments):** Any `experiment-*` prompt task must write a deterministic artifact path (for example `docs/context/<issue>/experiment-brief.md`) and commit it during that task. Any `implement-*` task that depends on that experiment must reference and consume the exact artifact path in both `description` and `prompt` with explicit acceptance language. The workflow must include a dedicated cleanup task (typically `cleanup-experiment-artifacts-*`) that removes the artifact and commits cleanup before that workflow's final verification gate.
+**Bugfix repro:** For bug/regression plans, a shared `bash scripts/repro-<slug>.sh` (or the same `command:` before and after) is **strongly recommended**; **`skill-doctor` does not require it.** If the fix invalidates the original repro, use another explicit verification task. Never reference local-only repo files unless they are already checked into the branch the plan will run on. Use repo-relative paths like `scripts/...`; do not use parent-directory paths like `../../..`. `skill-doctor` rejects repo-relative references to files that exist locally but are not in `HEAD`, rejects parent-directory references, and rejects missing shell scripts used by command tasks, instead of silently treating local-only proof as valid. See `references/task-patterns.md` § *Bugfix repro*.
 
-**Bugfix repro:** For bug/regression plans, a shared `bash scripts/repro-<slug>.sh` (or the same `command:` before and after) is **strongly recommended**; **`skill-doctor` does not require it.** If the fix invalidates the original repro, use another explicit verification task. See `references/task-patterns.md` § *Bugfix repro*.
+**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), be explicit that GitHub PR publishing should use **Mergify Stacks** after the work is ready: keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the resulting commit stack with `mergify stack push`. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks.
 
-**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), be explicit that GitHub PR publishing should use **Mergify Stacks** after the work is ready: keep `onFinish: pull_request` + `mergeMode: github`, then publish/update the resulting commit stack with `mergify stack push`. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks. For the actual PR authoring/publication step after implementation work is ready, use the `make-pr` skill.
+**Review-gate artifact intent:** Plans may include optional top-level `reviewGate.artifacts` metadata to describe an ordered review PR stack. Each artifact needs a unique `id`; `required` defaults to `true` when omitted; the first artifact has no dependency; every later artifact must depend on exactly the immediately previous artifact. Do not use fixed PR-count fields or Mergify-specific fields in the plan YAML. This metadata does not affect scheduler readiness, task dependencies, or workflow `externalDependencies`.
 
 ## Deterministic step map (plan-to-invoker)
 

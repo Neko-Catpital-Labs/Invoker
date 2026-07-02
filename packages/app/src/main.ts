@@ -34,12 +34,17 @@
 
 import { app, dialog, ipcMain, Menu, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { config as loadDotenv } from 'dotenv';
 import {
   configureEarlyElectronApp,
+  formatGuiOwnerBootstrapFallbackMessage,
+  guiOwnerBootstrapTimeoutMs,
   registerGuiLifecycleHandlers,
+  resolveGuiOwnerPreference,
   runElectronReadyBootstrap,
+  shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
   startMainProcessBootstrap,
 } from './bootstrap/app-bootstrap.js';
@@ -69,11 +74,13 @@ import type {
 import {
   makeEnvelope,
   CommandError,
+  IpcChannels,
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { ActionGraphResponse, WorkflowMeta, WorkResponse } from '@invoker/contracts';
-import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
+import type { ActionGraphResponse, BundledSkillsInstallMode, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
+import { SqliteTaskRepository } from '@invoker/data-store';
+import type { SQLiteAdapter } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
   WorkspaceProbeAdapter,
@@ -90,13 +97,17 @@ import {
   initializeShellEnvironment,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
+  DEFAULT_EXECUTION_AGENT,
   registerBuiltinAgents,
+  type AgentRegistry,
 } from '@invoker/execution-engine';
-import type { Logger } from '@invoker/contracts';
 import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
 import {
+  DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
+  resolveConfigFileState,
+  resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
   type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
@@ -111,6 +122,7 @@ import {
   createHourlySnapshot,
   resolveInvokerHomeRoot,
 } from './delete-all-snapshot.js';
+import { openMainProcessDatabase } from './viewer-db-boundary.js';
 import {
   isHeadlessMutatingCommand,
   isHeadlessReadOnlyCommand,
@@ -171,16 +183,16 @@ import {
 } from './cli-installer.js';
 import { resolveBundledCliPath } from './cli-helper.js';
 import { buildAppMenuTemplate } from './app-menu.js';
-import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-merge.js';
-import {
-  CoalescedWorkflowMetadataPublisher,
-  WorkflowMetadataInvalidator,
-} from './workflow-metadata-invalidation.js';
+import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
+import { WorkflowRollupProjection } from './workflow-rollup-projection.js';
+import { seedTaskCachesFromSnapshot } from './viewer-cache-hydration.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
+import { submitWorkflowMutationOrAcknowledgeDeleted } from './workflow-mutation-submit.js';
+import type { WorkflowMutationContext } from './persisted-workflow-mutation-coordinator.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
 import {
@@ -198,12 +210,15 @@ import {
   parseFixWithAgentMutationArgs,
 } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
-import {
-  buildActionGraphDiagnostics,
-  resolveActionDiagnosticsStallThresholdMs,
-} from './action-graph-diagnostics.js';
+import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
+import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
+import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
+import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
+import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
+import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
+import { resolveWebToken, resolveWebHost, resolveWebPort } from './web/start-web-surface.js';
 import {
   createGuiMutationRegistrars,
   registerBootstrapStateIpc,
@@ -214,6 +229,11 @@ import {
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
 import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
+import {
+  buildRecoveryWorkerAuditPayload,
+  classifyAutoFixRecoveryPhase,
+  recoveryWorkerEventType,
+} from './recovery-worker-observability.js';
 import {
   executeNoTrackHeadlessBatch,
   type HeadlessBatchExecRequest,
@@ -238,31 +258,6 @@ import {
 import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
 import { logProcessError } from './process-error-handling.js';
 
-function buildCurrentActionGraphSnapshot(args: {
-  orchestrator: Orchestrator;
-  persistence: SQLiteAdapter;
-  invokerConfig: InvokerConfig;
-}): ActionGraphResponse {
-  args.orchestrator.syncAllFromDb();
-  const tasks = args.orchestrator.getAllTasks();
-  const workflows = args.persistence.listWorkflows();
-
-  return buildActionGraphDiagnostics({
-    workflows,
-    tasks,
-    attemptsByTaskId: new Map(tasks.map((task) => [
-      task.id,
-      args.persistence.loadActionGraphAttempts(task.id, task.execution.selectedAttemptId),
-    ])),
-    queueStatus: args.orchestrator.getQueueStatus(),
-    mutationIntents: args.persistence.listWorkflowMutationIntents(undefined, ['queued', 'running', 'failed']),
-    mutationLeases: args.persistence.listWorkflowMutationLeases(),
-    eventsByTaskId: new Map(tasks.map((task) => [task.id, args.persistence.getEvents(task.id, 'desc', 20)])),
-    activityLogs: args.persistence.getActivityLogs(0, 200),
-    stallThresholdMs: resolveActionDiagnosticsStallThresholdMs(args.invokerConfig),
-    launchDispatches: args.persistence.listLaunchDispatchesByState(['enqueued', 'leased']),
-  });
-}
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -333,6 +328,7 @@ let commandService: CommandService;
 // constructed in initServices before TaskRunner exists, so the deps
 // resolve via this getter at cancel-in-flight time.
 let latestTaskExecutor: TaskRunner | null = null;
+let guiUsingDaemonOwner = false;
 
 function buildCommandServiceInvalidationDeps() {
   return buildWorkflowInvalidationDeps({
@@ -384,7 +380,7 @@ const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promi
  * cleared afterward. Allows fix-with-agent and conflict-resolution
  * handlers to read the AbortSignal without changing every handler signature.
  */
-let activeMutationContext: import('./persisted-workflow-mutation-coordinator.js').WorkflowMutationContext | undefined;
+let activeMutationContext: WorkflowMutationContext | undefined;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
@@ -401,27 +397,6 @@ interface HeadlessResumeMutationPayload {
 }
 
 type HeadlessOwnerMode = 'standalone' | 'gui';
-type GuiOwnerPreference = 'auto' | 'daemon' | 'gui';
-
-function resolveGuiOwnerPreference(): GuiOwnerPreference {
-  const raw = (process.env.INVOKER_GUI_OWNER_MODE ?? '').trim().toLowerCase();
-  if (raw === 'daemon' || raw === 'client' || raw === 'follower') return 'daemon';
-  if (raw === 'auto') return 'auto';
-  if (raw === 'gui' || raw === 'owner' || raw === 'local') return 'gui';
-  if (process.env.INVOKER_GUI_DAEMON_OWNER === '1') return 'daemon';
-  return 'daemon';
-}
-
-function guiOwnerBootstrapTimeoutMs(): number {
-  const parsed = Number.parseInt(
-    process.env.INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS
-      ?? process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS
-      ?? '60000',
-    10,
-  );
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60000;
-}
-
 function headlessExecLogFields(
   payload: HeadlessExecMutationPayload,
   mode: HeadlessOwnerMode,
@@ -452,7 +427,7 @@ function acknowledgeNoTrackHeadlessExec(
   workflowId: string | undefined,
   priority: WorkflowMutationPriority,
   mode: HeadlessOwnerMode,
-): { ok: true; intentId: number } | undefined {
+): WorkflowMutationAcceptedResult | undefined {
   logger.info(
     `headless.exec decision ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId ?? '<none>'}"`, priority })}`,
     { module: 'ipc-delegate' },
@@ -461,14 +436,17 @@ function acknowledgeNoTrackHeadlessExec(
   if (!payload.noTrack) return undefined;
 
   if (workflowId && workflowMutationCoordinator) {
-    const intentId = workflowMutationCoordinator.submit(workflowId, priority, 'headless.exec', [payload], {
+    const result = submitWorkflowMutationOrAcknowledgeDeleted(workflowId, priority, 'headless.exec', [payload], {
+      coordinator: workflowMutationCoordinator,
+      workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
+      logger,
       deferDrain: true,
     });
     logger.info(
-      `headless.exec accepted ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId}"`, intent: intentId, priority })}`,
+      `headless.exec accepted ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId}"`, intent: result.intentId, priority })}`,
       { module: 'ipc-delegate' },
     );
-    return { ok: true, intentId };
+    return result;
   }
 
   const reason = !workflowId ? 'workflow-not-resolved' : 'coordinator-unavailable';
@@ -496,6 +474,15 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const repoRoot = resolveRepoRoot(__dirname, { fallback: process.resourcesPath });
+
+// Load secrets from ~/.invoker/.env (canonical) then the repo .env BEFORE any startup guard
+// reads process.env. dotenv never overrides vars already set in the real environment.
+function loadInvokerEnvFiles(): void {
+  for (const envPath of [path.join(homedir(), '.invoker', '.env'), path.resolve(repoRoot, '.env')]) {
+    if (existsSync(envPath)) loadDotenv({ path: envPath });
+  }
+}
+loadInvokerEnvFiles();
 const invokerConfig: InvokerConfig = (() => {
   try {
     return loadConfig();
@@ -552,10 +539,15 @@ async function ensureStandaloneOwnerForGui(): Promise<void> {
 let guiOwnerRouteRefreshPromise: Promise<void> | null = null;
 
 async function refreshGuiMutationOwnerRoute(): Promise<void> {
-  if (resolveGuiOwnerPreference() !== 'daemon') return;
+  const ownerPreference = resolveGuiOwnerPreference();
+  if (!shouldRefreshGuiOwnerRoute(ownerPreference, guiUsingDaemonOwner)) return;
   if (!guiOwnerRouteRefreshPromise) {
     guiOwnerRouteRefreshPromise = (async () => {
-      await ensureStandaloneOwnerForGui();
+      if (ownerPreference === 'daemon') {
+        await ensureStandaloneOwnerForGui();
+      } else if (!await discoverStandaloneOwnerForGui(2_000)) {
+        throw new Error('No mutation owner is available');
+      }
       const previousMessageBus = typeof messageBus === 'undefined' ? null : messageBus;
       const refreshedMessageBus = new IpcBus(undefined, { allowServe: false });
       await refreshedMessageBus.ready();
@@ -609,7 +601,16 @@ function assertDeleteAllEnabled(): void {
 
 interface InitServicesOptions {
   readOnly?: boolean;
-  executionAgentRegistry?: import('@invoker/execution-engine').AgentRegistry;
+  /**
+   * GUI viewer mode: never open `invoker.db`. A writable owner is always present
+   * in this mode, so the renderer's reads delegate to the owner over IPC and
+   * live updates arrive via TASK_DELTA/TASK_OUTPUT. We back the in-process
+   * services with a private empty in-memory database so no `-shm` is mapped on
+   * the real file — that is what lets the owner run WAL exclusive locking and be
+   * immune to the `-shm` truncation SIGBUS. Implies non-owner (readOnly) semantics.
+   */
+  detachedViewer?: boolean;
+  executionAgentRegistry?: AgentRegistry;
   startupSyncMode?: 'all' | 'none';
 }
 
@@ -625,7 +626,7 @@ function getBundledSkillsStatus() {
   return resolveBundledSkillsStatus(buildBundledSkillsContext());
 }
 
-function installPackagedSkills(mode: import('@invoker/contracts').BundledSkillsInstallMode = 'install') {
+function installPackagedSkills(mode: BundledSkillsInstallMode = 'install') {
   return installBundledSkills(buildBundledSkillsContext(), mode);
 }
 
@@ -657,7 +658,9 @@ function updateInvokerCliFromMenu(): void {
 async function initServices(options?: InitServicesOptions): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
   mkdirSync(invokerHomeRoot, { recursive: true });
-  const readOnly = options?.readOnly === true;
+  const detachedViewer = options?.detachedViewer === true;
+  // Detached viewer mode is a non-owner mode (no writer lock, no backups).
+  const readOnly = options?.readOnly === true || detachedViewer;
   const previousMessageBus = typeof messageBus === 'undefined' ? null : messageBus;
   previousMessageBus?.disconnect();
   const serviceMessageBus = new IpcBus(undefined, { allowServe: !readOnly });
@@ -667,9 +670,12 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   if (!readOnly) {
     writerLock = acquireDbWriterLock(dbPath, `main:initServices pid=${process.pid}`);
   }
-  persistence = await SQLiteAdapter.create(dbPath, {
+  persistence = await openMainProcessDatabase({
+    dbPath,
+    detachedViewer,
     readOnly,
-    ownerCapability: !readOnly, // writable mode requires owner capability
+    exclusiveLocking: process.env.INVOKER_DISABLE_EXCLUSIVE_LOCKING !== '1'
+      && process.env.INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK !== '1',
   });
   // Upgrade root logger with DB persistence now that SQLiteAdapter is ready.
   logger = new FileAndDbLogger({ module: 'main' }, { persistence });
@@ -777,137 +783,13 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   }
 }
 
-// ── Load @invoker/surfaces at runtime ────────────────────────
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function loadSurfaces(): any {
-  const req = createRequire(__filename);
-  return req('@invoker/surfaces');
-}
-
-// ── Shared Slack Bot Wiring ──────────────────────────────────
-
-interface SlackBotDeps {
-  executor: TaskRunner;
-  logFn: (source: string, level: string, message: string) => void;
-  approveTaskAction?: (taskId: string) => Promise<void>;
-  onStartPlan?: () => void;
-  onPlanLoaded?: (plan: PlanDefinition) => void;
-}
-
-async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
-  // Load .env for Slack tokens
-  try {
-    const dotenv = await import('dotenv');
-    dotenv.config({ path: path.resolve(repoRoot, '.env') });
-  } catch {
-    // dotenv not installed — rely on environment variables
-  }
-
-  const requiredVars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
-  for (const v of requiredVars) {
-    if (!process.env[v]) throw new Error(`Missing env var: ${v}. Set it in .env or environment.`);
-  }
-
-  const surfaces = loadSurfaces();
-  const repoLogger = logger.child({ module: 'conversation-repo' });
-  const conversationRepo = new ConversationRepository(persistence, {
-    info: (msg) => { repoLogger.info(msg); },
-    warn: (msg) => { repoLogger.warn(msg); },
-    error: (msg) => { repoLogger.error(msg); },
-  });
-  let repoUrl = process.env.INVOKER_REPO_URL;
-  if (!repoUrl) {
-    try {
-      repoUrl = execSync('git remote get-url origin', { cwd: repoRoot, encoding: 'utf8', timeout: 5000 }).trim();
-    } catch {
-      deps.logFn('slack', 'warn', 'Could not detect repoUrl from git remote; plans will require repoUrl in YAML');
-    }
-  }
-
-  const slack = new surfaces.SlackSurface({
-    botToken: process.env.SLACK_BOT_TOKEN!,
-    appToken: process.env.SLACK_APP_TOKEN!,
-    signingSecret: process.env.SLACK_SIGNING_SECRET!,
-    channelId: process.env.SLACK_CHANNEL_ID!,
-    cursorCommand: process.env.CURSOR_COMMAND ?? 'agent',
-    model: process.env.CURSOR_MODEL,
-    workingDir: repoRoot,
-    conversationRepo,
-    defaultBranch: invokerConfig.defaultBranch,
-    repoUrl,
-    log: deps.logFn,
-    planningTimeoutSeconds: invokerConfig.planningTimeoutSeconds,
-    planningHeartbeatIntervalSeconds: invokerConfig.planningHeartbeatIntervalSeconds,
-  });
-
-  await slack.start(async (command: any) => {
-    deps.logFn('trace', 'info', `slackBot: command received — type=${command.type}`);
-    switch (command.type) {
-      case 'approve': {
-        const taskId = command.taskId as string;
-        if (deps.approveTaskAction) {
-          await deps.approveTaskAction(taskId);
-          break;
-        }
-        await sharedApproveTask(taskId, {
-          orchestrator,
-          taskExecutor: deps.executor,
-          approve: async (approvedTaskId) => {
-            const result = await commandService.approve(
-              makeEnvelope('approve', 'surface', 'task', { taskId: approvedTaskId }),
-            );
-            if (!result.ok) throw new Error(result.error.message);
-            return result.data;
-          },
-          resumeAfterFixApproval: async (approvedTaskId) => {
-            const result = await commandService.resumeTaskAfterFixApproval(
-              makeEnvelope('approve', 'surface', 'task', { taskId: approvedTaskId }),
-            );
-            if (!result.ok) throw new Error(result.error.message);
-            return result.data;
-          },
-        });
-        break;
-      }
-      case 'reject': {
-        const env = makeEnvelope('reject', 'surface', 'task', { taskId: command.taskId as string, reason: command.reason as string | undefined });
-        const rejectResult = await commandService.reject(env);
-        if (!rejectResult.ok) throw new Error(rejectResult.error.message);
-        break;
-      }
-      case 'select_experiment': {
-        const started = orchestrator.selectExperiment(command.taskId, command.experimentId);
-        break;
-      }
-      case 'provide_input':
-        orchestrator.provideInput(command.taskId, command.input);
-        break;
-      case 'get_status':
-        break;
-      case 'start_plan': {
-        const { parsePlan } = await import('./plan-parser.js');
-        const planText = command.planText as string;
-        const plan = parsePlan(planText);
-        deps.logFn('trace', 'info', `slackBot: loading plan "${plan.name}" (${plan.tasks.length} tasks)`);
-        deps.onStartPlan?.();
-        deps.onPlanLoaded?.(plan);
-        backupPlan(plan, undefined, logger);
-        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-        const started = orchestrator.startExecution();
-        deps.logFn('trace', 'info', `slackBot: startExecution returned ${started.length} tasks: [${started.map((t: any) => t.id).join(', ')}]`);
-        break;
-      }
-    }
-  });
-
-  return slack;
-}
 
 // ── ANSI Helpers ─────────────────────────────────────────────
 
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const RED = '\x1b[31m';
+const YELLOW = '\x1b[33m';
 
 // ══════════════════════════════════════════════════════════════
 // HEADLESS MODE
@@ -995,6 +877,7 @@ function startHeadlessMode(): void {
         if (!standaloneMode) {
           process.stderr.write(
             `${RED}Error:${RESET} Mutation command "${command}" requires a running owner process.\n` +
+            `The headless command is only a submitter. Scheduler drain runs inside the long-lived owner process.\n` +
             `\n${BOLD}Options:${RESET}\n` +
             `  1. Start the interactive process: ${BOLD}electron dist/main.js${RESET}\n` +
             `  2. Run in standalone mode: ${BOLD}INVOKER_HEADLESS_STANDALONE=1 electron dist/main.js --headless ${cliArgs.join(' ')}${RESET}\n` +
@@ -1044,7 +927,7 @@ function startHeadlessMode(): void {
       const headlessDeps: HeadlessDeps = {
         logger,
         orchestrator, persistence, executorRegistry, messageBus,
-        repoRoot, invokerConfig, initServices, wireSlackBot,
+        repoRoot, invokerConfig, initServices,
         commandService,
         getUiPerfStats: () => ({
           ts: new Date().toISOString(),
@@ -1066,6 +949,7 @@ function startHeadlessMode(): void {
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
         runtimeServices,
+        appRootDir: __dirname,
       };
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
@@ -1075,8 +959,8 @@ function startHeadlessMode(): void {
       };
 
       const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
-        const { parsePlanFile } = await import('./plan-parser.js');
-        const plan = await parsePlanFile(payload.planPath);
+        const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
+        const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
         backupPlan(plan, undefined, logger);
         const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
         orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -1125,8 +1009,8 @@ function startHeadlessMode(): void {
           }
           case 'invoker:load-plan': {
             const planText = String(payload.args[0] ?? '');
-            const { parsePlan } = await import('./plan-parser.js');
-            const plan = parsePlan(planText);
+            const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
+            const plan = applyConfiguredPlanDefaults(parsePlan(planText));
             backupPlan(plan, undefined, logger);
             orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
             return undefined;
@@ -1241,14 +1125,6 @@ function startHeadlessMode(): void {
 
       // In standalone owner mode, serve delegated requests from peer headless processes.
       if (standaloneMode && messageBus) {
-        if (!readOnlyMode) {
-          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
-            headlessDeps,
-            ownerId: workflowMutationOwnerId,
-            createTaskExecutor: createStandaloneTaskExecutor,
-            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
-          });
-        }
         const standaloneOwnerIdleTimeoutMs = Number.parseInt(
           process.env.INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '0',
           10,
@@ -1318,7 +1194,12 @@ function startHeadlessMode(): void {
             case 'cancel':
             case 'retry-task':
             case 'recreate-task':
+            case 'delete-task':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
+            case 'delete':
+            case 'delete-workflow':
+            case 'detach-workflow':
+              return { workflowId: arg0 === undefined ? undefined : String(arg0), priority: 'high' };
             case 'approve':
             case 'reject':
             case 'select':
@@ -1448,6 +1329,14 @@ function startHeadlessMode(): void {
             ...details,
           };
           persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
+          const recoveryAction = classifyAutoFixRecoveryPhase(phase, payload);
+          if (recoveryAction) {
+            persistence.logEvent?.(
+              taskId,
+              recoveryWorkerEventType(recoveryAction),
+              buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
+            );
+          }
           logger.info(
             `[auto-fix-debug][standalone] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
             { module: 'auto-fix' },
@@ -1526,6 +1415,11 @@ function startHeadlessMode(): void {
             scheduleStandaloneAutoFix(task.id);
             return true;
           }
+          logStandaloneAutoFixDebug(task.id, `${trigger}-skip`, {
+            reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
+            shouldSkipForCancellation: cancellationError,
+            shouldAutoFixFromOrchestrator,
+          });
           return false;
         };
 
@@ -1568,8 +1462,8 @@ function startHeadlessMode(): void {
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
         ): Promise<{ workflowId: string; tasks: TaskState[] }> => {
-          const { parsePlanFile } = await import('./plan-parser.js');
-          const plan = await parsePlanFile(payload.planPath);
+          const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
+          const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
           backupPlan(plan, undefined, logger);
           const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
           orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -1614,40 +1508,26 @@ function startHeadlessMode(): void {
             mode: 'standalone',
           };
         });
-        messageBus.onRequest('headless.query', async (req: unknown) => {
-          noteStandaloneOwnerActivity();
-          const { kind, reset } = req as { kind?: string; reset?: boolean };
-          if (kind === 'ui-perf') {
-            if (reset) {
-              headlessDeps.resetUiPerfStats?.();
-            }
-            return {
-              ownerMode: 'standalone',
-              ...(headlessDeps.getUiPerfStats?.() ?? {}),
-            };
-          }
-          if (kind === 'queue') {
-            return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
-          }
-          if (kind === 'workflow-status') {
-            return orchestrator.getWorkflowStatus();
-          }
-          if (kind === 'tasks' || kind === 'task-graph-refresh') {
-            if (kind === 'task-graph-refresh') {
-              orchestrator.syncAllFromDb();
-            }
-            return {
-              tasks: orchestrator.getAllTasks(),
-              workflows: persistence.listWorkflows(),
-              streamSequence: 0,
-              invokerHomeRoot: resolveInvokerHomeRoot(),
-            };
-          }
-          if (kind === 'action-graph') {
-            return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
-          }
-          throw new Error(`Unsupported headless query: ${String(kind)}`);
-        });
+        messageBus.onRequest('headless.query', async (req: unknown) =>
+          answerOwnerHeadlessQuery(req, buildOwnerReadQueryHandlers({
+            ownerModeLabel: 'standalone',
+            onActivity: noteStandaloneOwnerActivity,
+            getUiPerfStats: () => headlessDeps.getUiPerfStats?.() ?? {},
+            resetUiPerfStats: () => headlessDeps.resetUiPerfStats?.(),
+            getStreamSequence: () => 0,
+            resolveInvokerHomeRoot,
+            orchestrator,
+            persistence,
+            getActionGraphSnapshot: () =>
+              buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
+          }), {
+            orchestrator,
+            persistence,
+            invokerConfig,
+            executionAgentRegistry: headlessDeps.executionAgentRegistry,
+            getUiPerfStats: headlessDeps.getUiPerfStats,
+            resetUiPerfStats: headlessDeps.resetUiPerfStats,
+          }));
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { workflowId, traceId } = req as { workflowId: string; traceId?: string };
@@ -1702,11 +1582,28 @@ function startHeadlessMode(): void {
           logger,
         });
 
+        startSurfaceEventRelay({
+          messageBus,
+          persistence,
+          orchestrator,
+          logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
+        });
+
         reviewGateStatusWorker = startReviewGateStatusWorker({
           ownerMode: true,
           getTaskExecutor: createStandaloneTaskExecutor,
           logger,
         });
+
+        // Owner discovery and exec handlers must exist before dispatch polling starts.
+        if (!readOnlyMode) {
+          standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
+            headlessDeps,
+            ownerId: workflowMutationOwnerId,
+            createTaskExecutor: createStandaloneTaskExecutor,
+            setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
+          });
+        }
       }
 
       await runHeadless(cliArgs, headlessDeps);
@@ -1805,6 +1702,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let taskExecutor: TaskRunner | null = null;
   let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
   let apiServer: ApiServer | null = null;
+  let webBridge: WebBridge | null = null;
   let ownerMode = true;
   const taskHandles: TaskHandleMap = new Map();
   const embeddedTerminalManager = new EmbeddedTerminalManager({
@@ -1831,6 +1729,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
   const lastKnownTaskStates = new TaskSnapshotCache();
+  const workflowRollupProjection = new WorkflowRollupProjection();
   const deferredWorkflowLaunches = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
     taskIds: string[];
@@ -1848,11 +1747,18 @@ function createEmbeddedTerminalBackendFromConfig(
   };
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  let workflowMetadataInvalidator: WorkflowMetadataInvalidator | null = null;
   let workflowMetadataPublisher: CoalescedWorkflowMetadataPublisher | null = null;
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   let startupWorkflowId: string | null = null;
+  // In detached viewer mode the local DB is an empty in-memory copy. Workflow
+  // metadata for the bootstrap getter comes from the owner snapshot; task state
+  // is derived live from `lastKnownTaskStates` (kept current by deltas).
+  let detachedViewerWorkflows: unknown[] | null = null;
+  // While the detached viewer hydrates, owner deltas are buffered here and
+  // replayed after the cache is seeded, so an update arriving mid-hydration is
+  // not applied against an empty cache (quarantined and dropped).
+  let detachedDeltaBuffer: TaskDelta[] | null = null;
   let uiInteractive = false;
   let deferredStartupTriggered = false;
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
@@ -1990,9 +1896,6 @@ function createEmbeddedTerminalBackendFromConfig(
   const taskDeltaStream = createTaskDeltaStreamSequence();
   const getTaskDeltaStreamSequence = (): number => taskDeltaStream.current();
 
-  const markWorkflowMetadataFromTaskDelta = (delta: TaskDelta): void => {
-    workflowMetadataInvalidator?.markFromTaskDelta(delta);
-  };
 
   const taskGraphEventPublisher = createTaskGraphEventPublisher({
     getMainWindow: () => mainWindow,
@@ -2006,11 +1909,12 @@ function createEmbeddedTerminalBackendFromConfig(
         module: 'ui-backpressure',
       });
     },
+    onEvent: (event) => webBridge?.broadcast('invoker:task-graph-event', event),
   });
 
-  const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
-    markWorkflowMetadataFromTaskDelta(delta);
-    taskGraphEventPublisher.publishDelta(delta);
+  const publishTaskDeltaToRenderer = (delta: TaskDelta): void => {
+    const workflowRollups = workflowRollupProjection.applyDelta(delta);
+    taskGraphEventPublisher.publishDelta(delta, workflowRollups);
   };
 
   const applyTaskDeltaToOwnerCacheOrRecover = (delta: TaskDelta): TaskDelta[] => {
@@ -2091,6 +1995,14 @@ function createEmbeddedTerminalBackendFromConfig(
       ...details,
     };
     persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
+    const recoveryAction = classifyAutoFixRecoveryPhase(phase, payload);
+    if (recoveryAction) {
+      persistence.logEvent?.(
+        taskId,
+        recoveryWorkerEventType(recoveryAction),
+        buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
+      );
+    }
     logger.info(
       `[auto-fix-debug] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
       { module: 'auto-fix' },
@@ -2109,7 +2021,7 @@ function createEmbeddedTerminalBackendFromConfig(
     const savedError = task.execution.error ?? '';
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
     logger.info(
-      `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${source} route=${recoveryRoute.kind}`,
+      `fix-with-agent: "${taskId}" agent=${agentName ?? DEFAULT_EXECUTION_AGENT} source=${source} route=${recoveryRoute.kind}`,
       { module: 'ipc' },
     );
 
@@ -2138,7 +2050,7 @@ function createEmbeddedTerminalBackendFromConfig(
         agentName,
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
-        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Codex'}`,
         signal: activeMutationContext?.signal,
       },
     );
@@ -2241,6 +2153,7 @@ function createEmbeddedTerminalBackendFromConfig(
       repoRoot,
       invokerConfig,
       logger,
+      messageBus,
       taskHandles,
       enqueueTaskOutput,
       flushTaskOutput,
@@ -2268,6 +2181,37 @@ function createEmbeddedTerminalBackendFromConfig(
       await killRunningTask(id);
     }
     return cmdResult.data;
+  }
+
+  async function performDeleteTask(taskId: string): Promise<void> {
+    logger.info(`performDeleteTask begin task="${taskId}"`, { module: 'kill' });
+    const task = orchestrator.getTask(taskId);
+    const workflowId = task?.config.workflowId;
+    if (task && (task.status === 'running' || task.status === 'fixing_with_ai')) {
+      await killRunningTask(task.id);
+    }
+    if (workflowId) {
+      await requireTaskExecutor().closeWorkflowReview(workflowId);
+    }
+    const envelope = makeEnvelope('delete-task', 'ui', 'task', { taskId });
+    const result = await commandService.deleteTask(envelope);
+    if (!result.ok) throw CommandError.fromResult(result.error);
+    remoteFetchForPool.enabled = false;
+    try {
+      await dispatchStartedTasksWithGlobalTopup({
+        orchestrator,
+        taskExecutor: requireTaskExecutor(),
+        logger,
+        context: 'ipc.delete-task',
+        started: result.data,
+        scopedTaskIds: result.data.map((startedTask) => startedTask.id),
+        mutationTiming: activeMutationContext?.mutationTiming,
+      });
+    } finally {
+      remoteFetchForPool.enabled = true;
+    }
+    requestWorkflowMetadataPublish('delete-task');
+    logger.info(`performDeleteTask end task="${taskId}"`, { module: 'kill' });
   }
 
   /** Cancel all active tasks in a workflow and kill any running processes. */
@@ -2305,6 +2249,7 @@ function createEmbeddedTerminalBackendFromConfig(
     const envelope = makeEnvelope('delete-workflow', 'ui', 'workflow', { workflowId });
     const result = await commandService.deleteWorkflow(envelope);
     if (!result.ok) throw new Error(result.error.message);
+    requestWorkflowMetadataPublish('delete-workflow');
     logger.info(`performDeleteWorkflow end workflow="${workflowId}"`, { module: 'kill' });
   }
 
@@ -2314,6 +2259,7 @@ function createEmbeddedTerminalBackendFromConfig(
     const result = await commandService.detachWorkflow(envelope);
     if (!result.ok) throw new Error(result.error.message);
     logger.info(`performDetachWorkflow end workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    requestWorkflowMetadataPublish('detach-workflow');
   }
 
   /** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
@@ -2356,8 +2302,8 @@ function createEmbeddedTerminalBackendFromConfig(
 
 
   async function executeHeadlessRun(payload: HeadlessRunMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
-    const { parsePlanFile } = await import('./plan-parser.js');
-    const plan = await parsePlanFile(payload.planPath);
+    const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
+    const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
     taskHandles.clear();
     backupPlan(plan, undefined, logger);
     const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
@@ -2394,7 +2340,7 @@ function createEmbeddedTerminalBackendFromConfig(
       logger,
       orchestrator, persistence, executorRegistry, messageBus,
       commandService,
-      repoRoot, invokerConfig, initServices, wireSlackBot,
+      repoRoot, invokerConfig, initServices,
       signal: activeMutationContext?.signal,
       mutationTiming: activeMutationContext?.mutationTiming,
       cancelTask: (taskId: string) => performCancelTask(taskId),
@@ -2480,6 +2426,7 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'cancel-workflow':
       case 'delete':
       case 'delete-workflow':
+      case 'detach-workflow':
         return { workflowId: arg0, priority: 'high' };
       case 'rebase-retry':
       case 'rebase-recreate':
@@ -2487,6 +2434,7 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'cancel':
       case 'retry-task':
       case 'recreate-task':
+      case 'delete-task':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'high' };
       case 'approve':
       case 'reject':
@@ -2516,6 +2464,36 @@ function createEmbeddedTerminalBackendFromConfig(
     return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
   }
 
+  function submitWorkflowMutation(
+    workflowId: string | undefined,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
+  ): WorkflowMutationAcceptedResult {
+    if (!workflowId) throw new Error(`Could not resolve workflow for ${channel}`);
+    if (!workflowMutationCoordinator) throw new Error('Workflow mutation coordinator is unavailable');
+    if (!workflowMutationDispatcher.has(channel)) {
+      throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
+    }
+    return submitWorkflowMutationOrAcknowledgeDeleted(workflowId, priority, channel, args, {
+      coordinator: workflowMutationCoordinator,
+      workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
+      logger,
+    });
+  }
+
+  function registerTaskScopedGuiMutationHandler<TResult = unknown>(
+    channel: keyof typeof IpcChannels & string,
+    resolveWorkflowId: (...args: unknown[]) => string | undefined,
+    priority: WorkflowMutationPriority,
+    handler: (...args: unknown[]) => Promise<TResult>,
+  ): void {
+    workflowMutationDispatcher.set(channel, (...args: unknown[]) => handler(...args));
+    registerGuiMutationHandler(channel, async (...args: unknown[]) => (
+      submitWorkflowMutation(resolveWorkflowId(...args), priority, channel, args)
+    ));
+  }
+
   function translateGuiMutationToHeadless(payload: GuiMutationPayload):
     | { channel: 'headless.gui-mutation'; request: GuiMutationPayload }
     | { channel: 'headless.run'; request: HeadlessRunMutationPayload }
@@ -2533,8 +2511,10 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'invoker:clear':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resume-workflow': {
-        const workflows = persistence.listWorkflows();
-        const workflowId = workflows[0]?.id;
+        const workflows = detachedViewerWorkflows ?? persistence.listWorkflows();
+        const firstWorkflow = workflows[0] as { id?: unknown } | undefined;
+        const workflowId = startupWorkflowId
+          ?? (typeof firstWorkflow?.id === 'string' ? firstWorkflow.id : undefined);
         if (!workflowId) return null;
         return { channel: 'headless.resume', request: { workflowId } };
       }
@@ -2542,21 +2522,23 @@ function createEmbeddedTerminalBackendFromConfig(
         return { channel: 'headless.exec', request: { args: ['delete-all'] } };
       case 'invoker:delete-all-workflows-bulk':
         return { channel: 'headless.exec', request: { args: ['delete-all'] } };
+      case 'invoker:delete-task':
+        return { channel: 'headless.exec', request: { args: ['delete-task', String(arg0)], noTrack: true } };
       case 'invoker:delete-workflow':
-        return { channel: 'headless.exec', request: { args: ['delete', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['delete', String(arg0)], noTrack: true } };
       case 'invoker:detach-workflow':
-        return { channel: 'headless.exec', request: { args: ['detach-workflow', String(arg0), String(arg1)] } };
+        return { channel: 'headless.exec', request: { args: ['detach-workflow', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:provide-input':
-        return { channel: 'headless.exec', request: { args: ['input', String(arg0), String(arg1)] } };
+        return { channel: 'headless.exec', request: { args: ['input', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:approve':
-        return { channel: 'headless.exec', request: { args: ['approve', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['approve', String(arg0)], noTrack: true } };
       case 'invoker:reject':
         return arg1 === undefined
-          ? { channel: 'headless.exec', request: { args: ['reject', String(arg0)] } }
-          : { channel: 'headless.exec', request: { args: ['reject', String(arg0), String(arg1)] } };
+          ? { channel: 'headless.exec', request: { args: ['reject', String(arg0)], noTrack: true } }
+          : { channel: 'headless.exec', request: { args: ['reject', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:select-experiment':
         if (Array.isArray(arg1)) return null;
-        return { channel: 'headless.exec', request: { args: ['select', String(arg0), String(arg1)] } };
+        return { channel: 'headless.exec', request: { args: ['select', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:restart-task':
         return { channel: 'headless.exec', request: { args: ['retry-task', String(arg0)], noTrack: true } };
       case 'invoker:cancel-task':
@@ -2578,12 +2560,12 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'invoker:set-merge-branch':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:set-merge-mode':
-        return { channel: 'headless.exec', request: { args: ['set', 'merge-mode', String(arg0), String(arg1)] } };
+        return { channel: 'headless.exec', request: { args: ['set', 'merge-mode', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:approve-merge': {
         const workflowId = String(arg0);
         const mergeTask = persistence.loadTasks(workflowId).find((task) => task.config.isMergeNode);
         if (!mergeTask) return null;
-        return { channel: 'headless.exec', request: { args: ['approve', mergeTask.id] } };
+        return { channel: 'headless.exec', request: { args: ['approve', mergeTask.id], noTrack: true } };
       }
       case 'invoker:check-pr-statuses':
         return { channel: 'headless.gui-mutation', request: payload };
@@ -2591,22 +2573,24 @@ function createEmbeddedTerminalBackendFromConfig(
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resolve-conflict':
         return arg1 === undefined
-          ? { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0)] } }
-          : { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0), String(arg1)] } };
+          ? { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0)], noTrack: true } }
+          : { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:fix-with-agent': {
         const { taskId, agentName, context } = parseFixWithAgentMutationArgs(payload.args);
-        return { channel: 'headless.exec', request: { args: buildHeadlessFixArgs(taskId, agentName, context) } };
+        return { channel: 'headless.exec', request: { args: buildHeadlessFixArgs(taskId, agentName, context), noTrack: true } };
       }
       case 'invoker:edit-task-command':
-        return { channel: 'headless.exec', request: { args: ['set', 'command', String(arg0), String(arg1)] } };
+        return { channel: 'headless.exec', request: { args: ['set', 'command', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:edit-task-prompt':
-        return { channel: 'headless.exec', request: { args: ['set', 'prompt', String(arg0), String(arg1)] } };
+        return { channel: 'headless.exec', request: { args: ['set', 'prompt', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:edit-task-type':
-        return { channel: 'headless.exec', request: { args: ['set', 'executor', String(arg0), String(arg1)] } };
+        return { channel: 'headless.exec', request: { args: ['set', 'executor', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:edit-task-pool':
         return null;
       case 'invoker:edit-task-agent':
-        return { channel: 'headless.exec', request: { args: ['set', 'agent', String(arg0), String(arg1)] } };
+        return { channel: 'headless.exec', request: { args: ['set', 'agent', String(arg0), String(arg1)], noTrack: true } };
+      case 'invoker:edit-task-model':
+        return { channel: 'headless.exec', request: { args: ['set', 'model', String(arg0), arg1 == null ? '' : String(arg1)], noTrack: true } };
       case 'invoker:set-task-external-gate-policies': {
         const taskId = String(arg0);
         const updates = Array.isArray(arg1) ? arg1 as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }> : [];
@@ -2616,12 +2600,12 @@ function createEmbeddedTerminalBackendFromConfig(
         const args = ['set', 'gate-policy', taskId, update.workflowId];
         if (update.taskId) args.push(update.taskId);
         args.push(update.gatePolicy);
-        return { channel: 'headless.exec', request: { args } };
+        return { channel: 'headless.exec', request: { args, noTrack: true } };
       }
       case 'invoker:replace-task':
         return {
           channel: 'headless.exec',
-          request: { args: ['replace-task', String(arg0), JSON.stringify(Array.isArray(arg1) ? arg1 : [])] },
+          request: { args: ['replace-task', String(arg0), JSON.stringify(Array.isArray(arg1) ? arg1 : [])], noTrack: true },
         };
       default:
         return null;
@@ -2662,7 +2646,7 @@ function createEmbeddedTerminalBackendFromConfig(
   const workflowScopedGuiMutationRegistrationContext: WorkflowScopedGuiMutationRegistrationContext = {
     ...guiMutationRegistrationContext,
     workflowMutationDispatcher,
-    runWorkflowMutation,
+    submitWorkflowMutation,
   };
 
   const {
@@ -2689,9 +2673,83 @@ function createEmbeddedTerminalBackendFromConfig(
 
   function seedUiSnapshotCache(): void {
     lastKnownWorkflowCount = persistence.listWorkflows().length;
-    lastKnownTaskStates.clear();
-    for (const task of orchestrator.getAllTasks()) {
-      lastKnownTaskStates.set(task.id, JSON.stringify(task));
+    seedTaskCachesFromSnapshot(orchestrator.getAllTasks(), { lastKnownTaskStates, workflowRollupProjection });
+  }
+
+  // Detached viewer: the local DB is empty, so seed the delta caches and
+  // bootstrap snapshot from the owner. Without this, the empty cache quarantines
+  // every `updated` delta for a task the viewer has not seen (dropping live
+  // updates), and bootstrap getters return nothing. Failures are non-fatal — the
+  // renderer's delegated reads still populate the view.
+  async function hydrateDetachedViewerFromOwner(): Promise<void> {
+    try {
+      const snapshot = await messageBus.request<{ kind: string }, { tasks?: TaskState[]; workflows?: unknown[] }>(
+        'headless.query',
+        { kind: 'tasks' },
+      );
+      const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks : [];
+      const workflows = Array.isArray(snapshot?.workflows) ? snapshot.workflows : [];
+      detachedViewerWorkflows = workflows;
+      seedTaskCachesFromSnapshot(tasks, { lastKnownTaskStates, workflowRollupProjection });
+      lastKnownWorkflowCount = workflows.length;
+      startupWorkflowId = [...workflows]
+        .map((wf) => wf as { id?: string; updatedAt?: string; createdAt?: string })
+        .sort((left, right) => (Date.parse(right.updatedAt ?? '') || 0) - (Date.parse(left.updatedAt ?? '') || 0))[0]?.id ?? null;
+      logger.info(
+        `[init] Hydrated detached viewer from owner: ${tasks.length} tasks across ${workflows.length} workflows`,
+        { module: 'init' },
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn(`detached viewer hydration from owner failed; relying on delegated reads: ${message}`, { module: 'init' });
+    } finally {
+      // Resume direct delta processing and replay anything buffered during
+      // hydration (in arrival order). Always runs, so a hydration failure can
+      // never leave deltas buffered forever.
+      const buffered = detachedDeltaBuffer ?? [];
+      detachedDeltaBuffer = null;
+      for (const delta of buffered) processIncomingTaskDelta(delta);
+    }
+  }
+
+  // Current task states for the detached viewer's bootstrap getter, derived from
+  // the live delta cache so a renderer reload never sees the stale hydration
+  // snapshot.
+  function detachedViewerTasks(): TaskState[] {
+    return [...lastKnownTaskStates.keys()].map(
+      (taskId) => JSON.parse(lastKnownTaskStates.get(taskId) ?? '{}') as TaskState,
+    );
+  }
+
+  // Apply one owner task delta to the local cache and forward results to the
+  // renderer (and drive owner-side auto-fix). Extracted so the detached viewer
+  // can replay deltas that were buffered during hydration.
+  function processIncomingTaskDelta(d: TaskDelta): void {
+    uiPerfStats.mainDeltaToUi += 1;
+    if (traceUiDeltaFlow) {
+      logger.debug(`delta→ui: ${JSON.stringify(d)}`, { module: 'ui' });
+    }
+    const deltaTaskId = d.type === 'updated' || d.type === 'removed' ? d.taskId : undefined;
+    if (d.type === 'updated' && d.changes.status === 'failed') {
+      const cancellationError = shouldSkipAutoFixForError(d.changes.execution?.error);
+      const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(d.taskId);
+      logAutoFixDebug(d.taskId, 'delta-failed', {
+        shouldSkipForCancellation: cancellationError,
+        shouldAutoFixFromOrchestrator,
+      });
+      if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
+        logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
+        scheduleAutoFix(deltaTaskId);
+      } else if (deltaTaskId) {
+        logAutoFixDebug(deltaTaskId, 'delta-skip', {
+          reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
+          shouldSkipForCancellation: cancellationError,
+          shouldAutoFixFromOrchestrator,
+        });
+      }
+    }
+    for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
+      publishTaskDeltaToRenderer(rendererDelta);
     }
   }
 
@@ -2716,12 +2774,6 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       mainWindow.webContents.send('invoker:workflows-changed', workflows);
     },
-  });
-  workflowMetadataInvalidator = new WorkflowMetadataInvalidator({
-    getCachedTaskSnapshot: (taskId) => lastKnownTaskStates.get(taskId),
-    loadTask: loadTaskByIdFromPersistence,
-    listWorkflows: () => [],
-    publish: () => requestWorkflowMetadataPublish('task-delta'),
   });
 
   function listWorkflowsByStartupRecency() {
@@ -2797,18 +2849,19 @@ function createEmbeddedTerminalBackendFromConfig(
     const tasks = orchestrator.getAllTasks();
     const previousTaskIds = new Set(lastKnownTaskStates.keys());
     lastKnownTaskStates.clear();
+    workflowRollupProjection.replaceAll(tasks);
     for (const task of tasks) {
       const snapshot = JSON.stringify(task);
       previousTaskIds.delete(task.id);
       lastKnownTaskStates.set(task.id, snapshot);
       if (mainWindow && !mainWindow.isDestroyed()) {
-        sendTaskDeltaToRenderer({ type: 'created', task });
+        publishTaskDeltaToRenderer({ type: 'created', task });
       }
     }
     lastKnownWorkflowCount = workflows.length;
     if (mainWindow && !mainWindow.isDestroyed()) {
       for (const removedTaskId of previousTaskIds) {
-        sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
+        publishTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
       }
       requestWorkflowMetadataPublish('orchestrator-snapshot');
     }
@@ -2826,20 +2879,21 @@ function createEmbeddedTerminalBackendFromConfig(
     setTimeout(() => {
       if (!ownerMode) return;
 
+      const webMutations = new WorkflowMutationFacade({
+        logger,
+        orchestrator,
+        persistence,
+        commandService,
+        taskExecutor: requireTaskExecutor(),
+        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+        killRunningTask,
+      });
       apiServer = startApiServer({
         logger,
         orchestrator,
         persistence,
         executorRegistry,
-        mutations: new WorkflowMutationFacade({
-          logger,
-          orchestrator,
-          persistence,
-          commandService,
-          taskExecutor: requireTaskExecutor(),
-          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-          killRunningTask,
-        }),
+        mutations: webMutations,
         queueWorkflowMutation: (workflowId, priority, channel, args, options) => {
           if (!workflowMutationCoordinator) {
             throw new Error('Workflow mutation coordinator is unavailable');
@@ -2851,6 +2905,54 @@ function createEmbeddedTerminalBackendFromConfig(
       });
       recordStartupMark('api-server.started');
 
+      const webToken = resolveWebToken(invokerConfig);
+      if (webToken) {
+        const webDispatch = buildWebInvokerDispatch({
+          orchestrator,
+          persistence,
+          mutations: webMutations,
+          agentRegistry,
+          loadConfig,
+          getStreamSequence: getTaskDeltaStreamSequence,
+          refreshTaskGraph: async () => {
+            const snapshot = await resolveRefreshTaskGraphSnapshot({
+              ownerMode,
+              messageBus,
+              resolveInvokerHomeRoot,
+              orchestrator,
+              persistence,
+              logger,
+            });
+            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows);
+          },
+          deleteWorkflow: performDeleteWorkflow,
+          detachWorkflow: performDetachWorkflow,
+          getBundledSkillsStatus,
+          getSystemDiagnostics: () => collectSystemDiagnostics({
+            appVersion: app.getVersion(),
+            isPackaged: app.isPackaged,
+            platform: process.platform,
+            arch: process.arch,
+            config: resolveConfigFileState(),
+            presets: invokerConfig.slackHarnessPresets ?? DEFAULT_SLACK_HARNESS_PRESETS,
+            defaultPreset: invokerConfig.defaultSlackHarnessPreset ?? 'cursor+claude',
+          }),
+          logger,
+        });
+        webBridge = startWebBridge({
+          logger,
+          dispatch: webDispatch,
+          messageBus,
+          persistence,
+          uiDistDir: resolveWebUiDistDir(__dirname),
+          token: webToken,
+          host: resolveWebHost(invokerConfig),
+          port: resolveWebPort(invokerConfig),
+        });
+      } else {
+        logger.info('Web surface disabled — set INVOKER_WEB_TOKEN (or config.webToken) to enable it', { module: 'web-bridge' });
+      }
+
       void recoverWorkflowMutationsOnStartup({
         ownerMode,
         persistence,
@@ -2859,23 +2961,10 @@ function createEmbeddedTerminalBackendFromConfig(
         maybeDelayResume: maybeDelayWorkflowResumeForTest,
       });
 
-      // Skip Slack startup when env vars are missing. Avoids a dynamic
-      // `import('dotenv')` inside wireSlackBot whose promise can stall when
-      // the ESM loader gets stuck behind other startup work (e.g. the docker
-      // CLI hang we observed). startSlackBot would throw on missing env vars
-      // immediately after dotenv anyway.
-      const slackEnvVars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
-      const slackEnvMissing = slackEnvVars.filter((v) => !process.env[v]);
-      if (slackEnvMissing.length > 0) {
-        logger.info(`Slack bot not started (missing env: ${slackEnvMissing.join(', ')})`, { module: 'slack' });
-      } else {
-        startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
-          logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
-        });
-      }
 
       setTimeout(() => {
-        dbPollInterval = setInterval(() => {
+        if (ownerMode) {
+          dbPollInterval = setInterval(() => {
           if (!mainWindow || mainWindow.isDestroyed()) return;
           try {
             const workflows = persistence.listWorkflows();
@@ -2950,6 +3039,15 @@ function createEmbeddedTerminalBackendFromConfig(
                       },
                     };
                     logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
+                    if (persistence) {
+                      persistShutdownDiagnostic(task, persistence, {
+                        flushPendingOutput: flushTaskOutput,
+                        forcedStopReason: executingError,
+                        label: task.execution.phase === 'launching'
+                          ? 'Startup Failure Diagnostic'
+                          : 'Shutdown Diagnostic',
+                      });
+                    }
                     orchestrator.handleWorkerResponse(failedResponse);
                     continue;
                   }
@@ -2965,7 +3063,7 @@ function createEmbeddedTerminalBackendFromConfig(
                   }
                   lastKnownTaskStates.set(task.id, snapshot);
                   uiPerfStats.dbPollCreated += 1;
-                  sendTaskDeltaToRenderer({ type: 'created', task });
+                  publishTaskDeltaToRenderer({ type: 'created', task });
                 } else if (prev !== snapshot) {
                   if (traceDbPollPerTask) {
                     const msg = `Task updated: ${task.id} (${task.status})`;
@@ -2974,7 +3072,7 @@ function createEmbeddedTerminalBackendFromConfig(
                   }
                   lastKnownTaskStates.set(task.id, snapshot);
                   uiPerfStats.dbPollUpdatedAsCreated += 1;
-                  sendTaskDeltaToRenderer({ type: 'created', task });
+                  publishTaskDeltaToRenderer({ type: 'created', task });
                 }
               }
             }
@@ -2991,7 +3089,8 @@ function createEmbeddedTerminalBackendFromConfig(
           } catch {
             // DB might be locked — skip this tick
           }
-        }, 2000);
+          }, 2000);
+        }
 
         activityPollInterval = setInterval(() => {
           if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -3011,6 +3110,10 @@ function createEmbeddedTerminalBackendFromConfig(
 
   const runGuiReadyBootstrap = async (): Promise<void> => {
     recordStartupMark('app.whenReady');
+    // GUI owner modes:
+    // - daemon: GUI is a client; a background daemon owns workflow writes, and startup failure is serious.
+    // - gui/local: GUI owns workflow writes directly with no daemon.
+    // - auto: GUI uses an existing daemon when one is available, otherwise it runs locally as owner.
     const guiOwnerPreference = resolveGuiOwnerPreference();
     let daemonGuiOwner = false;
     if (guiOwnerPreference === 'daemon') {
@@ -3021,9 +3124,10 @@ function createEmbeddedTerminalBackendFromConfig(
         daemonGuiOwner = true;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
-        app.quit();
-        return;
+        const fallbackMessage = formatGuiOwnerBootstrapFallbackMessage(message);
+        logger.warn(fallbackMessage, { module: 'init' });
+        process.stderr.write(`${YELLOW}Warning:${RESET} ${fallbackMessage}\n`);
+        daemonGuiOwner = false;
       }
     } else if (guiOwnerPreference === 'auto') {
       recordStartupMark('daemonOwner.discover.start');
@@ -3039,9 +3143,10 @@ function createEmbeddedTerminalBackendFromConfig(
 
     if (daemonGuiOwner) {
       ownerMode = false;
+      guiUsingDaemonOwner = true;
       try {
         recordStartupMark('initServices.readOnly.start');
-        await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+        await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
         recordStartupMark('initServices.readOnly.end', { ownerMode: false, daemonOwner: true });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -3051,6 +3156,7 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     } else {
       ownerMode = true;
+      guiUsingDaemonOwner = false;
       try {
         recordStartupMark('initServices.start');
         await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
@@ -3062,10 +3168,18 @@ function createEmbeddedTerminalBackendFromConfig(
           app.quit();
           return;
         }
-        recordStartupMark('initServices.readOnly.start');
-        await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+        const owner = await discoverOwner(messageBus, 1500);
+        if (!isStandaloneCapable(owner)) {
+          process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+          process.stderr.write(`${RED}Detached viewer fallback requires a reachable owner, but no owner answered IPC.\n${RESET}`);
+          app.quit();
+          return;
+        }
+        recordStartupMark('initServices.readOnly.start', { ownerId: owner.ownerId });
+        await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
         ownerMode = false;
-        recordStartupMark('initServices.readOnly.end', { ownerMode: false });
+        guiUsingDaemonOwner = false;
+        recordStartupMark('initServices.readOnly.end', { ownerMode: false, ownerId: owner.ownerId });
       }
     }
 
@@ -3128,39 +3242,25 @@ function createEmbeddedTerminalBackendFromConfig(
         ownerId: workflowMutationOwnerId,
         mode: 'gui',
       }));
-      messageBus.onRequest('headless.query', async (req: unknown) => {
-        const { kind, reset } = req as { kind?: string; reset?: boolean };
-        if (kind === 'ui-perf') {
-          if (reset) {
-            resetUiPerfStats();
-          }
-          return {
-            ownerMode: 'gui',
-            ...getUiPerfStats(),
-          };
-        }
-        if (kind === 'queue') {
-          return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
-        }
-        if (kind === 'workflow-status') {
-          return orchestrator.getWorkflowStatus();
-        }
-        if (kind === 'tasks' || kind === 'task-graph-refresh') {
-          if (kind === 'task-graph-refresh') {
-            orchestrator.syncAllFromDb();
-          }
-          return {
-            tasks: orchestrator.getAllTasks(),
-            workflows: persistence.listWorkflows(),
-            streamSequence: getTaskDeltaStreamSequence(),
-            invokerHomeRoot: resolveInvokerHomeRoot(),
-          };
-        }
-        if (kind === 'action-graph') {
-          return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
-        }
-        throw new Error(`Unsupported headless query: ${String(kind)}`);
-      });
+      messageBus.onRequest('headless.query', async (req: unknown) =>
+        answerOwnerHeadlessQuery(req, buildOwnerReadQueryHandlers({
+          ownerModeLabel: 'gui',
+          getUiPerfStats: () => getUiPerfStats(),
+          resetUiPerfStats: () => resetUiPerfStats(),
+          getStreamSequence: () => getTaskDeltaStreamSequence(),
+          resolveInvokerHomeRoot,
+          orchestrator,
+          persistence,
+          getActionGraphSnapshot: () =>
+            buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
+        }), {
+          orchestrator,
+          persistence,
+          invokerConfig,
+          executionAgentRegistry: agentRegistry,
+          getUiPerfStats,
+          resetUiPerfStats,
+        }));
       messageBus.onRequest('headless.run', async (req: unknown) => {
         const { planPath, traceId } = req as { planPath: string; traceId?: string };
         logger.info(
@@ -3228,17 +3328,26 @@ function createEmbeddedTerminalBackendFromConfig(
         });
         return results;
       });
-      logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
+      logger.info(
+        `owner-ipc-ready ownerId=${workflowMutationOwnerId} pid=${process.pid} mode=gui handlers=headless.owner-ping,headless.exec,headless.query`,
+        { module: 'ipc-delegate' },
+      );
       recordStartupMark('owner-ipc-ready');
     }
 
-    bootstrapInitialWorkflowState();
     if (ownerMode) {
+      bootstrapInitialWorkflowState();
       startLifecycleEventBridge({
         messageBus,
         getInitialTasks: () => orchestrator.getAllTasks(),
         getTask: (taskId) => orchestrator.getTask(taskId),
         logger,
+      });
+      startSurfaceEventRelay({
+        messageBus,
+        persistence,
+        orchestrator,
+        logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
       });
     }
 
@@ -3267,33 +3376,17 @@ function createEmbeddedTerminalBackendFromConfig(
 
     // Forward deltas to renderer and keep snapshot cache in sync so
     // the db-poll doesn't re-emit deltas the messageBus already delivered.
+    // Detached viewer: buffer owner deltas until hydration seeds the cache.
+    if (!ownerMode) {
+      detachedDeltaBuffer = [];
+    }
     messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
-      uiPerfStats.mainDeltaToUi += 1;
       const d = delta as TaskDelta;
-      if (traceUiDeltaFlow) {
-        logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
+      if (detachedDeltaBuffer) {
+        detachedDeltaBuffer.push(d);
+        return;
       }
-      markWorkflowMetadataFromTaskDelta(d);
-
-      const deltaTaskId = d.type === 'updated' || d.type === 'removed'
-        ? d.taskId
-        : undefined;
-      if (d.type === 'updated' && d.changes.status === 'failed') {
-        const cancellationError = shouldSkipAutoFixForError(d.changes.execution?.error);
-        const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(d.taskId);
-        logAutoFixDebug(d.taskId, 'delta-failed', {
-          shouldSkipForCancellation: cancellationError,
-          shouldAutoFixFromOrchestrator,
-        });
-        if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
-          logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
-          scheduleAutoFix(deltaTaskId);
-        }
-      }
-
-      for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
-        taskGraphEventPublisher.publishDelta(rendererDelta);
-      }
+      processIncomingTaskDelta(d);
     });
 
     uiPerfLogInterval = setInterval(() => {
@@ -3318,8 +3411,8 @@ function createEmbeddedTerminalBackendFromConfig(
     // Register IPC handlers
     registerBootstrapStateIpc({
       ipcMain,
-      getTasks: () => orchestrator.getAllTasks(),
-      getWorkflows: () => listWorkflowsByStartupRecency(),
+      getTasks: () => (ownerMode ? orchestrator.getAllTasks() : detachedViewerTasks()),
+      getWorkflows: () => detachedViewerWorkflows ?? listWorkflowsByStartupRecency(),
       getInitialWorkflowId: () => startupWorkflowId,
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
@@ -3327,8 +3420,8 @@ function createEmbeddedTerminalBackendFromConfig(
     });
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
-      const { parsePlan } = await import('./plan-parser.js');
-      const plan = parsePlan(planText);
+      const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
+      const plan = applyConfiguredPlanDefaults(parsePlan(planText));
       logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
       taskHandles.clear();
       backupPlan(plan, undefined, logger);
@@ -3357,9 +3450,6 @@ function createEmbeddedTerminalBackendFromConfig(
           } satisfies TaskDelta);
         }
         orchestrator.syncAllFromDb();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          requestWorkflowMetadataPublish('gap-detect');
-        }
       };
       ipcMain.handle(
         'invoker:inject-task-states',
@@ -3398,10 +3488,11 @@ function createEmbeddedTerminalBackendFromConfig(
 
       const allStarted = orchestrator.startExecution();
       const tasks = orchestrator.getAllTasks();
+      workflowRollupProjection.replaceAll(tasks);
       for (const task of tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
         if (mainWindow && !mainWindow.isDestroyed()) {
-          sendTaskDeltaToRenderer({ type: 'created', task });
+          publishTaskDeltaToRenderer({ type: 'created', task });
         }
       }
       logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
@@ -3468,6 +3559,7 @@ function createEmbeddedTerminalBackendFromConfig(
       rebuildTaskRunner();
       taskHandles.clear();
       lastKnownTaskStates.clear();
+      workflowRollupProjection.clear();
       lastKnownWorkflowCount = 0;
       requestWorkflowMetadataPublish('clear');
     });
@@ -3515,6 +3607,7 @@ function createEmbeddedTerminalBackendFromConfig(
       await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
       taskHandles.clear();
       lastKnownTaskStates.clear();
+      workflowRollupProjection.clear();
       lastKnownWorkflowCount = 0;
       requestWorkflowMetadataPublish('delete-all-workflows');
     });
@@ -3525,9 +3618,26 @@ function createEmbeddedTerminalBackendFromConfig(
       await sharedDeleteAllWorkflowsBulk({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
       taskHandles.clear();
       lastKnownTaskStates.clear();
+      workflowRollupProjection.clear();
       lastKnownWorkflowCount = 0;
       requestWorkflowMetadataPublish('delete-all-workflows-bulk');
     });
+
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:delete-task',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
+        const taskId = String(taskIdArg);
+        logger.info(`delete-task: "${taskId}"`, { module: 'ipc' });
+        try {
+          await performDeleteTask(taskId);
+        } catch (err) {
+          logger.error(`delete-task failed: ${err}`, { module: 'ipc' });
+          throw err;
+        }
+      },
+    );
 
     registerWorkflowScopedGuiMutationHandler(
       'invoker:delete-workflow',
@@ -3538,10 +3648,6 @@ function createEmbeddedTerminalBackendFromConfig(
         logger.info(`delete-workflow: "${workflowId}"`, { module: 'ipc' });
         try {
           await performDeleteWorkflow(workflowId);
-
-          const workflows = persistence.listWorkflows();
-          lastKnownWorkflowCount = workflows.length;
-          requestWorkflowMetadataPublish('delete-workflow');
         } catch (err) {
           logger.error(`delete-workflow failed: ${err}`, { module: 'ipc' });
           throw err;
@@ -3569,7 +3675,11 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
-    registerGuiMutationHandler('invoker:provide-input', async (taskIdArg: unknown, inputArg: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:provide-input',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, inputArg: unknown) => {
       const taskId = String(taskIdArg);
       const input = String(inputArg);
       const envelope = makeEnvelope('provide-input', 'ui', 'task', { taskId, input });
@@ -3598,7 +3708,11 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
-    registerGuiMutationHandler('invoker:reject', async (taskIdArg: unknown, reasonArg?: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:reject',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, reasonArg?: unknown) => {
       const taskId = String(taskIdArg);
       const reason = reasonArg === undefined ? undefined : String(reasonArg);
       const envelope = makeEnvelope('reject', 'ui', 'task', { taskId, reason });
@@ -3606,7 +3720,11 @@ function createEmbeddedTerminalBackendFromConfig(
       if (!result.ok) throw new Error(result.error.message);
     });
 
-    registerGuiMutationHandler('invoker:select-experiment', async (taskIdArg: unknown, experimentIdArg: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:select-experiment',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, experimentIdArg: unknown) => {
       const taskId = String(taskIdArg);
       const experimentId = experimentIdArg as string | string[];
       const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
@@ -4064,7 +4182,11 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
-    registerGuiMutationHandler('invoker:set-merge-branch', async (workflowIdArg: unknown, baseBranchArg: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:set-merge-branch',
+      (workflowIdArg: unknown) => String(workflowIdArg),
+      'normal',
+      async (workflowIdArg: unknown, baseBranchArg: unknown) => {
       const workflowId = String(workflowIdArg);
       const baseBranch = String(baseBranchArg);
       logger.info(`set-merge-branch: workflow="${workflowId}" → "${baseBranch}"`, { module: 'ipc' });
@@ -4087,13 +4209,18 @@ function createEmbeddedTerminalBackendFromConfig(
             scopedTaskIds: [mergeTask.id],
           });
         }
+        requestWorkflowMetadataPublish('set-merge-branch');
       } catch (err) {
         logger.error(`set-merge-branch failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
-    registerGuiMutationHandler('invoker:set-merge-mode', async (workflowIdArg: unknown, mergeModeArg: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:set-merge-mode',
+      (workflowIdArg: unknown) => String(workflowIdArg),
+      'normal',
+      async (workflowIdArg: unknown, mergeModeArg: unknown) => {
       const workflowId = String(workflowIdArg);
       const mergeMode = String(mergeModeArg);
       logger.info(`set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`, { module: 'ipc' });
@@ -4162,7 +4289,7 @@ function createEmbeddedTerminalBackendFromConfig(
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
       logger.info(
-        `resolve-conflict: "${taskId}" agent=${agentName ?? 'claude'} source=ipc route=resolveConflictAction`,
+        `resolve-conflict: "${taskId}" agent=${agentName ?? DEFAULT_EXECUTION_AGENT} source=ipc route=resolveConflictAction`,
         { module: 'ipc' },
       );
       try {
@@ -4235,7 +4362,11 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
-    registerGuiMutationHandler('invoker:edit-task-command', async (taskIdArg: unknown, newCommandArg: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:edit-task-command',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, newCommandArg: unknown) => {
       const taskId = String(taskIdArg);
       const newCommand = String(newCommandArg);
       logger.info(`edit-task-command: "${taskId}" → "${newCommand}"`, { module: 'ipc' });
@@ -4257,7 +4388,11 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler('invoker:edit-task-prompt', async (taskIdArg: unknown, newPromptArg: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:edit-task-prompt',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, newPromptArg: unknown) => {
       const taskId = String(taskIdArg);
       const newPrompt = String(newPromptArg);
       logger.info(`edit-task-prompt: "${taskId}" → "${newPrompt}"`, { module: 'ipc' });
@@ -4279,7 +4414,11 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler('invoker:edit-task-type', async (taskIdArg: unknown, runnerKindArg: unknown, poolMemberIdArg?: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:edit-task-type',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, runnerKindArg: unknown, poolMemberIdArg?: unknown) => {
       const taskId = String(taskIdArg);
       const runnerKind = String(runnerKindArg);
       const poolMemberId = poolMemberIdArg === undefined ? undefined : String(poolMemberIdArg);
@@ -4302,7 +4441,11 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler('invoker:edit-task-pool', async (taskIdArg: unknown, poolIdArg: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:edit-task-pool',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, poolIdArg: unknown) => {
       const taskId = String(taskIdArg);
       const poolId = String(poolIdArg);
       logger.info(`edit-task-pool: "${taskId}" → "${poolId}"`, { module: 'ipc' });
@@ -4324,7 +4467,11 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    registerGuiMutationHandler('invoker:edit-task-agent', async (taskIdArg: unknown, agentNameArg: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:edit-task-agent',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, agentNameArg: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = String(agentNameArg);
       logger.info(`edit-task-agent: "${taskId}" → "${agentName}"`, { module: 'ipc' });
@@ -4345,9 +4492,37 @@ function createEmbeddedTerminalBackendFromConfig(
         throw err;
       }
     });
+    registerTaskScopedGuiMutationHandler(
+      'invoker:edit-task-model',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, executionModelArg: unknown) => {
+      const taskId = String(taskIdArg);
+      const executionModel = typeof executionModelArg === 'string' ? executionModelArg : null;
+      logger.info(`edit-task-model: "${taskId}" → "${executionModel ?? ''}"`, { module: 'ipc' });
+      try {
+        const envelope = makeEnvelope('edit-task-model', 'ui', 'task', { taskId, executionModel });
+        const result = await commandService.editTaskModel(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.edit-task-model',
+          started: result.data,
+          scopedTaskIds: [taskId],
+        });
+      } catch (err) {
+        logger.error(`edit-task-model failed: ${err}`, { module: 'ipc' });
+        throw err;
+      }
+    });
 
-    registerGuiMutationHandler(
+
+    registerTaskScopedGuiMutationHandler(
       'invoker:set-task-external-gate-policies',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
       async (taskIdArg: unknown, updatesArg: unknown) => {
         const taskId = String(taskIdArg);
         const updates = updatesArg as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>;
@@ -4375,8 +4550,28 @@ function createEmbeddedTerminalBackendFromConfig(
       return Object.keys(loadConfig().remoteTargets ?? {});
     });
 
-    ipcMain.handle('invoker:get-execution-agents', () => {
-      return agentRegistry.listExecution().map(a => a.name);
+    ipcMain.handle('invoker:get-execution-harnesses', () => {
+      return agentRegistry.listExecutionHarnesses();
+    });
+
+    ipcMain.handle('invoker:get-execution-defaults', () => {
+      return resolveDefaultTaskExecutionSettings(loadConfig());
+    });
+
+    ipcMain.handle('invoker:get-runtime-status', () => {
+      if (process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_READ_ONLY_STATUS === '1') {
+        return {
+          ownerMode: false,
+          readOnly: true,
+          mode: 'read-only',
+        };
+      }
+      const readOnly = !ownerMode && !guiUsingDaemonOwner;
+      return {
+        ownerMode,
+        readOnly,
+        mode: ownerMode ? 'local-owner' : guiUsingDaemonOwner ? 'daemon-owner' : 'read-only',
+      };
     });
 
     ipcMain.handle('invoker:get-system-diagnostics', () => {
@@ -4387,6 +4582,9 @@ function createEmbeddedTerminalBackendFromConfig(
         arch: process.arch,
         bundledSkills: getBundledSkillsStatus(),
         cliInstaller: resolveCliInstallerStatus(buildCliInstallerContext()),
+        config: resolveConfigFileState(),
+        presets: invokerConfig.slackHarnessPresets ?? DEFAULT_SLACK_HARNESS_PRESETS,
+        defaultPreset: invokerConfig.defaultSlackHarnessPreset ?? 'cursor+claude',
       });
     });
 
@@ -4402,7 +4600,11 @@ function createEmbeddedTerminalBackendFromConfig(
       return updateInvokerCli(buildCliInstallerContext());
     });
 
-    registerGuiMutationHandler('invoker:replace-task', async (taskIdArg: unknown, replacementTasksArg: unknown) => {
+    registerTaskScopedGuiMutationHandler(
+      'invoker:replace-task',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown, replacementTasksArg: unknown) => {
       const taskId = String(taskIdArg);
       const replacementTasks = replacementTasksArg as unknown[];
       logger.info(`replace-task: "${taskId}" with ${replacementTasks.length} replacement(s)`, { module: 'ipc' });
@@ -4500,7 +4702,11 @@ function createEmbeddedTerminalBackendFromConfig(
       ),
     );
 
-    seedUiSnapshotCache();
+    if (ownerMode) {
+      seedUiSnapshotCache();
+    } else {
+      await hydrateDetachedViewerFromOwner();
+    }
     createWindow();
     recordStartupMark('createWindow.end');
 
@@ -4553,6 +4759,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
       try {
         if (apiServer) await apiServer.close().catch(() => {});
+        if (webBridge) await webBridge.close().catch(() => {});
         reviewGateStatusWorker?.stop();
         reviewGateStatusWorker = null;
         if (dbPollInterval) clearInterval(dbPollInterval);
@@ -4601,30 +4808,4 @@ function createEmbeddedTerminalBackendFromConfig(
     },
   });
 
-  // ── Slack Bot (embedded in GUI process) ──────────────────
-  async function startSlackBot(
-    executor: TaskRunner,
-    handles: TaskHandleMap,
-  ): Promise<void> {
-    const logFn = (source: string, level: string, message: string) => {
-      const logMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
-      logger[logMethod](message, { module: source });
-      try { persistence.writeActivityLog(source, level, message); } catch { /* db locked */ }
-    };
-
-    await wireSlackBot({
-      executor,
-      logFn,
-      approveTaskAction: async (taskId: string) => {
-        const workflowId = orchestrator.getTask(taskId)?.config.workflowId;
-        await runWorkflowMutation(workflowId, 'normal', 'surface:approve-task', [taskId], async () => {
-          await performSharedApproveTask(taskId, 'surface');
-        });
-      },
-      onStartPlan: () => handles.clear(),
-      onPlanLoaded: () => {},
-    });
-
-    logFn('slack', 'info', 'Slack bot started (embedded in GUI)');
-  }
 }

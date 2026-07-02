@@ -5,6 +5,7 @@ import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec, Unsubsc
 import { bashPreserveOrReset, bashMergeUpstreams, bashFetchNodeRemotes, parsePreserveResult, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
+import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { checkStaleness } from './git-staleness-detector.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
 import { childProcessHasExited, terminateChildProcessGroup } from './process-utils.js';
@@ -905,10 +906,10 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     }
     if (request.actionType === 'ai_task') {
       if (opts?.agentRegistry) {
-        const agentName = request.inputs.executionAgent ?? 'claude';
+        const agentName = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
         const agent = opts.agentRegistry.getOrThrow(agentName);
         const fullPrompt = this.buildFullPrompt(request);
-        const spec = agent.buildCommand(fullPrompt);
+        const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };
       }
       // Fallback: use prepareClaudeSession when no agent registry is available
@@ -1051,7 +1052,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   ): SemanticFailure | undefined {
     if (exitCode !== 0) return undefined;
     if (request.actionType !== 'ai_task') return undefined;
-    if ((request.inputs.executionAgent ?? 'claude') !== 'codex') return undefined;
+    if ((request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT) !== 'codex') return undefined;
     const haystack = output.toLowerCase();
     const codexSandboxDenied =
       haystack.includes('codex(sandbox(denied') ||
@@ -1097,8 +1098,15 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   /**
    * Build CLI args for invoking `claude` with a session ID and prompt.
    */
-  protected buildClaudeArgs(sessionId: string, fullPrompt: string): string[] {
-    return ['--session-id', sessionId, '--dangerously-skip-permissions', '-p', fullPrompt];
+  protected buildClaudeArgs(sessionId: string, fullPrompt: string, executionModel?: string): string[] {
+    return [
+      '--session-id',
+      sessionId,
+      '--dangerously-skip-permissions',
+      ...(executionModel ? ['--model', executionModel] : []),
+      '-p',
+      fullPrompt,
+    ];
   }
 
   /**
@@ -1108,7 +1116,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   protected prepareClaudeSession(request: WorkRequest): ClaudeSessionParams {
     const sessionId = randomUUID();
     const fullPrompt = this.buildFullPrompt(request);
-    const cliArgs = this.buildClaudeArgs(sessionId, fullPrompt);
+    const cliArgs = this.buildClaudeArgs(sessionId, fullPrompt, request.inputs.executionModel);
     return { sessionId, cliArgs, fullPrompt };
   }
 

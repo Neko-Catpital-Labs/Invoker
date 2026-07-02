@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { WorkflowGraph } from '../components/WorkflowGraph.js';
 import { createGraphCameraCommandIssuer } from '../lib/graph-camera.js';
-import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
+import type { WorkflowMeta, WorkflowStatus } from '../types.js';
 import * as ReactFlowModule from '@xyflow/react';
 
 vi.mock('@xyflow/react', async () => {
@@ -24,18 +24,32 @@ const source = readFileSync(
 function wf(id: string, status: WorkflowStatus, overrides: Partial<WorkflowMeta> = {}): WorkflowMeta {
   return { id, name: id, status, ...overrides };
 }
-
-function task(id: string, workflowId: string): TaskState {
+function rollup(
+  status: NonNullable<WorkflowMeta['rollup']>['status'],
+  running: number,
+): NonNullable<WorkflowMeta['rollup']> {
   return {
-    id,
-    description: id,
-    status: 'pending',
-    dependencies: [],
-    config: { workflowId },
-    execution: {},
-    taskStateVersion: 1,
+    status,
+    countsByStatus: {
+      pending: 0,
+      running,
+      fixing_with_ai: 0,
+      completed: 0,
+      failed: 0,
+      closed: 0,
+      needs_input: 0,
+      blocked: 0,
+      review_ready: 0,
+      awaiting_approval: 0,
+      stale: 0,
+    },
+    failedTasks: [],
+    fixingTasks: [],
+    waitingTasks: [],
   };
 }
+
+
 
 /** Render a one-workflow graph and wait for the initial first-render fit to
  * settle, then clear the viewport spies so a test can assert on the calls that
@@ -63,13 +77,9 @@ describe('WorkflowGraph', () => {
     const workflows = new Map([
       ['wf-a', wf('wf-a', 'running')],
     ]);
-    const tasks = new Map([
-      ['t1', task('t1', 'wf-a')],
-    ]);
 
     render(
       <WorkflowGraph
-        tasks={tasks}
         workflows={workflows}
         selectedWorkflowId={null}
         statusFilters={new Set()}
@@ -91,13 +101,9 @@ describe('WorkflowGraph', () => {
     const workflows = new Map([
       ['wf-a', wf('wf-a', 'running')],
     ]);
-    const tasks = new Map([
-      ['t1', task('t1', 'wf-a')],
-    ]);
 
     render(
       <WorkflowGraph
-        tasks={tasks}
         workflows={workflows}
         selectedWorkflowId={null}
         statusFilters={new Set<WorkflowStatus>(['failed'])}
@@ -111,17 +117,61 @@ describe('WorkflowGraph', () => {
     expect(node).toHaveClass('opacity-35');
   });
 
-  it('renders the React Flow wrapper for non-empty workflow graphs', () => {
+  it('shows running task count under non-running workflow status', () => {
     const workflows = new Map([
-      ['wf-a', wf('wf-a', 'running')],
-    ]);
-    const tasks = new Map([
-      ['t1', task('t1', 'wf-a')],
+      ['wf-a', wf('wf-a', 'failed', { rollup: rollup('failed', 1) })],
     ]);
 
     render(
       <WorkflowGraph
-        tasks={tasks}
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('failed');
+    expect(screen.getByTestId('workflow-node-wf-a-running-tasks')).toHaveTextContent('1 running task');
+  });
+
+  it('renders core activity without mutation command labels', () => {
+    const workflows = new Map([
+      ['wf-1', wf('wf-1', 'running')],
+    ]);
+
+    render(
+      <WorkflowGraph
+        workflows={workflows}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        coreActivityByWorkflow={new Map([
+          ['wf-1', {
+            workflowId: 'wf-1',
+            status: 'pending',
+            label: 'Pending: queued for launch',
+            nodeId: 'launch-dispatch:1',
+            nodeType: 'launch-dispatch',
+          }],
+        ])}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    const activity = screen.getByTestId('workflow-node-wf-1-core-activity');
+    expect(activity).toHaveTextContent('Pending: queued for launch');
+    expect(screen.getByTestId('workflow-node-wf-1')).not.toHaveTextContent(/rebase|invoker:rebase-recreate/i);
+  });
+
+  it('renders the React Flow wrapper for non-empty workflow graphs', () => {
+    const workflows = new Map([
+      ['wf-a', wf('wf-a', 'running')],
+    ]);
+
+    render(
+      <WorkflowGraph
         workflows={workflows}
         selectedWorkflowId={null}
         statusFilters={new Set()}
@@ -154,7 +204,6 @@ describe('WorkflowGraph', () => {
 
     render(
       <WorkflowGraph
-        tasks={new Map()}
         workflows={workflows}
         selectedWorkflowId={null}
         statusFilters={new Set()}
@@ -194,7 +243,6 @@ describe('WorkflowGraph', () => {
 
     render(
       <WorkflowGraph
-        tasks={new Map()}
         workflows={workflows}
         selectedWorkflowId={null}
         statusFilters={new Set()}
@@ -229,7 +277,6 @@ describe('WorkflowGraph', () => {
 
     render(
       <WorkflowGraph
-        tasks={new Map()}
         workflows={workflows}
         selectedWorkflowId={null}
         statusFilters={new Set()}
@@ -253,11 +300,9 @@ describe('WorkflowGraph', () => {
 
   it('fits the viewport exactly once on the first non-empty render', async () => {
     const workflows = new Map([['wf-a', wf('wf-a', 'running')]]);
-    const tasks = new Map([['t1', task('t1', 'wf-a')]]);
 
     render(
       <WorkflowGraph
-        tasks={tasks}
         workflows={workflows}
         selectedWorkflowId={null}
         statusFilters={new Set()}
@@ -276,12 +321,8 @@ describe('WorkflowGraph', () => {
     const workflows = new Map([
       ['wf-a', wf('wf-a', 'running')],
     ]);
-    const tasks = new Map([
-      ['t1', task('t1', 'wf-a')],
-    ]);
 
     const { rerender } = await renderAndSettleInitialFit({
-      tasks,
       workflows,
       selectedWorkflowId: null,
       statusFilters: new Set(),
@@ -293,14 +334,9 @@ describe('WorkflowGraph', () => {
       ['wf-a', wf('wf-a', 'running')],
       ['wf-b', wf('wf-b', 'pending')],
     ]);
-    const refreshedTasks = new Map([
-      ['t1', task('t1', 'wf-a')],
-      ['t2', task('t2', 'wf-b')],
-    ]);
 
     rerender(
       <WorkflowGraph
-        tasks={refreshedTasks}
         workflows={refreshedWorkflows}
         selectedWorkflowId={null}
         statusFilters={new Set()}
@@ -317,10 +353,8 @@ describe('WorkflowGraph', () => {
   });
 
   it('does not move the camera on a status-only update', async () => {
-    const tasks = new Map([['t1', task('t1', 'wf-a')]]);
 
     const { rerender } = await renderAndSettleInitialFit({
-      tasks,
       workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
       selectedWorkflowId: 'wf-a',
       statusFilters: new Set(),
@@ -331,7 +365,6 @@ describe('WorkflowGraph', () => {
     // Same topology, only the workflow status changes.
     rerender(
       <WorkflowGraph
-        tasks={tasks}
         workflows={new Map([['wf-a', wf('wf-a', 'completed')]])}
         selectedWorkflowId="wf-a"
         statusFilters={new Set()}
@@ -351,7 +384,6 @@ describe('WorkflowGraph', () => {
     getZoomMock.mockReturnValue(1.75);
 
     const { rerender } = await renderAndSettleInitialFit({
-      tasks: new Map([['t1', task('t1', 'wf-a')]]),
       workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
       selectedWorkflowId: 'wf-a',
       statusFilters: new Set(),
@@ -361,7 +393,6 @@ describe('WorkflowGraph', () => {
 
     rerender(
       <WorkflowGraph
-        tasks={new Map([['t1', task('t1', 'wf-a')]])}
         workflows={new Map([['wf-a', wf('wf-a', 'running')]])}
         selectedWorkflowId="wf-a"
         cameraCommand={issuer.centerSelection('workflow', 'wf-a')}
@@ -383,7 +414,6 @@ describe('WorkflowGraph', () => {
     const issuer = createGraphCameraCommandIssuer();
 
     const { rerender } = await renderAndSettleInitialFit({
-      tasks: new Map([['t1', task('t1', 'wf-a')]]),
       workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
       selectedWorkflowId: 'wf-a',
       statusFilters: new Set(),
@@ -393,7 +423,6 @@ describe('WorkflowGraph', () => {
 
     rerender(
       <WorkflowGraph
-        tasks={new Map([['t1', task('t1', 'wf-a')]])}
         workflows={new Map([['wf-a', wf('wf-a', 'running')]])}
         selectedWorkflowId="wf-a"
         cameraCommand={issuer.fitInitial('workflow')}
@@ -411,7 +440,6 @@ describe('WorkflowGraph', () => {
     const issuer = createGraphCameraCommandIssuer();
 
     const { rerender } = await renderAndSettleInitialFit({
-      tasks: new Map([['t1', task('t1', 'wf-a')]]),
       workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
       selectedWorkflowId: 'wf-a',
       statusFilters: new Set(),
@@ -421,7 +449,6 @@ describe('WorkflowGraph', () => {
 
     rerender(
       <WorkflowGraph
-        tasks={new Map([['t1', task('t1', 'wf-a')]])}
         workflows={new Map([['wf-a', wf('wf-a', 'running')]])}
         selectedWorkflowId="wf-a"
         cameraCommand={issuer.centerSelection('task', 't1')}
@@ -441,7 +468,6 @@ describe('WorkflowGraph', () => {
     const command = issuer.centerSelection('workflow', 'wf-a');
 
     const { rerender } = await renderAndSettleInitialFit({
-      tasks: new Map([['t1', task('t1', 'wf-a')]]),
       workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
       selectedWorkflowId: 'wf-a',
       statusFilters: new Set(),
@@ -450,7 +476,6 @@ describe('WorkflowGraph', () => {
     });
 
     const props = {
-      tasks: new Map([['t1', task('t1', 'wf-a')]]),
       workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
       selectedWorkflowId: 'wf-a' as const,
       cameraCommand: command,
@@ -472,7 +497,6 @@ describe('WorkflowGraph', () => {
     const onManualViewport = vi.fn();
 
     await renderAndSettleInitialFit({
-      tasks: new Map([['t1', task('t1', 'wf-a')]]),
       workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
       selectedWorkflowId: 'wf-a',
       statusFilters: new Set(),

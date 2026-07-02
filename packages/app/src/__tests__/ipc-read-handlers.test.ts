@@ -67,8 +67,96 @@ describe('registerReadOnlyIpcHandlers', () => {
       streamSequence: 42,
     });
   });
+
+  it('get-review-gate returns the shared review gate shape', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    const mergeTask = {
+      ...makeTask('__merge__wf-1'),
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {
+        reviewGate: {
+          activeGeneration: 0,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [
+            { id: 'contracts', required: true, status: 'approved', generation: 0 },
+            { id: 'runtime', required: true, status: 'open', generation: 0, dependsOn: ['contracts'] },
+            { id: 'ui', required: true, status: 'open', generation: 0, dependsOn: ['runtime'] },
+          ],
+        },
+      },
+    };
+
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: {
+        listWorkflows: vi.fn(() => []),
+        loadWorkflow: vi.fn(() => ({ id: 'wf-1' })),
+        loadTasks: vi.fn(() => [mergeTask]),
+      } as never,
+      getOrchestrator: () => ({ getAllTasks: () => [mergeTask], getWorkflowStatus: () => ({}) }) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 1,
+    });
+
+    const result = await handlers.get('invoker:get-review-gate')?.({}, 'wf-1');
+
+    expect(result).toMatchObject({
+      workflowId: 'wf-1',
+      mergeTaskId: '__merge__wf-1',
+      edges: [
+        { from: 'contracts', to: 'runtime' },
+        { from: 'runtime', to: 'ui' },
+      ],
+      ready: false,
+    });
+  });
   it('does not expose renderer write tools to read handlers', () => {
     expectReadContextWriteToolsAreAbsent();
+  });
+
+  function registerViewer(requestImpl: () => Promise<unknown>) {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: { listWorkflows: vi.fn(() => [{ id: 'LOCAL-FALLBACK' }]) } as never,
+      getOrchestrator: () => ({}) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      getOwnerMode: () => false, // viewer mode → delegates to owner
+      getMessageBus: () => ({ request: vi.fn(requestImpl) }),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 0,
+    });
+    return handlers;
+  }
+
+  it('rethrows owner errors instead of silently serving local data (timeout)', async () => {
+    const handlers = registerViewer(() =>
+      Promise.reject(Object.assign(new Error('owner timed out'), { code: 'REQUEST_TIMEOUT' })));
+    await expect(handlers.get('invoker:list-workflows')?.({})).rejects.toThrow(/owner timed out/);
+  });
+
+  it('falls back to local only when the owner has no handler', async () => {
+    const handlers = registerViewer(() =>
+      Promise.reject(Object.assign(new Error('No request handler registered for channel: headless.query'), { code: 'NO_HANDLER' })));
+    await expect(handlers.get('invoker:list-workflows')?.({})).resolves.toEqual([{ id: 'LOCAL-FALLBACK' }]);
   });
 
 });

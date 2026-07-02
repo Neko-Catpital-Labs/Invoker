@@ -9,8 +9,8 @@
  * Backlog shows blocked or otherwise non-actionable tasks.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { TaskState } from '../types.js';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import type { QueueStatus, TaskState } from '../types.js';
 import {
   getRunningPhaseLabel,
   getStatusColor,
@@ -20,16 +20,10 @@ import {
 
 interface QueueViewProps {
   tasks: Map<string, TaskState>;
+  queueStatus: QueueStatus | null;
   onTaskClick: (task: TaskState) => void;
   onCancel: (taskId: string) => void;
   selectedTaskId: string | null;
-}
-
-interface QueueStatus {
-  maxConcurrency: number;
-  runningCount: number;
-  running: Array<{ taskId: string; description: string; attemptId?: string }>;
-  queued: Array<{ taskId: string; priority: number; description: string }>;
 }
 
 function displayTaskId(taskId: string): string {
@@ -49,9 +43,18 @@ const MANUAL_ACTION_STATUSES = new Set([
   'review_ready',
   'awaiting_approval',
 ]);
+type QueueRowSource = 'running' | 'queued' | 'manual';
 
-export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: QueueViewProps) {
-  const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
+type QueueRow = {
+  taskId: string;
+  description: string;
+  order: number;
+  source: QueueRowSource;
+  attemptId?: string;
+  priority?: number;
+};
+
+export function QueueView({ tasks, queueStatus, onTaskClick, onCancel, selectedTaskId }: QueueViewProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -93,25 +96,6 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
     [tasks, onTaskClick],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        const status = await window.invoker?.getQueueStatus();
-        if (!cancelled && status) setQueueStatus(status);
-      } catch {
-        // ignore polling errors
-      }
-    };
-
-    poll();
-    const interval = setInterval(poll, 2000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
 
   const handleCancel = useCallback(
     (taskId: string) => {
@@ -121,26 +105,38 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
     [onCancel],
   );
 
-  const actionRows = useMemo(() => {
+  const actionRows = useMemo<QueueRow[]>(() => {
     const schedulerTaskIds = new Set<string>();
 
-    const running = (queueStatus?.running ?? []).map((job, idx) => {
+    const running: QueueRow[] = (queueStatus?.running ?? []).map((job, idx) => {
       schedulerTaskIds.add(job.taskId);
-      return { ...job, order: idx + 1 };
+      return {
+        taskId: job.taskId,
+        description: job.description,
+        attemptId: job.attemptId,
+        order: idx + 1,
+        source: 'running',
+      };
     });
 
-    const queued = (queueStatus?.queued ?? []).map((job, idx) => {
+    const queued: QueueRow[] = (queueStatus?.queued ?? []).map((job, idx) => {
       schedulerTaskIds.add(job.taskId);
-      return { taskId: job.taskId, description: job.description, priority: job.priority, order: running.length + idx + 1 };
+      return {
+        taskId: job.taskId,
+        description: job.description,
+        priority: job.priority,
+        order: running.length + idx + 1,
+        source: 'queued',
+      };
     });
 
-    // Manual-action tasks not already in the scheduler queue
-    const manualAction = Array.from(tasks.values())
+    const manualAction: QueueRow[] = Array.from(tasks.values())
       .filter((t) => MANUAL_ACTION_STATUSES.has(t.status) && !schedulerTaskIds.has(t.id))
       .map((t, idx) => ({
         taskId: t.id,
         description: t.description,
         order: running.length + queued.length + idx + 1,
+        source: 'manual',
       }));
 
     return [...running, ...queued, ...manualAction];
@@ -160,6 +156,14 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
       ),
     [tasks, actionTaskIds],
   );
+  const assigningCount = useMemo(
+    () => (queueStatus?.running ?? []).reduce(
+      (count, job) => count + (tasks.get(job.taskId)?.execution.phase === 'launching' ? 1 : 0),
+      0,
+    ),
+    [queueStatus, tasks],
+  );
+  const activeRunningCount = queueStatus ? Math.max(0, queueStatus.runningCount - assigningCount) : 0;
 
   return (
     <div className="h-full overflow-y-auto bg-gray-900 p-4 flex flex-col gap-4">
@@ -168,22 +172,36 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
           Action Queue ({actionRows.length})
         </h3>
         <div className="text-xs text-gray-400 mb-2">
-          Running and scheduled actions, plus tasks awaiting manual action.
+          Running, assigning, scheduled, and manual-action work.
         </div>
         {queueStatus && (
-          <div className="text-xs text-gray-400 mb-2">
-            Running {queueStatus.runningCount} / {queueStatus.maxConcurrency}
-          </div>
+          <>
+            <div className="text-xs text-gray-400 mb-2">
+              Active {queueStatus.runningCount} / {queueStatus.maxConcurrency}
+            </div>
+            <div className="text-xs text-gray-400 mb-2">
+              Assigning {assigningCount} · Running {activeRunningCount}
+            </div>
+          </>
         )}
 
         {actionRows.map((job) => {
           const task = tasks.get(job.taskId);
+          const runningLike = job.source === 'running';
           const visualStatus = task
-            ? getEffectiveVisualStatus(task.status, task.execution)
+            ? getEffectiveVisualStatus(task.status, task.execution, { runningLike })
             : 'pending';
-          const statusLabel = task ? formatStatusLabel(task.status) : 'Pending';
+          const statusLabel = visualStatus === 'assigning'
+            ? 'Assigning'
+            : runningLike ? 'Running' : task ? formatStatusLabel(task.status) : 'Pending';
           const colors = getStatusColor(visualStatus);
-          const phaseLabel = task?.status === 'running' ? getRunningPhaseLabel(task.execution.phase) : null;
+          const phaseLabel = visualStatus === 'assigning'
+            ? null
+            : runningLike
+              ? getRunningPhaseLabel(task?.execution.phase)
+              : task?.status === 'running'
+                ? getRunningPhaseLabel(task.execution.phase)
+                : null;
           const isExpanded = expandedRows.has(job.taskId);
           const upstream = task?.dependencies ?? [];
           const downstream = dependentsMap.get(job.taskId) ?? [];
@@ -197,46 +215,52 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                 selectedTaskId === job.taskId ? 'bg-gray-600' : 'bg-gray-800 hover:bg-gray-700'
               }`}
             >
-              <div
-                onClick={() => task && onTaskClick(task)}
-                className="flex items-center justify-between p-2 cursor-pointer"
-              >
+              <div className="flex items-stretch">
+                {hasRelationships ? (
+                  <button
+                    onClick={(e) => toggleExpanded(job.taskId, e)}
+                    className="flex w-8 shrink-0 items-center justify-center rounded-l text-sm text-gray-400 hover:bg-gray-700 hover:text-gray-100"
+                    aria-label={isExpanded ? 'Collapse relationships' : 'Expand relationships'}
+                    aria-expanded={isExpanded}
+                    data-testid={`queue-rels-toggle-action-${job.taskId}`}
+                  >
+                    {isExpanded ? '▾' : '▸'}
+                  </button>
+                ) : (
+                  <div className="w-8 shrink-0" aria-hidden="true" />
+                )}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-500">#{job.order}</span>
-                    <span className="text-sm text-gray-100 truncate">{displayTaskId(job.taskId)}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded shrink-0 ${colors.bg} ${colors.text}`}>
-                      {statusLabel}
-                    </span>
-                    {hasRelationships && (
-                      <button
-                        onClick={(e) => toggleExpanded(job.taskId, e)}
-                        className="text-xs text-gray-400 hover:text-gray-200 shrink-0"
-                        aria-label={isExpanded ? 'Collapse relationships' : 'Expand relationships'}
-                        aria-expanded={isExpanded}
-                        data-testid={`queue-rels-toggle-action-${job.taskId}`}
-                      >
-                        {isExpanded ? '▾' : '▸'} rels
-                      </button>
-                    )}
+                  <div
+                    onClick={() => task && onTaskClick(task)}
+                    className="flex cursor-pointer items-center justify-between p-2"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500">#{job.order}</span>
+                        <span className="text-sm text-gray-100 truncate">{displayTaskId(job.taskId)}</span>
+                        <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-2 py-0.5 text-xs ${colors.bg} ${colors.border} ${colors.text}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${colors.dot}`} aria-hidden="true" />
+                          {statusLabel}
+                        </span>
+                      </div>
+                      <span className="text-xs text-gray-400 truncate block">{job.description}</span>
+                      {phaseLabel && (
+                        <span className="text-xs text-amber-300 truncate block">phase: {phaseLabel}</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCancel(job.taskId);
+                      }}
+                      title={`Cancel ${displayTaskId(job.taskId)}`}
+                      aria-label={`Cancel ${displayTaskId(job.taskId)}`}
+                      className="ml-2 px-1 py-0.5 text-xs text-gray-400 hover:text-gray-200 rounded shrink-0"
+                    >
+                      ×
+                    </button>
                   </div>
-                  <span className="text-xs text-gray-400 truncate block">{job.description}</span>
-                  {phaseLabel && (
-                    <span className="text-xs text-amber-300 truncate block">phase: {phaseLabel}</span>
-                  )}
-                  {'priority' in job && typeof (job as Record<string, unknown>).priority === 'number' && (
-                    <span className="text-xs text-cyan-300 truncate block">priority: {(job as Record<string, unknown>).priority as number}</span>
-                  )}
                 </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleCancel(job.taskId);
-                  }}
-                  className="ml-2 px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 text-white rounded shrink-0"
-                >
-                  Terminate
-                </button>
               </div>
               {isExpanded && (
                 <div className="mx-2 mb-2 pt-1 pb-1 border-t border-gray-700 text-xs" data-testid={`rels-${job.taskId}`}>
@@ -299,44 +323,53 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                 selectedTaskId === task.id ? 'bg-gray-600' : 'bg-gray-800 hover:bg-gray-700'
               }`}
             >
-              <div
-                onClick={() => onTaskClick(task)}
-                className="flex items-center justify-between p-2 cursor-pointer"
-              >
+              <div className="flex items-stretch">
+                {hasRelationships ? (
+                  <button
+                    onClick={(e) => toggleExpanded(task.id, e)}
+                    className="flex w-8 shrink-0 items-center justify-center rounded-l text-sm text-gray-400 hover:bg-gray-700 hover:text-gray-100"
+                    aria-label={isExpanded ? 'Collapse relationships' : 'Expand relationships'}
+                    aria-expanded={isExpanded}
+                    data-testid={`queue-rels-toggle-backlog-${task.id}`}
+                  >
+                    {isExpanded ? '▾' : '▸'}
+                  </button>
+                ) : (
+                  <div className="w-8 shrink-0" aria-hidden="true" />
+                )}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-gray-100 truncate">{displayTaskId(task.id)}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded shrink-0 ${backlogColors.bg} ${backlogColors.text}`}>
-                      {backlogStatusLabel}
-                    </span>
-                    {hasRelationships && (
-                      <button
-                        onClick={(e) => toggleExpanded(task.id, e)}
-                        className="text-xs text-gray-400 hover:text-gray-200 shrink-0"
-                        aria-label={isExpanded ? 'Collapse relationships' : 'Expand relationships'}
-                        aria-expanded={isExpanded}
-                        data-testid={`queue-rels-toggle-backlog-${task.id}`}
-                      >
-                        {isExpanded ? '▾' : '▸'} rels
-                      </button>
-                    )}
+                  <div
+                    onClick={() => onTaskClick(task)}
+                    className="flex cursor-pointer items-center justify-between p-2"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-gray-100 truncate">{displayTaskId(task.id)}</span>
+                        <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-2 py-0.5 text-xs ${backlogColors.bg} ${backlogColors.border} ${backlogColors.text}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${backlogColors.dot}`} aria-hidden="true" />
+                          {backlogStatusLabel}
+                        </span>
+                      </div>
+                      <span className="text-xs text-gray-400 truncate block">{task.description}</span>
+                      {task.dependencies.length > 0 && (
+                        <span className="text-xs text-gray-500 truncate block">
+                          deps: {displayDependencies(task.dependencies)}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCancel(task.id);
+                      }}
+                      title={`Cancel ${displayTaskId(task.id)}`}
+                      aria-label={`Cancel ${displayTaskId(task.id)}`}
+                      className="ml-2 px-1 py-0.5 text-xs text-gray-400 hover:text-gray-200 rounded shrink-0"
+                    >
+                      ×
+                    </button>
                   </div>
-                  <span className="text-xs text-gray-400 truncate block">{task.description}</span>
-                  {task.dependencies.length > 0 && (
-                    <span className="text-xs text-gray-500 truncate block">
-                      deps: {displayDependencies(task.dependencies)}
-                    </span>
-                  )}
                 </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleCancel(task.id);
-                  }}
-                  className="ml-2 px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 text-white rounded shrink-0"
-                >
-                  Terminate
-                </button>
               </div>
               {isExpanded && (
                 <div className="mx-2 mb-2 pt-1 pb-1 border-t border-gray-700 text-xs" data-testid={`rels-${task.id}`}>

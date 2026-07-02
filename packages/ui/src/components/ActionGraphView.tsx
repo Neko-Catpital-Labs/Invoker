@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   Background,
   Controls,
@@ -15,6 +15,8 @@ import type { ActionGraphNode, ActionGraphResponse } from '@invoker/contracts';
 import { BundledEdge } from './BundledEdge.js';
 
 interface ActionGraphViewProps {
+  graph: ActionGraphResponse | null;
+  error: string | null;
   selectedNodeId: string | null;
   onSelectNode: (node: ActionGraphNode | null) => void;
 }
@@ -176,31 +178,7 @@ function layoutGraph(graph: ActionGraphResponse | null, selectedNodeId: string |
   return { nodes, edges };
 }
 
-function ActionGraphInner({ selectedNodeId, onSelectNode }: ActionGraphViewProps): JSX.Element {
-  const [graph, setGraph] = useState<ActionGraphResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    const load = () => {
-      window.invoker?.getActionGraph?.()
-        .then((response) => {
-          if (!alive) return;
-          setGraph(response);
-          setError(null);
-        })
-        .catch((err) => {
-          if (!alive) return;
-          setError(err instanceof Error ? err.message : String(err));
-        });
-    };
-    load();
-    const interval = setInterval(load, 5_000);
-    return () => {
-      alive = false;
-      clearInterval(interval);
-    };
-  }, []);
+function ActionGraphInner({ graph, error, selectedNodeId, onSelectNode }: ActionGraphViewProps): JSX.Element {
 
   const rendered = useMemo(() => layoutGraph(graph, selectedNodeId), [graph, selectedNodeId]);
 

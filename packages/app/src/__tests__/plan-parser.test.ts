@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults } from '../plan-parser.js';
+import { parsePlan, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { writeFileSync } from 'node:fs';
@@ -370,6 +370,33 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow('must have a "description" field');
   });
 
+  it('rejects plan with duplicate task ids', () => {
+    const yaml = `
+name: Dup Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: First build
+    command: echo "one"
+  - id: build
+    description: Second build
+    command: echo "two"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('Duplicate task id "build"');
+  });
+
+  it('rejects non-object task entries with a parse error', () => {
+    const yaml = `
+name: Bad Task Shape Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - null
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('Task at index 0 must be an object with an "id" field');
+  });
+
   it('rejects task commands using npx vitest run', () => {
     const yaml = `
 name: Bad Command Plan
@@ -538,6 +565,81 @@ tasks:
     const plan = parsePlan(yaml);
     expect(plan.tasks[0].executionAgent).toBe('codex');
     expect(plan.tasks[1].executionAgent).toBeUndefined();
+  });
+
+  it('applies defaultExecutionAgent from config when agent task omits executionAgent', () => {
+    writeFileSync(isolatedConfigPath, JSON.stringify({ defaultBranch: 'main', defaultExecutionAgent: 'codex' }));
+    const yaml = `
+name: Config Agent Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: default-task
+    description: "No agent specified"
+    prompt: "Do the thing"
+  - id: command-task
+    description: "Command-only task"
+    command: "echo hi"
+  - id: explicit-task
+    description: "Explicit agent"
+    prompt: "Do the thing"
+    executionAgent: claude
+`;
+    const plan = applyConfiguredPlanDefaults(parsePlan(yaml));
+    expect(plan.tasks[0].executionAgent).toBe('codex');
+    expect(plan.tasks[1].executionAgent).toBeUndefined();
+    expect(plan.tasks[2].executionAgent).toBe('claude');
+  });
+
+  it('parses executionModel from task definitions', () => {
+    const yaml = `
+name: Model Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: claude-task
+    description: "Task using claude model"
+    command: "npm test"
+    executionModel: claude
+  - id: default-task
+    description: "No model specified"
+    command: "echo hi"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionModel).toBe('claude');
+    expect(plan.tasks[1].executionModel).toBeUndefined();
+  });
+
+  it('trims whitespace from executionModel and treats empty as undefined', () => {
+    const yaml = `
+name: Model Trim Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: padded
+    description: "Padded model"
+    command: "echo hi"
+    executionModel: "  claude  "
+  - id: empty
+    description: "Empty model"
+    command: "echo hi"
+    executionModel: ""
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionModel).toBe('claude');
+    expect(plan.tasks[1].executionModel).toBeUndefined();
+  });
+
+  it('rejects a non-string executionModel with PlanParseError', () => {
+    const yaml = `
+name: Bad Model Test
+repoUrl: git@github.com:test/repo.git
+baseBranch: main
+tasks:
+  - id: t1
+    description: "Bad model"
+    command: "echo hi"
+    executionModel: 123
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/executionModel/);
   });
 
   describe('onFinish parsing', () => {

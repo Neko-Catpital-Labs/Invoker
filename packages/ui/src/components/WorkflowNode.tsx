@@ -1,11 +1,13 @@
 import type { KeyboardEvent, MouseEvent } from 'react';
 import type { WorkflowMeta, WorkflowStatus } from '../types.js';
 import { isWorkflowStatusActive, workflowStatusVisual } from '../lib/workflow-status.js';
+import type { WorkflowCoreActivity } from '../lib/workflow-core-activity.js';
 
 interface WorkflowNodeProps {
   workflow: WorkflowMeta;
   selected: boolean;
   dimmed: boolean;
+  coreActivity?: WorkflowCoreActivity;
   onClick: () => void;
   onContextMenu: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -13,16 +15,23 @@ interface WorkflowNodeProps {
 function statusLabel(status: WorkflowStatus): string {
   return status.replaceAll('_', ' ');
 }
+function runningTaskLabel(count: number): string {
+  return count === 1 ? '1 running task' : `${count} running tasks`;
+}
+
 
 export function WorkflowNode({
   workflow,
   selected,
   dimmed,
+  coreActivity,
   onClick,
   onContextMenu,
 }: WorkflowNodeProps): JSX.Element {
   const visual = workflowStatusVisual(workflow.status);
   const detachedDependencyCount = workflow.detachedExternalDependencies?.length ?? 0;
+  const runningCount = workflow.rollup?.countsByStatus.running ?? 0;
+  const showRunningTaskLine = workflow.status !== 'running' && runningCount > 0;
 
   return (
     <div
@@ -64,6 +73,32 @@ export function WorkflowNode({
       </div>
       <div className="mt-1 text-[11px] text-gray-400 truncate">{workflow.id}</div>
       <div className={`mt-2 text-[10px] uppercase tracking-wide ${visual.textClass}`}>{statusLabel(workflow.status)}</div>
+      {showRunningTaskLine && (
+        <div
+          data-testid={`workflow-node-${workflow.id}-running-tasks`}
+          className="mt-1 text-[10px] text-gray-300"
+        >
+          {runningTaskLabel(runningCount)}
+        </div>
+      )}
+      {coreActivity && (
+        <div
+          data-testid={`workflow-node-${workflow.id}-core-activity`}
+          className={[
+            'mt-2 inline-flex items-center gap-1 rounded border px-2 py-1 text-[10px] font-medium',
+            coreActivity.status === 'running'
+              ? 'border-blue-400/60 text-blue-200'
+              : coreActivity.status === 'pending'
+                ? 'border-amber-400/60 text-amber-200'
+                : 'border-red-400/70 text-red-200',
+          ].join(' ')}
+        >
+          {coreActivity.status === 'running' && (
+            <span className="h-1.5 w-1.5 rounded-full bg-blue-300 animate-pulse" />
+          )}
+          {coreActivity.label}
+        </div>
+      )}
     </div>
   );
 }

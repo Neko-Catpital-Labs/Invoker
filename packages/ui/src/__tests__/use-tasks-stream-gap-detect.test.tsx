@@ -61,7 +61,7 @@ function installInvoker(opts: {
     reportUiPerfMock,
     onTaskGraphEventMock,
     refreshTaskGraphMock,
-    fireDelta: (delta) => handler?.({ type: 'delta', delta }),
+    fireDelta: (delta) => handler?.({ type: 'delta', delta, workflowRollups: [] }),
     fireSnapshot: (snapshot) => handler?.({
       type: 'snapshot',
       tasks: snapshot.tasks,

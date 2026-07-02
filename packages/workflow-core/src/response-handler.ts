@@ -8,6 +8,7 @@
 
 import type { WorkResponse } from '@invoker/contracts';
 import { validateWorkResponse } from '@invoker/contracts';
+import type { ReviewGateState } from '@invoker/workflow-graph';
 
 /** Plan-local id segment for experiment id prefixing (strip `${workflowId}/` when present). */
 function planLocalFromActionId(actionId: string): string {
@@ -40,6 +41,7 @@ export type ParsedResponse =
       reviewUrl?: string;
       reviewId?: string;
       reviewStatus?: string;
+      reviewGate?: ReviewGateState;
     }
   | {
       type: 'review_ready';
@@ -50,6 +52,7 @@ export type ParsedResponse =
       reviewUrl?: string;
       reviewId?: string;
       reviewStatus?: string;
+      reviewGate?: ReviewGateState;
     }
   | {
       type: 'failed';
@@ -103,6 +106,7 @@ export class ResponseHandler {
           reviewUrl: outputs.reviewUrl,
           reviewId: outputs.reviewId,
           reviewStatus: outputs.reviewStatus,
+          reviewGate: outputs.reviewGate,
         };
 
       case 'review_ready':
@@ -115,6 +119,7 @@ export class ResponseHandler {
           reviewUrl: outputs.reviewUrl,
           reviewId: outputs.reviewId,
           reviewStatus: outputs.reviewStatus,
+          reviewGate: outputs.reviewGate,
         };
 
       case 'failed':
