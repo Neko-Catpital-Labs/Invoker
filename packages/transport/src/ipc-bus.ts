@@ -236,6 +236,11 @@ export function resolveDefaultSocketPath(): string {
 export const DEFAULT_SOCKET_PATH = resolveDefaultSocketPath();
 
 /** Default request deadline in milliseconds (30 s). */
+/** Requests that can legitimately run much longer than the default transport round-trip.
+ *  Until request cancellation is threaded through the bus, these channels get a longer
+ *  caller deadline so the responder is less likely to finish after the requester has given up. */
+const LONG_REQUEST_DEADLINE_CHANNELS = new Set(['invoker:plan-from-goal']);
+export const LONG_REQUEST_DEADLINE_MS = 2 * 60 * 60 * 1000;
 export const DEFAULT_REQUEST_DEADLINE_MS = 30_000;
 
 export interface IpcBusOptions {
@@ -652,14 +657,17 @@ export class IpcBus implements MessageBus {
     const env: ReqEnvelope = { kind: 'req', channel, body: message, reqId };
 
     return new Promise<Res>((resolve, reject) => {
+      const effectiveDeadlineMs = LONG_REQUEST_DEADLINE_CHANNELS.has(channel)
+        ? Math.max(this.requestDeadlineMs, LONG_REQUEST_DEADLINE_MS)
+        : this.requestDeadlineMs;
       const timer = setTimeout(() => {
         if (this.pendingRequests.delete(reqId)) {
           reject(new TransportError(
             TransportErrorCode.REQUEST_TIMEOUT,
-            `Request on channel "${channel}" timed out after ${this.requestDeadlineMs}ms`,
+            `Request on channel "${channel}" timed out after ${effectiveDeadlineMs}ms`,
           ));
         }
-      }, this.requestDeadlineMs);
+      }, effectiveDeadlineMs);
       timer.unref?.();
 
       this.pendingRequests.set(reqId, {
