@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "corpus": "submit-to-invoker-sessions-2026-05-26",
+  "expected_conversation_count": 48,
+  "file_globs": [
+    "*.jsonl",
+    "*.json",
+    "*.md",
+    "*.txt"
+  ]
+}
