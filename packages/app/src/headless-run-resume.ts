@@ -71,6 +71,19 @@ export async function headlessWatch(workflowId: string | undefined, deps: Headle
   });
   process.stdout.write(`\n[watch] done — ${result.status.completed} completed, ${result.status.failed} failed, ${result.status.closed} closed\n`);
 }
+function runningExecutionKey(task: TaskState): string {
+  const attemptId = task.execution.selectedAttemptId?.trim();
+  return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
+}
+
+function collectDispatchableTopup(orchestrator: HeadlessDeps['orchestrator'], alreadyDispatchable: TaskState[]): TaskState[] {
+  const scopedKeys = new Set(alreadyDispatchable.map((task) => runningExecutionKey(task)));
+  return orchestrator
+    .startExecution()
+    .filter(isDispatchableLaunch)
+    .filter((task) => !scopedKeys.has(runningExecutionKey(task)));
+}
+
 
 export async function headlessRun(
   planPath: string,
@@ -238,16 +251,7 @@ export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Pro
     process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
 
     if (deps.noTrack) {
-      const runningKey = (task: TaskState): string => {
-        const attemptId = task.execution.selectedAttemptId?.trim();
-        return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
-      };
-      const scopedKeys = new Set(runnable.map((task) => runningKey(task)));
-      const globalTopup = deps.orchestrator
-        .startExecution()
-        .filter(isDispatchableLaunch)
-        .filter((task) => !scopedKeys.has(runningKey(task)));
-      const dispatchable = [...runnable, ...globalTopup];
+      const dispatchable = [...runnable, ...collectDispatchableTopup(deps.orchestrator, runnable)];
       if (dispatchable.length > 0) {
         if (deps.deferRunnableTasks) {
           deps.deferRunnableTasks(dispatchable, restored.workflowId);
@@ -508,6 +512,28 @@ export async function headlessRecreateWorkflow(workflowId: string, deps: Headles
   const started = recreateWfResult.data;
   const runnable = started.filter(isDispatchableLaunch);
   if (runnable.length > 0) {
+    if (deps.noTrack) {
+      const dispatchable = [...runnable, ...collectDispatchableTopup(deps.orchestrator, runnable)];
+      if (dispatchable.length > 0) {
+        if (deps.deferRunnableTasks) {
+          deps.deferRunnableTasks(dispatchable, workflowId);
+        } else {
+          const te = createHeadlessExecutor(deps);
+          const launch = setTimeout(() => {
+            void te.executeTasks(dispatchable).catch((err) => {
+              deps.logger.error(
+                `background no-track workflow recreate failed for ${workflowId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+                { module: 'headless' },
+              );
+            });
+          }, 25);
+          launch.unref?.();
+        }
+      }
+      process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
+      return;
+    }
+
     const te = createHeadlessExecutor(deps);
     remoteFetchForPool.enabled = false;
     let topup: TaskState[] = [];
@@ -523,13 +549,6 @@ export async function headlessRecreateWorkflow(workflowId: string, deps: Headles
       });
     } finally {
       remoteFetchForPool.enabled = true;
-    }
-    if (runnable.length + topup.length === 0) {
-      return;
-    }
-    if (deps.noTrack) {
-      process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
-      return;
     }
     await trackHeadlessWorkflow(workflowId, deps, {
       printSummary: false,
@@ -740,15 +759,7 @@ export async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDe
     module: 'headless',
   });
 
-  const runningKey = (task: TaskState): string => {
-    const attemptId = task.execution.selectedAttemptId?.trim();
-    return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
-  };
-  const scopedKeys = new Set(runnable.map((task) => runningKey(task)));
-  const globalTopup = deps.orchestrator
-    .startExecution()
-    .filter(isDispatchableLaunch)
-    .filter((task) => !scopedKeys.has(runningKey(task)));
+  const globalTopup = collectDispatchableTopup(deps.orchestrator, runnable);
   deps.logger.info(
     `headlessRetryWorkflow trace workflow="${workflowId}" postStartExecution globalTopup=${globalTopup.length}`,
     { module: 'headless' },
