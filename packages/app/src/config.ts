@@ -8,6 +8,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import type { MachineCapabilities } from '@invoker/execution-engine';
+import { validateInvokerConfig } from './config-validation.js';
 const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
 
 export interface ExternalWorkerLaunchConfig {
@@ -24,6 +26,18 @@ export interface ExternalWorkerConfig {
   kind: string;
   /** Process invocation used by the loader to start the external worker. */
   launch: ExternalWorkerLaunchConfig;
+}
+export interface DefaultExecutionConfig {
+  /**
+   * Default task execution harness when a task omits executionAgent.
+   * Falls back to the built-in default agent when unset.
+   */
+  executionAgent?: string;
+  /**
+   * Default task execution model paired with executionAgent.
+   * Only applied when the resolved task executionAgent matches this default agent.
+   */
+  executionModel?: string;
 }
 
 export interface InvokerConfig {
@@ -88,6 +102,11 @@ export interface InvokerConfig {
   defaultExecutionAgent?: string;
   /** Default execution model for prompt-backed tasks when the task does not override it. */
   defaultExecutionModel?: string;
+  /**
+   * Config-owned default execution harness/model for tasks that omit them.
+   * This is separate from Slack planning presets and applies across surfaces.
+   */
+  defaultExecution?: DefaultExecutionConfig;
   /**
    * When true, failed CI checks on Invoker-created review-gate PRs can
    * trigger the same auto-fix recovery flow used for task failures.
@@ -193,6 +212,7 @@ export interface InvokerConfig {
      * Default for pooled SSH members: 1.
      */
     maxConcurrentTasks?: number;
+    capabilities?: MachineCapabilities;
   }>;
   /**
    * Named execution pools used by routing rules.
@@ -201,8 +221,8 @@ export interface InvokerConfig {
   executionPools?: Record<string, {
     /** Pool members can mix substrates under one shared queue. */
     members: Array<
-      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
-      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
+      | { type: 'ssh'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
     >;
     /** Member selection strategy for available capacity. Default: roundRobin */
     selectionStrategy?: 'roundRobin' | 'leastLoaded';
@@ -306,7 +326,8 @@ export function resolveConfigFileState(): { path: string; exists: boolean } {
 }
 
 export function loadConfig(): InvokerConfig {
-  return readJsonSafe(resolveConfigFilePath());
+  const config = readJsonSafe(resolveConfigFilePath());
+  return validateInvokerConfig(config);
 }
 export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
   const configured = config.defaultExecutionAgent?.trim();
