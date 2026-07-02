@@ -13,11 +13,34 @@ JOBS="${INVOKER_TEST_ALL_JOBS:-1}"
 PROOF="${INVOKER_TEST_ALL_PROOF:-0}"
 EXCLUDE_RAW="${INVOKER_TEST_ALL_EXCLUDE:-}"
 PROOF_CONTRACT="INV-117"
+PROOF_MANIFEST="${INVOKER_TEST_ALL_PROOF_MANIFEST:-$ROOT/scripts/test-suites/proof-e2e.manifest}"
+SHARD_INDEX="${INVOKER_TEST_ALL_SHARD_INDEX:-}"
+SHARD_TOTAL="${INVOKER_TEST_ALL_SHARD_TOTAL:-1}"
+AGGREGATE="${INVOKER_TEST_ALL_AGGREGATE:-0}"
+SHARDED=0
 
 if [ "$PROOF" = "1" ]; then
   FORCE_RERUN=1
   RESUME=0
   JOBS="${INVOKER_TEST_ALL_JOBS:-1}"
+fi
+
+if [ -n "$SHARD_INDEX" ] || [ "$SHARD_TOTAL" != "1" ]; then
+  if ! [[ "$SHARD_INDEX" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: INVOKER_TEST_ALL_SHARD_INDEX must be a non-negative integer" >&2
+    exit 2
+  fi
+  if ! [[ "$SHARD_TOTAL" =~ ^[0-9]+$ ]] || [ "$SHARD_TOTAL" -lt 1 ]; then
+    echo "ERROR: INVOKER_TEST_ALL_SHARD_TOTAL must be a positive integer" >&2
+    exit 2
+  fi
+  if [ "$SHARD_INDEX" -ge "$SHARD_TOTAL" ]; then
+    echo "ERROR: INVOKER_TEST_ALL_SHARD_INDEX must be less than INVOKER_TEST_ALL_SHARD_TOTAL" >&2
+    exit 2
+  fi
+  if [ "$SHARD_TOTAL" -gt 1 ]; then
+    SHARDED=1
+  fi
 fi
 
 if ! [[ "$JOBS" =~ ^[0-9]+$ ]] || [ "$JOBS" -lt 1 ]; then
@@ -84,11 +107,27 @@ suite_is_excluded() {
   return 1
 }
 
+manifest_count() {
+  grep -cvE '^[[:space:]]*(#|$)' "$PROOF_MANIFEST"
+}
+
+proof_manifest_available() {
+  [ "$PROOF" = "1" ] && [ -f "$PROOF_MANIFEST" ]
+}
+
 expected_executed_for_mode() {
+  if proof_manifest_available; then
+    manifest_count
+    return
+  fi
   printf '%s' "${#SUITES[@]}"
 }
 
 expected_discovered_for_mode() {
+  if proof_manifest_available; then
+    manifest_count
+    return
+  fi
   case "$MODE_KEY" in
     required)
       printf '22'
@@ -330,6 +369,27 @@ flush_parallel() {
 
 collect_suites() {
   local dir
+  if proof_manifest_available; then
+    local rel suite
+    while IFS= read -r rel; do
+      rel="${rel%%#*}"
+      rel="$(printf '%s' "$rel" | tr -d '[:space:]')"
+      [ -n "$rel" ] || continue
+      DISCOVERED_TOTAL=$((DISCOVERED_TOTAL + 1))
+      suite="$ROOT/scripts/test-suites/$rel"
+      if [ ! -f "$suite" ]; then
+        echo "ERROR: proof manifest references missing suite: $rel" >&2
+        exit 2
+      fi
+      if suite_is_excluded "$suite"; then
+        SKIPPED_EXCLUDED+=( "$(suite_relpath "$suite")" )
+        continue
+      fi
+      SUITES+=( "$suite" )
+    done < "$PROOF_MANIFEST"
+    return
+  fi
+
   for dir in required optional dangerous; do
     case "$dir" in
       required) ;;
@@ -466,8 +526,41 @@ validate_proof_inventory() {
 load_state
 parse_exclusions
 collect_suites
+
 if ! validate_proof_inventory; then
   exit 1
+fi
+
+if [ "$SHARDED" = "1" ] && [ "$AGGREGATE" != "1" ]; then
+  shard_suites=()
+  for i in "${!SUITES[@]}"; do
+    if [ $(( i % SHARD_TOTAL )) -eq "$SHARD_INDEX" ]; then
+      shard_suites+=( "${SUITES[$i]}" )
+    fi
+  done
+  SUITES=( "${shard_suites[@]+"${shard_suites[@]}"}" )
+fi
+
+if [ "$AGGREGATE" = "1" ]; then
+  for suite in "${SUITES[@]}"; do
+    case "$(state_get "$suite")" in
+      passed)
+        EXECUTED+=( "$suite" )
+        ;;
+      failed)
+        EXECUTED+=( "$suite" )
+        FAILED+=( "$suite" )
+        ;;
+      skipped-unavailable)
+        SKIPPED_UNAVAILABLE+=( "$(suite_relpath "$suite")" )
+        ;;
+      *)
+        ;;
+    esac
+  done
+  print_summary
+  validate_proof_thresholds || exit 1
+  exit 0
 fi
 
 if [ "$PROOF" = "1" ]; then
@@ -530,8 +623,10 @@ if [ "${#JOB_SUITE[@]}" -gt 0 ]; then
 fi
 
 print_summary
-if ! validate_proof_thresholds; then
-  exit 1
+if [ "$SHARDED" != "1" ]; then
+  if ! validate_proof_thresholds; then
+    exit 1
+  fi
 fi
 
 if [ "$overall_failed" -ne 0 ]; then
