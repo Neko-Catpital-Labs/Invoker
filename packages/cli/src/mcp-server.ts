@@ -22,7 +22,10 @@ export function resolveCliInvocation(
   cliPath: string,
   args: string[],
 ): { command: string; args: string[] } {
-  if (!cliPath || cliPath === execPath) {
+  if (!cliPath) {
+    throw new Error('Unable to resolve CLI path for spawning invoker-cli');
+  }
+  if (cliPath === execPath) {
     return { command: execPath, args };
   }
   return { command: execPath, args: [cliPath, ...args] };
