@@ -1,8 +1,4 @@
-import type { PrerequisiteCheck, PrerequisiteReport, PrerequisiteStatus, SystemDiagnostics } from '@invoker/contracts';
-
-type DiagnosticsWithReadiness = SystemDiagnostics & {
-  readiness?: PrerequisiteReport | PrerequisiteCheck[];
-};
+import type { PrerequisiteCheck, PrerequisiteStatus, SystemDiagnostics } from '@invoker/contracts';
 
 const readinessStatusClasses: Record<PrerequisiteStatus, { dot: string; text: string; badge: string }> = {
   ok: {
@@ -23,7 +19,7 @@ const readinessStatusClasses: Record<PrerequisiteStatus, { dot: string; text: st
 };
 
 function getReadinessChecks(diagnostics: SystemDiagnostics | null): PrerequisiteCheck[] | undefined {
-  const readiness = (diagnostics as DiagnosticsWithReadiness | null)?.readiness;
+  const readiness = diagnostics?.readiness;
   if (!readiness) return undefined;
   return Array.isArray(readiness) ? readiness : readiness.checks;
 }
@@ -278,7 +274,7 @@ export function SystemSetupModal({
             </div>
           )}
 
-          {readinessChecks && (
+          {readinessChecks?.length ? (
             <div className="rounded border border-gray-700 bg-gray-950/20 overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-700 bg-gray-900">
                 <div className="text-sm font-medium text-gray-100">Readiness</div>
@@ -310,7 +306,7 @@ export function SystemSetupModal({
                 })}
               </div>
             </div>
-          )}
+          ) : null}
 
           <div className="rounded border border-gray-700 overflow-hidden">
             <table className="w-full text-sm">

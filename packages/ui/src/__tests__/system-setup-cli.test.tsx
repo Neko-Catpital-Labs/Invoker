@@ -12,7 +12,11 @@ import type { SystemDiagnostics, CliInstallerStatus, BundledSkillsStatus } from 
 
 import { SystemSetupModal } from '../components/SystemSetupModal.js';
 
-function makeDiagnostics(cliInstaller: CliInstallerStatus | undefined, bundledSkills?: BundledSkillsStatus): SystemDiagnostics {
+function makeDiagnostics(
+  cliInstaller: CliInstallerStatus | undefined,
+  bundledSkills?: BundledSkillsStatus,
+  readiness?: SystemDiagnostics['readiness'],
+): SystemDiagnostics {
   return {
     platform: 'darwin',
     arch: 'arm64',
@@ -21,6 +25,7 @@ function makeDiagnostics(cliInstaller: CliInstallerStatus | undefined, bundledSk
     tools: [],
     cliInstaller,
     bundledSkills,
+    readiness,
   };
 }
 
@@ -180,5 +185,44 @@ describe('SystemSetupModal — Invoker CLI section', () => {
     );
 
     expect(screen.queryByText('Invoker CLI')).not.toBeInTheDocument();
+  });
+
+  it('renders readiness checks from the shared diagnostics contract', () => {
+    render(
+      <SystemSetupModal
+        diagnostics={makeDiagnostics(undefined, undefined, {
+          ok: false,
+          checks: [
+            {
+              id: 'default-preset',
+              name: 'Default planning preset',
+              status: 'error',
+              detail: 'Default preset needs codex',
+              remediation: 'Install codex or choose an installed preset',
+            },
+          ],
+        })}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Readiness')).toBeInTheDocument();
+    expect(screen.getByText('Default planning preset')).toBeInTheDocument();
+    expect(screen.getByText('Default preset needs codex')).toBeInTheDocument();
+    expect(screen.getByText('Install codex or choose an installed preset')).toBeInTheDocument();
+  });
+
+  it('hides readiness when diagnostics has no checks', () => {
+    render(
+      <SystemSetupModal
+        diagnostics={makeDiagnostics(undefined, undefined, {
+          ok: true,
+          checks: [],
+        })}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText('Readiness')).not.toBeInTheDocument();
   });
 });

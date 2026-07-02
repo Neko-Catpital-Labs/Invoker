@@ -6,7 +6,6 @@ import {
   DEFAULT_TOOL_REQUIREMENTS,
   assembleReadinessChecks,
   type PlanningPresetSpec,
-  type PrerequisiteCheck,
   type SystemDiagnostics,
   type SystemToolStatus,
 } from '@invoker/contracts';
@@ -98,7 +97,7 @@ export function collectSystemDiagnostics(args: {
   config?: { path: string; exists: boolean; error?: string };
   presets?: Record<string, PlanningPresetSpec>;
   defaultPreset?: string;
-}): SystemDiagnostics & { readiness: PrerequisiteCheck[] } {
+}): SystemDiagnostics {
   const tools = DEFAULT_TOOL_REQUIREMENTS.map((req) =>
     detectTool(req.id, req.name, req.command, ['--version'], req.installHint ?? '', req.required ?? false),
   );
