@@ -464,18 +464,20 @@ test.describe('Visual proof capture', () => {
       await window.invoker.setTestPlanFromGoalResponse({ planYaml, planName });
     }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow' });
 
-    await page.getByTestId('invoker-terminal-input').fill('plan "Add README"');
-    await page.getByTestId('invoker-terminal-input').press('Enter');
+    try {
+      await page.getByTestId('invoker-terminal-input').fill('plan "Add README"');
+      await page.getByTestId('invoker-terminal-input').press('Enter');
 
-    await expect(page.getByText('Plan "Terminal Planned Flow" loaded. Use run to execute.')).toBeVisible();
-    await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
-    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Menu Proof Workflow');
-    await expect(page.getByText('What to expect')).toHaveCount(0);
-    await captureScreenshot(page, 'terminal-planned-graph');
-
-    await page.evaluate(async () => {
-      await window.invoker.setTestPlanFromGoalResponse(null);
-    });
+      await expect(page.getByText('Plan "Terminal Planned Flow" loaded. Use run to execute.')).toBeVisible();
+      await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+      await expect(page.getByTestId('workflow-inspector-title')).toContainText('Menu Proof Workflow');
+      await expect(page.getByText('What to expect')).toHaveCount(0);
+      await captureScreenshot(page, 'terminal-planned-graph');
+    } finally {
+      await page.evaluate(async () => {
+        await window.invoker.setTestPlanFromGoalResponse(null);
+      });
+    }
   });
 
   test('dag loaded', async ({ page }) => {

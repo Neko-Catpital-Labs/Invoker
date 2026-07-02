@@ -980,6 +980,20 @@ function startHeadlessMode(): void {
         return { workflowId, tasks };
       };
 
+      let headlessTestPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
+      const loadStandaloneGeneratedPlanPreview = async (planText: string): Promise<{ planName: string; workflowId: string }> => {
+        const { parsePlan } = await import('./plan-parser.js');
+        const plan = parsePlan(planText);
+        const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
+        backupPlan(plan, undefined, logger);
+        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+        const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+        if (!workflow) {
+          throw new Error('Loaded plan did not create a workflow.');
+        }
+        return { planName: plan.name, workflowId: workflow.id };
+      };
+
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
         switch (payload.channel) {
           case 'invoker:clear': {
@@ -1004,21 +1018,14 @@ function startHeadlessMode(): void {
             return undefined;
           }
           case 'invoker:plan-from-goal': {
+            if (process.env.NODE_ENV === 'test' && headlessTestPlanFromGoalResponse) {
+              const loaded = await loadStandaloneGeneratedPlanPreview(headlessTestPlanFromGoalResponse.planYaml);
+              return { ok: true, planName: headlessTestPlanFromGoalResponse.planName, workflowId: loaded.workflowId };
+            }
             return planFromGoalInApp(payload.args[0] as InAppPlanRequest, {
               config: invokerConfig,
               workingDir: repoRoot,
-              loadGeneratedPlan: async (planText) => {
-                const { parsePlan } = await import('./plan-parser.js');
-                const plan = parsePlan(planText);
-                const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-                backupPlan(plan, undefined, logger);
-                orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-                const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-                if (!workflow) {
-                  throw new Error('Loaded plan did not create a workflow.');
-                }
-                return { planName: plan.name, workflowId: workflow.id };
-              },
+              loadGeneratedPlan: loadStandaloneGeneratedPlanPreview,
             });
           }
           case 'invoker:load-plan': {
@@ -1064,6 +1071,13 @@ function startHeadlessMode(): void {
               persistence.updateTask(taskId, changes);
             }
             orchestrator.syncAllFromDb();
+            return undefined;
+          }
+          case 'invoker:set-test-plan-from-goal-response': {
+            if (process.env.NODE_ENV !== 'test') {
+              throw new Error('set-test-plan-from-goal-response is only available in tests');
+            }
+            headlessTestPlanFromGoalResponse = payload.args[0] as { planYaml: string; planName: string } | null;
             return undefined;
           }
           case 'invoker:set-merge-branch': {
@@ -3472,6 +3486,13 @@ function createEmbeddedTerminalBackendFromConfig(
       ipcMain.handle(
         'invoker:set-test-plan-from-goal-response',
         async (_event, response: { planYaml: string; planName: string } | null) => {
+          if (!ownerMode) {
+            await messageBus.request('headless.gui-mutation', {
+              channel: 'invoker:set-test-plan-from-goal-response',
+              args: [response],
+            } satisfies GuiMutationPayload);
+            return;
+          }
           testPlanFromGoalResponse = response;
         },
       );
