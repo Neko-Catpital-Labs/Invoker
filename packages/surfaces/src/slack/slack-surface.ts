@@ -23,6 +23,16 @@ import { buildAssistantPrompt, parseWorkflowControl, SLACK_DIRECT_ANSWER_GUIDANC
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
 import type { ConversationRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
 
+function truncateWords(text: string, maxWords: number): string {
+  const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  if (words.length <= maxWords) return words.join(' ');
+  return `${words.slice(0, maxWords).join(' ')} ...`;
+}
+
+function asSentence(text: string): string {
+  return text.endsWith('...') || text.endsWith('…') ? text : `${text}.`;
+}
+
 // ── Config ──────────────────────────────────────────────────
 
 export interface SlackSurfaceConfig {
@@ -870,10 +880,23 @@ export class SlackSurface implements Surface {
     await this.stageConfirm(threadTs, channel, { kind: 'submit', planText, ctx, channel, lobbyThreadTs: threadTs }, this.renderPlanSummary(summary), say);
   }
 
-  /** Plain-English plan view: one numbered sentence per step — the user approves this, not YAML. */
+  /** Short plain-English plan view: the user approves this, not YAML. */
   private renderPlanSummary(summary: { name: string; steps: string[]; taskCount: number }): string {
-    const lines = summary.steps.map((step, i) => `${i + 1}. ${step}`);
-    return [`*${summary.name}* — ${summary.taskCount} step${summary.taskCount === 1 ? '' : 's'}:`, ...lines].join('\n');
+    const title = truncateWords(summary.name, 5);
+    const first = truncateWords(summary.steps[0] ?? 'Run the plan', 6);
+    const parts = [
+      `I'll start "${title}": ${summary.taskCount} step${summary.taskCount === 1 ? '' : 's'} in order.`,
+      `First: ${asSentence(first)}`,
+    ];
+
+    if (summary.steps.length > 1) {
+      parts.push(`Then: ${asSentence(truncateWords(summary.steps[1], 6))}`);
+    }
+    if (summary.steps.length > 2) {
+      parts.push(`Then ${summary.steps.length - 2} more.`);
+    }
+
+    return parts.join(' ');
   }
 
   private buildConfirmBlocks(prompt: string, confirmKey: string): unknown[] {
