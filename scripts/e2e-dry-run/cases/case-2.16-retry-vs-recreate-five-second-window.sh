@@ -10,10 +10,6 @@ export INVOKER_DISABLE_EXCLUSIVE_LOCKING=1
 # sampling first-5s state changes. Keep shared WAL here; production owners
 # still exercise exclusive locking separately.
 invoker_e2e_init
-query_via_live_owner() {
-  env -u INVOKER_HEADLESS_STANDALONE \
-    "$INVOKER_E2E_REPO_ROOT/run.sh" --headless "$@"
-}
 trap invoker_e2e_cleanup EXIT
 
 cd "$INVOKER_E2E_REPO_ROOT"
@@ -102,7 +98,7 @@ recreate_snapshot_has_pending=0
 for i in 0 1 2 3 4 5; do
   KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
   FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
-  SNAP_JSON="$(query_via_live_owner query tasks --workflow "$WF_ID" --output json)"
+  SNAP_JSON="$(invoker_e2e_run_headless query tasks --workflow "$WF_ID" --output json)"
   SNAP_COUNTS="$(printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; from collections import Counter; data=json.load(sys.stdin); c=Counter(t.get("status","") for t in data); print(" ".join(f"{k}:{c[k]}" for k in sorted(c)))')"
   echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=$SNAP_COUNTS"
 
@@ -111,41 +107,41 @@ for i in 0 1 2 3 4 5; do
   fi
   sleep 1
 done
-KEEP_PENDING_DELTA_S="$(query_via_live_owner query audit "$KEEP_TASK_ID" --output json | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
-for e in data:
-    if e.get("eventType")!="task.pending":
-        continue
-    ts=e.get("createdAt")
-    if not ts:
-        continue
-    epoch=int(dt.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp())
-    if epoch >= start:
-        deltas.append(epoch-start)
-print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
-FAIL_PENDING_DELTA_S="$(query_via_live_owner query audit "$FAIL_TASK_ID" --output json | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
-for e in data:
-    if e.get("eventType")!="task.pending":
-        continue
-    ts=e.get("createdAt")
-    if not ts:
-        continue
-    epoch=int(dt.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp())
-    if epoch >= start:
-        deltas.append(epoch-start)
-print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
-
 kill "$RECREATE_PID" 2>/dev/null || true
 wait "$RECREATE_PID" 2>/dev/null || true
 
+KEEP_PENDING_DELTA_S="$(invoker_e2e_run_headless query audit "$KEEP_TASK_ID" --output json | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
+for e in data:
+    if e.get("eventType")!="task.pending":
+        continue
+    ts=e.get("createdAt")
+    if not ts:
+        continue
+    epoch=int(dt.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp())
+    if epoch >= start:
+        deltas.append(epoch-start)
+print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
+FAIL_PENDING_DELTA_S="$(invoker_e2e_run_headless query audit "$FAIL_TASK_ID" --output json | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
+for e in data:
+    if e.get("eventType")!="task.pending":
+        continue
+    ts=e.get("createdAt")
+    if not ts:
+        continue
+    epoch=int(dt.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp())
+    if epoch >= start:
+        deltas.append(epoch-start)
+print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
+
 if [ "$KEEP_PENDING_DELTA_S" -lt 0 ] || [ "$KEEP_PENDING_DELTA_S" -gt 5 ]; then
   echo "FAIL case 2.16: recreate did not emit task.pending for previously completed task within 5s (delta=${KEEP_PENDING_DELTA_S})"
-  query_via_live_owner query audit "$KEEP_TASK_ID" --output json 2>&1 || true
+  invoker_e2e_run_headless query audit "$KEEP_TASK_ID" --output json 2>&1 || true
   exit 1
 fi
 
 if [ "$FAIL_PENDING_DELTA_S" -lt 0 ] || [ "$FAIL_PENDING_DELTA_S" -gt 5 ]; then
   echo "FAIL case 2.16: recreate did not emit task.pending for previously failed task within 5s (delta=${FAIL_PENDING_DELTA_S})"
-  query_via_live_owner query audit "$FAIL_TASK_ID" --output json 2>&1 || true
+  invoker_e2e_run_headless query audit "$FAIL_TASK_ID" --output json 2>&1 || true
   exit 1
 fi
 
