@@ -175,6 +175,7 @@ export function createMockInvoker(
       commandTargets: [],
       mcpTargets: [],
     })),
+    runInvokerCliSetup: vi.fn(async () => ({ ok: true, steps: [{ id: 'tools', name: 'Run setup', ok: true, output: 'setup ok' }] })),
     replaceTask: vi.fn(async () => accepted('invoker:replace-task')),
     getActivityLogs: vi.fn(async () => []),
     getEvents: vi.fn(async () => []),

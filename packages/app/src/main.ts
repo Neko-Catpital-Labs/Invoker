@@ -181,6 +181,7 @@ import {
   updateInvokerCli,
   type CliInstallerContext,
 } from './cli-installer.js';
+import { runInvokerCliSetup } from './invoker-cli-setup.js';
 import { resolveBundledCliPath } from './cli-helper.js';
 import { buildAppMenuTemplate } from './app-menu.js';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
@@ -639,6 +640,14 @@ function buildCliInstallerContext(): CliInstallerContext {
     env: process.env,
     homeDir: homedir(),
   };
+}
+
+function resolveSetupCliPath(): string {
+  return resolveBundledCliPath({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appDir: path.join(__dirname, '..'),
+  });
 }
 
 function updateInvokerCliFromMenu(): void {
@@ -4599,6 +4608,14 @@ function createEmbeddedTerminalBackendFromConfig(
     ipcMain.handle('invoker:update-invoker-cli', () => {
       return updateInvokerCli(buildCliInstallerContext());
     });
+    ipcMain.handle('invoker:run-invoker-cli-setup', (_event, request) => {
+      return runInvokerCliSetup(request, {
+        cliPath: resolveSetupCliPath(),
+        updateCli: () => updateInvokerCli(buildCliInstallerContext()),
+        installBundledSkills: installPackagedSkills,
+      });
+    });
+
 
     registerTaskScopedGuiMutationHandler(
       'invoker:replace-task',

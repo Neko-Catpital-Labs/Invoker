@@ -1,4 +1,5 @@
-import type { SystemDiagnostics } from '@invoker/contracts';
+import { useState } from 'react';
+import type { InvokerSetupRequest, InvokerSetupResult, SystemDiagnostics } from '@invoker/contracts';
 
 interface SystemSetupModalProps {
   diagnostics: SystemDiagnostics | null;
@@ -6,6 +7,9 @@ interface SystemSetupModalProps {
   installError?: string | null;
   onInstallBundledSkills?: (mode?: 'install' | 'update' | 'reinstall') => void;
   updateCliPending?: boolean;
+  setupPending?: boolean;
+  setupResult?: InvokerSetupResult | null;
+  onRunSetup?: (request: InvokerSetupRequest) => void;
   updateCliError?: string | null;
   onUpdateInvokerCli?: () => void;
   onClose: () => void;
@@ -15,12 +19,43 @@ export function SystemSetupModal({
   diagnostics,
   installPending = false,
   installError = null,
+  setupPending = false,
+  setupResult = null,
   onInstallBundledSkills,
   updateCliPending = false,
   updateCliError = null,
+  onRunSetup,
   onUpdateInvokerCli,
   onClose,
 }: SystemSetupModalProps) {
+  const [setupChecks, setSetupChecks] = useState({
+    updateCli: true,
+    installHelpers: true,
+    fixTools: true,
+    slack: true,
+  });
+  const [slackFields, setSlackFields] = useState({
+    botToken: '',
+    appToken: '',
+    signingSecret: '',
+    channelId: '',
+  });
+  const anySetupSelected = setupChecks.updateCli || setupChecks.installHelpers || setupChecks.fixTools || setupChecks.slack;
+  const slackFieldsComplete = slackFields.botToken !== '' && slackFields.appToken !== '' && slackFields.signingSecret !== '' && slackFields.channelId !== '';
+  const canRunSetup = Boolean(onRunSetup && anySetupSelected && (!setupChecks.slack || slackFieldsComplete));
+  const toggleSetupCheck = (id: keyof typeof setupChecks): void => {
+    setSetupChecks((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+  const runSelectedSetup = (): void => {
+    if (!onRunSetup) return;
+    onRunSetup({
+      updateCli: setupChecks.updateCli,
+      installHelpers: setupChecks.installHelpers,
+      fixTools: setupChecks.fixTools,
+      slack: setupChecks.slack ? slackFields : false,
+    });
+  };
+
   const installedAgents = diagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed) ?? [];
   const bundledSkills = diagnostics?.bundledSkills;
   const cliInstaller = diagnostics?.cliInstaller;
@@ -52,6 +87,82 @@ export function SystemSetupModal({
         </div>
 
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
+          {onRunSetup && (
+            <div className="rounded border border-blue-700/60 bg-blue-950/30 px-4 py-4 space-y-3">
+              <div>
+                <div className="text-sm font-medium text-blue-100">One-step setup</div>
+                <div className="text-sm text-blue-200/80 mt-1">
+                  Pick what Invoker should set up, then approve the run. Slack is checked by default and uses the same CLI setup validation.
+                </div>
+              </div>
+
+              <div className="space-y-2 text-sm text-blue-100">
+                {[
+                  ['updateCli', 'Install or update invoker-cli'],
+                  ['installHelpers', 'Install Invoker helpers'],
+                  ['fixTools', 'Best-effort install missing tools'],
+                  ['slack', 'Set up Slack integration'],
+                ].map(([id, label]) => (
+                  <label key={id} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={setupChecks[id as keyof typeof setupChecks]}
+                      onChange={() => toggleSetupCheck(id as keyof typeof setupChecks)}
+                      className="h-4 w-4 rounded border-blue-600 bg-gray-900"
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+
+              {setupChecks.slack && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {[
+                    ['botToken', 'Bot token (xoxb-...)'],
+                    ['appToken', 'App token (xapp-...)'],
+                    ['signingSecret', 'Signing secret'],
+                    ['channelId', 'Lobby channel ID'],
+                  ].map(([id, label]) => (
+                    <label key={id} className="text-xs text-blue-100">
+                      {label}
+                      <input
+                        value={slackFields[id as keyof typeof slackFields]}
+                        onChange={(event) => setSlackFields((prev) => ({ ...prev, [id]: event.target.value }))}
+                        type={id === 'channelId' ? 'text' : 'password'}
+                        className="mt-1 w-full rounded border border-blue-800 bg-gray-950 px-2 py-1.5 text-sm text-gray-100"
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              <button
+                onClick={runSelectedSetup}
+                disabled={setupPending || !canRunSetup}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:text-blue-200 text-white rounded text-sm font-medium transition-colors"
+              >
+                {setupPending ? 'Setting up…' : 'Set everything up'}
+              </button>
+              {setupChecks.slack && !slackFieldsComplete && (
+                <div className="text-xs text-blue-200/80">Fill Slack fields or uncheck Slack before running setup.</div>
+              )}
+              {setupResult && (
+                <div className={`rounded border px-3 py-2 text-sm ${setupResult.ok ? 'border-green-700/50 bg-green-950/30 text-green-100' : 'border-red-700/50 bg-red-950/30 text-red-100'}`}>
+                  <div className="font-medium">{setupResult.ok ? 'Setup completed' : 'Setup completed with failures'}</div>
+                  <div className="mt-2 space-y-2">
+                    {setupResult.steps.map((step) => (
+                      <div key={step.id} className="rounded bg-gray-950/50 px-2 py-2">
+                        <div className={step.ok ? 'text-green-200' : 'text-red-200'}>{step.ok ? 'ok' : 'failed'} — {step.name}</div>
+                        {step.error && <div className="mt-1 text-xs text-red-200">{step.error}</div>}
+                        {step.output && <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-gray-200">{step.output}</pre>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {diagnostics && installedAgents.length === 0 && (
             <div className="rounded border border-amber-600/50 bg-amber-950/40 px-4 py-3 text-sm text-amber-100">
               No execution agent CLI is installed yet. Install Claude CLI or Codex CLI before running agent-backed tasks.

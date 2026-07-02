@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
+import type { ActionGraphNode, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
@@ -443,6 +443,8 @@ export function App() {
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
   const [updateCliPending, setUpdateCliPending] = useState(false);
+  const [setupPending, setSetupPending] = useState(false);
+  const [setupResult, setSetupResult] = useState<InvokerSetupResult | null>(null);
   const [updateCliError, setUpdateCliError] = useState<string | null>(null);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
@@ -1876,6 +1878,26 @@ export function App() {
       setUpdateCliPending(false);
     }
   }, [refreshSystemDiagnostics]);
+  const handleRunInvokerCliSetup = useCallback(async (request: InvokerSetupRequest) => {
+    try {
+      setSetupPending(true);
+      setSetupResult(null);
+      const result = await window.invoker?.runInvokerCliSetup?.(request);
+      setSetupResult(result ?? {
+        ok: false,
+        steps: [{ id: 'tools', name: 'Run setup', ok: false, output: '', error: 'invoker-cli setup is not available.' }],
+      });
+      refreshSystemDiagnostics();
+    } catch (err) {
+      setSetupResult({
+        ok: false,
+        steps: [{ id: 'tools', name: 'Run setup', ok: false, output: '', error: err instanceof Error ? err.message : String(err) }],
+      });
+    } finally {
+      setSetupPending(false);
+    }
+  }, [refreshSystemDiagnostics]);
+
 
   return (
     <div className="h-screen flex flex-col bg-gray-900 text-gray-100" onClick={() => closeContextMenu()}>
@@ -2293,6 +2315,9 @@ export function App() {
           installError={installSkillsError}
           onInstallBundledSkills={handleInstallBundledSkills}
           updateCliPending={updateCliPending}
+          setupPending={setupPending}
+          setupResult={setupResult}
+          onRunSetup={handleRunInvokerCliSetup}
           updateCliError={updateCliError}
           onUpdateInvokerCli={handleUpdateInvokerCli}
           onClose={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(false); }}

@@ -334,6 +334,31 @@ export interface CliInstallResult {
   error?: string;
   status: CliInstallerStatus;
 }
+export interface InvokerSetupRequest {
+  updateCli: boolean;
+  installHelpers: boolean;
+  fixTools: boolean;
+  slack: false | {
+    botToken: string;
+    appToken: string;
+    signingSecret: string;
+    channelId: string;
+  };
+}
+
+export interface InvokerSetupStepResult {
+  id: 'invoker-cli' | 'helpers' | 'tools' | 'slack';
+  name: string;
+  ok: boolean;
+  output: string;
+  error?: string;
+}
+
+export interface InvokerSetupResult {
+  ok: boolean;
+  steps: InvokerSetupStepResult[];
+}
+
 
 export interface SystemDiagnostics {
   platform: string;
@@ -742,6 +767,10 @@ export const IpcChannels = {
   'invoker:update-invoker-cli': {} as {
     request: [];
     response: CliInstallResult;
+  },
+  'invoker:run-invoker-cli-setup': {} as {
+    request: [request: InvokerSetupRequest];
+    response: InvokerSetupResult;
   },
 
 } as const;

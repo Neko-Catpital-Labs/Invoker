@@ -181,4 +181,49 @@ describe('SystemSetupModal — Invoker CLI section', () => {
 
     expect(screen.queryByText('Invoker CLI')).not.toBeInTheDocument();
   });
+  it('runs selected setup items with Slack checked by default', () => {
+    const onRunSetup = vi.fn();
+    render(
+      <SystemSetupModal
+        diagnostics={makeDiagnostics({ supported: true, bundledVersion: '0.0.3', upToDate: true })}
+        onRunSetup={onRunSetup}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByLabelText('Set up Slack integration')).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Set everything up' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Bot token (xoxb-...)'), { target: { value: 'xoxb-token' } });
+    fireEvent.change(screen.getByLabelText('App token (xapp-...)'), { target: { value: 'xapp-token' } });
+    fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'secret' } });
+    fireEvent.change(screen.getByLabelText('Lobby channel ID'), { target: { value: 'C123' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set everything up' }));
+    expect(onRunSetup).toHaveBeenCalledWith({
+      updateCli: true,
+      installHelpers: true,
+      fixTools: true,
+      slack: {
+        botToken: 'xoxb-token',
+        appToken: 'xapp-token',
+        signingSecret: 'secret',
+        channelId: 'C123',
+      },
+    });
+  });
+
+  it('shows setup output after the one-step setup command finishes', () => {
+    render(
+      <SystemSetupModal
+        diagnostics={makeDiagnostics({ supported: true, bundledVersion: '0.0.3', upToDate: true })}
+        setupResult={{ ok: true, steps: [{ id: 'tools', name: 'Install missing tools', ok: true, output: 'ok  Git: git found' }] }}
+        onRunSetup={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Setup completed')).toBeInTheDocument();
+    expect(screen.getByText(/Git: git found/)).toBeInTheDocument();
+  });
+
 });
