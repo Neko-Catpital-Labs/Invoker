@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as child_process from 'node:child_process';
-import { SlackSurface, parsePlanningRequest, parseLobbyClassification, BUILTIN_HARNESS_PRESETS } from '../slack/slack-surface.js';
+import { SlackSurface, parsePlanningRequest, parseLobbyClassification, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
 import type { WorkflowContext } from '../slack/workflow-assistant.js';
@@ -413,6 +413,14 @@ describe('lobby verb routing', () => {
       ...extra,
     });
   }
+
+  it('asks lobby question answers to be short ELI5 Slack prose except for clearly technical questions', () => {
+    const prompt = buildLobbyQuestionPrompt('how many workflows are running?');
+    expect(prompt).toContain('ELI5 Slack prose');
+    expect(prompt).toContain('40 words or fewer');
+    expect(prompt).toContain('clearly technical');
+    expect(prompt).toContain('Do NOT generate a YAML plan');
+  });
 
   it('stages a bulk verb for confirmation, then runs it on a plain `yes`', async () => {
     runWorkflowOp.mockResolvedValue({ ok: true, summary: 'recreate: 3 ok' });
