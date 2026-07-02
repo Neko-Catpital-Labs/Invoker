@@ -221,7 +221,7 @@ const SSH_TERMINAL_RESUME_PLAN = {
   ],
 };
 
-const SYSTEM_SETUP_READINESS_DIAGNOSTICS = {
+const systemSetupReadinessDiagnostics = (configPath: string) => ({
   platform: 'linux',
   arch: 'x64',
   appVersion: '0.0.0-visual-proof',
@@ -272,7 +272,7 @@ const SYSTEM_SETUP_READINESS_DIAGNOSTICS = {
         id: 'config',
         name: 'Config file',
         status: 'ok',
-        detail: 'Parsed /tmp/invoker-e2e/config.json',
+        detail: `Parsed ${configPath}`,
       },
       {
         id: 'planning-tools',
@@ -290,7 +290,7 @@ const SYSTEM_SETUP_READINESS_DIAGNOSTICS = {
       },
     ],
   },
-};
+});
 
 function workflowNode(page: Page, workflowId: string) {
   return page.getByTestId(`rf__node-${workflowId}`).first();
@@ -508,10 +508,14 @@ test.describe('Visual proof capture', () => {
   });
 
   test('system setup readiness report shows a failing default preset check', async ({ page, electronApp }) => {
+    const configPath = await electronApp.evaluate(() => process.env.INVOKER_REPO_CONFIG_PATH);
+    if (!configPath) throw new Error('INVOKER_REPO_CONFIG_PATH was not injected into the Electron test app');
+    const diagnostics = systemSetupReadinessDiagnostics(configPath);
+
     await electronApp.evaluate(({ ipcMain }, diagnostics) => {
       ipcMain.removeHandler('invoker:get-system-diagnostics');
       ipcMain.handle('invoker:get-system-diagnostics', () => diagnostics);
-    }, SYSTEM_SETUP_READINESS_DIAGNOSTICS);
+    }, diagnostics);
 
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
@@ -523,6 +527,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('heading', { name: 'System Setup' })).toBeVisible();
     await expect(page.getByText('Readiness')).toBeVisible();
     await expect(page.getByText('Config file')).toBeVisible();
+    await expect(page.getByText(`Parsed ${configPath}`)).toBeVisible();
     await expect(page.getByText('Planning tools')).toBeVisible();
     await expect(page.getByText('Default planning preset')).toBeVisible();
     await expect(page.getByText('Default preset "cursor+codex" needs "codex", which is not on PATH')).toBeVisible();
