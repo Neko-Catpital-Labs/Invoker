@@ -20,7 +20,10 @@ env:
   NODE_VERSION: '26'
 
 jobs:
+  # Full CI runs on default-branch pushes, manual/scheduled runs, and Mergify merge-queue refs.
+  # Ordinary PRs keep only cheap quality checks so stacked PR pushes do not fan out heavy jobs.
   build-artifacts:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     runs-on:
       labels: Runner_2_4_core
     timeout-minutes: 30
@@ -146,7 +149,7 @@ jobs:
         run: ${{ matrix.command }}
 
   inv117-proof:
-    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    if: ${{ github.event_name != 'pull_request' }}
     needs: build-artifacts
     runs-on:
       labels: Runner_2_4_core
@@ -214,6 +217,7 @@ jobs:
           bash scripts/run-all-tests.sh
 
   required-fast:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -419,6 +423,7 @@ jobs:
         run: bash scripts/test-suites/required/23-fix-intent-repros.sh
 
   dry-run:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on: ubuntu-latest
     container:
@@ -487,6 +492,7 @@ jobs:
         run: bash ${{ matrix.suite }}
 
   playwright:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on: ubuntu-latest
     container:
@@ -620,6 +626,7 @@ jobs:
           if-no-files-found: ignore
 
   ssh:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on: ubuntu-latest
     container:
@@ -697,6 +704,7 @@ jobs:
         run: bash ${{ matrix.suite }}
 
   optional-other:
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on:
       labels: ${{ matrix.runner_label }}
@@ -748,7 +756,7 @@ jobs:
         run: ${{ matrix.command }}
 
   docker:
-    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    if: ${{ github.event_name != 'pull_request' }}
     needs: build-artifacts
     runs-on:
       labels: Runner_2_4_core
