@@ -3,14 +3,15 @@ import { LocalBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import { encodeReviewGateCiContext } from '../auto-fix-intents.js';
 
-const { fixWithAgentActionMock, finalizeMock } = vi.hoisted(() => ({
+const { fixWithAgentActionMock, resolveConflictActionMock, finalizeMock } = vi.hoisted(() => ({
   fixWithAgentActionMock: vi.fn(async () => ({ kind: 'fixWithAgent', autoApproved: false, started: [] })),
+  resolveConflictActionMock: vi.fn(async () => ({ autoApproved: false, started: [] })),
   finalizeMock: vi.fn(async () => {}),
 }));
 
 vi.mock('../workflow-actions.js', async (importActual) => {
   const actual = await importActual<typeof import('../workflow-actions.js')>();
-  return { ...actual, fixWithAgentAction: fixWithAgentActionMock };
+  return { ...actual, fixWithAgentAction: fixWithAgentActionMock, resolveConflictAction: resolveConflictActionMock };
 });
 
 vi.mock('../global-topup.js', async (importActual) => {
@@ -18,7 +19,7 @@ vi.mock('../global-topup.js', async (importActual) => {
   return { ...actual, finalizeMutationWithGlobalTopup: finalizeMock };
 });
 
-function makeDeps(autoFixAttempts: number | null, executionOverrides: Record<string, unknown> = {}) {
+function makeDeps(autoFixAttempts: number | null, executionOverrides: Record<string, unknown> = {}, configOverrides: Record<string, unknown> = {}) {
   const updateTask = vi.fn();
   const task = {
     id: 'wf-1/task-1',
@@ -45,7 +46,7 @@ function makeDeps(autoFixAttempts: number | null, executionOverrides: Record<str
     executorRegistry: {},
     messageBus: new LocalBus() as MessageBus,
     repoRoot: '/fake/repo',
-    invokerConfig: { autoApproveAIFixes: false, launchOutboxMode: 'active' },
+    invokerConfig: { autoApproveAIFixes: false, launchOutboxMode: 'active', ...configOverrides },
     ownerTaskRunnerProvider: () => ({ fixWithAgent: vi.fn(), resolveConflict: vi.fn() }),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   } as any;
@@ -56,6 +57,7 @@ describe('headless fix auto-fix accounting', () => {
   afterEach(() => {
     fixWithAgentActionMock.mockClear();
     finalizeMock.mockClear();
+    resolveConflictActionMock.mockClear();
   });
 
   it('does not consume the auto-fix retry budget for a manual fix', async () => {
@@ -86,6 +88,29 @@ describe('headless fix auto-fix accounting', () => {
     await runHeadless(['fix', 'wf-1/task-1', '--auto-fix'], deps);
 
     expect(updateTask).toHaveBeenCalledWith('wf-1/task-1', { execution: { autoFixAttempts: 1 } });
+  });
+
+  it('uses configured default agent when manual fix omits an agent', async () => {
+    const { runHeadless } = await import('../headless.js');
+    const { deps } = makeDeps(0, {}, { defaultExecutionAgent: 'claude' });
+
+    await runHeadless(['fix', 'wf-1/task-1'], deps);
+
+    expect(fixWithAgentActionMock.mock.calls[0][2]).toMatchObject({ agentName: 'claude' });
+  });
+
+  it('uses configured default agent when resolve-conflict omits an agent', async () => {
+    const { runHeadless } = await import('../headless.js');
+    const { deps } = makeDeps(0, {}, { defaultExecutionAgent: 'claude' });
+
+    await runHeadless(['resolve-conflict', 'wf-1/task-1'], deps);
+
+    expect(resolveConflictActionMock).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      expect.any(Object),
+      'claude',
+      undefined,
+    );
   });
 
   it('passes a decoded review-gate CI context through to the fix action', async () => {
