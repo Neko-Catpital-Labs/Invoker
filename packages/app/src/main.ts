@@ -3447,7 +3447,6 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
       });
     });
-
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
       const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
