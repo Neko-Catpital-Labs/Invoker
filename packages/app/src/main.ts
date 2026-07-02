@@ -3432,6 +3432,11 @@ function createEmbeddedTerminalBackendFromConfig(
       getTasks: () => (ownerMode ? orchestrator.getAllTasks() : detachedViewerTasks()),
       getWorkflows: () => detachedViewerWorkflows ?? listWorkflowsByStartupRecency(),
       getInitialWorkflowId: () => startupWorkflowId,
+      getRuntimeStatus: () => (
+        process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_READ_ONLY_STATUS === '1'
+          ? { ownerMode: false, readOnly: true, mode: 'read-only' }
+          : { ownerMode, readOnly: !ownerMode && !guiUsingDaemonOwner, mode: ownerMode ? 'local-owner' : guiUsingDaemonOwner ? 'daemon-owner' : 'read-only' }
+      ),
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
       recordStartupDuration,
