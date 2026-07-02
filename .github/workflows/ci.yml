@@ -205,6 +205,7 @@ jobs:
           INVOKER_TEST_ALL_EXCLUDE: >-
             required/20-e2e-dry-run.sh,
             required/21-e2e-dry-run-downstream.sh,
+            required/21-e2e-dry-run-downstream-reset.sh,
             required/22-e2e-dry-run-github.sh
           TMPDIR: /tmp/invoker-tmp
         run: |
@@ -214,8 +215,7 @@ jobs:
 
   required-fast:
     needs: build-artifacts
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -228,14 +228,10 @@ jobs:
               bash scripts/test-suites/required/07-invalid-config-json.sh
               bash scripts/test-suites/required/15-owner-boundary-policy.sh
               bash scripts/test-suites/required/50-verify-executor-routing.sh
-            runner_label: Runner_2_4_core
           - name: Vitest Workspace
             command: bash scripts/test-suites/required/10-vitest-workspace.sh
-            runner_label: Github_Runner
           - name: Submit Workflow Chain
             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
-            runner_label: Runner_2_4_core
-
     name: required-fast / ${{ matrix.name }}
 
     steps:
@@ -424,8 +420,7 @@ jobs:
 
   dry-run:
     needs: build-artifacts
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
@@ -435,14 +430,14 @@ jobs:
         include:
           - name: case-1
             suite: scripts/test-suites/required/20-e2e-dry-run.sh
-            runner_label: Runner_2_4_core
           - name: case-2
+            suite: scripts/test-suites/required/21-e2e-dry-run-downstream.sh all
+          - name: case-2a
             suite: scripts/test-suites/required/21-e2e-dry-run-downstream.sh
-            runner_label: Github_Runner
+          - name: case-2b
+            suite: scripts/test-suites/required/21-e2e-dry-run-downstream-reset.sh
           - name: case-4
             suite: scripts/test-suites/required/22-e2e-dry-run-github.sh
-            runner_label: Runner_2_4_core
-
     name: dry-run / ${{ matrix.name }}
 
     steps:
@@ -493,8 +488,7 @@ jobs:
 
   playwright:
     needs: build-artifacts
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 45
@@ -503,14 +497,37 @@ jobs:
       matrix:
         include:
           - name: 1-of-3
-            shard: 1/3
-            runner_label: Runner_2_4_core
+            files: >-
+              e2e/visual-proof.spec.ts
+              e2e/edit-task-command.spec.ts
+              e2e/headless-thundering-herd.spec.ts
+              e2e/launching-stall-watchdog.spec.ts
+              e2e/embedded-terminal-pty.spec.ts
+              e2e/keyboard-navigation.spec.ts
+              e2e/action-graph-visual-proof.spec.ts
+              e2e/invalid-merge-workspace-visual.spec.ts
           - name: 2-of-3
-            shard: 2/3
-            runner_label: Runner_1
+            files: >-
+              e2e/persistence-lifecycle.spec.ts
+              e2e/task-death-logs.spec.ts
+              e2e/restart-failed-task.spec.ts
+              e2e/task-new-attempt-reset.spec.ts
+              e2e/ui-graph-drag-performance.spec.ts
+              e2e/pending-review-gate-target-repo.proof.spec.ts
+              e2e/workflow-status-composition.spec.ts
+              e2e/startup-window-liveness.spec.ts
           - name: 3-of-3
-            shard: 3/3
-            runner_label: Runner_2_4_core
+            files: >-
+              e2e/workflow-lifecycle.spec.ts
+              e2e/persistence-recovery.spec.ts
+              e2e/edit-task-prompt.spec.ts
+              e2e/fix-with-claude.spec.ts
+              e2e/fix-with-agent-transition.spec.ts
+              e2e/orphan-relaunch.spec.ts
+              e2e/gap-recovery-bench.spec.ts
+              e2e/system-setup-visual-proof.spec.ts
+              e2e/startup-nonempty-responsiveness.spec.ts
+              e2e/embedded-terminal-spawn-failure.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
@@ -538,6 +555,37 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify Playwright shard inventory
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const YAML = require('yaml');
+
+          const workflow = YAML.parse(fs.readFileSync('.github/workflows/ci.yml', 'utf8'));
+          const shards = workflow.jobs.playwright.strategy.matrix.include;
+          const listed = shards.flatMap((shard) => String(shard.files).trim().split(/\s+/).filter(Boolean));
+          const discovered = fs.readdirSync('packages/app/e2e')
+            .filter((file) => file.endsWith('.spec.ts'))
+            .map((file) => `e2e/${file}`)
+            .sort();
+
+          const listedSet = new Set(listed);
+          const discoveredSet = new Set(discovered);
+          const missing = discovered.filter((file) => !listedSet.has(file));
+          const extra = listed.filter((file) => !discoveredSet.has(file));
+          const duplicates = listed.filter((file, index) => listed.indexOf(file) !== index);
+
+          if (missing.length || extra.length || duplicates.length) {
+            console.error('Playwright shard inventory drift detected.');
+            if (missing.length) console.error(`Missing from shards: ${missing.join(', ')}`);
+            if (extra.length) console.error(`Extra in shards: ${extra.join(', ')}`);
+            if (duplicates.length) console.error(`Duplicate shard entries: ${[...new Set(duplicates)].join(', ')}`);
+            process.exit(1);
+          }
+
+          console.log(`Playwright shard inventory matches ${discovered.length} spec files.`);
+          NODE
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -555,9 +603,9 @@ jobs:
 
       - name: Run Playwright shard
         env:
-          INVOKER_PLAYWRIGHT_SHARD: ${{ matrix.shard }}
-          INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright
+          INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-${{ matrix.name }}
           INVOKER_PLAYWRIGHT_WORKERS: '1'
+          INVOKER_PLAYWRIGHT_FILES: ${{ matrix.files }}
           INVOKER_PLAYWRIGHT_ARGS: --reporter=line
         run: bash scripts/test-suites/optional/40-playwright-app.sh
 
@@ -573,8 +621,7 @@ jobs:
 
   ssh:
     needs: build-artifacts
-    runs-on:
-      labels: ${{ matrix.runner_label }}
+    runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
@@ -584,11 +631,8 @@ jobs:
         include:
           - name: shard-30
             suite: scripts/test-suites/optional/30-e2e-ssh.sh
-            runner_label: Runner_2_4_core
           - name: shard-31
             suite: scripts/test-suites/optional/31-e2e-ssh-merge.sh
-            runner_label: Github_Runner
-
     name: ssh / ${{ matrix.name }}
 
     steps:
