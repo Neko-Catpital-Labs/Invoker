@@ -44,16 +44,15 @@ describe('App launch (component)', () => {
     expect(screen.getByText('No tasks running')).toBeInTheDocument();
   });
 
-  it('renders left rail navigation and workflow controls', () => {
+  it('renders the left status column controls without the old nav rail', () => {
     render(<App />);
     expect(screen.getByTestId('rail-open-file')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-home')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-timeline')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-history')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-queue')).toBeInTheDocument();
-    expect(screen.queryByTestId('rail-attention')).not.toBeInTheDocument();
-    expect(screen.getByTestId('rail-refresh')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-clear')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
+    expect(screen.getByText('Run')).toBeInTheDocument();
+    expect(screen.getByText('Needs attention')).toBeInTheDocument();
+    expect(screen.getByText('Running task')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Timeline' })).not.toBeInTheDocument();
   });
 
   it('shows workflow status chips and terminal drawer controls in home view', () => {
