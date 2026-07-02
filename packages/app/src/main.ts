@@ -1635,9 +1635,6 @@ function startHeadlessMode(): void {
             getAutoFixAgent: () => invokerConfig.autoFixAgent,
             getAutoFixExecutionModel: () => invokerConfig.autoFixExecutionModel,
           },
-          autoApprove: {
-            getAutoApproveAIFixes: () => invokerConfig.autoApproveAIFixes,
-          },
         }));
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
@@ -3424,9 +3421,6 @@ function createEmbeddedTerminalBackendFromConfig(
           defaultAutoFixRetries: invokerConfig.autoFixRetries,
           getAutoFixAgent: () => invokerConfig.autoFixAgent,
           getAutoFixExecutionModel: () => invokerConfig.autoFixExecutionModel,
-        },
-        autoApprove: {
-          getAutoApproveAIFixes: () => invokerConfig.autoApproveAIFixes,
         },
       }));
     }

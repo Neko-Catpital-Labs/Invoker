@@ -7,6 +7,7 @@ import {
   createWorkerRegistry,
   PR_STATUS_WORKER_KIND,
   registerAutoFixWorker,
+  registerBuiltinWorkers,
   type WorkerRuntimeDependencies,
 } from '../worker-registry.js';
 
@@ -56,12 +57,10 @@ describe('worker registry', () => {
 
     expect(registry.list().map((d) => d.kind)).toEqual([
       AUTO_FIX_WORKER_KIND,
-      AUTO_APPROVE_WORKER_KIND,
       PR_STATUS_WORKER_KIND,
       CI_FAILURE_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
-    expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
     expect(registry.get(CI_FAILURE_WORKER_KIND)).toBeDefined();
   });
@@ -82,15 +81,6 @@ describe('worker registry', () => {
     expect(runtime.isRunning()).toBe(false);
   });
 
-  it('builds an auto-approve worker runtime from the auto-approve factory', () => {
-    const registry = registerBuiltinWorkers(createWorkerRegistry());
-    const definition = registry.get(AUTO_APPROVE_WORKER_KIND);
-    expect(definition).toBeDefined();
-
-    const runtime = definition!.factory(deps());
-    expect(runtime.identity.kind).toBe(AUTO_APPROVE_WORKER_KIND);
-    expect(runtime.isRunning()).toBe(false);
-  });
 
   it('builds the PR status and CI-failure worker runtimes from the registered factories', () => {
     const registry = registerBuiltinWorkers(createWorkerRegistry());

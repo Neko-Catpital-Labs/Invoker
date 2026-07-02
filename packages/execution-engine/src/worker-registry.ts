@@ -18,12 +18,6 @@ import {
   type AutoFixRecoverySubmitter,
 } from './auto-fix-recovery.js';
 import {
-  AUTO_APPROVE_WORKER_KIND,
-  createAutoApproveWorker,
-  type AutoApproveWorkerSubmitter,
-  type AutoApproveWorkerStore,
-} from './workers/auto-approve-worker.js';
-import {
   PR_STATUS_WORKER_KIND,
   createPrStatusWorker,
   type PrStatusReviewGate,
@@ -36,26 +30,26 @@ import {
 } from './workers/ci-failure-worker.js';
 import type { WorkerRuntime } from './worker-runtime.js';
 
-export { AUTO_APPROVE_WORKER_KIND } from './workers/auto-approve-worker.js';
 export { PR_STATUS_WORKER_KIND } from './workers/pr-status-worker.js';
 export { CI_FAILURE_WORKER_KIND } from './workers/ci-failure-worker.js';
 /** Registry kind for the built-in auto-fix recovery worker. */
 export const AUTO_FIX_WORKER_KIND = 'autofix';
 
-/** Auto-fix tuning handed to a worker factory. */
 export interface AutoFixWorkerConfig {
   /** Default attempt budget when a task does not override it. */
   defaultAutoFixRetries?: number;
   /** Resolves the agent that performs each auto-fix, when one is configured. */
   getAutoFixAgent?: () => string | undefined;
+  /** Resolves the execution model used by worker-submitted auto-fixes. */
+  getAutoFixExecutionModel?: () => string | undefined;
 }
 
 /** Dependencies injected into a worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore & AutoApproveWorkerStore & CiFailureWorkerStore;
+  store: AutoFixRecoveryStore & CiFailureWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
-  submitter: AutoFixRecoverySubmitter & AutoApproveWorkerSubmitter & CiFailureWorkerSubmitter;
+  submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter;
   /** Operator logger. */
   logger: Logger;
   /** Optional bus that turns lifecycle events into immediate wakeups. */
@@ -130,24 +124,6 @@ export function registerAutoFixWorker(registry: WorkerRegistry): WorkerRegistry 
   return registry;
 }
 
-/** Register the built-in auto-approval worker. */
-export function registerAutoApproveWorker(registry: WorkerRegistry): WorkerRegistry {
-  registry.register({
-    kind: AUTO_APPROVE_WORKER_KIND,
-    note: 'Approves AI-applied fixes that are awaiting approval when enabled.',
-    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
-      createAutoApproveWorker({
-        logger: deps.logger,
-        messageBus: deps.messageBus,
-        autoApprove: {
-          store: deps.store,
-          submitter: deps.submitter,
-          getAutoApproveAIFixes: deps.autoApprove?.getAutoApproveAIFixes,
-        },
-      }),
-  });
-  return registry;
-}
 
 /** Register the built-in PR status worker. */
 export function registerPrStatusWorker(registry: WorkerRegistry): WorkerRegistry {
@@ -187,7 +163,6 @@ export function registerCiFailureWorker(registry: WorkerRegistry): WorkerRegistr
 /** Register every built-in worker in the stable built-in order. */
 export function registerBuiltinWorkers(registry: WorkerRegistry): WorkerRegistry {
   registerAutoFixWorker(registry);
-  registerAutoApproveWorker(registry);
   registerPrStatusWorker(registry);
   registerCiFailureWorker(registry);
   return registry;
