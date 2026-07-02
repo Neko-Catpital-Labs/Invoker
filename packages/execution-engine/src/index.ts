@@ -43,3 +43,5 @@ export * from './workers/ci-failure-worker.js';
 export * from './auto-fix-gating.js';
 export * from './auto-fix-intents.js';
 export * from './lifecycle-events.js';
+
+export * from './external-worker.js';
