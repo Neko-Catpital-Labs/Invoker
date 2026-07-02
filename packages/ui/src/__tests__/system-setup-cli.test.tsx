@@ -12,13 +12,17 @@ import type { SystemDiagnostics, CliInstallerStatus, BundledSkillsStatus } from 
 
 import { SystemSetupModal } from '../components/SystemSetupModal.js';
 
-function makeDiagnostics(cliInstaller: CliInstallerStatus | undefined, bundledSkills?: BundledSkillsStatus): SystemDiagnostics {
+function makeDiagnostics(
+  cliInstaller: CliInstallerStatus | undefined,
+  bundledSkills?: BundledSkillsStatus,
+  tools: SystemDiagnostics['tools'] = [],
+): SystemDiagnostics {
   return {
     platform: 'darwin',
     arch: 'arm64',
     appVersion: '0.0.3',
     isPackaged: true,
-    tools: [],
+    tools,
     cliInstaller,
     bundledSkills,
   };
@@ -181,4 +185,97 @@ describe('SystemSetupModal — Invoker CLI section', () => {
 
     expect(screen.queryByText('Invoker CLI')).not.toBeInTheDocument();
   });
+
+  it('keeps system checks visible and adds guided setup status', () => {
+    render(
+      <SystemSetupModal
+        diagnostics={makeDiagnostics(
+          { supported: true, bundledVersion: '0.0.3', upToDate: false },
+          undefined,
+          [
+            { id: 'git', name: 'Git', installed: false, required: true, installHint: 'Install Git' },
+            { id: 'cursor', name: 'Cursor Agent', installed: false, required: false, installHint: 'Enable Cursor CLI' },
+          ],
+        )}
+        onRunSetup={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Choose setup items')).toBeInTheDocument();
+    expect(screen.getByText('Missing required: Git')).toBeInTheDocument();
+    expect(screen.getByText('System check details')).toBeInTheDocument();
+    expect(screen.queryByText('Enable Cursor CLI')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /System check details/ }));
+    expect(screen.getByText('Enable Cursor CLI')).toBeInTheDocument();
+  });
+  it('reviews selected setup items before running Slack checked by default', () => {
+    const onRunSetup = vi.fn();
+    render(
+      <SystemSetupModal
+        diagnostics={makeDiagnostics({ supported: true, bundledVersion: '0.0.3', upToDate: true })}
+        onRunSetup={onRunSetup}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('checkbox', { name: /Set up Slack integration/ })).toBeChecked();
+    expect(screen.queryByText(/Next: add Bot token/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Set it up for me' }));
+    expect(screen.getByText('Review setup plan')).toBeInTheDocument();
+    expect(screen.getByText(/Next: add Bot token/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/Bot token/), { target: { value: 'xoxb-token' } });
+    fireEvent.change(screen.getByLabelText(/App token/), { target: { value: 'xapp-token' } });
+    fireEvent.change(screen.getByLabelText(/Signing secret/), { target: { value: 'secret' } });
+    fireEvent.change(screen.getByLabelText(/Lobby channel ID/), { target: { value: 'C123' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve and run setup' }));
+    expect(onRunSetup).toHaveBeenCalledWith({
+      updateCli: true,
+      installHelpers: true,
+      fixTools: true,
+      slack: {
+        botToken: 'xoxb-token',
+        appToken: 'xapp-token',
+        signingSecret: 'secret',
+        channelId: 'C123',
+      },
+    });
+  });
+
+  it('runs safe selected setup first when Slack still needs fields', () => {
+    const onRunSetup = vi.fn();
+    render(
+      <SystemSetupModal
+        diagnostics={makeDiagnostics({ supported: true, bundledVersion: '0.0.3', upToDate: true })}
+        onRunSetup={onRunSetup}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set it up for me' }));
+    expect(screen.getByText('Slack waits for Bot token. The rest can run now.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve and run setup' }));
+    expect(onRunSetup).toHaveBeenCalledWith({
+      updateCli: true,
+      installHelpers: true,
+      fixTools: true,
+      slack: false,
+    });
+  });
+
+  it('shows setup output after the one-step setup command finishes', () => {
+    render(
+      <SystemSetupModal
+        diagnostics={makeDiagnostics({ supported: true, bundledVersion: '0.0.3', upToDate: true })}
+        setupResult={{ ok: true, steps: [{ id: 'tools', name: 'Install missing tools', ok: true, output: 'ok  Git: git found' }] }}
+        onRunSetup={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Setup completed')).toBeInTheDocument();
+    expect(screen.getByText(/Git: git found/)).toBeInTheDocument();
+  });
+
 });
