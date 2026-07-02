@@ -3,7 +3,9 @@ import { describe, it, expect } from 'vitest';
 import { RECOVERY_WORKER_KIND, type AutoFixRecoveryStore, type AutoFixRecoverySubmitter } from '../auto-fix-recovery.js';
 import {
   AUTO_FIX_WORKER_KIND,
+  CI_FAILURE_WORKER_KIND,
   createWorkerRegistry,
+  PR_STATUS_WORKER_KIND,
   registerAutoFixWorker,
   type WorkerRuntimeDependencies,
 } from '../worker-registry.js';
@@ -49,6 +51,20 @@ describe('worker registry', () => {
     expect(registry.list().map((d) => d.kind)).toEqual([AUTO_FIX_WORKER_KIND]);
   });
 
+  it('registers every built-in worker in one call', () => {
+    const registry = registerBuiltinWorkers(createWorkerRegistry());
+
+    expect(registry.list().map((d) => d.kind)).toEqual([
+      AUTO_FIX_WORKER_KIND,
+      AUTO_APPROVE_WORKER_KIND,
+      PR_STATUS_WORKER_KIND,
+      CI_FAILURE_WORKER_KIND,
+    ]);
+    expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
+    expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
+    expect(registry.get(CI_FAILURE_WORKER_KIND)).toBeDefined();
+  });
   it('returns nothing for an unknown kind', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry());
     expect(registry.get('does-not-exist')).toBeUndefined();
@@ -64,5 +80,22 @@ describe('worker registry', () => {
     // runtime identity keeps the underlying recovery kind.
     expect(runtime.identity.kind).toBe(RECOVERY_WORKER_KIND);
     expect(runtime.isRunning()).toBe(false);
+  });
+
+  it('builds an auto-approve worker runtime from the auto-approve factory', () => {
+    const registry = registerBuiltinWorkers(createWorkerRegistry());
+    const definition = registry.get(AUTO_APPROVE_WORKER_KIND);
+    expect(definition).toBeDefined();
+
+    const runtime = definition!.factory(deps());
+    expect(runtime.identity.kind).toBe(AUTO_APPROVE_WORKER_KIND);
+    expect(runtime.isRunning()).toBe(false);
+  });
+
+  it('builds the PR status and CI-failure worker runtimes from the registered factories', () => {
+    const registry = registerBuiltinWorkers(createWorkerRegistry());
+
+    expect(registry.get(PR_STATUS_WORKER_KIND)?.factory(deps()).identity.kind).toBe(PR_STATUS_WORKER_KIND);
+    expect(registry.get(CI_FAILURE_WORKER_KIND)?.factory(deps()).identity.kind).toBe(CI_FAILURE_WORKER_KIND);
   });
 });

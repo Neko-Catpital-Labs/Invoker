@@ -5266,8 +5266,8 @@ console.log(JSON.stringify(out));
         };
         const mergeGateProvider = {
           checkApproval: vi.fn()
-            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Approved one' })
-            .mockResolvedValueOnce({ lifecycle: 'open', rejected: false, statusText: 'Pending second' })
+            .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Approved one', headSha: 'head-1' })
+            .mockResolvedValueOnce({ lifecycle: 'open', rejected: false, statusText: 'Pending second', headSha: 'head-2' })
             .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Still approved' })
             .mockResolvedValueOnce({ lifecycle: 'merged', rejected: false, statusText: 'Approved both' })
         };
@@ -5293,8 +5293,8 @@ console.log(JSON.stringify(out));
         });
         expect(orchestrator.approve).not.toHaveBeenCalled();
         expect(task.execution.reviewGate?.artifacts).toEqual([
-          expect.objectContaining({ id: 'contracts', status: 'approved' }),
-          expect.objectContaining({ id: 'runtime', status: 'open', rawStatus: 'Pending second' }),
+          expect.objectContaining({ id: 'contracts', status: 'approved', headSha: 'head-1' }),
+          expect.objectContaining({ id: 'runtime', status: 'open', rawStatus: 'Pending second', headSha: 'head-2' }),
         ]);
 
         await executor.checkMergeGateStatuses();
