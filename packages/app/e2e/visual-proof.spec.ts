@@ -1897,6 +1897,7 @@ test.describe('Visual proof capture', () => {
 
     const actionRow = page.locator('[data-row-id$="task-alpha"]');
     await expect(actionRow).toBeVisible();
+    // Assert the action queue row renders the compact cancel affordance
     const cancelButton = actionRow.getByRole('button', { name: 'Cancel task-alpha' });
     await expect(cancelButton).toBeVisible();
 
