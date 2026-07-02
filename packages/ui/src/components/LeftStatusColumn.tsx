@@ -1,152 +1,116 @@
 import type { QueueStatus } from '@invoker/contracts';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { SidebarSurface } from '../lib/workflow-progress-surfaces.js';
+import { getAttentionTaskEntries, getRunningTaskEntries, getSortedWorkflows } from '../lib/workflow-progress-surfaces.js';
 
 interface LeftStatusColumnProps {
   workflows: Map<string, WorkflowMeta>;
   tasks: Map<string, TaskState>;
   queueStatus: QueueStatus | null;
-  planName: string | null;
-  plannerBusy: boolean;
-  hasStarted: boolean;
-  showStart: boolean;
-  showStop: boolean;
-  onOpenPlan: () => void;
-  onStart: () => void;
-  onStop: () => void;
+  selectedSurface: SidebarSurface;
+  onSelectSurface: (surface: SidebarSurface) => void;
   onOpenSettings: () => void;
-  onTaskClick: (taskId: string) => void;
 }
 
-const ATTENTION_STATUS: Record<string, true> = {
-  failed: true,
-  blocked: true,
-  needs_input: true,
-  awaiting_approval: true,
-  review_ready: true,
-};
+function navButtonClass(selected: boolean): string {
+  return [
+    'flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors',
+    selected
+      ? 'bg-gray-800/90 text-white shadow-sm'
+      : 'text-gray-300 hover:bg-gray-900/80 hover:text-white',
+  ].join(' ');
+}
 
 export function LeftStatusColumn({
   workflows,
   tasks,
   queueStatus,
-  planName,
-  plannerBusy,
-  hasStarted,
-  showStart,
-  showStop,
-  onOpenPlan,
-  onStart,
-  onStop,
+  selectedSurface,
+  onSelectSurface,
   onOpenSettings,
-  onTaskClick,
 }: LeftStatusColumnProps): JSX.Element {
-  const workflowCount = workflows.size;
-  const taskCount = tasks.size;
-  const attentionTasks = [...tasks.values()].filter((task) => ATTENTION_STATUS[task.status]);
-  const runningTasks = queueStatus?.running.length
-    ? queueStatus.running
-    : [...tasks.values()]
-      .filter((task) => task.status === 'running' || task.status === 'fixing_with_ai')
-      .map((task) => ({ taskId: task.id, description: task.description }));
+  const workflowEntries = getSortedWorkflows(workflows, tasks);
+  const attentionEntries = getAttentionTaskEntries(tasks, workflows);
+  const runningEntries = getRunningTaskEntries(tasks, workflows, queueStatus);
 
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-gray-800 bg-gray-950/80 p-3 text-sm text-gray-200">
-      <div className="flex-1 space-y-3 overflow-y-auto pr-1">
-        <section className="rounded-lg border border-gray-800 bg-gray-900/80 p-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Run</div>
-          {taskCount === 0 && !planName ? (
-            <p className="mt-3 text-sm text-gray-500">No runs yet</p>
-          ) : (
-            <div className="mt-3 space-y-2">
-              <div className="truncate text-sm font-medium text-gray-100" title={planName ?? undefined}>
-                {planName ?? `${workflowCount} workflow${workflowCount === 1 ? '' : 's'}`}
-              </div>
-              <div className="text-xs text-gray-400">
-                {plannerBusy ? 'Planning…' : hasStarted ? 'Run started' : `${taskCount} task${taskCount === 1 ? '' : 's'} ready`}
-              </div>
-            </div>
-          )}
-          <div className="mt-3 space-y-2">
-            <button
-              type="button"
-              data-testid="rail-open-file"
-              onClick={onOpenPlan}
-              className="w-full rounded bg-gray-700 px-3 py-2 text-left text-xs font-medium text-gray-100 hover:bg-gray-600"
-            >
-              Load plan
-            </button>
-            {showStart && (
-              <button
-                type="button"
-                data-testid="rail-start"
-                onClick={onStart}
-                className="w-full rounded bg-green-700 px-3 py-2 text-left text-xs font-medium text-white hover:bg-green-600"
-              >
-                Run
-              </button>
-            )}
-            {showStop && (
-              <button
-                type="button"
-                data-testid="rail-stop"
-                onClick={onStop}
-                className="w-full rounded bg-red-700 px-3 py-2 text-left text-xs font-medium text-white hover:bg-red-600"
-              >
-                Stop
-              </button>
-            )}
-          </div>
-        </section>
+    <aside className="flex h-full w-72 shrink-0 flex-col border-r border-gray-800 bg-gray-950/85 px-3 py-4 text-sm text-gray-200">
+      <button
+        type="button"
+        data-testid="sidebar-home"
+        data-sidebar-nav-item
+        data-sidebar-nav-order="1"
+        onClick={() => onSelectSurface('home')}
+        className="rounded-xl px-3 py-2 text-left hover:bg-gray-900/80"
+      >
+        <div className={`text-base font-semibold ${selectedSurface === 'home' ? 'text-white' : 'text-gray-100'}`}>Invoker</div>
+        <div className="mt-1 text-xs text-gray-500">Home</div>
+      </button>
 
-        <section className="rounded-lg border border-gray-800 bg-gray-900/80 p-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Needs attention</div>
-          {attentionTasks.length === 0 ? (
-            <p className="mt-3 text-sm text-emerald-300">All clear</p>
-          ) : (
-            <div className="mt-3 space-y-2">
-              {attentionTasks.slice(0, 6).map((task) => (
-                <button
-                  key={task.id}
-                  type="button"
-                  onClick={() => onTaskClick(task.id)}
-                  className="block w-full rounded border border-amber-700/40 bg-amber-950/30 px-2 py-1.5 text-left hover:bg-amber-950/50"
-                >
-                  <div className="truncate text-xs font-medium text-amber-100">{task.description || task.id}</div>
-                  <div className="mt-0.5 text-[11px] text-amber-300">{task.status.replaceAll('_', ' ')}</div>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
+      <div className="mt-6 px-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-500">Library</div>
+      <nav className="mt-2 space-y-1">
+        <button
+          type="button"
+          data-testid="sidebar-workflows"
+          data-sidebar-nav-item
+          data-sidebar-nav-order="2"
+          onClick={() => onSelectSurface('workflows')}
+          className={navButtonClass(selectedSurface === 'workflows')}
+        >
+          <span>Workflows</span>
+          <span className="text-xs text-gray-500">{workflowEntries.length}</span>
+        </button>
+        <button
+          type="button"
+          data-testid="sidebar-attention"
+          data-sidebar-nav-item
+          data-sidebar-nav-order="3"
+          onClick={() => onSelectSurface('attention')}
+          className={navButtonClass(selectedSurface === 'attention')}
+        >
+          <span>Needs Attention</span>
+          <span className="text-xs text-gray-500">{attentionEntries.length}</span>
+        </button>
+        <button
+          type="button"
+          data-testid="sidebar-running"
+          data-sidebar-nav-item
+          data-sidebar-nav-order="4"
+          onClick={() => onSelectSurface('running')}
+          className={navButtonClass(selectedSurface === 'running')}
+        >
+          <span>Running</span>
+          <span className="text-xs text-gray-500">{runningEntries.length}</span>
+        </button>
+      </nav>
 
-        <section className="rounded-lg border border-gray-800 bg-gray-900/80 p-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Running task</div>
-          {runningTasks.length === 0 ? (
-            <p className="mt-3 text-sm text-gray-500">No tasks running</p>
-          ) : (
-            <div className="mt-3 space-y-2">
-              {runningTasks.slice(0, 6).map((task) => (
-                <button
-                  key={task.taskId}
-                  type="button"
-                  onClick={() => onTaskClick(task.taskId)}
-                  className="block w-full rounded border border-blue-700/40 bg-blue-950/30 px-2 py-1.5 text-left hover:bg-blue-950/50"
-                >
-                  <div className="truncate text-xs font-medium text-blue-100">{task.description || task.taskId}</div>
-                  <div className="mt-0.5 text-[11px] text-blue-300">Running</div>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
+      <div className="mt-6 flex-1 overflow-y-auto px-3 text-xs text-gray-500">
+        {selectedSurface === 'workflows' && (
+          workflowEntries.length === 0
+            ? 'No workflows yet'
+            : `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'} ready to browse.`
+        )}
+        {selectedSurface === 'attention' && (
+          attentionEntries.length === 0
+            ? 'Nothing needs a decision right now.'
+            : `${attentionEntries.length} item${attentionEntries.length === 1 ? '' : 's'} need attention.`
+        )}
+        {selectedSurface === 'running' && (
+          runningEntries.length === 0
+            ? 'No tasks are running right now.'
+            : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`
+        )}
+        {selectedSurface === 'home' && 'Terminal planning and graph details live here.'}
       </div>
 
-      <div className="mt-3 border-t border-gray-800 pt-3">
+      <div className="border-t border-gray-800 px-3 pt-3">
         <button
           type="button"
           data-testid="rail-settings"
+          data-sidebar-nav-item
+          data-sidebar-nav-order="5"
           onClick={onOpenSettings}
-          className="flex w-full items-center justify-center rounded border border-gray-700 px-3 py-2 text-xs font-medium text-gray-200 hover:bg-gray-800"
+          className="flex w-full items-center justify-center rounded-lg border border-gray-700 px-3 py-2 text-xs font-medium text-gray-200 hover:bg-gray-800"
         >
           Settings
         </button>

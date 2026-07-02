@@ -9,7 +9,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -39,20 +40,38 @@ describe('App launch (component)', () => {
     expect(screen.getByText('Invoker Terminal')).toBeInTheDocument();
     expect(screen.getByText('What to expect')).toBeInTheDocument();
     expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
-    expect(screen.getByText('No runs yet')).toBeInTheDocument();
-    expect(screen.getByText('All clear')).toBeInTheDocument();
-    expect(screen.getByText('No tasks running')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-home')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
+    expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
   });
 
-  it('renders the left status column controls without the old nav rail', () => {
+  it('renders the Apple-like source list without manual plan loading', () => {
     render(<App />);
-    expect(screen.getByTestId('rail-open-file')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-open-file')).not.toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
-    expect(screen.getByText('Run')).toBeInTheDocument();
-    expect(screen.getByText('Needs attention')).toBeInTheDocument();
-    expect(screen.getByText('Running task')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
+    expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
+    expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Timeline' })).not.toBeInTheDocument();
+  });
+
+  it('returns home when Invoker is selected at the top', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha', status: 'running' },
+    ];
+    const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'running', workflowId: 'wf-alpha' });
+
+    render(<App />);
+    act(() => mock.setTasks([alpha], workflows));
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    expect(await screen.findByText('1 workflow')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(screen.getByText('Alpha · running')).toBeInTheDocument();
   });
 
   it('shows workflow status chips and terminal drawer controls in home view', () => {

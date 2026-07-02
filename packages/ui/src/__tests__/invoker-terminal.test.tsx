@@ -83,7 +83,7 @@ describe('Invoker terminal (component)', () => {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'run' } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
 
-    expect(await screen.findByText('Load or generate a plan before running.')).toBeInTheDocument();
+    expect(await screen.findByText('Create a plan before running.')).toBeInTheDocument();
     expect(mock.api.start).not.toHaveBeenCalled();
   });
 
