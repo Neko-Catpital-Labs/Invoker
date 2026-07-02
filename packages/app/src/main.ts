@@ -140,7 +140,6 @@ import {
   tryDelegateResume,
   resolveDelegationTimeoutMs,
   tryDelegateExec,
-  tryDelegateQuery,
   resolveAgentSession,
   createHeadlessExecutor,
   wireHeadlessApproveHook,
@@ -812,13 +811,18 @@ function startHeadlessMode(): void {
       return 'text';
     };
 
-    const writeDelegatedQueueStatus = (status: Record<string, unknown>): void => {
+    const writeDelegatedReadOnlyQuery = (response: Record<string, unknown>): boolean => {
+      if (typeof response.output === 'string') {
+        process.stdout.write(response.output);
+        return true;
+      }
+
       const format = delegatedQueueOutputFormat();
-      const running = Array.isArray(status.running) ? status.running as Array<Record<string, unknown>> : [];
-      const queued = Array.isArray(status.queued) ? status.queued as Array<Record<string, unknown>> : [];
+      const running = Array.isArray(response.running) ? response.running as Array<Record<string, unknown>> : [];
+      const queued = Array.isArray(response.queued) ? response.queued as Array<Record<string, unknown>> : [];
       if (format === 'json') {
-        process.stdout.write(JSON.stringify(status) + '\n');
-        return;
+        process.stdout.write(JSON.stringify(response) + '\n');
+        return true;
       }
       if (format === 'jsonl') {
         for (const task of running) {
@@ -827,18 +831,22 @@ function startHeadlessMode(): void {
         for (const task of queued) {
           process.stdout.write(JSON.stringify({ ...task, state: 'queued' }) + '\n');
         }
-        return;
+        return true;
       }
       if (format === 'label') {
         const ids = [...running, ...queued]
           .map((task) => String(task.taskId ?? ''))
           .filter(Boolean);
         process.stdout.write(ids.join('\n') + '\n');
-        return;
+        return true;
       }
-      const runningCount = Number(status.runningCount ?? running.length);
-      const maxConcurrency = Number(status.maxConcurrency ?? 0);
-      process.stdout.write(`running=${runningCount}/${maxConcurrency} queued=${queued.length}\n`);
+      if ('running' in response || 'queued' in response) {
+        const runningCount = Number(response.runningCount ?? running.length);
+        const maxConcurrency = Number(response.maxConcurrency ?? 0);
+        process.stdout.write(`running=${runningCount}/${maxConcurrency} queued=${queued.length}\n`);
+        return true;
+      }
+      return false;
     };
 
     // Try delegation for mutating commands first (owner mode).
@@ -894,22 +902,34 @@ function startHeadlessMode(): void {
       }
     }
 
-    if (readOnlyMode && queueQueryMode && !standaloneMode) {
+    if (readOnlyMode) {
       const delegationBus = new IpcBus(undefined, { allowServe: false });
       try {
         await delegationBus.ready();
-        const delegated = await tryDelegateQuery(delegationBus, { kind: 'queue' }, 5_000);
+        const delegationTimeout = Symbol('delegation-timeout');
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<typeof delegationTimeout>((resolveTimeout) => {
+          timeoutHandle = setTimeout(() => resolveTimeout(delegationTimeout), 1_000);
+          timeoutHandle.unref?.();
+        });
+        const response = await Promise.race([
+          delegationBus.request('headless.query', { kind: 'cli-query', args: cliArgs }),
+          timeout,
+        ]) as Record<string, unknown> | typeof delegationTimeout;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        const delegated = response === delegationTimeout ? null : response;
         delegationBus.disconnect();
-        if (delegated) {
-          writeDelegatedQueueStatus(delegated);
+        if (delegated && writeDelegatedReadOnlyQuery(delegated)) {
           process.exit(0);
           return;
         }
       } catch (err) {
         delegationBus.disconnect();
-        process.stderr.write(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
-        process.exit(1);
-        return;
+        if (!standaloneMode || queueQueryMode) {
+          process.stderr.write(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
+          process.exit(1);
+          return;
+        }
       }
     }
 

@@ -438,6 +438,29 @@ describe('headless-client', () => {
     stdout.mockRestore();
   }, 15_000);
 
+  it('delegates standalone read queries to a reachable owner before opening sqlite', async () => {
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+    const bus = new LocalBus();
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-standalone', mode: 'standalone' }));
+    bus.onRequest('headless.query', async () => ({ output: '[{"id":"wf-1"}]\n' }));
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    try {
+      const exitCode = await runHeadlessClientCommand(['query', 'workflows', '--output', 'json'], {
+        messageBus: bus,
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        runElectronHeadless,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(runElectronHeadless).not.toHaveBeenCalled();
+      expect(stdout).toHaveBeenCalledWith('[{"id":"wf-1"}]\n');
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it('refreshes past a non-mutation owner before delegating a mutation', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();

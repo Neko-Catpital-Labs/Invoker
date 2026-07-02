@@ -187,7 +187,7 @@ async function delegateGenericReadQuery(
     )
     : null;
   const ownerResult = resolver
-    ? await resolver.waitForAny(READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS)
+    ? await resolver.waitForAny(GENERIC_READ_OWNER_PING_TIMEOUT_MS)
     : { resolved: true as const, bus };
   if (!ownerResult.resolved) return false;
   let messageBus = ownerResult.bus;
@@ -451,7 +451,7 @@ export async function runHeadlessClientCommand(
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
 
-  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
+  if (!internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
   }
