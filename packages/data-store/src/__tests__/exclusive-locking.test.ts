@@ -57,40 +57,34 @@ describe('SQLiteAdapter exclusiveLocking', () => {
     }
   });
 
-  it('read-only file-backed opens use the WAL shared-memory sidecar', async () => {
+  it('rejects read-only file-backed opens while live WAL sidecars exist', async () => {
     const dir = makeDir();
     const dbPath = join(dir, 'invoker.db');
     const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
     try {
       owner.saveWorkflow(wf);
-      // A read-only connection can still participate in active WAL shared state.
-      // So readOnly on the real file is not a no-shm viewer boundary.
-      const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
-      try {
-        expect(reader.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
-        expect(existsSync(`${dbPath}-shm`)).toBe(true);
-      } finally {
-        reader.close();
-      }
+      expect(existsSync(`${dbPath}-shm`)).toBe(true);
+      await expect(
+        SQLiteAdapter.create(dbPath, { readOnly: true }),
+      ).rejects.toThrow(/WAL sidecars exist/i);
     } finally {
       owner.close();
     }
   });
 
-  it('read-only WAL opens recreate a missing shared-memory sidecar when SQLite can create it', async () => {
+  it('read-only opens are still allowed after a clean close', async () => {
     const dir = makeDir();
     const dbPath = join(dir, 'invoker.db');
     const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
     owner.saveWorkflow(wf);
     owner.close();
 
-    rmSync(`${dbPath}-shm`, { force: true });
     expect(existsSync(`${dbPath}-shm`)).toBe(false);
+    expect(existsSync(`${dbPath}-wal`)).toBe(false);
 
     const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
     try {
       expect(reader.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
-      expect(existsSync(`${dbPath}-shm`)).toBe(true);
     } finally {
       reader.close();
     }
