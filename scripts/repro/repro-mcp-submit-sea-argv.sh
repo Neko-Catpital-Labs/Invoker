@@ -36,8 +36,7 @@ if [ ! -f "$FIXTURE_PLAN" ]; then
   exit 2
 fi
 
-NODE_BIN="$(command -v node)"
-if [ -z "$NODE_BIN" ]; then
+if ! NODE_BIN="$(command -v node)"; then
   echo "[repro] node not found on PATH" >&2
   exit 2
 fi
