@@ -2148,12 +2148,23 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      orchestrator.deferTask('task-a');
+      orchestrator.deferTask('task-a', {
+        reason: 'resource-limit',
+        message: 'Execution pool "pnpm-ssh" has no member capacity available',
+        attemptId: 'attempt-a',
+        phase: 'launching',
+      });
 
       const deferredEvent = persistence.events.find(
         e => e.eventType === 'task.deferred',
       );
       expect(deferredEvent).toBeDefined();
+      expect(deferredEvent?.payload).toMatchObject({
+        reason: 'resource-limit',
+        message: 'Execution pool "pnpm-ssh" has no member capacity available',
+        attemptId: 'attempt-a',
+        phase: 'launching',
+      });
     });
 
     it('clears deferred set on restartTask', () => {

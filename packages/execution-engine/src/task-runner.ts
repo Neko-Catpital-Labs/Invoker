@@ -600,7 +600,22 @@ export class TaskRunner {
       const cause = err instanceof Error ? err.cause : undefined;
       if (cause instanceof ResourceLimitError) {
         traceExecution(`[TaskRunner] executeTask deferred for task=${task.id}: ${cause.message}`);
-        this.orchestrator.deferTask(task.id);
+        this.logger.info(
+          `[TaskRunner] launch deferred task=${task.id} attempt=${attemptId}; task remains pending and will retry when capacity is available: ${cause.message}`,
+          {
+            taskId: task.id,
+            attemptId,
+            reason: 'resource-limit',
+            message: cause.message,
+            phase: task.execution.phase ?? 'none',
+          },
+        );
+        this.orchestrator.deferTask(task.id, {
+          reason: 'resource-limit',
+          message: cause.message,
+          attemptId,
+          phase: task.execution.phase ?? 'none',
+        });
         if (dispatchOpts) {
           const completed = dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
           bench('executeTask.dispatchCompletedAfterDeferral', { accepted: completed });
