@@ -12,7 +12,7 @@ interface InvokerTerminalProps {
   onSubmit: (command: string) => void;
 }
 
-export function InvokerTerminal({ lines, busy, onSubmit }: InvokerTerminalProps): JSX.Element {
+export function InvokerTerminal({ lines, busy, onSubmit }: InvokerTerminalProps) {
   const [value, setValue] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
 

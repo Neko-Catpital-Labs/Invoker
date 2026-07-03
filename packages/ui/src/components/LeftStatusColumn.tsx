@@ -27,7 +27,7 @@ export function LeftStatusColumn({
   plannerBusy,
   hasStarted,
   onTaskClick,
-}: LeftStatusColumnProps): JSX.Element {
+}: LeftStatusColumnProps) {
   const workflowCount = workflows.size;
   const taskCount = tasks.size;
   const attentionTasks = [...tasks.values()].filter((task) => ATTENTION_STATUS[task.status]);

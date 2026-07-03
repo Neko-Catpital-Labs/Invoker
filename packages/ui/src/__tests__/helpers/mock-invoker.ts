@@ -23,6 +23,12 @@ export interface MockInvoker {
   api: InvokerAPI;
   /** Replace the task snapshot and fire matching 'created' graph events. */
   setTasks: (tasks: TaskState[], workflows?: WorkflowMeta[]) => void;
+  /** Replace the snapshots published after planFromGoal succeeds. */
+  setPlannedGraph: (
+    tasks: TaskState[],
+    workflows: WorkflowMeta[],
+    result?: { planName?: string; workflowId?: string },
+  ) => void;
   /** Directly fire a task delta to subscribers. */
   fireDelta: (delta: TaskDelta) => void;
   /** Directly fire a task graph event to subscribers. */
@@ -47,6 +53,12 @@ export function createMockInvoker(
 ): MockInvoker {
   let taskSnapshot = initialTasks;
   let workflowSnapshot = initialWorkflows;
+  let plannedTaskSnapshot: TaskState[] = [
+    makeUITask({ id: 'planned-task', description: 'Planned task', workflowId: 'wf-1' }),
+  ];
+  let plannedWorkflowSnapshot: WorkflowMeta[] = [{ id: 'wf-1', name: 'Mock Plan', status: 'pending' }];
+  let plannedPlanName = 'Mock Plan';
+  let plannedWorkflowId = 'wf-1';
   let graphEventCallback: ((event: TaskGraphEvent) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
@@ -111,11 +123,15 @@ export function createMockInvoker(
     onTaskOutput: vi.fn(() => () => {}),
     onActivityLog: vi.fn(() => () => {}),
     loadPlan: vi.fn(async () => {}),
-    planFromGoal: vi.fn(async () => ({
-      ok: true,
-      planName: 'Mock Plan',
-      workflowId: 'wf-1',
-    })),
+    planFromGoal: vi.fn(async () => {
+      taskSnapshot = plannedTaskSnapshot;
+      workflowSnapshot = plannedWorkflowSnapshot;
+      return {
+        ok: true,
+        planName: plannedPlanName,
+        workflowId: plannedWorkflowId,
+      };
+    }),
     start: vi.fn(async () => taskSnapshot),
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
@@ -255,6 +271,17 @@ export function createMockInvoker(
     });
   }
 
+  function setPlannedGraph(
+    tasks: TaskState[],
+    workflows: WorkflowMeta[],
+    result: { planName?: string; workflowId?: string } = {},
+  ) {
+    plannedTaskSnapshot = tasks;
+    plannedWorkflowSnapshot = workflows;
+    plannedPlanName = result.planName ?? workflows[0]?.name ?? 'Mock Plan';
+    plannedWorkflowId = result.workflowId ?? workflows[0]?.id ?? tasks[0]?.config.workflowId ?? 'wf-1';
+  }
+
   function setActionGraph(response: ActionGraphResponse) {
     actionGraphSnapshot = response;
   }
@@ -299,6 +326,7 @@ export function createMockInvoker(
   return {
     api,
     setTasks,
+    setPlannedGraph,
     setActionGraph,
     setRuntimeStatus,
     fireDelta,

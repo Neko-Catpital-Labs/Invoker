@@ -1613,13 +1613,15 @@ export function App() {
     [handleLoadPlan],
   );
 
-  const handleStart = useCallback(async () => {
-    if (!invoker) return;
+  const handleStart = useCallback(async (): Promise<boolean> => {
+    if (!invoker) return false;
     try {
       await invoker.start();
       setHasStarted(true);
+      return true;
     } catch (err) {
       console.error('Failed to start:', err);
+      return false;
     }
   }, [invoker]);
   const handleTerminalSubmit = useCallback(async (command: string) => {
@@ -1657,8 +1659,8 @@ export function App() {
         appendTerminalLine('Load or generate a plan before running.', 'error');
         return;
       }
-      await handleStart();
-      appendTerminalLine('Run started.', 'success');
+      const started = await handleStart();
+      appendTerminalLine(started ? 'Run started.' : 'Failed to start run.', started ? 'success' : 'error');
       return;
     }
 
