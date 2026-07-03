@@ -21,7 +21,7 @@ jobs:
   validate:
     name: PR Body
     runs-on:
-      labels: Github_Runner
+      labels: ${{ startsWith(github.event.pull_request.head.ref, 'mergify/merge-queue/') && 'Mergify_Runner' || 'Github_Runner' }}
     timeout-minutes: 10
 
     steps:
