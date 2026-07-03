@@ -506,6 +506,11 @@ invoker_e2e_count_owned_headless_processes() {
         continue
         ;;
     esac
+    case "$cmdline" in
+      *"--type="*|*"Electron Helper"* )
+        continue
+        ;;
+    esac
     if [ -n "${INVOKER_DB_DIR:-}" ] && invoker_e2e_pid_has_env "$pid" "INVOKER_DB_DIR" "$INVOKER_DB_DIR"; then
       count=$((count + 1))
       continue
