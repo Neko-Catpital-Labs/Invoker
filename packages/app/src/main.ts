@@ -78,7 +78,7 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { ActionGraphResponse, BundledSkillsInstallMode, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
+import type { ActionGraphResponse, BundledSkillsInstallMode, InAppPlanRequest, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
 import { SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
@@ -244,6 +244,7 @@ import {
   spawnDetachedStandaloneOwner,
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
+import { planFromGoal as planFromGoalInApp } from './in-app-planner.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
 import {
   killRunningTaskExecution,
@@ -849,7 +850,6 @@ function startHeadlessMode(): void {
         if (!standaloneMode) {
           process.stderr.write(
             `${RED}Error:${RESET} Mutation command "${command}" requires a running owner process.\n` +
-            `The headless command is only a submitter. Scheduler drain runs inside the long-lived owner process.\n` +
             `\n${BOLD}Options:${RESET}\n` +
             `  1. Start the interactive process: ${BOLD}electron dist/main.js${RESET}\n` +
             `  2. Run in standalone mode: ${BOLD}INVOKER_HEADLESS_STANDALONE=1 electron dist/main.js --headless ${cliArgs.join(' ')}${RESET}\n` +
@@ -978,6 +978,24 @@ function startHeadlessMode(): void {
               buildCommandServiceInvalidationDeps(),
             );
             return undefined;
+          }
+          case 'invoker:plan-from-goal': {
+            return planFromGoalInApp(payload.args[0] as InAppPlanRequest, {
+              config: invokerConfig,
+              workingDir: repoRoot,
+              loadGeneratedPlan: async (planText) => {
+                const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
+                const plan = applyConfiguredPlanDefaults(parsePlan(planText));
+                const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
+                backupPlan(plan, undefined, logger);
+                orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+                const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+                if (!workflow) {
+                  throw new Error('Loaded plan did not create a workflow.');
+                }
+                return { planName: plan.name, workflowId: workflow.id };
+              },
+            });
           }
           case 'invoker:load-plan': {
             const planText = String(payload.args[0] ?? '');
@@ -2474,6 +2492,8 @@ function createEmbeddedTerminalBackendFromConfig(
     | null {
     const [arg0, arg1, arg2] = payload.args;
     switch (payload.channel) {
+      case 'invoker:plan-from-goal':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:load-plan':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:start':
@@ -3300,10 +3320,7 @@ function createEmbeddedTerminalBackendFromConfig(
         });
         return results;
       });
-      logger.info(
-        `owner-ipc-ready ownerId=${workflowMutationOwnerId} pid=${process.pid} mode=gui handlers=headless.owner-ping,headless.exec,headless.query`,
-        { module: 'ipc-delegate' },
-      );
+      logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
       recordStartupMark('owner-ipc-ready');
     }
 
@@ -3369,6 +3386,7 @@ function createEmbeddedTerminalBackendFromConfig(
       };
       try {
         persistence.writeActivityLog('ui-perf-main', 'info', JSON.stringify(snapshot));
+
       } catch {
         // DB might be locked
       }
@@ -3381,15 +3399,55 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     // Register IPC handlers
+    const computeRuntimeStatus = () => (
+      process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_READ_ONLY_STATUS === '1'
+        ? { ownerMode: false, readOnly: true, mode: 'read-only' as const }
+        : {
+            ownerMode,
+            readOnly: !ownerMode && !guiUsingDaemonOwner,
+            mode: ownerMode ? 'local-owner' as const : guiUsingDaemonOwner ? 'daemon-owner' as const : 'read-only' as const,
+          }
+    );
+
     registerBootstrapStateIpc({
       ipcMain,
       getTasks: () => (ownerMode ? orchestrator.getAllTasks() : detachedViewerTasks()),
       getWorkflows: () => detachedViewerWorkflows ?? listWorkflowsByStartupRecency(),
       getInitialWorkflowId: () => startupWorkflowId,
+      getRuntimeStatus: computeRuntimeStatus,
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
       recordStartupDuration,
     });
+    async function loadGeneratedPlanPreview(planText: string): Promise<{ planName: string; workflowId: string }> {
+      const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
+      const plan = applyConfiguredPlanDefaults(parsePlan(planText));
+      const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
+      logger.info(`plan-from-goal: loading "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
+      taskHandles.clear();
+      backupPlan(plan, undefined, logger);
+      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+      if (!workflow) {
+        throw new Error('Loaded plan did not create a workflow.');
+      }
+      return { planName: plan.name, workflowId: workflow.id };
+    }
+    let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
+
+
+    registerGuiMutationHandler('invoker:plan-from-goal', async (...args: unknown[]) => {
+      if (process.env.NODE_ENV === 'test' && testPlanFromGoalResponse) {
+        const loaded = await loadGeneratedPlanPreview(testPlanFromGoalResponse.planYaml);
+        return { ok: true, planName: testPlanFromGoalResponse.planName, workflowId: loaded.workflowId };
+      }
+      return planFromGoalInApp(args[0] as InAppPlanRequest, {
+        config: invokerConfig,
+        workingDir: repoRoot,
+        loadGeneratedPlan: loadGeneratedPlanPreview,
+      });
+    });
+
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
       const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
@@ -3434,6 +3492,12 @@ function createEmbeddedTerminalBackendFromConfig(
             return;
           }
           await injectTaskStates(updates);
+        },
+      );
+      ipcMain.handle(
+        'invoker:set-test-plan-from-goal-response',
+        async (_event, response: { planYaml: string; planName: string } | null) => {
+          testPlanFromGoalResponse = response;
         },
       );
     }
@@ -4530,21 +4594,7 @@ function createEmbeddedTerminalBackendFromConfig(
       return resolveDefaultTaskExecutionSettings(loadConfig());
     });
 
-    ipcMain.handle('invoker:get-runtime-status', () => {
-      if (process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_READ_ONLY_STATUS === '1') {
-        return {
-          ownerMode: false,
-          readOnly: true,
-          mode: 'read-only',
-        };
-      }
-      const readOnly = !ownerMode && !guiUsingDaemonOwner;
-      return {
-        ownerMode,
-        readOnly,
-        mode: ownerMode ? 'local-owner' : guiUsingDaemonOwner ? 'daemon-owner' : 'read-only',
-      };
-    });
+    ipcMain.handle('invoker:get-runtime-status', () => computeRuntimeStatus());
 
     ipcMain.handle('invoker:get-system-diagnostics', () => {
       return collectSystemDiagnostics({
