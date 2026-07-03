@@ -224,6 +224,22 @@ export interface ResumeWorkflowResult {
   taskCount: number;
   startedCount: number;
 }
+export interface InAppPlanRequest {
+  goal: string;
+  presetKey?: string;
+}
+
+export type InAppPlanResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 
 export interface WorkflowListEntry {
   id: string;
@@ -424,6 +440,10 @@ export interface SearchOptions {
 
 export const IpcChannels = {
   // Plan & Workflow Management
+  'invoker:plan-from-goal': {} as {
+    request: [request: InAppPlanRequest];
+    response: InAppPlanResponse;
+  },
   'invoker:load-plan': {} as {
     request: [planText: string];
     response: void;
@@ -753,6 +773,10 @@ export const IpcChannels = {
 export const IpcTestOnlyChannels = {
   'invoker:inject-task-states': {} as {
     request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
+    response: void;
+  },
+  'invoker:set-test-plan-from-goal-response': {} as {
+    request: [response: { planYaml: string; planName: string } | null];
     response: void;
   },
 } as const;
