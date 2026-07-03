@@ -17,8 +17,10 @@ export function InvokerTerminal({ lines, busy, onSubmit }: InvokerTerminalProps)
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (!busy) {
+      inputRef.current?.focus();
+    }
+  }, [busy]);
 
   return (
     <section className="rounded-xl border border-gray-800 bg-gray-950 shadow-inner">
