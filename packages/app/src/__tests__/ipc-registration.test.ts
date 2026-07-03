@@ -222,6 +222,7 @@ describe('ipc-registration', () => {
       appStartedAtEpochMs: 123,
       getTaskDeltaStreamSequence: () => 7,
       recordStartupDuration,
+      getRuntimeStatus: () => ({ ownerMode: true, readOnly: false, mode: 'local-owner' }),
     });
 
     const event: { returnValue?: unknown } = {};
@@ -233,6 +234,7 @@ describe('ipc-registration', () => {
       initialWorkflowId: 'workflow-1',
       appStartedAtEpochMs: 123,
       streamSequence: 7,
+      runtimeStatus: { ownerMode: true, readOnly: false, mode: 'local-owner' },
     });
     expect(recordStartupDuration).toHaveBeenCalledWith(
       'bootstrap-ipc.serialize-return',
