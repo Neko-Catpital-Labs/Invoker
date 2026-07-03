@@ -41,10 +41,11 @@
     "check:required-builds": "bash scripts/required-builds.sh",
     "check:deps": "depcruise packages --config .dependency-cruiser.js",
     "check:types": "tsc -p tsconfig.typecheck.json",
+    "check:ts-source-imports": "node scripts/check-ts-source-imports.mjs",
     "check:large-files": "node scripts/check-large-files.mjs",
     "check:versions": "node scripts/check-version-sync.mjs",
     "bump-version": "node scripts/bump-version.mjs",
-    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:large-files && pnpm run check:versions && bash scripts/check-owner-boundary.sh",
+    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && pnpm run check:ts-source-imports && pnpm run check:large-files && pnpm run check:versions && bash scripts/check-owner-boundary.sh",
     "lint": "pnpm run check:all"
   },
   "pnpm": {
