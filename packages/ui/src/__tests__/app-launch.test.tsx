@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -38,7 +38,7 @@ describe('App launch (component)', () => {
     expect(screen.getByText('Start with a goal.')).toBeInTheDocument();
     expect(screen.getByText('Invoker Terminal')).toBeInTheDocument();
     expect(screen.getByText('What to expect')).toBeInTheDocument();
-    expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
+    expect(within(screen.getByTestId('workflow-graph-surface')).getByText('Your plan will appear here.')).toBeInTheDocument();
     expect(screen.getByText('No runs yet')).toBeInTheDocument();
     expect(screen.getByText('All clear')).toBeInTheDocument();
     expect(screen.getByText('No tasks running')).toBeInTheDocument();
