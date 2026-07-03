@@ -162,6 +162,7 @@ export function LeftStatusColumn({
         data-testid="sidebar-home"
         data-sidebar-nav-item
         data-sidebar-nav-order="1"
+        aria-current={selectedSurface === 'home' ? 'page' : undefined}
         onClick={() => onSelectSurface('home')}
         className={[
           'rounded-xl text-left hover:bg-gray-900/80',
@@ -196,7 +197,7 @@ export function LeftStatusColumn({
               aria-label={source.label}
               data-testid={`sidebar-${source.key}`}
               data-sidebar-nav-item
-              data-sidebar-nav-order={String(index + 2)}
+              aria-current={selected ? 'page' : undefined}
               onClick={() => onSelectSurface(source.key)}
               className={navButtonClass(selected, collapsed)}
             >
@@ -237,7 +238,7 @@ export function LeftStatusColumn({
           {selectedSurface === 'attention' && (
             attentionEntries.length === 0
               ? 'Nothing needs a decision right now.'
-              : `${attentionEntries.length} item${attentionEntries.length === 1 ? '' : 's'} need attention.`
+              : `${attentionEntries.length} item${attentionEntries.length === 1 ? ' needs' : 's need'} attention.`
           )}
           {selectedSurface === 'running' && (
             runningEntries.length === 0
@@ -277,13 +278,10 @@ export function LeftStatusColumn({
           {collapsed ? (
             <CollapseIcon collapsed={collapsed} />
           ) : (
-            <>
-              <span className="flex items-center gap-2">
-                <CollapseIcon collapsed={collapsed} />
-                <span>Collapse</span>
-              </span>
-              <span>◂</span>
-            </>
+            <span className="flex items-center gap-2">
+              <CollapseIcon collapsed={collapsed} />
+              <span>Collapse</span>
+            </span>
           )}
         </button>
       </div>

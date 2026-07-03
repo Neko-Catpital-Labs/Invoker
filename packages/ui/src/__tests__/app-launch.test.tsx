@@ -120,6 +120,7 @@ describe('App launch (component)', () => {
     });
 
     expect(mock.api.getRuntimeStatus).toHaveBeenCalled();
+    expect(screen.getByTestId('read-only-mode-banner')).toBeInTheDocument();
   });
 
   it('hides the read-only banner for the local write owner', async () => {

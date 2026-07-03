@@ -484,6 +484,7 @@ export function App() {
   const [setupResult, setSetupResult] = useState<InvokerSetupResult | null>(null);
   const [updateCliError, setUpdateCliError] = useState<string | null>(null);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [inspectorManualOpen, setInspectorManualOpen] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 1600 : window.innerWidth));
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalDrawerState, setTerminalDrawerState] = useState<TerminalDrawerState>('minimized');
@@ -575,9 +576,9 @@ export function App() {
     }).catch(() => {});
   }, []);
   useEffect(() => {
-    if (!graphMaximized) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.stopPropagation();
         setGraphMaximized(false);
       }
     };
@@ -1091,6 +1092,9 @@ export function App() {
         return;
       }
 
+      if (graphMaximized && event.key === 'Escape') {
+        return;
+      }
       if (isEditableKeyboardTarget(event.target) || modal.type !== 'none') return;
 
       // F1 is the keyboard-only camera lock control. It is already ignored for
@@ -1235,6 +1239,7 @@ export function App() {
     bottomStatusIndex,
     contextMenu,
     focusKeyboardRegion,
+    graphMaximized,
     handleStatusClick,
     issueCameraCommand,
     keyboardRegion,
@@ -1331,7 +1336,15 @@ export function App() {
   useEffect(() => {
     if (sidebarSurface === 'workflows') {
       const activeWorkflowId = selectedWorkflow?.id ?? selectedWorkflowId;
-      if (!workflowEntries.length || workflowEntries.some((entry) => entry.workflow.id === activeWorkflowId)) {
+      if (!workflowEntries.length) {
+        if (selectedTaskId !== null || activeWorkflowId !== null) {
+          setSelectedTaskId(null);
+          setSelectedWorkflowId(null);
+          setWorkflowSelectionDismissed(false);
+        }
+        return;
+      }
+      if (workflowEntries.some((entry) => entry.workflow.id === activeWorkflowId)) {
         return;
       }
       selectWorkflowById(workflowEntries[0].workflow.id);
@@ -1339,7 +1352,15 @@ export function App() {
     }
 
     if (sidebarSurface === 'attention') {
-      if (!attentionEntries.length || attentionEntries.some((entry) => entry.task.id === selectedTaskId)) {
+      if (!attentionEntries.length) {
+        if (selectedTaskId !== null || selectedWorkflowId !== null) {
+          setSelectedTaskId(null);
+          setSelectedWorkflowId(null);
+          setWorkflowSelectionDismissed(false);
+        }
+        return;
+      }
+      if (attentionEntries.some((entry) => entry.task.id === selectedTaskId)) {
         return;
       }
       selectTaskById(attentionEntries[0].task.id);
@@ -1347,7 +1368,15 @@ export function App() {
     }
 
     if (sidebarSurface === 'running') {
-      if (!runningEntries.length || runningEntries.some((entry) => entry.task.id === selectedTaskId)) {
+      if (!runningEntries.length) {
+        if (selectedTaskId !== null || selectedWorkflowId !== null) {
+          setSelectedTaskId(null);
+          setSelectedWorkflowId(null);
+          setWorkflowSelectionDismissed(false);
+        }
+        return;
+      }
+      if (runningEntries.some((entry) => entry.task.id === selectedTaskId)) {
         return;
       }
       selectTaskById(runningEntries[0].task.id);
@@ -1692,13 +1721,15 @@ export function App() {
     setTerminalLines((prev) => [...prev, { id, text, tone }]);
   }, []);
 
-  const handleStart = useCallback(async () => {
-    if (!invoker) return;
+  const handleStart = useCallback(async (): Promise<boolean> => {
+    if (!invoker) return false;
     try {
       await invoker.start();
       setHasStarted(true);
+      return true;
     } catch (err) {
       console.error('Failed to start:', err);
+      return false;
     }
   }, [invoker]);
 
@@ -1740,8 +1771,8 @@ export function App() {
         appendTerminalLine('Create a plan before running.', 'error');
         return;
       }
-      await handleStart();
-      appendTerminalLine('Run started.', 'success');
+      const started = await handleStart();
+      appendTerminalLine(started ? 'Run started.' : 'Run failed to start.', started ? 'success' : 'error');
       return;
     }
 
@@ -1798,6 +1829,7 @@ export function App() {
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
+      setStatusFilters(new Set<WorkflowStatus>());
     } catch (err) {
       console.error('Failed to delete workflows:', err);
     }
@@ -1818,14 +1850,14 @@ export function App() {
   const showStop = hasStarted && !allSettled;
   const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
   const autoCollapseInspector = sidebarSurface !== 'home' && viewportWidth < 1440;
-  const effectiveInspectorCollapsed = inspectorCollapsed || autoCollapseInspector;
+  const effectiveInspectorCollapsed = inspectorCollapsed || (autoCollapseInspector && !inspectorManualOpen);
   const showInspectorPlaceholder = !showEmptyGraphTutorial && !selectedTask && !selectedWorkflow && !(viewMode === 'actionGraph' && selectedActionNode);
 
   useEffect(() => {
-    const handleResize = () => setViewportWidth(window.innerWidth);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+    if (sidebarSurface === 'home' || !autoCollapseInspector) {
+      setInspectorManualOpen(false);
+    }
+  }, [autoCollapseInspector, sidebarSurface]);
   useEffect(() => {
     if (!graphActionsMenuOpen) return undefined;
     const handlePointerDown = (event: PointerEvent) => {
@@ -1847,6 +1879,9 @@ export function App() {
 
   const selectViewMode = useCallback((nextView: 'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph') => {
     setGraphActionsMenuOpen(false);
+    if (nextView !== 'actionGraph' && selectedActionNodeId !== null) {
+      setSelectedActionNodeId(null);
+    }
     if (nextView === 'actionGraph') {
       setSidebarSurface('home');
       setViewMode('actionGraph');
@@ -1860,7 +1895,17 @@ export function App() {
     }
     setSidebarSurface('home');
     setViewMode(nextView);
-  }, []);
+  }, [selectedActionNodeId]);
+
+  const handleToggleInspectorCollapsed = useCallback(() => {
+    if (autoCollapseInspector) {
+      setInspectorCollapsed(false);
+      setInspectorManualOpen((prev) => !prev);
+      return;
+    }
+    setInspectorManualOpen(false);
+    setInspectorCollapsed((prev) => !prev);
+  }, [autoCollapseInspector]);
 
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
@@ -1868,16 +1913,20 @@ export function App() {
     if (nextSurface === 'home') {
       setSidebarSurface('home');
       setSidebarCollapsed(false);
+      setInspectorManualOpen(false);
       return;
     }
     setSidebarSurface(nextSurface);
     setSidebarCollapsed(true);
+    setInspectorManualOpen(false);
+    setStatusFilters(new Set<WorkflowStatus>());
   }, []);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
     setSidebarSurface('home');
     setSidebarCollapsed(false);
+    setInspectorManualOpen(false);
     setViewMode('dag');
   }, []);
 
@@ -2498,12 +2547,14 @@ export function App() {
       data-keyboard-active={keyboardRegion === 'bottomBar' ? 'true' : 'false'}
       className={`outline-none ${keyboardRegion === 'bottomBar' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
     >
-      <WorkflowStatusChips
-        workflows={workflows}
-        activeFilters={statusFilters}
-        keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
-        onStatusClick={handleStatusClick}
-      />
+      {sidebarSurface === 'home' && (
+        <WorkflowStatusChips
+          workflows={workflows}
+          activeFilters={statusFilters}
+          keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
+          onStatusClick={handleStatusClick}
+        />
+      )}
       <TerminalDrawer
         state={terminalDrawerState}
         onCycle={() =>
@@ -2656,22 +2707,17 @@ export function App() {
                 task={selectedTask}
                 workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
                 reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
+                actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
+                collapsed={effectiveInspectorCollapsed}
+                advancedExpanded={advancedMetadataExpanded}
                 remoteTargets={remoteTargets}
                 executionPools={executionPools}
                 executionAgents={executionAgents}
-                collapsed={effectiveInspectorCollapsed}
-                advancedExpanded={advancedMetadataExpanded}
-                actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
-                onEditType={handleEditType}
-                onEditPool={handleEditPool}
-                onEditAgent={handleEditAgent}
-                onEditPrompt={handleEditPrompt}
-                onEditCommand={handleEditCommand}
-                onApprove={openApprovalModal}
-                onReject={openRejectModal}
+                onApprove={(task) => void handleApprove(task.id)}
+                onReject={(task) => void handleReject(task.id)}
                 onSetMergeBranch={handleSetMergeBranch}
                 onSetMergeMode={handleSetMergeMode}
-                onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
+                onToggleCollapsed={handleToggleInspectorCollapsed}
                 onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
               />
             )}
