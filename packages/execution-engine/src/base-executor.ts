@@ -875,8 +875,10 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        const missingLocalRef = message.includes('src refspec ')
+          && message.includes(' does not match any');
         const currentBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
-        if (!/src refspec .* does not match any/i.test(message) || currentBranch.length > 0) {
+        if (!missingLocalRef || currentBranch.length > 0) {
           throw err;
         }
         await this.execGitSimpleWithNetworkTimeout(
