@@ -435,6 +435,49 @@ describe('serializeWorkerAction', () => {
     });
     expect(JSON.stringify(result)).not.toContain('\x1b');
   });
+
+  it('normalizes unsafe payload values before JSON output', () => {
+    class PayloadBox {
+      label: string;
+
+      constructor(label: string) {
+        this.label = label;
+      }
+    }
+
+    const circular: Record<string, unknown> = { ok: true };
+    circular.self = circular;
+    const action: WorkerActionRecord = {
+      id: 'wa-unsafe',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'completed',
+      attemptCount: 1,
+      payload: {
+        big: BigInt(1),
+        circular,
+        map: new Map([['answer', BigInt(42)]]),
+        box: new PayloadBox('kept'),
+        list: [undefined, Number.NaN],
+      },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:05:00.000Z',
+    };
+
+    const result = serializeWorkerAction(action);
+
+    expect(() => formatAsJson(result)).not.toThrow();
+    expect(JSON.parse(formatAsJson(result)).payload).toEqual({
+      big: '1',
+      circular: { ok: true, self: '[Circular]' },
+      map: { answer: '42' },
+      box: { label: 'kept' },
+      list: [null, null],
+    });
+  });
 });
 
 // ── formatAsLabel ───────────────────────────────────────────

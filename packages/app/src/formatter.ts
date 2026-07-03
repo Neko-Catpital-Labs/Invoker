@@ -22,6 +22,8 @@ const MAGENTA = '\x1b[35m';
 const DIM = '\x1b[2m';
 
 
+type JsonSafeValue = string | number | boolean | null | JsonSafeValue[] | { [key: string]: JsonSafeValue };
+
 function escapeTerminalText(value: string): string {
   return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => {
     switch (char) {
@@ -35,6 +37,58 @@ function escapeTerminalText(value: string): string {
         return `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
     }
   });
+}
+
+function normalizeJsonValue(value: unknown, seen = new WeakSet<object>()): JsonSafeValue {
+  if (value === null) return null;
+
+  switch (typeof value) {
+    case 'string':
+    case 'boolean':
+      return value;
+    case 'number':
+      return Number.isFinite(value) ? value : null;
+    case 'bigint':
+      return value.toString();
+    case 'undefined':
+    case 'function':
+    case 'symbol':
+      return null;
+    case 'object':
+      break;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (seen.has(value)) {
+    return '[Circular]';
+  }
+
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map(item => normalizeJsonValue(item, seen));
+    }
+    if (value instanceof Map) {
+      const normalized: { [key: string]: JsonSafeValue } = {};
+      for (const [key, item] of value.entries()) {
+        normalized[String(key)] = normalizeJsonValue(item, seen);
+      }
+      return normalized;
+    }
+    if (value instanceof Set) {
+      return Array.from(value, item => normalizeJsonValue(item, seen));
+    }
+
+    const normalized: { [key: string]: JsonSafeValue } = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      normalized[key] = normalizeJsonValue(item, seen);
+    }
+    return normalized;
+  } finally {
+    seen.delete(value);
+  }
 }
 // ── Status Colors ────────────────────────────────────────────
 
@@ -401,7 +455,7 @@ export function serializeWorkerAction(action: WorkerActionRecord): Record<string
     ...(action.executionModel != null && { executionModel: action.executionModel }),
     ...(action.sessionId != null && { sessionId: action.sessionId }),
     ...(action.summary != null && { summary: action.summary }),
-    ...(action.payload !== undefined && { payload: action.payload }),
+    ...(action.payload !== undefined && { payload: normalizeJsonValue(action.payload) }),
     createdAt: action.createdAt,
     updatedAt: action.updatedAt,
     ...(action.completedAt != null && { completedAt: action.completedAt }),
