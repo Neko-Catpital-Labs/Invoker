@@ -56,8 +56,8 @@ export interface CrabboxResolverTargetConfig {
   readonly target: string;
   /** When to stop the lease after the task settles (e.g. 'completed', 'never'). */
   readonly stopAfter: string;
-  /** Keep the lease alive on failure for debugging instead of stopping it. */
-  readonly keepOnFailure: boolean;
+  /** Keep the lease alive on failure for debugging instead of stopping it. Default: true. */
+  readonly keepOnFailure?: boolean;
   /** SSH port to fall back to when the lease status omits one. Default: 22. */
   readonly port?: number;
   /** Optional extra args appended to the warmup subcommand. */

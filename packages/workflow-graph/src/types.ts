@@ -163,8 +163,8 @@ export interface CrabboxRemoteLeaseMetadata {
   readonly expiresAt: string;
   /** When to stop the lease after the task settles (e.g. 'completed', 'never'). */
   readonly stopAfter: string;
-  /** Keep the lease alive on failure for debugging instead of stopping it. */
-  readonly keepOnFailure: boolean;
+  /** Keep the lease alive on failure for debugging instead of stopping it. Default: true. */
+  readonly keepOnFailure?: boolean;
 }
 
 /** Provider-tagged durable lease metadata for a remote target. */
