@@ -127,9 +127,14 @@ invoker_e2e_kill_owned_headless_processes() {
       [ -n "$pid" ] || continue
       cmdline="$(invoker_e2e_pid_cmdline "$pid")"
       case "$cmdline" in
-        *"--headless"*)
+        *"--headless"* )
           ;;
         *)
+          continue
+          ;;
+      esac
+      case "$cmdline" in
+        *"--type="*|*"Electron Helper"* )
           continue
           ;;
       esac
@@ -285,27 +290,42 @@ invoker_e2e_run_headless() {
   local attempt=1
   local max_attempts=2
   local status=0
+  local stdout_file stderr_file retry_reason
   while :; do
-    if invoker_e2e_run_with_timeout "$INVOKER_E2E_REPO_ROOT/run.sh" --headless "$@"; then
+    stdout_file="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-headless.stdout.XXXXXX")"
+    stderr_file="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-headless.stderr.XXXXXX")"
+    if invoker_e2e_run_with_timeout "$INVOKER_E2E_REPO_ROOT/run.sh" --headless "$@" >"$stdout_file" 2>"$stderr_file"; then
       status=0
     else
       status=$?
     fi
     if [ "$status" -eq 0 ]; then
+      cat "$stdout_file"
+      cat "$stderr_file" >&2
+      rm -f "$stdout_file" "$stderr_file"
       return 0
     fi
+    retry_reason=""
     case "$status" in
       # 133 is SIGTRAP from transient headless Electron startup failures in
       # constrained Linux CI containers.
       124|133|137|143)
-        if [ "$attempt" -lt "$max_attempts" ]; then
-          echo "WARN: headless command interrupted (exit=$status), retrying once: $*" >&2
-          attempt=$((attempt + 1))
-          sleep 1
-          continue
-        fi
+        retry_reason="interrupted (exit=$status)"
         ;;
     esac
+    if [ -z "$retry_reason" ] && grep -Fq 'Read-only file open refused while WAL sidecars exist' "$stderr_file"; then
+      retry_reason="owner-boundary WAL guard"
+    fi
+    if [ -n "$retry_reason" ] && [ "$attempt" -lt "$max_attempts" ]; then
+      echo "WARN: headless command hit ${retry_reason}, retrying once: $*" >&2
+      rm -f "$stdout_file" "$stderr_file"
+      attempt=$((attempt + 1))
+      sleep 1
+      continue
+    fi
+    cat "$stdout_file"
+    cat "$stderr_file" >&2
+    rm -f "$stdout_file" "$stderr_file"
     return "$status"
   done
 }
@@ -500,7 +520,17 @@ invoker_e2e_count_owned_headless_processes() {
 
 invoker_e2e_assert_no_owned_headless_processes() {
   local allowed="${1:-0}"
-  local count
+  local wait_secs="${2:-15}"
+  local count=0
+  local waited=0
+  while [ "$waited" -lt "$wait_secs" ]; do
+    count="$(invoker_e2e_count_owned_headless_processes)"
+    if [ "$count" -le "$allowed" ]; then
+      return 0
+    fi
+    waited=$((waited + 1))
+    sleep 1
+  done
   count="$(invoker_e2e_count_owned_headless_processes)"
   if [ "$count" -gt "$allowed" ]; then
     echo "FAIL: expected at most $allowed owned headless process(es), found $count" >&2
