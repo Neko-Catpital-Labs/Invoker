@@ -1122,6 +1122,64 @@ describe('TaskRunner', () => {
       expect(onComplete).toHaveBeenCalled();
     });
 
+    it('appends a durable diagnostic block for startup stderr/stdout', async () => {
+      const handleWorkerResponse = vi.fn();
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse,
+      };
+      const startupError = Object.assign(new Error('spawn failed before handle'), {
+        stderr: 'remote setup stderr\nmissing dependency\n',
+        stdout: 'remote setup stdout\n',
+      });
+      const throwingExecutor = {
+        type: 'ssh',
+        start: async () => { throw startupError; },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
+      };
+      const appendTaskOutput = vi.fn();
+      const onOutput = vi.fn();
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { appendTaskOutput } as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+        callbacks: { onOutput },
+      });
+
+      const task = makeTask({ id: 'failing-start', status: 'running', config: { command: 'echo hi' } });
+      await executor.executeTask(task);
+
+      expect(onOutput).toHaveBeenCalledWith(
+        'failing-start',
+        expect.stringContaining('Executor startup failed (ssh): spawn failed before handle'),
+      );
+      expect(appendTaskOutput).toHaveBeenCalledWith(
+        'failing-start',
+        expect.stringContaining('[Startup Failure Diagnostic]'),
+      );
+      const output = appendTaskOutput.mock.calls[0]?.[1] as string;
+      expect(output).toContain('executor=ssh');
+      expect(output).toContain('message=spawn failed before handle');
+      expect(output).toContain('--- startup stderr ---');
+      expect(output).toContain('missing dependency');
+      expect(output).toContain('--- startup stdout ---');
+      expect(output).toContain('remote setup stdout');
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'failed',
+          outputs: expect.objectContaining({ exitCode: 1 }),
+        }),
+      );
+    });
+
     it('startup error includes phase prefix in outputs.error', async () => {
       const handleWorkerResponse = vi.fn();
       const orchestrator = {
