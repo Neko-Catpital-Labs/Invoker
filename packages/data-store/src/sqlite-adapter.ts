@@ -8,10 +8,8 @@
 import {
   appendFileSync,
   closeSync,
-  copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   readSync,
@@ -389,15 +387,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private readonly activityLogMaxRows: number;
   private activityLogWritesSincePrune = 0;
   private readonly exclusiveLocking: boolean;
-  private readonly readOnlySnapshotPath: string | null;
 
   /** Use SQLiteAdapter.create() instead. */
-  private constructor(
-    db: DatabaseSync,
-    dbPath: string | null,
-    options?: SQLiteAdapterOptions,
-    readOnlySnapshotPath: string | null = null,
-  ) {
+  private constructor(db: DatabaseSync, dbPath: string | null, options?: SQLiteAdapterOptions) {
     this.nativeDb = db;
     this.db = new NativeDatabaseCompat(db);
     this.dbPath = dbPath;
@@ -406,12 +398,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.exclusiveLocking = options?.exclusiveLocking === true;
-    this.readOnlySnapshotPath = readOnlySnapshotPath;
-    this.configureConnection(dbPath !== null, this.readOnly);
+    this.configureConnection(dbPath !== null);
     if (!this.readOnly) {
       this.initSchema();
       this.migrate();
     }
+  }
+
+  private normalizeConversationMode(value: unknown): Conversation['mode'] {
+    return value === 'agent' ? 'agent' : 'plan';
   }
 
   /**
@@ -457,21 +452,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
     }
 
-    let readOnlySnapshotPath: string | null = null;
-    if (isFile && options?.readOnly === true) {
-      readOnlySnapshotPath = SQLiteAdapter.createReadOnlySnapshot(dbPath);
-    } else if (isFile) {
+    if (isFile) {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
+
     try {
       const { DatabaseSync } = await loadNativeSqlite();
-      const openPath = readOnlySnapshotPath ?? dbPath;
-      const db = new DatabaseSync(openPath, { readOnly: options?.readOnly === true });
-      return new SQLiteAdapter(db, isFile ? dbPath : null, options, readOnlySnapshotPath);
+      const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
+      return new SQLiteAdapter(db, isFile ? dbPath : null, options);
     } catch (err) {
-      if (readOnlySnapshotPath) {
-        rmSync(dirname(readOnlySnapshotPath), { recursive: true, force: true });
-      }
       if (!isFile || options?.readOnly === true || !existsSync(dbPath) || !isDatabaseCorruptionError(err)) {
         throw err;
       }
@@ -491,31 +480,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
-  private static createReadOnlySnapshot(dbPath: string): string {
-    SQLiteAdapter.assertNoWalSidecars(dbPath);
-    const snapshotDir = mkdtempSync(join(tmpdir(), 'invoker-readonly-snapshot-'));
-    const snapshotPath = join(snapshotDir, 'invoker.db');
-    try {
-      copyFileSync(dbPath, snapshotPath);
-      SQLiteAdapter.assertNoWalSidecars(dbPath);
-      return snapshotPath;
-    } catch (err) {
-      rmSync(snapshotDir, { recursive: true, force: true });
-      throw err;
-    }
-  }
-
-  private static assertNoWalSidecars(dbPath: string): void {
-    const walPath = `${dbPath}-wal`;
-    const shmPath = `${dbPath}-shm`;
-    if (existsSync(walPath) || existsSync(shmPath)) {
-      throw new Error(
-        'Read-only file open refused while WAL sidecars exist. ' +
-        'Route the query through the owner process or start a standalone owner.',
-      );
-    }
-  }
-
   private resolveOutputDir(dbPath: string | null): string {
     const invokerHome = process.env.INVOKER_DB_DIR ?? (dbPath ? dirname(dbPath) : join(homedir(), '.invoker'));
     if (!dbPath && !process.env.INVOKER_DB_DIR) {
@@ -524,10 +488,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return join(invokerHome, 'task-output');
   }
 
-  private configureConnection(fileBacked: boolean, readOnly: boolean): void {
+  private configureConnection(fileBacked: boolean): void {
     this.nativeDb.exec('PRAGMA busy_timeout = 5000');
     this.nativeDb.exec('PRAGMA foreign_keys = ON');
-    if (fileBacked && !readOnly) {
+    if (fileBacked) {
       if (this.exclusiveLocking) {
         // Heap wal-index (no -shm file). MUST precede `journal_mode = WAL`.
         this.nativeDb.exec('PRAGMA locking_mode = EXCLUSIVE');
@@ -2185,12 +2149,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveConversation(conversation: Conversation): void {
     this.execRun(`
-      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, extracted_plan, plan_submitted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, mode, extracted_plan, plan_submitted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.threadTs,
       conversation.channelId,
       conversation.userId,
+      conversation.mode ?? 'plan',
       conversation.extractedPlan,
       conversation.planSubmitted ? 1 : 0,
       conversation.createdAt,
@@ -2205,6 +2170,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       threadTs: row.thread_ts as string,
       channelId: row.channel_id as string,
       userId: row.user_id as string,
+      mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
@@ -2212,10 +2178,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     };
   }
 
-  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void {
+  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'mode' | 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
+    if ('mode' in changes) {
+      setClauses.push('mode = ?');
+      values.push(changes.mode ?? 'plan');
+    }
     if ('extractedPlan' in changes) {
       setClauses.push('extracted_plan = ?');
       values.push(changes.extractedPlan ?? null);
@@ -2247,6 +2217,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       threadTs: row.thread_ts as string,
       channelId: row.channel_id as string,
       userId: row.user_id as string,
+      mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
@@ -2766,16 +2737,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Lifecycle ─────────────────────────────────────────
 
   close(): void {
-    try {
-      if (this.dbPath && !this.readOnly) {
-        this.checkpointWal('PASSIVE');
-      }
-      this.db.close();
-    } finally {
-      if (this.readOnlySnapshotPath) {
-        rmSync(dirname(this.readOnlySnapshotPath), { recursive: true, force: true });
-      }
+    if (this.dbPath && !this.readOnly) {
+      this.checkpointWal('PASSIVE');
     }
+    this.db.close();
   }
 
   // ── Helpers ───────────────────────────────────────────

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as child_process from 'node:child_process';
-import { SlackSurface, parsePlanningRequest, parseLobbyClassification, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
+import { SlackSurface, parsePlanningRequest, parseLobbyClassification, parseLocalRequest, parseThreadRequest, parseWorkflowStatusQuery, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
 import type { WorkflowContext } from '../slack/workflow-assistant.js';
@@ -54,6 +54,7 @@ vi.mock('../slack/plan-conversation.js', async (importOriginal) => {
         getDraftedPlan: vi.fn(() => draftedPlanForMock),
         submittedPlanText: null,
         planSubmitted: false,
+        conversationMode: config?.mode ?? 'plan',
         init: vi.fn().mockResolvedValue(undefined),
       };
     }),
@@ -124,6 +125,7 @@ describe('parsePlanningRequest', () => {
     });
   });
 
+
   it('normalizes a "plain <tool>" tag and stops at unknown tags', () => {
     expect(parsePlanningRequest('[plain codex] go', keys, 'cursor+claude')).toEqual({
       presetKey: 'codex',
@@ -158,6 +160,35 @@ describe('parsePlanningRequest', () => {
       text: 'go',
       unknownPreset: 'omp+gpt5',
     });
+  });
+});
+
+describe('parseLocalRequest', () => {
+  it('requires explicit local prefixes', () => {
+    expect(parseLocalRequest('run local: report back how many workflows are running')).toEqual({ kind: 'agent', text: 'report back how many workflows are running' });
+    expect(parseLocalRequest('exec local: pnpm test')).toEqual({ kind: 'command', text: 'pnpm test' });
+    expect(parseLocalRequest('local command: git status')).toEqual({ kind: 'command', text: 'git status' });
+    expect(parseLocalRequest('local: fix the Slack typo')).toEqual({ kind: 'change', text: 'fix the Slack typo' });
+    expect(parseLocalRequest('patch locally: update the docs')).toEqual({ kind: 'change', text: 'update the docs' });
+    expect(parseLocalRequest('fix the Slack typo')).toBeNull();
+  });
+});
+
+
+describe('parseWorkflowStatusQuery', () => {
+  it('detects workflow count and status questions without an LLM classifier', () => {
+    expect(parseWorkflowStatusQuery('report back how many workflows we are running')).toEqual({ intent: 'command', operation: 'status', target: { all: true } });
+    expect(parseWorkflowStatusQuery('what is the status of workflows')).toEqual({ intent: 'command', operation: 'status', target: { all: true } });
+    expect(parseWorkflowStatusQuery('fix the Slack workflow docs')).toBeNull();
+  });
+});
+describe('parseThreadRequest', () => {
+  it('defaults to a normal agent thread and requires an explicit plan prefix for Invoker YAML', () => {
+    expect(parseThreadRequest('fix the Slack routing bug')).toEqual({ mode: 'agent', text: 'fix the Slack routing bug' });
+    expect(parseThreadRequest('local: fix the Slack routing bug')).toEqual({ mode: 'agent', text: 'fix the Slack routing bug' });
+    expect(parseThreadRequest('run local: report back how many workflows are running')).toEqual({ mode: 'agent', text: 'report back how many workflows are running' });
+    expect(parseThreadRequest('plan: fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
+    expect(parseThreadRequest('draft an Invoker plan: fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
   });
 });
 
@@ -640,37 +671,92 @@ describe('lobby verb routing', () => {
     expect(say).not.toHaveBeenCalledWith(expect.objectContaining({ text: 'Processing your request...' }));
   });
 
-  it('answers a question with no session, workflow, or start_plan', async () => {
-    mockSpawn
-      .mockImplementationOnce(() => mockProcess('{"intent":"question","operation":"none","target":"none"}'))
-      .mockImplementationOnce(() => mockProcess('There are 3 workflows running.'));
+  it('answers a workflow count question with deterministic status', async () => {
+    runWorkflowOp.mockResolvedValue({ ok: true, summary: '`wf-1`: 3 running, 0 pending, 0 done, 0 failed' });
     const surface = lobbySurface();
     await surface.start(async (cmd) => { received.push(cmd); });
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> how many workflows are running?', ts: 't1', user: 'U1' }, say });
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('3 workflows running') }));
+    expect(runWorkflowOp.mock.calls[0][0]).toEqual({ operation: 'status', target: { all: true } });
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('3 running') }));
     expect(planConversationConfigs).toHaveLength(0);
-    expect(runWorkflowOp).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
     expect(received).toHaveLength(0);
   });
 
-  it('routes a build request to a planning conversation without classifying', async () => {
+  it('routes a build request to a normal agent thread without classifying', async () => {
     const surface = lobbySurface();
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> add a /health endpoint', ts: 't1', user: 'U1' }, say });
     expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].mode).toBe('agent');
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(runWorkflowOp).not.toHaveBeenCalled();
   });
 
+  it('routes an explicit plan request to an Invoker plan thread', async () => {
+    const surface = lobbySurface();
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> plan: add a /health endpoint', ts: 't1', user: 'U1' }, say });
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].mode).toBe('plan');
+    expect(runWorkflowOp).not.toHaveBeenCalled();
+  });
+
+
+  it('runs an explicit shell command without creating a plan conversation', async () => {
+    mockSpawn.mockImplementationOnce(() => mockProcess('ok'));
+    const surface = lobbySurface();
+    await surface.start(async (cmd) => { received.push(cmd); });
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> exec local: pnpm test -- --run', ts: 't1', user: 'U1' }, say });
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      '/bin/bash',
+      ['-lc', 'pnpm test -- --run'],
+      expect.objectContaining({ cwd: expect.any(String) }),
+    );
+    expect(planConversationConfigs).toHaveLength(0);
+    expect(runWorkflowOp).not.toHaveBeenCalled();
+    expect(received).toHaveLength(0);
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Local command finished: exit 0') }));
+  });
+
+  it('routes run local workflow-count questions to deterministic status', async () => {
+    runWorkflowOp.mockResolvedValue({ ok: true, summary: '`wf-1`: 1 running, 0 pending, 2 done, 0 failed' });
+    const surface = lobbySurface();
+    await surface.start(async (cmd) => { received.push(cmd); });
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> run local: report back how many workflows we are running', ts: 't1', user: 'U1' }, say });
+
+    expect(runWorkflowOp.mock.calls[0][0]).toEqual({ operation: 'status', target: { all: true } });
+    expect(planConversationConfigs).toHaveLength(0);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(received).toHaveLength(0);
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('running') }));
+  });
+
+  it('routes an explicit local change into a recoverable agent thread', async () => {
+    const surface = lobbySurface();
+    await surface.start(async (cmd) => { received.push(cmd); });
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> local: fix the Slack routing bug', ts: 't1', user: 'U1' }, say });
+
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].mode).toBe('agent');
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(runWorkflowOp).not.toHaveBeenCalled();
+    expect(received).toHaveLength(0);
+  });
   it('submit with no drafted plan asks the user to describe one', async () => {
     const surface = lobbySurface();
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> submit', ts: 't1', user: 'U1' }, say });
     expect(received).toHaveLength(0);
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No planning conversation') }));
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No Invoker plan draft') }));
   });
 
   it('submit shows a short plain-English plan summary and emits start_plan on confirmation', async () => {
@@ -678,7 +764,7 @@ describe('lobby verb routing', () => {
     await surface.start(async (cmd) => { received.push(cmd); });
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     // Open a planning conversation in the thread, then arm its drafted plan.
-    await mentionHandler(surface)({ event: { text: '<@BOT> add a /health endpoint', ts: 't1', user: 'U1' }, say });
+    await mentionHandler(surface)({ event: { text: '<@BOT> plan: add a /health endpoint', ts: 't1', user: 'U1' }, say });
     draftedPlanForMock = `
 name: "Health API rollout with several detailed implementation tasks"
 tasks:

@@ -14,7 +14,7 @@ import { formatSurfaceEvent, formatWorkflowStatus } from './slack-formatter.js';
 import { splitForSlack, sanitizeSlashCommands } from './slack-message-helpers.js';
 import type { SlackMessage } from './slack-formatter.js';
 import { PlanConversation, defaultPlanningCommand, isConfirmation, isNegation } from './plan-conversation.js';
-import type { PlanningCommandBuilder } from './plan-conversation.js';
+import type { ConversationMode, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
 import { summarizePlanText } from './plan-summary.js';
@@ -119,6 +119,15 @@ interface PlanningContext {
   lobbyChannel?: string;
 }
 
+export type LocalRequest =
+  | { kind: 'command'; text: string }
+  | { kind: 'agent'; text: string }
+  | { kind: 'change'; text: string };
+
+export type ThreadRequest =
+  | { mode: 'agent'; text: string }
+  | { mode: 'plan'; text: string };
+
 // ── Planning request parsing ─────────────────────────────────
 
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
@@ -134,7 +143,7 @@ export function parsePlanningRequest(
   presetKeys: string[],
   defaultPresetKey: string,
 ): { presetKey: string; repo?: string; text: string; unknownPreset?: string } {
-  let rest = text.replace(/<@[A-Z0-9]+>/g, '').trim();
+  let rest = text.replace(/<@[^>]+>/g, '').trim();
   let presetKey = defaultPresetKey;
   let repo: string | undefined;
   let unknownPreset: string | undefined;
@@ -244,9 +253,82 @@ export function parseLobbyClassification(raw: string): LobbyClassification {
 
 const OPERATIONAL_HINT = /\b(recreate|rebase|retry|retries|cancel|status|workflows?)\b/i;
 
+export function parseWorkflowStatusQuery(text: string): LobbyClassification | null {
+  const trimmed = text.trim();
+  if (!/\bworkflows?\b/i.test(trimmed)) return null;
+  if (!/\b(status|how many|count|running|active|in progress|progress)\b/i.test(trimmed)) return null;
+  return { intent: 'command', operation: 'status', target: { all: true } };
+}
+
 /** Cheap pre-filter: does a non-verb message look operational enough to spend an LLM classify? */
 export function looksOperational(text: string): boolean {
   return OPERATIONAL_HINT.test(text);
+}
+
+/** Explicit local-mode prefixes. `run local:` means “use the local agent”; `exec local:` means raw shell. */
+export function parseLocalRequest(text: string): LocalRequest | null {
+  const trimmed = text.trim();
+  const commandPatterns = [
+    /^(?:exec|execute)\s+local(?:ly)?\s*:\s*/i,
+    /^local\s+(?:command|cmd)\s*:\s*/i,
+  ];
+  for (const pattern of commandPatterns) {
+    const match = pattern.exec(trimmed);
+    if (match) {
+      const rest = trimmed.slice(match[0].length).trim();
+      return rest ? { kind: 'command', text: rest } : null;
+    }
+  }
+
+  const agentPatterns = [
+    /^run\s+local(?:ly)?\s*:\s*/i,
+    /^local\s+run\s*:\s*/i,
+  ];
+  for (const pattern of agentPatterns) {
+    const match = pattern.exec(trimmed);
+    if (match) {
+      const rest = trimmed.slice(match[0].length).trim();
+      return rest ? { kind: 'agent', text: rest } : null;
+    }
+  }
+
+  const changePatterns = [
+    /^local\s*:\s*/i,
+    /^local\s+(?:change|edit|patch)\s*:\s*/i,
+    /^(?:change|edit|patch)\s+local(?:ly)?\s*:\s*/i,
+    /^locally\s*:\s*/i,
+  ];
+  for (const pattern of changePatterns) {
+    const match = pattern.exec(trimmed);
+    if (match) {
+      const rest = trimmed.slice(match[0].length).trim();
+      return rest ? { kind: 'change', text: rest } : null;
+    }
+  }
+
+  return null;
+}
+
+export function parseThreadRequest(text: string): ThreadRequest | null {
+  const trimmed = text.trim();
+  const planPatterns = [
+    /^(?:invoker\s+)?plan\s*:\s*/i,
+    /^draft\s+(?:an?\s+)?invoker\s+plan\s*:\s*/i,
+  ];
+  for (const pattern of planPatterns) {
+    const match = pattern.exec(trimmed);
+    if (match) {
+      const rest = trimmed.slice(match[0].length).trim();
+      return rest ? { mode: 'plan', text: rest } : null;
+    }
+  }
+
+  const localRequest = parseLocalRequest(trimmed);
+  if (localRequest?.kind === 'agent' || localRequest?.kind === 'change') {
+    return { mode: 'agent', text: localRequest.text };
+  }
+
+  return trimmed ? { mode: 'agent', text: trimmed } : null;
 }
 
 // ── ConversationLike ─────────────────────────────────────────
@@ -255,6 +337,7 @@ export function looksOperational(text: string): boolean {
 interface ConversationLike {
   sendMessage(message: string): Promise<string>;
   getDraftedPlan(): string | null;
+  readonly conversationMode: ConversationMode;
   readonly planSubmitted: boolean;
   readonly submittedPlanText: string | null;
 }
@@ -673,7 +756,7 @@ export class SlackSurface implements Surface {
     // Confirm/cancel a staged action first (plain yes/no in-thread).
     if (await this.resolveConfirm(threadTs, parsed.text, say, channel)) return;
 
-    // Deterministic verb commands respond instantly and take priority over the planner.
+    // Deterministic verb commands respond instantly and take priority over agent sessions.
     const ctrl = parseLobbyControl(parsed.text);
     if (ctrl?.kind === 'op') {
       await this.handleLobbyOp(ctrl, threadTs, channel, say);
@@ -688,12 +771,25 @@ export class SlackSurface implements Surface {
       return;
     }
 
-    // Slower paths (LLM classifier, repo checkout, planner) acknowledge receipt up front.
+    const localRequest = parseLocalRequest(parsed.text);
+    if (localRequest?.kind === 'command') {
+      await this.handleLocalRequest(localRequest, preset, threadTs, say, channel);
+      return;
+    }
+
+    const workflowStatusQuery = parseWorkflowStatusQuery(localRequest?.kind === 'agent' ? localRequest.text : parsed.text);
+    if (workflowStatusQuery?.intent === 'command') {
+      await this.handleLobbyOp({ kind: 'op', operation: workflowStatusQuery.operation, target: workflowStatusQuery.target }, threadTs, channel, say);
+      return;
+    }
+
+    const explicitLocalAgent = localRequest?.kind === 'agent' || localRequest?.kind === 'change';
+
+    // Slower paths (LLM classifier, repo checkout, agent) acknowledge receipt up front.
     if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
 
-
     // Fallback classifier: only when a non-verb message looks operational.
-    if (looksOperational(parsed.text)) {
+    if (!explicitLocalAgent && looksOperational(parsed.text)) {
       const cls = await this.classifyLobbyIntent(parsed.text, preset);
       this.log('slack', 'info', `[CLASSIFY] thread_ts=${threadTs} intent=${cls.intent}`);
       if (cls.intent === 'command') {
@@ -709,8 +805,10 @@ export class SlackSurface implements Surface {
       // invalid-command / plan → fall through to a planning conversation.
     }
 
-    // Default: a plain planning conversation (drafts a plan, never auto-submits).
+    const threadRequest = parseThreadRequest(parsed.text);
+    if (!threadRequest) return;
 
+    // Default: a normal agent conversation. `plan:` opts into an Invoker YAML draft.
     let workingDir = this.workingDir;
     if (repoUrl && this.prepareRepoCheckout) {
       try {
@@ -726,20 +824,23 @@ export class SlackSurface implements Surface {
       tool: preset.tool,
       model: preset.model,
       workingDir,
+      mode: threadRequest.mode,
     });
     if (!conversation) {
       await say({ text: 'Too many active conversations. Please wait.', thread_ts: threadTs });
       return;
     }
 
-    this.planningContexts.set(threadTs, {
-      repoUrl,
-      presetKey: parsed.presetKey,
-      requestedBy: event.user,
-      lobbyChannel: channel,
-    });
+    if (threadRequest.mode === 'plan') {
+      this.planningContexts.set(threadTs, {
+        repoUrl,
+        presetKey: parsed.presetKey,
+        requestedBy: event.user,
+        lobbyChannel: channel,
+      });
+    }
 
-    await this.handleConversationMessage(conversation, parsed.text, threadTs, say, channel);
+    await this.handleConversationMessage(conversation, threadRequest.text, threadTs, say, channel);
   }
 
   /** Post the immediate "received it" acknowledgment and track it for in-place replacement. */
@@ -862,13 +963,13 @@ export class SlackSurface implements Surface {
   /** Submit the plan drafted in this thread, after an explicit, summarized confirmation. */
   private async handleLobbySubmit(channel: string, threadTs: string, userId: string, say: SayFn): Promise<void> {
     const conversation = await this.getSession(channel, threadTs, userId, false);
-    if (!conversation) {
-      await say({ text: "No planning conversation here yet. Tell me what you want to build and I'll draft a plan.", thread_ts: threadTs });
+    if (!conversation || conversation.conversationMode !== 'plan') {
+      await say({ text: "No Invoker plan draft here yet. Start one with `@Invoker plan: ...`, then run `submit`.", thread_ts: threadTs });
       return;
     }
     const planText = conversation.getDraftedPlan();
     if (!planText) {
-      await say({ text: "I don't see a complete plan drafted yet — describe what you want and I'll put one together.", thread_ts: threadTs });
+      await say({ text: "I don't see a complete plan drafted yet — use `plan:` to ask for an Invoker plan, then submit again.", thread_ts: threadTs });
       return;
     }
     const summary = summarizePlanText(planText);
@@ -1092,6 +1193,110 @@ export class SlackSurface implements Surface {
         thread_ts: threadTs,
       });
     }
+  }
+
+  private async handleLocalRequest(
+    request: LocalRequest,
+    harness: HarnessPreset,
+    threadTs: string,
+    say: SayFn,
+    channel: string,
+  ): Promise<void> {
+    if (request.kind === 'command') {
+      await say({ text: `Running locally on DO1: \`${truncateWords(request.text, 12)}\``, thread_ts: threadTs });
+      try {
+        const result = await this.runLocalCommand(request.text);
+        const reply = this.formatLocalCommandResult(result);
+        const chunks = splitForSlack(sanitizeSlashCommands(reply));
+        for (let i = 0; i < chunks.length; i++) {
+          if (i > 0) await this.sleep(this.messagePacingMs);
+          await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
+        }
+      } catch (err) {
+        await this.sayWithRateLimitRetry(say, {
+          text: `Local command failed to start: ${err instanceof Error ? err.message : String(err)}`,
+          thread_ts: threadTs,
+        });
+      }
+      return;
+    }
+
+    await say({ text: 'Making that local change on DO1. I will not create or submit an Invoker plan.', thread_ts: threadTs });
+    try {
+      const reply = await this.runOneShotPlanner(harness, this.buildLocalChangePrompt(request.text));
+      const chunks = splitForSlack(sanitizeSlashCommands(reply));
+      for (let i = 0; i < chunks.length; i++) {
+        if (i > 0) await this.sleep(this.messagePacingMs);
+        await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
+      }
+    } catch (err) {
+      await this.sayWithRateLimitRetry(say, {
+        text: `Local change failed: ${err instanceof Error ? err.message : String(err)}`,
+        thread_ts: threadTs,
+      });
+    }
+  }
+
+  private buildLocalChangePrompt(text: string): string {
+    const cwd = this.workingDir ?? process.cwd();
+    return `Make this request directly in the local checkout on DO1.
+
+Working directory: ${cwd}
+
+Rules:
+- Do NOT generate Invoker YAML.
+- Do NOT create, submit, start, or mention an Invoker workflow.
+- Edit files only when the request needs a local change.
+- Run the focused command or test that verifies the local change when practical.
+- Reply with changed files, verification, and any remaining risk in short Slack prose.
+
+Request:
+${text}`;
+  }
+
+  private runLocalCommand(commandText: string): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+    const timeoutMs = (this.planningTimeoutSeconds ?? 7_200) * 1_000;
+    return new Promise((resolve, reject) => {
+      const child = spawn('/bin/bash', ['-lc', commandText], {
+        cwd: this.workingDir ?? process.cwd(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env },
+      });
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      const timer = setTimeout(() => {
+        settled = true;
+        try { child.kill('SIGTERM'); } catch { /* already dead */ }
+        resolve({ code: null, stdout, stderr, timedOut: true });
+      }, timeoutMs);
+      child.on('close', (code) => {
+        if (settled) return;
+        clearTimeout(timer);
+        resolve({ code, stdout, stderr, timedOut: false });
+      });
+      child.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+  }
+
+  private formatLocalCommandResult(result: { code: number | null; stdout: string; stderr: string; timedOut: boolean }): string {
+    const status = result.timedOut ? 'timed out' : `exit ${result.code ?? 'unknown'}`;
+    const output = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join('\n\n');
+    const safeOutput = output.replace(/```/g, '`\u200b``');
+    const maxChars = 12_000;
+    const body = safeOutput.length > maxChars
+      ? `[showing last ${maxChars} chars]\n${safeOutput.slice(-maxChars)}`
+      : safeOutput;
+    return body
+      ? `Local command finished: ${status}\n\`\`\`\n${body}\n\`\`\``
+      : `Local command finished: ${status}`;
   }
 
   private resolveHarnessPreset(presetKey: string): HarnessPreset {
@@ -1320,6 +1525,13 @@ export class SlackSurface implements Surface {
 
       const text = (msg.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
       if (text && (await this.resolveConfirm(msg.thread_ts, text, say, channel))) return;
+
+      const localRequest = parseLocalRequest(text);
+      if (localRequest?.kind === 'command') {
+        const preset = this.resolveHarnessPreset(this.defaultHarnessPreset);
+        await this.handleLocalRequest(localRequest, preset, msg.thread_ts, say, channel);
+        return;
+      }
 
       // Look up or recover session (don't create new sessions for random thread replies in fallback mode)
       const conversation = await this.getSession(channel, msg.thread_ts, msg.user ?? 'unknown', false);
@@ -1647,7 +1859,7 @@ export class SlackSurface implements Surface {
     threadTs: string,
     userId: string,
     create = true,
-    opts?: { tool?: string; model?: string; workingDir?: string },
+    opts?: { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode },
   ): Promise<ConversationLike | null> {
     this.log('slack', 'info', `[TRACE] getSession (channelId=${channelId}, threadTs=${threadTs}, userId=${userId}, create=${create}, hasSessionManager=${!!this.sessionManager})`);
     if (this.sessionManager) {
@@ -1680,6 +1892,7 @@ export class SlackSurface implements Surface {
         cursorCommand: this.cursorCommand,
         tool: opts?.tool,
         model: opts?.model ?? this.model,
+        mode: opts?.mode ?? 'agent',
         planningCommandBuilder: this.planningCommandBuilder,
         workingDir: opts?.workingDir ?? this.workingDir,
         threadTs,
@@ -1746,6 +1959,7 @@ export class SlackSurface implements Surface {
           const conversation = new PlanConversation({
             cursorCommand: this.cursorCommand,
             model: this.model,
+            mode: entry.mode ?? 'plan',
             workingDir: this.workingDir,
             threadTs: entry.threadTs,
             conversationRepo: this.conversationRepo,
