@@ -2581,6 +2581,49 @@ describe('SQLiteAdapter', () => {
       }
     });
 
+    it('surfaces legacy diagnostic rows alongside spool stream without duplicating old stream rows', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-legacy-diag-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-legacy-diag-tail'));
+
+        db.appendOutputChunk('t-legacy-diag-tail', 'test output before failure\n');
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-legacy-diag-tail', 'duplicate stream row\n'],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          [
+            't-legacy-diag-tail',
+            '\n[Startup Failure Diagnostic]\nmessage=concrete startup stderr\n--- end startup failure diagnostic ---\n',
+          ],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          [
+            't-legacy-diag-tail',
+            '\n[Shutdown Diagnostic]\nforcedStopReason=Application quit\n--- end shutdown diagnostic ---\n',
+          ],
+        );
+
+        const output = db.getTaskOutput('t-legacy-diag-tail');
+        expect(output).toContain('test output before failure');
+        expect(output).toContain('[Startup Failure Diagnostic]');
+        expect(output).toContain('concrete startup stderr');
+        expect(output).toContain('[Shutdown Diagnostic]');
+        expect(output).toContain('Application quit');
+        expect(output).not.toContain('duplicate stream row');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('falls back to task_output when no output_spool chunks exist', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-fallback-'));
       const dbPath = join(dir, 'invoker.db');
