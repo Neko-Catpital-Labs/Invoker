@@ -824,6 +824,13 @@ export type FixWithAgentActionResult =
   | { kind: 'fixWithAgent' | 'resolveConflict'; autoApproved: boolean; started: TaskState[] }
   | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string; started: TaskState[] };
 
+function resolveTaskRunnerDefaultExecutionAgent(taskExecutor: TaskRunner): string {
+  const configured = (taskExecutor as { getDefaultExecutionAgent?: () => string | undefined })
+    .getDefaultExecutionAgent?.()?.trim();
+  return configured && configured.length > 0 ? configured : DEFAULT_EXECUTION_AGENT;
+}
+
+
 export async function fixWithAgentAction(
   taskId: string,
   deps: Pick<CommandActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'autoApproveAIFixes' | 'commandService' | 'mutationTiming'> & { taskExecutor: TaskRunner },
@@ -844,7 +851,7 @@ export async function fixWithAgentAction(
     assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task.execution);
   }
 
-  const effectiveAgentName = options.agentName ?? DEFAULT_EXECUTION_AGENT;
+  const effectiveAgentName = options.agentName ?? resolveTaskRunnerDefaultExecutionAgent(taskExecutor);
   const savedError = task.execution.error ?? '';
   const recoveryRoute = await selectFailureRecoveryRouteForAction(task, savedError, taskExecutor, options.recoveryRoute);
   if (recoveryRoute.kind === 'invalidMergeWorkspace') {

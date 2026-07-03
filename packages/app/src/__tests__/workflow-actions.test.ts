@@ -1225,6 +1225,42 @@ describe('fixWithAgentAction', () => {
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
   });
 
+  it('uses the task runner default agent when manual fix omits agentName', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a' },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      getDefaultExecutionAgent: vi.fn(() => 'claude'),
+      fixWithAgent: vi.fn().mockRejectedValue(new Error('agent failed')),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+    })).rejects.toThrow('agent failed');
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      '\n[Fix with claude] Failed: agent failed',
+    );
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-a', 'boom', 'agent failed');
+  });
+
   it('dispatches merge conflicts with a workspace to taskExecutor.resolveConflict', async () => {
     const mergeError = JSON.stringify({
       type: 'merge_conflict',
@@ -1374,6 +1410,7 @@ describe('fixWithAgentAction', () => {
       getTaskOutput: vi.fn(),
     };
     const taskExecutor = {
+      getDefaultExecutionAgent: vi.fn(() => 'claude'),
       preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
       execGitIn: vi.fn().mockRejectedValue(new Error('fatal: not a git repository')),
       fixWithAgent: vi.fn(),
@@ -1385,8 +1422,6 @@ describe('fixWithAgentAction', () => {
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
       commandService: makeCommandService(),
-    }, {
-      failureOutputLabel: 'Fix with AI',
     })).rejects.toThrow('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository');
 
     expect(taskExecutor.execGitIn).toHaveBeenCalledWith(
@@ -1397,7 +1432,7 @@ describe('fixWithAgentAction', () => {
     expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
       'merge-a',
-      expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+      expect.stringContaining('\n[Fix with claude] Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
     );
     expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
       'merge-a',
