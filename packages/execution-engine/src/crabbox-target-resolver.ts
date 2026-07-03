@@ -114,8 +114,12 @@ export function spawnCrabboxCommand(
       stderr += chunk.toString();
     });
     child.on('error', reject);
-    child.on('close', (code) => {
-      resolve({ stdout, stderr, exitCode: code ?? 0 });
+    child.on('close', (code, signal) => {
+      if (code === null) {
+        reject(new Error(`Crabbox process terminated by signal ${signal ?? 'unknown'}.`));
+        return;
+      }
+      resolve({ stdout, stderr, exitCode: code });
     });
   });
 }
@@ -259,7 +263,12 @@ export class CrabboxTargetResolver {
         : (config.port ?? DEFAULT_SSH_PORT);
     const leaseId = asNonEmptyString(json.id) ?? leaseRef;
     const slug = asNonEmptyString(json.slug) ?? leaseId;
-    const expiresAt = asNonEmptyString(json.expiresAt) ?? '';
+    const expiresAt = asNonEmptyString(json.expiresAt);
+    if (!expiresAt) {
+      throw new Error(
+        `Crabbox status for remote target "${config.id}" is missing required lease field: expiresAt.`,
+      );
+    }
 
     return {
       sshTarget: {

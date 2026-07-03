@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CrabboxTargetResolver,
+  spawnCrabboxCommand,
   buildCrabboxWarmupArgs,
   buildCrabboxStatusArgs,
   type CrabboxCommandResult,
@@ -54,6 +55,17 @@ function scriptRunner(results: CrabboxCommandResult[]): {
   };
   return { runner, calls };
 }
+
+describe('spawnCrabboxCommand', () => {
+  it('rejects when the child process is terminated by a signal', async () => {
+    await expect(
+      spawnCrabboxCommand(process.execPath, [
+        '-e',
+        'process.kill(process.pid, "SIGTERM")',
+      ]),
+    ).rejects.toThrow(/signal/i);
+  });
+});
 
 describe('buildCrabboxWarmupArgs', () => {
   it('builds warmup args from config plus explicit warmupArgs', () => {
@@ -155,6 +167,7 @@ describe('CrabboxTargetResolver.resolve', () => {
     const status = JSON.stringify({
       id: 'lease-123',
       slug: 'happy-crab',
+      expiresAt: '2026-01-01T00:30:00.000Z',
       sshHost: '10.0.0.5',
       sshUser: 'invoker',
       sshKey: '/home/me/.ssh/crabbox',
@@ -174,6 +187,7 @@ describe('CrabboxTargetResolver.resolve', () => {
     const status = JSON.stringify({
       id: 'lease-123',
       slug: 'happy-crab',
+      expiresAt: '2026-01-01T00:30:00.000Z',
       sshHost: '10.0.0.5',
       sshUser: 'invoker',
       sshKey: '/home/me/.ssh/crabbox',
@@ -183,6 +197,21 @@ describe('CrabboxTargetResolver.resolve', () => {
     const result = await new CrabboxTargetResolver(runner).resolve(baseConfig);
 
     expect(result.sshTarget.port).toBe(22);
+  });
+
+  it('rejects missing expiresAt instead of building blank lease metadata', async () => {
+    const status = JSON.stringify({
+      id: 'lease-123',
+      slug: 'happy-crab',
+      sshHost: '10.0.0.5',
+      sshUser: 'invoker',
+      sshKey: '/home/me/.ssh/crabbox',
+    });
+    const { runner } = scriptRunner([ok('lease-123'), ok(status)]);
+
+    await expect(
+      new CrabboxTargetResolver(runner).resolve(baseConfig),
+    ).rejects.toThrow(/expiresAt/);
   });
 
   it('rejects missing sshHost/sshUser/sshKey with an error naming the target id', async () => {
