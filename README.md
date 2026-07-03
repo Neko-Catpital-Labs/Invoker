@@ -155,6 +155,7 @@ Minimal example:
 ```json
 {
   "maxConcurrency": 6,
+  "defaultExecutionAgent": "codex",
   "autoFixRetries": 3,
   "autoFixAgent": "claude",
   "autoFixCi": false,

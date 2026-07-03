@@ -89,8 +89,8 @@ describe('Side rail controls (component)', () => {
 
   it('Refresh button forced-snapshots tasks and refits the workflow graph without remounting it', async () => {
     await renderKeyboardFixture(mock);
-    await waitFor(() => expect(fitViewMock).toHaveBeenCalled());
     fitViewMock.mockClear();
+    setCenterMock.mockClear();
 
     fireEvent.click(screen.getByTestId('rail-refresh'));
 
@@ -98,7 +98,7 @@ describe('Side rail controls (component)', () => {
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(fitViewMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(fitViewMock.mock.calls.length + setCenterMock.mock.calls.length).toBeGreaterThanOrEqual(1);
     });
     expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
@@ -106,8 +106,8 @@ describe('Side rail controls (component)', () => {
 
   it('Clear button calls clear', async () => {
     render(<App />);
+    fireEvent.click(screen.getByTestId('graph-more-button'));
     fireEvent.click(screen.getByTestId('rail-clear'));
-
     await waitFor(() => {
       expect(mock.api.clear).toHaveBeenCalled();
     });

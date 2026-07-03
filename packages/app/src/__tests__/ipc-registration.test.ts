@@ -219,6 +219,7 @@ describe('ipc-registration', () => {
       getTasks: () => [{ id: 'task-1' } as any],
       getWorkflows: () => [{ id: 'workflow-1' }],
       getInitialWorkflowId: () => 'workflow-1',
+      getRuntimeStatus: () => ({ ownerMode: true, readOnly: false, mode: 'local-owner' }),
       appStartedAtEpochMs: 123,
       getTaskDeltaStreamSequence: () => 7,
       recordStartupDuration,
@@ -231,6 +232,7 @@ describe('ipc-registration', () => {
       tasks: [{ id: 'task-1' }],
       workflows: [{ id: 'workflow-1' }],
       initialWorkflowId: 'workflow-1',
+      runtimeStatus: { ownerMode: true, readOnly: false, mode: 'local-owner' },
       appStartedAtEpochMs: 123,
       streamSequence: 7,
     });
@@ -243,5 +245,26 @@ describe('ipc-registration', () => {
         jsonSizeBytes: expect.any(Number),
       }),
     );
+  });
+
+  it('includes runtime status in the bootstrap payload when provided', () => {
+    const { ipcMain, onHandlers } = createFakeIpcMain();
+    registerBootstrapStateIpc({
+      ipcMain,
+      getTasks: () => [],
+      getWorkflows: () => [],
+      getInitialWorkflowId: () => null,
+      appStartedAtEpochMs: 123,
+      getTaskDeltaStreamSequence: () => 0,
+      getRuntimeStatus: () => ({ ownerMode: false, readOnly: true, mode: 'read-only' }),
+      recordStartupDuration: vi.fn(),
+    });
+
+    const event: { returnValue?: unknown } = {};
+    onHandlers.get('invoker:get-bootstrap-state-sync')?.(event);
+
+    expect(event.returnValue).toMatchObject({
+      runtimeStatus: { ownerMode: false, readOnly: true, mode: 'read-only' },
+    });
   });
 });

@@ -34,6 +34,23 @@ export function mergeTrace(tag: string, data: Record<string, unknown>): void {
   } catch { /* best effort */ }
 }
 
+type TaskLogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+function logTaskProgress(
+  host: MergeRunnerHost,
+  taskId: string,
+  level: TaskLogLevel,
+  message: string,
+  detail: Record<string, unknown> = {},
+): void {
+  try {
+    const logger = host.persistence as { logEvent?: (taskId: string, eventType: string, payload?: unknown) => void };
+    logger.logEvent?.(taskId, 'task.log', { level, message, ...detail });
+  } catch {
+    // Best-effort progress telemetry must not fail merge execution.
+  }
+}
+
 /** Unit tests may use partial persistence mocks without {@link SQLiteAdapter.getWorkspacePath}. */
 function safeGetWorkspacePath(persistence: SQLiteAdapter, taskId: string): string | null | undefined {
   const p = persistence as { getWorkspacePath?: (this: SQLiteAdapter, id: string) => string | null };
@@ -550,6 +567,12 @@ export async function runMergeGateActionImpl(
     featureBranch: featureBranch ?? null,
     persistedWorkspaceBefore: safeGetWorkspacePath(host.persistence, task.id),
   });
+  logTaskProgress(host, task.id, 'info', 'Starting merge gate', {
+    workflowId,
+    mergeMode,
+    onFinish,
+    featureBranch: featureBranch ?? null,
+  });
   console.log(
     `[merge-gate-workspace] executeMergeNode enter task=${task.id} featureBranch=${featureBranch ?? 'none'} ` +
       `mergeMode=${mergeMode} onFinish=${onFinish} dbWorkspacePath=${safeGetWorkspacePath(host.persistence, task.id) ?? 'NULL'}`,
@@ -569,6 +592,10 @@ export async function runMergeGateActionImpl(
   // `git checkout <branch>` to switch to featureBranch anyway.
   let gateWorkspacePath: string | undefined = opts.gateWorkspacePath;
   if (!gateWorkspacePath && featureBranch) {
+    logTaskProgress(host, task.id, 'info', 'Preparing review workspace', {
+      baseBranch,
+      featureBranch,
+    });
     const baseCheckoutRef = await resolveBaseCheckoutRef(
       host,
       baseBranch,
@@ -579,6 +606,9 @@ export async function runMergeGateActionImpl(
       'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
       workflow?.repoUrl,
     );
+    logTaskProgress(host, task.id, 'info', 'Review workspace ready', {
+      workspacePath: gateWorkspacePath,
+    });
     mergeTrace('GATE_WS_GATE_CLONE_CREATED', { taskId: task.id, gateWorkspacePath });
     console.log(`[merge-gate-workspace] gate clone created task=${task.id} path=${gateWorkspacePath}`);
   } else {
@@ -594,6 +624,9 @@ export async function runMergeGateActionImpl(
   if (featureBranch && (onFinish !== 'none' || mergeMode === 'external_review')) {
     const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
     try {
+      logTaskProgress(host, task.id, 'info', 'Collecting completed task branches', {
+        featureBranch,
+      });
       const baseCheckoutRef = await resolveBaseCheckoutRef(
         host,
         baseBranch,
@@ -641,6 +674,9 @@ export async function runMergeGateActionImpl(
         // The PR branch is pushed from the separate consolidation clone above.
         // Fetch it into the persistent gate workspace and check it out before
         // persisting the workspace handoff used by review terminals.
+        logTaskProgress(host, task.id, 'info', 'Checking out review branch in gate workspace', {
+          featureBranch,
+        });
         await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
 
         const expectedGeneration = task.execution.generation ?? 0;
@@ -660,6 +696,9 @@ export async function runMergeGateActionImpl(
           if (!host.publishReviewStackWithMakePrSkill) {
             throw new Error('make-pr skill is required to publish Invoker review stacks');
           }
+          logTaskProgress(host, task.id, 'info', 'Publishing review stack with make-pr agent', {
+            featureBranch,
+          });
           const published = await host.publishReviewStackWithMakePrSkill({
             workflowId,
             mergeNodeTaskId: task.id,
@@ -668,6 +707,11 @@ export async function runMergeGateActionImpl(
             featureBranch: featureBranch!,
             workflowSummary: fullSummary ?? '',
             cwd: gateWorkspacePath!,
+          });
+          logTaskProgress(host, task.id, 'info', 'Review stack published', {
+            agentName: published.agentName,
+            artifactCount: published.artifacts.length,
+            reviewUrl: published.artifacts[0]?.url,
           });
           const artifacts = published.artifacts.map((artifact) => ({
             ...artifact,
@@ -690,6 +734,9 @@ export async function runMergeGateActionImpl(
           );
         } else {
           // Route through shared PR-authoring helper for consistent PR bodies.
+          logTaskProgress(host, task.id, 'info', 'Authoring PR body', {
+            featureBranch,
+          });
           const structuredCtx = workflowId
             ? await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture)
             : undefined;
@@ -706,12 +753,19 @@ export async function runMergeGateActionImpl(
 
           // Create PR via provider (consolidation already done above).
           // Use the gate clone dir so gh CLI resolves the correct GitHub remote.
+          logTaskProgress(host, task.id, 'info', 'Creating review PR', {
+            featureBranch,
+          });
           const result = await host.mergeGateProvider!.createReview({
             baseBranch,
             featureBranch,
             title: workflow?.name ?? 'Workflow',
             cwd: gateWorkspacePath!,
             body: prBody,
+          });
+          logTaskProgress(host, task.id, 'info', 'Review PR created', {
+            reviewUrl: result.url,
+            reviewId: result.identifier,
           });
           console.log(`[merge] Created GitHub PR: ${result.url}`);
 
@@ -776,6 +830,9 @@ export async function runMergeGateActionImpl(
         outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
       };
     } catch (err) {
+      logTaskProgress(host, task.id, 'error', 'Merge gate failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
@@ -1216,6 +1273,9 @@ export async function publishAfterFixImpl(
     }
 
     // Push feature branch directly to origin (GitHub) from the gate clone
+    logTaskProgress(host, task.id, 'info', 'Pushing feature branch', {
+      featureBranch,
+    });
     await pushFeatureBranchWithRefLockRetry(host, consolidateDir, featureBranch);
 
     let fullSummary = summary;
@@ -1243,6 +1303,9 @@ export async function publishAfterFixImpl(
         if (!host.publishReviewStackWithMakePrSkill) {
           throw new Error('make-pr skill is required to publish Invoker review stacks');
         }
+        logTaskProgress(host, task.id, 'info', 'Publishing review stack with make-pr agent', {
+          featureBranch,
+        });
         const published = await host.publishReviewStackWithMakePrSkill({
           workflowId,
           mergeNodeTaskId: task.id,
@@ -1251,6 +1314,11 @@ export async function publishAfterFixImpl(
           featureBranch,
           workflowSummary: fullSummary ?? '',
           cwd: consolidateDir,
+        });
+        logTaskProgress(host, task.id, 'info', 'Review stack published', {
+          agentName: published.agentName,
+          artifactCount: published.artifacts.length,
+          reviewUrl: published.artifacts[0]?.url,
         });
         const artifacts = published.artifacts.map((artifact) => ({
           ...artifact,
@@ -1271,6 +1339,9 @@ export async function publishAfterFixImpl(
         );
       } else {
         // Route through shared PR-authoring helper for consistent PR bodies.
+        logTaskProgress(host, task.id, 'info', 'Authoring PR body', {
+          featureBranch,
+        });
         const structuredCtxReview = workflowId
           ? await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture2)
           : undefined;
@@ -1285,12 +1356,19 @@ export async function publishAfterFixImpl(
           cwd: consolidateDir,
         });
 
+        logTaskProgress(host, task.id, 'info', 'Creating review PR', {
+          featureBranch,
+        });
         const result = await host.mergeGateProvider!.createReview({
           baseBranch,
           featureBranch,
           title: workflow?.name ?? 'Workflow',
           cwd: consolidateDir,
           body: prBodyReview,
+        });
+        logTaskProgress(host, task.id, 'info', 'Review PR created', {
+          reviewUrl: result.url,
+          reviewId: result.identifier,
         });
         console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
 

@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
+import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions, ExecutionModelOption } from '../agent.js';
 
 export interface ClaudeExecutionAgentConfig {
   /** Command to invoke the Claude CLI. Default: 'claude'. */
@@ -23,12 +23,19 @@ export interface ClaudeExecutionAgentConfig {
   apiKey?: string;
 }
 
+const CLAUDE_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
+  { id: 'sonnet', label: 'Claude Sonnet' },
+  { id: 'opus', label: 'Claude Opus' },
+  { id: 'haiku', label: 'Claude Haiku' },
+];
+
 export class ClaudeExecutionAgent implements ExecutionAgent {
   readonly name = 'claude';
   readonly stdinMode = 'ignore' as const;
   readonly linuxTerminalTail = 'exec_bash' as const;
   readonly bundledSkillRoot: string;
   readonly bundledSkills = ['make-pr'] as const;
+  readonly supportedModels = CLAUDE_SUPPORTED_MODELS;
 
   private readonly command: string;
   private readonly fixCommand: string;
@@ -45,23 +52,27 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
     this.bundledSkillRoot = join(this.configDir, 'skills');
   }
 
-  buildCommand(fullPrompt: string): AgentCommandSpec {
+  buildCommand(fullPrompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
     const sessionId = randomUUID();
     return {
       cmd: this.command,
-      args: ['--session-id', sessionId, '--dangerously-skip-permissions', '-p', fullPrompt],
+      args: ['--session-id', sessionId, '--dangerously-skip-permissions', ...this.buildModelArgs(options.executionModel), '-p', fullPrompt],
       sessionId,
       fullPrompt,
     };
   }
 
-  buildFixCommand(prompt: string): AgentCommandSpec {
+  buildFixCommand(prompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
     const sessionId = randomUUID();
     return {
       cmd: this.fixCommand,
-      args: ['--session-id', sessionId, '-p', prompt, '--dangerously-skip-permissions'],
+      args: ['--session-id', sessionId, ...this.buildModelArgs(options.executionModel), '-p', prompt, '--dangerously-skip-permissions'],
       sessionId,
     };
+  }
+
+  private buildModelArgs(executionModel?: string): string[] {
+    return executionModel ? ['--model', executionModel] : [];
   }
 
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {

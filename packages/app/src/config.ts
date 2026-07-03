@@ -8,6 +8,23 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
+
+export interface ExternalWorkerLaunchConfig {
+  /** Executable used to start the external worker process. */
+  executable: string;
+  /** Optional argv passed after the executable. */
+  args?: string[];
+  /** Optional process working directory for the worker launch. */
+  cwd?: string;
+}
+
+export interface ExternalWorkerConfig {
+  /** Stable worker registry kind declared by the operator. */
+  kind: string;
+  /** Process invocation used by the loader to start the external worker. */
+  launch: ExternalWorkerLaunchConfig;
+}
 
 export interface InvokerConfig {
   defaultBranch?: string;
@@ -67,6 +84,10 @@ export interface InvokerConfig {
    * then to the built-in default agent.
    */
   autoFixAgent?: string;
+  /** Default execution harness for prompt-backed tasks when the task does not override it. */
+  defaultExecutionAgent?: string;
+  /** Default execution model for prompt-backed tasks when the task does not override it. */
+  defaultExecutionModel?: string;
   /**
    * When true, failed CI checks on Invoker-created review-gate PRs can
    * trigger the same auto-fix recovery flow used for task failures.
@@ -238,7 +259,20 @@ export interface InvokerConfig {
     /** Routing strategy. Defaults to "enforce". */
     strategy?: 'enforce' | 'route';
   }>;
+  /**
+   * Operator-declared external worker list, with each worker identified by registry kind.
+   * The loader consumes this later; absent means no external workers.
+   */
+  externalWorkers?: ExternalWorkerConfig[];
 }
+export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
+  'cursor+claude': { tool: 'cursor', model: 'claude' },
+  'cursor+codex': { tool: 'cursor', model: 'codex' },
+  'omp+claude': { tool: 'omp', model: 'claude' },
+  'omp+codex': { tool: 'omp', model: 'codex' },
+  omp: { tool: 'omp' },
+  codex: { tool: 'codex' },
+};
 
 function readJsonSafe(path: string): InvokerConfig {
   if (!existsSync(path)) {
@@ -262,16 +296,35 @@ function readJsonSafe(path: string): InvokerConfig {
 }
 
 export function resolveConfigFilePath(): string {
-  return process.env.INVOKER_REPO_CONFIG_PATH ?? join(homedir(), '.invoker', 'config.json');
+  const override = process.env.INVOKER_REPO_CONFIG_PATH?.trim();
+  return override || join(homedir(), '.invoker', 'config.json');
 }
 
 export function resolveConfigFileState(): { path: string; exists: boolean } {
   const path = resolveConfigFilePath();
   return { path, exists: existsSync(path) };
 }
-
 export function loadConfig(): InvokerConfig {
   return readJsonSafe(resolveConfigFilePath());
+}
+export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
+  const configured = config.defaultExecutionAgent?.trim();
+  return configured && configured.length > 0 ? configured : BUILT_IN_DEFAULT_EXECUTION_AGENT;
+}
+
+
+export interface DefaultTaskExecutionSettings {
+  executionAgent: string;
+  executionModel?: string;
+}
+
+export function resolveDefaultTaskExecutionSettings(config: InvokerConfig): DefaultTaskExecutionSettings {
+  const configuredAgent = config.defaultExecutionAgent?.trim();
+  const configuredModel = config.defaultExecutionModel?.trim();
+  return {
+    executionAgent: configuredAgent && configuredAgent.length > 0 ? configuredAgent : BUILT_IN_DEFAULT_EXECUTION_AGENT,
+    ...(configuredModel && configuredModel.length > 0 ? { executionModel: configuredModel } : {}),
+  };
 }
 
 

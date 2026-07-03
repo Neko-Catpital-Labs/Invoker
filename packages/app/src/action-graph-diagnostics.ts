@@ -23,6 +23,19 @@ export function resolveActionDiagnosticsStallThresholdMs(config: InvokerConfig, 
   const parsed = raw ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_STALL_THRESHOLD_MS;
 }
+const ACTION_GRAPH_TEXT_LIMITS = {
+  label: 2_048,
+  latestError: 8_192,
+  historyMessage: 2_048,
+} as const;
+
+function truncateActionGraphText(value: string, maxLength: number): string;
+function truncateActionGraphText(value: string | undefined, maxLength: number): string | undefined;
+function truncateActionGraphText(value: string | undefined, maxLength: number): string | undefined {
+  if (value === undefined || value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}… [truncated ${value.length - maxLength} chars]`;
+}
+
 
 export interface ActionGraphDiagnosticsInput {
   workflows: Workflow[];
@@ -95,14 +108,14 @@ function compactHistory(events: TaskEvent[], activityLogs: ActivityLogEntry[]): 
     id: `event:${event.id}`,
     timestamp: event.createdAt,
     source: event.eventType,
-    message: event.payload ?? event.eventType,
+    message: truncateActionGraphText(event.payload ?? event.eventType, ACTION_GRAPH_TEXT_LIMITS.historyMessage),
   }));
   const logs = activityLogs.slice(-10).map((entry) => ({
     id: `activity:${entry.id}`,
     timestamp: entry.timestamp,
     source: entry.source,
     level: entry.level,
-    message: entry.message,
+    message: truncateActionGraphText(entry.message, ACTION_GRAPH_TEXT_LIMITS.historyMessage),
   }));
   return [...taskEvents, ...logs].sort((a, b) => a.timestamp.localeCompare(b.timestamp)).slice(-25);
 }
@@ -140,7 +153,7 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
     nodes.push({
       id: actionId,
       type: 'user-action',
-      label: workflow.name || workflow.id,
+      label: truncateActionGraphText(workflow.name || workflow.id, ACTION_GRAPH_TEXT_LIMITS.label) ?? workflow.id,
       status: taskStatusToActionStatus(workflow.status as TaskState['status']),
       workflowId: workflow.id,
       createdAt: workflow.createdAt,
@@ -176,7 +189,7 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
       createdAt: intent.createdAt,
       startedAt: intent.startedAt,
       completedAt: intent.completedAt,
-      latestError: intent.error,
+      latestError: truncateActionGraphText(intent.error, ACTION_GRAPH_TEXT_LIMITS.latestError),
       durations: {
         queuedMs: intent.status === 'queued' ? ageMs(nowMs, intent.createdAt) : undefined,
         runningMs: intent.status === 'running' ? ageMs(nowMs, intent.startedAt) : undefined,
@@ -302,7 +315,7 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
       nodes.push({
         id: nodeId,
         type: 'task-attempt',
-        label: task.description,
+        label: truncateActionGraphText(task.description, ACTION_GRAPH_TEXT_LIMITS.label) ?? task.id,
         status: stalled ? 'stalled' : attemptStatusToActionStatus(attempt.status),
         workflowId,
         taskId: task.id,
@@ -313,7 +326,7 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
         completedAt: iso(attempt.completedAt),
         heartbeatAt: iso(attempt.lastHeartbeatAt),
         leaseExpiresAt: iso(attempt.leaseExpiresAt),
-        latestError: attempt.error ?? task.execution.error,
+        latestError: truncateActionGraphText(attempt.error ?? task.execution.error, ACTION_GRAPH_TEXT_LIMITS.latestError),
         history: attempt.id === selectedAttemptId ? compactHistory(taskEvents, input.activityLogs) : undefined,
         durations: {
           queuedMs: queuedQueueIds.has(task.id) ? ageMs(nowMs, attempt.createdAt) : undefined,

@@ -9,7 +9,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -33,27 +34,103 @@ describe('App launch (component)', () => {
     mock.cleanup();
   });
 
-  it('shows empty state prompt when no plan is loaded', () => {
+  it('shows the reskinned empty shell when no plan is loaded', () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
+    expect(screen.getByText('Start with a goal.')).toBeInTheDocument();
+    expect(screen.getByText('Invoker Terminal')).toBeInTheDocument();
+    expect(screen.getByText('What to expect')).toBeInTheDocument();
+    expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('sidebar-home')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
+    expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
   });
 
-  it('renders left rail navigation and workflow controls', () => {
+  it('renders the Apple-like source list without manual plan loading', () => {
     render(<App />);
-    expect(screen.getByTestId('rail-open-file')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-home')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-timeline')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-history')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-queue')).toBeInTheDocument();
-    expect(screen.queryByTestId('rail-attention')).not.toBeInTheDocument();
-    expect(screen.getByTestId('rail-refresh')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-clear')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-open-file')).not.toBeInTheDocument();
+    expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
+    expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
+    expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
+  });
+
+  it('returns home when Invoker is selected at the top', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha', status: 'running' },
+    ];
+    const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'running', workflowId: 'wf-alpha' });
+
+    render(<App />);
+    act(() => mock.setTasks([alpha], workflows));
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    expect(await screen.findByText('1 workflow')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(screen.getByText('Alpha · running')).toBeInTheDocument();
+  });
+  it('auto-collapses the app sidebar for browser views, focuses attention tasks, and collapses the inspector on narrow windows', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha', status: 'running' },
+    ];
+    const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'failed', workflowId: 'wf-alpha' });
+
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+
+    render(<App />);
+    act(() => mock.setTasks([alpha], workflows));
+    act(() => window.dispatchEvent(new Event('resize')));
+
+    fireEvent.click(await screen.findByTestId('sidebar-attention'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+    expect(screen.getByTestId('workflow-inspector-shell').className).toContain('w-16');
+    expect(screen.queryByText('Invoker Terminal')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Needs Attention' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
+    expect(screen.queryByText('More needs attention')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Invoker Terminal')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
 
   it('shows workflow status chips and terminal drawer controls in home view', () => {
     render(<App />);
     expect(screen.getByTestId('workflow-status-pill-running')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
+  });
+
+  it('requests runtime status for read-only windows', async () => {
+    mock.api.getRuntimeStatus = vi.fn(async () => ({
+      ownerMode: false,
+      readOnly: true,
+      mode: 'read-only',
+    }));
+
+    await act(async () => {
+      render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mock.api.getRuntimeStatus).toHaveBeenCalled();
+    expect(screen.getByTestId('read-only-mode-banner')).toBeInTheDocument();
+  });
+
+  it('hides the read-only banner for the local write owner', async () => {
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId('read-only-mode-banner')).not.toBeInTheDocument();
   });
 
   it('warns when no Claude or Codex CLI is installed', async () => {

@@ -47,13 +47,16 @@ vi.mock('@slack/bolt', () => {
 });
 
 const mockSendMessage = vi.fn();
+let mockDraftedPlan: string | null = null;
 const mockPlanConversation = {
   sendMessage: mockSendMessage,
+  getDraftedPlan: () => mockDraftedPlan,
   submittedPlanText: null as any,
   planSubmitted: false,
 };
 
-vi.mock('../slack/plan-conversation.js', () => ({
+vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../slack/plan-conversation.js')>()),
   PlanConversation: vi.fn(() => mockPlanConversation),
 }));
 
@@ -89,8 +92,8 @@ describe('SlackSurface', () => {
     it('registers action handlers for approve, reject, select, input', async () => {
       await surface.start(async () => {});
       const app = surface.getApp() as any;
-      // 4 action registrations: approve:, reject:, select:, input:
-      expect(app.action).toHaveBeenCalledTimes(4);
+      // 6 action registrations: approve:, reject:, select:, input:, lobby_confirm, lobby_cancel
+      expect(app.action).toHaveBeenCalledTimes(6);
     });
 
     it('registers app_mention and message event handlers', async () => {
@@ -490,6 +493,7 @@ describe('SlackSurface', () => {
       mockSendMessage.mockReset();
       mockPlanConversation.submittedPlanText = null;
       mockPlanConversation.planSubmitted = false;
+      mockDraftedPlan = null;
 
       surfaceWithApi = new SlackSurface({
         botToken: 'xoxb-test',
@@ -500,13 +504,10 @@ describe('SlackSurface', () => {
       });
     });
 
-    it('calls start_plan when planSubmitted is true after sendMessage', async () => {
-      const planText = 'name: "Test Plan"\ntasks:\n  - id: t1\n    description: "Do something"\n    dependencies: []\n';
-      mockSendMessage.mockImplementation(async () => {
-        mockPlanConversation.submittedPlanText = planText;
-        mockPlanConversation.planSubmitted = true;
-        return 'Submitting plan now.';
-      });
+    it('submits the drafted plan only after an explicit submit + confirmation', async () => {
+      const planText = 'name: "Test Plan"\ntasks:\n  - id: t1\n    description: "Do something useful"\n    dependencies: []\n';
+      mockSendMessage.mockResolvedValue('Here is your plan.');
+      mockDraftedPlan = planText;
 
       await surfaceWithApi.start(async (cmd) => {
         receivedCommands.push(cmd);
@@ -514,25 +515,22 @@ describe('SlackSurface', () => {
 
       const app = surfaceWithApi.getApp() as any;
       const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+      const messageHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'message')?.handler;
 
-      const say = vi.fn().mockResolvedValue({ ts: '1111.001' });
-      await mentionHandler({
-        event: { text: '<@U_BOT> build me a REST API', ts: '1111', thread_ts: undefined },
-        say,
-      });
+      // Build request → a planning conversation in the thread; nothing submitted.
+      const say1 = vi.fn().mockResolvedValue({ ts: '1111.001' });
+      await mentionHandler({ event: { text: '<@U_BOT> build me a REST API', ts: '1111', thread_ts: undefined }, say: say1 });
+      expect(receivedCommands).toHaveLength(0);
 
-      // Should post immediate ack (via say), replace it with actual response (via update), then post execution message
-      expect(say).toHaveBeenNthCalledWith(1, expect.objectContaining({ text: 'Processing your request...' }));
-      expect(app.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
-        channel: 'C-test',
-        ts: '1111.001',
-        text: 'Submitting plan now.',
-      }));
-      expect(say).toHaveBeenCalledWith(expect.objectContaining({
-        text: expect.stringContaining('Starting'),
-      }));
+      // Explicit submit → plain-English summary + confirmation, still no start_plan.
+      const say2 = vi.fn().mockResolvedValue({ ts: '1111.002' });
+      await mentionHandler({ event: { text: '<@UBOT> submit', ts: '1111.5', thread_ts: '1111' }, say: say2 });
+      expect(say2).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Do something useful') }));
+      expect(receivedCommands).toHaveLength(0);
 
-      // Should emit start_plan command with raw plan text
+      // Confirm → start_plan with the raw plan text.
+      const say3 = vi.fn().mockResolvedValue({ ts: '1111.003' });
+      await messageHandler({ event: { text: 'yes', ts: '1111.6', thread_ts: '1111', user: 'U1' }, say: say3 });
       expect(receivedCommands).toEqual([
         expect.objectContaining({ type: 'start_plan', planText }),
       ]);

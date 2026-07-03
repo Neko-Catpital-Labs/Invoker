@@ -15,7 +15,6 @@ import type { WorkRequest } from '@invoker/contracts';
 
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { formatLifecycleTag, extractAttemptSuffix } from './branch-utils.js';
-import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import type { TaskRunnerPhaseHost } from './task-runner-phase-host.js';
 
 export async function buildWorkRequest(
@@ -123,7 +122,8 @@ export async function buildWorkRequest(
   };
 
   const actionType = host.determineActionType(task);
-  const executionAgent = task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT;
+  const executionAgent = task.config.executionAgent?.trim() || host.getDefaultExecutionAgent();
+  const executionModel = task.config.executionModel?.trim() || host.getDefaultExecutionModel();
   const request: WorkRequest = {
     requestId: randomUUID(),
     actionId: task.id,
@@ -135,6 +135,7 @@ export async function buildWorkRequest(
       command: task.config.command,
       prompt: task.config.prompt,
       executionAgent,
+      executionModel,
       repoUrl,
       branchRepoUrl,
       featureBranch: task.config.featureBranch,

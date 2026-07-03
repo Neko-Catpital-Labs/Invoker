@@ -135,6 +135,12 @@ export function createGuiMutationRegistrars(
   };
 }
 
+export interface RuntimeStatusSnapshot {
+  ownerMode: boolean;
+  readOnly: boolean;
+  mode: 'local-owner' | 'daemon-owner' | 'read-only';
+}
+
 export interface BootstrapStateIpcContext {
   ipcMain: Pick<IpcMain, 'on'>;
   getTasks: () => TaskState[];
@@ -142,6 +148,7 @@ export interface BootstrapStateIpcContext {
   getInitialWorkflowId: () => string | null;
   appStartedAtEpochMs: number;
   getTaskDeltaStreamSequence: () => number;
+  getRuntimeStatus?: () => RuntimeStatusSnapshot;
   recordStartupDuration: (
     phase: string,
     startedAtMs: number,
@@ -155,12 +162,14 @@ export function registerBootstrapStateIpc(context: BootstrapStateIpcContext): vo
     const tasks = context.getTasks();
     const workflows = context.getWorkflows();
     const streamSequence = context.getTaskDeltaStreamSequence();
+    const runtimeStatus = context.getRuntimeStatus?.();
     const payload = {
       tasks,
       workflows,
       initialWorkflowId: context.getInitialWorkflowId(),
       appStartedAtEpochMs: context.appStartedAtEpochMs,
       streamSequence,
+      ...(runtimeStatus ? { runtimeStatus } : {}),
     };
     const jsonSizeBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
     context.recordStartupDuration('bootstrap-ipc.serialize-return', startedAtMs, {

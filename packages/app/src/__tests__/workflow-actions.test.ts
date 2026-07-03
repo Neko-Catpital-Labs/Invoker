@@ -97,7 +97,7 @@ describe('fresh-base workflow lifecycle helpers', () => {
     });
 
     expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
@@ -217,7 +217,7 @@ describe('rebaseRecreate', () => {
     });
 
     expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
@@ -666,7 +666,7 @@ describe('autoFixOnFailure', () => {
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
@@ -761,7 +761,7 @@ describe('autoFixOnFailure', () => {
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
@@ -803,7 +803,7 @@ describe('autoFixOnFailure', () => {
       commandService: makeCommandService(),
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
   });
 
@@ -1042,13 +1042,13 @@ describe('autoFixOnFailure', () => {
       getAutoFixAgent: () => '   ',
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
       expect.objectContaining({
         phase: 'auto-fix-agent-selected',
-        selectedAgent: 'claude',
+        selectedAgent: 'codex',
         selectedAgentSource: 'default',
       }),
     );
@@ -1094,13 +1094,13 @@ describe('autoFixOnFailure', () => {
       getAutoFixAgent: () => undefined,
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex');
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
       expect.objectContaining({
         phase: 'auto-fix-agent-selected',
-        selectedAgent: 'claude',
+        selectedAgent: 'codex',
         selectedAgentSource: 'default',
       }),
     );
@@ -1225,6 +1225,42 @@ describe('fixWithAgentAction', () => {
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
   });
 
+  it('uses the task runner default agent when manual fix omits agentName', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a' },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      getDefaultExecutionAgent: vi.fn(() => 'custom-agent'),
+      fixWithAgent: vi.fn().mockRejectedValue(new Error('agent failed')),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+    })).rejects.toThrow('agent failed');
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'custom-agent', 'boom');
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      '\n[Fix with custom-agent] Failed: agent failed',
+    );
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-a', 'boom', 'agent failed');
+  });
+
   it('dispatches merge conflicts with a workspace to taskExecutor.resolveConflict', async () => {
     const mergeError = JSON.stringify({
       type: 'merge_conflict',
@@ -1338,7 +1374,7 @@ describe('fixWithAgentAction', () => {
       'task-a',
       expect.stringContaining('Startup merge conflict detected; recreating workflow wf-1 from a fresh base.'),
     );
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
     expect(result).toEqual({
       kind: 'recreateWorkflowFromFreshBase',
@@ -1374,6 +1410,7 @@ describe('fixWithAgentAction', () => {
       getTaskOutput: vi.fn(),
     };
     const taskExecutor = {
+      getDefaultExecutionAgent: vi.fn(() => 'claude'),
       preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
       execGitIn: vi.fn().mockRejectedValue(new Error('fatal: not a git repository')),
       fixWithAgent: vi.fn(),
@@ -1385,8 +1422,6 @@ describe('fixWithAgentAction', () => {
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
       commandService: makeCommandService(),
-    }, {
-      failureOutputLabel: 'Fix with AI',
     })).rejects.toThrow('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository');
 
     expect(taskExecutor.execGitIn).toHaveBeenCalledWith(
@@ -1397,7 +1432,7 @@ describe('fixWithAgentAction', () => {
     expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
       'merge-a',
-      expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+      expect.stringContaining('\n[Fix with claude] Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
     );
     expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
       'merge-a',
@@ -1668,9 +1703,7 @@ describe('buildWorkflowInvalidationDeps', () => {
         if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
         return workflow as any;
       },
-      setWorkflowGeneration: (workflowId, generation) => {
-        persistence.updateWorkflow(workflowId, { generation });
-      },
+      
       killActiveExecution: taskExecutor?.killActiveExecution?.bind(taskExecutor),
       prepareFreshBase: taskExecutor?.preparePoolForRebaseRetry
         ? async (workflowId, workflow) => {
@@ -1719,8 +1752,8 @@ describe('buildWorkflowInvalidationDeps', () => {
 
     await deps.recreateWorkflow('wf-1');
 
-    expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
+    expect(persistence.loadWorkflow).not.toHaveBeenCalled();
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
   });
 
@@ -1740,7 +1773,7 @@ describe('buildWorkflowInvalidationDeps', () => {
 
     const result = await deps.recreateWorkflowFromFreshBase!('wf-1');
 
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',
       'https://example/repo.git',

@@ -127,6 +127,71 @@ export interface ExecutionResourceLeaseReleaseRow {
   taskId?: string;
 }
 
+export type WorkerActionStatus =
+  | 'queued'
+  | 'pending'
+  | 'running'
+  | 'needs_input'
+  | 'review_ready'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'abandoned'
+  | 'cancelled';
+
+export interface WorkerActionRecord {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary?: string;
+  payload?: unknown;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface WorkerActionWrite {
+  /** Insert-only row id. Updates are keyed by workerKind/externalKey and reject a different id. */
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount?: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary?: string;
+  payload?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
+export interface WorkerActionListFilters {
+  workflowId?: string;
+  taskId?: string;
+  workerKind?: string;
+  status?: WorkerActionStatus | string;
+  limit?: number;
+}
+
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: WorkflowSaveInput): void;
@@ -144,6 +209,8 @@ export interface PersistenceAdapter {
   loadWorkflowTaskSnapshot?(): WorkflowTaskSnapshot;
   /** Authoritative single-task read by ID, suitable for recovery workflows. */
   loadTask(taskId: string): TaskState | undefined;
+  /** Delete one task and its task-owned rows. */
+  deleteTask(taskId: string): void;
   getAllTaskIds(): string[];
   getAllTaskBranches(): string[];
   deleteAllTasks(workflowId: string): void;
@@ -154,6 +221,11 @@ export interface PersistenceAdapter {
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
   getEvents(taskId: string): TaskEvent[];
   getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
+
+  // Worker actions (durable worker-owned action state/history)
+  getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
+  upsertWorkerAction(action: WorkerActionWrite): WorkerActionRecord;
+  listWorkerActions(filters?: WorkerActionListFilters): WorkerActionRecord[];
 
   // Conversations (Slack thread-based)
   saveConversation(conversation: Conversation): void;

@@ -23,10 +23,10 @@ export const SCHEMA_DDL = `
         feature_branch TEXT,
         merge_mode TEXT,
         review_provider TEXT,
-        external_dependencies TEXT,
-        external_dependency_changes TEXT,
-        detached_external_dependencies TEXT,
-        generation INTEGER DEFAULT 0,
+        external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
+        external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
+        detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
+        generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
@@ -45,7 +45,7 @@ export const SCHEMA_DDL = `
         protocol_error_code TEXT,
         protocol_error_message TEXT,
         input_prompt TEXT,
-        external_dependencies TEXT,
+        external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
 
         -- Context
         summary TEXT,
@@ -92,6 +92,7 @@ export const SCHEMA_DDL = `
         completed_at TEXT,
         execution_generation INTEGER DEFAULT 0,
         docker_image TEXT,
+        execution_model TEXT,
 
         FOREIGN KEY (workflow_id) REFERENCES workflows(id)
       );
@@ -279,6 +280,37 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_task_launch_dispatch_task_state
         ON task_launch_dispatch(task_id, state);
 
+      CREATE TABLE IF NOT EXISTS worker_actions (
+        id TEXT PRIMARY KEY,
+        worker_kind TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        workflow_id TEXT,
+        task_id TEXT,
+        subject_type TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        external_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        intent_id TEXT,
+        agent_name TEXT,
+        execution_model TEXT,
+        session_id TEXT,
+        summary TEXT,
+        payload_json TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        completed_at TEXT,
+        FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
+        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+        UNIQUE(worker_kind, external_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_worker_actions_task_updated
+        ON worker_actions(task_id, updated_at);
+
+      CREATE INDEX IF NOT EXISTS idx_worker_actions_workflow_status
+        ON worker_actions(workflow_id, worker_kind, status);
+
       CREATE TABLE IF NOT EXISTS execution_resource_leases (
         resource_key TEXT NOT NULL,
         resource_type TEXT NOT NULL,
@@ -355,6 +387,7 @@ export const COLUMN_MIGRATIONS = [
   // detached_external_dependencies: read-only provenance for deps removed by detachWorkflow
   'ALTER TABLE workflows ADD COLUMN detached_external_dependencies TEXT',
   // execution_agent / agent_name: interchangeable agent support
+  'ALTER TABLE tasks ADD COLUMN execution_model TEXT',
   'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
   'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
   // durable audit pointers for most-recent agent session/name
@@ -372,6 +405,7 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
   'ALTER TABLE tasks ADD COLUMN fix_prompt TEXT',
   'ALTER TABLE tasks ADD COLUMN fix_context TEXT',
+  'ALTER TABLE tasks ADD COLUMN execution_model TEXT',
   'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
   'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
@@ -388,12 +422,15 @@ export const POST_MIGRATION_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_events_task_id_id ON events(task_id, id)',
   'CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id ON tasks(workflow_id)',
+  'CREATE INDEX IF NOT EXISTS idx_worker_actions_task_updated ON worker_actions(task_id, updated_at)',
+  'CREATE INDEX IF NOT EXISTS idx_worker_actions_workflow_status ON worker_actions(workflow_id, worker_kind, status)',
   'DROP INDEX IF EXISTS idx_task_launch_dispatch_active_attempt',
   `
       CREATE UNIQUE INDEX IF NOT EXISTS idx_task_launch_dispatch_active_attempt
         ON task_launch_dispatch(attempt_id)
         WHERE state IN ('enqueued', 'leased')
     `,
+  `UPDATE worker_actions SET status = 'cancelled' WHERE status = 'canceled'`,
 ];
 
 /** Rebuilt `workflows` table used to drop a legacy `status` column. */
@@ -413,9 +450,10 @@ export const WORKFLOWS_REBUILD_TABLE_DDL = `
         feature_branch TEXT,
         merge_mode TEXT,
         review_provider TEXT,
-        external_dependencies TEXT,
-        external_dependency_changes TEXT,
-        generation INTEGER DEFAULT 0,
+        external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
+        external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
+        detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
+        generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       )
@@ -426,13 +464,13 @@ export const WORKFLOWS_REBUILD_INSERT_DDL = `
       INSERT INTO workflows_new (
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, external_dependencies, external_dependency_changes,
+        review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies,
         generation, created_at, updated_at
       )
       SELECT
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, external_dependencies, external_dependency_changes,
+        review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies,
         generation, created_at, updated_at
       FROM workflows
     `;

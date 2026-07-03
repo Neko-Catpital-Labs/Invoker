@@ -16,6 +16,7 @@ import type {
   WorkflowDerivedStatus,
   WorkflowRollup,
 } from '@invoker/workflow-graph';
+import type { PrerequisiteCheck, PrerequisiteReport } from './prerequisites.js';
 
 export type { WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-graph';
 import type { ReviewGateQueryResponse } from './types.js';
@@ -33,6 +34,21 @@ export interface TaskReplacementDef {
   runnerKind?: string;
   executionAgent?: string;
 }
+export interface ExecutionModelOption {
+  id: string;
+  label: string;
+}
+
+export interface ExecutionHarnessOption {
+  name: string;
+  supportedModels: ExecutionModelOption[];
+}
+
+export interface ExecutionDefaults {
+  executionAgent: string;
+  executionModel?: string;
+}
+
 
 export interface WorkflowMeta {
   id: string;
@@ -209,6 +225,22 @@ export interface ResumeWorkflowResult {
   taskCount: number;
   startedCount: number;
 }
+export interface InAppPlanRequest {
+  goal: string;
+  presetKey?: string;
+}
+
+export type InAppPlanResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 
 export interface WorkflowListEntry {
   id: string;
@@ -319,6 +351,31 @@ export interface CliInstallResult {
   error?: string;
   status: CliInstallerStatus;
 }
+export interface InvokerSetupRequest {
+  updateCli: boolean;
+  installHelpers: boolean;
+  fixTools: boolean;
+  slack: false | {
+    botToken: string;
+    appToken: string;
+    signingSecret: string;
+    channelId: string;
+  };
+}
+
+export interface InvokerSetupStepResult {
+  id: 'invoker-cli' | 'helpers' | 'tools' | 'slack';
+  name: string;
+  ok: boolean;
+  output: string;
+  error?: string;
+}
+
+export interface InvokerSetupResult {
+  ok: boolean;
+  steps: InvokerSetupStepResult[];
+}
+
 
 export interface SystemDiagnostics {
   platform: string;
@@ -328,7 +385,17 @@ export interface SystemDiagnostics {
   tools: SystemToolStatus[];
   bundledSkills?: BundledSkillsStatus;
   cliInstaller?: CliInstallerStatus;
+  readiness?: PrerequisiteReport | PrerequisiteCheck[];
 }
+
+export type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only';
+
+export interface RuntimeStatus {
+  ownerMode: boolean;
+  readOnly: boolean;
+  mode: RuntimeMode;
+}
+
 
 // ── Embedded terminal session types ─────────────────────────
 
@@ -400,6 +467,10 @@ export interface SearchOptions {
 
 export const IpcChannels = {
   // Plan & Workflow Management
+  'invoker:plan-from-goal': {} as {
+    request: [request: InAppPlanRequest];
+    response: InAppPlanResponse;
+  },
   'invoker:load-plan': {} as {
     request: [planText: string];
     response: void;
@@ -513,6 +584,10 @@ export const IpcChannels = {
     request: [taskId: string];
     response: WorkflowMutationAcceptedResult;
   },
+  'invoker:delete-task': {} as {
+    request: [taskId: string];
+    response: WorkflowMutationAcceptedResult;
+  },
   'invoker:cancel-workflow': {} as {
     request: [workflowId: string];
     response: WorkflowMutationAcceptedResult;
@@ -533,6 +608,10 @@ export const IpcChannels = {
   },
   'invoker:edit-task-agent': {} as {
     request: [taskId: string, agentName: string];
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:edit-task-model': {} as {
+    request: [taskId: string, executionModel: string | null];
     response: WorkflowMutationAcceptedResult;
   },
   'invoker:edit-task-prompt': {} as {
@@ -636,9 +715,18 @@ export const IpcChannels = {
     request: [];
     response: string[];
   },
-  'invoker:get-execution-agents': {} as {
+  'invoker:get-execution-harnesses': {} as {
     request: [];
-    response: string[];
+    response: ExecutionHarnessOption[];
+  },
+  'invoker:get-execution-defaults': {} as {
+    request: [];
+    response: ExecutionDefaults;
+  },
+
+  'invoker:get-runtime-status': {} as {
+    request: [];
+    response: RuntimeStatus;
   },
 
   // Performance & Activity
@@ -702,6 +790,10 @@ export const IpcChannels = {
     request: [];
     response: CliInstallResult;
   },
+  'invoker:run-invoker-cli-setup': {} as {
+    request: [request: InvokerSetupRequest];
+    response: InvokerSetupResult;
+  },
 
 } as const;
 
@@ -712,6 +804,10 @@ export const IpcChannels = {
 export const IpcTestOnlyChannels = {
   'invoker:inject-task-states': {} as {
     request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
+    response: void;
+  },
+  'invoker:set-test-plan-from-goal-response': {} as {
+    request: [response: { planYaml: string; planName: string } | null];
     response: void;
   },
 } as const;

@@ -210,6 +210,18 @@ async function delegateGenericReadQuery(
   throw new Error('Live owner is present but did not serve cli-query');
 }
 
+function shouldBootstrapStandaloneReadQuery(
+  args: string[],
+  standaloneMode: boolean,
+  internalOwnerServe: boolean,
+): boolean {
+  if (!standaloneMode || internalOwnerServe) return false;
+  const isSpecialRead =
+    (args[0] === 'query' && (args[1] === 'queue' || args[1] === 'ui-perf' || args[1] === 'action-graph'))
+    || args[0] === 'queue';
+  return isSpecialRead || isGenericDelegatableReadCommand(args);
+}
+
 async function delegateReadOnlyQuery(
   args: string[],
   bus: MessageBus,
@@ -451,9 +463,21 @@ export async function runHeadlessClientCommand(
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
 
-  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
+  if (!internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
+  }
+  if (shouldBootstrapStandaloneReadQuery(args, standaloneMode, internalOwnerServe)) {
+    await deps.ensureStandaloneOwner(deps.messageBus);
+    const delegatedAfterBootstrap = await delegateReadOnlyQuery(
+      args,
+      deps.refreshMessageBus ? await deps.refreshMessageBus() : deps.messageBus,
+      deps.refreshMessageBus,
+    );
+    if (delegatedAfterBootstrap) {
+      const exitCode = process.exitCode;
+      return typeof exitCode === 'number' ? exitCode : 0;
+    }
   }
 
   if (!shouldUseSharedMutationOwner(args, standaloneMode, internalOwnerServe)) {
