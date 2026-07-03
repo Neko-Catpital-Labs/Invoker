@@ -36,6 +36,47 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('refreshes the graph after terminal planning succeeds', async () => {
+    mock.api.planFromGoal = vi.fn(async () => {
+      mock.setTasks([
+        {
+          id: 'task-alpha',
+          description: 'Alpha task',
+          status: 'pending',
+          config: {
+            baseBranch: 'main',
+            prompt: 'Do alpha',
+            agent: 'codex',
+            dependencies: [],
+            canRunInParallel: true,
+            requiresReview: true,
+            autoRetry: false,
+            sandboxMode: 'workspace-write',
+            model: 'gpt-5',
+            workflowId: 'wf-graph',
+          },
+        } as any,
+      ], [
+        { id: 'wf-graph', name: 'Mock Plan', status: 'pending' } as any,
+      ]);
+      return { ok: true as const, planName: 'Mock Plan', workflowId: 'wf-graph' };
+    }) as any;
+
+    render(<App />);
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'plan "Add README"' } });
+    fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+
+    await waitFor(() => {
+      expect(mock.api.planFromGoal).toHaveBeenCalledWith({ goal: 'Add README' });
+      expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
+      expect(screen.getByTestId('workflow-node-wf-graph')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('What to expect')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Mock Plan');
+  });
+
   it('explains that run needs a loaded plan first', async () => {
     render(<App />);
 
