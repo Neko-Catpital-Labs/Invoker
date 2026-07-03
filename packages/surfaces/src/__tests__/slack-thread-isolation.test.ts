@@ -56,6 +56,7 @@ vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({
       submittedPlanText: null as any,
       getDraftedPlan: () => instance.submittedPlanText,
       planSubmitted: false,
+      conversationMode: config?.mode ?? 'plan',
       init: vi.fn().mockResolvedValue(undefined),
       sendMessage: vi.fn().mockImplementation(async (text: string) => {
         instance._messages.push({ role: 'user', content: text });
@@ -320,7 +321,7 @@ describe('Slack thread isolation', () => {
       const say = vi.fn();
 
       await mentionHandler({
-        event: { text: '<@U_BOT> build something', ts: 'thread-submit', thread_ts: undefined, user: 'U1' },
+        event: { text: '<@U_BOT> plan: build something', ts: 'thread-submit', thread_ts: undefined, user: 'U1' },
         say,
       });
 
@@ -617,9 +618,9 @@ Want me to execute this?`;
     const messageHandler = getMessageHandler(surface);
     const say = vi.fn();
 
-    // Step 1: User @mentions with a request → planning conversation.
+    // Step 1: User explicitly asks for an Invoker plan.
     await mentionHandler({
-      event: { text: '<@U_BOT> build a REST API', ts: 'thread-e2e', thread_ts: undefined, user: 'U1' },
+      event: { text: '<@U_BOT> plan: build a REST API', ts: 'thread-e2e', thread_ts: undefined, user: 'U1' },
       say,
     });
     const conv = conversationInstances.get('thread-e2e');

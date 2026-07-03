@@ -1,13 +1,14 @@
 # Slack-native coding workflows
 
-Drive Invoker from Slack: mention `@Invoker` in a shared **lobby** channel to plan a change against a checked-out repo, then spin the agreed plan up as a workflow. When a workflow starts, Invoker creates a **private `workflow-<id>` channel**, invites you, and posts the workflow there. Mentioning `@Invoker` inside that channel answers using **only that workflow's context** (its planning conversation plus every task transcript) and runs control actions on it.
+Drive Invoker from Slack: mention `@Invoker` in a shared **lobby** channel to start a normal agent thread in a checked-out repo. If you want an Invoker workflow, say `plan:` first, then submit the drafted plan. When a workflow starts, Invoker creates a **private `workflow-<id>` channel**, invites you, and posts the workflow there. Mentioning `@Invoker` inside that channel answers using **only that workflow's context** (its planning conversation plus every task transcript) and runs control actions on it.
 
 ## Flow
 
-1. **Plan in the lobby.** In the lobby channel: `@Invoker [cursor+codex] [repo:web] add a /health endpoint`. Invoker checks out the repo and runs a planning conversation in the thread.
-2. **Confirm.** Reply `go` (or `yes`/`ship it`) to submit the generated YAML plan.
-3. **Workflow channel appears.** Invoker creates private `workflow-<id>`, invites you, posts the workflow summary there, and links it from the lobby thread.
-4. **Operate in the channel.** `@Invoker status`, `@Invoker approve <task>`, `@Invoker reject <task>`, `@Invoker retry <task>`, `@Invoker input <task>: <text>`, or ask a free-form question (answered only from this workflow's planning + task transcripts).
+1. **Start a normal agent thread.** In the lobby channel: `@Invoker [omp+codex] [repo:web] fix the Slack routing bug`. Invoker checks out the repo and runs a normal OMP/Codex-style conversation in the thread.
+2. **Opt into Invoker planning.** Use `@Invoker plan: add a /health endpoint` when you want YAML for an Invoker workflow instead of direct local agent work.
+3. **Submit only when ready.** Run `@Invoker submit` in that plan thread, then approve the short summary. That starts the generated YAML plan as a workflow.
+4. **Workflow channel appears.** Invoker creates private `workflow-<id>`, invites you, posts the workflow summary there, and links it from the lobby thread.
+5. **Operate in the channel.** `@Invoker status`, `@Invoker approve <task>`, `@Invoker reject <task>`, `@Invoker retry <task>`, `@Invoker input <task>: <text>`, or ask a free-form question (answered only from this workflow's planning + task transcripts).
 
 ## Message tags (lobby only)
 
@@ -16,7 +17,16 @@ Leading `[...]` tags select how planning runs. Order does not matter; everything
 - `[<preset>]` — pick a harness preset (CLI tool + model). No tag ⇒ the default preset.
 - `[repo:<alias|git-url>]` — pick the target repo. No tag ⇒ `defaultRepoUrl`.
 
-`@Invoker raise a PR that adds rate limiting` (no tags) uses the default preset and default repo.
+`@Invoker raise a PR that adds rate limiting` (no tags) uses the default preset and default repo as a normal agent thread.
+
+## Local and plan modes
+
+Normal lobby mentions are local agent sessions. They can answer, edit, and run focused checks in their repo worktree.
+
+- `@Invoker fix the typo in the Slack docs` — starts or continues a normal agent thread.
+- `@Invoker local: fix the typo in the Slack docs` — kept as an alias for the same normal agent thread.
+- `@Invoker run local: pnpm --filter @invoker/surfaces test -- slack-surface-workflows.test.ts` — runs that shell command and reports the exit code and output. It does **not** edit files.
+- `@Invoker plan: fix the typo in the Slack docs` — drafts Invoker YAML. Use `@Invoker submit` in that thread to start the approval flow.
 
 ## Harness presets
 
@@ -92,4 +102,4 @@ Without `groups:write`, channel creation fails; without `groups:history`, the in
 
 - Runs on the existing bring-your-own-machine / DigitalOcean SSH single-owner model. No hosted AWS env is required.
 - Workflow creation uses `orchestrator.loadPlan` (the same path headless `run` uses); there is no separate HTTP/facade create route today.
-- One owner process serves all workflows; "spinning up a planning bot" is a per-thread planning conversation in a per-repo checkout plus a per-workflow channel, all under that one process.
+- One owner process serves all workflows; "spinning up a bot" is a per-thread agent or plan conversation in a per-repo checkout plus a per-workflow channel, all under that one process.

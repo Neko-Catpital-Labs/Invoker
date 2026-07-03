@@ -53,6 +53,7 @@ const mockPlanConversation = {
   getDraftedPlan: () => mockDraftedPlan,
   submittedPlanText: null as any,
   planSubmitted: false,
+  conversationMode: 'plan' as const,
 };
 
 vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({
@@ -517,9 +518,9 @@ describe('SlackSurface', () => {
       const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
       const messageHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'message')?.handler;
 
-      // Build request → a planning conversation in the thread; nothing submitted.
+      // Explicit plan request → a planning conversation in the thread; nothing submitted.
       const say1 = vi.fn().mockResolvedValue({ ts: '1111.001' });
-      await mentionHandler({ event: { text: '<@U_BOT> build me a REST API', ts: '1111', thread_ts: undefined }, say: say1 });
+      await mentionHandler({ event: { text: '<@U_BOT> plan: build me a REST API', ts: '1111', thread_ts: undefined }, say: say1 });
       expect(receivedCommands).toHaveLength(0);
 
       // Explicit submit → plain-English summary + confirmation, still no start_plan.
