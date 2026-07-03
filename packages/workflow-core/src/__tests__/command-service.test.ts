@@ -30,6 +30,7 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     provideInput: vi.fn(),
     retryTask: vi.fn().mockReturnValue([]),
     recreateTask: vi.fn().mockReturnValue([]),
+    deleteTask: vi.fn().mockReturnValue([]),
     selectExperiment: vi.fn().mockReturnValue([]),
     editTaskCommand: vi.fn().mockReturnValue([]),
     editTaskAgent: vi.fn().mockReturnValue([]),
@@ -286,6 +287,24 @@ describe('CommandService', () => {
       });
       const result = await service.cancelTask(makeEnvelope({ taskId: 'bad' }));
       expect(result).toEqual({ ok: false, error: { code: 'CANCEL_TASK_FAILED', message: 'unexpected' } });
+    });
+  });
+
+  // ── deleteTask ───────────────────────────────────────────
+
+  describe('deleteTask', () => {
+    it('delegates to orchestrator.deleteTask', async () => {
+      const result = await service.deleteTask(makeEnvelope({ taskId: 't-1' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.deleteTask).toHaveBeenCalledWith('t-1');
+    });
+
+    it('returns typed error code from OrchestratorError', async () => {
+      (orchestrator.deleteTask as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new OrchestratorError('TASK_NOT_FOUND', 'Task "bad" not found');
+      });
+      const result = await service.deleteTask(makeEnvelope({ taskId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'TASK_NOT_FOUND', message: 'Task "bad" not found' } });
     });
   });
 

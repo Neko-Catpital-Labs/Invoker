@@ -135,7 +135,10 @@ export const REQUIRED_BOT_SCOPES = [
 
 export interface SlackAppManifest {
   display_information: { name: string };
-  features: { bot_user: { display_name: string; always_online: boolean } };
+  features: {
+    bot_user: { display_name: string; always_online: boolean };
+    slash_commands?: { command: string; description: string; usage_hint?: string; should_escape?: boolean }[];
+  };
   oauth_config: { scopes: { bot: string[] } };
   settings: {
     event_subscriptions: { bot_events: string[] };
@@ -149,11 +152,21 @@ export interface SlackAppManifest {
 export function generateSlackManifest(name = 'Invoker'): SlackAppManifest {
   return {
     display_information: { name },
-    features: { bot_user: { display_name: name, always_online: true } },
+    features: {
+      bot_user: { display_name: name, always_online: true },
+      slash_commands: [
+        {
+          command: '/invoker',
+          description: 'Invoker workflow commands',
+          usage_hint: '<status|recreate|rebase|retry|cancel|submit> [all|<workflow>]',
+          should_escape: false,
+        },
+      ],
+    },
     oauth_config: { scopes: { bot: [...REQUIRED_BOT_SCOPES] } },
     settings: {
       event_subscriptions: { bot_events: ['app_mention'] },
-      interactivity: { is_enabled: false },
+      interactivity: { is_enabled: true },
       org_deploy_enabled: false,
       socket_mode_enabled: true,
       token_rotation_enabled: false,
@@ -329,13 +342,19 @@ export function loadInvokerEnv(): void {
 export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promise<number> {
   const wantSlack = argv[0] === 'slack';
   const checkOnly = argv.includes('--check');
+  const json = argv.includes('--json');
+  const fromEnv = argv.includes('--from-env');
+  for (const arg of argv) {
+    if (arg === 'slack' || arg === '--check' || arg === '--json' || arg === '--from-env') continue;
+    throw new Error(`Unknown setup option: ${arg}`);
+  }
   const rl = (io as { rl?: { close: () => void } }).rl;
   try {
     if (checkOnly) {
       loadInvokerEnv();
       const checks = await validateSlackCredentials(slackCredsFromEnv());
       const report = buildReport(checks);
-      io.print(formatReport(report, { json: argv.includes('--json') }));
+      io.print(formatReport(report, { json }));
       return report.ok ? 0 : 1;
     }
 
@@ -344,14 +363,34 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
     io.print(formatReport(core));
     io.print('');
 
-    let doSlack = wantSlack;
-    if (!wantSlack) {
-      const answer = (await io.prompt('Set up the Slack integration now? [y/N] ')).toLowerCase();
-      doSlack = answer === 'y' || answer === 'yes';
+    let doSlack = wantSlack || fromEnv;
+    if (!wantSlack && !fromEnv) {
+      const answer = (await io.prompt('Set up the Slack integration now? [Y/n] ')).toLowerCase();
+      doSlack = answer === '' || answer === 'y' || answer === 'yes';
     }
     if (!doSlack) {
       io.print('\nYou are good to go for CLI and UI workflows. Run `invoker-cli setup slack` later to add Slack.');
       return core.ok ? 0 : 1;
+    }
+
+    if (fromEnv) {
+      loadInvokerEnv();
+      const creds = slackCredsFromEnv();
+      const checks = await validateSlackCredentials(creds);
+      const report = buildReport(checks);
+      io.print(`\n${formatReport(report, { json })}`);
+      if (!creds.botToken || !creds.appToken || !creds.signingSecret || !creds.channelId || !report.ok) {
+        io.print('Nothing written. Fix the items above and re-run setup.');
+        return 1;
+      }
+      const envPath = writeSlackEnv({
+        botToken: creds.botToken,
+        appToken: creds.appToken,
+        signingSecret: creds.signingSecret,
+        channelId: creds.channelId,
+      });
+      io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
+      return 0;
     }
 
     const manifestPath = manifestFilePath();

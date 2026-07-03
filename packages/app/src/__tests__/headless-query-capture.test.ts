@@ -62,6 +62,34 @@ describe('runReadOnlyHeadlessQueryToString', () => {
     expect(output).toBe('wf-9\n');
   });
 
+  it('uses configured default agent when session task has no persisted agent name', async () => {
+    const task = {
+      id: 'wf-1/task-1',
+      status: 'failed',
+      description: 'failed',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-1', runnerKind: 'local' },
+      execution: { agentSessionId: 'sess-1' },
+    };
+    const deps = makeQueryDeps(() => [{ id: 'wf-1' }]);
+    deps.invokerConfig = { defaultExecutionAgent: 'custom-agent' } as unknown as HeadlessQueryDeps['invokerConfig'];
+    deps.persistence = {
+      ...deps.persistence,
+      loadTasks: vi.fn(() => [task]),
+      getEvents: vi.fn(() => []),
+    } as unknown as HeadlessQueryDeps['persistence'];
+    deps.orchestrator = {
+      syncFromDb: vi.fn(),
+      getTask: vi.fn(() => task),
+      getAllTasks: vi.fn(() => [task]),
+    } as unknown as HeadlessQueryDeps['orchestrator'];
+
+    const output = await runReadOnlyHeadlessQueryToString(['session', 'task-1'], deps);
+
+    expect(output).toContain('agent=custom-agent sessionId=sess-1\n');
+  });
+
   it('rejects a command that is not a delegatable read-only query', async () => {
     const deps = makeQueryDeps(() => []);
     await expect(runReadOnlyHeadlessQueryToString(['watch', 'wf-1'], deps)).rejects.toThrow(

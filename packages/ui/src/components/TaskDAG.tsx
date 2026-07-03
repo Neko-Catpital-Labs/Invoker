@@ -54,6 +54,7 @@ interface TaskDAGProps {
   onManualViewport?: () => void;
   statusFilters?: Set<string>;
   runningTaskIds?: ReadonlySet<string>;
+  surfaceMode?: 'default' | 'browser' | 'overlay';
 }
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
@@ -152,7 +153,7 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds }: TaskDAGProps) {
+function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds, surfaceMode = 'default' }: TaskDAGProps) {
   const { fitView, setCenter, getZoom } = useReactFlow();
   const graphRootRef = useRef<HTMLDivElement>(null);
   const prevNodeCount = useRef(0);
@@ -161,10 +162,11 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const watchdogMissCountRef = useRef(0);
   const watchdogRecoveryAttemptedRef = useRef(false);
   const lastHandledCameraSeqRef = useRef(0);
+  const browserRemountDoneRef = useRef(false);
   const initFitFrameRef = useRef(0);
+  const nodesRef = useRef<typeof nodes>([]);
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
-
   const onInitHandler = useCallback(() => {
     initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
@@ -172,6 +174,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   // Cancel a pending first-fit frame on unmount so it never fires against a
   // torn-down graph after the component has gone away.
   useEffect(() => () => cancelAnimationFrame(initFitFrameRef.current), []);
+
 
   const rawGraph = useMemo(() => {
     const taskArray = [...tasks.values()];
@@ -220,7 +223,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       }
     }
 
-    // Build dimmed node set for edge opacity
     const dimmedNodeIds = new Set<string>();
     if (statusFilters && statusFilters.size > 0) {
       for (const task of taskArray) {
@@ -244,6 +246,9 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       layoutKey: layoutKeyFor(layoutTasks, rawEdges),
     };
   }, [runningTaskIds, tasks, statusFilters]);
+  useEffect(() => {
+    browserRemountDoneRef.current = false;
+  }, [rawGraph.layoutKey, surfaceMode]);
 
   useEffect(() => {
     if (rawGraph.taskArray.length === 0) return;
@@ -448,6 +453,9 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     },
     [onManualViewport],
   );
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
 
   // Consume each task-scoped camera command exactly once, by sequence. Centering
   // preserves the current zoom so ordinary refreshes never zoom the graph; only
@@ -478,6 +486,48 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     });
     return () => cancelAnimationFrame(frame);
   }, [cameraCommand, fitView, getZoom, nodes, setCenter]);
+
+  useEffect(() => {
+    if (surfaceMode !== 'browser' || nodesRef.current.length === 0) return;
+
+    let cancelled = false;
+    const frame = requestAnimationFrame(() => {
+      if (cancelled) return;
+      fitView({ padding: 0.2 });
+      if (!selectedTaskId) return;
+      const node = nodesRef.current.find((candidate) => candidate.id === selectedTaskId);
+      if (!node) return;
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        const zoom = Math.max(typeof getZoom === 'function' ? getZoom() : 1, 0.85);
+        setCenter(node.position.x + 132, node.position.y + 55, { zoom, duration: 0 });
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [fitView, getZoom, rawGraph.layoutKey, selectedTaskId, setCenter, surfaceMode]);
+
+  useEffect(() => {
+    if (surfaceMode !== 'browser' || nodesRef.current.length === 0 || browserRemountDoneRef.current) return;
+
+    let cancelled = false;
+    const frame = requestAnimationFrame(() => {
+      if (cancelled) return;
+      requestAnimationFrame(() => {
+        if (cancelled || browserRemountDoneRef.current) return;
+        browserRemountDoneRef.current = true;
+        setFlowInstanceKey((key) => key + 1);
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [rawGraph.layoutKey, surfaceMode]);
 
   useEffect(() => {
     if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {
@@ -588,17 +638,24 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     return (
       <div className="h-full w-full flex items-center justify-center text-gray-500">
         <div className="text-center">
-          <p>No tasks yet</p>
-          <p className="text-sm mt-1">Load a plan to create a task graph</p>
+          <p>Your plan will appear here.</p>
         </div>
       </div>
     );
   }
 
+  const browserHeight = surfaceMode === 'browser' ? '300px' : '100%';
+
   return (
-    <div ref={graphRootRef} className="h-full w-full" style={{ minHeight: '300px' }}>
+    <div
+      ref={graphRootRef}
+      className="flex w-full flex-1"
+      style={{ minHeight: '300px', height: browserHeight }}
+    >
       <ReactFlow
         key={flowInstanceKey}
+        className="h-full w-full"
+        style={{ width: '100%', height: browserHeight }}
         nodes={rfNodes}
         edges={edges}
         nodeTypes={nodeTypes}

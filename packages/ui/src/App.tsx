@@ -2,17 +2,18 @@
  * App — Main layout for Invoker UI.
  *
  * Layout:
- * - Left rail: workflow controls and navigation
- * - Main: workflow graph / task DAG
- * - Right: workflow inspector
+ * - Left: run/status column
+ * - Main: terminal and graph
+ * - Right: empty-state tutorial or inspector
  * - Bottom: status chips and terminal drawer
  * - Modals overlay when needed
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ReviewGateQueryResponse, TerminalSessionDescriptor } from '@invoker/contracts';
+import type { ActionGraphNode, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
+import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
 import { useActionGraphSnapshot } from './hooks/useActionGraphSnapshot.js';
@@ -34,11 +35,19 @@ import { groupWorkflowCoreActivity } from './lib/workflow-core-activity.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
+import { LeftStatusColumn } from './components/LeftStatusColumn.js';
+import { InvokerTerminal, type InvokerTerminalLine } from './components/InvokerTerminal.js';
+import {
+  getAttentionTaskEntries,
+  getRunningTaskEntries,
+  getSortedWorkflows,
+  formatTaskStatus,
+  formatWorkflowStatus,
+} from './lib/workflow-progress-surfaces.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
 } from './isExperimentSpawnPivot.js';
-import { parsePlanText } from './lib/plan-parser.js';
 import {
   createGraphCameraCommandIssuer,
   loadCameraLockPreference,
@@ -347,21 +356,39 @@ function WorkflowContextMenu({
   );
 }
 
-function GearIcon(): JSX.Element {
+function EmptyGraphTutorial(): JSX.Element {
   return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 16 16"
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.6"
-    >
-      <path d="M6.9 2.2h2.2l.4 1.6a4.7 4.7 0 0 1 1.1.6l1.6-.5 1.1 1.9-1.2 1.1a4.8 4.8 0 0 1 0 1.3l1.2 1.1-1.1 1.9-1.6-.5a4.7 4.7 0 0 1-1.1.6l-.4 1.6H6.9l-.4-1.6a4.7 4.7 0 0 1-1.1-.6l-1.6.5-1.1-1.9 1.2-1.1a4.8 4.8 0 0 1 0-1.3L2.7 5.8l1.1-1.9 1.6.5a4.7 4.7 0 0 1 1.1-.6l.4-1.6Z" />
-      <circle cx="8" cy="7.5" r="1.7" />
-    </svg>
+    <aside className="h-full w-full border-l border-gray-800 bg-gray-900/90 p-4">
+      <div className="rounded-xl border border-gray-800 bg-gray-950/70 p-4">
+        <h2 className="text-sm font-semibold text-gray-100">What to expect</h2>
+        <ol className="mt-3 space-y-3 text-sm text-gray-400">
+          <li>
+            <div className="font-medium text-gray-200">1. Type a goal</div>
+            <div className="mt-1 text-xs text-gray-500">Describe the change in the terminal to generate a plan.</div>
+          </li>
+          <li>
+            <div className="font-medium text-gray-200">2. Review the plan</div>
+            <div className="mt-1 text-xs text-gray-500">Check the graph before starting work.</div>
+          </li>
+          <li>
+            <div className="font-medium text-gray-200">3. Run it</div>
+            <div className="mt-1 text-xs text-gray-500">Start the workflow when the plan looks right.</div>
+          </li>
+        </ol>
+      </div>
+    </aside>
+  );
+}
+
+function EmptyInspectorPlaceholder(): JSX.Element {
+  return (
+    <aside className="h-full w-full border-l border-gray-800 bg-gray-900/90 p-4">
+      <div className="rounded-xl border border-dashed border-gray-800 bg-gray-950/50 p-4">
+        <h2 className="text-sm font-semibold text-gray-100">No task selected</h2>
+        <p className="mt-2 text-sm text-gray-400">Select a task in the graph to see details.</p>
+        <p className="mt-2 text-xs text-gray-500">Status, logs, and actions will appear here.</p>
+      </div>
+    </aside>
   );
 }
 
@@ -392,11 +419,12 @@ export function App() {
   const { tasks, workflows, clearTasks, refreshTaskGraph } = useTasks({
     onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
   });
+  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
   const {
     graph: actionGraph,
     error: actionGraphError,
     refreshActionGraph,
-  } = useActionGraphSnapshot();
+  } = useActionGraphSnapshot(2_000, viewMode === 'actionGraph');
   const trackAcceptedMutation = useCallback((result: unknown) => {
     if (result && typeof result === 'object' && (result as { accepted?: unknown }).accepted === true) {
       void refreshActionGraph();
@@ -413,9 +441,11 @@ export function App() {
     () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
     [queueStatus],
   );
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
+  const graphActionsMenuRef = useRef<HTMLDivElement>(null);
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
+  const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
@@ -425,8 +455,13 @@ export function App() {
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
+  const [terminalLines, setTerminalLines] = useState<InvokerTerminalLine[]>([
+    { id: 1, text: 'Start with a goal.', tone: 'muted' },
+  ]);
+  const nextTerminalLineIdRef = useRef(2);
+  const [plannerBusy, setPlannerBusy] = useState(false);
+  const [graphMaximized, setGraphMaximized] = useState(false);
   const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
   const selectedActionNode = useMemo(
     () => actionGraph?.nodes.find((node) => node.id === selectedActionNodeId) ?? null,
     [actionGraph, selectedActionNodeId],
@@ -436,19 +471,27 @@ export function App() {
   const [executionPools, setExecutionPools] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(
+    () => (typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__?.runtimeStatus ?? null : null),
+  );
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
   const [updateCliPending, setUpdateCliPending] = useState(false);
+  const [setupPending, setSetupPending] = useState(false);
+  const [setupResult, setSetupResult] = useState<InvokerSetupResult | null>(null);
   const [updateCliError, setUpdateCliError] = useState<string | null>(null);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [inspectorManualOpen, setInspectorManualOpen] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 1600 : window.innerWidth));
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalDrawerState, setTerminalDrawerState] = useState<TerminalDrawerState>('minimized');
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
+  const [graphActionsMenuOpen, setGraphActionsMenuOpen] = useState(false);
   // Transient, user-visible outcome line for a confirmed workflow detach.
   const [detachNotice, setDetachNotice] = useState<string | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
@@ -521,6 +564,7 @@ export function App() {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+    window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
 
@@ -531,6 +575,17 @@ export function App() {
       }
     }).catch(() => {});
   }, []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setGraphMaximized(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [graphMaximized]);
+
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onTerminalExit?.((event) => {
@@ -783,6 +838,9 @@ export function App() {
     }
     return STATUS_KEY_ORDER.filter((key) => key === 'completed' || key === 'running' || key === 'failed' || key === 'pending' || (counts.get(key) ?? 0) > 0);
   }, [workflows]);
+  const workflowEntries = useMemo(() => getSortedWorkflows(workflows, tasks), [workflows, tasks]);
+  const attentionEntries = useMemo(() => getAttentionTaskEntries(tasks, workflows), [tasks, workflows]);
+  const runningEntries = useMemo(() => getRunningTaskEntries(tasks, workflows, queueStatus), [tasks, workflows, queueStatus]);
 
   const searchResults = useMemo<SearchResult[]>(() => {
     const query = normalizedSearchText(searchQuery.trim());
@@ -1034,6 +1092,9 @@ export function App() {
         return;
       }
 
+      if (graphMaximized && event.key === 'Escape') {
+        return;
+      }
       if (isEditableKeyboardTarget(event.target) || modal.type !== 'none') return;
 
       // F1 is the keyboard-only camera lock control. It is already ignored for
@@ -1178,6 +1239,7 @@ export function App() {
     bottomStatusIndex,
     contextMenu,
     focusKeyboardRegion,
+    graphMaximized,
     handleStatusClick,
     issueCameraCommand,
     keyboardRegion,
@@ -1263,7 +1325,7 @@ export function App() {
     recenterForSelection('workflow', workflowId);
   }, [recenterForSelection]);
 
-  const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, workflowId: string) => {
+  const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<Element>, workflowId: string) => {
     event.preventDefault();
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
@@ -1271,6 +1333,97 @@ export function App() {
     setContextMenu(null);
     setWorkflowContextMenu({ x: event.clientX, y: event.clientY, workflowId });
   }, []);
+  useEffect(() => {
+    if (sidebarSurface === 'workflows') {
+      const activeWorkflowId = selectedWorkflow?.id ?? selectedWorkflowId;
+      if (!workflowEntries.length) {
+        if (selectedTaskId !== null || activeWorkflowId !== null) {
+          setSelectedTaskId(null);
+          setSelectedWorkflowId(null);
+          setWorkflowSelectionDismissed(false);
+        }
+        return;
+      }
+      if (workflowEntries.some((entry) => entry.workflow.id === activeWorkflowId)) {
+        return;
+      }
+      selectWorkflowById(workflowEntries[0].workflow.id);
+      return;
+    }
+
+    if (sidebarSurface === 'attention') {
+      if (!attentionEntries.length) {
+        if (selectedTaskId !== null || selectedWorkflowId !== null) {
+          setSelectedTaskId(null);
+          setSelectedWorkflowId(null);
+          setWorkflowSelectionDismissed(false);
+        }
+        return;
+      }
+      if (attentionEntries.some((entry) => entry.task.id === selectedTaskId)) {
+        return;
+      }
+      selectTaskById(attentionEntries[0].task.id);
+      return;
+    }
+
+    if (sidebarSurface === 'running') {
+      if (!runningEntries.length) {
+        if (selectedTaskId !== null || selectedWorkflowId !== null) {
+          setSelectedTaskId(null);
+          setSelectedWorkflowId(null);
+          setWorkflowSelectionDismissed(false);
+        }
+        return;
+      }
+      if (runningEntries.some((entry) => entry.task.id === selectedTaskId)) {
+        return;
+      }
+      selectTaskById(runningEntries[0].task.id);
+    }
+  }, [
+    attentionEntries,
+    runningEntries,
+    selectTaskById,
+    selectWorkflowById,
+    selectedTaskId,
+    selectedWorkflow?.id,
+    selectedWorkflowId,
+    sidebarSurface,
+    workflowEntries,
+  ]);
+  useEffect(() => {
+    if (viewMode !== 'dag' || sidebarSurface === 'home' || displayedSelectedWorkflowGraph === null) {
+      return;
+    }
+
+    let cancelled = false;
+    const fitFrame = requestAnimationFrame(() => {
+      if (cancelled) return;
+      issueCameraCommand({ kind: 'fitInitial', scope: 'task', reason: 'browser-surface' });
+
+      if (!selectedTaskId) return;
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        requestAnimationFrame(() => {
+          if (cancelled) return;
+          issueCameraCommand({ kind: 'centerSelection', scope: 'task', target: selectedTaskId, reason: 'browser-selection' });
+        });
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(fitFrame);
+    };
+  }, [
+    displayedSelectedWorkflowGraph,
+    issueCameraCommand,
+    selectedTaskId,
+    sidebarSurface,
+    viewMode,
+  ]);
+
 
   const handleDagSurfaceClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (contextMenu || workflowContextMenu) {
@@ -1410,6 +1563,24 @@ export function App() {
     }
   }, [trackAcceptedMutation]);
 
+  const handleDeleteTask = useCallback(async (taskId: string) => {
+    setContextMenu(null);
+    const confirmed = window.confirm(
+      `Delete task "${taskId}"? Its dependents will use this task's upstream dependencies.`
+    );
+    if (!confirmed) return;
+    try {
+      const result = await window.invoker?.deleteTask(taskId);
+      trackAcceptedMutation(result);
+      if (selectedTaskId === taskId) {
+        setSelectedTaskId(null);
+      }
+      refreshTaskGraph();
+    } catch (err) {
+      console.error('Delete Task failed:', err);
+    }
+  }, [refreshTaskGraph, selectedTaskId, trackAcceptedMutation]);
+
   const handleDeleteWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     const confirmed = window.confirm(
@@ -1541,61 +1712,73 @@ export function App() {
 
   const handleRefresh = useCallback(async () => {
     await refreshTaskGraph();
+    void invoker?.checkPrStatuses?.();
     issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'manual-refresh' });
-  }, [issueCameraCommand, refreshTaskGraph]);
+  }, [invoker, issueCameraCommand, refreshTaskGraph]);
+  const appendTerminalLine = useCallback((text: string, tone: InvokerTerminalLine['tone'] = 'muted') => {
+    const id = nextTerminalLineIdRef.current;
+    nextTerminalLineIdRef.current += 1;
+    setTerminalLines((prev) => [...prev, { id, text, tone }]);
+  }, []);
 
-  // ── Plan loading ──────────────────────────────────────────
-  const handleLoadPlan = useCallback(
-    async (planText: string) => {
-      if (!invoker) return;
-      try {
-        await invoker.loadPlan(planText);
-        setWorkflowSelectionDismissed(false);
-        setHasLoadedPlan(true);
-        // Parse locally just for UI display state
-        const parsed = yaml.load(planText) as any;
-        setPlanName(parsed?.name ?? 'Untitled Plan');
-        setOnFinish(parsed?.onFinish ?? 'merge');
-        refreshTaskGraph();
-      } catch (err) {
-        console.error('Failed to load plan:', err);
-      }
-    },
-    [invoker, refreshTaskGraph],
-  );
-
-  const handleFileSelect = useCallback(
-    async (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      if (!file) return;
-
-      const text = await file.text();
-      const dotIndex = file.name.lastIndexOf('.');
-      const ext = dotIndex >= 0 ? file.name.slice(dotIndex).toLowerCase() : undefined;
-
-      try {
-        parsePlanText(text, ext);
-        await handleLoadPlan(text);
-      } catch (err) {
-        console.error('Failed to parse plan file:', err);
-      }
-
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    },
-    [handleLoadPlan],
-  );
-
-  const handleStart = useCallback(async () => {
-    if (!invoker) return;
+  const handleStart = useCallback(async (): Promise<boolean> => {
+    if (!invoker) return false;
     try {
       await invoker.start();
       setHasStarted(true);
+      return true;
     } catch (err) {
       console.error('Failed to start:', err);
+      return false;
     }
   }, [invoker]);
+
+  const handleTerminalSubmit = useCallback(async (command: string) => {
+    appendTerminalLine(`$ ${command}`);
+    const planMatch = command.match(/^plan\s+"([^"]+)"$/i);
+    if (planMatch) {
+      if (!invoker?.planFromGoal) {
+        appendTerminalLine('Planner is not available.', 'error');
+        return;
+      }
+      setPlannerBusy(true);
+      try {
+        const result = await invoker.planFromGoal({ goal: planMatch[1] });
+        if (result.ok) {
+          setHasLoadedPlan(true);
+          setHasStarted(false);
+          setSidebarSurface('home');
+          setWorkflowSelectionDismissed(false);
+          setViewMode('dag');
+          setGraphActionsMenuOpen(false);
+          setPlanName(result.planName);
+          setSelectedWorkflowId(result.workflowId);
+          await refreshTaskGraph();
+          appendTerminalLine(`Plan \"${result.planName}\" loaded. Use run to execute.`, 'success');
+        } else {
+          appendTerminalLine(result.error, 'error');
+        }
+      } catch (err) {
+        appendTerminalLine(err instanceof Error ? err.message : 'Failed to generate plan.', 'error');
+      } finally {
+        setPlannerBusy(false);
+      }
+      return;
+    }
+
+    if (command.toLowerCase() === 'run') {
+      if (!hasLoadedPlan) {
+        appendTerminalLine('Create a plan before running.', 'error');
+        return;
+      }
+      const started = await handleStart();
+      appendTerminalLine(started ? 'Run started.' : 'Run failed to start.', started ? 'success' : 'error');
+      return;
+    }
+
+    appendTerminalLine('Unknown command. Try plan \"Add README\" or run.', 'error');
+  }, [appendTerminalLine, handleStart, hasLoadedPlan, invoker, refreshTaskGraph]);
+
 
   const handleStop = useCallback(async () => {
     if (!invoker) return;
@@ -1614,7 +1797,10 @@ export function App() {
       setHasLoadedPlan(false);
       setHasStarted(false);
       setPlanName(null);
-      setOnFinish('merge');
+      setSidebarSurface('home');
+      setSidebarCollapsed(false);
+      setViewMode('dag');
+      setGraphActionsMenuOpen(false);
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
@@ -1622,7 +1808,7 @@ export function App() {
     } catch (err) {
       console.error('Failed to clear:', err);
     }
-  }, [invoker, clearTasks]);
+  }, [clearTasks, invoker]);
 
   const handleDeleteDB = useCallback(async () => {
     if (!invoker) return;
@@ -1636,13 +1822,18 @@ export function App() {
       setHasLoadedPlan(false);
       setHasStarted(false);
       setPlanName(null);
+      setSidebarSurface('home');
+      setSidebarCollapsed(false);
+      setViewMode('dag');
+      setGraphActionsMenuOpen(false);
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
+      setStatusFilters(new Set<WorkflowStatus>());
     } catch (err) {
       console.error('Failed to delete workflows:', err);
     }
-  }, [invoker, clearTasks]);
+  }, [clearTasks, invoker]);
 
   // True when all tasks have reached a terminal state.
   const allSettled = useMemo(() => {
@@ -1654,8 +1845,90 @@ export function App() {
     }
     return true;
   }, [tasks]);
+
   const showStart = hasLoadedPlan && !hasStarted;
   const showStop = hasStarted && !allSettled;
+  const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
+  const autoCollapseInspector = sidebarSurface !== 'home' && viewportWidth < 1440;
+  const effectiveInspectorCollapsed = inspectorCollapsed || (autoCollapseInspector && !inspectorManualOpen);
+  const showInspectorPlaceholder = !showEmptyGraphTutorial && !selectedTask && !selectedWorkflow && !(viewMode === 'actionGraph' && selectedActionNode);
+
+  useEffect(() => {
+    if (sidebarSurface === 'home' || !autoCollapseInspector) {
+      setInspectorManualOpen(false);
+    }
+  }, [autoCollapseInspector, sidebarSurface]);
+  useEffect(() => {
+    if (!graphActionsMenuOpen) return undefined;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (graphActionsMenuRef.current?.contains(event.target as Node)) return;
+      setGraphActionsMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setGraphActionsMenuOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [graphActionsMenuOpen]);
+
+  const selectViewMode = useCallback((nextView: 'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph') => {
+    setGraphActionsMenuOpen(false);
+    if (nextView !== 'actionGraph' && selectedActionNodeId !== null) {
+      setSelectedActionNodeId(null);
+    }
+    if (nextView === 'actionGraph') {
+      setSidebarSurface('home');
+      setViewMode('actionGraph');
+      setWorkflowSelectionDismissed(true);
+      setSelectedTaskId(null);
+      return;
+    }
+    if (nextView === 'dag') {
+      setViewMode('dag');
+      return;
+    }
+    setSidebarSurface('home');
+    setViewMode(nextView);
+  }, [selectedActionNodeId]);
+
+  const handleToggleInspectorCollapsed = useCallback(() => {
+    if (autoCollapseInspector) {
+      setInspectorCollapsed(false);
+      setInspectorManualOpen((prev) => !prev);
+      return;
+    }
+    setInspectorManualOpen(false);
+    setInspectorCollapsed((prev) => !prev);
+  }, [autoCollapseInspector]);
+
+  const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
+    setGraphActionsMenuOpen(false);
+    setViewMode('dag');
+    if (nextSurface === 'home') {
+      setSidebarSurface('home');
+      setSidebarCollapsed(false);
+      setInspectorManualOpen(false);
+      return;
+    }
+    setSidebarSurface(nextSurface);
+    setSidebarCollapsed(true);
+    setInspectorManualOpen(false);
+    setStatusFilters(new Set<WorkflowStatus>());
+  }, []);
+
+  const handleDismissBrowserSurface = useCallback(() => {
+    setGraphActionsMenuOpen(false);
+    setSidebarSurface('home');
+    setSidebarCollapsed(false);
+    setInspectorManualOpen(false);
+    setViewMode('dag');
+  }, []);
 
   // ── Task actions ──────────────────────────────────────────
   const handleProvideInput = useCallback(
@@ -1855,7 +2128,487 @@ export function App() {
       setUpdateCliPending(false);
     }
   }, [refreshSystemDiagnostics]);
+  const handleRunInvokerCliSetup = useCallback(async (request: InvokerSetupRequest) => {
+    try {
+      setSetupPending(true);
+      setSetupResult(null);
+      const result = await window.invoker?.runInvokerCliSetup?.(request);
+      setSetupResult(result ?? {
+        ok: false,
+        steps: [{ id: 'tools', name: 'Run setup', ok: false, output: '', error: 'invoker-cli setup is not available.' }],
+      });
+      refreshSystemDiagnostics();
+    } catch (err) {
+      setSetupResult({
+        ok: false,
+        steps: [{ id: 'tools', name: 'Run setup', ok: false, output: '', error: err instanceof Error ? err.message : String(err) }],
+      });
+    } finally {
+      setSetupPending(false);
+    }
+  }, [refreshSystemDiagnostics]);
 
+
+  const selectedWorkflowEntry = selectedWorkflow
+    ? workflowEntries.find((entry) => entry.workflow.id === selectedWorkflow.id) ?? null
+    : null;
+  const selectedTaskWorkflowName = selectedWorkflow?.name ?? (selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.name ?? selectedTask.config.workflowId : null);
+
+  const renderGraphActions = (showMoreMenu: boolean): JSX.Element => (
+    <div className="flex items-center gap-2">
+      {showStart && (
+        <button
+          type="button"
+          data-testid="rail-start"
+          onClick={handleStart}
+          className="rounded bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600"
+        >
+          Run
+        </button>
+      )}
+      {showStop && (
+        <button
+          type="button"
+          data-testid="rail-stop"
+          onClick={handleStop}
+          className="rounded bg-red-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-600"
+        >
+          Stop
+        </button>
+      )}
+      <button
+        type="button"
+        data-testid="rail-refresh"
+        onClick={handleRefresh}
+        className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+      >
+        Refresh
+      </button>
+      <button
+        type="button"
+        onClick={() => setGraphMaximized(true)}
+        className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+      >
+        Full graph ⤢
+      </button>
+      {showMoreMenu && (
+        <div ref={graphActionsMenuRef} className="relative">
+          <button
+            type="button"
+            data-testid="graph-more-button"
+            onClick={() => setGraphActionsMenuOpen((open) => !open)}
+            className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+          >
+            More ▾
+          </button>
+          {graphActionsMenuOpen && (
+            <div
+              data-testid="graph-more-menu"
+              className="absolute right-0 top-10 z-20 w-48 rounded-lg border border-gray-700 bg-gray-950 p-1 shadow-xl"
+            >
+              <button
+                type="button"
+                data-testid="rail-home"
+                onClick={() => {
+                  handleSelectSidebarSurface('home');
+                  selectViewMode('dag');
+                }}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+              >
+                Home
+              </button>
+              <button
+                type="button"
+                data-testid="rail-timeline"
+                onClick={() => selectViewMode('timeline')}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+              >
+                Timeline
+              </button>
+              <button
+                type="button"
+                data-testid="rail-history"
+                onClick={() => selectViewMode('history')}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+              >
+                History
+              </button>
+              <button
+                type="button"
+                data-testid="rail-action-graph"
+                onClick={() => selectViewMode('actionGraph')}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+              >
+                Action Graph
+              </button>
+              <button
+                type="button"
+                data-testid="rail-queue"
+                onClick={() => selectViewMode('queue')}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+              >
+                Queue
+              </button>
+              <div className="my-1 border-t border-gray-800" />
+              <button
+                type="button"
+                data-testid="rail-clear"
+                onClick={async () => {
+                  setGraphActionsMenuOpen(false);
+                  await handleClear();
+                }}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                data-testid="rail-delete-history"
+                onClick={async () => {
+                  setGraphActionsMenuOpen(false);
+                  await handleDeleteDB();
+                }}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-red-300 hover:bg-red-950/50"
+              >
+                Delete history
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderSelectedWorkflowTaskGraph = (floating: boolean): JSX.Element | null => {
+    if (displayedSelectedWorkflowGraph === null) return null;
+
+    const graphBody = (
+      <div
+        data-keyboard-region="taskGraph"
+        tabIndex={0}
+        data-keyboard-active={keyboardRegion === 'taskGraph' ? 'true' : 'false'}
+        className={`flex h-full min-h-0 flex-1 outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-blue-300/60' : ''}`}
+      >
+        {isSelectedWorkflowGraphRefreshing && (
+          <div data-testid="selected-workflow-mini-dag-refreshing" className="px-2 py-1 text-xs text-amber-200">
+            Refreshing graph…
+          </div>
+        )}
+        <TaskDAG
+          key={`${displayedSelectedWorkflowGraph.workflow.id}-${floating ? 'floating' : 'browser'}`}
+          tasks={displayedSelectedWorkflowGraph.tasks}
+          workflows={selectedTaskDagWorkflows}
+          selectedTaskId={selectedTaskId}
+          cameraCommand={cameraCommand}
+          onTaskClick={handleTaskClick}
+          onTaskDoubleClick={handleTaskDoubleClick}
+          onTaskContextMenu={handleTaskContextMenu}
+          onManualViewport={handleManualViewport}
+          statusFilters={new Set<string>()}
+          runningTaskIds={runningTaskIds}
+          surfaceMode={floating ? 'default' : 'browser'}
+        />
+      </div>
+    );
+
+    if (floating) {
+      return (
+        <FloatingGraphPanel
+          key={displayedSelectedWorkflowGraph.workflow.id}
+          testId="selected-workflow-mini-dag"
+          dragHandleTestId="selected-workflow-mini-dag-drag-handle"
+          title={`${displayedSelectedWorkflowGraph.workflow.name} task DAG`}
+          boundsRef={graphSurfaceRef as unknown as RefObject<HTMLElement>}
+          contentClassName="h-[250px]"
+        >
+          {graphBody}
+        </FloatingGraphPanel>
+      );
+    }
+
+    return (
+      <div className="flex h-full min-h-0 flex-col p-4">
+        <div
+          data-testid="selected-workflow-mini-dag"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-gray-700 bg-gray-900/95 shadow-lg"
+        >
+          <div className="border-b border-gray-700 px-3 py-2 text-[11px] text-gray-300">
+            {displayedSelectedWorkflowGraph.workflow.name} task DAG
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col">
+            {graphBody}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderGraphCanvas = (): JSX.Element => (
+    <div
+      ref={graphSurfaceRef}
+      data-testid="workflow-graph-surface"
+      data-keyboard-region="workflowGraph"
+      tabIndex={0}
+      data-keyboard-active={keyboardRegion === 'workflowGraph' ? 'true' : 'false'}
+      className={`flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900 outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
+      onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
+    >
+      {viewMode === 'queue' ? (
+        <QueueView
+          tasks={tasks}
+          queueStatus={queueStatus}
+          onTaskClick={handleTaskClick}
+          onCancel={handleCancelTask}
+          selectedTaskId={selectedTaskId}
+        />
+      ) : viewMode === 'history' ? (
+        <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+      ) : viewMode === 'timeline' ? (
+        <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+      ) : viewMode === 'actionGraph' ? (
+        <ActionGraphView
+          graph={actionGraph}
+          error={actionGraphError}
+          selectedNodeId={selectedActionNodeId}
+          onSelectNode={(node) => {
+            setSelectedActionNodeId(node?.id ?? null);
+            if (node?.taskId) setSelectedTaskId(node.taskId);
+            if (node?.workflowId) setSelectedWorkflowId(node.workflowId);
+          }}
+        />
+      ) : (
+        <>
+          {sidebarSurface === 'home' && (
+            <WorkflowGraph
+              workflows={workflows}
+              selectedWorkflowId={selectedWorkflow?.id ?? null}
+              cameraCommand={cameraCommand}
+              statusFilters={statusFilters}
+              coreActivityByWorkflow={coreActivityByWorkflow}
+              onSelectWorkflow={handleWorkflowClick}
+              onWorkflowContextMenu={handleWorkflowContextMenu}
+              onManualViewport={handleManualViewport}
+            />
+          )}
+          {renderSelectedWorkflowTaskGraph(sidebarSurface === 'home')}
+        </>
+      )}
+    </div>
+  );
+
+  const renderGraphWorkspace = (title: string, subtitle: string, showMoreMenu: boolean): JSX.Element => (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between border-b border-gray-800 bg-gray-950/50 px-4 py-2">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-100">{title}</h2>
+          <p className="text-xs text-gray-500">{subtitle}</p>
+        </div>
+        {renderGraphActions(showMoreMenu)}
+      </div>
+      {renderGraphCanvas()}
+    </div>
+  );
+
+  const renderBrowserEmptyState = (title: string, copy: string): JSX.Element => (
+    <div className="flex h-full items-center justify-center px-6 text-center">
+      <div>
+        <div className="text-sm font-medium text-gray-200">{title}</div>
+        <div className="mt-2 text-sm text-gray-500">{copy}</div>
+      </div>
+    </div>
+  );
+
+  const workflowsSubtitle = `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'}`;
+  const attentionSubtitle = attentionEntries.length === 0
+    ? 'Nothing needs a decision right now.'
+    : `${attentionEntries.length} item${attentionEntries.length === 1 ? '' : 's'} need attention.`;
+  const runningSubtitle = runningEntries.length === 0
+    ? 'No active tasks right now.'
+    : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`;
+
+  const browserSurfaceTitle = sidebarSurface === 'workflows'
+    ? 'Workflows'
+    : sidebarSurface === 'attention'
+      ? 'Needs Attention'
+      : 'Running';
+  const browserSurfaceSubtitle = sidebarSurface === 'workflows'
+    ? workflowsSubtitle
+    : sidebarSurface === 'attention'
+      ? attentionSubtitle
+      : runningSubtitle;
+
+  const browserSelectedTitle = sidebarSurface === 'workflows'
+    ? selectedWorkflow?.name ?? 'Select a workflow'
+    : selectedTask?.description || selectedTask?.id || 'Select an item';
+  const browserSelectedContext = sidebarSurface === 'workflows'
+    ? selectedWorkflowEntry
+      ? `${selectedWorkflowEntry.taskCount} task${selectedWorkflowEntry.taskCount === 1 ? '' : 's'}`
+      : workflowsSubtitle
+    : selectedTaskWorkflowName ?? 'No workflow';
+  const browserSelectedStatus = sidebarSurface === 'workflows'
+    ? selectedWorkflow
+      ? formatWorkflowStatus(selectedWorkflow.status)
+      : 'No workflow selected'
+    : selectedTask
+      ? formatTaskStatus(selectedTask.status)
+      : 'No item selected';
+  const browserStatusToneClass = sidebarSurface === 'running'
+    ? 'bg-blue-950/70 text-blue-100'
+    : sidebarSurface === 'attention'
+      ? 'bg-amber-950/70 text-amber-100'
+      : 'bg-gray-800 text-gray-200';
+
+  const relatedBrowserTasks = Array.from(miniDagTasks.values()).filter((task) =>
+    sidebarSurface === 'workflows' || task.id !== selectedTask?.id,
+  );
+
+  const renderWorkflowsList = (): JSX.Element => (
+    workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
+      <div className="overflow-y-auto p-3">
+        <div className="space-y-1">
+          {workflowEntries.map((entry) => {
+            const selected = selectedWorkflow?.id === entry.workflow.id;
+            return (
+              <button
+                key={entry.workflow.id}
+                type="button"
+                onClick={() => selectWorkflowById(entry.workflow.id)}
+                className={`block w-full rounded-xl px-3 py-2 text-left transition-colors ${selected ? 'bg-gray-800 text-white ring-1 ring-gray-700' : 'text-gray-200 hover:bg-gray-900/80'}`}
+              >
+                <div className="truncate font-medium">{entry.workflow.name}</div>
+                <div className="mt-1 text-xs text-gray-500">{entry.taskCount} task{entry.taskCount === 1 ? '' : 's'}</div>
+                <div className="mt-1 text-xs text-gray-400">{formatWorkflowStatus(entry.workflow.status)}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    )
+  );
+
+  const renderTaskList = (entries: typeof attentionEntries, emptyTitle: string, emptyCopy: string, tone: 'attention' | 'running'): JSX.Element => (
+    entries.length === 0 ? renderBrowserEmptyState(emptyTitle, emptyCopy) : (
+      <div className="overflow-y-auto p-3">
+        <div className="space-y-1">
+          {entries.map((entry) => {
+            const selected = selectedTask?.id === entry.task.id;
+            const accent = tone === 'attention'
+              ? selected ? 'bg-amber-950/50 text-amber-50 ring-1 ring-amber-800/60' : 'text-gray-200 hover:bg-gray-900/80'
+              : selected ? 'bg-blue-950/50 text-blue-50 ring-1 ring-blue-800/60' : 'text-gray-200 hover:bg-gray-900/80';
+            return (
+              <button
+                key={entry.task.id}
+                type="button"
+                onClick={() => selectTaskById(entry.task.id)}
+                className={`block w-full rounded-xl px-3 py-2 text-left transition-colors ${accent}`}
+              >
+                <div className="truncate font-medium">{entry.task.description || entry.task.id}</div>
+                <div className="mt-1 text-xs text-gray-500">{entry.workflow?.name ?? 'No workflow'}</div>
+                <div className="mt-1 text-xs text-gray-400">{formatTaskStatus(entry.task.status)}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    )
+  );
+
+  const renderBrowserRail = (): JSX.Element => (
+    <div data-testid="browser-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
+      <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-100">{browserSurfaceTitle}</h2>
+          <p className="mt-1 text-xs text-gray-500">{browserSurfaceSubtitle}</p>
+        </div>
+        <button
+          type="button"
+          aria-label="Close browser panel"
+          data-testid="browser-rail-dismiss"
+          onClick={handleDismissBrowserSurface}
+          className="rounded-lg border border-gray-700 px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+        >
+          Close
+        </button>
+      </div>
+      <div className="min-h-0 flex-1">
+        {sidebarSurface === 'workflows'
+          ? renderWorkflowsList()
+          : sidebarSurface === 'attention'
+            ? renderTaskList(attentionEntries, 'All clear', 'Nothing needs a decision right now.', 'attention')
+            : renderTaskList(runningEntries, 'No tasks running', 'Start a run to watch live work here.', 'running')}
+      </div>
+    </div>
+  );
+  const renderGraphTerminalChrome = (): JSX.Element => (
+    <div
+      data-testid="graph-terminal-chrome"
+      data-keyboard-region="bottomBar"
+      tabIndex={0}
+      data-keyboard-active={keyboardRegion === 'bottomBar' ? 'true' : 'false'}
+      className={`outline-none ${keyboardRegion === 'bottomBar' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
+    >
+      {sidebarSurface === 'home' && (
+        <WorkflowStatusChips
+          workflows={workflows}
+          activeFilters={statusFilters}
+          keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
+          onStatusClick={handleStatusClick}
+        />
+      )}
+      <TerminalDrawer
+        state={terminalDrawerState}
+        onCycle={() =>
+          setTerminalDrawerState((prev) =>
+            prev === 'minimized' ? 'partial' : prev === 'partial' ? 'maximized' : 'minimized',
+          )
+        }
+        sessions={terminalSessions}
+        activeSessionId={activeTerminalSessionId}
+        onSelectSession={setActiveTerminalSessionId}
+        onCloseSession={(sessionId) => void handleCloseTerminalSession(sessionId)}
+        taskLabels={terminalTaskLabels}
+      />
+    </div>
+  );
+
+
+  const renderBrowserDetailWorkspace = (): JSX.Element => (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-100">{browserSelectedTitle}</h2>
+            <p className="mt-1 text-sm text-gray-400">{browserSelectedContext}</p>
+            <div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${browserStatusToneClass}`}>
+              {browserSelectedStatus}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {renderGraphActions(true)}
+            <button
+              type="button"
+              aria-label="Return home"
+              data-testid="browser-return-home"
+              onClick={handleDismissBrowserSurface}
+              className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+            >
+              Home
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {renderGraphCanvas()}
+      </div>
+      {viewMode === 'dag' && renderGraphTerminalChrome()}
+    </div>
+  );
+
+  const homeSubtitle = workflows.size === 0
+    ? 'Your plan will appear here.'
+    : selectedWorkflow
+      ? `${selectedWorkflow.name} · ${formatWorkflowStatus(selectedWorkflow.status)}`
+      : `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'} ready`;
   return (
     <div className="h-screen flex flex-col bg-gray-900 text-gray-100" onClick={() => closeContextMenu()}>
       {showSystemBanner && (
@@ -1885,285 +2638,145 @@ export function App() {
           </div>
         </div>
       )}
+      {runtimeStatus?.readOnly && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="read-only-mode-banner"
+          className="border-b border-blue-700 bg-blue-950/70 px-4 py-2 text-sm text-blue-100"
+        >
+          <span className="font-semibold text-blue-50">Read-only mode.</span>{' '}
+          This window can browse workflows, but it cannot make changes until the write owner is available.
+        </div>
+      )}
+
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
-        <nav className="w-24 border-r border-gray-800 bg-gray-950/60 flex flex-col justify-between py-3">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".json,.yaml,.yml"
-            onChange={handleFileSelect}
-            className="hidden"
-          />
-          <div className="space-y-3 px-2">
-            <div className="space-y-1">
-              <button
-                data-testid="rail-open-file"
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full rounded bg-gray-700 px-2 py-1.5 text-left text-xs font-medium text-gray-100 hover:bg-gray-600"
-              >
-                Open
-              </button>
-              {showStart && (
-                <button
-                  data-testid="rail-start"
-                  onClick={handleStart}
-                  className="w-full rounded bg-green-700 px-2 py-1.5 text-left text-xs font-medium text-white hover:bg-green-600"
-                >
-                  Start
-                </button>
-              )}
-              {showStop && (
-                <button
-                  data-testid="rail-stop"
-                  onClick={handleStop}
-                  className="w-full rounded bg-red-700 px-2 py-1.5 text-left text-xs font-medium text-white hover:bg-red-600"
-                >
-                  Stop
-                </button>
-              )}
-              {planName && (
-                <div className="truncate px-1 pt-1 text-[10px] leading-tight text-gray-500" title={planName}>
-                  {planName}
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-1">
-            <button
-              data-testid="rail-home"
-              onClick={() => {
-                setViewMode('dag');
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'dag' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              Home
-            </button>
-            <button
-              data-testid="rail-timeline"
-              onClick={() => {
-                setViewMode('timeline');
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'timeline' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              Timeline
-            </button>
-            <button
-              data-testid="rail-history"
-              onClick={() => {
-                setViewMode('history');
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'history' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              History
-            </button>
-            <button
-              data-testid="rail-action-graph"
-              onClick={() => {
-                setViewMode('actionGraph');
-                setWorkflowSelectionDismissed(true);
-                setSelectedTaskId(null);
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'actionGraph' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              Action Graph
-            </button>
-            <button
-              data-testid="rail-queue"
-              onClick={() => {
-                setViewMode('queue');
-              }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'queue' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
-            >
-              Queue
-            </button>
-            </div>
-
-            <div className="space-y-1 border-t border-gray-800 pt-3">
-              <button
-                data-testid="rail-refresh"
-                onClick={handleRefresh}
-                className="w-full rounded px-2 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-800/70"
-              >
-                Refresh
-              </button>
-              <button
-                data-testid="rail-clear"
-                onClick={handleClear}
-                className="w-full rounded px-2 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-800/70"
-              >
-                Clear
-              </button>
-              <button
-                data-testid="rail-delete-history"
-                onClick={handleDeleteDB}
-                className="w-full rounded px-2 py-1.5 text-left text-xs text-red-300 hover:bg-red-950/50"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-          <div className="px-2">
-            <button
-              data-testid="rail-settings"
-              onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
-              className="flex h-8 w-full items-center justify-center rounded text-gray-300 hover:bg-gray-800/70 hover:text-white"
-              aria-label="Settings"
-              title="Settings"
-            >
-              <GearIcon />
-            </button>
-          </div>
-        </nav>
+        <LeftStatusColumn
+          workflows={workflows}
+          tasks={tasks}
+          queueStatus={queueStatus}
+          selectedSurface={sidebarSurface}
+          collapsed={sidebarCollapsed}
+          onSelectSurface={handleSelectSidebarSurface}
+          onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
+          onOpenSettings={() => {
+            cancelPendingSystemSetupAutoOpen();
+            setShowSystemSetup(true);
+          }}
+        />
 
         <div className="flex-1 flex overflow-hidden">
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <div
-              ref={graphSurfaceRef}
-              data-testid="workflow-graph-surface"
-              data-keyboard-region="workflowGraph"
-              tabIndex={0}
-              data-keyboard-active={keyboardRegion === 'workflowGraph' ? 'true' : 'false'}
-              className={`flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900 outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
-              onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
-            >
-              {viewMode === 'queue' ? (
-                <QueueView
-                  tasks={tasks}
-                  queueStatus={queueStatus}
-                  onTaskClick={handleTaskClick}
-                  onCancel={handleCancelTask}
-                  selectedTaskId={selectedTaskId}
-                />
-              ) : viewMode === 'history' ? (
-                <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
-              ) : viewMode === 'timeline' ? (
-                <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
-              ) : viewMode === 'actionGraph' ? (
-                <ActionGraphView
-                  graph={actionGraph}
-                  error={actionGraphError}
-                  selectedNodeId={selectedActionNodeId}
-                  onSelectNode={(node) => {
-                    setSelectedActionNodeId(node?.id ?? null);
-                    if (node?.taskId) setSelectedTaskId(node.taskId);
-                    if (node?.workflowId) setSelectedWorkflowId(node.workflowId);
-                  }}
-                />
-              ) : (
-                <>
-                  <WorkflowGraph
-                    workflows={workflows}
-                    selectedWorkflowId={selectedWorkflow?.id ?? null}
-                    cameraCommand={cameraCommand}
-                    statusFilters={statusFilters}
-                    coreActivityByWorkflow={coreActivityByWorkflow}
-                    onSelectWorkflow={handleWorkflowClick}
-                    onWorkflowContextMenu={handleWorkflowContextMenu}
-                    onManualViewport={handleManualViewport}
+          <main className="flex-1 flex flex-col overflow-hidden bg-gray-900">
+            {sidebarSurface === 'home' ? (
+              <>
+                <div className="border-b border-gray-800 bg-gray-900/80 p-4">
+                  <InvokerTerminal
+                    lines={terminalLines}
+                    busy={plannerBusy}
+                    onSubmit={(command) => void handleTerminalSubmit(command)}
                   />
-                  {displayedSelectedWorkflowGraph !== null && (
-                    <FloatingGraphPanel
-                      key={displayedSelectedWorkflowGraph.workflow.id}
-                      testId="selected-workflow-mini-dag"
-                      dragHandleTestId="selected-workflow-mini-dag-drag-handle"
-                      title={`${displayedSelectedWorkflowGraph.workflow.name} task DAG`}
-                      boundsRef={graphSurfaceRef}
-                      contentClassName="h-[250px]"
-                    >
-                      <div
-                        data-keyboard-region="taskGraph"
-                        tabIndex={0}
-                        data-keyboard-active={keyboardRegion === 'taskGraph' ? 'true' : 'false'}
-                        className={`h-full outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-blue-300/60' : ''}`}
-                      >
-                        {isSelectedWorkflowGraphRefreshing && (
-                          <div data-testid="selected-workflow-mini-dag-refreshing" className="px-2 py-1 text-xs text-amber-200">
-                            Refreshing graph…
-                          </div>
-                        )}
-                        <TaskDAG
-                          tasks={displayedSelectedWorkflowGraph.tasks}
-                          workflows={selectedTaskDagWorkflows}
-                          selectedTaskId={selectedTaskId}
-                          cameraCommand={cameraCommand}
-                          onTaskClick={handleTaskClick}
-                          onTaskDoubleClick={handleTaskDoubleClick}
-                          onTaskContextMenu={handleTaskContextMenu}
-                          onManualViewport={handleManualViewport}
-                          statusFilters={new Set()}
-                          runningTaskIds={runningTaskIds}
-                        />
-                      </div>
-                    </FloatingGraphPanel>
-                  )}
-                </>
-              )}
-            </div>
-
-            {viewMode === 'dag' && (
-              <div
-                data-keyboard-region="bottomBar"
-                tabIndex={0}
-                data-keyboard-active={keyboardRegion === 'bottomBar' ? 'true' : 'false'}
-                className={`outline-none ${keyboardRegion === 'bottomBar' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
-              >
-                <WorkflowStatusChips
-                  workflows={workflows}
-                  activeFilters={statusFilters}
-                  keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
-                  onStatusClick={handleStatusClick}
-                />
-                <TerminalDrawer
-                  state={terminalDrawerState}
-                  onCycle={() =>
-                    setTerminalDrawerState((prev) =>
-                      prev === 'minimized' ? 'partial' : prev === 'partial' ? 'maximized' : 'minimized',
-                    )
-                  }
-                  sessions={terminalSessions}
-                  activeSessionId={activeTerminalSessionId}
-                  onSelectSession={setActiveTerminalSessionId}
-                  onCloseSession={(sessionId) => void handleCloseTerminalSession(sessionId)}
-                  taskLabels={terminalTaskLabels}
-                />
+                </div>
+                {renderGraphWorkspace('Plan graph', homeSubtitle, true)}
+              </>
+            ) : (
+              <div className="flex-1 flex overflow-hidden">
+                {renderBrowserRail()}
+                {renderBrowserDetailWorkspace()}
               </div>
             )}
-          </div>
+
+            {sidebarSurface === 'home' && viewMode === 'dag' && renderGraphTerminalChrome()}
+          </main>
 
           <div
+            data-testid="workflow-inspector-shell"
             data-keyboard-region="inspector"
             tabIndex={0}
             data-keyboard-active={keyboardRegion === 'inspector' ? 'true' : 'false'}
-            className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
+            className={`${showEmptyGraphTutorial || showInspectorPlaceholder ? 'w-96' : effectiveInspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
           >
-            <WorkflowInspector
-              workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
-              task={selectedTask}
-              workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
-              reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
-              remoteTargets={remoteTargets}
-              executionPools={executionPools}
-              executionAgents={executionAgents}
-              collapsed={inspectorCollapsed}
-              advancedExpanded={advancedMetadataExpanded}
-              actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
-              onEditType={handleEditType}
-              onEditPool={handleEditPool}
-              onEditAgent={handleEditAgent}
-              onEditPrompt={handleEditPrompt}
-              onEditCommand={handleEditCommand}
-              onApprove={openApprovalModal}
-              onReject={openRejectModal}
-              onSetMergeBranch={handleSetMergeBranch}
-              onSetMergeMode={handleSetMergeMode}
-              onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
-              onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
-            />
+            {showEmptyGraphTutorial ? (
+              <EmptyGraphTutorial />
+            ) : showInspectorPlaceholder ? (
+              <EmptyInspectorPlaceholder />
+            ) : (
+              <WorkflowInspector
+                workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
+                task={selectedTask}
+                workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
+                reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
+                actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
+                collapsed={effectiveInspectorCollapsed}
+                advancedExpanded={advancedMetadataExpanded}
+                remoteTargets={remoteTargets}
+                executionPools={executionPools}
+                executionAgents={executionAgents}
+                onApprove={(task) => void handleApprove(task.id)}
+                onReject={(task) => void handleReject(task.id)}
+                onSetMergeBranch={handleSetMergeBranch}
+                onSetMergeMode={handleSetMergeMode}
+                onToggleCollapsed={handleToggleInspectorCollapsed}
+                onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
+              />
+            )}
           </div>
         </div>
       </div>
+
+
+      {graphMaximized && (
+        <div
+          data-testid="graph-maximized-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Full graph"
+          className="fixed inset-0 z-50 flex flex-col bg-gray-950"
+        >
+          <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-100">Full graph</h2>
+              <p className="text-xs text-gray-500">Press Escape to return.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setGraphMaximized(false)}
+              className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+            >
+              Close
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            {displayedSelectedWorkflowGraph !== null ? (
+              <TaskDAG
+                tasks={displayedSelectedWorkflowGraph.tasks}
+                workflows={selectedTaskDagWorkflows}
+                selectedTaskId={selectedTaskId}
+                cameraCommand={cameraCommand}
+                onTaskClick={handleTaskClick}
+                onTaskDoubleClick={handleTaskDoubleClick}
+                onTaskContextMenu={handleTaskContextMenu}
+                onManualViewport={handleManualViewport}
+                statusFilters={new Set<string>()}
+                runningTaskIds={runningTaskIds}
+                surfaceMode="overlay"
+              />
+            ) : (
+              <WorkflowGraph
+                workflows={workflows}
+                selectedWorkflowId={selectedWorkflow?.id ?? null}
+                cameraCommand={cameraCommand}
+                statusFilters={statusFilters}
+                coreActivityByWorkflow={coreActivityByWorkflow}
+                onSelectWorkflow={handleWorkflowClick}
+                onWorkflowContextMenu={handleWorkflowContextMenu}
+                onManualViewport={handleManualViewport}
+              />
+            )}
+          </div>
+        </div>
+      )}
 
       {searchOpen && (
         <div
@@ -2260,6 +2873,9 @@ export function App() {
           installError={installSkillsError}
           onInstallBundledSkills={handleInstallBundledSkills}
           updateCliPending={updateCliPending}
+          setupPending={setupPending}
+          setupResult={setupResult}
+          onRunSetup={handleRunInvokerCliSetup}
           updateCliError={updateCliError}
           onUpdateInvokerCli={handleUpdateInvokerCli}
           onClose={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(false); }}
@@ -2310,6 +2926,7 @@ export function App() {
           onRecreateDownstream={handleRecreateDownstream}
           onFix={handleFix}
           onCancel={handleCancelTask}
+          onDelete={handleDeleteTask}
           onClose={closeContextMenu}
           autoFocus={Boolean(contextMenu.returnFocusRegion)}
         />

@@ -389,10 +389,18 @@ bounded_headless_query() {
   local output_file="$STATE_DIR/query-output.$$.$RANDOM"
 
   while [ "$attempt" -le "$attempts" ]; do
+    local query_cmd=()
+    if [ -f "$HEADLESS_CLIENT_JS" ] && owner_ping_ready; then
+      query_cmd=(node "$HEADLESS_CLIENT_JS" --no-track "$@")
+    else
+      query_cmd=("$ELECTRON" "$MAIN")
+      if [ -n "$SANDBOX_FLAG" ]; then
+        query_cmd+=("$SANDBOX_FLAG")
+      fi
+      query_cmd+=(--headless "$@")
+    fi
     set +e
-    # shellcheck disable=SC2086
-    run_with_optional_timeout "$QUERY_TIMEOUT_SECONDS" \
-      "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" > "$output_file" 2>/dev/null
+    run_with_optional_timeout "$QUERY_TIMEOUT_SECONDS" "${query_cmd[@]}" > "$output_file" 2>/dev/null
     code=$?
     set -e
     if [ "$code" -eq 0 ]; then

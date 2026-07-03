@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { SQLiteAdapter } from '@invoker/data-store';
 import { stringify as yamlStringify } from 'yaml';
 import { E2E_REPO_URL } from './fixtures/electron-app.js';
+import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
 
@@ -65,6 +66,7 @@ async function waitForTask(page: Page, taskId: string, predicate: (task: any) =>
 async function launchApp(testDir: string, configPath: string): Promise<{ app: ElectronApplication; page: Page }> {
   const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
   const electronUserDataDir = path.join(testDir, 'electron-user-data');
+  registerTrackedBrowserUserDataDir(electronUserDataDir);
   const app = await electron.launch({
     args: [
       ...launchArgs().slice(0, -1),

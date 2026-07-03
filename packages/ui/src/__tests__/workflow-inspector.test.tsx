@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowInspector } from '../components/WorkflowInspector.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
@@ -633,5 +633,84 @@ describe('WorkflowInspector', () => {
     expect(screen.getByTestId('workflow-inspector-action-node-status')).toHaveTextContent('RUNNING');
     expect(screen.getByTestId('workflow-inspector-action-node')).toHaveTextContent('runningMs');
     expect(screen.getByTestId('workflow-inspector-action-node')).toHaveTextContent('12000');
+  });
+
+  it('shows task logs and filters by minimum level', async () => {
+    (window as unknown as {
+      invoker: { getEvents: (taskId: string) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
+    }).invoker = {
+      getEvents: vi.fn(async () => [
+        {
+          id: 1,
+          eventType: 'debug.auto-fix',
+          payload: JSON.stringify({ message: 'debug detail', attempt: 1, value: 'secret' }),
+          createdAt: '2025-01-01T00:00:01.000Z',
+        },
+        {
+          id: 2,
+          eventType: 'task.log',
+          payload: JSON.stringify({ level: 'info', message: 'Preparing review workspace', branch: 'stack/test' }),
+          createdAt: '2025-01-01T00:00:02.000Z',
+        },
+        {
+          id: 3,
+          eventType: 'task.failed',
+          payload: JSON.stringify({ message: 'Merge gate failed' }),
+          createdAt: '2025-01-01T00:00:03.000Z',
+        },
+      ]),
+    };
+
+    try {
+      render(
+        <WorkflowInspector
+          workflow={workflow}
+          task={makeTask({ status: 'running' })}
+          collapsed={false}
+          advancedExpanded={false}
+          onToggleCollapsed={() => {}}
+          onToggleAdvanced={() => {}}
+        />,
+      );
+
+      await waitFor(() => expect(screen.getByText('Preparing review workspace')).toBeInTheDocument());
+      expect(screen.getByText('Merge gate failed')).toBeInTheDocument();
+      expect(screen.queryByText('debug detail')).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByTestId('task-log-level-select'), { target: { value: 'debug' } });
+
+      expect(screen.getByText('debug detail')).toBeInTheDocument();
+      expect(screen.getByText('{"attempt":1}')).toBeInTheDocument();
+      expect(screen.queryByText(/secret/)).not.toBeInTheDocument();
+    } finally {
+      delete (window as unknown as { invoker?: unknown }).invoker;
+    }
+  });
+
+  it('shows a retrying log error when task events fail to load', async () => {
+    (window as unknown as {
+      invoker: { getEvents: (taskId: string) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
+    }).invoker = {
+      getEvents: vi.fn(async () => {
+        throw new Error('offline');
+      }),
+    };
+
+    try {
+      render(
+        <WorkflowInspector
+          workflow={workflow}
+          task={makeTask({ status: 'running' })}
+          collapsed={false}
+          advancedExpanded={false}
+          onToggleCollapsed={() => {}}
+          onToggleAdvanced={() => {}}
+        />,
+      );
+
+      await waitFor(() => expect(screen.getByTestId('task-log-error')).toHaveTextContent('Could not load logs. Retrying…'));
+    } finally {
+      delete (window as unknown as { invoker?: unknown }).invoker;
+    }
   });
 });

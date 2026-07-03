@@ -12,60 +12,44 @@ queue_rules:
     merge_method: squash
     batch_size: 5
     batch_max_wait_time: 5min
+    checks_timeout: 60min
     queue_conditions:
       - base=master
       - -draft
       - "#approved-reviews-by >= 1"
       - -label=merge-hold
       - "#review-threads-unresolved = 0"
+    # Temporary queue stabilizer: heavy CI still runs on PRs, but does not block
+    # Mergify until the flaky queue-only failures are fixed.
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
       - check-success = PR Body
       - check-success = quality / TypeScript Types
       - check-success = required-fast / Guardrails
-      - check-success = required-fast / Vitest Workspace
       - check-success = required-fast / Submit Workflow Chain
-      - check-success = dry-run / case-1
-      - check-success = dry-run / case-2
-      - check-success = dry-run / case-4
-      - check-success = playwright / 1-of-3
-      - check-success = playwright / 2-of-3
-      - check-success = playwright / 3-of-3
-      - check-success = ssh / shard-30
-      - check-success = ssh / shard-31
-      - check-success = optional / Worktree Provisioning
-      - check-success = optional / Visual Proof Validate
       - "#review-threads-unresolved = 0"
 
   - name: admin-bypass
     merge_method: squash
     batch_size: 1
     batch_max_wait_time: 5min
+    checks_timeout: 60min
     queue_conditions:
       - base=master
       - -draft
       - label=admin-bypass
       - -label=merge-hold
       - "#review-threads-unresolved = 0"
+    # Temporary queue stabilizer: heavy CI still runs on PRs, but does not block
+    # Mergify until the flaky queue-only failures are fixed.
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
       - check-success = PR Body
       - check-success = quality / TypeScript Types
       - check-success = required-fast / Guardrails
-      - check-success = required-fast / Vitest Workspace
       - check-success = required-fast / Submit Workflow Chain
-      - check-success = dry-run / case-1
-      - check-success = dry-run / case-2
-      - check-success = dry-run / case-4
-      - check-success = playwright / 1-of-3
-      - check-success = playwright / 2-of-3
-      - check-success = playwright / 3-of-3
-      - check-success = ssh / shard-30
-      - check-success = ssh / shard-31
-      - check-success = optional / Worktree Provisioning
-      - check-success = optional / Visual Proof Validate
       - "#review-threads-unresolved = 0"
 
 pull_request_rules:

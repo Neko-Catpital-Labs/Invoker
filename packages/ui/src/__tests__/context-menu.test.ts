@@ -256,7 +256,7 @@ describe('ContextMenu getMenuItems', () => {
       const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const items = getMenuItems(task);
 
-      const dangerIds = ['cancel-task', 'recreate-task', 'recreate-downstream'];
+      const dangerIds = ['cancel-task', 'recreate-task', 'recreate-downstream', 'delete-task'];
       dangerIds.forEach((id) => {
         const item = items.find((i) => i.id === id);
         expect(item?.variant).toBe('danger');

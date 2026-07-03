@@ -74,8 +74,10 @@ describe('QueueView', () => {
     expect(screen.getByText('#2')).toBeInTheDocument();
     expect(screen.getByText('Running')).toBeInTheDocument();
     expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.getByText('Running').closest('span')?.className).toContain('border-');
+    expect(screen.getByText('Pending').closest('span')?.className).toContain('border-');
     expect(screen.getByText('phase: Executing')).toBeInTheDocument();
-    expect(screen.getByText('priority: 0')).toBeInTheDocument();
+    expect(screen.queryByText(/priority:/)).not.toBeInTheDocument();
     expect(screen.getByText('deps: running-task')).toBeInTheDocument();
     expect(screen.getByText('Blocked')).toBeInTheDocument();
   });
@@ -134,7 +136,7 @@ describe('QueueView', () => {
     fireEvent.click(screen.getByText('run-all-fixture-tests'));
     expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: runningTask.id }));
 
-    fireEvent.click(screen.getAllByText('Terminate')[0]);
+    fireEvent.click(screen.getByLabelText('Cancel run-all-fixture-tests'));
     expect(onCancel).toHaveBeenCalledWith(runningTask.id);
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('run-all-fixture-tests'));
     expect(window.confirm).not.toHaveBeenCalledWith(expect.stringContaining('wf-1/'));
@@ -220,7 +222,7 @@ describe('QueueView', () => {
     expect(screen.getByText('Action Queue (1)')).toBeInTheDocument();
     expect(screen.getByText('Backlog (0)')).toBeInTheDocument();
     expect(screen.getByText('Pending')).toBeInTheDocument();
-    expect(screen.getByText('priority: 5')).toBeInTheDocument();
+    expect(screen.queryByText(/priority:/)).not.toBeInTheDocument();
   });
 
   describe('relationship expander', () => {
@@ -266,6 +268,8 @@ describe('QueueView', () => {
       expect(screen.getByTestId('queue-rels-toggle-action-wf-1/task-a')).toBeInTheDocument();
       expect(screen.getByTestId('queue-rels-toggle-backlog-wf-1/task-b')).toBeInTheDocument();
       expect(screen.getByTestId('queue-rels-toggle-backlog-wf-1/task-c')).toBeInTheDocument();
+
+      // But no upstream/downstream labels should be visible (collapsed)
       expect(screen.queryByText('upstream:')).not.toBeInTheDocument();
       expect(screen.queryByText('downstream:')).not.toBeInTheDocument();
     });
@@ -336,11 +340,17 @@ describe('QueueView', () => {
 
       expect(screen.queryByTestId('queue-rels-toggle-action-wf-1/lone-task')).not.toBeInTheDocument();
       expect(screen.queryByTestId('queue-rels-toggle-backlog-wf-1/lone-task')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Expand relationships')).not.toBeInTheDocument();
     });
   });
 
   describe('integrated queue hardening', () => {
-    it('canonical labels, expanded rels, and Terminate coexist in a composed queue', () => {
+    it('canonical labels, expanded rels, and compact cancel coexist in a composed queue', () => {
+      // Scenario: running task with a downstream blocked dep, plus a manual-action task.
+      // Exercises all three prior-workflow features together:
+      // 1. Canonical status labels (Running, Fixing With AI, Blocked)
+      // 2. Relationship expanders (upstream/downstream chips)
+      // 3. Compact × cancel control on actionable rows
       const runningTask = makeUITask({
         id: 'wf-1/build',
         status: 'running',
@@ -395,10 +405,12 @@ describe('QueueView', () => {
       expect(deployRels.textContent).toContain('upstream:');
       expect(deployRels.textContent).toContain('build');
 
-      const terminateButtons = screen.getAllByText('Terminate');
-      expect(terminateButtons.length).toBe(3);
+      // 3. Compact cancel controls present on all rows (× with accessible labels)
+      const cancelButtons = screen.getAllByLabelText(/^Cancel /);
+      expect(cancelButtons.length).toBe(3); // 2 action + 1 backlog
 
-      fireEvent.click(terminateButtons[0]);
+      // Click cancel on the running task — confirm uses display-friendly ID
+      fireEvent.click(cancelButtons[0]);
       expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('build'));
       expect(onCancel).toHaveBeenCalledWith(runningTask.id);
 

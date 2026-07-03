@@ -522,6 +522,296 @@ EOF
   return 0
 }
 
+# Test: command tasks must not reference missing shell scripts
+test_missing_command_script_fails() {
+  local temp_plan script_path
+  temp_plan=$(mktemp)
+  script_path="scripts/repro/repro-plan-validator-missing-local-$$.sh"
+  rm -f "$REPO_ROOT/$script_path"
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<EOF
+name: missing-command-script-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: repro-proof
+    description: Repro proof references a script that is not checked out
+    command: "bash \${PWD}/$script_path"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for missing command script" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "missing_file_reference" and .field == "command" and .taskId == "repro-proof")] | length == 1' &>/dev/null; then
+    echo "Expected missing_file_reference for repro-proof command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: bare relative shell scripts must be checked into HEAD
+test_missing_bare_command_script_fails() {
+  local temp_plan script_path
+  temp_plan=$(mktemp)
+  script_path="./repro-plan-validator-missing-bare-$$.sh"
+  rm -f "$REPO_ROOT/${script_path#./}"
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<EOF
+name: missing-bare-command-script-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: bare-repro-proof
+    description: Repro proof references a bare script that is not checked out
+    command: "bash $script_path"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for missing bare command script" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "missing_file_reference" and .field == "command" and .taskId == "bare-repro-proof")] | length == 1' &>/dev/null; then
+    echo "Expected missing_file_reference for bare-repro-proof command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+
+# Test: command tasks must not reference local files that are not checked into HEAD
+test_local_only_command_file_fails() {
+  local temp_plan local_path abs_local
+  temp_plan=$(mktemp)
+  local_path="docs/context/plan-validator-local-only-$$.txt"
+  abs_local="$REPO_ROOT/$local_path"
+  trap "rm -f $temp_plan $abs_local" RETURN
+
+  mkdir -p "$REPO_ROOT/docs/context"
+  printf 'local only\n' > "$abs_local"
+
+  cat > "$temp_plan" <<EOF
+name: local-only-command-file-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: repro-proof
+    description: Repro proof references a local-only command input
+    command: "node scripts/read-fixture.mjs --fixture=$local_path"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for local-only command file" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "local_only_file_reference" and .field == "command" and .taskId == "repro-proof")] | length == 1' &>/dev/null; then
+    echo "Expected local_only_file_reference for repro-proof command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: bare relative local shell scripts must not be treated as checked in
+test_local_only_bare_command_script_fails() {
+  local temp_plan script_path abs_local
+  temp_plan=$(mktemp)
+  script_path="repro-plan-validator-local-only-bare-$$.sh"
+  abs_local="$REPO_ROOT/$script_path"
+  trap "rm -f $temp_plan $abs_local" RETURN
+
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$abs_local"
+
+  cat > "$temp_plan" <<EOF
+name: local-only-bare-command-script-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: bare-repro-proof
+    description: Repro proof references a local-only bare command script
+    command: "bash $script_path"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for local-only bare command script" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "local_only_file_reference" and .field == "command" and .taskId == "bare-repro-proof")] | length == 1' &>/dev/null; then
+    echo "Expected local_only_file_reference for bare-repro-proof command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+
+# Test: prompt tasks must not reference local-only files either
+test_local_only_prompt_file_fails() {
+  local temp_plan local_path abs_local
+  temp_plan=$(mktemp)
+  local_path="docs/context/plan-validator-local-only-prompt-$$.md"
+  abs_local="$REPO_ROOT/$local_path"
+  trap "rm -f $temp_plan $abs_local" RETURN
+
+  mkdir -p "$REPO_ROOT/docs/context"
+  printf 'local only\n' > "$abs_local"
+
+  cat > "$temp_plan" <<EOF
+name: local-only-prompt-file-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: implementation-proof
+    description: Review docs/context/plan-validator-local-only-prompt-$$.md before changing code
+    prompt: |
+      Use $local_path as the implementation brief.
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for local-only prompt file" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "local_only_file_reference" and .field == "prompt" and .taskId == "implementation-proof")] | length == 1' &>/dev/null; then
+    echo "Expected local_only_file_reference for implementation-proof prompt" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: experiment variant command files are validated
+test_experiment_variant_missing_command_script_fails() {
+  local temp_plan script_path
+  temp_plan=$(mktemp)
+  script_path="scripts/repro/repro-plan-validator-missing-variant-$$.sh"
+  rm -f "$REPO_ROOT/$script_path"
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<EOF
+name: missing-variant-command-script-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: experiment-proof
+    description: Repro proof variant references a script that is not checked out
+    command: "printf 'base\\n'"
+    experimentVariants:
+      - id: variant-a
+        command: "bash $script_path"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for missing variant command script" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "missing_file_reference" and .field == "experimentVariants[0].command" and .taskId == "experiment-proof")] | length == 1' &>/dev/null; then
+    echo "Expected missing_file_reference for experiment variant command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: upward relative paths are not valid plan file references
+test_upward_relative_path_fails() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: upward-relative-path-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: repro-proof
+    description: Verify a file outside the checkout
+    command: "bash ../../../scripts/repro/local-only.sh && node scripts/../docs/context/local-only.txt"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for upward relative path" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '
+    [.[] | select(.errorType == "unsupported_relative_file_reference" and .field == "command" and .taskId == "repro-proof")] as $errors |
+    ($errors | length) == 2 and
+    any($errors[]; .message | contains("../../../scripts/repro/local-only.sh")) and
+    any($errors[]; .message | contains("scripts/../docs/context/local-only.txt"))
+  ' &>/dev/null; then
+    echo "Expected unsupported_relative_file_reference for both parent-directory command paths" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+  return 0
+}
+
+
 # Test: Branched review-gate artifacts should fail validation
 test_branched_review_gate_rejected() {
   local temp_plan
@@ -640,6 +930,13 @@ run_test "Direct shell variable command should validate" test_direct_shell_varia
 run_test "Pipefail without bash should be rejected" test_pipefail_without_bash_fails
 run_test "Pipefail with bash should validate" test_pipefail_with_bash_validates
 run_test "Experiment variant nested shell variable expansion should be rejected" test_experiment_variant_nested_shell_variable_expansion_fails
+run_test "Missing command scripts should be rejected" test_missing_command_script_fails
+run_test "Missing bare command scripts should be rejected" test_missing_bare_command_script_fails
+run_test "Local-only command files should be rejected" test_local_only_command_file_fails
+run_test "Local-only bare command scripts should be rejected" test_local_only_bare_command_script_fails
+run_test "Local-only prompt files should be rejected" test_local_only_prompt_file_fails
+run_test "Upward relative paths should be rejected" test_upward_relative_path_fails
+run_test "Experiment variant missing command scripts should be rejected" test_experiment_variant_missing_command_script_fails
 run_test "Branched review gate artifacts should be rejected" test_branched_review_gate_rejected
 run_test "Error objects should have correct field structure" test_error_field_structure
 

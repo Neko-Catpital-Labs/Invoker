@@ -280,12 +280,13 @@ export function classifyReviewUnitsForPath(filePath) {
   if (
     path === 'package.json'
     || path === 'pnpm-lock.yaml'
-    || path === 'run.sh'
     || /^tsconfig.*\.json$/.test(path)
     || /^packages\/[^/]+\/package\.json$/.test(path)
+    || /^packages\/[^/]+\/tsconfig.*\.json$/.test(path)
   ) {
-    return ['tooling-policy'];
+    return [];
   }
+  if (path === 'run.sh') return ['tooling-policy'];
   if (path.startsWith('scripts/')) return ['tooling-policy'];
   if (
     path.startsWith('packages/')
