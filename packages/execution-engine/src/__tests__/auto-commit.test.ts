@@ -2118,6 +2118,19 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     const remoteBranches = execSync('git branch', { cwd: intermediateDir }).toString();
     expect(remoteBranches).toContain('invoker/task-intermediate');
   });
+  it('pushes HEAD when the branch ref is missing locally', async () => {
+    execSync('git checkout -b invoker/task-detached', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'detached.txt'), 'task result');
+    execSync('git add -A && git commit -m "task commit detached"', { cwd: cloneDir });
+    execSync('git checkout --detach HEAD', { cwd: cloneDir });
+    execSync('git branch -D invoker/task-detached', { cwd: cloneDir });
+
+    const pushErr = await executor.testPushBranchToRemote(cloneDir, 'invoker/task-detached');
+    expect(pushErr).toBeUndefined();
+
+    const remoteBranches = execSync('git branch', { cwd: originDir }).toString();
+    expect(remoteBranches).toContain('invoker/task-detached');
+  });
 });
 
 describe('BaseExecutor.handleProcessExit push semantics', () => {
