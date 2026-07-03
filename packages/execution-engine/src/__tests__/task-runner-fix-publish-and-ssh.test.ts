@@ -2320,13 +2320,15 @@ describe('TaskRunner', () => {
         remoteLeaseMetadata: { leaseId: 'lease-123' },
       });
 
-      completeByTask.get(task.id)?.({
+      const response: WorkResponse = {
         requestId: 'r',
         actionId: task.id,
         attemptId: 'crab-task-attempt',
+        executionGeneration: 0,
         status: 'completed',
         outputs: { exitCode: 0 },
-      } as WorkResponse);
+      };
+      completeByTask.get(task.id)?.(response);
       await run;
     });
   });
@@ -2434,13 +2436,15 @@ describe('TaskRunner', () => {
 
       const run = runner.executeTask(task);
       await vi.waitFor(() => expect(SshExecutor.prototype.start).toHaveBeenCalledTimes(1));
-      completeByTask.get(task.id)?.({
+      const response: WorkResponse = {
         requestId: 'r',
         actionId: task.id,
         attemptId: 'crab-attempt',
+        executionGeneration: 0,
         status: opts.final.status,
         outputs: { exitCode: opts.final.exitCode },
-      } as WorkResponse);
+      };
+      completeByTask.get(task.id)?.(response);
       await run;
 
       const event = (name: string) => logEvent.mock.calls.find(([, e]: [string, string]) => e === name)?.[2];
