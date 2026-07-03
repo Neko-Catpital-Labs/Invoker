@@ -18,7 +18,7 @@ import type { InvokerAPI } from '@invoker/contracts';
 const api: Record<string, unknown> = {};
 const bootstrapStartedAt = Date.now();
 const bootstrapState = ipcRenderer.sendSync('invoker:get-bootstrap-state-sync') as
-  | { tasks?: unknown[]; workflows?: unknown[]; appStartedAtEpochMs?: number }
+  | { tasks?: unknown[]; workflows?: unknown[]; runtimeStatus?: unknown; appStartedAtEpochMs?: number }
   | undefined;
 const bootstrapDurationMs = Date.now() - bootstrapStartedAt;
 

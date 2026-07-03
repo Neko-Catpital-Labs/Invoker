@@ -286,9 +286,10 @@ export function createMockInvoker(
 
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
-    (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[] } }).__INVOKER_BOOTSTRAP__ = {
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[]; runtimeStatus?: RuntimeStatus } }).__INVOKER_BOOTSTRAP__ = {
       tasks: taskSnapshot,
       workflows: workflowSnapshot,
+      runtimeStatus,
     };
   }
 
