@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract tests for the make-pr skill's stack-ordering policy.
+# Contract tests for the make-pr skill.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -36,6 +36,16 @@ must_contain "$SKILL_MD" "mixes behavior, refactor, cleanup, or test-harness/pro
 must_contain "$SKILL_MD" "Ordering Rules" "make-pr skill must point at review-compression Ordering Rules"
 must_contain "$REVIEW_COMPRESSION_MD" "## Ordering Rules" "review-compression must expose the referenced Ordering Rules section"
 must_contain "$REVIEW_COMPRESSION_MD" "Evidence before change" "review-compression Ordering Rules must state evidence before change"
+
+# PR updates must re-run proof from the current diff.
+must_contain "$SKILL_MD" "created, updated, rewritten, split, or republished" "make-pr trigger must include update/split/republication requests"
+must_contain "$SKILL_MD" "When an existing PR changes after its body or proof was written" "make-pr must require rerun after PR diff changes"
+must_contain "$SKILL_MD" "rerun this skill from the current diff before updating the PR" "make-pr must re-author from the current diff"
+must_contain "$SKILL_MD" 'rerun `skills/visual-proof/SKILL.md`' "make-pr must rerun visual proof for changed UI diffs"
+must_contain "$SKILL_MD" "Do not reuse earlier proof media after UI behavior changes" "make-pr must forbid stale screenshot or video proof"
+must_contain "$SKILL_MD" "This script handles local image path upload/injection" "make-pr must route media upload through create-pr"
+must_contain "$SKILL_MD" "add or update a focused skill contract test for the exact issue being fixed" "make-pr must require focused tests for skill policy changes"
+must_contain "$SKILL_MD" "fail if the instruction that prevents the regression is removed" "make-pr skill tests must lock the regression rule"
 
 # The publication checklist must stop empty PR slices before create/update/stack publish.
 must_contain "$SKILL_MD" "has no file changes against its selected base" "make-pr skill must reject branches with no reviewable file diff"
