@@ -192,10 +192,11 @@ jobs:
       - name: Run INV-117 required proof contract
         env:
           INVOKER_TEST_ALL_PROOF: '1'
-          INVOKER_TEST_ALL_JOBS: '1'
+          INVOKER_TEST_ALL_JOBS: '3'
           INVOKER_TEST_ALL_EXCLUDE: >-
             required/20-e2e-dry-run.sh,
-            required/21-e2e-dry-run-downstream.sh,
+            required/21a-e2e-dry-run-downstream-early.sh,
+            required/21b-e2e-dry-run-downstream-late.sh,
             required/22-e2e-dry-run-github.sh
           TMPDIR: /tmp/invoker-tmp
         run: |
@@ -396,8 +397,12 @@ jobs:
       - name: Install Playwright system dependencies
         run: pnpm --filter @invoker/app exec playwright install-deps chromium
 
-      - name: Run fix-intent repro bundle
-        run: bash scripts/test-suites/required/23-fix-intent-repros.sh
+      - name: Run fix-intent repro shards
+        run: |
+          bash scripts/test-suites/required/23a-recreate-task-queue-authority.sh
+          bash scripts/test-suites/required/23b-fix-intent-cancellation-stale-ssh-metadata.sh
+          bash scripts/test-suites/required/23c-stale-late-completion-after-reset.sh
+          bash scripts/test-suites/required/23d-same-workflow-tracked-fix-vs-recreate.sh
 
   dry-run:
     needs: build-artifacts
@@ -411,8 +416,10 @@ jobs:
         include:
           - name: case-1
             suite: scripts/test-suites/required/20-e2e-dry-run.sh
-          - name: case-2
-            suite: scripts/test-suites/required/21-e2e-dry-run-downstream.sh
+          - name: case-2a
+            suite: scripts/test-suites/required/21a-e2e-dry-run-downstream-early.sh
+          - name: case-2b
+            suite: scripts/test-suites/required/21b-e2e-dry-run-downstream-late.sh
           - name: case-4
             suite: scripts/test-suites/required/22-e2e-dry-run-github.sh
 
