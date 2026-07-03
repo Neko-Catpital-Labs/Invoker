@@ -15,6 +15,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
+import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
@@ -68,6 +69,7 @@ export const test = base.extend<ElectronFixtures>({
     await fs.mkdir(stubDir, { recursive: true });
     await fs.mkdir(markerRoot, { recursive: true });
     await fs.mkdir(electronUserDataDir, { recursive: true });
+    registerTrackedBrowserUserDataDir(electronUserDataDir);
     writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
     try {
       await fs.symlink(claudeMarker, path.join(stubDir, 'claude'));

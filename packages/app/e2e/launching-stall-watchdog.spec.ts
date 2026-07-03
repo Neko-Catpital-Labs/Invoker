@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
-import { E2E_REPO_URL } from './fixtures/electron-app.js';
-import { injectTaskStates } from './fixtures/electron-app.js';
+import { E2E_REPO_URL, injectTaskStates } from './fixtures/electron-app.js';
+import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
 
@@ -45,6 +45,7 @@ base.describe('Launch stall watchdog', () => {
     const configPath = path.join(testDir, 'e2e-config.json');
     const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
     const electronUserDataDir = path.join(testDir, 'electron-user-data');
+    registerTrackedBrowserUserDataDir(electronUserDataDir);
     writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0, disableAutoRunOnStartup: true }), 'utf8');
     let app: ElectronApplication | undefined;
 
@@ -152,6 +153,7 @@ base.describe('Launch stall watchdog', () => {
     const configPath = path.join(testDir, 'e2e-config.json');
     const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
     const electronUserDataDir = path.join(testDir, 'electron-user-data');
+    registerTrackedBrowserUserDataDir(electronUserDataDir);
     writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0, disableAutoRunOnStartup: true }), 'utf8');
     let app: ElectronApplication | undefined;
 
