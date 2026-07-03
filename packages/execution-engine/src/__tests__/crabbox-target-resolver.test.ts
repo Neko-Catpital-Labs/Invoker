@@ -3,6 +3,9 @@ import {
   CrabboxTargetResolver,
   buildCrabboxWarmupArgs,
   buildCrabboxStatusArgs,
+  buildCrabboxStopArgs,
+  resolveCrabboxCleanupPolicy,
+  shouldStopCrabboxLease,
   type CrabboxCommandResult,
   type CrabboxCommandRunner,
   type CrabboxResolverTargetConfig,
@@ -233,5 +236,100 @@ describe('CrabboxTargetResolver.resolve', () => {
     await expect(
       new CrabboxTargetResolver(runner).resolve(baseConfig),
     ).rejects.toThrow(/did not return valid JSON/);
+  });
+});
+
+describe('buildCrabboxStopArgs', () => {
+  it('builds `stop <leaseId>` plus configured stopArgs', () => {
+    expect(
+      buildCrabboxStopArgs(
+        { id: 'crab1', crabboxCommand: 'crabbox', stopArgs: ['--force'] },
+        'lease-123',
+      ),
+    ).toEqual(['stop', 'lease-123', '--force']);
+  });
+
+  it('omits stopArgs when none are configured', () => {
+    expect(
+      buildCrabboxStopArgs({ id: 'crab1', crabboxCommand: 'crabbox' }, 'lease-9'),
+    ).toEqual(['stop', 'lease-9']);
+  });
+});
+
+describe('CrabboxTargetResolver.stop', () => {
+  it('runs `crabbox stop <leaseId>` with stopArgs and resolves on exit 0', async () => {
+    const { runner, calls } = scriptRunner([ok('stopped')]);
+
+    await new CrabboxTargetResolver(runner).stop(
+      { id: 'crab1', crabboxCommand: '/usr/local/bin/crabbox', stopArgs: ['--now'] },
+      'lease-123',
+    );
+
+    expect(calls[0]).toEqual({
+      command: '/usr/local/bin/crabbox',
+      args: ['stop', 'lease-123', '--now'],
+    });
+  });
+
+  it('throws an actionable error when stop exits non-zero', async () => {
+    const { runner } = scriptRunner([
+      { stdout: '', stderr: 'lease not found', exitCode: 3 },
+    ]);
+
+    await expect(
+      new CrabboxTargetResolver(runner).stop(
+        { id: 'crab1', crabboxCommand: 'crabbox' },
+        'lease-123',
+      ),
+    ).rejects.toThrow(/Crabbox stop failed for lease "lease-123".*crab1.*lease not found/s);
+  });
+});
+
+describe('resolveCrabboxCleanupPolicy', () => {
+  it('defaults stopAfter to success and keepOnFailure to true', () => {
+    expect(resolveCrabboxCleanupPolicy(undefined, undefined)).toEqual({
+      stopAfter: 'success',
+      keepOnFailure: true,
+    });
+  });
+
+  it('treats the legacy "completed" value as success', () => {
+    expect(resolveCrabboxCleanupPolicy('completed', false)).toEqual({
+      stopAfter: 'success',
+      keepOnFailure: false,
+    });
+  });
+
+  it('passes through known policies', () => {
+    expect(resolveCrabboxCleanupPolicy('always', false).stopAfter).toBe('always');
+    expect(resolveCrabboxCleanupPolicy('never', true).stopAfter).toBe('never');
+    expect(resolveCrabboxCleanupPolicy('failure', false).stopAfter).toBe('failure');
+  });
+});
+
+describe('shouldStopCrabboxLease', () => {
+  it('success policy stops on success only', () => {
+    const policy = { stopAfter: 'success' as const, keepOnFailure: false };
+    expect(shouldStopCrabboxLease(policy, true)).toBe(true);
+    expect(shouldStopCrabboxLease(policy, false)).toBe(false);
+  });
+
+  it('keepOnFailure preserves a failed lease regardless of stopAfter', () => {
+    expect(
+      shouldStopCrabboxLease({ stopAfter: 'always', keepOnFailure: true }, false),
+    ).toBe(false);
+    expect(
+      shouldStopCrabboxLease({ stopAfter: 'success', keepOnFailure: true }, false),
+    ).toBe(false);
+  });
+
+  it('always stops; never keeps', () => {
+    expect(shouldStopCrabboxLease({ stopAfter: 'always', keepOnFailure: false }, false)).toBe(true);
+    expect(shouldStopCrabboxLease({ stopAfter: 'never', keepOnFailure: false }, true)).toBe(false);
+  });
+
+  it('failure policy stops only on failure', () => {
+    expect(shouldStopCrabboxLease({ stopAfter: 'failure', keepOnFailure: false }, false)).toBe(true);
+    expect(shouldStopCrabboxLease({ stopAfter: 'failure', keepOnFailure: false }, true)).toBe(false);
   });
 });
