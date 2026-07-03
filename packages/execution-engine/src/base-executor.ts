@@ -899,6 +899,10 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     return TRANSIENT_GIT_TRANSPORT_ERROR_PATTERNS.some((pattern) => pattern.test(error));
   }
 
+  protected isNoRefspecPushError(error: string): boolean {
+    return /src refspec .* does not match any/i.test(error);
+  }
+
   // ── Shared command building ─────────────────────────────
 
   /**
@@ -1007,6 +1011,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         this.emitOutput(
           executionId,
           `[${this.type}] Branch push failed due to transient git transport error; preserving successful command result.\n`,
+        );
+      } else if (this.isNoRefspecPushError(pushError)) {
+        this.emitOutput(
+          executionId,
+          `[${this.type}] Branch push had no local ref to publish; preserving successful command result.\n`,
         );
       } else {
         status = 'failed';
