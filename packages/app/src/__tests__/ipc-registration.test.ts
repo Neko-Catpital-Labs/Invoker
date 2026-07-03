@@ -244,4 +244,25 @@ describe('ipc-registration', () => {
       }),
     );
   });
+
+  it('includes runtime status in the bootstrap payload when provided', () => {
+    const { ipcMain, onHandlers } = createFakeIpcMain();
+    registerBootstrapStateIpc({
+      ipcMain,
+      getTasks: () => [],
+      getWorkflows: () => [],
+      getInitialWorkflowId: () => null,
+      appStartedAtEpochMs: 123,
+      getTaskDeltaStreamSequence: () => 0,
+      getRuntimeStatus: () => ({ ownerMode: false, readOnly: true, mode: 'read-only' }),
+      recordStartupDuration: vi.fn(),
+    });
+
+    const event: { returnValue?: unknown } = {};
+    onHandlers.get('invoker:get-bootstrap-state-sync')?.(event);
+
+    expect(event.returnValue).toMatchObject({
+      runtimeStatus: { ownerMode: false, readOnly: true, mode: 'read-only' },
+    });
+  });
 });
