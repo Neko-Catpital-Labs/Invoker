@@ -54,6 +54,7 @@ vi.mock('../config.js', () => ({
     autoFixAgent: 'codex',
     autoApproveAIFixes: true,
   })),
+  resolveDefaultTaskExecutionSettings: vi.fn(() => ({ executionAgent: 'claude' })),
   resolveSecretsFilePath: vi.fn(() => '/tmp/secrets.env'),
 }));
 
@@ -127,7 +128,8 @@ describe('task-runner-wiring', () => {
     expect(config.dockerConfig).toEqual({ imageName: 'image', secretsFile: '/tmp/secrets.env' });
     expect(config.remoteTargetsProvider()).toEqual({ remote: { host: 'host' } });
     expect(config.executionPoolsProvider()).toEqual({ pool: { members: [] } });
-    expect(loadConfig).toHaveBeenCalledTimes(2);
+    expect(config.executionDefaultsProvider()).toEqual({ executionAgent: 'claude' });
+    expect(loadConfig).toHaveBeenCalledTimes(3);
 
     config.callbacks.onOutput('task-1', 'chunk');
     expect(taskRunnerConstructor.mock.calls[0]?.[0].callbacks.onOutput).toBe(config.callbacks.onOutput);

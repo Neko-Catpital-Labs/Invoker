@@ -22,6 +22,7 @@ import {
   parseQueryFlags,
   restoreWorkflowForTask,
 } from './headless-shared.js';
+import { resolveDefaultExecutionAgent } from './config.js';
 
 /**
  * The read-query family writes its formatted output through {@link writeOut}.
@@ -669,14 +670,14 @@ export async function resolveAgentSession(
   };
 }
 
-export async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>): Promise<void> {
+export async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry' | 'invokerConfig'>): Promise<void> {
   if (!taskId) throw new Error('Usage: --headless session <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   const task = deps.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task "${taskId}" not found`);
 
   let sessionId = task.execution.agentSessionId ?? task.execution.lastAgentSessionId;
-  let agentName = task.execution.agentName ?? task.execution.lastAgentName ?? 'claude';
+  let agentName = task.execution.agentName ?? task.execution.lastAgentName ?? resolveDefaultExecutionAgent(deps.invokerConfig);
 
   // Fallback: if current execution dropped agentSessionId, recover the most
   // recent session from task event payloads.

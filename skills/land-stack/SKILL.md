@@ -3,7 +3,7 @@ name: land-stack
 description: >
   Land (queue/merge) a Mergify-managed PR stack safely. Trigger when asked to
   land, merge, ship, or queue a PR or PR stack with Mergify. Enforces that you
-  act on explicit, SHA-verified PR numbers — never a PR found by branch name.
+  act only on confirmed, SHA-verified PR numbers — never a PR found by branch name.
 ---
 
 # land-stack
@@ -14,14 +14,27 @@ Use this skill whenever the user asks to **land / merge / ship / queue** a PR or
 
 **Never identify the PR to land by branch name.** Two different PRs can share a
 branch name (an auto-generated workflow branch PR and the intended `stack/...`
-PR). You must land by **explicit PR number**, and every PR must pass the guard
+PR). You must land by **confirmed PR number**, and every PR must pass the guard
 before any write (label, thread-resolve, queue, merge).
 
 ## Steps
 
-1. **Get explicit PR numbers from the user**, bottom of stack first. If they
-   give a URL, read the number from it. Do not run `gh pr list --head <branch>`
-   to discover what to land.
+1. **Resolve PR numbers, bottom of stack first.** If the user gives numbers or
+   URLs, use those. If they do not, make a best-effort read-only discovery pass
+   and suggest the numbers yourself:
+
+   - Enumerate open PRs broadly, for example with `gh pr list --state open
+     --json number,baseRefName,headRefName,headRefOid,title --limit 100`.
+   - Filter to candidates whose `headRefName` starts with `stack/`.
+   - Prefer candidates whose `headRefOid` exists in the local clone, so the code
+     is actually available for review.
+   - Order the stack by base/head links: the bottom PR targets the trunk; each
+     later PR targets the previous PR's head branch.
+   - Run the guard on the suggested sequence. If it passes, present the exact
+     bottom-up PR numbers and ask the user to confirm them before landing.
+
+   Never discover by branch name. Do not run `gh pr list --head <branch>` to
+   decide what to land; that is the unsafe path this skill exists to prevent.
 
 2. **Verify with the guard — it must exit 0:**
 

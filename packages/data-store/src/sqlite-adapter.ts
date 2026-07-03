@@ -8,8 +8,10 @@
 import {
   appendFileSync,
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readSync,
@@ -35,6 +37,9 @@ import type {
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
 import {
+  assertTaskConsistent,
+  assertWorkflowConsistent,
+  assertWorkflowPatchConsistent,
   computeWorkflowRollupFromSummaries,
   isDiscardedAttempt,
   normalizeRunnerKind,
@@ -52,6 +57,9 @@ import type {
   Conversation,
   ConversationMessage,
   WorkflowChannel,
+  WorkerActionListFilters,
+  WorkerActionRecord,
+  WorkerActionWrite,
 } from './adapter.js';
 import {
   SCHEMA_DDL,
@@ -67,6 +75,7 @@ import {
   mapRowToTaskLaunchDispatch,
   mapRowToWorkflowMutationIntent,
   mapRowToWorkflowMutationLease,
+  mapRowToWorkerAction,
 } from './sqlite-row-mappers.js';
 import {
   taskOutputFilePath,
@@ -76,6 +85,32 @@ import {
   readLastSpoolLinesFromFile,
 } from './sqlite-output-spool.js';
 
+function normalizeWorkerActionStatus(status: string): string {
+  return status === 'canceled' ? 'cancelled' : status;
+}
+
+type WorkflowMetadataChanges = Partial<
+  Pick<
+    Workflow,
+    | 'name'
+    | 'description'
+    | 'visualProof'
+    | 'planFile'
+    | 'repoUrl'
+    | 'intermediateRepoUrl'
+    | 'branch'
+    | 'onFinish'
+    | 'baseBranch'
+    | 'featureBranch'
+    | 'mergeMode'
+    | 'reviewProvider'
+    | 'externalDependencies'
+    | 'externalDependencyChanges'
+    | 'detachedExternalDependencies'
+    | 'generation'
+    | 'updatedAt'
+  >
+>;
 type NativeSqlite = typeof import('node:sqlite');
 
 let nativeSqlite: Promise<NativeSqlite> | undefined;
@@ -354,9 +389,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private readonly activityLogMaxRows: number;
   private activityLogWritesSincePrune = 0;
   private readonly exclusiveLocking: boolean;
+  private readonly readOnlySnapshotPath: string | null;
 
   /** Use SQLiteAdapter.create() instead. */
-  private constructor(db: DatabaseSync, dbPath: string | null, options?: SQLiteAdapterOptions) {
+  private constructor(
+    db: DatabaseSync,
+    dbPath: string | null,
+    options?: SQLiteAdapterOptions,
+    readOnlySnapshotPath: string | null = null,
+  ) {
     this.nativeDb = db;
     this.db = new NativeDatabaseCompat(db);
     this.dbPath = dbPath;
@@ -365,7 +406,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.exclusiveLocking = options?.exclusiveLocking === true;
-    this.configureConnection(dbPath !== null);
+    this.readOnlySnapshotPath = readOnlySnapshotPath;
+    this.configureConnection(dbPath !== null, this.readOnly);
     if (!this.readOnly) {
       this.initSchema();
       this.migrate();
@@ -415,15 +457,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
     }
 
-    if (isFile) {
+    let readOnlySnapshotPath: string | null = null;
+    if (isFile && options?.readOnly === true) {
+      readOnlySnapshotPath = SQLiteAdapter.createReadOnlySnapshot(dbPath);
+    } else if (isFile) {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
-
     try {
       const { DatabaseSync } = await loadNativeSqlite();
-      const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
-      return new SQLiteAdapter(db, isFile ? dbPath : null, options);
+      const openPath = readOnlySnapshotPath ?? dbPath;
+      const db = new DatabaseSync(openPath, { readOnly: options?.readOnly === true });
+      return new SQLiteAdapter(db, isFile ? dbPath : null, options, readOnlySnapshotPath);
     } catch (err) {
+      if (readOnlySnapshotPath) {
+        rmSync(dirname(readOnlySnapshotPath), { recursive: true, force: true });
+      }
       if (!isFile || options?.readOnly === true || !existsSync(dbPath) || !isDatabaseCorruptionError(err)) {
         throw err;
       }
@@ -443,6 +491,31 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
+  private static createReadOnlySnapshot(dbPath: string): string {
+    SQLiteAdapter.assertNoWalSidecars(dbPath);
+    const snapshotDir = mkdtempSync(join(tmpdir(), 'invoker-readonly-snapshot-'));
+    const snapshotPath = join(snapshotDir, 'invoker.db');
+    try {
+      copyFileSync(dbPath, snapshotPath);
+      SQLiteAdapter.assertNoWalSidecars(dbPath);
+      return snapshotPath;
+    } catch (err) {
+      rmSync(snapshotDir, { recursive: true, force: true });
+      throw err;
+    }
+  }
+
+  private static assertNoWalSidecars(dbPath: string): void {
+    const walPath = `${dbPath}-wal`;
+    const shmPath = `${dbPath}-shm`;
+    if (existsSync(walPath) || existsSync(shmPath)) {
+      throw new Error(
+        'Read-only file open refused while WAL sidecars exist. ' +
+        'Route the query through the owner process or start a standalone owner.',
+      );
+    }
+  }
+
   private resolveOutputDir(dbPath: string | null): string {
     const invokerHome = process.env.INVOKER_DB_DIR ?? (dbPath ? dirname(dbPath) : join(homedir(), '.invoker'));
     if (!dbPath && !process.env.INVOKER_DB_DIR) {
@@ -451,10 +524,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return join(invokerHome, 'task-output');
   }
 
-  private configureConnection(fileBacked: boolean): void {
+  private configureConnection(fileBacked: boolean, readOnly: boolean): void {
     this.nativeDb.exec('PRAGMA busy_timeout = 5000');
     this.nativeDb.exec('PRAGMA foreign_keys = ON');
-    if (fileBacked) {
+    if (fileBacked && !readOnly) {
       if (this.exclusiveLocking) {
         // Heap wal-index (no -shm file). MUST precede `journal_mode = WAL`.
         this.nativeDb.exec('PRAGMA locking_mode = EXCLUSIVE');
@@ -943,6 +1016,40 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return Array.from(byKey.values());
   }
 
+  private buildWorkflowAfterChanges(
+    before: Workflow,
+    changes: WorkflowMetadataChanges,
+    updatedAt: string,
+  ): Workflow {
+    const after: Workflow = { ...before, updatedAt };
+    const applyPatchKeyToValidationCopy = <K extends keyof WorkflowMetadataChanges>(key: K): void => {
+      if (Object.prototype.hasOwnProperty.call(changes, key)) {
+        (after as WorkflowMetadataChanges)[key] = changes[key];
+      }
+    };
+
+    // Mirror updateWorkflow patch semantics before writing: missing key means
+    // unchanged; present key, even undefined, means apply the clear and validate it.
+    applyPatchKeyToValidationCopy('name');
+    applyPatchKeyToValidationCopy('description');
+    applyPatchKeyToValidationCopy('visualProof');
+    applyPatchKeyToValidationCopy('planFile');
+    applyPatchKeyToValidationCopy('repoUrl');
+    applyPatchKeyToValidationCopy('intermediateRepoUrl');
+    applyPatchKeyToValidationCopy('branch');
+    applyPatchKeyToValidationCopy('onFinish');
+    applyPatchKeyToValidationCopy('baseBranch');
+    applyPatchKeyToValidationCopy('featureBranch');
+    applyPatchKeyToValidationCopy('mergeMode');
+    applyPatchKeyToValidationCopy('reviewProvider');
+    applyPatchKeyToValidationCopy('externalDependencies');
+    applyPatchKeyToValidationCopy('externalDependencyChanges');
+    applyPatchKeyToValidationCopy('detachedExternalDependencies');
+    applyPatchKeyToValidationCopy('generation');
+
+    return after;
+  }
+
   /**
    * Promote legacy per-task external dependencies to workflow metadata.
    * This is intentionally idempotent: once task rows are cleared, later runs
@@ -1001,6 +1108,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Workflows ─────────────────────────────────────────
 
   saveWorkflow(workflow: WorkflowSaveInput): void {
+    assertWorkflowConsistent(workflow);
     this.execRun(`
       INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1020,7 +1128,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     ]);
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void {
+  updateWorkflow(workflowId: string, changes: WorkflowMetadataChanges): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
     const columnMap: Record<string, string> = {
@@ -1073,9 +1181,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
       setClauses.push('detached_external_dependencies = ?');
       values.push(changes.detachedExternalDependencies ? JSON.stringify(changes.detachedExternalDependencies) : null);
     }
+    const updatedAt = changes.updatedAt ?? new Date().toISOString();
     setClauses.push('updated_at = ?');
-    values.push(changes.updatedAt ?? new Date().toISOString());
+    values.push(updatedAt);
     if (setClauses.length === 0) return;
+
+    const before = this.loadWorkflow(workflowId);
+    if (!before) return;
+    const after = this.buildWorkflowAfterChanges(before, changes, updatedAt);
+    assertWorkflowPatchConsistent(before, after, changes);
+
     values.push(workflowId);
     this.execRun(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
@@ -1280,6 +1395,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Tasks ─────────────────────────────────────────────
 
   saveTask(workflowId: string, task: TaskState): void {
+    assertTaskConsistent(task);
     const cfg = task.config;
     const exec = task.execution;
     this.execRun(`
@@ -1303,6 +1419,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         pool_member_id,
         docker_image,
         execution_agent,
+        execution_model,
         agent_name,
         task_state_version
       ) VALUES (
@@ -1320,6 +1437,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -1381,6 +1499,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       (cfg as { poolMemberId?: string }).poolMemberId ?? null,
       cfg.dockerImage ?? null,
       cfg.executionAgent ?? null,
+      cfg.executionModel ?? null,
       exec.agentName ?? null,
       task.taskStateVersion ?? 1,
     ]);
@@ -1421,6 +1540,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         poolMemberId: 'pool_member_id',
         dockerImage: 'docker_image',
         executionAgent: 'execution_agent',
+        executionModel: 'execution_model',
         fixPrompt: 'fix_prompt',
         fixContext: 'fix_context',
       };
@@ -1528,6 +1648,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
         }
       }
     }
+
+
+    const beforeTask = this.loadTask(taskId);
+    if (!beforeTask) return;
+    assertTaskConsistent({
+      ...beforeTask,
+      ...changes,
+      config: changes.config ? ({ ...beforeTask.config, ...changes.config } as TaskState['config']) : beforeTask.config,
+      execution: changes.execution ? { ...beforeTask.execution, ...changes.execution } : beforeTask.execution,
+    });
 
     if (setClauses.length === 0) return;
 
@@ -1683,12 +1813,30 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }));
   }
 
+  deleteTask(taskId: string): void {
+    this.runTransaction(() => {
+      this.db.run('DELETE FROM task_launch_dispatch WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM execution_resource_leases WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM events WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM task_output WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM attempts WHERE node_id = ?', [taskId]);
+      this.db.run('DELETE FROM output_spool WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM tasks WHERE id = ?', [taskId]);
+    });
+    this.removeOutputFiles([taskId]);
+  }
+
   deleteAllTasks(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
+      this.db.run(`
+        DELETE FROM worker_actions WHERE workflow_id = ? OR task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId, workflowId]);
       this.db.run(`
         DELETE FROM execution_resource_leases WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
@@ -1725,6 +1873,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM workflow_mutation_leases');
       this.db.run('DELETE FROM workflow_mutation_intents');
       this.db.run('DELETE FROM task_launch_dispatch');
+      this.db.run('DELETE FROM worker_actions');
       this.db.run('DELETE FROM execution_resource_leases');
       this.db.run('DELETE FROM events');
       this.db.run('DELETE FROM task_output');
@@ -1744,6 +1893,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
+      this.db.run(`
+        DELETE FROM worker_actions WHERE workflow_id = ? OR task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId, workflowId]);
       this.db.run(`
         DELETE FROM execution_resource_leases WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
@@ -1812,6 +1966,123 @@ export class SQLiteAdapter implements PersistenceAdapter {
       payload: row.payload ?? undefined,
       createdAt: row.created_at,
     }));
+  }
+
+  getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM worker_actions WHERE worker_kind = ? AND external_key = ?',
+      [workerKind, externalKey],
+    );
+    return row ? this.rowToWorkerAction(row) : undefined;
+  }
+
+  upsertWorkerAction(action: WorkerActionWrite): WorkerActionRecord {
+    return this.runTransaction(() => {
+      const existing = this.queryOne(
+        'SELECT id FROM worker_actions WHERE worker_kind = ? AND external_key = ?',
+        [action.workerKind, action.externalKey],
+      );
+      if (existing && String(existing.id) !== action.id) {
+        throw new Error(
+          `Worker action ${action.workerKind}/${action.externalKey} already exists with id "${String(existing.id)}"`,
+        );
+      }
+      const nowIso = new Date().toISOString();
+      const createdAt = action.createdAt ?? nowIso;
+      const updatedAt = action.updatedAt ?? nowIso;
+      const payloadJson = action.payload === undefined ? null : JSON.stringify(action.payload);
+      const status = normalizeWorkerActionStatus(action.status);
+      this.execRun(
+        `INSERT INTO worker_actions (
+          id, worker_kind, action_type, workflow_id, task_id,
+          subject_type, subject_id, external_key, status, attempt_count,
+          intent_id, agent_name, execution_model, session_id, summary,
+          payload_json, created_at, updated_at, completed_at
+        ) VALUES (
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?
+        )
+        ON CONFLICT(worker_kind, external_key) DO UPDATE SET
+          action_type = excluded.action_type,
+          workflow_id = excluded.workflow_id,
+          task_id = excluded.task_id,
+          subject_type = excluded.subject_type,
+          subject_id = excluded.subject_id,
+          status = excluded.status,
+          attempt_count = excluded.attempt_count,
+          intent_id = excluded.intent_id,
+          agent_name = excluded.agent_name,
+          execution_model = excluded.execution_model,
+          session_id = excluded.session_id,
+          summary = excluded.summary,
+          payload_json = excluded.payload_json,
+          updated_at = excluded.updated_at,
+          completed_at = excluded.completed_at`,
+        [
+          action.id,
+          action.workerKind,
+          action.actionType,
+          action.workflowId ?? null,
+          action.taskId ?? null,
+          action.subjectType,
+          action.subjectId,
+          action.externalKey,
+          status,
+          action.attemptCount ?? 0,
+          action.intentId ?? null,
+          action.agentName ?? null,
+          action.executionModel ?? null,
+          action.sessionId ?? null,
+          action.summary ?? null,
+          payloadJson,
+          createdAt,
+          updatedAt,
+          action.completedAt ?? null,
+        ],
+      );
+      const saved = this.getWorkerAction(action.workerKind, action.externalKey);
+      if (!saved) {
+        throw new Error(`Failed to persist worker action ${action.workerKind}/${action.externalKey}`);
+      }
+      return saved;
+    });
+  }
+
+  listWorkerActions(filters: WorkerActionListFilters = {}): WorkerActionRecord[] {
+    if (filters.limit !== undefined && Math.floor(filters.limit) <= 0) {
+      return [];
+    }
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filters.workflowId) {
+      where.push('workflow_id = ?');
+      params.push(filters.workflowId);
+    }
+    if (filters.taskId) {
+      where.push('task_id = ?');
+      params.push(filters.taskId);
+    }
+    if (filters.workerKind) {
+      where.push('worker_kind = ?');
+      params.push(filters.workerKind);
+    }
+    if (filters.status) {
+      where.push('status = ?');
+      params.push(normalizeWorkerActionStatus(String(filters.status)));
+    }
+    let limitSql = '';
+    if (filters.limit !== undefined) {
+      limitSql = ' LIMIT ?';
+      params.push(Math.floor(filters.limit));
+    }
+    const rows = this.queryAll(
+      `SELECT * FROM worker_actions ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''} ` +
+        `ORDER BY updated_at DESC, id ASC${limitSql}`,
+      params,
+    );
+    return rows.map((row) => this.rowToWorkerAction(row));
   }
 
   // ── Queries ─────────────────────────────────────────
@@ -2104,13 +2375,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const diagnosticFile = this.readTaskOutputFile(taskId);
     const spoolChunks = this.getOutputChunks(taskId);
     if (spoolChunks.length > 0) {
-      return spoolChunks.map((chunk) => chunk.data).join('') + diagnosticFile;
+      return spoolChunks.map((chunk) => chunk.data).join('')
+        + this.readLegacyDiagnosticTaskOutputRows(taskId)
+        + diagnosticFile;
     }
     const rows = this.queryAll(
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
       [taskId],
     ) as Array<{ data: string }>;
     return rows.map((r) => r.data).join('') + diagnosticFile;
+  }
+
+  private readLegacyDiagnosticTaskOutputRows(taskId: string): string {
+    const rows = this.queryAll(
+      'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
+      [taskId],
+    ) as Array<{ data: string }>;
+    return rows
+      .map((r) => r.data)
+      .filter((data) => this.isDiagnosticTaskOutput(data))
+      .join('');
+  }
+
+  private isDiagnosticTaskOutput(data: string): boolean {
+    return data.includes('[Shutdown Diagnostic]')
+      || data.includes('[Startup Failure Diagnostic]')
+      || data.includes('Executor startup failed');
   }
 
   /**
@@ -2476,10 +2766,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Lifecycle ─────────────────────────────────────────
 
   close(): void {
-    if (this.dbPath && !this.readOnly) {
-      this.checkpointWal('PASSIVE');
+    try {
+      if (this.dbPath && !this.readOnly) {
+        this.checkpointWal('PASSIVE');
+      }
+      this.db.close();
+    } finally {
+      if (this.readOnlySnapshotPath) {
+        rmSync(dirname(this.readOnlySnapshotPath), { recursive: true, force: true });
+      }
     }
-    this.db.close();
   }
 
   // ── Helpers ───────────────────────────────────────────
@@ -3435,6 +3731,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private rowToWorkflowMutationLease(row: Record<string, unknown>): WorkflowMutationLease {
     return mapRowToWorkflowMutationLease(row);
+  }
+
+  private rowToWorkerAction(row: Record<string, unknown>): WorkerActionRecord {
+    return mapRowToWorkerAction(row);
   }
 
   private requeueWorkflowMutationLease(workflowId: string): void {

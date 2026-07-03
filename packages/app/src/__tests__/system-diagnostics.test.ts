@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { describe, expect, it, afterAll, beforeAll } from 'vitest';
+import { describe, expect, it, afterAll, beforeAll, beforeEach } from 'vitest';
 
 import { DEFAULT_TOOL_REQUIREMENTS } from '@invoker/contracts';
 
@@ -77,27 +77,72 @@ const baseArgs = {
 };
 
 describe('commandIsOnPath — non-spawning PATH probe', () => {
-  it('resolves a binary present on PATH and rejects a missing one', () => {
-    // `node` is always on PATH while the test runner executes.
-    expect(commandIsOnPath('node')).toBe(true);
-    expect(commandIsOnPath('definitely-not-a-real-binary-xyz')).toBe(false);
+  let scratchDir: string;
+  let presentCli: string;
+
+  beforeAll(() => {
+    scratchDir = mkdtempSync(path.join(tmpdir(), 'invoker-path-diag-'));
+    presentCli = path.join(scratchDir, 'fake-present-cli');
+    writeFileSync(presentCli, '#!/usr/bin/env bash\nexit 0\n', 'utf8');
+    chmodSync(presentCli, 0o755);
+  });
+
+  afterAll(() => {
+    rmSync(scratchDir, { recursive: true, force: true });
+  });
+
+  it('resolves a binary present on an injected PATH and rejects a missing one', () => {
+    expect(commandIsOnPath('fake-present-cli', { PATH: scratchDir })).toBe(true);
+    expect(commandIsOnPath('definitely-not-a-real-binary-xyz', { PATH: scratchDir })).toBe(false);
   });
 
   it('honors an injected PATH and finds nothing when PATH is empty', () => {
-    expect(commandIsOnPath('node', { PATH: '' })).toBe(false);
+    expect(commandIsOnPath('fake-present-cli', { PATH: '' })).toBe(false);
   });
 });
 
+type CollectSystemDiagnosticsArgs = Parameters<typeof collectSystemDiagnostics>[0];
+
+const observedToolDetections: Array<{ id: string; versionArgs: string[] }> = [];
+
+const stubToolDetector: NonNullable<CollectSystemDiagnosticsArgs['toolDetector']> = (
+  id,
+  name,
+  _command,
+  versionArgs,
+  installHint,
+  required = false,
+) => {
+  observedToolDetections.push({ id, versionArgs });
+  return { id, name, required, installed: true, version: `${id}-test`, installHint };
+};
+
+const collectWithStubbedTools = (
+  overrides: Partial<CollectSystemDiagnosticsArgs> = {},
+) => collectSystemDiagnostics({
+  ...baseArgs,
+  toolDetector: stubToolDetector,
+  isInstalled: () => true,
+  ...overrides,
+});
+
 describe('collectSystemDiagnostics — shared canonical contract', () => {
+  beforeEach(() => {
+    observedToolDetections.length = 0;
+  });
   it('builds the tools array from DEFAULT_TOOL_REQUIREMENTS', () => {
-    const diag = collectSystemDiagnostics(baseArgs);
+    const diag = collectWithStubbedTools();
     expect(diag.tools.map((t) => t.id)).toEqual(DEFAULT_TOOL_REQUIREMENTS.map((r) => r.id));
     expect(diag.tools.map((t) => t.name)).toEqual(DEFAULT_TOOL_REQUIREMENTS.map((r) => r.name));
+    expect(diag.tools.map((t) => t.version)).toEqual(DEFAULT_TOOL_REQUIREMENTS.map((r) => `${r.id}-test`));
+    expect(observedToolDetections.find((entry) => entry.id === 'ssh')?.versionArgs).toEqual(['-V']);
+    expect(observedToolDetections.filter((entry) => entry.id !== 'ssh').map((entry) => entry.versionArgs)).toEqual(
+      DEFAULT_TOOL_REQUIREMENTS.filter((req) => req.id !== 'ssh').map(() => ['--version']),
+    );
   });
 
   it('assembles a config-aware readiness report with config, planning-tools, and default-preset checks', () => {
-    const diag = collectSystemDiagnostics({
-      ...baseArgs,
+    const diag = collectWithStubbedTools({
       config: { path: '/tmp/invoker-nonexistent/config.json', exists: false },
       presets: { 'cursor+claude': { tool: 'cursor', model: 'claude' } },
       defaultPreset: 'cursor+claude',
@@ -111,8 +156,7 @@ describe('collectSystemDiagnostics — shared canonical contract', () => {
   });
 
   it('skips the preset checks when no presets are configured', () => {
-    const diag = collectSystemDiagnostics({
-      ...baseArgs,
+    const diag = collectWithStubbedTools({
       config: { path: '/tmp/invoker-nonexistent/config.json', exists: false },
     });
     const ids = diag.readiness.map((c) => c.id);

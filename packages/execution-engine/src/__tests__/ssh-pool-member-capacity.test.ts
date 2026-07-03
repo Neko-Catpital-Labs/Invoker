@@ -149,7 +149,10 @@ describe('SSH pool member capacity', () => {
     runner.selectExecutor(firstTask);
     await runner.executeTask(secondTask);
 
-    expect(deferTask).toHaveBeenCalledWith(secondTask.id);
+    expect(deferTask).toHaveBeenCalledWith(secondTask.id, expect.objectContaining({
+      reason: 'resource-limit',
+      attemptId: secondTask.execution.selectedAttemptId,
+    }));
     expect(sshExecutor.start).not.toHaveBeenCalled();
   });
 
@@ -215,7 +218,10 @@ describe('SSH pool member capacity', () => {
     firstTask.execution = { ...firstTask.execution, selectedAttemptId: `${firstTask.id}-retry-attempt` };
     secondTask.execution = { ...secondTask.execution, selectedAttemptId: `${secondTask.id}-retry-attempt` };
     await runner.executeTask(thirdTask);
-    expect(deferTask).toHaveBeenCalledWith(thirdTask.id);
+    expect(deferTask).toHaveBeenCalledWith(thirdTask.id, expect.objectContaining({
+      reason: 'resource-limit',
+      attemptId: thirdTask.execution.selectedAttemptId,
+    }));
     expect(sshExecutor.start).toHaveBeenCalledTimes(2);
 
     expect(await runner.killActiveExecution(firstTask.id)).toBe(true);
@@ -376,7 +382,10 @@ describe('SSH pool member capacity', () => {
       await secondRunner.executeTask(secondTask);
 
       expect(secondExecutor.start).not.toHaveBeenCalled();
-      expect(deferTask).toHaveBeenCalledWith(secondTask.id);
+      expect(deferTask).toHaveBeenCalledWith(secondTask.id, expect.objectContaining({
+        reason: 'resource-limit',
+        attemptId: secondTask.execution.selectedAttemptId,
+      }));
 
       firstComplete?.({
         requestId: 'req',

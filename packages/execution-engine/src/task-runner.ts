@@ -279,6 +279,10 @@ export interface TaskRunnerConfig {
     selectionStrategy?: 'roundRobin' | 'leastLoaded';
     maxConcurrentTasksPerMember?: number;
   }>;
+  executionDefaultsProvider?: () => {
+    executionAgent?: string;
+    executionModel?: string;
+  };
   /** Docker execution environment configuration from .invoker.json. */
   dockerConfig?: {
     imageName?: string;
@@ -306,6 +310,7 @@ export class TaskRunner {
   private reviewGateCiFailureInFlight = new Set<string>();
   private getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   /** @internal */ getExecutionPools: () => Record<string, ExecutionPoolConfig>;
+  private getExecutionDefaults: () => { executionAgent?: string; executionModel?: string };
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
   /** @internal */ logger: Logger;
@@ -326,6 +331,16 @@ export class TaskRunner {
   /** Config default branch (e.g. master) for workflows without baseBranch. */
   getDefaultBranchHint(): string | undefined {
     return this.defaultBranch;
+  }
+
+  /** @internal */ getDefaultExecutionAgent(): string {
+    const configured = this.getExecutionDefaults().executionAgent?.trim();
+    return configured && configured.length > 0 ? configured : DEFAULT_EXECUTION_AGENT;
+  }
+
+  /** @internal */ getDefaultExecutionModel(): string | undefined {
+    const configured = this.getExecutionDefaults().executionModel?.trim();
+    return configured && configured.length > 0 ? configured : undefined;
   }
 
   /**
@@ -409,6 +424,7 @@ export class TaskRunner {
     this.reviewGateCiFailurePublisher = config.reviewGateCiFailurePublisher;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
+    this.getExecutionDefaults = config.executionDefaultsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
     this.logger = config.logger ?? NOOP_LOGGER;
@@ -584,7 +600,22 @@ export class TaskRunner {
       const cause = err instanceof Error ? err.cause : undefined;
       if (cause instanceof ResourceLimitError) {
         traceExecution(`[TaskRunner] executeTask deferred for task=${task.id}: ${cause.message}`);
-        this.orchestrator.deferTask(task.id);
+        this.logger.info(
+          `[TaskRunner] launch deferred task=${task.id} attempt=${attemptId}; task remains pending and will retry when capacity is available: ${cause.message}`,
+          {
+            taskId: task.id,
+            attemptId,
+            reason: 'resource-limit',
+            message: cause.message,
+            phase: task.execution.phase ?? 'none',
+          },
+        );
+        this.orchestrator.deferTask(task.id, {
+          reason: 'resource-limit',
+          message: cause.message,
+          attemptId,
+          phase: task.execution.phase ?? 'none',
+        });
         if (dispatchOpts) {
           const completed = dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
           bench('executeTask.dispatchCompletedAfterDeferral', { accepted: completed });
@@ -2238,6 +2269,33 @@ export class TaskRunner {
     const preferredName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
     const prCapableAgents = this.executionAgentRegistry.listWithCapability('make-pr');
     const orderedAgents = this.buildAgentFallbackOrder(preferredName, prCapableAgents);
+    const logProgress = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      message: string,
+      detail: Record<string, unknown> = {},
+    ) => {
+      if (!args.mergeNodeTaskId) return;
+      try {
+        const persistence = this.persistence as { logEvent?: (taskId: string, eventType: string, payload?: unknown) => void };
+        persistence.logEvent?.(args.mergeNodeTaskId, 'task.log', {
+          level,
+          message,
+          ...detail,
+        });
+      } catch (error) {
+        this.logger.warn('[pr-authoring] failed to persist task progress event', {
+          taskId: args.mergeNodeTaskId,
+          error,
+        });
+      }
+    };
+
+    logProgress('info', 'Preparing make-pr review stack publisher', {
+      featureBranch: args.featureBranch,
+      baseBranch: args.baseBranch,
+      agentCount: orderedAgents.length,
+    });
+
     const errors: string[] = [];
 
     for (const agent of orderedAgents) {
@@ -2259,11 +2317,19 @@ export class TaskRunner {
       });
 
       try {
+        logProgress('info', `Starting ${agent.name} make-pr agent`, {
+          agentName: agent.name,
+          cwd: args.cwd,
+        });
         this.logger.info(
           `[pr-authoring] review-stack publish starting agent=${agent.name} `
             + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr cwd=${args.cwd}`,
         );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
+        logProgress('info', `${agent.name} make-pr agent finished; validating output`, {
+          agentName: agent.name,
+          sessionId: result.sessionId,
+        });
         const parsedArtifacts = parseMakePrStackPublishResult(result.body);
 
         // Enforce the make-pr review-stack schema on every published body. Prefer
@@ -2300,6 +2366,10 @@ export class TaskRunner {
             `[pr-authoring] review-stack body validation failed agent=${agent.name} `
               + `errors=${bodyErrors.join('; ')}`,
           );
+          logProgress('warn', `${agent.name} published review stack failed validation`, {
+            agentName: agent.name,
+            errors: bodyErrors,
+          });
           errors.push(`${agent.name}: invalid PR body — ${bodyErrors.join('; ')}`);
           continue;
         }
@@ -2315,13 +2385,22 @@ export class TaskRunner {
           generation,
           createdAt: nowIso,
         }));
+        logProgress('info', 'Review stack body validated', {
+          agentName: agent.name,
+          artifactCount: artifacts.length,
+        });
         this.logger.info(
           `[pr-authoring] review-stack published agent=${agent.name} artifacts=${artifacts.length} `
             + 'bodies validated against make-pr schema',
         );
         return { artifacts, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
-        errors.push(`${agent.name}: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        logProgress('warn', `${agent.name} make-pr agent failed`, {
+          agentName: agent.name,
+          error: message,
+        });
+        errors.push(`${agent.name}: ${message}`);
       }
     }
 
@@ -2382,7 +2461,7 @@ export class TaskRunner {
         .filter((agent): agent is string => Boolean(agent)),
     )];
     if (distinctAgents.length === 0) {
-      return DEFAULT_EXECUTION_AGENT;
+      return this.getDefaultExecutionAgent();
     }
     if (distinctAgents.length > 1) {
       console.warn(

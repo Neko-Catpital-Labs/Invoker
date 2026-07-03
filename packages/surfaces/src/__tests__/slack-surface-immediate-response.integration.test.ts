@@ -103,14 +103,17 @@ vi.mock('@slack/bolt', () => {
 
 // Mock PlanConversation to control response timing
 const mockSendMessage = vi.fn();
+let mockDraftedPlan: string | null = null;
 const mockPlanConversation = {
   sendMessage: mockSendMessage,
+  getDraftedPlan: () => mockDraftedPlan,
   submittedPlanText: null as any,
   planSubmitted: false,
   init: vi.fn().mockResolvedValue(undefined),
 };
 
-vi.mock('../slack/plan-conversation.js', () => ({
+vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../slack/plan-conversation.js')>()),
   PlanConversation: vi.fn(() => mockPlanConversation),
 }));
 
@@ -126,6 +129,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
     mockSendMessage.mockReset();
     mockPlanConversation.submittedPlanText = null;
     mockPlanConversation.planSubmitted = false;
+    mockDraftedPlan = null;
   });
 
   afterEach(async () => {
@@ -195,7 +199,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
       expect(actualCall).toBe('help me debug this issue');
     });
 
-    it('handles plan submission flow correctly', async () => {
+    it('handles the explicit plan submission flow correctly', async () => {
       surface = new SlackSurface({
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
@@ -204,55 +208,46 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
         anthropicApiKey: 'test-anthropic-key',
       });
 
-      const planText = 'name: "Debug Issue"\ntasks:\n  - id: t1\n    description: "Run debugger"\n    dependencies: []\n';
-
-      mockSendMessage.mockImplementation(async () => {
-        mockPlanConversation.submittedPlanText = planText;
-        mockPlanConversation.planSubmitted = true;
-        return 'Plan ready. Submitting now...';
-      });
+      const planText = 'name: "Debug Issue"\ntasks:\n  - id: t1\n    description: "Run the debugger"\n    dependencies: []\n';
+      mockSendMessage.mockResolvedValue('Plan ready. Say `submit` to run it.');
+      mockDraftedPlan = planText;
 
       await surface.start(async (cmd) => {
         receivedCommands.push(cmd);
       });
 
       const app = surface.getApp() as any;
-      const mentionHandler = app._eventHandlers.find(
-        (h: MockHandler) => h.pattern === 'app_mention'
-      )?.handler;
+      const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+      const messageHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'message')?.handler;
 
-      const say = vi.fn().mockImplementation(async ({ text, thread_ts }) => {
+      const say = vi.fn().mockImplementation(async ({ text }) => {
         const ts = `${Date.now()}.${Math.random().toString(36).substr(2, 6)}`;
         apiCalls.push({ method: 'postMessage', channel: 'C-test', text, ts });
         return { ts, ok: true };
       });
 
+      // Build request → immediate ack, replaced with the drafted-plan reply. No submission.
       await mentionHandler({
-        event: {
-          text: '<@UBOT123456> create a plan for me',
-          ts: '1111.001',
-          thread_ts: undefined,
-          user: 'U123',
-        },
+        event: { text: '<@UBOT123456> create a plan for me', ts: '1111.001', thread_ts: undefined, user: 'U123' },
         say,
       });
-
-      // Verify flow: ack → replace → execution message
-      expect(apiCalls.length).toBeGreaterThanOrEqual(3);
-
-      // 1. Immediate ack
-      expect(apiCalls[0].method).toBe('postMessage');
       expect(apiCalls[0].text).toBe('Processing your request...');
-
-      // 2. Replace ack with response
       expect(apiCalls[1].method).toBe('update');
-      expect(apiCalls[1].text).toBe('Plan ready. Submitting now...');
+      expect(apiCalls[1].text).toBe('Plan ready. Say `submit` to run it.');
+      expect(receivedCommands).toHaveLength(0);
 
-      // 3. Execution started message
-      expect(apiCalls[2].method).toBe('postMessage');
-      expect(apiCalls[2].text).toContain('Starting');
+      // Explicit submit → summary + confirmation, still no start_plan.
+      await mentionHandler({
+        event: { text: '<@UBOT123456> submit', ts: '1111.5', thread_ts: '1111.001', user: 'U123' },
+        say,
+      });
+      expect(receivedCommands).toHaveLength(0);
 
-      // 4. Command should be emitted with raw plan text
+      // Confirm → start_plan with the raw plan text.
+      await messageHandler({
+        event: { text: 'yes', ts: '1111.6', thread_ts: '1111.001', user: 'U123' },
+        say,
+      });
       expect(receivedCommands).toEqual([
         expect.objectContaining({ type: 'start_plan', planText }),
       ]);

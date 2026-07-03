@@ -36,8 +36,3 @@ tasks:
     description: "Run the plan-to-invoker fixture tests"
     command: "bash skills/plan-to-invoker/scripts/test-fixtures.sh"
     dependencies: [update-dogfood-guidance]
-
-  - id: final-regression
-    description: "Run the full repository test suite as the final regression gate"
-    command: "pnpm run test:all"
-    dependencies: [update-dogfood-guidance, verify-skill-fixtures]

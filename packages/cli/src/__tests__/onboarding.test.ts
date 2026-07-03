@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import {
   loadInvokerEnv,
   REQUIRED_BOT_SCOPES,
   slackCredsFromEnv,
+  runSetup,
   upsertEnvLines,
   validateSlackCredentials,
   type CliConfigState,
@@ -21,6 +22,8 @@ describe('generateSlackManifest', () => {
     expect(m.settings.socket_mode_enabled).toBe(true);
     expect(m.settings.event_subscriptions.bot_events).toContain('app_mention');
     expect(m.features.bot_user.display_name).toBe('Invoker');
+    expect(m.settings.interactivity.is_enabled).toBe(true);
+    expect(m.features.slash_commands?.some((c) => c.command === '/invoker')).toBe(true);
   });
 });
 
@@ -103,6 +106,63 @@ describe('buildDoctorChecks', () => {
     expect(checks.find((c) => c.id === 'default-preset')?.status).toBe('ok');
   });
 });
+describe('runSetup', () => {
+  it('keeps Slack enabled by default and lets the user opt out', async () => {
+    const lines: string[] = [];
+    const code = await runSetup([], {
+      print: (line) => lines.push(line),
+      prompt: async () => 'n',
+    });
+
+    expect(lines.join('\n')).toContain('Invoker setup');
+    expect(lines.join('\n')).toContain('Run `invoker-cli setup slack` later');
+    expect(typeof code).toBe('number');
+  });
+
+  it('writes Slack env from environment values without prompts', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-env-'));
+    const saved = {
+      HOME: process.env.HOME,
+      bot: process.env.SLACK_BOT_TOKEN,
+      app: process.env.SLACK_APP_TOKEN,
+      sign: process.env.SLACK_SIGNING_SECRET,
+      chan: process.env.SLACK_CHANNEL_ID,
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(mockFetch({
+      'auth.test': { body: { ok: true, user: 'invoker', team: 'Acme' }, scopes: REQUIRED_BOT_SCOPES.join(',') },
+      'apps.connections.open': { body: { ok: true } },
+      'conversations.info': { body: { ok: true, channel: { name: 'lobby' } } },
+    }) as never);
+    try {
+      process.env.HOME = home;
+      process.env.SLACK_BOT_TOKEN = 'xoxb-env';
+      process.env.SLACK_APP_TOKEN = 'xapp-env';
+      process.env.SLACK_SIGNING_SECRET = 'secret-env';
+      process.env.SLACK_CHANNEL_ID = 'C123';
+      const prompts: string[] = [];
+
+      const code = await runSetup(['slack', '--from-env'], {
+        print: () => {},
+        prompt: async (question) => {
+          prompts.push(question);
+          return '';
+        },
+      });
+
+      expect(code).toBe(0);
+      expect(prompts).toEqual([]);
+    } finally {
+      fetchSpy.mockRestore();
+      restoreEnv('HOME', saved.HOME);
+      restoreEnv('SLACK_BOT_TOKEN', saved.bot);
+      restoreEnv('SLACK_APP_TOKEN', saved.app);
+      restoreEnv('SLACK_SIGNING_SECRET', saved.sign);
+      restoreEnv('SLACK_CHANNEL_ID', saved.chan);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 
 describe('loadInvokerEnv', () => {
   it('loads SLACK_* from ~/.invoker/.env without overriding real env vars', () => {

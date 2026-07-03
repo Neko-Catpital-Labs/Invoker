@@ -13,4 +13,6 @@ export * from './task-repository.js';
 export * from './invalidation-policy.js';
 export * from './invalidation-plan.js';
 export * from './attempt-policy.js';
+export * from './task-reset-policy.js';
+export * from './state-invariants.js';
 export * from './repo-default-branch.js';

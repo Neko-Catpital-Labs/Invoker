@@ -111,16 +111,17 @@ describe('PlanConversation persistence', () => {
       expect(saved!.extractedPlan).toBeNull();
     });
 
-    it('persists planSubmitted state when user confirms', async () => {
+    it('a drafted plan is recoverable from persistence via getDraftedPlan', async () => {
       const conv = createConversation('ts-submit');
       mockCursorResponse(VALID_YAML_PLAN);
       await conv.sendMessage('Generate a plan');
+      expect(conv.planSubmitted).toBe(false);
 
-      await conv.sendMessage('yes');
-      expect(conv.planSubmitted).toBe(true);
-
-      const saved = repo.loadConversation('ts-submit');
-      expect(saved!.planSubmitted).toBe(true);
+      const recovered = createConversation('ts-submit');
+      await recovered.init();
+      const drafted = recovered.getDraftedPlan();
+      expect(drafted).not.toBeNull();
+      expect(drafted).toContain('Test Plan');
     });
 
     it('does not persist when no repo is configured', async () => {
@@ -155,7 +156,7 @@ describe('PlanConversation persistence', () => {
       );
     });
 
-    it('recovered session can submit plan via confirmation', async () => {
+    it('recovered session exposes the drafted plan via getDraftedPlan', async () => {
       const conv1 = createConversation('ts-plan-recover');
       mockCursorResponse(VALID_YAML_PLAN);
       await conv1.sendMessage('Generate a plan for REST API');
@@ -163,18 +164,19 @@ describe('PlanConversation persistence', () => {
       const conv2 = createConversation('ts-plan-recover');
       await conv2.init();
 
-      const reply = await conv2.sendMessage('yes');
-      expect(reply).toContain('submitted for execution');
-      expect(conv2.submittedPlanText).not.toBeNull();
-      expect(typeof conv2.submittedPlanText).toBe('string');
-      expect(conv2.submittedPlanText).toContain('Test Plan');
+      const drafted = conv2.getDraftedPlan();
+      expect(drafted).not.toBeNull();
+      expect(typeof drafted).toBe('string');
+      expect(drafted).toContain('Test Plan');
     });
 
     it('recovers planSubmitted state from a previous session', async () => {
-      const conv1 = createConversation('ts-submitted-recover');
-      mockCursorResponse(VALID_YAML_PLAN);
-      await conv1.sendMessage('Generate a plan');
-      await conv1.sendMessage('yes');
+      // The conversation flow never flips planSubmitted, but a value already
+      // persisted in the repo must still round-trip back through init().
+      repo.saveConversation('ts-submitted-recover', [
+        { role: 'user', content: 'Generate a plan' },
+        { role: 'assistant', content: VALID_YAML_PLAN },
+      ], null, true);
 
       const conv2 = createConversation('ts-submitted-recover');
       await conv2.init();
@@ -271,7 +273,7 @@ describe('PlanConversation persistence', () => {
   // ── Plan extraction and submission state ───────────────
 
   describe('plan extraction and submission persistence', () => {
-    it('confirmation picks up the latest plan from history', async () => {
+    it('getDraftedPlan picks up the latest plan from history', async () => {
       const conv = createConversation('ts-plan-update');
 
       mockCursorResponse('```yaml\nname: "Plan A"\ntasks:\n  - id: t1\n    description: "Task A"\n    dependencies: []\n```');
@@ -280,12 +282,13 @@ describe('PlanConversation persistence', () => {
       mockCursorResponse('```yaml\nname: "Plan B"\ntasks:\n  - id: t1\n    description: "Task B"\n    dependencies: []\n```');
       await conv.sendMessage('Actually, generate plan B');
 
-      const reply = await conv.sendMessage('yes');
-      expect(reply).toContain('Plan B');
-      expect(conv.submittedPlanText).toContain('Plan B');
+      const drafted = conv.getDraftedPlan();
+      expect(drafted).not.toBeNull();
+      expect(drafted).toContain('Plan B');
+      expect(conv.planSubmitted).toBe(false);
     });
 
-    it('complex plan is correctly found by confirmation', async () => {
+    it('complex plan is correctly found by getDraftedPlan', async () => {
       const complexYaml = `\`\`\`yaml
 name: "Complex Plan"
 onFinish: pull_request
@@ -321,14 +324,12 @@ tasks:
       mockCursorResponse(complexYaml);
       await conv.sendMessage('Generate a complex plan');
 
-      const reply = await conv.sendMessage('yes');
-      expect(reply).toContain('submitted for execution');
-
-      const planText = conv.submittedPlanText!;
+      const planText = conv.getDraftedPlan();
+      expect(planText).not.toBeNull();
       expect(typeof planText).toBe('string');
       // Parse to verify structure is preserved
       const { parse: parseYaml } = await import('yaml');
-      const plan = parseYaml(planText) as Record<string, any>;
+      const plan = parseYaml(planText!) as Record<string, any>;
       expect(plan.name).toBe('Complex Plan');
       expect(plan.onFinish).toBe('pull_request');
       expect(plan.baseBranch).toBe('develop');
@@ -383,7 +384,7 @@ tasks:
   // ── E2E: full round-trip with restart ──────────────────
 
   describe('E2E: full round-trip with restart', () => {
-    it('recovers conversation after restart, confirmation submits plan', async () => {
+    it('recovers conversation after restart and exposes the drafted plan', async () => {
       const threadTs = 'ts-e2e-roundtrip';
 
       const conv1 = createConversation(threadTs);
@@ -400,15 +401,10 @@ tasks:
       expect(conv2.history.length).toBeGreaterThanOrEqual(2);
       expect(conv2.history[0].content).toContain('Add a login form');
 
-      const reply = await conv2.sendMessage('execute');
-
-      expect(conv2.planSubmitted).toBe(true);
-      expect(conv2.submittedPlanText).not.toBeNull();
-      expect(conv2.submittedPlanText).toContain('Test Plan');
-
-      const saved2 = repo.loadConversation(threadTs);
-      expect(saved2!.messages.length).toBeGreaterThanOrEqual(4);
-      expect(saved2!.planSubmitted).toBe(true);
+      const drafted = conv2.getDraftedPlan();
+      expect(drafted).not.toBeNull();
+      expect(drafted).toContain('Test Plan');
+      expect(conv2.planSubmitted).toBe(false);
     });
 
     it('recovered conversation retains message count for context', async () => {

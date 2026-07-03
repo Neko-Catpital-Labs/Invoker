@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   loadConfig,
+  resolveConfigFilePath,
+  resolveDefaultExecutionAgent,
+  resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
 } from '../config.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -9,12 +12,13 @@ import { tmpdir } from 'node:os';
 
 const testDir = join(tmpdir(), `invoker-config-test-${process.pid}`);
 const fakeHome = join(testDir, 'home');
-
 beforeEach(() => {
+  delete process.env.INVOKER_REPO_CONFIG_PATH;
   mkdirSync(join(fakeHome, '.invoker'), { recursive: true });
 });
 
 afterEach(() => {
+  delete process.env.INVOKER_REPO_CONFIG_PATH;
   rmSync(testDir, { recursive: true, force: true });
 });
 
@@ -22,7 +26,7 @@ vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>();
   return {
     ...actual,
-    homedir: () => fakeHome,
+    homedir: () => `${actual.tmpdir()}/invoker-config-test-${process.pid}/home`,
   };
 });
 
@@ -122,6 +126,41 @@ describe('loadConfig', () => {
     const config = loadConfig();
     expect(config.autoFixAgent).toBe('codex');
   });
+  it('reads defaultExecutionAgent from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultExecutionAgent: 'claude' }),
+    );
+    const config = loadConfig();
+    expect(config.defaultExecutionAgent).toBe('claude');
+    expect(resolveDefaultExecutionAgent(config)).toBe('claude');
+  });
+
+  it('falls back to the built-in default execution agent', () => {
+    expect(resolveDefaultExecutionAgent({})).toBe('codex');
+    expect(resolveDefaultExecutionAgent({ defaultExecutionAgent: '   ' })).toBe('codex');
+  });
+
+
+  it('reads default execution settings from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' }),
+    );
+    const config = loadConfig();
+    expect(config.defaultExecutionAgent).toBe('omp');
+    expect(config.defaultExecutionModel).toBe('chatgpt-5.4');
+  });
+
+  it('resolves built-in task execution defaults when config values are blank', () => {
+    expect(resolveDefaultTaskExecutionSettings({ defaultExecutionAgent: '  ', defaultExecutionModel: '   ' })).toEqual({
+      executionAgent: 'codex',
+    });
+    expect(resolveDefaultTaskExecutionSettings({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' })).toEqual({
+      executionAgent: 'omp',
+      executionModel: 'chatgpt-5.4',
+    });
+  });
 
   it('reads autoFixCi from user config', () => {
     writeFileSync(
@@ -139,6 +178,32 @@ describe('loadConfig', () => {
     );
     const config = loadConfig();
     expect(config.browser).toBe('firefox');
+  });
+
+  it('defaults externalWorkers to none when absent', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultBranch: 'main' }),
+    );
+    const config = loadConfig();
+    expect(config.externalWorkers).toBeUndefined();
+  });
+
+  it('reads external worker launch config from user config', () => {
+    const externalWorkers = [{
+      kind: 'preview',
+      launch: {
+        executable: '/usr/local/bin/invoker-preview-worker',
+        args: ['--stdio', '--log-level=info'],
+        cwd: '/srv/invoker',
+      },
+    }];
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ externalWorkers }),
+    );
+    const config = loadConfig();
+    expect(config.externalWorkers).toEqual(externalWorkers);
   });
 
   it('reads imageStorage from user config', () => {
@@ -228,6 +293,16 @@ describe('loadConfig', () => {
     expect(config.defaultPoolId).toBe('mixed-local-ssh');
   });
 
+
+  it('treats a blank env config path override as unset', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultBranch: 'main' }),
+    );
+    process.env.INVOKER_REPO_CONFIG_PATH = '   ';
+    expect(resolveConfigFilePath()).toBe(join(fakeHome, '.invoker', 'config.json'));
+    expect(loadConfig().defaultBranch).toBe('main');
+  });
 });
 
 describe('resolveEmbeddedTerminalBackendConfig', () => {

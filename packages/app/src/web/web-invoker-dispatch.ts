@@ -21,7 +21,7 @@ import type {
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
-import type { InvokerConfig } from '../config.js';
+import { resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
 import type { ApiMutationFacade } from '../api-server.js';
 import { buildReviewGateQueryResponse } from '../review-gate-query.js';
 import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
@@ -134,8 +134,10 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return Object.keys(deps.loadConfig().remoteTargets ?? {});
       case 'invoker:get-execution-pools':
         return Object.keys(deps.loadConfig().executionPools ?? {});
-      case 'invoker:get-execution-agents':
-        return agentRegistry.listExecution().map((a) => a.name);
+      case 'invoker:get-execution-harnesses':
+        return agentRegistry.listExecutionHarnesses();
+      case 'invoker:get-execution-defaults':
+        return resolveDefaultTaskExecutionSettings(deps.loadConfig());
       case 'invoker:get-system-diagnostics':
         return (
           deps.getSystemDiagnostics?.() ??
@@ -159,6 +161,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           String(args[0]),
           (args[1] as Parameters<SQLiteAdapter['searchWorkflowsAndTasks']>[1]) ?? undefined,
         );
+      case 'invoker:get-runtime-status':
+        return { ownerMode: true, readOnly: false, mode: 'local-owner' };
       case 'invoker:get-ui-perf-stats':
         return {};
       case 'invoker:report-ui-perf':
@@ -183,6 +187,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return mutations.recreateDownstream(String(args[0]));
       case 'invoker:cancel-task':
         return mutations.cancelTask(String(args[0]));
+      case 'invoker:delete-task':
+        return mutations.deleteTask(String(args[0]));
       case 'invoker:recreate-workflow':
         return mutations.recreateWorkflow(String(args[0]));
       case 'invoker:retry-workflow':
