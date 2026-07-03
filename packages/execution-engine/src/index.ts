@@ -15,6 +15,7 @@ export * from './docker-executor.js';
 export * from './worktree-executor.js';
 export * from './merge-gate-executor.js';
 export * from './ssh-executor.js';
+export * from './crabbox-target-resolver.js';
 export * from './repo-pool.js';
 export * from './registry.js';
 export * from './task-runner.js';
