@@ -17,6 +17,8 @@ All notable changes to Invoker will be documented in this file.
 
 
 - Add task deletion across the desktop app, HTTP API, and headless commands. Deleting a task now kills it first when needed, rewires direct dependents to the deleted task's upstream dependencies, and blocks deleting the last task in a workflow so users delete the whole workflow instead.
+- Add a checklist-driven System Setup action in the desktop app. Users can approve or uncheck CLI install, helper install, best-effort tool fixes, and Slack setup; Slack is checked by default, collected inline, validated through `invoker-cli setup slack --from-env`, and diagnostics refresh after the run.
+
 ## 0.0.6
 
 - Make `plan-to-invoker` use focused verification by default instead of mandatory `pnpm test` or `pnpm run test:all` gates.
