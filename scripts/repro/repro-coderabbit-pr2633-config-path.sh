@@ -9,6 +9,7 @@ echo "[repro] root cause: readiness diagnostics hardcoded /tmp/invoker-e2e/confi
 
 python3 - "$SPEC" <<'PY'
 import pathlib
+import re
 import sys
 
 spec = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
@@ -28,14 +29,21 @@ for needle in required_invariants:
     if needle not in spec:
         raise SystemExit(f"missing injected-config invariant: {needle}")
 
-# Pre-fix model: the fixture path and the rendered detail diverge.
-fixture_path = "/tmp/invoker-fixture/e2e-config.json"
-pre_fix_rendered_detail = "Parsed /tmp/invoker-e2e/config.json"
-post_fix_rendered_detail = f"Parsed {fixture_path}"
-assert pre_fix_rendered_detail != f"Parsed {fixture_path}", "pre-fix hardcoded path must diverge from fixture path"
-assert post_fix_rendered_detail == f"Parsed {fixture_path}", "post-fix detail must render the injected fixture path"
+config_block_match = re.search(
+    r"\{\s*id: 'config',\s*name: 'Config file',(?P<body>.*?)\n\s*\},",
+    spec,
+    re.S,
+)
+if not config_block_match:
+    raise SystemExit("missing Config file readiness check block")
 
-print("[repro] pre-fix model: hardcoded /tmp/invoker-e2e/config.json diverges from injected fixture path")
+config_block = config_block_match.group("body")
+if "detail: `Parsed ${configPath}`" not in config_block:
+    raise SystemExit("Config file readiness detail must render the injected configPath")
+if re.search(r"detail: ['\"]Parsed /", config_block):
+    raise SystemExit("Config file readiness detail still renders a hardcoded absolute path")
+
+print("[repro] pre-fix model: hardcoded /tmp/invoker-e2e/config.json is absent; spec renders `Parsed ${configPath}` dynamically")
 print("[repro] source check: diagnostics and assertion both use INVOKER_REPO_CONFIG_PATH via configPath")
 PY
 
