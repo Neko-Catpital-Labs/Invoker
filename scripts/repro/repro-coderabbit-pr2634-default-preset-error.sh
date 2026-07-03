@@ -6,8 +6,16 @@ SKILL_FILE="$REPO_ROOT/skills/invoker-setup/SKILL.md"
 CONTRACT_FILE="$REPO_ROOT/packages/contracts/src/prerequisites.ts"
 SKILL_TEXT="$(tr '\n' ' ' < "$SKILL_FILE")"
 
-if ! grep -Eq "status: 'error'" "$CONTRACT_FILE"; then
-  echo "[repro] FAIL: default-preset contract error status was not found; update this repro with the new contract."
+if ! awk '
+  /id: '\''default-preset'\''/ { in_default = 1; has_error = 0; next }
+  in_default && /status: '\''error'\''/ { has_error = 1; next }
+  in_default && /detail: `Default preset "\$\{defaultPresetKey\}" needs "\$\{preset\.tool\}"/ {
+    if (has_error) found = 1
+  }
+  in_default && /^    };/ { in_default = 0; has_error = 0 }
+  END { exit found ? 0 : 1 }
+' "$CONTRACT_FILE"; then
+  echo "[repro] FAIL: default-preset missing-tool contract error status was not found; update this repro with the new contract."
   exit 1
 fi
 
