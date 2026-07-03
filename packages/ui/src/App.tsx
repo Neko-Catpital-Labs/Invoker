@@ -1598,10 +1598,10 @@ export function App() {
         await invoker.loadPlan(planText);
         setWorkflowSelectionDismissed(false);
         setHasLoadedPlan(true);
+        setHasStarted(false);
         // Parse locally just for UI display state
         const parsed = yaml.load(planText) as any;
         setPlanName(parsed?.name ?? 'Untitled Plan');
-        setOnFinish(parsed?.onFinish ?? 'merge');
         refreshTaskGraph();
       } catch (err) {
         console.error('Failed to load plan:', err);
@@ -1703,7 +1703,6 @@ export function App() {
       setHasLoadedPlan(false);
       setHasStarted(false);
       setPlanName(null);
-      setOnFinish('merge');
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });

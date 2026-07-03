@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -53,6 +53,38 @@ describe('App launch (component)', () => {
     expect(screen.getByText('Running task')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Timeline' })).not.toBeInTheDocument();
+  });
+
+  it('resets run controls when uploading a new plan after start', async () => {
+    const { container } = render(<App />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+
+    const uploadPlan = async (name: string) => {
+      const planText = `name: ${name}\nonFinish: merge\n`;
+      const file = new File([planText], `${name}.yaml`, { type: 'application/x-yaml' });
+      Object.defineProperty(file, 'text', {
+        value: async () => planText,
+      });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+      await waitFor(() => {
+        expect(mock.api.loadPlan).toHaveBeenLastCalledWith(expect.stringContaining(`name: ${name}`));
+      });
+    };
+
+    await uploadPlan('First Plan');
+    expect(screen.getByTestId('rail-start')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('rail-start'));
+    await waitFor(() => {
+      expect(mock.api.start).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('rail-stop')).toBeInTheDocument();
+    });
+
+    await uploadPlan('Second Plan');
+    await waitFor(() => {
+      expect(screen.getByTestId('rail-start')).toBeInTheDocument();
+      expect(screen.queryByTestId('rail-stop')).not.toBeInTheDocument();
+    });
   });
 
   it('shows workflow status chips and terminal drawer controls in home view', () => {
