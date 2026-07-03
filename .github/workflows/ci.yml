@@ -25,7 +25,7 @@ jobs:
   build-artifacts:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     runs-on:
-      labels: Runner_2_4_core
+      labels: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && 'Mergify_Runner' || 'Runner_2_4_core' }}
     timeout-minutes: 30
 
     steps:
@@ -64,7 +64,7 @@ jobs:
 
   quality-required:
     runs-on:
-      labels: ${{ matrix.runner_label }}
+      labels: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && 'Mergify_Runner' || matrix.runner_label }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -106,7 +106,7 @@ jobs:
   quality-extra:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     runs-on:
-      labels: ${{ matrix.runner_label }}
+      labels: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && 'Mergify_Runner' || matrix.runner_label }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -151,7 +151,7 @@ jobs:
   e2e-proof:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && 'Mergify_Runner' || 'ubuntu-latest' }}
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
@@ -226,7 +226,7 @@ jobs:
   e2e-proof-aggregate:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: e2e-proof
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && 'Mergify_Runner' || 'ubuntu-latest' }}
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 15
@@ -259,7 +259,7 @@ jobs:
   required-fast:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && 'Mergify_Runner' || 'ubuntu-latest' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -328,7 +328,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on:
-      labels: ${{ matrix.runner_label }}
+      labels: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && 'Mergify_Runner' || matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -466,7 +466,7 @@ jobs:
   playwright:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && 'Mergify_Runner' || 'ubuntu-latest' }}
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 45
@@ -600,7 +600,7 @@ jobs:
   ssh:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && 'Mergify_Runner' || 'ubuntu-latest' }}
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
@@ -679,7 +679,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on:
-      labels: ${{ matrix.runner_label }}
+      labels: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && 'Mergify_Runner' || matrix.runner_label }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
