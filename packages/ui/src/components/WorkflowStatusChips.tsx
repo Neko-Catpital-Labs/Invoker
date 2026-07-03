@@ -37,7 +37,7 @@ export function WorkflowStatusChips({
   const hasFilters = activeFilters.size > 0;
 
   return (
-    <div className="flex items-center gap-6 px-4 py-2 bg-gray-800 border-t border-gray-700 text-sm">
+    <div data-testid="workflow-status-chips" className="flex items-center gap-6 px-4 py-2 bg-gray-800 border-t border-gray-700 text-sm">
       {DISPLAY_ORDER.map((status) => {
         const visual = workflowStatusVisual(status);
         const active = activeFilters.has(status);

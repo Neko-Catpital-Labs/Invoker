@@ -73,24 +73,31 @@ describe('App launch (component)', () => {
     expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(screen.getByText('Alpha · running')).toBeInTheDocument();
   });
-  it('auto-collapses the app sidebar for browser views and returns home when dismissed', async () => {
+  it('auto-collapses the app sidebar for browser views, focuses attention tasks, and collapses the inspector on narrow windows', async () => {
     const workflows: WorkflowMeta[] = [
       { id: 'wf-alpha', name: 'Alpha', status: 'running' },
     ];
     const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'failed', workflowId: 'wf-alpha' });
 
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+
     render(<App />);
     act(() => mock.setTasks([alpha], workflows));
+    act(() => window.dispatchEvent(new Event('resize')));
 
     fireEvent.click(await screen.findByTestId('sidebar-attention'));
     expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
     expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+    expect(screen.getByTestId('workflow-inspector-shell').className).toContain('w-16');
     expect(screen.queryByText('Invoker Terminal')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Needs Attention' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
+    expect(screen.queryByText('More needs attention')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
     expect(await screen.findByText('Invoker Terminal')).toBeInTheDocument();
-    expect(screen.getByTestId('app-sidebar').className).toContain('w-72');
-    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
+    expect(screen.queryByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
 
   it('shows workflow status chips and terminal drawer controls in home view', () => {
