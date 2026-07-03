@@ -3414,7 +3414,6 @@ function createEmbeddedTerminalBackendFromConfig(
       getTasks: () => (ownerMode ? orchestrator.getAllTasks() : detachedViewerTasks()),
       getWorkflows: () => detachedViewerWorkflows ?? listWorkflowsByStartupRecency(),
       getInitialWorkflowId: () => startupWorkflowId,
-      getRuntimeStatus: computeRuntimeStatus,
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
       recordStartupDuration,
