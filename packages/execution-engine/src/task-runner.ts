@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { scopePlanTaskId } from '@invoker/workflow-core';
-import type { Orchestrator, TaskState, ExperimentVariant, RunnerKind } from '@invoker/workflow-core';
+import type { Orchestrator, TaskState, ExperimentVariant, RunnerKind, CrabboxRemoteLeaseMetadata } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
@@ -186,6 +186,7 @@ export interface CrabboxResolver {
 class CrabboxResolutionRequiredError extends Error {
   constructor(
     readonly targetId: string,
+    readonly target: RemoteTargetDisplay,
     readonly resolverConfig: CrabboxResolverTargetConfig,
   ) {
     super(`Crabbox remote target "${targetId}" must be resolved before use`);
@@ -411,6 +412,8 @@ export class TaskRunner {
   private crabboxResolver: CrabboxResolver;
   /** Resolved crabbox leases, keyed by remote target id. One lease per target until cleared. */
   private resolvedCrabboxTargets = new Map<string, ResolvedCrabboxTarget>();
+  /** In-flight crabbox resolutions, keyed by remote target id, to avoid double-leasing. */
+  private resolvingCrabboxTargets = new Map<string, Promise<ResolvedCrabboxTarget>>();
   private poolRoundRobinCursor = new Map<string, number>();
   private pendingPoolSelections = new Map<string, PoolSelection>();
   private freshBaseCommits = new Map<string, FreshBaseCommit>();
@@ -975,14 +978,24 @@ export class TaskRunner {
       try {
         executor = this.selectExecutor(task, attemptedPoolMemberKeys);
       } catch (err) {
-        if (!(err instanceof CrabboxResolutionRequiredError)) throw err;
+        const pendingSelection = this.pendingPoolSelections.get(task.id);
+        if (!(err instanceof CrabboxResolutionRequiredError)) {
+          this.pendingPoolSelections.delete(task.id);
+          throw err;
+        }
         // The pool member was already selected (pendingPoolSelections is set);
         // lease the machine once, cache it, then build the executor from the
         // resolved endpoint WITHOUT re-running selection (which would advance
         // round-robin / re-pick a different member).
         bench('crabbox.resolve.start', { targetId: err.targetId });
-        const resolved = await this.crabboxResolver.resolve(err.resolverConfig);
-        this.resolvedCrabboxTargets.set(err.targetId, resolved);
+        let resolved: ResolvedCrabboxTarget;
+        try {
+          resolved = await this.resolveCrabboxTarget(err.targetId, err.resolverConfig);
+        } catch (resolveErr) {
+          this.pendingPoolSelections.delete(task.id);
+          this.releasePoolSelectionLease(pendingSelection);
+          throw resolveErr;
+        }
         bench('crabbox.resolve.end', {
           targetId: err.targetId,
           host: resolved.sshTarget.host,
@@ -995,8 +1008,7 @@ export class TaskRunner {
           sshHost: resolved.sshTarget.host,
           sshPort: resolved.sshTarget.port,
         });
-        const target = this.getRemoteTargets()[err.targetId];
-        executor = this.buildSshExecutorForTarget(task.id, err.targetId, target, resolved);
+        executor = this.buildSshExecutorForTarget(task.id, err.targetId, err.target, resolved);
       }
       const poolSelectionForStart = this.pendingPoolSelections.get(task.id);
       if (!this.acquirePoolSelectionLease(task, attemptId, poolSelectionForStart)) {
@@ -1786,11 +1798,20 @@ export class TaskRunner {
         // targets skip all of this and behave exactly as before.
         let resolvedCrabbox: ResolvedCrabboxTarget | undefined;
         if (target.type === 'crabbox') {
-          resolvedCrabbox = this.resolvedCrabboxTargets.get(targetId);
+          resolvedCrabbox = this.resolvedCrabboxTargets.get(targetId)
+            ?? this.seedResolvedCrabboxTargetFromTask(targetId, task);
           if (!resolvedCrabbox) {
+            let resolverConfig: CrabboxResolverTargetConfig;
+            try {
+              resolverConfig = this.buildCrabboxResolverConfig(targetId, target);
+            } catch (err) {
+              this.pendingPoolSelections.delete(task.id);
+              throw err;
+            }
             throw new CrabboxResolutionRequiredError(
               targetId,
-              this.buildCrabboxResolverConfig(targetId, target),
+              target,
+              resolverConfig,
             );
           }
         }
@@ -1875,6 +1896,56 @@ export class TaskRunner {
     this.sshExecutorCache.set(cacheKey, ssh);
     traceExecution(`[trace] TaskRunner.selectExecutor: task=${taskId} effectiveType=ssh remoteTarget=${targetId} → ssh (new, cached)`);
     return ssh;
+  }
+
+  private async resolveCrabboxTarget(
+    targetId: string,
+    resolverConfig: CrabboxResolverTargetConfig,
+  ): Promise<ResolvedCrabboxTarget> {
+    const existing = this.resolvedCrabboxTargets.get(targetId);
+    if (existing) return existing;
+
+    let pending = this.resolvingCrabboxTargets.get(targetId);
+    if (!pending) {
+      pending = this.crabboxResolver.resolve(resolverConfig).then((resolved) => {
+        this.resolvedCrabboxTargets.set(targetId, resolved);
+        return resolved;
+      });
+      this.resolvingCrabboxTargets.set(targetId, pending);
+    }
+
+    try {
+      return await pending;
+    } finally {
+      if (this.resolvingCrabboxTargets.get(targetId) === pending) {
+        this.resolvingCrabboxTargets.delete(targetId);
+      }
+    }
+  }
+
+  private seedResolvedCrabboxTargetFromTask(
+    targetId: string,
+    task: TaskState,
+  ): ResolvedCrabboxTarget | undefined {
+    const resolved = this.resolvedCrabboxTargetFromMetadata(targetId, task.execution.remoteLeaseMetadata);
+    if (resolved) this.resolvedCrabboxTargets.set(targetId, resolved);
+    return resolved;
+  }
+
+  private resolvedCrabboxTargetFromMetadata(
+    targetId: string,
+    metadata: CrabboxRemoteLeaseMetadata | undefined,
+  ): ResolvedCrabboxTarget | undefined {
+    if (!metadata || metadata.provider !== 'crabbox' || metadata.targetId !== targetId) return undefined;
+    return {
+      sshTarget: {
+        host: metadata.sshHost,
+        user: metadata.sshUser,
+        sshKeyPath: metadata.sshKeyPath,
+        port: metadata.sshPort,
+      },
+      remoteLeaseMetadata: metadata,
+    };
   }
 
   /** Map a configured crabbox remote target into the resolver's input config. */
@@ -1977,7 +2048,7 @@ export class TaskRunner {
     let publishWorkspacePath = workspacePath;
     if (task.config.runnerKind === 'ssh') {
       const poolMemberId = resolveSelectedRemoteTargetId(this, task.id, task);
-      const target = poolMemberId ? this.getRemoteTargetConfig(poolMemberId) : undefined;
+      const target = poolMemberId ? this.getRemoteTargetConfig(poolMemberId, task) : undefined;
       if (target) {
         const repairedWorkspacePath = await resolveRemoteBranchOwnerPath(branch, workspacePath, target);
         if (repairedWorkspacePath && repairedWorkspacePath !== workspacePath) {
@@ -3089,7 +3160,7 @@ export class TaskRunner {
     return this.executionAgentRegistry;
   }
 
-  getRemoteTargetConfig(targetId: string): {
+  getRemoteTargetConfig(targetId: string, task?: TaskState): {
     host: string;
     user: string;
     sshKeyPath: string;
@@ -3106,7 +3177,8 @@ export class TaskRunner {
     // Overlay the resolved crabbox endpoint so post-execution flows (publish,
     // conflict resolution, terminal restore) reach the leased machine, not the
     // empty config host. Static targets pass through unchanged.
-    const resolved = this.resolvedCrabboxTargets.get(targetId);
+    const resolved = this.resolvedCrabboxTargets.get(targetId)
+      ?? (task ? this.seedResolvedCrabboxTargetFromTask(targetId, task) : undefined);
     const host = resolved?.sshTarget.host ?? target.host;
     const user = resolved?.sshTarget.user ?? target.user;
     const sshKeyPath = resolved?.sshTarget.sshKeyPath ?? target.sshKeyPath;

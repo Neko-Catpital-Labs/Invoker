@@ -11,7 +11,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import type { Orchestrator } from '@invoker/workflow-core';
+import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode, parseMergeConflictError } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
@@ -51,7 +51,7 @@ export interface ConflictResolverHost {
   createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
   spawnAgentFix(prompt: string, cwd: string, agentName?: string): Promise<{ stdout: string; sessionId: string }>;
-  getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
+  getRemoteTargetConfig?(targetId: string, task?: TaskState): RemoteTargetConfig | undefined;
 }
 
 const DEFAULT_MAX_INLINE_PROMPT_BYTES = 64 * 1024;
@@ -212,7 +212,7 @@ export async function resolveConflictImpl(
       poolMemberId,
       workspacePath: rawCwd,
     });
-    const target = host.getRemoteTargetConfig?.(poolMemberId);
+    const target = host.getRemoteTargetConfig?.(poolMemberId, task);
     if (!target) {
       throw new Error(`No remote target config for "${poolMemberId}" — cannot resolve conflict on remote`);
     }
@@ -492,7 +492,7 @@ export async function fixWithAgentImpl(
       poolMemberId,
       workspacePath,
     });
-    const target = host.getRemoteTargetConfig?.(poolMemberId);
+    const target = host.getRemoteTargetConfig?.(poolMemberId, task);
     if (!target) {
       throw new Error(`No remote target config for "${poolMemberId}" — cannot fix on remote`);
     }
