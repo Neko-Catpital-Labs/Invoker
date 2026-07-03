@@ -3399,7 +3399,6 @@ function createEmbeddedTerminalBackendFromConfig(
       const plan = parsePlan(planText);
       const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
       logger.info(`plan-from-goal: loading "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
-      taskHandles.clear();
       backupPlan(plan, undefined, logger);
       orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
       const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
@@ -3409,8 +3408,8 @@ function createEmbeddedTerminalBackendFromConfig(
       return { planName: plan.name, workflowId: workflow.id };
     }
 
-    registerGuiMutationHandler('invoker:plan-from-goal', async (request: InAppPlanRequest) => (
-      planFromGoalInApp(request, {
+    registerGuiMutationHandler('invoker:plan-from-goal', async (request: unknown) => (
+      planFromGoalInApp(request as InAppPlanRequest, {
         config: invokerConfig,
         workingDir: repoRoot,
         loadGeneratedPlan: loadGeneratedPlanPreview,
