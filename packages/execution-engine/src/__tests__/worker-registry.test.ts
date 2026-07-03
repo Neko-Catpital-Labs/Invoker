@@ -4,7 +4,9 @@ import { RECOVERY_WORKER_KIND, type AutoFixRecoveryStore, type AutoFixRecoverySu
 import {
   AUTO_APPROVE_WORKER_KIND,
   AUTO_FIX_WORKER_KIND,
+  CI_FAILURE_WORKER_KIND,
   createWorkerRegistry,
+  PR_STATUS_WORKER_KIND,
   registerAutoFixWorker,
   registerBuiltinWorkers,
   type WorkerRuntimeDependencies,
@@ -57,9 +59,13 @@ describe('worker registry', () => {
     expect(registry.list().map((d) => d.kind)).toEqual([
       AUTO_FIX_WORKER_KIND,
       AUTO_APPROVE_WORKER_KIND,
+      PR_STATUS_WORKER_KIND,
+      CI_FAILURE_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
+    expect(registry.get(CI_FAILURE_WORKER_KIND)).toBeDefined();
   });
 
   it('returns nothing for an unknown kind', () => {
@@ -87,5 +93,12 @@ describe('worker registry', () => {
     const runtime = definition!.factory(deps());
     expect(runtime.identity.kind).toBe(AUTO_APPROVE_WORKER_KIND);
     expect(runtime.isRunning()).toBe(false);
+  });
+
+  it('builds the PR status and CI-failure worker runtimes from the registered factories', () => {
+    const registry = registerBuiltinWorkers(createWorkerRegistry());
+
+    expect(registry.get(PR_STATUS_WORKER_KIND)?.factory(deps()).identity.kind).toBe(PR_STATUS_WORKER_KIND);
+    expect(registry.get(CI_FAILURE_WORKER_KIND)?.factory(deps()).identity.kind).toBe(CI_FAILURE_WORKER_KIND);
   });
 });
