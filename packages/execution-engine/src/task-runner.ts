@@ -1404,12 +1404,12 @@ export class TaskRunner {
               this.logger.error(`[TaskRunner] completion callback observer failed for task=${task.id}`, { err });
             }
 
-            this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
-
             // Apply the Crabbox cleanup policy for SSH tasks backed by a lease.
             // Runs on the live completion path only (stale completions return
             // earlier) so a superseded attempt never stops a reused machine.
             await this.maybeCleanupCrabboxLease(task, crabboxLeaseMetadata, normalizedResponse);
+
+            this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
           } finally {
             // Clean up per-task Docker executor to avoid resource leaks
             try {
@@ -1968,7 +1968,7 @@ export class TaskRunner {
       // surface the commands to connect to and later stop the leased machine.
       if (!succeeded && policy.keepOnFailure) {
         const sshCommand = `${crabboxCommand} ssh --id ${metadata.leaseId}`;
-        const stopCommand = `${crabboxCommand} stop ${metadata.leaseId}`;
+        const stopCommand = [crabboxCommand, 'stop', metadata.leaseId, ...(target?.stopArgs ?? [])].join(' ');
         const message =
           `Crabbox lease ${metadata.slug} (${metadata.leaseId}) kept for debugging after failure.\n` +
           `  Connect: ${sshCommand}\n` +
@@ -1997,7 +1997,8 @@ export class TaskRunner {
       stopArgs: target?.stopArgs,
     };
     try {
-      await this.crabboxResolver.stop?.(stopConfig, metadata.leaseId);
+      if (!this.crabboxResolver.stop) throw new Error('Crabbox resolver does not support stop cleanup.');
+      await this.crabboxResolver.stop(stopConfig, metadata.leaseId);
       // Drop the cached lease so a later task re-leases instead of reusing a
       // machine we just asked Crabbox to stop.
       this.resolvedCrabboxTargets.delete(metadata.targetId);
