@@ -164,6 +164,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const lastHandledCameraSeqRef = useRef(0);
   const browserRemountDoneRef = useRef(false);
   const initFitFrameRef = useRef(0);
+  const nodesRef = useRef<typeof nodes>([]);
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const onInitHandler = useCallback(() => {
@@ -174,9 +175,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   // torn-down graph after the component has gone away.
   useEffect(() => () => cancelAnimationFrame(initFitFrameRef.current), []);
 
-  useEffect(() => {
-    browserRemountDoneRef.current = false;
-  }, [surfaceMode, tasks.size]);
 
   const rawGraph = useMemo(() => {
     const taskArray = [...tasks.values()];
@@ -248,6 +246,9 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       layoutKey: layoutKeyFor(layoutTasks, rawEdges),
     };
   }, [runningTaskIds, tasks, statusFilters]);
+  useEffect(() => {
+    browserRemountDoneRef.current = false;
+  }, [rawGraph.layoutKey, surfaceMode]);
 
   useEffect(() => {
     if (rawGraph.taskArray.length === 0) return;
@@ -452,6 +453,9 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     },
     [onManualViewport],
   );
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
 
   // Consume each task-scoped camera command exactly once, by sequence. Centering
   // preserves the current zoom so ordinary refreshes never zoom the graph; only
@@ -484,14 +488,14 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   }, [cameraCommand, fitView, getZoom, nodes, setCenter]);
 
   useEffect(() => {
-    if (surfaceMode !== 'browser' || nodes.length === 0) return;
+    if (surfaceMode !== 'browser' || nodesRef.current.length === 0) return;
 
     let cancelled = false;
     const frame = requestAnimationFrame(() => {
       if (cancelled) return;
       fitView({ padding: 0.2 });
       if (!selectedTaskId) return;
-      const node = nodes.find((candidate) => candidate.id === selectedTaskId);
+      const node = nodesRef.current.find((candidate) => candidate.id === selectedTaskId);
       if (!node) return;
       requestAnimationFrame(() => {
         if (cancelled) return;
@@ -504,10 +508,10 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [fitView, getZoom, nodes, selectedTaskId, setCenter, surfaceMode]);
+  }, [fitView, getZoom, rawGraph.layoutKey, selectedTaskId, setCenter, surfaceMode]);
 
   useEffect(() => {
-    if (surfaceMode !== 'browser' || nodes.length === 0 || browserRemountDoneRef.current) return;
+    if (surfaceMode !== 'browser' || nodesRef.current.length === 0 || browserRemountDoneRef.current) return;
 
     let cancelled = false;
     const frame = requestAnimationFrame(() => {
@@ -523,7 +527,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [nodes.length, surfaceMode]);
+  }, [rawGraph.layoutKey, surfaceMode]);
 
   useEffect(() => {
     if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {
