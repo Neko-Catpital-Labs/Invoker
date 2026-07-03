@@ -107,7 +107,6 @@ import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
   resolveConfigFileState,
-  resolveDefaultExecutionAgent,
   resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
   type EmbeddedTerminalBackendConfig,
@@ -2020,10 +2019,9 @@ function createEmbeddedTerminalBackendFromConfig(
       throw new Error(`Task ${taskId} not found`);
     }
     const savedError = task.execution.error ?? '';
-    const effectiveAgentName = agentName ?? resolveDefaultExecutionAgent(invokerConfig);
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
     logger.info(
-      `fix-with-agent: "${taskId}" agent=${effectiveAgentName} source=${source} route=${recoveryRoute.kind}`,
+      `fix-with-agent: "${taskId}" agent=${agentName ?? DEFAULT_EXECUTION_AGENT} source=${source} route=${recoveryRoute.kind}`,
       { module: 'ipc' },
     );
 
@@ -2049,10 +2047,10 @@ function createEmbeddedTerminalBackendFromConfig(
         autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
       },
       {
-        agentName: effectiveAgentName,
+        agentName,
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
-        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${effectiveAgentName}`,
+        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Codex'}`,
         signal: activeMutationContext?.signal,
       },
     );
@@ -4290,9 +4288,8 @@ function createEmbeddedTerminalBackendFromConfig(
       async (taskIdArg: unknown, agentNameArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
-      const effectiveAgentName = agentName ?? resolveDefaultExecutionAgent(invokerConfig);
       logger.info(
-        `resolve-conflict: "${taskId}" agent=${effectiveAgentName} source=ipc route=resolveConflictAction`,
+        `resolve-conflict: "${taskId}" agent=${agentName ?? DEFAULT_EXECUTION_AGENT} source=ipc route=resolveConflictAction`,
         { module: 'ipc' },
       );
       try {
@@ -4301,7 +4298,7 @@ function createEmbeddedTerminalBackendFromConfig(
           persistence,
           taskExecutor: requireTaskExecutor(),
           autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-        }, effectiveAgentName, activeMutationContext?.signal);
+        }, agentName, activeMutationContext?.signal);
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
