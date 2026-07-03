@@ -803,43 +803,6 @@ function startHeadlessMode(): void {
     const mutatingMode = isHeadlessMutatingCommand(cliArgs);
     const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1' || command === 'owner-serve';
     const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && command === 'owner-serve';
-    const queueQueryMode = command === 'queue' || (command === 'query' && cliArgs[1] === 'queue');
-
-    const delegatedQueueOutputFormat = (): 'json' | 'jsonl' | 'label' | 'text' => {
-      const outputIndex = cliArgs.indexOf('--output');
-      const value = outputIndex >= 0 ? cliArgs[outputIndex + 1] : undefined;
-      if (value === 'json' || value === 'jsonl' || value === 'label') return value;
-      return 'text';
-    };
-
-    const writeDelegatedQueueStatus = (status: Record<string, unknown>): void => {
-      const format = delegatedQueueOutputFormat();
-      const running = Array.isArray(status.running) ? status.running as Array<Record<string, unknown>> : [];
-      const queued = Array.isArray(status.queued) ? status.queued as Array<Record<string, unknown>> : [];
-      if (format === 'json') {
-        process.stdout.write(JSON.stringify(status) + '\n');
-        return;
-      }
-      if (format === 'jsonl') {
-        for (const task of running) {
-          process.stdout.write(JSON.stringify({ ...task, state: 'running' }) + '\n');
-        }
-        for (const task of queued) {
-          process.stdout.write(JSON.stringify({ ...task, state: 'queued' }) + '\n');
-        }
-        return;
-      }
-      if (format === 'label') {
-        const ids = [...running, ...queued]
-          .map((task) => String(task.taskId ?? ''))
-          .filter(Boolean);
-        process.stdout.write(ids.join('\n') + '\n');
-        return;
-      }
-      const runningCount = Number(status.runningCount ?? running.length);
-      const maxConcurrency = Number(status.maxConcurrency ?? 0);
-      process.stdout.write(`running=${runningCount}/${maxConcurrency} queued=${queued.length}\n`);
-    };
 
     // Try delegation for mutating commands first (owner mode).
     // In standalone mode we skip delegation and run locally.
@@ -894,14 +857,14 @@ function startHeadlessMode(): void {
       }
     }
 
-    if (readOnlyMode && queueQueryMode && !standaloneMode) {
+    if (readOnlyMode && command !== 'owner-serve') {
       const delegationBus = new IpcBus(undefined, { allowServe: false });
       try {
         await delegationBus.ready();
-        const delegated = await tryDelegateQuery(delegationBus, { kind: 'queue' }, 5_000);
+        const delegated = await tryDelegateQuery(delegationBus, { kind: 'cli-query', args: cliArgs }, 5_000);
         delegationBus.disconnect();
-        if (delegated) {
-          writeDelegatedQueueStatus(delegated);
+        if (delegated && typeof delegated.output === 'string') {
+          process.stdout.write(delegated.output);
           process.exit(0);
           return;
         }

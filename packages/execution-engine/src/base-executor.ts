@@ -858,19 +858,31 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         ? this.entries.get(executionId)?.request.inputs.branchRepoUrl
         : undefined);
       const branchRepoUrl = requestBranchRepoUrl?.trim();
+      const remoteName = branchRepoUrl ? BaseExecutor.BRANCH_REMOTE_NAME : 'origin';
       if (branchRepoUrl) {
         await ensureRemoteUrl({
           cwd,
-          remote: BaseExecutor.BRANCH_REMOTE_NAME,
+          remote: remoteName,
           url: branchRepoUrl,
           context: { caller: `${this.type}.pushBranchToRemote`, detail: branch },
         });
+      }
+      const branchRef = `${branch}:refs/heads/${branch}`;
+      try {
         await this.execGitSimpleWithNetworkTimeout(
-          ['push', '--force-with-lease', BaseExecutor.BRANCH_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
+          ['push', '--force-with-lease', remoteName, branchRef],
           cwd,
         );
-      } else {
-        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', 'origin', `${branch}:refs/heads/${branch}`], cwd);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const currentBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
+        if (!/src refspec .* does not match any/i.test(message) || currentBranch.length > 0) {
+          throw err;
+        }
+        await this.execGitSimpleWithNetworkTimeout(
+          ['push', '--force-with-lease', remoteName, `HEAD:refs/heads/${branch}`],
+          cwd,
+        );
       }
       return undefined;
     } catch (err) {
