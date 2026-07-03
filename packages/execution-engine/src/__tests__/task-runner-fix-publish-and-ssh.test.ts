@@ -2320,7 +2320,10 @@ describe('TaskRunner', () => {
         remoteLeaseMetadata: { leaseId: 'lease-123' },
       });
 
-      completeByTask.get(task.id)?.({
+      await vi.waitFor(() => expect(completeByTask.has(task.id)).toBe(true));
+      const complete = completeByTask.get(task.id);
+      expect(complete).toBeTypeOf('function');
+      complete!({
         requestId: 'r',
         actionId: task.id,
         attemptId: 'crab-task-attempt',

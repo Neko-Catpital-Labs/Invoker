@@ -4,12 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-echo "[repro] verifying Crabbox cleanup helper registers completion before delivering response"
+echo "[repro] verifying Crabbox tests register completion before delivering responses"
 if pnpm --filter @invoker/execution-engine exec vitest run \
   src/__tests__/task-runner-fix-publish-and-ssh.test.ts \
-  -t "stops the lease on success" \
+  -t "resolves a crabbox target through the injected resolver|stops the lease on success" \
   --reporter=verbose; then
-  echo "PASS: completion response reaches the registered callback"
+  echo "PASS: completion responses reach registered callbacks"
 else
   echo "FAIL: completion response can be skipped before callback registration" >&2
   exit 1
