@@ -2359,6 +2359,7 @@ describe('TaskRunner', () => {
       final: { status: WorkResponse['status']; exitCode: number };
       stopRejects?: boolean;
       omitStop?: boolean;
+      stopNeverResolves?: boolean;
       newlyStarted?: TaskState[];
     }) {
       let targetOverrides = opts.targetOverrides;
@@ -2399,6 +2400,7 @@ describe('TaskRunner', () => {
       const stop = vi.fn(async () => {
         order.push('stop');
         if (opts.stopRejects) throw new Error('crabbox stop boom');
+        if (opts.stopNeverResolves) await new Promise<void>(() => {});
       });
 
       const appendTaskOutput = vi.fn();
@@ -2538,6 +2540,34 @@ describe('TaskRunner', () => {
       });
       const stopped = logEvent.mock.calls.find(([, e]: [string, string]) => e === 'task.executor.crabbox-stopped');
       expect(stopped).toBeUndefined();
+    });
+
+    it('times out a hung Crabbox stop so completion processing continues', async () => {
+      const previousTimeout = process.env.INVOKER_CRABBOX_STOP_TIMEOUT_MS;
+      process.env.INVOKER_CRABBOX_STOP_TIMEOUT_MS = '10';
+      try {
+        const result = runCrabboxTask({
+          final: { status: 'completed', exitCode: 0 },
+          stopNeverResolves: true,
+        });
+        const timeout = new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error('cleanup did not time out hung stop')), 250);
+        });
+
+        const { stop, event } = await Promise.race([result, timeout]);
+
+        expect(stop).toHaveBeenCalledTimes(1);
+        expect(event('task.executor.crabbox-cleanup-failed')).toMatchObject({
+          leaseId: 'lease-xyz',
+          error: expect.stringContaining('exceeded Crabbox stop timeout (10ms)'),
+        });
+      } finally {
+        if (previousTimeout === undefined) {
+          delete process.env.INVOKER_CRABBOX_STOP_TIMEOUT_MS;
+        } else {
+          process.env.INVOKER_CRABBOX_STOP_TIMEOUT_MS = previousTimeout;
+        }
+      }
     });
 
     it('cleans the current Crabbox lease before launching downstream tasks', async () => {

@@ -83,6 +83,7 @@ type ReviewGateArtifactStatus = ReviewGateArtifact['status'];
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_GIT_OPERATION_TIMEOUT_MS = 15 * 60 * 1000;
+const DEFAULT_CRABBOX_STOP_TIMEOUT_MS = 60_000;
 const GITHUB_TARGET_REPO_ENV = 'INVOKER_GITHUB_TARGET_REPO';
 
 type StartupFailureMetadata = {
@@ -236,6 +237,53 @@ function getGitOperationTimeoutMs(): number {
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_GIT_OPERATION_TIMEOUT_MS;
   return parsed;
+}
+
+function getCrabboxStopTimeoutMs(): number {
+  const raw = process.env.INVOKER_CRABBOX_STOP_TIMEOUT_MS?.trim();
+  if (raw === '0') return 0;
+  if (!raw) return DEFAULT_CRABBOX_STOP_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_CRABBOX_STOP_TIMEOUT_MS;
+  return parsed;
+}
+
+function withCrabboxStopTimeout(
+  stop: Promise<void>,
+  leaseId: string,
+  targetId: string,
+): Promise<void> {
+  const timeoutMs = getCrabboxStopTimeoutMs();
+  if (timeoutMs === 0) return stop;
+
+  return new Promise((resolvePromise, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(
+        `Crabbox stop for lease "${leaseId}" on remote target "${targetId}" ` +
+          `exceeded Crabbox stop timeout (${timeoutMs}ms). ` +
+          'Set INVOKER_CRABBOX_STOP_TIMEOUT_MS to adjust (0 = unbounded).',
+      ));
+    }, timeoutMs);
+    timeout.unref?.();
+
+    stop.then(
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolvePromise();
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(err);
+      },
+    );
+  });
 }
 
 function execGitWithTimeout(args: string[], cwd: string): Promise<string> {
@@ -2014,7 +2062,11 @@ export class TaskRunner {
       if (!this.crabboxResolver.stop) {
         throw new Error('Crabbox resolver does not implement stop()');
       }
-      await this.crabboxResolver.stop(effectiveStopConfig, metadata.leaseId);
+      await withCrabboxStopTimeout(
+        this.crabboxResolver.stop(effectiveStopConfig, metadata.leaseId),
+        metadata.leaseId,
+        metadata.targetId,
+      );
       // Drop the cached lease so a later task re-leases instead of reusing a
       // machine we just asked Crabbox to stop.
       this.resolvedCrabboxTargets.delete(metadata.targetId);
