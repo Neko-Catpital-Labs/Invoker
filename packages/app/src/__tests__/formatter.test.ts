@@ -3,15 +3,17 @@ import {
   formatTaskStatus,
   formatWorkflowStatus,
   formatEventLog,
+  formatWorkerActions,
   serializeWorkflow,
   serializeTask,
   serializeEvent,
+  serializeWorkerAction,
   formatAsLabel,
   formatAsJson,
   formatAsJsonl,
 } from '../formatter.js';
 import type { TaskState } from '@invoker/workflow-core';
-import type { TaskEvent, Workflow } from '@invoker/data-store';
+import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -164,6 +166,55 @@ describe('formatEventLog', () => {
   it('handles empty events', () => {
     const output = formatEventLog([]);
     expect(output).toContain('No events recorded');
+  });
+});
+
+// ── formatWorkerActions ─────────────────────────────────────
+
+describe('formatWorkerActions', () => {
+  const action: WorkerActionRecord = {
+    id: 'wa-1',
+    workerKind: 'autofix',
+    actionType: 'fix-task',
+    workflowId: 'wf-1',
+    taskId: 'wf-1/task-1',
+    subjectType: 'task',
+    subjectId: 'wf-1/task-1',
+    externalKey: 'wf-1/task-1:g0:a1',
+    status: 'running',
+    attemptCount: 1,
+    summary: 'Retrying task',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:01:00.000Z',
+  };
+
+  it('formats worker action summaries', () => {
+    const output = formatWorkerActions([action]);
+    expect(output).toContain('Worker actions (1)');
+    expect(output).toContain('wa-1');
+    expect(output).toContain('autofix/fix-task');
+    expect(output).toContain('task=wf-1/task-1');
+    expect(output).toContain('Retrying task');
+  });
+
+  it('handles empty worker actions', () => {
+    expect(formatWorkerActions([])).toContain('No worker actions found');
+  });
+
+  it('escapes terminal control characters in worker action fields', () => {
+    const output = formatWorkerActions([{
+      ...action,
+      id: 'wa-\u001b[31m1',
+      workerKind: 'auto\nfix',
+      actionType: 'fix\ttask',
+      taskId: 'wf-1/task\r1',
+      summary: 'Retry\nnext',
+    }]);
+
+    expect(output).toContain('wa-\\u001b[31m1');
+    expect(output).toContain('auto\\nfix/fix\\ttask');
+    expect(output).toContain('task=wf-1/task\\r1');
+    expect(output).toContain('Retry\\nnext');
   });
 });
 
@@ -331,6 +382,101 @@ describe('serializeEvent', () => {
     };
     const result = serializeEvent(event);
     expect(result).not.toHaveProperty('payload');
+  });
+});
+
+// ── serializeWorkerAction ───────────────────────────────────
+
+describe('serializeWorkerAction', () => {
+  it('returns a JSON-safe worker action object', () => {
+    const action: WorkerActionRecord = {
+      id: 'wa-1',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'completed',
+      attemptCount: 2,
+      intentId: '42',
+      agentName: 'codex',
+      executionModel: 'gpt-5.2',
+      sessionId: 'sess-1',
+      summary: 'Fixed',
+      payload: { result: 'ok' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:05:00.000Z',
+      completedAt: '2026-01-01T00:05:00.000Z',
+    };
+
+    const result = serializeWorkerAction(action);
+    expect(result).toEqual({
+      id: 'wa-1',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'completed',
+      attemptCount: 2,
+      intentId: '42',
+      agentName: 'codex',
+      executionModel: 'gpt-5.2',
+      sessionId: 'sess-1',
+      summary: 'Fixed',
+      payload: { result: 'ok' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:05:00.000Z',
+      completedAt: '2026-01-01T00:05:00.000Z',
+    });
+    expect(JSON.stringify(result)).not.toContain('\x1b');
+  });
+
+  it('normalizes unsafe payload values before JSON output', () => {
+    class PayloadBox {
+      label: string;
+
+      constructor(label: string) {
+        this.label = label;
+      }
+    }
+
+    const circular: Record<string, unknown> = { ok: true };
+    circular.self = circular;
+    const action: WorkerActionRecord = {
+      id: 'wa-unsafe',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'completed',
+      attemptCount: 1,
+      payload: {
+        big: BigInt(1),
+        circular,
+        map: new Map([['answer', BigInt(42)]]),
+        box: new PayloadBox('kept'),
+        list: [undefined, Number.NaN],
+      },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:05:00.000Z',
+    };
+
+    const result = serializeWorkerAction(action);
+
+    expect(() => formatAsJson(result)).not.toThrow();
+    expect(JSON.parse(formatAsJson(result)).payload).toEqual({
+      big: '1',
+      circular: { ok: true, self: '[Circular]' },
+      map: { answer: '42' },
+      box: { label: 'kept' },
+      list: [null, null],
+    });
   });
 });
 
