@@ -1241,7 +1241,7 @@ describe('fixWithAgentAction', () => {
       appendTaskOutput: vi.fn(),
     };
     const taskExecutor = {
-      getDefaultExecutionAgent: vi.fn(() => 'claude'),
+      getDefaultExecutionAgent: vi.fn(() => 'custom-agent'),
       fixWithAgent: vi.fn().mockRejectedValue(new Error('agent failed')),
       resolveConflict: vi.fn(),
     };
@@ -1253,10 +1253,10 @@ describe('fixWithAgentAction', () => {
       commandService: makeCommandService(),
     })).rejects.toThrow('agent failed');
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'custom-agent', 'boom');
     expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
       'task-a',
-      '\n[Fix with claude] Failed: agent failed',
+      '\n[Fix with custom-agent] Failed: agent failed',
     );
     expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-a', 'boom', 'agent failed');
   });

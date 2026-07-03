@@ -92,23 +92,23 @@ describe('headless fix auto-fix accounting', () => {
 
   it('uses configured default agent when manual fix omits an agent', async () => {
     const { runHeadless } = await import('../headless.js');
-    const { deps } = makeDeps(0, {}, { defaultExecutionAgent: 'claude' });
+    const { deps } = makeDeps(0, {}, { defaultExecutionAgent: 'custom-agent' });
 
     await runHeadless(['fix', 'wf-1/task-1'], deps);
 
-    expect(fixWithAgentActionMock.mock.calls[0][2]).toMatchObject({ agentName: 'claude' });
+    expect(fixWithAgentActionMock.mock.calls[0][2]).toMatchObject({ agentName: 'custom-agent' });
   });
 
   it('uses configured default agent when resolve-conflict omits an agent', async () => {
     const { runHeadless } = await import('../headless.js');
-    const { deps } = makeDeps(0, {}, { defaultExecutionAgent: 'claude' });
+    const { deps } = makeDeps(0, {}, { defaultExecutionAgent: 'custom-agent' });
 
     await runHeadless(['resolve-conflict', 'wf-1/task-1'], deps);
 
     expect(resolveConflictActionMock).toHaveBeenCalledWith(
       'wf-1/task-1',
       expect.any(Object),
-      'claude',
+      'custom-agent',
       undefined,
     );
   });
