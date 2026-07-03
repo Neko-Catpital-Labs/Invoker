@@ -70,6 +70,22 @@ describe('Slack gate-policy workflow op runner', () => {
     expect(result.summary).toContain('wf-upstream/__merge__ -> review_ready');
   });
 
+  it('treats an omitted gate-policy taskId as the merge gate only', async () => {
+    const deps = makeDeps();
+    const run = createSlackWorkflowOpRunner(deps);
+
+    const result = await run({
+      operation: 'gate-policy',
+      target: { workflow: 'Downstream' },
+      updates: [{ workflowId: 'wf-upstream', gatePolicy: 'review_ready' }],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(deps.mutations.setWorkflowExternalGatePolicies).toHaveBeenCalledWith('wf-downstream', [
+      { workflowId: 'wf-upstream', taskId: undefined, gatePolicy: 'review_ready' },
+    ]);
+  });
+
   it('fans out all-target gate-policy ops across workflows with dependency-specific updates', async () => {
     const deps = makeDeps();
     const run = createSlackWorkflowOpRunner(deps);

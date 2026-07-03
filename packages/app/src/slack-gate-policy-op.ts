@@ -82,7 +82,6 @@ function resolveWorkflowTargets(
 
 function dependencyMatchesUpdate(dep: ExternalDependency, update: ExternalGatePolicyUpdate): boolean {
   if (dep.workflowId !== update.workflowId) return false;
-  if (update.taskId === undefined) return true;
   return dependencyTaskKey(dep.taskId) === dependencyTaskKey(update.taskId);
 }
 
