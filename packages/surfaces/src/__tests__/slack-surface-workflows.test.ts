@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import * as child_process from 'node:child_process';
 import { SlackSurface, parsePlanningRequest, parseLobbyClassification, BUILTIN_HARNESS_PRESETS } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, WorkflowChannelRepository } from '@invoker/data-store';
-import type { SurfaceCommand } from '../surface.js';
+import type { SurfaceCommand, WorkflowOp, WorkflowOpResult } from '../surface.js';
 import type { WorkflowContext } from '../slack/workflow-assistant.js';
 
 // ── Mocks ────────────────────────────────────────────────────
@@ -286,13 +286,14 @@ describe('in-channel workflow assistant', () => {
     mockSpawn.mockReset();
   });
 
-  function assistantSurface(gather?: (id: string) => Promise<WorkflowContext>) {
+  function assistantSurface(gather?: (id: string) => Promise<WorkflowContext>, runWorkflowOp?: (op: WorkflowOp) => Promise<WorkflowOpResult>) {
     const surface = new SlackSurface({
       ...baseConfig(),
       conversationRepo: convoRepo,
       workflowChannelRepo: repo,
       planningCommandBuilder: () => ({ command: 'cursor', args: ['--print', 'x'] }),
       gatherWorkflowContext: gather,
+      ...(runWorkflowOp ? { runWorkflowOp } : {}),
     });
     return surface;
   }
@@ -315,6 +316,27 @@ describe('in-channel workflow assistant', () => {
       say: vi.fn().mockResolvedValue({ ts: 'a' }),
     });
     expect(received).toContainEqual({ type: 'approve', taskId: 'wf-1-2/api' });
+  });
+
+  it('routes workflow-channel gate-policy commands to workflow ops', async () => {
+    const runWorkflowOp = vi.fn().mockResolvedValue({ ok: true, summary: 'gate policy updated' });
+    const surface = assistantSurface(undefined, runWorkflowOp);
+    await surface.start(async (cmd) => { received.push(cmd); });
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> set gate-policy api wf-upstream review_ready', ts: 't1', user: 'U1', channel: 'C123' },
+      say,
+    });
+
+    expect(runWorkflowOp).toHaveBeenCalledWith({
+      operation: 'gate-policy',
+      target: { workflow: 'wf-1-2' },
+      ownerTaskId: 'wf-1-2/api',
+      updates: [{ workflowId: 'wf-upstream', taskId: '__merge__', gatePolicy: 'review_ready' }],
+    });
+    expect(received).toHaveLength(0);
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 
   it('answers a free-form question only from the gathered workflow context', async () => {

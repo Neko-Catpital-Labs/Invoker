@@ -1046,7 +1046,7 @@ export class SlackSurface implements Surface {
       return;
     }
 
-    const ctrl = parseWorkflowControl(text);
+    const ctrl = parseWorkflowControl(text, mapping.workflowId);
     if (ctrl) {
       await this.dispatchWorkflowControl(mapping, ctrl, say, threadTs);
       return;
@@ -1083,6 +1083,18 @@ export class SlackSurface implements Surface {
   ): Promise<void> {
     const scoped = (task: string): string => `${mapping.workflowId}/${task}`;
     switch (ctrl.kind) {
+      case 'gate-policy':
+        if (!this.runWorkflowOp) {
+          await say({ text: 'Workflow operations are not available in this deployment.', thread_ts: threadTs });
+          return;
+        }
+        await this.runConfirmedOp({
+          operation: 'gate-policy',
+          target: ctrl.target,
+          ownerTaskId: ctrl.ownerTaskId,
+          updates: ctrl.updates,
+        }, threadTs, say);
+        return;
       case 'status':
         await this.onCommand?.({ type: 'get_status', workflowId: mapping.workflowId });
         await say({ text: `Fetching status for \`${mapping.workflowId}\`...`, thread_ts: threadTs });
