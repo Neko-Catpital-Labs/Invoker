@@ -8,6 +8,7 @@ import { stringify as yamlStringify } from 'yaml';
 import type { ElectronApplication, Page } from '@playwright/test';
 
 import { E2E_REPO_URL } from './fixtures/electron-app.js';
+import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const repoRoot = resolveRepoRoot(__dirname);
 
@@ -23,8 +24,11 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
   const markerRoot = path.join(testDir, 'e2e-markers');
   const configPath = path.join(testDir, 'e2e-config.json');
   const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
+  const electronUserDataDir = path.join(testDir, 'electron-user-data');
   await fs.mkdir(stubDir, { recursive: true });
   await fs.mkdir(markerRoot, { recursive: true });
+  await fs.mkdir(electronUserDataDir, { recursive: true });
+  registerTrackedBrowserUserDataDir(electronUserDataDir);
   writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
   try {
     await fs.symlink(claudeMarker, path.join(stubDir, 'claude'));
@@ -34,6 +38,7 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
       ...(process.platform === 'linux'
         ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
         : []),
+      `--user-data-dir=${electronUserDataDir}`,
       path.resolve(__dirname, '..', 'dist', 'main.js'),
     ],
     env: {
