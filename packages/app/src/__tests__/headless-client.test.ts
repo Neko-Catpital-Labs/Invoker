@@ -32,7 +32,7 @@ describe('headless-client', () => {
     expect(args.slice(mainIndex + 1)).toEqual(['--headless', 'query', 'workflows']);
   });
 
-  it('bootstraps a standalone owner for read-only queries when none is initially reachable', async () => {
+  it('refreshes to a reachable standalone owner for read-only queries without bootstrapping', async () => {
     process.env.INVOKER_HEADLESS_STANDALONE = '1';
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();
@@ -57,8 +57,8 @@ describe('headless-client', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
-    expect(ensureStandaloneOwner).toHaveBeenCalledWith(firstBus);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(refreshMessageBus).toHaveBeenCalled();
     expect(runElectronHeadless).not.toHaveBeenCalled();
   });
 
