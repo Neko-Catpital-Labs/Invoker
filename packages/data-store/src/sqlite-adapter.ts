@@ -2399,8 +2399,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private isDiagnosticTaskOutput(data: string): boolean {
     return data.includes('[Shutdown Diagnostic]')
-      || data.includes('[Startup Failure Diagnostic]')
-      || data.includes('Executor startup failed');
+      || data.includes('[Startup Failure Diagnostic]');
   }
 
   /**

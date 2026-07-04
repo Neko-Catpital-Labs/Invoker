@@ -2599,6 +2599,13 @@ describe('SQLiteAdapter', () => {
           'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
           [
             't-legacy-diag-tail',
+            'Executor startup failed (ssh) on pool member remote-1; retrying another SSH pool member: connection reset\n',
+          ],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          [
+            't-legacy-diag-tail',
             '\n[Startup Failure Diagnostic]\nmessage=concrete startup stderr\n--- end startup failure diagnostic ---\n',
           ],
         );
@@ -2617,6 +2624,7 @@ describe('SQLiteAdapter', () => {
         expect(output).toContain('[Shutdown Diagnostic]');
         expect(output).toContain('Application quit');
         expect(output).not.toContain('duplicate stream row');
+        expect(output).not.toContain('retrying another SSH pool member');
 
         db.close();
       } finally {
