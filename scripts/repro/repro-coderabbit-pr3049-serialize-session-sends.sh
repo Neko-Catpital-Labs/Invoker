@@ -66,12 +66,21 @@ describe('sendPlanningChatMessage concurrency', () => {
 
     const first = deferred<string>();
     const second = deferred<string>();
+    // Arrival barriers: resolved the instant each concurrent send actually
+    // reaches its awaited spawnPlanner call. This replaces a wall-clock sleep,
+    // so the repro never races a fixed timeout on a slow machine. Staged (not
+    // "wait for both at once") because the fixed/serialized path only lets send
+    // B reach the planner AFTER send A has completed — a combined barrier would
+    // deadlock the passing case.
+    const arrivedA = deferred<void>();
+    const arrivedB = deferred<void>();
     let call = 0;
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockImplementation(() => {
       const idx = call++;
       if (idx === 0) return Promise.resolve('reply-0'); // session creation
-      if (idx === 1) return first.promise; // concurrent send A
-      return second.promise; // concurrent send B
+      if (idx === 1) { arrivedA.resolve(); return first.promise; } // concurrent send A
+      arrivedB.resolve(); // concurrent send B
+      return second.promise;
     });
 
     // Create the session with a completed first turn.
@@ -86,9 +95,14 @@ describe('sendPlanningChatMessage concurrency', () => {
     const pA = sendPlanningChatMessage({ sessionId, message: 'message A' } as never, deps);
     const pB = sendPlanningChatMessage({ sessionId, message: 'message B' } as never, deps);
 
-    // Give both turns a chance to reach their spawnPlanner await before resolving.
-    await new Promise((r) => setTimeout(r, 30));
+    // Barrier, not sleep: release send A's reply only once it is provably
+    // awaiting the planner, then release send B's reply once it too reaches the
+    // planner. Under serialization send B arrives only after A finishes, so the
+    // awaits proceed in that order; under the buggy interleave both arrive up
+    // front. Either way there is no timing race.
+    await arrivedA.promise;
     first.resolve('reply-A');
+    await arrivedB.promise;
     second.resolve('reply-B');
     await Promise.all([pA, pB]);
 
