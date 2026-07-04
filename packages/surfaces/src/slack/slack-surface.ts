@@ -128,6 +128,18 @@ export type ThreadRequest =
   | { mode: 'agent'; text: string }
   | { mode: 'plan'; text: string };
 
+/**
+ * Upper bound on stdout/stderr retained per stream while a local command runs.
+ * Bounds process memory against noisy commands; only the tail is kept because
+ * `formatLocalCommandResult` shows the last chars anyway.
+ */
+const MAX_LOCAL_CAPTURE_CHARS = 65_536;
+
+/** Keep only the last `max` chars of a growing buffer. */
+function capTailChars(value: string, max: number): string {
+  return value.length > max ? value.slice(-max) : value;
+}
+
 // ── Planning request parsing ─────────────────────────────────
 
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
@@ -773,7 +785,7 @@ export class SlackSurface implements Surface {
 
     const localRequest = parseLocalRequest(parsed.text);
     if (localRequest?.kind === 'command') {
-      await this.handleLocalRequest(localRequest, preset, threadTs, say, channel);
+      await this.handleLocalRequest(localRequest, preset, threadTs, say, channel, { userId: event.user, repoUrl });
       return;
     }
 
@@ -1201,11 +1213,20 @@ export class SlackSurface implements Surface {
     threadTs: string,
     say: SayFn,
     channel: string,
+    opts: { userId?: string; repoUrl?: string } = {},
   ): Promise<void> {
     if (request.kind === 'command') {
+      // Raw shell on the host is admin-only: this runs `/bin/bash -lc` with the
+      // full inherited environment, so anyone else must be refused before execution.
+      if (!this.isLocalCommandAuthorized(opts.userId)) {
+        await say({ text: 'Permission denied. Raw local shell commands (`exec local:`) require admin access.', thread_ts: threadTs });
+        return;
+      }
+      const dir = await this.resolveLocalWorkingDir(opts.repoUrl, threadTs, say);
+      if (!dir.ok) return;
       await say({ text: `Running locally on DO1: \`${truncateWords(request.text, 12)}\``, thread_ts: threadTs });
       try {
-        const result = await this.runLocalCommand(request.text);
+        const result = await this.runLocalCommand(request.text, dir.workingDir);
         const reply = this.formatLocalCommandResult(result);
         const chunks = splitForSlack(sanitizeSlashCommands(reply));
         for (let i = 0; i < chunks.length; i++) {
@@ -1221,9 +1242,11 @@ export class SlackSurface implements Surface {
       return;
     }
 
+    const dir = await this.resolveLocalWorkingDir(opts.repoUrl, threadTs, say);
+    if (!dir.ok) return;
     await say({ text: 'Making that local change on DO1. I will not create or submit an Invoker plan.', thread_ts: threadTs });
     try {
-      const reply = await this.runOneShotPlanner(harness, this.buildLocalChangePrompt(request.text));
+      const reply = await this.runOneShotPlanner(harness, this.buildLocalChangePrompt(request.text, dir.workingDir));
       const chunks = splitForSlack(sanitizeSlashCommands(reply));
       for (let i = 0; i < chunks.length; i++) {
         if (i > 0) await this.sleep(this.messagePacingMs);
@@ -1237,8 +1260,31 @@ export class SlackSurface implements Surface {
     }
   }
 
-  private buildLocalChangePrompt(text: string): string {
-    const cwd = this.workingDir ?? process.cwd();
+  /** Only configured admins may run raw local shell. Empty admin set = nobody. */
+  private isLocalCommandAuthorized(userId?: string): boolean {
+    return !!userId && this.adminUserIds.has(userId);
+  }
+
+  /** Resolve the working dir for a local request, honoring an explicit `[repo:…]` checkout. */
+  private async resolveLocalWorkingDir(
+    repoUrl: string | undefined,
+    threadTs: string,
+    say: SayFn,
+  ): Promise<{ ok: true; workingDir?: string } | { ok: false }> {
+    let workingDir = this.workingDir;
+    if (repoUrl && this.prepareRepoCheckout) {
+      try {
+        workingDir = await this.prepareRepoCheckout(repoUrl);
+      } catch (err) {
+        await say({ text: `Failed to check out repo: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
+        return { ok: false };
+      }
+    }
+    return { ok: true, workingDir };
+  }
+
+  private buildLocalChangePrompt(text: string, workingDir?: string): string {
+    const cwd = workingDir ?? this.workingDir ?? process.cwd();
     return `Make this request directly in the local checkout on DO1.
 
 Working directory: ${cwd}
@@ -1254,19 +1300,22 @@ Request:
 ${text}`;
   }
 
-  private runLocalCommand(commandText: string): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+  private runLocalCommand(commandText: string, workingDir?: string): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
     const timeoutMs = (this.planningTimeoutSeconds ?? 7_200) * 1_000;
+    const cwd = workingDir ?? this.workingDir ?? process.cwd();
     return new Promise((resolve, reject) => {
       const child = spawn('/bin/bash', ['-lc', commandText], {
-        cwd: this.workingDir ?? process.cwd(),
+        cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
       });
       let stdout = '';
       let stderr = '';
       let settled = false;
-      child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-      child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      // Bound the buffers as data arrives so a noisy command cannot exhaust memory
+      // before formatting runs; only the tail is kept, which is all the reply shows.
+      child.stdout?.on('data', (chunk: Buffer) => { stdout = capTailChars(stdout + chunk.toString(), MAX_LOCAL_CAPTURE_CHARS); });
+      child.stderr?.on('data', (chunk: Buffer) => { stderr = capTailChars(stderr + chunk.toString(), MAX_LOCAL_CAPTURE_CHARS); });
       const timer = setTimeout(() => {
         settled = true;
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
@@ -1529,7 +1578,7 @@ ${text}`;
       const localRequest = parseLocalRequest(text);
       if (localRequest?.kind === 'command') {
         const preset = this.resolveHarnessPreset(this.defaultHarnessPreset);
-        await this.handleLocalRequest(localRequest, preset, msg.thread_ts, say, channel);
+        await this.handleLocalRequest(localRequest, preset, msg.thread_ts, say, channel, { userId: msg.user });
         return;
       }
 

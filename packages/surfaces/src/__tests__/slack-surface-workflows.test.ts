@@ -708,7 +708,7 @@ describe('lobby verb routing', () => {
 
   it('runs an explicit shell command without creating a plan conversation', async () => {
     mockSpawn.mockImplementationOnce(() => mockProcess('ok'));
-    const surface = lobbySurface();
+    const surface = lobbySurface(true, { adminUserIds: ['U1'] });
     await surface.start(async (cmd) => { received.push(cmd); });
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> exec local: pnpm test -- --run', ts: 't1', user: 'U1' }, say });
@@ -807,5 +807,76 @@ tasks:
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> status', ts: 't1', user: 'U1' }, say });
     expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('not available') }));
+  });
+});
+
+// ── Local shell command safety (CodeRabbit PR #3028) ─────────
+
+describe('local shell command safety', () => {
+  beforeEach(() => {
+    planConversationConfigs.length = 0;
+    mockSpawn.mockReset();
+  });
+
+  it('refuses `exec local:` from a non-admin user (no shell spawn)', async () => {
+    const surface = new SlackSurface({ ...baseConfig(), adminUserIds: ['U_ADMIN'] });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> exec local: cat /etc/passwd', ts: 't1', user: 'U_ATTACKER' }, say });
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Permission denied') }));
+  });
+
+  it('refuses `exec local:` when no admins are configured', async () => {
+    const surface = new SlackSurface({ ...baseConfig() });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> exec local: rm -rf /', ts: 't1', user: 'U1' }, say });
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Permission denied') }));
+  });
+
+  it('runs `[repo:foo] exec local:` in the resolved repo checkout, not the default dir', async () => {
+    mockSpawn.mockImplementationOnce(() => mockProcess('ok'));
+    const prepareRepoCheckout = vi.fn().mockResolvedValue('/checkouts/foo');
+    const surface = new SlackSurface({
+      ...baseConfig(),
+      adminUserIds: ['U1'],
+      workingDir: '/default/dir',
+      prepareRepoCheckout,
+      repoAliases: { foo: 'git@github.com:me/foo.git' },
+    });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> [repo:foo] exec local: pnpm test', ts: 't1', user: 'U1' }, say });
+
+    expect(prepareRepoCheckout).toHaveBeenCalledWith('git@github.com:me/foo.git');
+    expect(mockSpawn).toHaveBeenCalledWith(
+      '/bin/bash',
+      ['-lc', 'pnpm test'],
+      expect.objectContaining({ cwd: '/checkouts/foo' }),
+    );
+  });
+
+  it('caps captured stdout while streaming, before formatting', async () => {
+    const surface = new SlackSurface({ ...baseConfig(), adminUserIds: ['U1'] });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        const chunk = 'x'.repeat(100_000);
+        for (let i = 0; i < 20; i++) proc.stdout.emit('data', Buffer.from(chunk)); // 2,000,000 chars emitted
+        proc.emit('close', 0);
+      });
+      return proc;
+    });
+
+    const result = await (surface as any).runLocalCommand('noisy');
+    // The fix bounds retained output; the buggy version keeps all 2,000,000 chars.
+    expect(result.stdout.length).toBeLessThan(200_000);
   });
 });
