@@ -172,7 +172,7 @@ export function InvokerTerminal({
           rows={expanded ? 8 : 3}
           onChange={(event) => onValueChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !busy && value.trim()) {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && value.trim()) {
               event.preventDefault();
               onSubmit();
             }

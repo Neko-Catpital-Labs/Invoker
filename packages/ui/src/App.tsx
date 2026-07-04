@@ -1780,6 +1780,8 @@ export function App() {
         setGraphActionsMenuOpen(false);
         setPlanName(result.planName);
         setSelectedWorkflowId(result.workflowId);
+        setDraftPlanAvailable(false);
+        setDraftPlanSummary(undefined);
         await refreshTaskGraph();
         appendTerminalLine(`Plan "${result.planName}" submitted to Invoker. Review it, then Run.`, 'system', 'success');
       } else {
@@ -1799,12 +1801,21 @@ export function App() {
     setPlanningInput('');
 
     if (input.toLowerCase() === 'run') {
-      if (!hasLoadedPlan) {
-        appendTerminalLine('Create or submit a plan before running.', 'system', 'error');
+      if (!hasLoadedPlan || hasStarted) {
+        appendTerminalLine(
+          hasStarted ? 'Run already started.' : 'Create or submit a plan before running.',
+          'system',
+          'error',
+        );
         return;
       }
-      const started = await handleStart();
-      appendTerminalLine(started ? 'Run started.' : 'Run failed to start.', 'system', started ? 'success' : 'error');
+      setPlannerBusy(true);
+      try {
+        const started = await handleStart();
+        appendTerminalLine(started ? 'Run started.' : 'Run failed to start.', 'system', started ? 'success' : 'error');
+      } finally {
+        setPlannerBusy(false);
+      }
       return;
     }
 
@@ -1845,6 +1856,7 @@ export function App() {
     handlePlanningSubmitDraft,
     handleStart,
     hasLoadedPlan,
+    hasStarted,
     invoker,
     plannerBusy,
     planningInput,
