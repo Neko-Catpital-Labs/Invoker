@@ -3559,12 +3559,17 @@ function createEmbeddedTerminalBackendFromConfig(
       getTaskDeltaStreamSequence,
       recordStartupDuration,
     });
-    async function loadGeneratedPlanPreview(planText: string): Promise<{ planName: string; workflowId: string }> {
+    async function loadGeneratedPlanPreview(
+      planText: string,
+      options?: { preserveTaskHandles?: boolean; logLabel?: string },
+    ): Promise<{ planName: string; workflowId: string }> {
       const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
       const plan = applyConfiguredPlanDefaults(parsePlan(planText));
       const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-      logger.info(`plan-from-goal: loading "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
-      taskHandles.clear();
+      logger.info(`${options?.logLabel ?? 'plan-from-goal'}: loading "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
+      if (!options?.preserveTaskHandles) {
+        taskHandles.clear();
+      }
       backupPlan(plan, undefined, logger);
       orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
       const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
@@ -3620,12 +3625,18 @@ function createEmbeddedTerminalBackendFromConfig(
     });
     registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
       if (process.env.NODE_ENV === 'test' && testPlanningChatResponse) {
-        const loaded = await loadGeneratedPlanPreview(testPlanningChatResponse.planYaml);
+        const loaded = await loadGeneratedPlanPreview(testPlanningChatResponse.planYaml, {
+          preserveTaskHandles: true,
+          logLabel: 'planning-chat-submit',
+        });
         return { ok: true, planName: testPlanningChatResponse.planName, workflowId: loaded.workflowId };
       }
       return submitPlanningChatDraft(request as InAppPlanningSubmitRequest, {
         sessions: planningChatSessions,
-        loadGeneratedPlan: loadGeneratedPlanPreview,
+        loadGeneratedPlan: (planText) => loadGeneratedPlanPreview(planText, {
+          preserveTaskHandles: true,
+          logLabel: 'planning-chat-submit',
+        }),
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-reset', async (request: unknown) => {
