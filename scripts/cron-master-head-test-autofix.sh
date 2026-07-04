@@ -339,8 +339,15 @@ BRANCH="cron/master-head-test-fix-$SHORT_SHA-$RUN_ID"
 )
 
 PROMPT="$(build_prompt "$BASE_SHA" "$FAILED_LOG")"
+set +e
 run_omp "$PROMPT"
+OMP_STATUS=$?
+set -e
 cleanup_checkout_processes
+if [ "$OMP_STATUS" -ne 0 ]; then
+  ledger_record master-head-attempt "$BASE_SHA" "omp-failed-$OMP_STATUS"
+  exit 1
+fi
 
 if ( cd "$CHECKOUT_DIR" && git diff --quiet ); then
   ledger_record master-head-attempt "$BASE_SHA" no-diff
