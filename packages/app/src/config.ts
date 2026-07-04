@@ -304,7 +304,6 @@ export function resolveConfigFileState(): { path: string; exists: boolean } {
   const path = resolveConfigFilePath();
   return { path, exists: existsSync(path) };
 }
-
 export function loadConfig(): InvokerConfig {
   return readJsonSafe(resolveConfigFilePath());
 }
