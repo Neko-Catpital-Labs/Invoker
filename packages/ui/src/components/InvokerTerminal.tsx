@@ -20,6 +20,7 @@ interface InvokerTerminalProps {
   presetOptions: PlanningPresetOptionView[];
   draftPlanAvailable: boolean;
   draftPlanSummary?: { name: string; taskCount: number };
+  readOnly?: boolean;
   expanded?: boolean;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
@@ -38,6 +39,7 @@ export function InvokerTerminal({
   presetOptions,
   draftPlanAvailable,
   draftPlanSummary,
+  readOnly = false,
   expanded = false,
   onValueChange,
   onSubmit,
@@ -50,10 +52,10 @@ export function InvokerTerminal({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    if (!busy) {
+    if (!busy && !readOnly) {
       inputRef.current?.focus();
     }
-  }, [busy]);
+  }, [busy, readOnly]);
 
   const focusComposer = (): void => {
     inputRef.current?.focus();
@@ -68,6 +70,7 @@ export function InvokerTerminal({
         </div>
         <div className="flex items-center gap-2">
           {busy && <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs text-blue-200">Working…</span>}
+          {readOnly && <span className="rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300">Submitted</span>}
           {expanded ? (
             <button
               type="button"
@@ -126,7 +129,7 @@ export function InvokerTerminal({
         })}
       </div>
 
-      {draftPlanAvailable && (
+      {draftPlanAvailable && !readOnly && (
         <div
           data-testid="invoker-terminal-ready-bar"
           className="sticky bottom-0 z-10 mx-4 mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-950/70 px-4 py-3 text-sm text-emerald-100 shadow-lg"
@@ -160,7 +163,7 @@ export function InvokerTerminal({
         className="border-t border-gray-900 px-5 py-4"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!value.trim() || busy) return;
+          if (!value.trim() || busy || readOnly) return;
           onSubmit();
         }}
       >
@@ -168,16 +171,16 @@ export function InvokerTerminal({
           ref={inputRef}
           data-testid="invoker-terminal-input"
           value={value}
-          disabled={busy}
+          disabled={busy || readOnly}
           rows={expanded ? 8 : 3}
           onChange={(event) => onValueChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && value.trim()) {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
               event.preventDefault();
               onSubmit();
             }
           }}
-          placeholder="Describe the change, ask questions, or say “draft the full plan”."
+          placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe the change, ask questions, or say “draft the full plan”.'}
           className="min-h-24 w-full resize-none rounded-2xl border border-gray-800 bg-gray-900/70 px-4 py-3 text-sm leading-6 text-gray-100 outline-none placeholder:text-gray-600 focus:border-blue-400 disabled:cursor-wait"
         />
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
@@ -187,6 +190,7 @@ export function InvokerTerminal({
               data-testid="invoker-terminal-harness"
               value={selectedPresetKey}
               onChange={(event) => onPresetChange(event.target.value)}
+              disabled={readOnly}
               className="rounded-full border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-200 outline-none hover:border-gray-600 focus:border-blue-400"
             >
               {presetOptions.map((option) => (
@@ -196,7 +200,7 @@ export function InvokerTerminal({
           </label>
           <button
             type="submit"
-            disabled={busy || !value.trim()}
+            disabled={busy || readOnly || !value.trim()}
             className="rounded-full bg-blue-400 px-5 py-2 text-sm font-medium text-gray-950 hover:bg-blue-300 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Send
