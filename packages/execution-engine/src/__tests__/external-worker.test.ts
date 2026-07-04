@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { registerExternalWorkers, type ExternalWorkerRuntime } from '../external-worker.js';
-import { createWorkerRegistry, type WorkerRuntimeDependencies } from '../worker-registry.js';
+import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
+import { createWorkerRegistry } from '../worker-registry.js';
 
 const externalWorkers = [
   {
@@ -14,7 +15,7 @@ const externalWorkers = [
 ];
 
 function createSleepingExternalWorker(): ExternalWorkerRuntime {
-  const registry = createWorkerRegistry();
+  const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
   registerExternalWorkers(registry, [
     {
       kind: 'external-sleep',

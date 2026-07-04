@@ -272,7 +272,7 @@ const REGISTERED_OWNER_WORKER_KINDS = [
 ] as const;
 
 function startRegisteredOwnerWorkers(deps: WorkerRuntimeDependencies): WorkerRuntime[] {
-  const registry = registerBuiltinWorkers(createWorkerRegistry());
+  const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
   const workers: WorkerRuntime[] = [];
   for (const kind of REGISTERED_OWNER_WORKER_KINDS) {
     const definition = registry.get(kind);
