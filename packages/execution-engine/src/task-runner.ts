@@ -117,6 +117,14 @@ type PoolSelection = {
   selectionStrategy: 'roundRobin' | 'leastLoaded';
   leaseResourceKey?: string;
   leaseHolderId?: string;
+  /**
+   * Launch-scoped Crabbox lease for this selection. Stamped from the exact
+   * lease the executor was built from so resource keys, logs, and persisted
+   * metadata never read a concurrently-overwritten `resolvedCrabboxTargets`
+   * entry (a same-target launch resolving in parallel would otherwise swap the
+   * shared map out from under this launch).
+   */
+  resolvedCrabbox?: ResolvedCrabboxTarget;
 };
 
 function isRetryableSshStartupTransportError(err: unknown): boolean {
@@ -1013,6 +1021,12 @@ export class TaskRunner {
           });
           const target = this.getRemoteTargets()[err.targetId];
           executor = this.buildSshExecutorForTarget(task.id, err.targetId, target, resolved);
+          // Bind the resolved lease to THIS launch's pending selection so the
+          // resource key, selected-event, and start-metadata reads below use the
+          // exact lease this executor was built from, never a shared-map entry a
+          // concurrent same-target launch may have overwritten in the meantime.
+          const pendingSelection = this.pendingPoolSelections.get(task.id);
+          if (pendingSelection) pendingSelection.resolvedCrabbox = resolved;
         } catch (resolveErr) {
           const pending = this.pendingPoolSelections.get(task.id);
           this.releasePoolSelectionLease(pending);
@@ -1234,10 +1248,14 @@ export class TaskRunner {
         ? this.selectedRemoteTargetId(task, poolSelection)
         : undefined;
       // Crabbox-backed SSH tasks carry durable lease metadata so cleanup and
-      // terminal restore can find the leased host after a restart.
-      const remoteLeaseMetadata = selectedSshTargetId
-        ? this.resolvedCrabboxTargets.get(selectedSshTargetId)?.remoteLeaseMetadata
-        : undefined;
+      // terminal restore can find the leased host after a restart. Prefer the
+      // launch-scoped lease bound to this selection over the shared map, which a
+      // concurrent same-target resolution may have overwritten with another
+      // launch's lease.
+      const remoteLeaseMetadata = poolSelection?.resolvedCrabbox?.remoteLeaseMetadata
+        ?? (selectedSshTargetId
+          ? this.resolvedCrabboxTargets.get(selectedSshTargetId)?.remoteLeaseMetadata
+          : undefined);
       const changes = {
         config: {
           runnerKind: executor.type as RunnerKind,
@@ -1554,8 +1572,10 @@ export class TaskRunner {
     // For crabbox targets the resource key must reflect the resolved (leased)
     // SSH endpoint, not the empty config host/user, so two tasks on the same
     // leased machine contend on the same lease. The pool member id is still
-    // used as the holder/poolMemberId below.
-    const resolved = this.resolvedCrabboxTargets.get(selection.member.id);
+    // used as the holder/poolMemberId below. Prefer the launch-scoped lease so
+    // the key matches the box this executor actually uses even if a concurrent
+    // same-target launch has since rewritten the shared map.
+    const resolved = selection.resolvedCrabbox ?? this.resolvedCrabboxTargets.get(selection.member.id);
     const resourceKey = this.sshResourceKey(
       resolved
         ? {
@@ -1622,7 +1642,11 @@ export class TaskRunner {
     if (executor.type === 'ssh') {
       const targetId = this.selectedRemoteTargetId(task, poolSelection);
       if (targetId) payload.poolMemberId = targetId;
-      const resolved = targetId ? this.resolvedCrabboxTargets.get(targetId) : undefined;
+      // Prefer the launch-scoped lease bound to this selection so the logged
+      // endpoint matches the executor's lease even under concurrent same-target
+      // resolution; fall back to the shared map for pre-selection callers.
+      const resolved = poolSelection?.resolvedCrabbox
+        ?? (targetId ? this.resolvedCrabboxTargets.get(targetId) : undefined);
       if (resolved) {
         // Crabbox: report the resolved (leased) endpoint plus durable lease metadata.
         payload.remoteHost = resolved.sshTarget.host;
@@ -1815,6 +1839,15 @@ export class TaskRunner {
               this.buildCrabboxResolverConfig(targetId, target),
             );
           }
+        }
+
+        // A later launch reuses the already-resolved endpoint (map hit above).
+        // Bind it to this launch's pending selection too, so its metadata/logs/
+        // resource key stay matched to the exact lease its executor uses even if
+        // a concurrent same-target resolution rewrites the shared map afterward.
+        if (resolvedCrabbox) {
+          const pendingSelection = this.pendingPoolSelections.get(task.id);
+          if (pendingSelection) pendingSelection.resolvedCrabbox = resolvedCrabbox;
         }
 
         return this.buildSshExecutorForTarget(task.id, targetId, target, resolvedCrabbox);
