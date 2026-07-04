@@ -206,6 +206,11 @@ const MENU_PROOF_PLAN = {
   onFinish: 'pull_request' as const,
   mergeMode: 'external_review',
 };
+const TERMINAL_PLANNED_PLAN = {
+  ...TEST_PLAN,
+  name: 'Terminal Planned Flow',
+};
+
 
 const SSH_TERMINAL_RESUME_PLAN = {
   name: 'SSH Terminal Resume Visual Proof',
@@ -507,15 +512,15 @@ test.describe('Read-only mode visual proof', () => {
 
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
-    await expect(page.getByText('Start with a goal.')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('Invoker Terminal')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('What do you want to build?')).toHaveCount(0);
     await expect(page.getByText('What to expect')).toBeVisible();
     await expect(page.getByTestId('workflow-graph-surface').getByText('Your plan will appear here.')).toBeVisible();
     await expect(page.getByTestId('sidebar-home')).toContainText('Invoker');
+    await expect(page.getByTestId('sidebar-planning')).toContainText('Planning Terminal');
     await expect(page.getByTestId('sidebar-workflows')).toContainText('Workflows');
     await expect(page.getByTestId('sidebar-attention')).toContainText('Needs Attention');
     await expect(page.getByTestId('sidebar-running')).toContainText('Running');
-    await expect(page.getByText('Terminal planning and graph details live here.')).toBeVisible();
     await expect(page.getByTestId('rail-settings')).toBeVisible();
     await expect(page.getByTestId('sidebar-home')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
@@ -524,22 +529,26 @@ test.describe('Visual proof capture', () => {
   });
 
   test('terminal planning loads graph', async ({ page }) => {
-    const plannedYaml = yamlStringify(MENU_PROOF_PLAN);
+    const plannedYaml = yamlStringify(TERMINAL_PLANNED_PLAN);
     await page.evaluate(async ({ planYaml, planName }) => {
-      await window.invoker.setTestPlanFromGoalResponse({ planYaml, planName });
+      await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'I drafted the plan.' });
     }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow' });
 
-    await page.getByTestId('invoker-terminal-input').fill('plan "Add README"');
-    await page.getByTestId('invoker-terminal-input').press('Enter');
+    await page.getByTestId('sidebar-planning').click();
+    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await page.getByTestId('invoker-terminal-input').fill('Add README');
+    await page.getByRole('button', { name: 'Send' }).click();
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
+    await page.getByRole('button', { name: 'Submit to Invoker' }).click();
 
-    await expect(page.getByText('Plan "Terminal Planned Flow" loaded. Use run to execute.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
-    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Menu Proof Workflow');
+    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Terminal Planned Flow');
     await expect(page.getByText('What to expect')).toHaveCount(0);
     await captureScreenshot(page, 'terminal-planned-graph');
 
     await page.evaluate(async () => {
-      await window.invoker.setTestPlanFromGoalResponse(null);
+      await window.invoker.setTestPlanningChatResponse(null);
     });
   });
 
@@ -553,8 +562,7 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflows-browser');
 
     await page.getByTestId('browser-rail-dismiss').click();
-    await expect(page.getByText('Plan graph')).toBeVisible();
-    await expect(page.getByText('Invoker Terminal')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
