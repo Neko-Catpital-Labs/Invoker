@@ -103,6 +103,7 @@ const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
+  busy: boolean;
 };
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
@@ -114,6 +115,7 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     messages: [{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' }],
     input: '',
     draftPlanAvailable: false,
+    busy: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -522,7 +524,6 @@ export function App() {
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(2);
-  const [plannerBusy, setPlannerBusy] = useState(false);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningTerminalExpanded, setPlanningTerminalExpanded] = useState(false);
@@ -535,6 +536,7 @@ export function App() {
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
+  const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
   const [graphMaximized, setGraphMaximized] = useState(false);
   const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
@@ -1805,11 +1807,15 @@ export function App() {
     void invoker?.checkPrStatuses?.();
     issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'manual-refresh' });
   }, [invoker, issueCameraCommand, refreshTaskGraph]);
-  const updateActivePlanningSession = useCallback((updater: (session: PlanningSessionView) => PlanningSessionView) => {
+  const updatePlanningSessionById = useCallback((sessionId: string, updater: (session: PlanningSessionView) => PlanningSessionView) => {
     setPlanningSessions((prev) => prev.map((session) => (
-      session.id === activePlanningSessionId ? updater(session) : session
+      session.id === sessionId ? updater(session) : session
     )));
-  }, [activePlanningSessionId]);
+  }, []);
+
+  const updateActivePlanningSession = useCallback((updater: (session: PlanningSessionView) => PlanningSessionView) => {
+    updatePlanningSessionById(activePlanningSessionId, updater);
+  }, [activePlanningSessionId, updatePlanningSessionById]);
 
   const setPlanningInput = useCallback((value: string) => {
     updateActivePlanningSession((session) => ({ ...session, input: value }));
@@ -1851,7 +1857,7 @@ export function App() {
       appendTerminalLine('Planner is not available.', 'system', 'error');
       return;
     }
-    setPlannerBusy(true);
+    updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: true }));
     try {
       const result = await invoker.planningChatSubmit({ sessionId: planningSessionId });
       if (result.ok) {
@@ -1863,8 +1869,9 @@ export function App() {
         setGraphActionsMenuOpen(false);
         setPlanName(result.planName);
         setSelectedWorkflowId(result.workflowId);
-        updateActivePlanningSession((session) => ({
+        updatePlanningSessionById(planningSessionId, (session) => ({
           ...session,
+          busy: false,
           status: 'submitted',
           submittedWorkflowId: result.workflowId,
           submittedPlanName: result.planName,
@@ -1875,18 +1882,18 @@ export function App() {
         await refreshTaskGraph();
         appendTerminalLine(`Plan "${result.planName}" submitted to Invoker. Review it, then Run.`, 'system', 'success');
       } else {
+        updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: false }));
         appendTerminalLine(result.error, 'system', 'error');
       }
     } catch (err) {
+      updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: false }));
       appendTerminalLine(err instanceof Error ? err.message : 'Failed to submit the plan.', 'system', 'error');
-    } finally {
-      setPlannerBusy(false);
     }
-  }, [appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updateActivePlanningSession]);
+  }, [appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
-    if (!input || plannerBusy || activePlanningSessionSubmitted) return;
+    if (!input || activePlanningSessionBusy || activePlanningSessionSubmitted) return;
     appendTerminalLine(input, 'user');
     setPlanningInput('');
 
@@ -1899,12 +1906,12 @@ export function App() {
         );
         return;
       }
-      setPlannerBusy(true);
+      updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, busy: true }));
       try {
         const started = await handleStart();
         appendTerminalLine(started ? 'Run started.' : 'Run failed to start.', 'system', started ? 'success' : 'error');
       } finally {
-        setPlannerBusy(false);
+        updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, busy: false }));
       }
       return;
     }
@@ -1919,14 +1926,14 @@ export function App() {
       return;
     }
 
-    setPlannerBusy(true);
+    const previousSessionId = activePlanningSessionId;
+    updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
     try {
       const request = {
         message: input,
         presetKey: selectedPlanningPresetKey || undefined,
         ...(planningSessionId ? { sessionId: planningSessionId } : {}),
       };
-      const previousSessionId = activePlanningSessionId;
       const result = await invoker.planningChatSend(request);
       if (result.ok) {
         const updatedAt = new Date().toISOString();
@@ -1936,6 +1943,7 @@ export function App() {
           if (session.id !== previousSessionId) return session;
           return {
             ...session,
+            busy: false,
             id: result.sessionId,
             title: session.title === 'Untitled plan'
               ? (input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input)
@@ -1947,17 +1955,20 @@ export function App() {
             updatedAt,
           };
         }));
-        setActivePlanningSessionId(result.sessionId);
+        setActivePlanningSessionId((currentSessionId) => (
+          currentSessionId === previousSessionId ? result.sessionId : currentSessionId
+        ));
         setHasLoadedPlan(false);
       } else {
+        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
         appendTerminalLine(result.error, 'system', 'error');
       }
     } catch (err) {
+      updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
       appendTerminalLine(err instanceof Error ? err.message : 'Failed to reach the planner.', 'system', 'error');
-    } finally {
-      setPlannerBusy(false);
     }
   }, [
+    activePlanningSessionBusy,
     activePlanningSessionId,
     activePlanningSessionSubmitted,
     appendTerminalLine,
@@ -1966,11 +1977,11 @@ export function App() {
     hasLoadedPlan,
     hasStarted,
     invoker,
-    plannerBusy,
     planningInput,
     planningSessionId,
     selectedPlanningPresetKey,
     setPlanningInput,
+    updatePlanningSessionById,
   ]);
 
   const handleCreatePlanningSession = useCallback(() => {
@@ -2796,7 +2807,7 @@ export function App() {
         <div className="min-h-0 flex-1 overflow-y-auto bg-gray-900 p-4">
           <InvokerTerminal
             lines={terminalLines}
-            busy={plannerBusy}
+            busy={activePlanningSessionBusy}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
@@ -3032,7 +3043,7 @@ export function App() {
         >
           <InvokerTerminal
             lines={terminalLines}
-            busy={plannerBusy}
+            busy={activePlanningSessionBusy}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}

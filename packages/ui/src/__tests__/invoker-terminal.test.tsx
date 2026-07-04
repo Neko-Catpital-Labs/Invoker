@@ -189,4 +189,42 @@ describe('Invoker terminal (component)', () => {
 
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
   });
+
+  it('keeps a new planning chat editable while another session is working', async () => {
+    let resolveFirstSend: ((value: any) => void) | null = null;
+    mock.api.planningChatSend = vi.fn((request: any) => {
+      if (!request.sessionId) {
+        return new Promise((resolve) => {
+          resolveFirstSend = resolve;
+        }) as any;
+      }
+      return Promise.resolve({
+        ok: true,
+        sessionId: request.sessionId,
+        reply: 'Second session is ready.',
+        draftPlanAvailable: false,
+      }) as any;
+    }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('first session request');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+
+    const secondInput = screen.getByTestId('invoker-terminal-input');
+    expect(secondInput).not.toBeDisabled();
+    fireEvent.change(secondInput, { target: { value: 'second session request' } });
+    expect(secondInput).toHaveValue('second session request');
+
+    resolveFirstSend?.({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'First session is ready.',
+      draftPlanAvailable: false,
+    });
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('second session request'));
+  });
 });
