@@ -47,6 +47,51 @@ configure_git_identity_if_missing() {
   git config user.email >/dev/null 2>&1 || git config user.email "ci@invoker.dev"
 }
 
+
+cleanup_checkout_processes() {
+  python3 - "$CHECKOUT_DIR" <<'PYCLEANUP'
+import os
+import signal
+import sys
+import time
+
+checkout = os.path.realpath(sys.argv[1])
+self_pid = os.getpid()
+
+def matching_process_groups():
+    groups = set()
+    for name in os.listdir('/proc'):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == self_pid:
+            continue
+        try:
+            raw = open(f'/proc/{pid}/cmdline', 'rb').read()
+            cmd = raw.replace(b'\0', b' ').decode(errors='replace')
+            cwd = os.path.realpath(os.readlink(f'/proc/{pid}/cwd'))
+            pgid = os.getpgid(pid)
+        except Exception:
+            continue
+        if checkout in cmd or cwd.startswith(checkout):
+            groups.add(pgid)
+    return groups
+
+for sig in (signal.SIGTERM, signal.SIGKILL):
+    groups = matching_process_groups()
+    if not groups:
+        break
+    for pgid in groups:
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            pass
+    time.sleep(2 if sig == signal.SIGTERM else 0)
+PYCLEANUP
+}
+
 make_log_path() {
   local label="$1"
   printf '%s/%s-%s.log' "$LOG_DIR" "$(date -u +%Y%m%dT%H%M%SZ)" "$label"
@@ -84,6 +129,7 @@ run_full_tests() {
     ) > "$log_file" 2>&1
   fi
   local code=$?
+  cleanup_checkout_processes
 
   if [ "$code" -eq 0 ] && grep -Eq 'Skipped unavailable:[[:space:]]*[1-9][0-9]*' "$log_file"; then
     log_line "$label: infrastructure unavailable: skipped suite in $log_file"
@@ -294,6 +340,7 @@ BRANCH="cron/master-head-test-fix-$SHORT_SHA-$RUN_ID"
 
 PROMPT="$(build_prompt "$BASE_SHA" "$FAILED_LOG")"
 run_omp "$PROMPT"
+cleanup_checkout_processes
 
 if ( cd "$CHECKOUT_DIR" && git diff --quiet ); then
   ledger_record master-head-attempt "$BASE_SHA" no-diff
