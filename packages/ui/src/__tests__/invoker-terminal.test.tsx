@@ -24,7 +24,8 @@ describe('Invoker terminal (component)', () => {
     mock.cleanup();
   });
 
-  async function waitForPresetLoad() {
+  async function openPlanningTerminal() {
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
     });
@@ -37,20 +38,20 @@ describe('Invoker terminal (component)', () => {
 
   it('generates a planning reply from plain language', async () => {
     render(<App />);
-    await waitForPresetLoad();
+    await openPlanningTerminal();
 
     submitPlanningText('hello');
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex' });
-      expect(screen.getByText('I can help draft that.')).toBeInTheDocument();
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
     });
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
   });
 
   it('sends plain language when Enter is pressed', async () => {
     render(<App />);
-    await waitForPresetLoad();
+    await openPlanningTerminal();
 
     const input = screen.getByTestId('invoker-terminal-input');
     fireEvent.change(input, { target: { value: 'hello' } });
@@ -63,7 +64,7 @@ describe('Invoker terminal (component)', () => {
 
   it('continues the same planning session', async () => {
     render(<App />);
-    await waitForPresetLoad();
+    await openPlanningTerminal();
 
     submitPlanningText('hello');
     await waitFor(() => {
@@ -83,7 +84,7 @@ describe('Invoker terminal (component)', () => {
 
   it('passes the selected planning preset', async () => {
     render(<App />);
-    await waitForPresetLoad();
+    await openPlanningTerminal();
 
     fireEvent.change(screen.getByTestId('invoker-terminal-harness'), { target: { value: 'omp+claude' } });
     submitPlanningText('draft a plan');
@@ -102,7 +103,7 @@ describe('Invoker terminal (component)', () => {
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
     })) as any;
     render(<App />);
-    await waitForPresetLoad();
+    await openPlanningTerminal();
 
     submitPlanningText('draft the full plan');
 
@@ -115,14 +116,16 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(screen.getByText('Plan "Mock Plan" submitted to Invoker. Review it, then Run.')).toBeInTheDocument();
+      expect(screen.getByText('Plan graph')).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review it, then Run.');
     expect(mock.api.start).not.toHaveBeenCalled();
   });
 
   it('explains that run needs a submitted plan first', async () => {
     render(<App />);
-    await waitForPresetLoad();
+    await openPlanningTerminal();
 
     submitPlanningText('run');
 
@@ -130,7 +133,7 @@ describe('Invoker terminal (component)', () => {
     expect(mock.api.start).not.toHaveBeenCalled();
   });
 
-  it('starts execution after a submitted plan is loaded', async () => {
+  it('marks a submitted planning session read-only', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
       sessionId: 'session-1',
@@ -139,27 +142,25 @@ describe('Invoker terminal (component)', () => {
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
     })) as any;
     render(<App />);
-    await waitForPresetLoad();
+    await openPlanningTerminal();
 
     submitPlanningText('draft the full plan');
     await screen.findByTestId('invoker-terminal-ready-bar');
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
-    await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then Run.');
+    await waitFor(() => expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' }));
 
-    submitPlanningText('run');
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
 
-    await waitFor(() => {
-      expect(mock.api.start).toHaveBeenCalled();
-      expect(screen.getByText('Run started.')).toBeInTheDocument();
-    });
+    expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
+    expect(screen.getAllByText('Submitted').length).toBeGreaterThan(0);
   });
 
   it('opens the expanded planning chat and Escape closes it without clearing transcript', async () => {
     render(<App />);
-    await waitForPresetLoad();
+    await openPlanningTerminal();
 
     submitPlanningText('hello');
-    await screen.findByText('I can help draft that.');
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand planning chat' }));
     expect(screen.getByTestId('invoker-terminal-expanded')).toBeInTheDocument();
@@ -169,24 +170,23 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('invoker-terminal-expanded')).not.toBeInTheDocument();
     });
-    expect(screen.getByText('I can help draft that.')).toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
   });
 
-  it('collapses and reopens the planning chat without clearing transcript', async () => {
+  it('creates another planning chat without clearing the first transcript', async () => {
     render(<App />);
-    await waitForPresetLoad();
+    await openPlanningTerminal();
 
     submitPlanningText('hello');
-    await screen.findByText('I can help draft that.');
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse planning chat' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
 
-    expect(screen.getByTestId('invoker-terminal-collapsed')).toBeInTheDocument();
-    expect(screen.queryByTestId('invoker-terminal-input')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('');
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('I can help draft that.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open planning chat' }));
+    fireEvent.click(screen.getByText('hello'));
 
-    expect(screen.getByTestId('invoker-terminal-input')).toBeInTheDocument();
-    expect(screen.getByText('I can help draft that.')).toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
   });
 });

@@ -116,6 +116,20 @@ export function createMockInvoker(
       planName: 'Mock Plan',
       workflowId: 'wf-1',
     })),
+    planningChatCreate: vi.fn(async () => ({
+      ok: true,
+      session: {
+        id: 'session-1',
+        title: 'Untitled plan',
+        status: 'still_discussing',
+        presetKey: 'codex',
+        messages: [{ id: 1, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-01-01T00:00:00.000Z' }],
+        draftPlanAvailable: false,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    })),
+    planningChatList: vi.fn(async () => ({ ok: true, sessions: [] })),
     planningChatSend: vi.fn(async () => ({
       ok: true,
       sessionId: 'session-1',

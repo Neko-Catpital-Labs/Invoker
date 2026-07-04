@@ -38,22 +38,22 @@ describe('App launch (component)', () => {
   });
   it('shows the reskinned empty shell when no plan is loaded', async () => {
     render(<App />);
-    await screen.findByDisplayValue('Codex');
-    expect(screen.getByText('Ask Invoker what you want to build.')).toBeInTheDocument();
-    expect(screen.getByText('What do you want to build?')).toBeInTheDocument();
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
     expect(screen.getByText('What to expect')).toBeInTheDocument();
     expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
     expect(screen.getByTestId('sidebar-home')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
   });
   it('renders the Apple-like source list without manual plan loading', async () => {
     render(<App />);
-    await screen.findByDisplayValue('Codex');
+    expect(await screen.findByTestId('sidebar-home')).toHaveTextContent('Invoker');
     expect(screen.queryByTestId('rail-open-file')).not.toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
-    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
+    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
@@ -80,7 +80,7 @@ describe('App launch (component)', () => {
     Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
 
     render(<App />);
-    await screen.findByDisplayValue('Codex');
+    await screen.findByTestId('sidebar-workflows');
     act(() => window.dispatchEvent(new Event('resize')));
 
     fireEvent.click(screen.getByTestId('sidebar-workflows'));
