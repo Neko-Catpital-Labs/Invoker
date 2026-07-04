@@ -96,17 +96,38 @@ run_with_optional_timeout() {
   fi
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$seconds" "$@" <<'PY'
+import os
+import signal
 import subprocess
 import sys
 
 timeout = int(sys.argv[1])
 cmd = sys.argv[2:]
 
+# start_new_session puts the child in its own process group so we can signal the
+# whole tree on expiry, matching GNU timeout's default behavior instead of
+# leaking descendants (only the direct child would otherwise be reaped).
+proc = subprocess.Popen(cmd, start_new_session=True)
 try:
-    completed = subprocess.run(cmd, timeout=timeout, check=False)
-    sys.exit(completed.returncode)
+    sys.exit(proc.wait(timeout=timeout))
 except subprocess.TimeoutExpired:
     print(f"Timed out after {timeout}s: {' '.join(cmd)}", file=sys.stderr)
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        pgid = None
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if pgid is None:
+            break
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            break
+        try:
+            proc.wait(timeout=5)
+            break
+        except subprocess.TimeoutExpired:
+            continue
     sys.exit(124)
 PY
     return $?
