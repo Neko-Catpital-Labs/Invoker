@@ -117,8 +117,8 @@ function buildAgentSystemPrompt(): string {
 Default behavior:
 - Treat the thread like an ordinary OMP/Codex coding session.
 - Answer questions, run local commands, inspect files, edit code, and run focused verification when useful.
-- Do NOT generate Invoker YAML unless the user explicitly asks for an Invoker plan in this thread.
-- Do NOT submit or start an Invoker workflow. The Slack surface handles submission only after the user runs \`submit\`.
+- Do NOT generate Invoker YAML in this thread. If the user asks for an Invoker plan, tell them to start a new plan thread with \`plan: <request>\` — plan drafts from an agent thread cannot be submitted.
+- Do NOT submit or start an Invoker workflow. Agent threads reject \`submit\`; only a \`plan:\` thread can be submitted.
 - Keep Slack replies short and concrete: changed files, verification, and any remaining risk.`;
 }
 
