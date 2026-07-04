@@ -980,23 +980,35 @@ export class TaskRunner {
         // lease the machine once, cache it, then build the executor from the
         // resolved endpoint WITHOUT re-running selection (which would advance
         // round-robin / re-pick a different member).
-        bench('crabbox.resolve.start', { targetId: err.targetId });
-        const resolved = await this.crabboxResolver.resolve(err.resolverConfig);
-        this.resolvedCrabboxTargets.set(err.targetId, resolved);
-        bench('crabbox.resolve.end', {
-          targetId: err.targetId,
-          host: resolved.sshTarget.host,
-          leaseId: resolved.remoteLeaseMetadata.leaseId,
-        });
-        this.persistence.logEvent?.(task.id, 'task.executor.crabbox_resolved', {
-          targetId: err.targetId,
-          leaseId: resolved.remoteLeaseMetadata.leaseId,
-          slug: resolved.remoteLeaseMetadata.slug,
-          sshHost: resolved.sshTarget.host,
-          sshPort: resolved.sshTarget.port,
-        });
-        const target = this.getRemoteTargets()[err.targetId];
-        executor = this.buildSshExecutorForTarget(task.id, err.targetId, target, resolved);
+        // selectExecutor already stored a pending pool selection for this task
+        // (poolMemberLoad counts it). If the lease resolution or the
+        // post-resolution executor build throws, release that pending selection
+        // so the member's capacity is restored — otherwise the failed launch
+        // permanently reduces capacity for later tasks.
+        try {
+          bench('crabbox.resolve.start', { targetId: err.targetId });
+          const resolved = await this.crabboxResolver.resolve(err.resolverConfig);
+          this.resolvedCrabboxTargets.set(err.targetId, resolved);
+          bench('crabbox.resolve.end', {
+            targetId: err.targetId,
+            host: resolved.sshTarget.host,
+            leaseId: resolved.remoteLeaseMetadata.leaseId,
+          });
+          this.persistence.logEvent?.(task.id, 'task.executor.crabbox_resolved', {
+            targetId: err.targetId,
+            leaseId: resolved.remoteLeaseMetadata.leaseId,
+            slug: resolved.remoteLeaseMetadata.slug,
+            sshHost: resolved.sshTarget.host,
+            sshPort: resolved.sshTarget.port,
+          });
+          const target = this.getRemoteTargets()[err.targetId];
+          executor = this.buildSshExecutorForTarget(task.id, err.targetId, target, resolved);
+        } catch (resolveErr) {
+          const pending = this.pendingPoolSelections.get(task.id);
+          this.releasePoolSelectionLease(pending);
+          this.pendingPoolSelections.delete(task.id);
+          throw resolveErr;
+        }
       }
       const poolSelectionForStart = this.pendingPoolSelections.get(task.id);
       if (!this.acquirePoolSelectionLease(task, attemptId, poolSelectionForStart)) {
