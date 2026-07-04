@@ -116,6 +116,23 @@ export function createMockInvoker(
       planName: 'Mock Plan',
       workflowId: 'wf-1',
     })),
+    planningChatSend: vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'I can help draft that.',
+      draftPlanAvailable: false,
+    })),
+    planningChatSubmit: vi.fn(async () => ({
+      ok: true,
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    })),
+    planningChatReset: vi.fn(async () => ({ ok: true })),
+    getPlanningPresets: vi.fn(async () => [
+      { key: 'codex', label: 'Codex', tool: 'codex', isDefault: true },
+      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: false },
+      { key: 'omp', label: 'OMP', tool: 'omp', isDefault: false },
+    ]),
     start: vi.fn(async () => taskSnapshot),
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
