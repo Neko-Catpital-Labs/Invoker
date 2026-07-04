@@ -562,7 +562,7 @@ export interface OrchestratorConfig {
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
   maxConcurrency?: number;
-  /** Default auto-fix retry budget for older tasks missing persisted per-task config. */
+  /** Positive values enable auto-fix; attempts are not capped by workflow-core. */
   defaultAutoFixRetries?: number;
   /**
    * Rules that validate task execution environment against command patterns.
@@ -663,7 +663,7 @@ export class Orchestrator {
     ];
     this.availablePoolIds = new Set(config.availablePoolIds ?? []);
     this.defaultPoolId = config.defaultPoolId;
-    this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
+    this.defaultAutoFixRetries = Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0));
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
     this.resolveRepoDefaultBranch = config.resolveRepoDefaultBranch ?? requireDefaultBranchRemote;
 
@@ -3870,7 +3870,7 @@ export class Orchestrator {
   }
 
   getAutoFixRetryBudget(taskId: string): number {
-    return this.defaultAutoFixRetries;
+    return this.defaultAutoFixRetries > 0 ? Number.POSITIVE_INFINITY : 0;
   }
 
   private isRuntimeAutoFixEligibleTask(task: TaskState): boolean {
@@ -3885,8 +3885,7 @@ export class Orchestrator {
     if (task.status !== 'failed') return false;
     if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
     const max = this.getAutoFixRetryBudget(taskId);
-    if (max <= 0) return false;
-    return (task.execution.autoFixAttempts ?? 0) < max;
+    return max > 0;
   }
 
   getAllTasks(): TaskState[] {

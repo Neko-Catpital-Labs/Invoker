@@ -203,6 +203,26 @@ describe('PR status and CI failure workers', () => {
     });
   });
 
+  it('queues CI repair even after previous auto-fix attempts', async () => {
+    const event = makeEvent();
+    const harness = makeHarness(makeTask({
+      execution: {
+        autoFixAttempts: 100,
+      },
+    }));
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      defaultAutoFixRetries: 1,
+      drainEvents: () => [event],
+    });
+
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1 });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects stale CI failure events when the PR head changed before submit', async () => {
     const event = makeEvent();
     const task = makeTask({

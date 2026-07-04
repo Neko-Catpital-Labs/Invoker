@@ -46,7 +46,7 @@ export interface AutoFixRecoverySubmitter {
   ): number;
 }
 export interface AutoFixWorkerConfig {
-  /** Default attempt budget when a task does not override it. */
+  /** Positive config enables auto-fix; attempts are not capped. */
   defaultAutoFixRetries?: number;
   /** Resolves the agent that performs each auto-fix, when one is configured. */
   getAutoFixAgent?: () => string | undefined;
@@ -157,8 +157,13 @@ export function listAutoFixRecoveryScanCandidates(
 
 function retryBudgetForTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): number {
   const raw = options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0;
+  if (raw === Number.POSITIVE_INFINITY) return Number.POSITIVE_INFINITY;
   if (!Number.isFinite(raw)) return 0;
-  return Math.min(Math.max(0, Math.floor(raw)), 10);
+  return Math.floor(raw) > 0 ? Number.POSITIVE_INFINITY : 0;
+}
+
+function retryBudgetLabel(budget: number): number | 'unlimited' {
+  return budget === Number.POSITIVE_INFINITY ? 'unlimited' : budget;
 }
 
 function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): boolean {
@@ -168,7 +173,7 @@ function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryP
   if (shouldSkipAutoFixForError(task.execution.error)) return false;
   const max = retryBudgetForTask(task, options);
   if (max <= 0) return false;
-  return (task.execution.autoFixAttempts ?? 0) < max;
+  return true;
 }
 
 function candidateFromWakeup(wakeup: RecoveryWorkerWakeupHint): AutoFixRecoveryCandidate | undefined {
@@ -298,7 +303,7 @@ function validateAutoFixCandidate(
     skipAutoFixCandidate(options, candidate, 'not-eligible', {
       status: latest.status,
       autoFixAttempts: latest.execution.autoFixAttempts ?? 0,
-      maxRetries: retryBudgetForTask(latest, options),
+      maxRetries: retryBudgetLabel(retryBudgetForTask(latest, options)),
       isReconciliation: Boolean(latest.config.isReconciliation),
       hasParentTask: Boolean(latest.config.parentTask),
       skippedForError: shouldSkipAutoFixForError(latest.execution.error),
@@ -357,7 +362,7 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         attemptId: candidate.attemptId ?? null,
         agent: selectedAgent ?? null,
         autoFixAttempts: candidate.task.execution.autoFixAttempts ?? 0,
-        maxRetries: retryBudgetForTask(candidate.task, options),
+        maxRetries: retryBudgetLabel(retryBudgetForTask(candidate.task, options)),
       });
     }
   };
