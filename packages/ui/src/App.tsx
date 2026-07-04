@@ -122,7 +122,7 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
 function planningStatusLabel(status: InAppPlanningSessionStatus): string {
   switch (status) {
     case 'waiting_for_answer':
-      return 'Waiting for answer';
+      return 'Waiting for you';
     case 'draft_ready':
       return 'Draft ready';
     case 'submitted':
