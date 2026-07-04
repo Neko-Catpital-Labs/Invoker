@@ -456,10 +456,18 @@ export function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [terminalLines, setTerminalLines] = useState<InvokerTerminalLine[]>([
-    { id: 1, text: 'Start with a goal.', tone: 'muted' },
+    { id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' },
   ]);
   const nextTerminalLineIdRef = useRef(2);
   const [plannerBusy, setPlannerBusy] = useState(false);
+  const [planningInput, setPlanningInput] = useState('');
+  const [planningSessionId, setPlanningSessionId] = useState<string | null>(null);
+  const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
+  const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
+  const [draftPlanAvailable, setDraftPlanAvailable] = useState(false);
+  const [draftPlanSummary, setDraftPlanSummary] = useState<{ name: string; taskCount: number } | undefined>(undefined);
+  const [planningTerminalExpanded, setPlanningTerminalExpanded] = useState(false);
+  const [planningTerminalCollapsed, setPlanningTerminalCollapsed] = useState(false);
   const [graphMaximized, setGraphMaximized] = useState(false);
   const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
   const selectedActionNode = useMemo(
@@ -565,6 +573,18 @@ export function App() {
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
     window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
+    window.invoker?.getPlanningPresets?.()
+      .then((options) => {
+        const resolved = Array.isArray(options) && options.length > 0
+          ? options.map((option) => ({ key: option.key, label: option.label, isDefault: option.isDefault }))
+          : [{ key: 'codex', label: 'Codex', isDefault: true }];
+        setPlanningPresetOptions(resolved);
+        setSelectedPlanningPresetKey(resolved.find((option) => option.isDefault)?.key ?? resolved[0]?.key ?? 'codex');
+      })
+      .catch(() => {
+        setPlanningPresetOptions([{ key: 'codex', label: 'Codex', isDefault: true }]);
+        setSelectedPlanningPresetKey('codex');
+      });
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
 
@@ -577,14 +597,15 @@ export function App() {
   }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        setGraphMaximized(false);
-      }
+      if (event.key !== 'Escape') return;
+      if (!graphMaximized && !planningTerminalExpanded) return;
+      event.stopPropagation();
+      setGraphMaximized(false);
+      setPlanningTerminalExpanded(false);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [graphMaximized]);
+  }, [graphMaximized, planningTerminalExpanded]);
 
 
   useEffect(() => {
@@ -1092,7 +1113,7 @@ export function App() {
         return;
       }
 
-      if (graphMaximized && event.key === 'Escape') {
+      if ((graphMaximized || planningTerminalExpanded) && event.key === 'Escape') {
         return;
       }
       if (isEditableKeyboardTarget(event.target) || modal.type !== 'none') return;
@@ -1240,6 +1261,7 @@ export function App() {
     contextMenu,
     focusKeyboardRegion,
     graphMaximized,
+    planningTerminalExpanded,
     handleStatusClick,
     issueCameraCommand,
     keyboardRegion,
@@ -1715,10 +1737,14 @@ export function App() {
     void invoker?.checkPrStatuses?.();
     issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'manual-refresh' });
   }, [invoker, issueCameraCommand, refreshTaskGraph]);
-  const appendTerminalLine = useCallback((text: string, tone: InvokerTerminalLine['tone'] = 'muted') => {
+  const appendTerminalLine = useCallback((
+    text: string,
+    role: InvokerTerminalLine['role'] = 'system',
+    tone?: InvokerTerminalLine['tone'],
+  ) => {
     const id = nextTerminalLineIdRef.current;
     nextTerminalLineIdRef.current += 1;
-    setTerminalLines((prev) => [...prev, { id, text, tone }]);
+    setTerminalLines((prev) => [...prev, { id, text, role, tone }]);
   }, []);
 
   const handleStart = useCallback(async (): Promise<boolean> => {
@@ -1733,51 +1759,98 @@ export function App() {
     }
   }, [invoker]);
 
-  const handleTerminalSubmit = useCallback(async (command: string) => {
-    appendTerminalLine(`$ ${command}`);
-    const planMatch = command.match(/^plan\s+"([^"]+)"$/i);
-    if (planMatch) {
-      if (!invoker?.planFromGoal) {
-        appendTerminalLine('Planner is not available.', 'error');
-        return;
-      }
-      setPlannerBusy(true);
-      try {
-        const result = await invoker.planFromGoal({ goal: planMatch[1] });
-        if (result.ok) {
-          setHasLoadedPlan(true);
-          setHasStarted(false);
-          setSidebarSurface('home');
-          setWorkflowSelectionDismissed(false);
-          setViewMode('dag');
-          setGraphActionsMenuOpen(false);
-          setPlanName(result.planName);
-          setSelectedWorkflowId(result.workflowId);
-          await refreshTaskGraph();
-          appendTerminalLine(`Plan \"${result.planName}\" loaded. Use run to execute.`, 'success');
-        } else {
-          appendTerminalLine(result.error, 'error');
-        }
-      } catch (err) {
-        appendTerminalLine(err instanceof Error ? err.message : 'Failed to generate plan.', 'error');
-      } finally {
-        setPlannerBusy(false);
-      }
+  const handlePlanningSubmitDraft = useCallback(async () => {
+    if (!planningSessionId) {
+      appendTerminalLine('No planning conversation yet.', 'system', 'error');
       return;
     }
+    if (!invoker?.planningChatSubmit) {
+      appendTerminalLine('Planner is not available.', 'system', 'error');
+      return;
+    }
+    setPlannerBusy(true);
+    try {
+      const result = await invoker.planningChatSubmit({ sessionId: planningSessionId });
+      if (result.ok) {
+        setHasLoadedPlan(true);
+        setHasStarted(false);
+        setSidebarSurface('home');
+        setWorkflowSelectionDismissed(false);
+        setViewMode('dag');
+        setGraphActionsMenuOpen(false);
+        setPlanName(result.planName);
+        setSelectedWorkflowId(result.workflowId);
+        await refreshTaskGraph();
+        appendTerminalLine(`Plan "${result.planName}" submitted to Invoker. Review it, then Run.`, 'system', 'success');
+      } else {
+        appendTerminalLine(result.error, 'system', 'error');
+      }
+    } catch (err) {
+      appendTerminalLine(err instanceof Error ? err.message : 'Failed to submit the plan.', 'system', 'error');
+    } finally {
+      setPlannerBusy(false);
+    }
+  }, [appendTerminalLine, invoker, planningSessionId, refreshTaskGraph]);
 
-    if (command.toLowerCase() === 'run') {
+  const handlePlanningSubmit = useCallback(async () => {
+    const input = planningInput.trim();
+    if (!input || plannerBusy) return;
+    appendTerminalLine(input, 'user');
+    setPlanningInput('');
+
+    if (input.toLowerCase() === 'run') {
       if (!hasLoadedPlan) {
-        appendTerminalLine('Create a plan before running.', 'error');
+        appendTerminalLine('Create or submit a plan before running.', 'system', 'error');
         return;
       }
       const started = await handleStart();
-      appendTerminalLine(started ? 'Run started.' : 'Run failed to start.', started ? 'success' : 'error');
+      appendTerminalLine(started ? 'Run started.' : 'Run failed to start.', 'system', started ? 'success' : 'error');
       return;
     }
 
-    appendTerminalLine('Unknown command. Try plan \"Add README\" or run.', 'error');
-  }, [appendTerminalLine, handleStart, hasLoadedPlan, invoker, refreshTaskGraph]);
+    if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
+      await handlePlanningSubmitDraft();
+      return;
+    }
+
+    if (!invoker?.planningChatSend) {
+      appendTerminalLine('Planner is not available.', 'system', 'error');
+      return;
+    }
+
+    setPlannerBusy(true);
+    try {
+      const request = {
+        message: input,
+        presetKey: selectedPlanningPresetKey || undefined,
+        ...(planningSessionId ? { sessionId: planningSessionId } : {}),
+      };
+      const result = await invoker.planningChatSend(request);
+      if (result.ok) {
+        setPlanningSessionId(result.sessionId);
+        appendTerminalLine(result.reply, 'assistant');
+        setDraftPlanAvailable(result.draftPlanAvailable);
+        setDraftPlanSummary(result.draftPlanAvailable ? result.draftPlanSummary : undefined);
+        setHasLoadedPlan(false);
+      } else {
+        appendTerminalLine(result.error, 'system', 'error');
+      }
+    } catch (err) {
+      appendTerminalLine(err instanceof Error ? err.message : 'Failed to reach the planner.', 'system', 'error');
+    } finally {
+      setPlannerBusy(false);
+    }
+  }, [
+    appendTerminalLine,
+    handlePlanningSubmitDraft,
+    handleStart,
+    hasLoadedPlan,
+    invoker,
+    plannerBusy,
+    planningInput,
+    planningSessionId,
+    selectedPlanningPresetKey,
+  ]);
 
 
   const handleStop = useCallback(async () => {
@@ -2672,11 +2745,52 @@ export function App() {
             {sidebarSurface === 'home' ? (
               <>
                 <div className="border-b border-gray-800 bg-gray-900/80 p-4">
-                  <InvokerTerminal
-                    lines={terminalLines}
-                    busy={plannerBusy}
-                    onSubmit={(command) => void handleTerminalSubmit(command)}
-                  />
+                  {planningTerminalCollapsed ? (
+                    <div
+                      data-testid="invoker-terminal-collapsed"
+                      className="flex items-center justify-between gap-4 rounded-3xl border border-gray-800 bg-gray-950/95 px-5 py-4 shadow-2xl"
+                    >
+                      <div>
+                        <h1 className="text-lg font-semibold tracking-tight text-gray-50">Planning chat</h1>
+                        <p className="mt-1 text-sm text-gray-400">
+                          {draftPlanSummary
+                            ? `Draft plan ready: "${draftPlanSummary.name}" (${draftPlanSummary.taskCount} steps).`
+                            : plannerBusy
+                              ? 'Invoker is thinking…'
+                              : terminalLines.length > 1
+                                ? 'Planning chat is collapsed.'
+                                : 'Ask Invoker what you want to build.'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Open planning chat"
+                        onClick={() => setPlanningTerminalCollapsed(false)}
+                        className="rounded-full border border-gray-800 px-4 py-2 text-sm text-gray-300 hover:border-gray-600 hover:text-gray-100"
+                      >
+                        Open
+                      </button>
+                    </div>
+                  ) : (
+                    <InvokerTerminal
+                      lines={terminalLines}
+                      busy={plannerBusy}
+                      value={planningInput}
+                      selectedPresetKey={selectedPlanningPresetKey}
+                      presetOptions={planningPresetOptions}
+                      draftPlanAvailable={draftPlanAvailable}
+                      draftPlanSummary={draftPlanSummary}
+                      onValueChange={setPlanningInput}
+                      onSubmit={() => void handlePlanningSubmit()}
+                      onSubmitDraft={() => void handlePlanningSubmitDraft()}
+                      onPresetChange={setSelectedPlanningPresetKey}
+                      onExpand={() => {
+                        setPlanningTerminalCollapsed(false);
+                        setPlanningTerminalExpanded(true);
+                      }}
+                      onCollapse={() => setPlanningTerminalCollapsed(true)}
+                    />
+                  )}
                 </div>
                 {renderGraphWorkspace('Plan graph', homeSubtitle, true)}
               </>
@@ -2725,6 +2839,33 @@ export function App() {
         </div>
       </div>
 
+
+      {planningTerminalExpanded && (
+        <div
+          data-testid="invoker-terminal-expanded"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Planning chat"
+          className="fixed inset-0 z-50 flex flex-col bg-gray-950"
+        >
+          <InvokerTerminal
+            lines={terminalLines}
+            busy={plannerBusy}
+            value={planningInput}
+            selectedPresetKey={selectedPlanningPresetKey}
+            presetOptions={planningPresetOptions}
+            draftPlanAvailable={draftPlanAvailable}
+            draftPlanSummary={draftPlanSummary}
+            expanded
+            onValueChange={setPlanningInput}
+            onSubmit={() => void handlePlanningSubmit()}
+            onSubmitDraft={() => void handlePlanningSubmitDraft()}
+            onPresetChange={setSelectedPlanningPresetKey}
+            onExpand={() => setPlanningTerminalExpanded(true)}
+            onCloseExpanded={() => setPlanningTerminalExpanded(false)}
+          />
+        </div>
+      )}
 
       {graphMaximized && (
         <div
