@@ -134,13 +134,14 @@ describe('extractYamlPlan', () => {
     expect(plan.onFinish).toBeUndefined();
   });
 
-  it('preserves explicit fields from YAML', () => {
+  it('preserves explicit supported fields and strips legacy auto-fix fields from planner YAML', () => {
     const text = `\`\`\`yaml
 name: "Full"
 onFinish: merge
 baseBranch: develop
 featureBranch: feature/test
 mergeMode: automatic
+autoFixRetries: 3
 tasks:
   - id: t1
     description: "test"
@@ -148,6 +149,7 @@ tasks:
     dependencies: []
     pivot: true
     autoFix: true
+    autoFixRetries: 2
     requiresManualApproval: true
 \`\`\``;
     const result = extractYamlPlan(text);
@@ -156,8 +158,10 @@ tasks:
     expect(plan.baseBranch).toBe('develop');
     expect(plan.featureBranch).toBe('feature/test');
     expect(plan.mergeMode).toBe('automatic');
+    expect(plan.autoFixRetries).toBeUndefined();
     expect(plan.tasks[0].pivot).toBe(true);
-    expect(plan.tasks[0].autoFix).toBe(true);
+    expect(plan.tasks[0].autoFix).toBeUndefined();
+    expect(plan.tasks[0].autoFixRetries).toBeUndefined();
     expect(plan.tasks[0].requiresManualApproval).toBe(true);
   });
 
