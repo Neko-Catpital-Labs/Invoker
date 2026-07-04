@@ -82,6 +82,7 @@ import type {
   ActionGraphResponse,
   BundledSkillsInstallMode,
   InAppPlanRequest,
+  InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
@@ -263,8 +264,10 @@ import {
 } from './headless-owner-bootstrap.js';
 import {
   createInAppPlanningChatSessions,
+  createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
   listInAppPlanningPresets,
+  listPlanningChatSessions,
   planFromGoal as planFromGoalInApp,
   resetPlanningChat,
   sendPlanningChatMessage,
@@ -1087,6 +1090,18 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               planningCommandBuilder,
             });
+          }
+          case 'invoker:planning-chat-create': {
+            return createPlanningChatSession(payload.args[0] as InAppPlanningCreateSessionRequest | undefined, {
+              config: invokerConfig,
+              workingDir: repoRoot,
+              sessions: planningChatSessions,
+              planningCommandBuilder,
+              loadGeneratedPlan,
+            });
+          }
+          case 'invoker:planning-chat-list': {
+            return listPlanningChatSessions({ sessions: planningChatSessions });
           }
           case 'invoker:planning-chat-send': {
             return sendPlanningChatMessage(payload.args[0] as InAppPlanningChatRequest, {
@@ -2608,6 +2623,8 @@ function createEmbeddedTerminalBackendFromConfig(
     | null {
     const [arg0, arg1, arg2] = payload.args;
     switch (payload.channel) {
+      case 'invoker:planning-chat-create':
+      case 'invoker:planning-chat-list':
       case 'invoker:plan-from-goal':
       case 'invoker:planning-chat-send':
       case 'invoker:planning-chat-submit':
@@ -3571,6 +3588,18 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
         planningCommandBuilder,
       });
+    });
+    registerGuiMutationHandler('invoker:planning-chat-create', async (request: unknown) => {
+      return createPlanningChatSession(request as InAppPlanningCreateSessionRequest | undefined, {
+        config: invokerConfig,
+        workingDir: repoRoot,
+        sessions: planningChatSessions,
+        planningCommandBuilder,
+        loadGeneratedPlan: loadGeneratedPlanPreview,
+      });
+    });
+    registerGuiMutationHandler('invoker:planning-chat-list', async () => {
+      return listPlanningChatSessions({ sessions: planningChatSessions });
     });
     registerGuiMutationHandler('invoker:planning-chat-send', async (request: unknown) => {
       if (process.env.NODE_ENV === 'test' && testPlanningChatResponse) {

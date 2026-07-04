@@ -2,16 +2,30 @@ import { randomUUID } from 'node:crypto';
 import type {
   InAppPlanRequest,
   InAppPlanResponse,
+  InAppPlanningChatLine,
   InAppPlanningChatRequest,
   InAppPlanningChatResponse,
+  InAppPlanningCreateSessionRequest,
+  InAppPlanningCreateSessionResponse,
+  InAppPlanningListSessionsResponse,
+  InAppPlanningPlanSummary,
   InAppPlanningResetRequest,
   InAppPlanningResetResponse,
+  InAppPlanningSessionStatus,
+  InAppPlanningSessionSummary,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
   PlanningPresetOption,
 } from '@invoker/contracts';
 import type { AgentRegistry } from '@invoker/execution-engine';
-import type { HarnessPreset, PlanConversation, PlanningCommandBuilder } from '@invoker/surfaces';
+import {
+  BUILTIN_HARNESS_PRESETS,
+  DEFAULT_HARNESS_PRESET,
+  PlanConversation,
+  extractYamlPlan,
+  summarizePlanText,
+} from '@invoker/surfaces';
+import type { HarnessPreset, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
 export interface LoadedGeneratedPlan {
@@ -28,8 +42,17 @@ export interface InAppPlannerDeps {
 
 export interface InAppPlanningChatSession {
   id: string;
+  title: string;
   presetKey: string;
+  status: InAppPlanningSessionStatus;
+  messages: InAppPlanningChatLine[];
   conversation: PlanConversation;
+  draftPlanSummary?: InAppPlanningPlanSummary;
+  submittedWorkflowId?: string;
+  submittedPlanName?: string;
+  createdAt: string;
+  updatedAt: string;
+  nextMessageId: number;
   pendingSend?: Promise<void>;
 }
 
@@ -39,19 +62,7 @@ export function createInAppPlanningChatSessions(): InAppPlanningChatSessions {
   return new Map();
 }
 
-type PlannerSurfacesModule = typeof import('@invoker/surfaces');
-
-async function loadPlannerSurfaces(): Promise<PlannerSurfacesModule> {
-  try {
-    return await import('@invoker/surfaces');
-  } catch {
-    return await import('../../surfaces/src/index.ts');
-  }
-}
-
-
 async function resolveHarnessPresets(config: InvokerConfig): Promise<Record<string, HarnessPreset>> {
-  const { BUILTIN_HARNESS_PRESETS } = await loadPlannerSurfaces();
   return {
     ...BUILTIN_HARNESS_PRESETS,
     ...(config.slackHarnessPresets ?? {}),
@@ -59,7 +70,6 @@ async function resolveHarnessPresets(config: InvokerConfig): Promise<Record<stri
 }
 
 async function resolveDefaultPresetKey(config: InvokerConfig): Promise<string> {
-  const { DEFAULT_HARNESS_PRESET } = await loadPlannerSurfaces();
   return config.defaultSlackHarnessPreset ?? DEFAULT_HARNESS_PRESET;
 }
 
@@ -82,6 +92,78 @@ function labelForPresetKey(key: string): string {
   }
 }
 
+function titleFromMessage(message: string): string {
+  const firstLine = message.split('\n', 1)[0]?.trim() ?? '';
+  if (!firstLine) return 'Untitled plan';
+  return firstLine.length > 56 ? `${firstLine.slice(0, 53).trimEnd()}…` : firstLine;
+}
+
+function appendSessionMessage(
+  session: InAppPlanningChatSession,
+  role: InAppPlanningChatLine['role'],
+  text: string,
+  tone?: InAppPlanningChatLine['tone'],
+): void {
+  const createdAt = new Date().toISOString();
+  session.messages.push({
+    id: session.nextMessageId,
+    role,
+    text,
+    tone,
+    createdAt,
+  });
+  session.nextMessageId += 1;
+  session.updatedAt = createdAt;
+}
+
+async function createSession(
+  request: Partial<InAppPlanningCreateSessionRequest> | null | undefined,
+  deps: InAppPlannerDeps & {
+    sessions: InAppPlanningChatSessions;
+    planningCommandBuilder: PlanningCommandBuilder;
+  },
+): Promise<InAppPlanningChatSession | { error: string }> {
+  const presets = await resolveHarnessPresets(deps.config);
+  const requestedPresetKey = typeof request?.presetKey === 'string' && request.presetKey
+    ? request.presetKey
+    : undefined;
+  const presetKey = requestedPresetKey ?? await resolveDefaultPresetKey(deps.config);
+  const preset = presets[presetKey];
+  if (!preset) {
+    return { error: `Unknown planner preset "${presetKey}".` };
+  }
+
+  const createdAt = new Date().toISOString();
+  const session: InAppPlanningChatSession = {
+    id: randomUUID(),
+    title: typeof request?.title === 'string' && request.title.trim() ? request.title.trim() : 'Untitled plan',
+    presetKey,
+    status: 'still_discussing',
+    messages: [{
+      id: 1,
+      role: 'system',
+      text: 'Ask Invoker what you want to build.',
+      tone: 'muted',
+      createdAt,
+    }],
+    conversation: new PlanConversation({
+      tool: preset.tool,
+      model: preset.model,
+      workingDir: deps.workingDir,
+      timeoutMs: (deps.config.planningTimeoutSeconds ?? 7200) * 1000,
+      defaultBranch: deps.config.defaultBranch,
+      repoUrl: deps.config.defaultRepoUrl,
+      experimentalPlanner: deps.config.experimentalPlanner,
+      planningCommandBuilder: deps.planningCommandBuilder,
+    }),
+    createdAt,
+    updatedAt: createdAt,
+    nextMessageId: 2,
+  };
+  deps.sessions.set(session.id, session);
+  return session;
+}
+
 export async function listInAppPlanningPresets(config: InvokerConfig): Promise<PlanningPresetOption[]> {
   const presets = await resolveHarnessPresets(config);
   const defaultPresetKey = await resolveDefaultPresetKey(config);
@@ -99,7 +181,6 @@ export function createPlanningCommandBuilderFromRegistry(
 ): PlanningCommandBuilder {
   return (opts) => registry.getPlanningOrThrow(opts.tool).buildPlanningCommand(opts.prompt, { model: opts.model });
 }
-
 
 export async function planFromGoal(
   request: InAppPlanRequest,
@@ -119,7 +200,6 @@ export async function planFromGoal(
   }
 
   try {
-    const { PlanConversation, extractYamlPlan } = await loadPlannerSurfaces();
     const conversation = new PlanConversation({
       tool: preset.tool,
       model: preset.model,
@@ -156,6 +236,7 @@ function formatDraftPlanReply(summary: { name: string; steps: string[] }): strin
     'If this looks right, choose Submit to Invoker.',
   ].join('\n');
 }
+
 function formatConversationalPlanningMessage(message: string): string {
   return [
     message,
@@ -169,6 +250,57 @@ function formatConversationalPlanningMessage(message: string): string {
   ].join('\n');
 }
 
+export async function createPlanningChatSession(
+  request: InAppPlanningCreateSessionRequest | undefined,
+  deps: InAppPlannerDeps & {
+    sessions: InAppPlanningChatSessions;
+    planningCommandBuilder: PlanningCommandBuilder;
+  },
+): Promise<InAppPlanningCreateSessionResponse> {
+  try {
+    const session = await createSession(request, deps);
+    if ('error' in session) {
+      return { ok: false, error: session.error };
+    }
+    const summary: InAppPlanningSessionSummary = {
+      id: session.id,
+      title: session.title,
+      status: session.status,
+      presetKey: session.presetKey,
+      messages: session.messages,
+      draftPlanAvailable: Boolean(session.draftPlanSummary),
+      draftPlanSummary: session.draftPlanSummary,
+      submittedWorkflowId: session.submittedWorkflowId,
+      submittedPlanName: session.submittedPlanName,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+    };
+    return { ok: true, session: summary };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export function listPlanningChatSessions(
+  deps: { sessions: InAppPlanningChatSessions },
+): InAppPlanningListSessionsResponse {
+  const sessions = [...deps.sessions.values()]
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .map((session): InAppPlanningSessionSummary => ({
+      id: session.id,
+      title: session.title,
+      status: session.status,
+      presetKey: session.presetKey,
+      messages: session.messages,
+      draftPlanAvailable: Boolean(session.draftPlanSummary),
+      draftPlanSummary: session.draftPlanSummary,
+      submittedWorkflowId: session.submittedWorkflowId,
+      submittedPlanName: session.submittedPlanName,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+    }));
+  return { ok: true, sessions };
+}
 
 export async function sendPlanningChatMessage(
   request: InAppPlanningChatRequest,
@@ -185,67 +317,60 @@ export async function sendPlanningChatMessage(
 
   let sessionId = rawRequest?.sessionId;
   try {
-    const presets = await resolveHarnessPresets(deps.config);
-    const defaultPresetKey = await resolveDefaultPresetKey(deps.config);
-    const existingSession = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
-    const requestedPresetKey = typeof rawRequest?.presetKey === 'string' && rawRequest.presetKey
-      ? rawRequest.presetKey
-      : undefined;
-    const effectivePresetKey = existingSession?.presetKey ?? requestedPresetKey ?? defaultPresetKey;
-    const preset = presets[effectivePresetKey];
-    if (!preset) {
-      return {
-        ok: false,
-        sessionId: rawRequest?.sessionId,
-        error: `Unknown planner preset "${effectivePresetKey}".`,
-      };
-    }
-
-    let session = existingSession;
+    let session = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
     if (!session) {
-      const { PlanConversation } = await loadPlannerSurfaces();
-      const newSessionId = randomUUID();
-      session = {
-        id: newSessionId,
-        presetKey: effectivePresetKey,
-        conversation: new PlanConversation({
-          tool: preset.tool,
-          model: preset.model,
-          workingDir: deps.workingDir,
-          timeoutMs: (deps.config.planningTimeoutSeconds ?? 7200) * 1000,
-          defaultBranch: deps.config.defaultBranch,
-          repoUrl: deps.config.defaultRepoUrl,
-          experimentalPlanner: deps.config.experimentalPlanner,
-          planningCommandBuilder: deps.planningCommandBuilder,
-        }),
-      };
-      deps.sessions.set(newSessionId, session);
+      const created = await createSession({
+        presetKey: rawRequest?.presetKey,
+        title: titleFromMessage(message),
+      }, deps);
+      if ('error' in created) {
+        return { ok: false, sessionId, error: created.error };
+      }
+      session = created;
+      sessionId = session.id;
     }
-    sessionId = session.id;
+    if (session.status === 'submitted') {
+      return { ok: false, sessionId: session.id, error: 'This planning session was already submitted. Start a new planning chat for changes.' };
+    }
 
     const activeSession = session;
     const previousSend = activeSession.pendingSend ?? Promise.resolve();
     const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
+      appendSessionMessage(activeSession, 'user', message);
+      if (activeSession.title === 'Untitled plan') {
+        activeSession.title = titleFromMessage(message);
+      }
+
       const reply = await activeSession.conversation.sendMessage(formatConversationalPlanningMessage(message));
       const planText = activeSession.conversation.getDraftedPlan();
       if (!planText) {
+        activeSession.draftPlanSummary = undefined;
+        activeSession.status = reply.includes('?') ? 'waiting_for_answer' : 'still_discussing';
+        appendSessionMessage(activeSession, 'assistant', reply);
         return { ok: true, sessionId: activeSession.id, reply, draftPlanAvailable: false };
       }
 
-      const { summarizePlanText } = await loadPlannerSurfaces();
       const summary = summarizePlanText(planText);
       if (!summary) {
+        const fallbackReply = 'I drafted a plan, but I could not turn it into simple steps. Ask me to regenerate it before submitting.';
+        activeSession.draftPlanSummary = undefined;
+        activeSession.status = 'still_discussing';
+        appendSessionMessage(activeSession, 'assistant', fallbackReply);
         return {
           ok: true,
           sessionId: activeSession.id,
-          reply: 'I drafted a plan, but I could not turn it into simple steps. Ask me to regenerate it before submitting.',
+          reply: fallbackReply,
           draftPlanAvailable: false,
         };
       }
+      const formattedReply = formatDraftPlanReply(summary);
+      activeSession.draftPlanSummary = summary;
+      activeSession.status = 'draft_ready';
+      appendSessionMessage(activeSession, 'assistant', formattedReply);
       return {
         ok: true,
         sessionId: activeSession.id,
-        reply: formatDraftPlanReply(summary),
+        reply: formattedReply,
         draftPlanAvailable: true,
         draftPlanSummary: summary,
       };
@@ -274,6 +399,9 @@ export async function submitPlanningChatDraft(
   if (!session) {
     return { ok: false, error: 'No planning conversation yet.' };
   }
+  if (session.status === 'submitted') {
+    return { ok: false, error: 'This planning session was already submitted.' };
+  }
 
   const planText = session.conversation.getDraftedPlan();
   if (!planText) {
@@ -281,13 +409,16 @@ export async function submitPlanningChatDraft(
   }
 
   try {
-    const { summarizePlanText } = await loadPlannerSurfaces();
     if (!summarizePlanText(planText)) {
       return { ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' };
     }
 
     const loaded = await deps.loadGeneratedPlan(planText);
-    deps.sessions.delete(sessionId);
+    session.status = 'submitted';
+    session.submittedPlanName = loaded.planName;
+    session.submittedWorkflowId = loaded.workflowId;
+    session.updatedAt = new Date().toISOString();
+    appendSessionMessage(session, 'system', `Plan "${loaded.planName}" submitted to Invoker. Review it, then Run.`, 'success');
     return { ok: true, planName: loaded.planName, workflowId: loaded.workflowId };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -301,4 +432,3 @@ export function resetPlanningChat(
   deps.sessions.delete(request.sessionId);
   return { ok: true };
 }
-
