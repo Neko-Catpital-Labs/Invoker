@@ -1001,6 +1001,16 @@ export class TaskRunner {
             sshHost: resolved.sshTarget.host,
             sshPort: resolved.sshTarget.port,
           });
+          // The machine is now leased on the provider. Persist the lease
+          // immediately so that if pool-lease acquisition or executor.start()
+          // fails below, cleanup/restart flows can still find and stop the
+          // leased box instead of orphaning it. Uses the launch-local
+          // `resolved`, so this durable record always matches the lease this
+          // launch built its executor from. The success path re-writes the
+          // same metadata alongside workspace/branch details.
+          this.persistence.updateTask(task.id, {
+            execution: { remoteLeaseMetadata: resolved.remoteLeaseMetadata },
+          });
           const target = this.getRemoteTargets()[err.targetId];
           executor = this.buildSshExecutorForTarget(task.id, err.targetId, target, resolved);
         } catch (resolveErr) {
