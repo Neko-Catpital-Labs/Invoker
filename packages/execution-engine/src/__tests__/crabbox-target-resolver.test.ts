@@ -155,6 +155,7 @@ describe('CrabboxTargetResolver.resolve', () => {
     const status = JSON.stringify({
       id: 'lease-123',
       slug: 'happy-crab',
+      expiresAt: '2026-01-01T00:30:00.000Z',
       sshHost: '10.0.0.5',
       sshUser: 'invoker',
       sshKey: '/home/me/.ssh/crabbox',
@@ -174,6 +175,7 @@ describe('CrabboxTargetResolver.resolve', () => {
     const status = JSON.stringify({
       id: 'lease-123',
       slug: 'happy-crab',
+      expiresAt: '2026-01-01T00:30:00.000Z',
       sshHost: '10.0.0.5',
       sshUser: 'invoker',
       sshKey: '/home/me/.ssh/crabbox',
@@ -233,5 +235,62 @@ describe('CrabboxTargetResolver.resolve', () => {
     await expect(
       new CrabboxTargetResolver(runner).resolve(baseConfig),
     ).rejects.toThrow(/did not return valid JSON/);
+  });
+
+  it('treats whitespace-only sshHost/sshUser/sshKey as missing values', async () => {
+    const status = JSON.stringify({
+      id: 'lease-123',
+      slug: 'happy-crab',
+      expiresAt: '2026-01-01T00:30:00.000Z',
+      sshHost: '   ',
+      sshUser: '\t',
+      sshPort: 2222,
+      sshKey: '  ',
+    });
+    const { runner } = scriptRunner([ok('lease-123'), ok(status)]);
+
+    await expect(
+      new CrabboxTargetResolver(runner).resolve(baseConfig),
+    ).rejects.toThrow(/crab1.*sshHost.*sshUser.*sshKey/s);
+  });
+
+  it('rejects an out-of-range or non-integer sshPort and falls back to the default port', async () => {
+    const build = (sshPort: unknown) =>
+      JSON.stringify({
+        id: 'lease-123',
+        slug: 'happy-crab',
+        expiresAt: '2026-01-01T00:30:00.000Z',
+        sshHost: '10.0.0.5',
+        sshUser: 'invoker',
+        sshPort,
+        sshKey: '/home/me/.ssh/crabbox',
+      });
+
+    for (const badPort of [0, -1, 2222.5, 70000]) {
+      const { runner } = scriptRunner([ok('lease-123'), ok(build(badPort))]);
+      const result = await new CrabboxTargetResolver(runner).resolve(baseConfig);
+      expect(result.sshTarget.port).toBe(22);
+      expect(result.remoteLeaseMetadata.sshPort).toBe(22);
+    }
+  });
+
+  it('throws when status omits expiresAt instead of persisting an empty string', async () => {
+    const build = (expiresAt?: unknown) =>
+      JSON.stringify({
+        id: 'lease-123',
+        slug: 'happy-crab',
+        sshHost: '10.0.0.5',
+        sshUser: 'invoker',
+        sshPort: 2222,
+        sshKey: '/home/me/.ssh/crabbox',
+        ...(expiresAt === undefined ? {} : { expiresAt }),
+      });
+
+    for (const status of [build(), build('   ')]) {
+      const { runner } = scriptRunner([ok('lease-123'), ok(status)]);
+      await expect(
+        new CrabboxTargetResolver(runner).resolve(baseConfig),
+      ).rejects.toThrow(/crab1.*expiresAt/s);
+    }
   });
 });

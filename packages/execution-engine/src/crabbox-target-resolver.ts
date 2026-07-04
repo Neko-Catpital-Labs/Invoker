@@ -166,7 +166,19 @@ export function buildCrabboxStatusArgs(
 }
 
 function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** Accept a value only when it is an integer in the valid TCP port range. */
+function asValidPort(value: unknown): number | undefined {
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= 65535
+    ? value
+    : undefined;
 }
 
 /**
@@ -254,12 +266,15 @@ export class CrabboxTargetResolver {
     }
 
     const sshPort =
-      typeof json.sshPort === 'number' && Number.isFinite(json.sshPort)
-        ? json.sshPort
-        : (config.port ?? DEFAULT_SSH_PORT);
+      asValidPort(json.sshPort) ?? asValidPort(config.port) ?? DEFAULT_SSH_PORT;
     const leaseId = asNonEmptyString(json.id) ?? leaseRef;
     const slug = asNonEmptyString(json.slug) ?? leaseId;
-    const expiresAt = asNonEmptyString(json.expiresAt) ?? '';
+    const expiresAt = asNonEmptyString(json.expiresAt);
+    if (!expiresAt) {
+      throw new Error(
+        `Crabbox status for remote target "${config.id}" is missing required field: expiresAt.`,
+      );
+    }
 
     return {
       sshTarget: {
