@@ -20,6 +20,7 @@ import {
   registerAutoFixWorker,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
+  type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import {
   parseMetadataValue,
@@ -422,7 +423,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry()),
+    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
   );
 
   if (subCommand === 'list') {
