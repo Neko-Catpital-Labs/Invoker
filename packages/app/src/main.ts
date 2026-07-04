@@ -270,9 +270,45 @@ const REGISTERED_OWNER_WORKER_KINDS = [
   PR_STATUS_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
 ] as const;
+type RegisteredOwnerWorkerSubmit = WorkerRuntimeDependencies['submitter']['submit'];
+
+function submitRegisteredOwnerWorkerMutation(
+  ...args: Parameters<RegisteredOwnerWorkerSubmit>
+): ReturnType<RegisteredOwnerWorkerSubmit> {
+  const [workflowId, priority, channel, mutationArgs, options] = args;
+  if (!workflowMutationCoordinator) {
+    throw new Error('Workflow mutation coordinator is unavailable');
+  }
+  if (!workflowMutationDispatcher.has(channel)) {
+    throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
+  }
+  return workflowMutationCoordinator.submit(workflowId, priority, channel, mutationArgs, options);
+}
+
+function buildRegisteredOwnerWorkerDeps(
+  store: WorkerRuntimeDependencies['store'],
+  checkMergeGateStatuses: NonNullable<WorkerRuntimeDependencies['reviewGate']>['checkMergeGateStatuses'],
+): WorkerRuntimeDependencies {
+  return {
+    store,
+    submitter: {
+      submit: submitRegisteredOwnerWorkerMutation,
+    },
+    logger,
+    messageBus,
+    reviewGate: {
+      checkMergeGateStatuses,
+    },
+    autoFix: {
+      defaultAutoFixRetries: invokerConfig.autoFixRetries,
+      getAutoFixAgent: () => invokerConfig.autoFixAgent,
+      getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
+    },
+  };
+}
 
 function startRegisteredOwnerWorkers(deps: WorkerRuntimeDependencies): WorkerRuntime[] {
-  const registry = registerBuiltinWorkers(createWorkerRegistry());
+  const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
   const workers: WorkerRuntime[] = [];
   for (const kind of REGISTERED_OWNER_WORKER_KINDS) {
     const definition = registry.get(kind);
@@ -1610,32 +1646,14 @@ function startHeadlessMode(): void {
           logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
         });
 
-        registeredOwnerWorkers.push(...startRegisteredOwnerWorkers({
-          store: persistence,
-          submitter: {
-            submit: (workflowId, priority, channel, mutationArgs, options) => {
-              if (!workflowMutationCoordinator) {
-                throw new Error('Workflow mutation coordinator is unavailable');
-              }
-              if (!workflowMutationDispatcher.has(channel)) {
-                throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
-              }
-              return workflowMutationCoordinator.submit(workflowId, priority, channel, mutationArgs, options);
-            },
-          },
-          logger,
-          messageBus,
-          reviewGate: {
-            checkMergeGateStatuses: async () => {
+        registeredOwnerWorkers.push(...startRegisteredOwnerWorkers(
+          buildRegisteredOwnerWorkerDeps(
+            persistence,
+            async () => {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
-          },
-          autoFix: {
-            defaultAutoFixRetries: invokerConfig.autoFixRetries,
-            getAutoFixAgent: () => invokerConfig.autoFixAgent,
-            getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
-          },
-        }));
+          ),
+        ));
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
@@ -3395,32 +3413,14 @@ function createEmbeddedTerminalBackendFromConfig(
     }
 
     if (ownerMode) {
-      registeredOwnerWorkers.push(...startRegisteredOwnerWorkers({
-        store: persistence,
-        submitter: {
-          submit: (workflowId, priority, channel, args, options) => {
-            if (!workflowMutationCoordinator) {
-              throw new Error('Workflow mutation coordinator is unavailable');
-            }
-            if (!workflowMutationDispatcher.has(channel)) {
-              throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
-            }
-            return workflowMutationCoordinator.submit(workflowId, priority, channel, args, options);
-          },
-        },
-        logger,
-        messageBus,
-        reviewGate: {
-          checkMergeGateStatuses: async () => {
+      registeredOwnerWorkers.push(...startRegisteredOwnerWorkers(
+        buildRegisteredOwnerWorkerDeps(
+          persistence,
+          async () => {
             await requireTaskExecutor().checkMergeGateStatuses();
           },
-        },
-        autoFix: {
-          defaultAutoFixRetries: invokerConfig.autoFixRetries,
-          getAutoFixAgent: () => invokerConfig.autoFixAgent,
-          getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
-        },
-      }));
+        ),
+      ));
     }
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
