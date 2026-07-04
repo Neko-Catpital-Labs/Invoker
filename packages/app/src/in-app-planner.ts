@@ -18,14 +18,7 @@ import type {
   PlanningPresetOption,
 } from '@invoker/contracts';
 import type { AgentRegistry } from '@invoker/execution-engine';
-import {
-  BUILTIN_HARNESS_PRESETS,
-  DEFAULT_HARNESS_PRESET,
-  PlanConversation,
-  extractYamlPlan,
-  summarizePlanText,
-} from '@invoker/surfaces';
-import type { HarnessPreset, PlanningCommandBuilder } from '@invoker/surfaces';
+import type { HarnessPreset, PlanConversation, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
 export interface LoadedGeneratedPlan {
@@ -61,8 +54,24 @@ export type InAppPlanningChatSessions = Map<string, InAppPlanningChatSession>;
 export function createInAppPlanningChatSessions(): InAppPlanningChatSessions {
   return new Map();
 }
+async function loadPlannerSurfaces(): Promise<{
+  BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset>;
+  DEFAULT_HARNESS_PRESET: string;
+  PlanConversation: new (...args: any[]) => PlanConversation;
+  extractYamlPlan: (output: string) => string | null;
+  summarizePlanText: (planText: string) => InAppPlanningPlanSummary | null;
+}> {
+  try {
+    // Static import cannot work in required-fast CI because that job boots the built app
+    // before the workspace @invoker/surfaces package has produced dist/index.js.
+    return await import('@invoker/surfaces');
+  } catch {
+    return await import('../../surfaces/src/index.ts');
+  }
+}
 
 async function resolveHarnessPresets(config: InvokerConfig): Promise<Record<string, HarnessPreset>> {
+  const { BUILTIN_HARNESS_PRESETS } = await loadPlannerSurfaces();
   return {
     ...BUILTIN_HARNESS_PRESETS,
     ...(config.slackHarnessPresets ?? {}),
@@ -70,6 +79,7 @@ async function resolveHarnessPresets(config: InvokerConfig): Promise<Record<stri
 }
 
 async function resolveDefaultPresetKey(config: InvokerConfig): Promise<string> {
+  const { DEFAULT_HARNESS_PRESET } = await loadPlannerSurfaces();
   return config.defaultSlackHarnessPreset ?? DEFAULT_HARNESS_PRESET;
 }
 
@@ -133,6 +143,7 @@ async function createSession(
     return { error: `Unknown planner preset "${presetKey}".` };
   }
 
+  const { PlanConversation } = await loadPlannerSurfaces();
   const createdAt = new Date().toISOString();
   const session: InAppPlanningChatSession = {
     id: randomUUID(),
@@ -200,6 +211,7 @@ export async function planFromGoal(
   }
 
   try {
+    const { PlanConversation, extractYamlPlan } = await loadPlannerSurfaces();
     const conversation = new PlanConversation({
       tool: preset.tool,
       model: preset.model,
@@ -350,6 +362,7 @@ export async function sendPlanningChatMessage(
         return { ok: true, sessionId: activeSession.id, reply, draftPlanAvailable: false };
       }
 
+      const { summarizePlanText } = await loadPlannerSurfaces();
       const summary = summarizePlanText(planText);
       if (!summary) {
         const fallbackReply = 'I drafted a plan, but I could not turn it into simple steps. Ask me to regenerate it before submitting.';
@@ -409,6 +422,7 @@ export async function submitPlanningChatDraft(
   }
 
   try {
+    const { summarizePlanText } = await loadPlannerSurfaces();
     if (!summarizePlanText(planText)) {
       return { ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' };
     }
