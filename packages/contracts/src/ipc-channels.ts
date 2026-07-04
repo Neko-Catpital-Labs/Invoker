@@ -241,6 +241,110 @@ export type InAppPlanResponse =
       error: string;
     };
 
+export interface PlanningPresetOption {
+  key: string;
+  label: string;
+  tool: string;
+  model?: string;
+  isDefault: boolean;
+}
+
+export interface InAppPlanningPlanSummary {
+  name: string;
+  taskCount: number;
+  steps: string[];
+}
+export type InAppPlanningSessionStatus =
+  | 'still_discussing'
+  | 'waiting_for_answer'
+  | 'draft_ready'
+  | 'submitted';
+
+export interface InAppPlanningChatLine {
+  id: number;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  tone?: 'muted' | 'error' | 'success';
+  createdAt: string;
+}
+
+export interface InAppPlanningSessionSummary {
+  id: string;
+  title: string;
+  status: InAppPlanningSessionStatus;
+  presetKey: string;
+  messages: InAppPlanningChatLine[];
+  draftPlanAvailable: boolean;
+  draftPlanSummary?: InAppPlanningPlanSummary;
+  submittedWorkflowId?: string;
+  submittedPlanName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InAppPlanningCreateSessionRequest {
+  presetKey?: string;
+  title?: string;
+}
+
+export type InAppPlanningCreateSessionResponse =
+  | {
+      ok: true;
+      session: InAppPlanningSessionSummary;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export type InAppPlanningListSessionsResponse = {
+  ok: true;
+  sessions: InAppPlanningSessionSummary[];
+};
+
+
+export interface InAppPlanningChatRequest {
+  sessionId?: string;
+  message: string;
+  presetKey?: string;
+}
+
+export type InAppPlanningChatResponse =
+  | {
+      ok: true;
+      sessionId: string;
+      reply: string;
+      draftPlanAvailable: boolean;
+      draftPlanSummary?: InAppPlanningPlanSummary;
+    }
+  | {
+      ok: false;
+      sessionId?: string;
+      error: string;
+    };
+
+export interface InAppPlanningSubmitRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningSubmitResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export interface InAppPlanningResetRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningResetResponse = { ok: true };
+
+
 
 export interface WorkflowListEntry {
   id: string;
@@ -470,6 +574,30 @@ export const IpcChannels = {
   'invoker:plan-from-goal': {} as {
     request: [request: InAppPlanRequest];
     response: InAppPlanResponse;
+  },
+  'invoker:planning-chat-create': {} as {
+    request: [request?: InAppPlanningCreateSessionRequest];
+    response: InAppPlanningCreateSessionResponse;
+  },
+  'invoker:planning-chat-list': {} as {
+    request: [];
+    response: InAppPlanningListSessionsResponse;
+  },
+  'invoker:planning-chat-send': {} as {
+    request: [request: InAppPlanningChatRequest];
+    response: InAppPlanningChatResponse;
+  },
+  'invoker:planning-chat-submit': {} as {
+    request: [request: InAppPlanningSubmitRequest];
+    response: InAppPlanningSubmitResponse;
+  },
+  'invoker:planning-chat-reset': {} as {
+    request: [request: InAppPlanningResetRequest];
+    response: InAppPlanningResetResponse;
+  },
+  'invoker:get-planning-presets': {} as {
+    request: [];
+    response: PlanningPresetOption[];
   },
   'invoker:load-plan': {} as {
     request: [planText: string];
@@ -808,6 +936,10 @@ export const IpcTestOnlyChannels = {
   },
   'invoker:set-test-plan-from-goal-response': {} as {
     request: [response: { planYaml: string; planName: string } | null];
+    response: void;
+  },
+  'invoker:set-test-planning-chat-response': {} as {
+    request: [response: { planYaml: string; planName: string; reply?: string } | null];
     response: void;
   },
 } as const;
