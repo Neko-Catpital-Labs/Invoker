@@ -11,14 +11,13 @@
 # Provides:
 #   Variables: REPO_ROOT, RUNNER, IPC_HELPER (from headless-lib.sh),
 #              TARGET_REPO, PR_AUTHOR, CODERABBIT_LOGIN, CRON_LOCK, DRY_RUN
-#   Functions: log_line, cron_lock, ledger_init, ledger_record, ledger_count,
-#              ledger_marker_seen, ledger_max_marker, gh_json,
+#   Functions: log_line, cron_lock, claim_key, ledger_init, ledger_record,
+#              ledger_count, ledger_marker_seen, ledger_max_marker, gh_json,
 #              resolve_workflow_for_pr
 #
-# Both jobs run their mutating operation SYNCHRONOUSLY while holding a single
-# shared lock, so only one PR cron operation runs at a time (the other exits
-# this tick and retries in 5 min). The lock prefers flock (Linux owner host)
-# and falls back to an atomic mkdir lock where flock is absent (e.g. macOS).
+# PR cron jobs acquire one shared slot from a bounded pool, then claim a single
+# PR or stack before mutating it. That allows limited parallelism without two
+# workers fixing the same branch at once.
 
 # headless-lib.sh: REPO_ROOT, RUNNER, IPC_HELPER, headless_query, ... It keys
 # off ${BASH_SOURCE[0]} so it resolves correctly no matter the caller's cwd.
@@ -33,8 +32,9 @@ TARGET_REPO="${INVOKER_GITHUB_TARGET_REPO:-Neko-Catpital-Labs/Invoker}"
 PR_AUTHOR="${INVOKER_PR_CRON_AUTHOR:-EdbertChan}"
 CODERABBIT_LOGIN="${INVOKER_CODERABBIT_LOGIN:-coderabbitai[bot]}"
 CRON_LOCK="${INVOKER_PR_CRON_LOCK:-${TMPDIR:-/tmp}/invoker-pr-crons.lock}"
+CRON_MAX_CONCURRENCY="${INVOKER_PR_CRON_MAX_CONCURRENCY:-1}"
+CLAIM_LOCK_ROOT="${INVOKER_PR_CLAIM_LOCK_ROOT:-${TMPDIR:-/tmp}/invoker-pr-claims}"
 DRY_RUN="${INVOKER_PR_CRON_DRY_RUN:-0}"
-
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -44,27 +44,20 @@ log_line() {
 }
 
 # ---------------------------------------------------------------------------
-# Shared cross-job lock (decision 3): one PR cron operation at a time.
-# Exits 0 (clean no-op) when the other job holds the lock.
+# Shared cross-job slot pool. Each mutating cron run takes one slot, then claims
+# one PR/stack before acting on it. Exits 0 (clean no-op) when no slot is free.
 # ---------------------------------------------------------------------------
 
 _cron_lock_reap_stale() {
-  # Steal a mkdir lock only when its holder is gone. The holder records its PID
-  # in the lock dir; we reap on a dead PID and NEVER on age alone, so a healthy
-  # long run keeps the lock no matter how long it takes (age-based reaping would
-  # break mutual exclusion once a run crossed the threshold). flock has no such
-  # risk (the kernel releases the fd), so this only applies to the mkdir path.
   local lockdir="$1"
   local pid_file="$lockdir/pid"
   local holder=""
   [ -f "$pid_file" ] && holder="$(cat "$pid_file" 2>/dev/null || true)"
   if [ -n "$holder" ]; then
-    kill -0 "$holder" 2>/dev/null && return 0   # holder alive — do not reap
+    kill -0 "$holder" 2>/dev/null && return 0
     rm -rf "$lockdir" 2>/dev/null || true
     return 0
   fi
-  # No PID recorded (a pre-PID or garbled lock): fall back to an age threshold so
-  # a crashed legacy holder is still cleaned up eventually.
   local max_age now mtime
   max_age="${INVOKER_PR_CRON_LOCK_STALE_SECS:-3600}"
   now="$(date +%s)"
@@ -74,27 +67,85 @@ _cron_lock_reap_stale() {
   fi
 }
 
+_cron_try_flock_slot() {
+  local slot_path="$1"
+  local fd_var="$2"
+  local fd
+  exec {fd}>"$slot_path"
+  if flock -n "$fd"; then
+    printf -v "$fd_var" '%s' "$fd"
+    return 0
+  fi
+  eval "exec ${fd}>&-"
+  return 1
+}
+
 cron_lock() {
+  local slots="${CRON_MAX_CONCURRENCY:-1}"
+  if [ "$slots" -lt 1 ]; then
+    slots=1
+  fi
+
   if command -v flock >/dev/null 2>&1; then
-    exec 9>"$CRON_LOCK"
-    if ! flock -n 9; then
-      log_line "another PR cron operation in progress; exiting"
-      exit 0
+    local idx slot_fd slot_path
+    for idx in $(seq 1 "$slots"); do
+      slot_path="${CRON_LOCK%.lock}.slot.${idx}.lock"
+      if _cron_try_flock_slot "$slot_path" slot_fd; then
+        CRON_SLOT_FD="$slot_fd"
+        CRON_SLOT_PATH="$slot_path"
+        return 0
+      fi
+    done
+    log_line "all PR cron slots busy; exiting"
+    exit 0
+  fi
+
+  local idx lockdir
+  for idx in $(seq 1 "$slots"); do
+    lockdir="${CRON_LOCK}.slot.${idx}.d"
+    [ -d "$lockdir" ] && _cron_lock_reap_stale "$lockdir"
+    if mkdir "$lockdir" 2>/dev/null; then
+      printf '%s\n' "$$" > "$lockdir/pid"
+      CRON_LOCK_DIR="$lockdir"
+      trap 'rm -rf "'"$lockdir"'" 2>/dev/null || true' EXIT
+      return 0
     fi
+  done
+  log_line "all PR cron slots busy; exiting"
+  exit 0
+}
+
+claim_key() {
+  local key="$1"
+  local safe slot_path
+  safe="$(python3 - "$key" <<'PY'
+import hashlib, sys
+print(hashlib.sha256((sys.argv[1] or '').encode()).hexdigest())
+PY
+)"
+  mkdir -p "$CLAIM_LOCK_ROOT"
+  slot_path="$CLAIM_LOCK_ROOT/$safe.lock"
+  if command -v flock >/dev/null 2>&1; then
+    local fd
+    exec {fd}>"$slot_path"
+    if ! flock -n "$fd"; then
+      eval "exec ${fd}>&-"
+      return 1
+    fi
+    CLAIM_FD="$fd"
+    CLAIM_KEY="$key"
     return 0
   fi
 
-  # Portable fallback: atomic mkdir lock, reaped only on a dead holder PID.
-  local lockdir="${CRON_LOCK}.d"
+  local lockdir="${slot_path}.d"
   [ -d "$lockdir" ] && _cron_lock_reap_stale "$lockdir"
   if ! mkdir "$lockdir" 2>/dev/null; then
-    log_line "another PR cron operation in progress; exiting"
-    exit 0
+    return 1
   fi
   printf '%s\n' "$$" > "$lockdir/pid"
-  CRON_LOCK_DIR="$lockdir"
-  # shellcheck disable=SC2064
-  trap 'rm -rf "'"$lockdir"'" 2>/dev/null || true' EXIT
+  CLAIM_LOCK_DIR="$lockdir"
+  CLAIM_KEY="$key"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
