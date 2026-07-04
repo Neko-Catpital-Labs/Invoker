@@ -17,29 +17,45 @@ import {
   type AutoFixRecoveryStore,
   type AutoFixRecoverySubmitter,
 } from './auto-fix-recovery.js';
+import {
+  PR_STATUS_WORKER_KIND,
+  createPrStatusWorker,
+  type PrStatusReviewGate,
+} from './workers/pr-status-worker.js';
+import {
+  CI_FAILURE_WORKER_KIND,
+  createCiFailureWorker,
+  type CiFailureWorkerStore,
+  type CiFailureWorkerSubmitter,
+} from './workers/ci-failure-worker.js';
 import type { WorkerRuntime } from './worker-runtime.js';
 
+export { PR_STATUS_WORKER_KIND } from './workers/pr-status-worker.js';
+export { CI_FAILURE_WORKER_KIND } from './workers/ci-failure-worker.js';
 /** Registry kind for the built-in auto-fix recovery worker. */
 export const AUTO_FIX_WORKER_KIND = 'autofix';
 
-/** Auto-fix tuning handed to a worker factory. */
 export interface AutoFixWorkerConfig {
   /** Default attempt budget when a task does not override it. */
   defaultAutoFixRetries?: number;
   /** Resolves the agent that performs each auto-fix, when one is configured. */
   getAutoFixAgent?: () => string | undefined;
+  /** Resolves the execution model used by worker-submitted auto-fixes. */
+  getAutoFixExecutionModel?: () => string | undefined;
 }
 
 /** Dependencies injected into a worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore;
+  store: AutoFixRecoveryStore & CiFailureWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
-  submitter: AutoFixRecoverySubmitter;
+  submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter;
   /** Operator logger. */
   logger: Logger;
   /** Optional bus that turns lifecycle events into immediate wakeups. */
   messageBus?: MessageBus;
+  /** Review-gate polling surface owned by the task runner. */
+  reviewGate?: PrStatusReviewGate;
   /** Auto-fix tuning. */
   autoFix?: AutoFixWorkerConfig;
 }
@@ -105,5 +121,49 @@ export function registerAutoFixWorker(registry: WorkerRegistry): WorkerRegistry 
         },
       }),
   });
+  return registry;
+}
+
+
+/** Register the built-in PR status worker. */
+export function registerPrStatusWorker(registry: WorkerRegistry): WorkerRegistry {
+  registry.register({
+    kind: PR_STATUS_WORKER_KIND,
+    note: 'Polls review-gate PR status through the registered TaskRunner review-gate check.',
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createPrStatusWorker({
+        logger: deps.logger,
+        reviewGate: deps.reviewGate,
+      }),
+  });
+  return registry;
+}
+
+/** Register the built-in CI-failure repair worker. */
+export function registerCiFailureWorker(registry: WorkerRegistry): WorkerRegistry {
+  registry.register({
+    kind: CI_FAILURE_WORKER_KIND,
+    note: 'Submits head-SHA guarded CI repair intents for failed review-gate checks.',
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createCiFailureWorker({
+        logger: deps.logger,
+        messageBus: deps.messageBus,
+        ciFailure: {
+          store: deps.store,
+          submitter: deps.submitter,
+          defaultAutoFixRetries: deps.autoFix?.defaultAutoFixRetries,
+          getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
+          getAutoFixExecutionModel: deps.autoFix?.getAutoFixExecutionModel,
+        },
+      }),
+  });
+  return registry;
+}
+
+/** Register every built-in worker in the stable built-in order. */
+export function registerBuiltinWorkers(registry: WorkerRegistry): WorkerRegistry {
+  registerAutoFixWorker(registry);
+  registerPrStatusWorker(registry);
+  registerCiFailureWorker(registry);
   return registry;
 }
