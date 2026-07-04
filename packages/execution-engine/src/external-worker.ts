@@ -144,15 +144,15 @@ function createExternalWorkerRuntime(config: ExternalWorkerConfig): ExternalWork
   };
 }
 
-export function registerExternalWorkers(
-  registry: WorkerRegistry,
+export function registerExternalWorkers<TDeps>(
+  registry: WorkerRegistry<TDeps>,
   externalWorkers: readonly ExternalWorkerConfig[] | undefined,
-): WorkerRegistry {
+): WorkerRegistry<TDeps> {
   for (const config of externalWorkers ?? []) {
     registry.register({
       kind: config.kind,
       note: `Supervises external worker process ${config.launch.executable}.`,
-      factory: () => createExternalWorkerRuntime(config),
+      factory: (_deps: TDeps) => createExternalWorkerRuntime(config),
     });
   }
   return registry;

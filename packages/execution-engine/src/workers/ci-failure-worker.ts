@@ -24,6 +24,8 @@ import type {
   ReviewGateFailedCheck,
   WorkflowLifecycleEvent,
 } from '../lifecycle-events.js';
+import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
+import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 
 export const CI_FAILURE_WORKER_KIND = 'ci-failure';
@@ -78,6 +80,29 @@ export interface CiFailureWorkerOptions {
   ciFailure?: Omit<CiFailureWorkerPolicyOptions, 'logger' | 'drainEvents'>;
   onTick?: WorkerTick;
 }
+/** Register the built-in CI-failure repair worker. */
+export function registerCiFailureWorker(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registry.register({
+    kind: CI_FAILURE_WORKER_KIND,
+    note: 'Submits head-SHA guarded CI repair intents for failed review-gate checks.',
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createCiFailureWorker({
+        logger: deps.logger,
+        messageBus: deps.messageBus,
+        ciFailure: {
+          store: deps.store,
+          submitter: deps.submitter,
+          defaultAutoFixRetries: deps.autoFix?.defaultAutoFixRetries,
+          getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
+          getAutoFixExecutionModel: deps.autoFix?.getAutoFixExecutionModel,
+        },
+      }),
+  });
+  return registry;
+}
+
 
 export function ciFailureChecksHash(failedChecks: readonly ReviewGateFailedCheck[]): string {
   const normalized = failedChecks

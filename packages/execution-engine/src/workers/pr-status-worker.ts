@@ -1,7 +1,8 @@
 import type { Logger } from '@invoker/contracts';
 
+import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
+import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
-
 export const PR_STATUS_WORKER_KIND = 'pr-status';
 export const DEFAULT_PR_STATUS_WORKER_INTERVAL_MS = 60_000;
 
@@ -23,6 +24,22 @@ export interface PrStatusWorkerOptions {
   reviewGate?: PrStatusReviewGate;
   onTick?: WorkerTick;
 }
+/** Register the built-in PR status worker. */
+export function registerPrStatusWorker(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registry.register({
+    kind: PR_STATUS_WORKER_KIND,
+    note: 'Polls review-gate PR status through the registered TaskRunner review-gate check.',
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createPrStatusWorker({
+        logger: deps.logger,
+        reviewGate: deps.reviewGate,
+      }),
+  });
+  return registry;
+}
+
 
 export function createPrStatusTick(options: PrStatusWorkerPolicyOptions): WorkerTick {
   return async () => {
