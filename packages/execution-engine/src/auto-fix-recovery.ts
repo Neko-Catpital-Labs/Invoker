@@ -12,10 +12,14 @@ import {
   listOpenFixIntentsForTask,
 } from './auto-fix-intents.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
-import type { RecoveryWorkerWakeupHint, WorkflowLifecycleEvent } from './lifecycle-events.js';
+import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from './lifecycle-events.js';
+import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
+import type { WorkerRegistry } from './worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from './worker-runtime.js';
 
-/** Public worker kind for the auto-fix recovery worker. */
+/** Registry kind for the built-in auto-fix recovery worker. */
+export const AUTO_FIX_WORKER_KIND = 'autofix';
+/** Public runtime kind for the underlying auto-fix recovery worker. */
 export const RECOVERY_WORKER_KIND = 'recovery';
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
@@ -41,6 +45,15 @@ export interface AutoFixRecoverySubmitter {
     options?: { deferDrain?: boolean },
   ): number;
 }
+export interface AutoFixWorkerConfig {
+  /** Default attempt budget when a task does not override it. */
+  defaultAutoFixRetries?: number;
+  /** Resolves the agent that performs each auto-fix, when one is configured. */
+  getAutoFixAgent?: () => string | undefined;
+  /** Resolves the execution model used by worker-submitted auto-fixes. */
+  getAutoFixExecutionModel?: () => string | undefined;
+}
+
 
 export interface AutoFixRecoveryPolicyOptions {
   store: AutoFixRecoveryStore;
@@ -50,6 +63,27 @@ export interface AutoFixRecoveryPolicyOptions {
   getAutoFixAgent?: () => string | undefined;
   getRetryBudget?: (task: TaskState) => number;
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
+}
+/** Register the built-in auto-fix worker. */
+export function registerAutoFixWorker(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registry.register({
+    kind: AUTO_FIX_WORKER_KIND,
+    note: 'Auto-fixes failed tasks by submitting fix-with-agent recovery intents.',
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createRecoveryWorker({
+        logger: deps.logger,
+        messageBus: deps.messageBus,
+        autoFix: {
+          store: deps.store,
+          submitter: deps.submitter,
+          defaultAutoFixRetries: deps.autoFix?.defaultAutoFixRetries,
+          getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
+        },
+      }),
+  });
+  return registry;
 }
 
 export type AutoFixRecoveryCandidate = {

@@ -5,9 +5,9 @@ import {
 
 import type { ExternalWorkerConfig } from './config.js';
 
-export function registerExternalWorkersFromConfig(
+export function registerExternalWorkersFromConfig<TDeps>(
   externalWorkers: readonly ExternalWorkerConfig[] | undefined,
-  registry: WorkerRegistry,
-): WorkerRegistry {
+  registry: WorkerRegistry<TDeps>,
+): WorkerRegistry<TDeps> {
   return registerExternalWorkers(registry, externalWorkers);
 }

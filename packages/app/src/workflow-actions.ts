@@ -102,12 +102,29 @@ export function assertLineageCurrent(
   }
 }
 
+function currentReviewGateLineage(task: TaskState, reviewId: string): ReviewGateLineageFields {
+  const gate = task.execution.reviewGate;
+  const artifact = gate?.artifacts.find((candidate) =>
+    candidate.generation === gate.activeGeneration
+    && candidate.status !== 'discarded'
+    && !candidate.discardedAt
+    && candidate.providerId === reviewId,
+  );
+  return {
+    reviewId: artifact?.providerId ?? task.execution.reviewId,
+    generation: task.execution.generation ?? 0,
+    selectedAttemptId: task.execution.selectedAttemptId,
+    branch: task.execution.branch,
+    headSha: artifact?.headSha,
+  };
+}
+
 function assertReviewGateCiContextCurrent(
   taskId: string,
   context: ReviewGateCiContext,
-  current: ReviewGateLineageFields,
+  task: TaskState,
 ): void {
-  if (!isReviewGateCiContextStale(context, current)) return;
+  if (!isReviewGateCiContextStale(context, currentReviewGateLineage(task, context.reviewId))) return;
   throw new StaleLineageError(
     `Review-gate CI auto-fix for ${taskId} is stale (review=${context.reviewId})`,
   );
@@ -848,7 +865,7 @@ export async function fixWithAgentAction(
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
   if (options.reviewGateContext) {
-    assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task.execution);
+    assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task);
   }
 
   const effectiveAgentName = options.agentName ?? resolveTaskRunnerDefaultExecutionAgent(taskExecutor);

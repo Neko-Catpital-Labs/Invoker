@@ -20,6 +20,7 @@ import {
   type WorkerDefinition,
   type WorkerRegistry,
   type WorkerRuntime,
+  type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import {
   IpcBus,
@@ -481,7 +482,7 @@ function workerDisplayName(kind: string): string {
   return kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : kind;
 }
 
-function printWorkerKinds(registry: WorkerRegistry): void {
+function printWorkerKinds<TDeps>(registry: WorkerRegistry<TDeps>): void {
   process.stdout.write('Worker kinds\n');
   for (const worker of registry.list()) {
     process.stdout.write(`  ${worker.kind} — available (${worker.note})\n`);
@@ -499,8 +500,7 @@ function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorke
  * poll loop, so the two doors can never run competing scans. The CLI owns the
  * foreground lifetime — owner discovery, connect message, the SIGINT/SIGTERM
  * block, and a deterministic stop.
- */
-async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise<number> {
+async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
   const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
@@ -582,7 +582,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
       const registry = registerExternalWorkers(
-        registerAutoFixWorker(createWorkerRegistry()),
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
         readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
       );
       if (subcommand === 'list') {
