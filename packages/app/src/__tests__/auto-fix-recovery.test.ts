@@ -166,6 +166,16 @@ describe('auto-fix recovery candidate validation', () => {
     });
   });
 
+  it('keeps failed tasks eligible after previous auto-fix attempts', () => {
+    const task = makeTask({ execution: { error: 'boom', autoFixAttempts: 100, generation: 1, selectedAttemptId: 'attempt-1' } });
+    const harness = makeRecoveryPolicyHarness(task);
+
+    const candidates = collectValidatedAutoFixRecoveryCandidates(harness.options);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.task.execution.autoFixAttempts).toBe(100);
+  });
+
   it.each([
     {
       name: 'workflow',

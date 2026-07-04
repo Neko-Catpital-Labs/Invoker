@@ -60,7 +60,7 @@ describe('headless fix auto-fix accounting', () => {
     resolveConflictActionMock.mockClear();
   });
 
-  it('does not consume the auto-fix retry budget for a manual fix', async () => {
+  it('does not increment auto-fix attempts for a manual fix', async () => {
     const { runHeadless } = await import('../headless.js');
     const { deps, updateTask } = makeDeps(2);
 

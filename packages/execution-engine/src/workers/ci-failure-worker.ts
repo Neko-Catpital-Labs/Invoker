@@ -136,8 +136,13 @@ export function ciFailureActionKey(event: Pick<
 
 function retryBudgetForTask(task: TaskState, options: CiFailureWorkerPolicyOptions): number {
   const raw = options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0;
+  if (raw === Number.POSITIVE_INFINITY) return Number.POSITIVE_INFINITY;
   if (!Number.isFinite(raw)) return 0;
-  return Math.min(Math.max(0, Math.floor(raw)), 10);
+  return Math.floor(raw) > 0 ? Number.POSITIVE_INFINITY : 0;
+}
+
+function retryBudgetLabel(budget: number): number | 'unlimited' {
+  return budget === Number.POSITIVE_INFINITY ? 'unlimited' : budget;
 }
 
 function loadTaskForEvent(
@@ -358,7 +363,6 @@ function buildCiFailureFixContext(event: ReviewGateCiFailedLifecycleEvent): stri
 function shouldSkipExistingAction(
   options: CiFailureWorkerPolicyOptions,
   event: ReviewGateCiFailedLifecycleEvent,
-  maxAttempts: number,
 ): boolean {
   const externalKey = ciFailureActionKey(event);
   const existing = options.store.getWorkerAction?.(CI_FAILURE_WORKER_KIND, externalKey);
@@ -368,21 +372,6 @@ function shouldSkipExistingAction(
       reason: 'already-recorded',
       existingStatus: existing.status,
       intentId: existing.intentId ?? null,
-    });
-    return true;
-  }
-  if (existing.attemptCount >= maxAttempts) {
-    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because retry budget is exhausted', {
-      reason: 'retry-budget-exhausted',
-      existingStatus: existing.status,
-      attemptCount: existing.attemptCount,
-      maxAttempts,
-    }, existing.intentId);
-    logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
-      reason: 'retry-budget-exhausted',
-      existingStatus: existing.status,
-      attemptCount: existing.attemptCount,
-      maxAttempts,
     });
     return true;
   }
@@ -414,21 +403,8 @@ async function handleCiFailureEvent(
     });
     return;
   }
-  if ((task.execution.autoFixAttempts ?? 0) >= maxAttempts) {
-    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because retry budget is exhausted', {
-      reason: 'retry-budget-exhausted',
-      autoFixAttempts: task.execution.autoFixAttempts ?? 0,
-      maxAttempts,
-    });
-    logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
-      reason: 'retry-budget-exhausted',
-      autoFixAttempts: task.execution.autoFixAttempts ?? 0,
-      maxAttempts,
-    });
-    return;
-  }
 
-  if (shouldSkipExistingAction(options, event, maxAttempts)) return;
+  if (shouldSkipExistingAction(options, event)) return;
 
   const stale = staleReasonForEvent(event, task);
   if (stale.stale) {
@@ -477,7 +453,7 @@ async function handleCiFailureEvent(
     {
       channel: FIX_WITH_AGENT_CHANNEL,
       autoFixAttempts: task.execution.autoFixAttempts ?? 0,
-      maxAttempts,
+      maxAttempts: retryBudgetLabel(maxAttempts),
     },
     intentId,
     selectedAgent,
@@ -489,7 +465,7 @@ async function handleCiFailureEvent(
     agent: selectedAgent ?? null,
     executionModel: executionModel ?? null,
     autoFixAttempts: task.execution.autoFixAttempts ?? 0,
-    maxAttempts,
+    maxAttempts: retryBudgetLabel(maxAttempts),
   });
 }
 
