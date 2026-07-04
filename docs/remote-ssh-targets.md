@@ -77,6 +77,77 @@ tasks:
 
 This is the supported way to run multiple SSH executors in one workflow: define multiple targets, then attach different tasks to different target IDs.
 
+## Crabbox-backed Targets
+
+Crabbox is a machine supplier. Invoker leases a box from Crabbox first, then runs the **same SSH executor** against it. There is no `runnerKind: crabbox` — tasks still use `runnerKind: ssh`. The only difference is the target config: it has `type: crabbox`, so Invoker warms up a lease and reads its SSH host/user/key before connecting.
+
+Add a Crabbox target under `remoteTargets`:
+
+```json
+{
+  "remoteTargets": {
+    "crab-builder": {
+      "type": "crabbox",
+      "crabboxCommand": "crabbox",
+      "provider": "fly",
+      "class": "performance-4x",
+      "ttl": "30m",
+      "idleTimeout": "10m",
+      "network": "default",
+      "target": "ubuntu-22",
+      "stopAfter": "success",
+      "keepOnFailure": true,
+      "port": 22
+    }
+  }
+}
+```
+
+Tasks reference it exactly like any other SSH target:
+
+```yaml
+tasks:
+  - id: build
+    description: "Build on a leased Crabbox machine"
+    command: "pnpm run build"
+    runnerKind: ssh
+    poolMemberId: crab-builder
+```
+
+### Lifecycle
+
+1. Invoker runs `crabbox warmup ...` to create or find the leased machine.
+2. It reads the lease's SSH host, user, and key from `crabbox status`.
+3. The normal `SshExecutor` connects and runs the task command.
+4. After the task settles, Invoker stops the lease based on `stopAfter` and `keepOnFailure`.
+
+### Cleanup policy
+
+`stopAfter` decides when Invoker stops the lease after a task finishes:
+
+| Value | Stops the lease when |
+|-------|----------------------|
+| `success` | the task succeeded (default — don't leak machines) |
+| `failure` | the task failed |
+| `always` | the task succeeded or failed |
+| `never` | never; you stop it yourself |
+
+`keepOnFailure: true` (default) overrides `stopAfter` on failure: a failed task's machine is kept alive so you can SSH in and debug. With `keepOnFailure: false`, failures follow `stopAfter` like any other outcome.
+
+> **Warning:** `keepOnFailure` only keeps Invoker from stopping the lease. It does **not** defeat Crabbox's own `ttl` (lease time-to-live) or `idleTimeout` cleanup. A kept machine still disappears once its TTL expires or it sits idle past the idle timeout. Debug it promptly, or raise `ttl`/`idleTimeout` for that target.
+
+### Recovery commands
+
+When a lease is kept after a failure, Invoker logs the lease id. To inspect or clean it up manually:
+
+```bash
+# Open an interactive SSH session to the kept lease
+crabbox ssh --id <lease>
+
+# Stop (release) the lease when you're done debugging
+crabbox stop <lease>
+```
+
 ## Usage in Plans
 
 Reference a remote target in a plan YAML task:

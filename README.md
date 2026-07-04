@@ -201,6 +201,29 @@ tasks:
 
 Use this when you want Invoker to spread work across machines you already manage. The SSH executor does not provision the hosts for you; it connects to the target you name and runs there.
 
+### Crabbox-backed SSH targets
+
+When you don't have a host ready, a `type: crabbox` target lets Invoker lease one. Invoker warms up a Crabbox box, reads its SSH details, then runs the **same SSH executor** against it — tasks still use `runnerKind: ssh`, never `runnerKind: crabbox`.
+
+```json
+"remoteTargets": {
+  "crab-builder": {
+    "type": "crabbox",
+    "crabboxCommand": "crabbox",
+    "provider": "fly",
+    "class": "performance-4x",
+    "ttl": "30m",
+    "idleTimeout": "10m",
+    "network": "default",
+    "target": "ubuntu-22",
+    "stopAfter": "success",
+    "keepOnFailure": true
+  }
+}
+```
+
+`stopAfter` controls when Invoker stops the lease (`success`/`failure`/`always`/`never`). `keepOnFailure: true` keeps a failed task's box alive so you can debug it — but it does **not** override Crabbox's own `ttl` or `idleTimeout`, so a kept box still goes away on its own. To inspect or clean up a kept lease: `crabbox ssh --id <lease>` and `crabbox stop <lease>`. Full details: [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md#crabbox-backed-targets).
+
 ## Quick start
 
 For a guided first run, use [the first agent workflow tutorial](docs/tutorial-first-agent-workflow.md). It gives you a toy repo and exact UI checkpoints.
