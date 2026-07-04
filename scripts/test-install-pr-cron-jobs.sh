@@ -52,7 +52,7 @@ echo "$cr" | grep -F "# invoker-cron-master-head-test-autofix" | grep -q '^17 3 
 count="$(cron_now | grep -c 'invoker-cron-' || true)"
 [ "$count" -eq 3 ] || fail "expected 3 cron lines, found $count" "$(cron_now)"
 
-# Idempotency: re-run, still exactly two.
+# Idempotency: re-run, still exactly three.
 bash scripts/install-pr-cron-jobs.sh >/dev/null
 count="$(cron_now | grep -c 'invoker-cron-' || true)"
 [ "$count" -eq 3 ] || fail "after re-install expected 3 cron lines, found $count" "$(cron_now)"
