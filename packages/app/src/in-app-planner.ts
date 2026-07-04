@@ -30,6 +30,7 @@ export interface InAppPlanningChatSession {
   id: string;
   presetKey: string;
   conversation: PlanConversation;
+  pendingSend?: Promise<void>;
 }
 
 export type InAppPlanningChatSessions = Map<string, InAppPlanningChatSession>;
@@ -182,30 +183,30 @@ export async function sendPlanningChatMessage(
     return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
   }
 
-  const presets = await resolveHarnessPresets(deps.config);
-  const defaultPresetKey = await resolveDefaultPresetKey(deps.config);
-  const existingSession = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
-  const requestedPresetKey = typeof rawRequest?.presetKey === 'string' && rawRequest.presetKey
-    ? rawRequest.presetKey
-    : undefined;
-  const effectivePresetKey = existingSession?.presetKey ?? requestedPresetKey ?? defaultPresetKey;
-  const preset = presets[effectivePresetKey];
-  if (!preset) {
-    return {
-      ok: false,
-      sessionId: rawRequest?.sessionId,
-      error: `Unknown planner preset "${effectivePresetKey}".`,
-    };
-  }
-
-  let session = existingSession;
-  let sessionId = existingSession?.id ?? rawRequest?.sessionId;
+  let sessionId = rawRequest?.sessionId;
   try {
+    const presets = await resolveHarnessPresets(deps.config);
+    const defaultPresetKey = await resolveDefaultPresetKey(deps.config);
+    const existingSession = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
+    const requestedPresetKey = typeof rawRequest?.presetKey === 'string' && rawRequest.presetKey
+      ? rawRequest.presetKey
+      : undefined;
+    const effectivePresetKey = existingSession?.presetKey ?? requestedPresetKey ?? defaultPresetKey;
+    const preset = presets[effectivePresetKey];
+    if (!preset) {
+      return {
+        ok: false,
+        sessionId: rawRequest?.sessionId,
+        error: `Unknown planner preset "${effectivePresetKey}".`,
+      };
+    }
+
+    let session = existingSession;
     if (!session) {
       const { PlanConversation } = await loadPlannerSurfaces();
-      sessionId = randomUUID();
+      const newSessionId = randomUUID();
       session = {
-        id: sessionId,
+        id: newSessionId,
         presetKey: effectivePresetKey,
         conversation: new PlanConversation({
           tool: preset.tool,
@@ -218,32 +219,39 @@ export async function sendPlanningChatMessage(
           planningCommandBuilder: deps.planningCommandBuilder,
         }),
       };
-      deps.sessions.set(sessionId, session);
+      deps.sessions.set(newSessionId, session);
     }
+    sessionId = session.id;
 
-    const reply = await session.conversation.sendMessage(formatConversationalPlanningMessage(message));
-    const planText = session.conversation.getDraftedPlan();
-    if (!planText) {
-      return { ok: true, sessionId: session.id, reply, draftPlanAvailable: false };
-    }
+    const activeSession = session;
+    const previousSend = activeSession.pendingSend ?? Promise.resolve();
+    const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
+      const reply = await activeSession.conversation.sendMessage(formatConversationalPlanningMessage(message));
+      const planText = activeSession.conversation.getDraftedPlan();
+      if (!planText) {
+        return { ok: true, sessionId: activeSession.id, reply, draftPlanAvailable: false };
+      }
 
-    const { summarizePlanText } = await loadPlannerSurfaces();
-    const summary = summarizePlanText(planText);
-    if (!summary) {
+      const { summarizePlanText } = await loadPlannerSurfaces();
+      const summary = summarizePlanText(planText);
+      if (!summary) {
+        return {
+          ok: true,
+          sessionId: activeSession.id,
+          reply: 'I drafted a plan, but I could not turn it into simple steps. Ask me to regenerate it before submitting.',
+          draftPlanAvailable: false,
+        };
+      }
       return {
         ok: true,
-        sessionId: session.id,
-        reply: 'I drafted a plan, but I could not turn it into simple steps. Ask me to regenerate it before submitting.',
-        draftPlanAvailable: false,
+        sessionId: activeSession.id,
+        reply: formatDraftPlanReply(summary),
+        draftPlanAvailable: true,
+        draftPlanSummary: summary,
       };
-    }
-    return {
-      ok: true,
-      sessionId: session.id,
-      reply: formatDraftPlanReply(summary),
-      draftPlanAvailable: true,
-      draftPlanSummary: summary,
-    };
+    });
+    activeSession.pendingSend = turn.then(() => undefined, () => undefined);
+    return await turn;
   } catch (error) {
     return {
       ok: false,
@@ -272,13 +280,18 @@ export async function submitPlanningChatDraft(
     return { ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' };
   }
 
-  const { summarizePlanText } = await loadPlannerSurfaces();
-  if (!summarizePlanText(planText)) {
-    return { ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' };
-  }
+  try {
+    const { summarizePlanText } = await loadPlannerSurfaces();
+    if (!summarizePlanText(planText)) {
+      return { ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' };
+    }
 
-  const loaded = await deps.loadGeneratedPlan(planText);
-  return { ok: true, planName: loaded.planName, workflowId: loaded.workflowId };
+    const loaded = await deps.loadGeneratedPlan(planText);
+    deps.sessions.delete(sessionId);
+    return { ok: true, planName: loaded.planName, workflowId: loaded.workflowId };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export function resetPlanningChat(
