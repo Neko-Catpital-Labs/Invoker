@@ -4439,8 +4439,11 @@ function createEmbeddedTerminalBackendFromConfig(
         repoRoot,
         logger,
         // If a live executor handle exists we can safely attach instead of
-        // refusing — embedded mode is designed for this case.
+        // refusing — embedded mode is designed for this case. Passing the live
+        // executor also skips the Crabbox lease refresh so a transient
+        // `crabbox status` failure cannot block attaching to a running task.
         allowRunning: Boolean(liveHandle),
+        liveExecutor: liveHandle?.executor,
         runningTaskReason:
           'Task is still running or being fixed with AI. View output in the terminal panel below.',
       });

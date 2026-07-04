@@ -1252,6 +1252,46 @@ describe('Crabbox SSH terminal restore', () => {
     expect(result.reason).toContain('lease not found');
     loadConfigSpy.mockRestore();
   });
+
+  it('attaches to a live executor without refreshing the Crabbox lease for a running task', async () => {
+    const { resolveTaskTerminalSpec } = await import('../open-terminal-for-task.js');
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: CRABBOX_TARGET_CONFIG,
+    } as any);
+
+    // The refresh runner throws if touched — a live attach must never run
+    // `crabbox status`, so a transient status failure / missing CLI cannot
+    // block opening a terminal for an actually running Crabbox SSH task.
+    const resolver = new CrabboxTargetResolver(async () => {
+      throw new Error('crabbox status must not run when attaching to a live executor');
+    });
+
+    const liveExecutor = new SshExecutor({
+      host: 'live.example',
+      user: 'runner',
+      sshKeyPath: '/home/me/.ssh/live',
+      port: 22,
+    });
+
+    // Running task with a live handle: main.ts sets allowRunning + liveExecutor.
+    const persistence = crabboxPersistence({ getTaskStatus: vi.fn(() => 'running') });
+
+    const resolved = await resolveTaskTerminalSpec({
+      taskId: 'crab-live-task',
+      persistence: persistence as any,
+      executorRegistry: new ExecutorRegistry(),
+      repoRoot: '/repo',
+      allowRunning: true,
+      liveExecutor,
+      crabboxResolver: resolver,
+    });
+
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.executor).toBe(liveExecutor);
+    }
+    loadConfigSpy.mockRestore();
+  });
 });
 
 // ── Codex vs Claude session resume ───────────────────────────

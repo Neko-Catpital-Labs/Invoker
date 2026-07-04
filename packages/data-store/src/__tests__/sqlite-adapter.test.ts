@@ -1061,6 +1061,47 @@ describe('SQLiteAdapter', () => {
       expect(reloaded?.status).toBe('completed');
       expect(reloaded?.remoteLeaseMetadata).toEqual(crabboxLease);
     });
+
+    it('getRemoteLeaseMetadata returns the lease for well-formed metadata', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-lease-read', {
+        config: { runnerKind: 'ssh' },
+        execution: { remoteLeaseMetadata: crabboxLease },
+      }));
+
+      expect(adapter.getRemoteLeaseMetadata('t-lease-read')).toEqual(crabboxLease);
+    });
+
+    it('getRemoteLeaseMetadata returns null without throwing for malformed or drifted metadata', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-lease-bad'));
+
+      // Untrusted persisted content must never crash restore. Each of these
+      // would otherwise either throw in JSON.parse or throw downstream at a
+      // `.trim()` on a non-string lease field.
+      const badRows = [
+        '{',                                                       // malformed JSON
+        'null',                                                     // valid JSON, not an object
+        '"just a string"',                                          // valid JSON, not an object
+        JSON.stringify({ provider: 'unknown', targetId: 'crab1' }), // wrong provider
+        JSON.stringify({ provider: 'crabbox' }),                    // missing targetId
+        JSON.stringify({ provider: 'crabbox', targetId: '  ' }),    // blank targetId
+        JSON.stringify({ provider: 'crabbox', targetId: 'crab1', leaseId: 123 }), // non-string leaseId
+        JSON.stringify({ provider: 'crabbox', targetId: 'crab1', slug: 42 }),     // non-string slug
+      ];
+
+      for (const raw of badRows) {
+        (adapter as any).db.run(
+          'UPDATE tasks SET remote_lease_metadata = ? WHERE id = ?',
+          [raw, 't-lease-bad'],
+        );
+        let result: unknown;
+        expect(() => {
+          result = adapter.getRemoteLeaseMetadata('t-lease-bad');
+        }, `raw=${raw}`).not.toThrow();
+        expect(result, `raw=${raw}`).toBeNull();
+      }
+    });
   });
 
   describe('task-state version persistence', () => {

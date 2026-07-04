@@ -158,6 +158,14 @@ export interface ResolveTaskTerminalSpecOptions {
   runningTaskReason?: string;
   /** When true, allow resolution even if the task status is `running` / `fixing_with_ai` — used by the embedded manager which can attach to a live executor handle. */
   allowRunning?: boolean;
+  /**
+   * Live executor handle for a task that is currently running. When present the
+   * embedded manager attaches to this executor directly, so restore MUST NOT run
+   * a Crabbox lease refresh (or re-resolve a static SSH target): a transient
+   * `crabbox status` failure, expired persisted lease, or missing CLI must not
+   * block opening a terminal for an actually running task.
+   */
+  liveExecutor?: Executor;
   /** Resolver used to refresh Crabbox leases for SSH terminal restore. Injectable for tests. */
   crabboxResolver?: CrabboxTargetResolver;
   logger?: Logger;
@@ -265,14 +273,20 @@ export async function resolveTaskTerminalSpec(
     `meta from DB: runnerKind=${repairedMeta.runnerKind} workspacePath=${repairedMeta.workspacePath ?? 'undefined'} branch=${repairedMeta.branch ?? 'undefined'} agentSessionId=${repairedMeta.agentSessionId ?? 'undefined'} executionAgent=${repairedMeta.executionAgent ?? 'undefined'} containerId=${repairedMeta.containerId ?? 'undefined'}`,
   );
 
-  let executor = repairedMeta.runnerKind === 'ssh' ? undefined : executorRegistry.get(repairedMeta.runnerKind);
+  let executor =
+    opts.liveExecutor ??
+    (repairedMeta.runnerKind === 'ssh' ? undefined : executorRegistry.get(repairedMeta.runnerKind));
   termLogger?.info(`executorRegistry.get("${repairedMeta.runnerKind}") → ${executor ? executor.type : 'null (will lazy-create)'}`);
 
-  if (repairedMeta.runnerKind === 'ssh' && repairedMeta.remoteLeaseMetadata?.provider === 'crabbox') {
+  if (
+    !opts.liveExecutor &&
+    repairedMeta.runnerKind === 'ssh' &&
+    repairedMeta.remoteLeaseMetadata?.provider === 'crabbox'
+  ) {
     const crabboxResult = await resolveCrabboxSshExecutor(taskId, repairedMeta.remoteLeaseMetadata, opts);
     if (!crabboxResult.ok) return crabboxResult;
     executor = crabboxResult.executor;
-  } else if (repairedMeta.runnerKind === 'ssh') {
+  } else if (!opts.liveExecutor && repairedMeta.runnerKind === 'ssh') {
     const targetId = persistence.getPoolMemberId?.(taskId)?.trim();
     const target = targetId ? staticRemoteTargets(loadConfig())[targetId] : undefined;
     if (!targetId) {
