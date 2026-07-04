@@ -26,6 +26,35 @@ export interface ExternalWorkerConfig {
   launch: ExternalWorkerLaunchConfig;
 }
 
+export interface PrMaintenanceConfig {
+  /** GitHub owner/repo scanned by the PR-maintenance workers. Default: Neko-Catpital-Labs/Invoker. */
+  targetRepo?: string;
+  /** GitHub PR author scanned by the PR-maintenance workers. Default: EdbertChan. */
+  author?: string;
+  /** CodeRabbit bot login to collect comments from. Default: coderabbitai[bot]. */
+  coderabbitLogin?: string;
+  /** Per-feedback CodeRabbit attempt cap. Default: 3. */
+  coderabbitMaxAttempts?: number;
+  /** Checkout root for CodeRabbit agent runs. Default: ~/.invoker/pr-cron-work. */
+  coderabbitWorkDir?: string;
+  /** Agent executable for CodeRabbit feedback updates. Default: omp. */
+  coderabbitExecutionAgent?: string;
+  /** Optional model forwarded to the CodeRabbit update agent. */
+  coderabbitExecutionModel?: string;
+  /** CodeRabbit agent timeout in milliseconds. Default: 45 minutes. */
+  coderabbitTimeoutMs?: number;
+  /** CodeRabbit worker poll interval in milliseconds. Default: 5 minutes. */
+  coderabbitPollIntervalMs?: number;
+  /** Per-generation merge-conflict rebase-recreate attempt cap. Default: 3. */
+  mergeConflictMaxAttempts?: number;
+  /** Timeout for confirming generation advancement in milliseconds. Default: 120 seconds. */
+  mergeConflictConfirmTimeoutMs?: number;
+  /** Poll interval for generation confirmation in milliseconds. Default: 5 seconds. */
+  mergeConflictConfirmPollMs?: number;
+  /** Merge-conflict worker poll interval in milliseconds. Default: 5 minutes. */
+  mergeConflictPollIntervalMs?: number;
+}
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -264,6 +293,11 @@ export interface InvokerConfig {
    * The loader consumes this later; absent means no external workers.
    */
   externalWorkers?: ExternalWorkerConfig[];
+  /**
+   * Built-in PR-maintenance workers. Env vars used by the legacy cron scripts
+   * still take precedence for the same fields.
+   */
+  prMaintenance?: PrMaintenanceConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },

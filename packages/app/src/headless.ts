@@ -17,7 +17,7 @@ import {
   TaskRunner,
   acquireWorkerLock,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
 } from '@invoker/execution-engine';
@@ -422,7 +422,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry()),
+    registerBuiltinWorkers(createWorkerRegistry()),
   );
 
   if (subCommand === 'list') {
@@ -483,6 +483,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
+      prMaintenance: deps.invokerConfig.prMaintenance,
     });
     await worker.tick('manual');
     await worker.stop();
@@ -960,4 +961,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-

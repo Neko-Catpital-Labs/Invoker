@@ -95,8 +95,10 @@ import {
   ExecutorRegistry, TaskRunner,
   WorktreeExecutor,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_UPDATE_WORKER_KIND,
   initializeShellEnvironment,
   createWorkerRegistry,
+  MERGE_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
@@ -269,6 +271,8 @@ import { logProcessError } from './process-error-handling.js';
 const REGISTERED_OWNER_WORKER_KINDS = [
   PR_STATUS_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_UPDATE_WORKER_KIND,
+  MERGE_CONFLICT_REBASE_WORKER_KIND,
 ] as const;
 
 function startRegisteredOwnerWorkers(deps: WorkerRuntimeDependencies): WorkerRuntime[] {
@@ -1635,6 +1639,7 @@ function startHeadlessMode(): void {
             getAutoFixAgent: () => invokerConfig.autoFixAgent,
             getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
           },
+          prMaintenance: invokerConfig.prMaintenance,
         }));
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
@@ -3420,6 +3425,7 @@ function createEmbeddedTerminalBackendFromConfig(
           getAutoFixAgent: () => invokerConfig.autoFixAgent,
           getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
         },
+        prMaintenance: invokerConfig.prMaintenance,
       }));
     }
 

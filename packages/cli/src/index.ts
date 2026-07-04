@@ -11,11 +11,12 @@ import {
   WorktreeExecutor,
   acquireWorkerLock,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
   registerExternalWorkers,
   WorkerLockHeldError,
   registerBuiltinAgents,
   type ExternalWorkerConfig,
+  type PrMaintenanceWorkerConfig,
   type ExternalWorkerRuntime,
   type WorkerDefinition,
   type WorkerRegistry,
@@ -107,8 +108,10 @@ type CliRuntimeConfig = {
   autoFixRetries?: number;
   autoFixAgent?: string;
   autoFixExecutionModel?: string;
+  defaultExecutionModel?: string;
   autoApproveAIFixes?: boolean;
   externalWorkers?: ExternalWorkerConfig[];
+  prMaintenance?: PrMaintenanceWorkerConfig;
 };
 
 const silentLogger: Logger = {
@@ -130,7 +133,7 @@ function usage(): string {
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli setup [slack] [--check|--from-env]',
     '  invoker-cli mcp',
-    '  invoker-cli worker [autofix|list]',
+    '  invoker-cli worker [kind|list]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
@@ -461,7 +464,9 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
 function readWorkerConfig(homeRoot: string): {
   autoFixRetries?: number;
   autoFixAgent?: string;
+  autoFixExecutionModel?: string;
   externalWorkers?: ExternalWorkerConfig[];
+  prMaintenance?: PrMaintenanceWorkerConfig;
 } {
   const configPath = join(homeRoot, 'config.json');
   if (!existsSync(configPath)) return {};
@@ -470,7 +475,13 @@ function readWorkerConfig(homeRoot: string): {
     return {
       autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
       autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
+      autoFixExecutionModel: typeof parsed.autoFixExecutionModel === 'string'
+        ? parsed.autoFixExecutionModel
+        : typeof parsed.defaultExecutionModel === 'string'
+          ? parsed.defaultExecutionModel
+          : undefined,
       externalWorkers: Array.isArray(parsed.externalWorkers) ? parsed.externalWorkers : undefined,
+      prMaintenance: parsed.prMaintenance,
     };
   } catch {
     return {};
@@ -503,7 +514,12 @@ function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorke
 async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
-  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
+  const {
+    autoFixRetries,
+    autoFixAgent,
+    autoFixExecutionModel,
+    prMaintenance,
+  } = readWorkerConfig(homeRoot);
 
   // Single-instance guard: refuse if another worker of this kind (this door or
   // the dev `--headless worker <kind>` door) already holds the cross-process
@@ -538,7 +554,9 @@ async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise
       autoFix: {
         defaultAutoFixRetries: autoFixRetries,
         getAutoFixAgent: () => autoFixAgent,
+        getAutoFixExecutionModel: () => autoFixExecutionModel,
       },
+      prMaintenance,
     });
 
     worker.start();
@@ -582,7 +600,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
       const registry = registerExternalWorkers(
-        registerAutoFixWorker(createWorkerRegistry()),
+        registerBuiltinWorkers(createWorkerRegistry()),
         readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
       );
       if (subcommand === 'list') {

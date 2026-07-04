@@ -4,13 +4,13 @@ import {
   AUTO_FIX_WORKER_KIND,
   RECOVERY_WORKER_KIND,
   registerAutoFixWorker,
-  type AutoFixRecoveryStore,
-  type AutoFixRecoverySubmitter,
 } from '../auto-fix-recovery.js';
 import { registerBuiltinWorkers } from '../builtin-workers.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import { createWorkerRegistry } from '../worker-registry.js';
+import { CODERABBIT_UPDATE_WORKER_KIND } from '../workers/coderabbit-update-worker.js';
 import { CI_FAILURE_WORKER_KIND } from '../workers/ci-failure-worker.js';
+import { MERGE_CONFLICT_REBASE_WORKER_KIND } from '../workers/merge-conflict-rebase-worker.js';
 import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
 
 const silentLogger = {
@@ -21,13 +21,21 @@ const silentLogger = {
   child: () => silentLogger,
 };
 
-const emptyStore: AutoFixRecoveryStore = {
+const emptyStore: WorkerRuntimeDependencies['store'] = {
   listWorkflows: () => [],
   loadTasks: () => [],
   listWorkflowMutationIntents: () => [],
+  getWorkerAction: () => undefined,
+  upsertWorkerAction: (action) => ({
+    ...action,
+    attemptCount: action.attemptCount ?? 0,
+    createdAt: action.createdAt ?? new Date(0).toISOString(),
+    updatedAt: action.updatedAt ?? new Date(0).toISOString(),
+  }),
+  listWorkerActions: () => [],
 };
 
-const noopSubmitter: AutoFixRecoverySubmitter = {
+const noopSubmitter: WorkerRuntimeDependencies['submitter'] = {
   submit: () => 0,
 };
 
@@ -61,10 +69,14 @@ describe('worker registry', () => {
       AUTO_FIX_WORKER_KIND,
       PR_STATUS_WORKER_KIND,
       CI_FAILURE_WORKER_KIND,
+      CODERABBIT_UPDATE_WORKER_KIND,
+      MERGE_CONFLICT_REBASE_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
     expect(registry.get(CI_FAILURE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(CODERABBIT_UPDATE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(MERGE_CONFLICT_REBASE_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>());
@@ -84,10 +96,12 @@ describe('worker registry', () => {
   });
 
 
-  it('builds the PR status and CI-failure worker runtimes from the registered factories', () => {
+  it('builds the registered worker runtimes from the built-in factories', () => {
     const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
 
     expect(registry.get(PR_STATUS_WORKER_KIND)?.factory(deps()).identity.kind).toBe(PR_STATUS_WORKER_KIND);
     expect(registry.get(CI_FAILURE_WORKER_KIND)?.factory(deps()).identity.kind).toBe(CI_FAILURE_WORKER_KIND);
+    expect(registry.get(CODERABBIT_UPDATE_WORKER_KIND)?.factory(deps()).identity.kind).toBe(CODERABBIT_UPDATE_WORKER_KIND);
+    expect(registry.get(MERGE_CONFLICT_REBASE_WORKER_KIND)?.factory(deps()).identity.kind).toBe(MERGE_CONFLICT_REBASE_WORKER_KIND);
   });
 });
