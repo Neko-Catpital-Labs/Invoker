@@ -17,6 +17,7 @@ INVOKER_MASTER_HEAD_AUTOFIX_OMP_TIMEOUT_SECONDS="${INVOKER_MASTER_HEAD_AUTOFIX_O
 INVOKER_MASTER_HEAD_AUTOFIX_TEST_TIMEOUT_SECONDS="${INVOKER_MASTER_HEAD_AUTOFIX_TEST_TIMEOUT_SECONDS:-3600}"
 INVOKER_MASTER_HEAD_AUTOFIX_CONFIRM_FAILURE="${INVOKER_MASTER_HEAD_AUTOFIX_CONFIRM_FAILURE:-1}"
 INVOKER_MASTER_HEAD_AUTOFIX_TEST_COMMAND="${INVOKER_MASTER_HEAD_AUTOFIX_TEST_COMMAND:-pnpm run test:all:destructive}"
+INVOKER_MASTER_HEAD_AUTOFIX_RUN_RETENTION="${INVOKER_MASTER_HEAD_AUTOFIX_RUN_RETENTION:-10}"
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 RUN_DIR="$INVOKER_MASTER_HEAD_AUTOFIX_WORKDIR/runs/$RUN_ID"
@@ -31,6 +32,24 @@ mkdir -p "$CHECKOUT_DIR" "$LOG_DIR" "$VISUAL_PROOF_DIR"
 infrastructure_unavailable() {
   log_line "infrastructure unavailable: $1"
   exit 1
+}
+
+# Bound disk usage: each run keeps a full clone + node_modules + logs + visual
+# proof under runs/<RUN_ID>. Keep only the newest N run directories (RUN_ID is a
+# UTC timestamp, so lexical order == chronological), deleting the rest. Runs
+# after cron_lock so only the worker holding a slot prunes, and before the
+# clone so a nearly-full disk is reclaimed before the heavy work.
+prune_old_run_dirs() {
+  local runs_dir="$INVOKER_MASTER_HEAD_AUTOFIX_WORKDIR/runs"
+  local keep="$INVOKER_MASTER_HEAD_AUTOFIX_RUN_RETENTION"
+  [ "$keep" -ge 1 ] 2>/dev/null || return 0
+  [ -d "$runs_dir" ] || return 0
+  local victim
+  while IFS= read -r victim; do
+    [ -n "$victim" ] || continue
+    log_line "pruning old run dir $victim"
+    rm -rf -- "$victim"
+  done < <(find "$runs_dir" -mindepth 1 -maxdepth 1 -type d | sort | head -n "-${keep}")
 }
 
 preflight() {
@@ -270,6 +289,8 @@ BODY
 BODY
 }
 
+prune_old_run_dirs
+
 preflight
 
 log_line "cloning $INVOKER_MASTER_HEAD_AUTOFIX_REPO_URL into $CHECKOUT_DIR"
@@ -349,7 +370,7 @@ if [ "$OMP_STATUS" -ne 0 ]; then
   exit 1
 fi
 
-if ( cd "$CHECKOUT_DIR" && git diff --quiet ); then
+if ( cd "$CHECKOUT_DIR" && [ -z "$(git status --porcelain --untracked-files=all)" ] ); then
   ledger_record master-head-attempt "$BASE_SHA" no-diff
   log_line "omp exited without changes; no PR created"
   exit 1
