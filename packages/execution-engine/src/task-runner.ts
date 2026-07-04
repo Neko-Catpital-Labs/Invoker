@@ -1993,6 +1993,8 @@ export class TaskRunner {
         const next: ReviewGateArtifact = {
           ...artifact,
           status: mappedStatus,
+          ...(status.headSha ? { headSha: status.headSha } : {}),
+          ...(status.headRef ? { headRef: status.headRef } : {}),
           updatedAt: new Date().toISOString(),
         };
         if (mappedStatus === 'open') {

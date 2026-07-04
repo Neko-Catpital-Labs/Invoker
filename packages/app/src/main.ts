@@ -94,12 +94,18 @@ import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry, TaskRunner,
   WorktreeExecutor,
+  CI_FAILURE_WORKER_KIND,
   initializeShellEnvironment,
+  createWorkerRegistry,
+  PR_STATUS_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   DEFAULT_EXECUTION_AGENT,
   registerBuiltinAgents,
+  registerBuiltinWorkers,
   type AgentRegistry,
+  type WorkerRuntime,
+  type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
@@ -209,6 +215,7 @@ import {
   buildHeadlessFixArgs,
   listOpenFixIntentsForTask,
   parseFixWithAgentMutationArgs,
+  type ReviewGateCiContext,
 } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
@@ -229,7 +236,6 @@ import {
 } from './ipc/ipc-registration.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
-import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 import {
   buildRecoveryWorkerAuditPayload,
   classifyAutoFixRecoveryPhase,
@@ -260,6 +266,67 @@ import {
 import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
 import { logProcessError } from './process-error-handling.js';
 
+const REGISTERED_OWNER_WORKER_KINDS = [
+  PR_STATUS_WORKER_KIND,
+  CI_FAILURE_WORKER_KIND,
+] as const;
+type RegisteredOwnerWorkerSubmit = WorkerRuntimeDependencies['submitter']['submit'];
+
+function submitRegisteredOwnerWorkerMutation(
+  ...args: Parameters<RegisteredOwnerWorkerSubmit>
+): ReturnType<RegisteredOwnerWorkerSubmit> {
+  const [workflowId, priority, channel, mutationArgs, options] = args;
+  if (!workflowMutationCoordinator) {
+    throw new Error('Workflow mutation coordinator is unavailable');
+  }
+  if (!workflowMutationDispatcher.has(channel)) {
+    throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
+  }
+  return workflowMutationCoordinator.submit(workflowId, priority, channel, mutationArgs, options);
+}
+
+function buildRegisteredOwnerWorkerDeps(
+  store: WorkerRuntimeDependencies['store'],
+  checkMergeGateStatuses: NonNullable<WorkerRuntimeDependencies['reviewGate']>['checkMergeGateStatuses'],
+): WorkerRuntimeDependencies {
+  return {
+    store,
+    submitter: {
+      submit: submitRegisteredOwnerWorkerMutation,
+    },
+    logger,
+    messageBus,
+    reviewGate: {
+      checkMergeGateStatuses,
+    },
+    autoFix: {
+      defaultAutoFixRetries: invokerConfig.autoFixRetries,
+      getAutoFixAgent: () => invokerConfig.autoFixAgent,
+      getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
+    },
+  };
+}
+
+function startRegisteredOwnerWorkers(deps: WorkerRuntimeDependencies): WorkerRuntime[] {
+  const registry = registerBuiltinWorkers(createWorkerRegistry());
+  const workers: WorkerRuntime[] = [];
+  for (const kind of REGISTERED_OWNER_WORKER_KINDS) {
+    const definition = registry.get(kind);
+    if (!definition) {
+      deps.logger.warn(`registered owner worker "${kind}" is unavailable`, { module: 'worker-registry' });
+      continue;
+    }
+    const worker = definition.factory(deps);
+    worker.start();
+    workers.push(worker);
+  }
+  return workers;
+}
+
+async function stopRegisteredOwnerWorkers(workers: WorkerRuntime[]): Promise<void> {
+  const stopping = workers.splice(0).map((worker) => worker.stop().catch(() => undefined));
+  await Promise.all(stopping);
+}
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -886,7 +953,7 @@ function startHeadlessMode(): void {
     }
 
     let exitCode = 0;
-    let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
+    const registeredOwnerWorkers: WorkerRuntime[] = [];
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
     try {
@@ -1579,11 +1646,14 @@ function startHeadlessMode(): void {
           logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
         });
 
-        reviewGateStatusWorker = startReviewGateStatusWorker({
-          ownerMode: true,
-          getTaskExecutor: createStandaloneTaskExecutor,
-          logger,
-        });
+        registeredOwnerWorkers.push(...startRegisteredOwnerWorkers(
+          buildRegisteredOwnerWorkerDeps(
+            persistence,
+            async () => {
+              await createStandaloneTaskExecutor().checkMergeGateStatuses();
+            },
+          ),
+        ));
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
@@ -1603,7 +1673,7 @@ function startHeadlessMode(): void {
     } finally {
       standaloneLaunchDispatcherController?.stop();
       lifecycleEventBridge?.stop();
-      reviewGateStatusWorker?.stop();
+      await stopRegisteredOwnerWorkers(registeredOwnerWorkers);
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
       }
@@ -1690,7 +1760,7 @@ function createEmbeddedTerminalBackendFromConfig(
   const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
-  let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
+  const registeredOwnerWorkers: WorkerRuntime[] = [];
   let apiServer: ApiServer | null = null;
   let webBridge: WebBridge | null = null;
   let ownerMode = true;
@@ -2003,6 +2073,7 @@ function createEmbeddedTerminalBackendFromConfig(
     taskId: string,
     agentName?: string,
     source: 'ipc' | 'auto-fix' = 'ipc',
+    reviewGateContext?: ReviewGateCiContext,
   ): Promise<TaskState[]> => {
     const task = orchestrator.getTask(taskId);
     if (!task) {
@@ -2041,6 +2112,7 @@ function createEmbeddedTerminalBackendFromConfig(
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
         failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Codex'}`,
+        reviewGateContext,
         signal: activeMutationContext?.signal,
       },
     );
@@ -3340,11 +3412,16 @@ function createEmbeddedTerminalBackendFromConfig(
       });
     }
 
-    reviewGateStatusWorker = startReviewGateStatusWorker({
-      ownerMode,
-      getTaskExecutor: requireTaskExecutor,
-      logger,
-    });
+    if (ownerMode) {
+      registeredOwnerWorkers.push(...startRegisteredOwnerWorkers(
+        buildRegisteredOwnerWorkerDeps(
+          persistence,
+          async () => {
+            await requireTaskExecutor().checkMergeGateStatuses();
+          },
+        ),
+      ));
+    }
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (!ownerMode) {
@@ -4364,16 +4441,21 @@ function createEmbeddedTerminalBackendFromConfig(
       'invoker:fix-with-agent',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
-      const taskId = String(taskIdArg);
-      const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
+      async (...fixArgs: unknown[]) => {
+      const { taskId, agentName, context } = parseFixWithAgentMutationArgs(fixArgs);
+      const source = context.autoFix ? 'auto-fix' : 'ipc';
       try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
+        const started = await executeFixWithAgentMutation(
+          taskId,
+          agentName,
+          source,
+          context.reviewGateContext,
+        );
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
           logger,
-          context: 'ipc.fix-with-agent',
+          context: source === 'auto-fix' ? 'ipc.fix-with-agent.auto-fix' : 'ipc.fix-with-agent',
           started,
           mutationTiming: activeMutationContext?.mutationTiming,
           scopedTaskIds: [taskId],
@@ -4788,8 +4870,7 @@ function createEmbeddedTerminalBackendFromConfig(
       try {
         if (apiServer) await apiServer.close().catch(() => {});
         if (webBridge) await webBridge.close().catch(() => {});
-        reviewGateStatusWorker?.stop();
-        reviewGateStatusWorker = null;
+        await stopRegisteredOwnerWorkers(registeredOwnerWorkers);
         if (dbPollInterval) clearInterval(dbPollInterval);
         if (activityPollInterval) clearInterval(activityPollInterval);
         if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
