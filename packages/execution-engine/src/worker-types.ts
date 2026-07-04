@@ -1,4 +1,6 @@
 import type {
+  ReviewGateLookup,
+  Workflow,
   WorkerActionListFilters,
   WorkerActionRecord,
   WorkerActionWrite,
@@ -8,8 +10,10 @@ import type { TaskState } from '@invoker/workflow-core';
 
 export interface WorkerStateStore {
   listWorkflows(): ReadonlyArray<{ id: string }>;
+  loadWorkflow?(workflowId: string): Workflow | undefined;
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
+  findReviewGateByPr?(pr: string): ReviewGateLookup | undefined;
   getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
   upsertWorkerAction(action: WorkerActionWrite): WorkerActionRecord;
   listWorkerActions(filters?: WorkerActionListFilters): WorkerActionRecord[];
@@ -32,9 +36,12 @@ export interface WorkerGitHubPullRequest {
   number: number;
   url: string;
   state: string;
+  title?: string;
   headSha?: string;
   branch?: string;
   baseBranch?: string;
+  mergeable?: string;
+  mergeStateStatus?: string;
 }
 
 export interface WorkerGitHubCheckRun {

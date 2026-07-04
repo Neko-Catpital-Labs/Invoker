@@ -4,7 +4,9 @@ import { RECOVERY_WORKER_KIND, type AutoFixRecoveryStore, type AutoFixRecoverySu
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_UPDATE_WORKER_KIND,
   createWorkerRegistry,
+  MERGE_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   registerAutoFixWorker,
   registerBuiltinWorkers,
@@ -21,8 +23,18 @@ const silentLogger = {
 
 const emptyStore: AutoFixRecoveryStore = {
   listWorkflows: () => [],
+  loadWorkflow: () => undefined,
   loadTasks: () => [],
+  findReviewGateByPr: () => undefined,
   listWorkflowMutationIntents: () => [],
+  getWorkerAction: () => undefined,
+  upsertWorkerAction: (action: any) => ({
+    ...action,
+    attemptCount: action.attemptCount ?? 0,
+    createdAt: action.createdAt ?? new Date().toISOString(),
+    updatedAt: action.updatedAt ?? new Date().toISOString(),
+  }),
+  listWorkerActions: () => [],
 };
 
 const noopSubmitter: AutoFixRecoverySubmitter = {
@@ -59,10 +71,14 @@ describe('worker registry', () => {
       AUTO_FIX_WORKER_KIND,
       PR_STATUS_WORKER_KIND,
       CI_FAILURE_WORKER_KIND,
+      CODERABBIT_UPDATE_WORKER_KIND,
+      MERGE_CONFLICT_REBASE_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
     expect(registry.get(CI_FAILURE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(CODERABBIT_UPDATE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(MERGE_CONFLICT_REBASE_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry());
@@ -82,10 +98,12 @@ describe('worker registry', () => {
   });
 
 
-  it('builds the PR status and CI-failure worker runtimes from the registered factories', () => {
+  it('builds the PR maintenance worker runtimes from the registered factories', () => {
     const registry = registerBuiltinWorkers(createWorkerRegistry());
 
     expect(registry.get(PR_STATUS_WORKER_KIND)?.factory(deps()).identity.kind).toBe(PR_STATUS_WORKER_KIND);
     expect(registry.get(CI_FAILURE_WORKER_KIND)?.factory(deps()).identity.kind).toBe(CI_FAILURE_WORKER_KIND);
+    expect(registry.get(CODERABBIT_UPDATE_WORKER_KIND)?.factory(deps()).identity.kind).toBe(CODERABBIT_UPDATE_WORKER_KIND);
+    expect(registry.get(MERGE_CONFLICT_REBASE_WORKER_KIND)?.factory(deps()).identity.kind).toBe(MERGE_CONFLICT_REBASE_WORKER_KIND);
   });
 });

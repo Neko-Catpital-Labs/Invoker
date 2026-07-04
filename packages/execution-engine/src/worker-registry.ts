@@ -28,10 +28,26 @@ import {
   type CiFailureWorkerStore,
   type CiFailureWorkerSubmitter,
 } from './workers/ci-failure-worker.js';
+import {
+  CODERABBIT_UPDATE_WORKER_KIND,
+  createCodeRabbitUpdateWorker,
+  type CodeRabbitGitHubClient,
+  type CodeRabbitUpdateRunner,
+  type CodeRabbitUpdateWorkerConfig,
+} from './workers/coderabbit-update-worker.js';
+import {
+  MERGE_CONFLICT_REBASE_WORKER_KIND,
+  createMergeConflictRebaseWorker,
+  type MergeConflictRebaseGitHubClient,
+  type MergeConflictRebaseWorkerConfig,
+} from './workers/merge-conflict-rebase-worker.js';
 import type { WorkerRuntime } from './worker-runtime.js';
+import type { WorkerStateStore } from './worker-types.js';
 
 export { PR_STATUS_WORKER_KIND } from './workers/pr-status-worker.js';
 export { CI_FAILURE_WORKER_KIND } from './workers/ci-failure-worker.js';
+export { CODERABBIT_UPDATE_WORKER_KIND } from './workers/coderabbit-update-worker.js';
+export { MERGE_CONFLICT_REBASE_WORKER_KIND } from './workers/merge-conflict-rebase-worker.js';
 /** Registry kind for the built-in auto-fix recovery worker. */
 export const AUTO_FIX_WORKER_KIND = 'autofix';
 
@@ -44,10 +60,20 @@ export interface AutoFixWorkerConfig {
   getAutoFixExecutionModel?: () => string | undefined;
 }
 
+export interface PrMaintenanceWorkerConfig {
+  coderabbit?: CodeRabbitUpdateWorkerConfig;
+  coderabbitGithub?: CodeRabbitGitHubClient;
+  coderabbitRunner?: CodeRabbitUpdateRunner;
+  mergeConflictRebase?: MergeConflictRebaseWorkerConfig;
+  mergeConflictGithub?: MergeConflictRebaseGitHubClient;
+  mergeConflictSleep?: (ms: number) => Promise<void>;
+  mergeConflictNow?: () => number;
+}
+
 /** Dependencies injected into a worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore & CiFailureWorkerStore;
+  store: AutoFixRecoveryStore & CiFailureWorkerStore & WorkerStateStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter;
   /** Operator logger. */
@@ -58,6 +84,7 @@ export interface WorkerRuntimeDependencies {
   reviewGate?: PrStatusReviewGate;
   /** Auto-fix tuning. */
   autoFix?: AutoFixWorkerConfig;
+  prMaintenance?: PrMaintenanceWorkerConfig;
 }
 
 /** Builds a worker runtime from injected dependencies. */
@@ -160,10 +187,50 @@ export function registerCiFailureWorker(registry: WorkerRegistry): WorkerRegistr
   return registry;
 }
 
+export function registerCodeRabbitUpdateWorker(registry: WorkerRegistry): WorkerRegistry {
+  registry.register({
+    kind: CODERABBIT_UPDATE_WORKER_KIND,
+    note: 'Addresses new CodeRabbit feedback on mapped Invoker review-gate PRs.',
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createCodeRabbitUpdateWorker({
+        logger: deps.logger,
+        coderabbit: {
+          store: deps.store,
+          github: deps.prMaintenance?.coderabbitGithub,
+          runner: deps.prMaintenance?.coderabbitRunner,
+          config: deps.prMaintenance?.coderabbit,
+        },
+      }),
+  });
+  return registry;
+}
+
+export function registerMergeConflictRebaseWorker(registry: WorkerRegistry): WorkerRegistry {
+  registry.register({
+    kind: MERGE_CONFLICT_REBASE_WORKER_KIND,
+    note: 'Submits headless rebase-recreate for mapped conflicting review-gate PRs.',
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createMergeConflictRebaseWorker({
+        logger: deps.logger,
+        mergeConflictRebase: {
+          store: deps.store,
+          submitter: deps.submitter,
+          github: deps.prMaintenance?.mergeConflictGithub,
+          config: deps.prMaintenance?.mergeConflictRebase,
+          sleep: deps.prMaintenance?.mergeConflictSleep,
+          now: deps.prMaintenance?.mergeConflictNow,
+        },
+      }),
+  });
+  return registry;
+}
+
 /** Register every built-in worker in the stable built-in order. */
 export function registerBuiltinWorkers(registry: WorkerRegistry): WorkerRegistry {
   registerAutoFixWorker(registry);
   registerPrStatusWorker(registry);
   registerCiFailureWorker(registry);
+  registerCodeRabbitUpdateWorker(registry);
+  registerMergeConflictRebaseWorker(registry);
   return registry;
 }

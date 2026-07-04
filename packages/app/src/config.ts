@@ -8,6 +8,14 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import {
+  resolveCodeRabbitUpdateWorkerRuntimeConfig,
+  resolveMergeConflictRebaseWorkerRuntimeConfig,
+  type CodeRabbitUpdateWorkerConfig,
+  type MergeConflictRebaseWorkerConfig,
+  type ResolvedCodeRabbitUpdateWorkerConfig,
+  type ResolvedMergeConflictRebaseWorkerConfig,
+} from '@invoker/execution-engine';
 const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
 
 export interface ExternalWorkerLaunchConfig {
@@ -24,6 +32,13 @@ export interface ExternalWorkerConfig {
   kind: string;
   /** Process invocation used by the loader to start the external worker. */
   launch: ExternalWorkerLaunchConfig;
+}
+
+export interface PrMaintenanceConfig {
+  targetRepo?: string;
+  author?: string;
+  coderabbit?: CodeRabbitUpdateWorkerConfig;
+  mergeConflictRebase?: MergeConflictRebaseWorkerConfig;
 }
 
 export interface InvokerConfig {
@@ -264,6 +279,7 @@ export interface InvokerConfig {
    * The loader consumes this later; absent means no external workers.
    */
   externalWorkers?: ExternalWorkerConfig[];
+  prMaintenance?: PrMaintenanceConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
@@ -307,6 +323,39 @@ export function resolveConfigFileState(): { path: string; exists: boolean } {
 export function loadConfig(): InvokerConfig {
   return readJsonSafe(resolveConfigFilePath());
 }
+
+function prMaintenanceWorkerConfig<T extends { targetRepo?: string; author?: string }>(
+  config: InvokerConfig,
+  specific: T | undefined,
+): T {
+  const base = (specific ?? {}) as T;
+  return {
+    ...base,
+    targetRepo: specific?.targetRepo ?? config.prMaintenance?.targetRepo,
+    author: specific?.author ?? config.prMaintenance?.author,
+  } as T;
+}
+
+export function resolveCodeRabbitUpdateWorkerConfig(
+  config: InvokerConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedCodeRabbitUpdateWorkerConfig {
+  return resolveCodeRabbitUpdateWorkerRuntimeConfig(
+    prMaintenanceWorkerConfig(config, config.prMaintenance?.coderabbit),
+    env,
+  );
+}
+
+export function resolveMergeConflictRebaseWorkerConfig(
+  config: InvokerConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedMergeConflictRebaseWorkerConfig {
+  return resolveMergeConflictRebaseWorkerRuntimeConfig(
+    prMaintenanceWorkerConfig(config, config.prMaintenance?.mergeConflictRebase),
+    env,
+  );
+}
+
 export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
   const configured = config.defaultExecutionAgent?.trim();
   return configured && configured.length > 0 ? configured : BUILT_IN_DEFAULT_EXECUTION_AGENT;

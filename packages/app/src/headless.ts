@@ -17,7 +17,7 @@ import {
   TaskRunner,
   acquireWorkerLock,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
 } from '@invoker/execution-engine';
@@ -41,6 +41,10 @@ import {
   type RecoveryWorkerStatus,
 } from './recovery-worker-observability.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import {
+  resolveCodeRabbitUpdateWorkerConfig,
+  resolveMergeConflictRebaseWorkerConfig,
+} from './config.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -422,7 +426,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry()),
+    registerBuiltinWorkers(createWorkerRegistry()),
   );
 
   if (subCommand === 'list') {
@@ -482,6 +486,10 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       autoFix: {
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+      },
+      prMaintenance: {
+        coderabbit: resolveCodeRabbitUpdateWorkerConfig(deps.invokerConfig),
+        mergeConflictRebase: resolveMergeConflictRebaseWorkerConfig(deps.invokerConfig),
       },
     });
     await worker.tick('manual');
@@ -960,4 +968,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-

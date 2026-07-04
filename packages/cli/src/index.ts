@@ -11,12 +11,14 @@ import {
   WorktreeExecutor,
   acquireWorkerLock,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
   registerExternalWorkers,
   WorkerLockHeldError,
   registerBuiltinAgents,
+  type CodeRabbitUpdateWorkerConfig,
   type ExternalWorkerConfig,
   type ExternalWorkerRuntime,
+  type MergeConflictRebaseWorkerConfig,
   type WorkerDefinition,
   type WorkerRegistry,
   type WorkerRuntime,
@@ -109,6 +111,12 @@ type CliRuntimeConfig = {
   autoFixExecutionModel?: string;
   autoApproveAIFixes?: boolean;
   externalWorkers?: ExternalWorkerConfig[];
+  prMaintenance?: {
+    targetRepo?: string;
+    author?: string;
+    coderabbit?: CodeRabbitUpdateWorkerConfig;
+    mergeConflictRebase?: MergeConflictRebaseWorkerConfig;
+  };
 };
 
 const silentLogger: Logger = {
@@ -130,7 +138,7 @@ function usage(): string {
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli setup [slack] [--check|--from-env]',
     '  invoker-cli mcp',
-    '  invoker-cli worker [autofix|list]',
+    '  invoker-cli worker [kind|list]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
@@ -462,6 +470,7 @@ function readWorkerConfig(homeRoot: string): {
   autoFixRetries?: number;
   autoFixAgent?: string;
   externalWorkers?: ExternalWorkerConfig[];
+  prMaintenance?: CliRuntimeConfig['prMaintenance'];
 } {
   const configPath = join(homeRoot, 'config.json');
   if (!existsSync(configPath)) return {};
@@ -471,6 +480,9 @@ function readWorkerConfig(homeRoot: string): {
       autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
       autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
       externalWorkers: Array.isArray(parsed.externalWorkers) ? parsed.externalWorkers : undefined,
+      prMaintenance: parsed.prMaintenance && typeof parsed.prMaintenance === 'object'
+        ? parsed.prMaintenance
+        : undefined,
     };
   } catch {
     return {};
@@ -503,7 +515,7 @@ function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorke
 async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
-  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
+  const { autoFixRetries, autoFixAgent, prMaintenance } = readWorkerConfig(homeRoot);
 
   // Single-instance guard: refuse if another worker of this kind (this door or
   // the dev `--headless worker <kind>` door) already holds the cross-process
@@ -538,6 +550,18 @@ async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise
       autoFix: {
         defaultAutoFixRetries: autoFixRetries,
         getAutoFixAgent: () => autoFixAgent,
+      },
+      prMaintenance: {
+        coderabbit: {
+          ...prMaintenance?.coderabbit,
+          targetRepo: prMaintenance?.coderabbit?.targetRepo ?? prMaintenance?.targetRepo,
+          author: prMaintenance?.coderabbit?.author ?? prMaintenance?.author,
+        },
+        mergeConflictRebase: {
+          ...prMaintenance?.mergeConflictRebase,
+          targetRepo: prMaintenance?.mergeConflictRebase?.targetRepo ?? prMaintenance?.targetRepo,
+          author: prMaintenance?.mergeConflictRebase?.author ?? prMaintenance?.author,
+        },
       },
     });
 
@@ -582,7 +606,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
       const registry = registerExternalWorkers(
-        registerAutoFixWorker(createWorkerRegistry()),
+        registerBuiltinWorkers(createWorkerRegistry()),
         readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
       );
       if (subcommand === 'list') {
