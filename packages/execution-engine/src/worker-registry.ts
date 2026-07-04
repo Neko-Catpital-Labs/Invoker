@@ -9,10 +9,10 @@ import type { WorkerRuntime } from './worker-runtime.js';
  */
 
 /** Builds a worker runtime from injected dependencies. */
-export type WorkerFactory<TDeps = any> = (deps: TDeps) => WorkerRuntime;
+export type WorkerFactory<TDeps = unknown> = (deps: TDeps) => WorkerRuntime;
 
 /** A single worker declared in the registry. */
-export interface WorkerDefinition<TDeps = any> {
+export interface WorkerDefinition<TDeps = unknown> {
   /** Stable registry kind, e.g. `'autofix'`. */
   readonly kind: string;
   /** Human-readable note surfaced in operator output. */
@@ -22,7 +22,7 @@ export interface WorkerDefinition<TDeps = any> {
 }
 
 /** Mutable collection of worker definitions keyed by kind. */
-export interface WorkerRegistry<TDeps = any> {
+export interface WorkerRegistry<TDeps = unknown> {
   /** Register (or replace) a definition by its kind. */
   register(definition: WorkerDefinition<TDeps>): void;
   /** Look up a definition by kind, or `undefined` when none is registered. */
@@ -32,7 +32,7 @@ export interface WorkerRegistry<TDeps = any> {
 }
 
 /** Create an empty worker registry. */
-export function createWorkerRegistry<TDeps = any>(): WorkerRegistry<TDeps> {
+export function createWorkerRegistry<TDeps = unknown>(): WorkerRegistry<TDeps> {
   const byKind = new Map<string, WorkerDefinition<TDeps>>();
   return {
     register(definition: WorkerDefinition<TDeps>): void {
