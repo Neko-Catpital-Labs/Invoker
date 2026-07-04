@@ -596,7 +596,6 @@ export function SystemSetupModal({
               </div>
             </div>
           ) : null}
-
           <div className="rounded border border-gray-700 overflow-hidden">
             <button
               type="button"

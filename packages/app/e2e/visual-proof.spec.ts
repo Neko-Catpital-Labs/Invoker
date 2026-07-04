@@ -291,7 +291,6 @@ const systemSetupReadinessDiagnostics = (configPath: string) => ({
     ],
   },
 });
-
 function workflowNode(page: Page, workflowId: string) {
   return page.getByTestId(`rf__node-${workflowId}`).first();
 }
