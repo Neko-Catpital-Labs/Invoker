@@ -318,7 +318,7 @@ describe('planning chat', () => {
       id: 'session-1',
       presetKey: 'codex',
       conversation: new PlanConversation({}),
-    });
+    } as any);
 
     expect(resetPlanningChat({ sessionId: 'session-1' }, { sessions })).toEqual({ ok: true });
     expect(sessions.has('session-1')).toBe(false);
