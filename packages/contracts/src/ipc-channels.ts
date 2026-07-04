@@ -16,6 +16,7 @@ import type {
   WorkflowDerivedStatus,
   WorkflowRollup,
 } from '@invoker/workflow-graph';
+import type { PrerequisiteCheck, PrerequisiteReport } from './prerequisites.js';
 
 export type { WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-graph';
 import type { ReviewGateQueryResponse } from './types.js';
@@ -384,6 +385,7 @@ export interface SystemDiagnostics {
   tools: SystemToolStatus[];
   bundledSkills?: BundledSkillsStatus;
   cliInstaller?: CliInstallerStatus;
+  readiness?: PrerequisiteReport | PrerequisiteCheck[];
 }
 
 export type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only';
