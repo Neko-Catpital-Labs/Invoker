@@ -31,6 +31,7 @@ import type {
   ExternalDependency,
   ExternalDependencyChange,
   DetachedExternalDependency,
+  RemoteLeaseMetadata,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
@@ -2206,6 +2207,31 @@ export class SQLiteAdapter implements PersistenceAdapter {
       [taskId],
     );
     return (row?.pool_member_id as string) ?? null;
+  }
+
+  getRemoteLeaseMetadata(taskId: string): RemoteLeaseMetadata | null {
+    const row = this.queryOne(
+      'SELECT remote_lease_metadata FROM tasks WHERE id = ?',
+      [taskId],
+    );
+    const raw = (row?.remote_lease_metadata as string) ?? null;
+    if (!raw) return null;
+    // Persisted content is untrusted: malformed JSON or a drifted shape
+    // (e.g. a non-string leaseId/slug) must yield a clean null so restore
+    // falls back to a refusal path instead of crashing at a later `.trim()`.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (!parsed || typeof parsed !== 'object') return null;
+    const candidate = parsed as Partial<RemoteLeaseMetadata>;
+    if (candidate.provider !== 'crabbox') return null;
+    if (typeof candidate.targetId !== 'string' || candidate.targetId.trim() === '') return null;
+    if (candidate.leaseId !== undefined && typeof candidate.leaseId !== 'string') return null;
+    if (candidate.slug !== undefined && typeof candidate.slug !== 'string') return null;
+    return candidate as RemoteLeaseMetadata;
   }
 
   // ── Conversations ───────────────────────────────────────

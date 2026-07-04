@@ -82,6 +82,24 @@ export interface CrabboxStopConfig {
   readonly stopArgs?: readonly string[];
 }
 
+/**
+ * Inputs needed to refresh (re-inspect) an existing Crabbox lease for terminal
+ * restore. Unlike {@link resolve}, this never warms up a new machine: it only
+ * runs a status call against a lease id/slug persisted earlier, so it needs
+ * just the CLI entrypoint, the target id (for errors), any status args, and a
+ * fallback SSH port.
+ */
+export interface CrabboxRefreshConfig {
+  /** Config key of the remote target. Named in errors. */
+  readonly id: string;
+  /** CLI entrypoint that inspects Crabbox leases. */
+  readonly crabboxCommand: string;
+  /** Optional extra args appended to the status subcommand. */
+  readonly statusArgs?: readonly string[];
+  /** SSH port to fall back to when the lease status omits one. Default: 22. */
+  readonly port?: number;
+}
+
 /** When to stop a Crabbox lease relative to the task's final status. */
 export type CrabboxStopAfter = 'success' | 'failure' | 'always' | 'never';
 
@@ -180,6 +198,18 @@ interface CrabboxStatusJson {
 
 const DEFAULT_SSH_PORT = 22;
 
+/** Lease states that are still SSH-reachable and safe to restore a terminal to. */
+const CRABBOX_READY_STATES = new Set(['ready', 'running', 'active']);
+/** Lease states meaning the machine is gone and cannot be restored. */
+const CRABBOX_DEAD_STATES = new Set([
+  'expired',
+  'stopped',
+  'terminated',
+  'deleted',
+  'gone',
+  'released',
+]);
+
 /** Default runner: spawn the Crabbox CLI and collect its output. */
 export function spawnCrabboxCommand(
   command: string,
@@ -232,19 +262,24 @@ export function buildCrabboxWarmupArgs(
 }
 
 /**
- * Build the status args that block until the lease is reachable and print its
- * SSH coordinates as JSON. `leaseRef` is the id or slug returned by warmup.
+ * Build the status args that report a lease's SSH coordinates as JSON.
+ * `leaseRef` is the id or slug returned by warmup. By default the call blocks
+ * (`--wait`) until the lease is reachable, which is what initial resolution
+ * wants. Terminal restore passes `{ wait: false }` so a dead or not-ready lease
+ * is reported immediately instead of blocking the terminal open.
  */
 export function buildCrabboxStatusArgs(
-  config: CrabboxResolverTargetConfig,
+  config: { readonly statusArgs?: readonly string[] },
   leaseRef: string,
+  opts: { readonly wait?: boolean } = {},
 ): string[] {
+  const wait = opts.wait ?? true;
   return [
     'status',
     '--id',
     leaseRef,
     '--json',
-    '--wait',
+    ...(wait ? ['--wait'] : []),
     ...(config.statusArgs ?? []),
   ];
 }
@@ -319,6 +354,77 @@ export class CrabboxTargetResolver {
           `(exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim()}`,
       );
     }
+  }
+
+  /**
+   * Re-inspect an already-leased machine and return a fresh SSH endpoint,
+   * without warming up a new one. Used to restore a terminal after restart:
+   * the lease id/slug was persisted, so a single status call (no `--wait`)
+   * gives the current SSH coordinates.
+   *
+   * Throws an actionable error — caught by the terminal opener and surfaced as
+   * a refusal — when the lease is missing/unreachable, expired or stopped, not
+   * yet ready, or no longer reports the SSH fields needed to connect.
+   */
+  async refreshLease(
+    config: CrabboxRefreshConfig,
+    leaseRef: string,
+  ): Promise<ResolvedSshTarget> {
+    const status = await this.run(
+      config.crabboxCommand,
+      buildCrabboxStatusArgs(config, leaseRef, { wait: false }),
+    );
+    if (status.exitCode !== 0) {
+      throw new Error(
+        `Crabbox lease "${leaseRef}" for remote target "${config.id}" is missing or unreachable ` +
+          `(exit ${status.exitCode}): ${status.stderr.trim() || status.stdout.trim() || 'no output'}.`,
+      );
+    }
+
+    const json = tryParseJson(status.stdout.trim());
+    if (!json) {
+      throw new Error(
+        `Crabbox status for lease "${leaseRef}" on remote target "${config.id}" did not return valid JSON.`,
+      );
+    }
+
+    const state = asNonEmptyString(json.status)?.toLowerCase();
+    if (state && CRABBOX_DEAD_STATES.has(state)) {
+      throw new Error(
+        `Crabbox lease "${leaseRef}" for remote target "${config.id}" has expired or been stopped (status: ${state}).`,
+      );
+    }
+    if (state && !CRABBOX_READY_STATES.has(state)) {
+      throw new Error(
+        `Crabbox lease "${leaseRef}" for remote target "${config.id}" is not ready (status: ${state}).`,
+      );
+    }
+
+    const sshHost = asNonEmptyString(json.sshHost);
+    const sshUser = asNonEmptyString(json.sshUser);
+    const sshKeyPath = asNonEmptyString(json.sshKey);
+    const missing: string[] = [];
+    if (!sshHost) missing.push('sshHost');
+    if (!sshUser) missing.push('sshUser');
+    if (!sshKeyPath) missing.push('sshKey');
+    if (missing.length > 0) {
+      throw new Error(
+        `Crabbox lease "${leaseRef}" for remote target "${config.id}" is missing required SSH field(s): ${missing.join(', ')}. ` +
+          `Cannot rebuild an SSH endpoint for this lease.`,
+      );
+    }
+
+    const sshPort =
+      typeof json.sshPort === 'number' && Number.isFinite(json.sshPort)
+        ? json.sshPort
+        : (config.port ?? DEFAULT_SSH_PORT);
+
+    return {
+      host: sshHost as string,
+      user: sshUser as string,
+      sshKeyPath: sshKeyPath as string,
+      port: sshPort,
+    };
   }
 
   /** Read the lease id (or slug) that warmup printed for the status call. */
