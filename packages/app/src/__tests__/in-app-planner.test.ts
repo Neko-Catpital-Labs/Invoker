@@ -289,6 +289,31 @@ describe('planning chat', () => {
     await expect(second).resolves.toEqual({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
   });
 
+  it('returns load and parse failures as submit errors', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
+    const sessions = createInAppPlanningChatSessions();
+    const sent = await sendPlanningChatMessage({
+      message: 'draft',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    if (!sent.ok) throw new Error(sent.error);
+    const loadGeneratedPlan = vi.fn().mockRejectedValue(new Error('Task "make-selected-lists-scroll" uses "autoFix", which is no longer supported.'));
+
+    await expect(submitPlanningChatDraft({
+      sessionId: sent.sessionId,
+    }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({
+      ok: false,
+      error: 'Task "make-selected-lists-scroll" uses "autoFix", which is no longer supported.',
+    });
+  });
 
   it('submits planner drafts after stripping legacy auto-fix fields', async () => {
     const legacyPlan = `Here is the plan.
