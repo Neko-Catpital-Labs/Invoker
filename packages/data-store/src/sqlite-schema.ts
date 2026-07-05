@@ -121,6 +121,7 @@ export const SCHEMA_DDL = `
         thread_ts TEXT PRIMARY KEY,
         channel_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
+        mode TEXT DEFAULT 'plan',
         extracted_plan TEXT,
         plan_submitted INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
@@ -346,6 +347,7 @@ export const SCHEMA_DDL = `
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
 export const COLUMN_MIGRATIONS = [
+  "ALTER TABLE conversations ADD COLUMN mode TEXT DEFAULT 'plan'",
   'ALTER TABLE tasks ADD COLUMN claude_session_id TEXT',
   'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',
   'ALTER TABLE tasks ADD COLUMN container_id TEXT',

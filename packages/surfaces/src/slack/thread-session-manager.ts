@@ -14,7 +14,7 @@
  */
 
 import { PlanConversation } from './plan-conversation.js';
-import type { PlanningCommandBuilder } from './plan-conversation.js';
+import type { ConversationMode, PlanningCommandBuilder } from './plan-conversation.js';
 import type { ConversationRepository } from '@invoker/data-store';
 import type { LogFn } from '../surface.js';
 
@@ -65,6 +65,8 @@ export interface SessionMetadata {
   readonly userId: string;
   /** Whether the plan has been submitted (terminal state) */
   planSubmitted: boolean;
+  /** Whether this thread is a normal agent session or an Invoker plan draft. */
+  mode: ConversationMode;
 }
 
 /**
@@ -113,6 +115,10 @@ export class SessionHandle {
     return this.conversation.planSubmitted;
   }
 
+
+  get conversationMode(): ConversationMode {
+    return this.conversation.conversationMode;
+  }
   /** Returns the last complete YAML plan drafted in this conversation, or null. */
   getDraftedPlan(): string | null {
     return this.conversation.getDraftedPlan();
@@ -168,6 +174,7 @@ export interface SessionManagerConfig {
   log?: LogFn;
   timeoutMs?: number;
   planningCommandBuilder?: PlanningCommandBuilder;
+  mode?: ConversationMode;
 }
 
 export interface SessionMetrics {
@@ -205,6 +212,7 @@ export class SessionManager {
   private readonly maxActiveSessions: number;
   private readonly timeoutMs?: number;
   private readonly planningCommandBuilder?: PlanningCommandBuilder;
+  private readonly mode: ConversationMode;
 
   constructor(config: SessionManagerConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -219,6 +227,7 @@ export class SessionManager {
     this.maxActiveSessions = config.maxActiveSessions ?? 100;
     this.timeoutMs = config.timeoutMs;
     this.planningCommandBuilder = config.planningCommandBuilder;
+    this.mode = config.mode ?? 'agent';
   }
 
   /**
@@ -254,7 +263,7 @@ export class SessionManager {
   async getOrCreateSession(
     id: SessionIdentifier,
     userId: string,
-    opts?: { tool?: string; model?: string; workingDir?: string },
+    opts?: { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode },
   ): Promise<SessionHandle | null> {
     const key = id.toString();
 
@@ -299,6 +308,7 @@ export class SessionManager {
         cursorCommand: this.cursorCommand,
         tool: opts?.tool,
         model: opts?.model ?? this.model,
+        mode: loaded.mode ?? opts?.mode ?? this.mode ?? 'plan',
         planningCommandBuilder: this.planningCommandBuilder,
         workingDir: opts?.workingDir ?? this.workingDir,
         threadTs: id.threadTs,
@@ -316,6 +326,7 @@ export class SessionManager {
         lastAccessedAt: new Date(loaded.updatedAt),
         userId: loaded.userId,
         planSubmitted: loaded.planSubmitted,
+        mode: loaded.mode ?? opts?.mode ?? this.mode ?? 'plan',
       };
 
       handle = new SessionHandle(id, metadata, conversation);
@@ -328,6 +339,7 @@ export class SessionManager {
         cursorCommand: this.cursorCommand,
         tool: opts?.tool,
         model: opts?.model ?? this.model,
+        mode: opts?.mode ?? this.mode ?? 'agent',
         planningCommandBuilder: this.planningCommandBuilder,
         workingDir: opts?.workingDir ?? this.workingDir,
         threadTs: id.threadTs,
@@ -344,6 +356,7 @@ export class SessionManager {
         lastAccessedAt: new Date(),
         userId,
         planSubmitted: false,
+        mode: opts?.mode ?? this.mode ?? 'agent',
       };
 
       handle = new SessionHandle(id, metadata, conversation);
@@ -357,6 +370,7 @@ export class SessionManager {
         false, // Not submitted
         id.channelId,
         userId,
+        opts?.mode ?? this.mode ?? 'agent',
       );
     }
 
