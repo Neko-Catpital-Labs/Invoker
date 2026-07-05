@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
+import { parsePlan, parsePlanSubmissionBundle, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { writeFileSync } from 'node:fs';
@@ -118,6 +118,108 @@ tasks:
 `;
     const plan = parsePlan(yaml);
     expect(plan.intermediateRepoUrl).toBe('https://github.com/fork/repo.git');
+  });
+
+  it('parses a Workers Surface stacked workflow bundle in order', () => {
+    const yaml = `
+name: Workers Surface
+repoUrl: git@github.com:test/repo.git
+baseBranch: main
+onFinish: pull_request
+mergeMode: external_review
+workflows:
+  - name: Workers Surface Contracts
+    featureBranch: plan/workers-surface-contracts
+    tasks:
+      - id: define-worker-contracts
+        description: Define worker contracts
+        prompt: Update shared contracts for workers
+        dependencies: []
+      - id: verify-worker-contracts
+        description: Verify worker contracts
+        command: pnpm test packages/contracts
+        dependencies: [define-worker-contracts]
+  - name: Workers Surface UI
+    featureBranch: plan/workers-surface-ui
+    tasks:
+      - id: build-workers-ui
+        description: Build workers UI
+        prompt: Implement the workers surface
+        dependencies: []
+      - id: verify-workers-ui
+        description: Verify workers UI
+        command: pnpm test packages/ui
+        dependencies: [build-workers-ui]
+`;
+    const bundle = parsePlanSubmissionBundle(yaml);
+    expect(bundle.name).toBe('Workers Surface');
+    expect(bundle.isStack).toBe(true);
+    expect(bundle.plans.map((plan) => plan.name)).toEqual([
+      'Workers Surface Contracts',
+      'Workers Surface UI',
+    ]);
+    expect(bundle.plans[0].repoUrl).toBe('git@github.com:test/repo.git');
+    expect(bundle.plans[0].mergeMode).toBe('external_review');
+    expect(bundle.plans[0].reviewProvider).toBe('github');
+    expect(bundle.plans[0].featureBranch).toBe('plan/workers-surface-contracts');
+    expect(bundle.plans[1].featureBranch).toBe('plan/workers-surface-ui');
+    expect(bundle.plans[1].tasks.map((task) => task.id)).toEqual([
+      'build-workers-ui',
+      'verify-workers-ui',
+    ]);
+  });
+
+  it('rejects invalid stacked workflow bundles', () => {
+    expect(() => parsePlanSubmissionBundle(`
+name: Empty Stack
+repoUrl: git@github.com:test/repo.git
+workflows: []
+`)).toThrow('Plan stack must have a non-empty "workflows" array');
+
+    expect(() => parsePlanSubmissionBundle(`
+name: Mixed Stack
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: top
+    description: Top task
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Plan stack must put tasks inside each workflow');
+
+    expect(() => parsePlanSubmissionBundle(`
+name: Legacy Stack
+repoUrl: git@github.com:test/repo.git
+autoFixRetries: 1
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Plan stack-level "autoFixRetries" is no longer supported');
+
+    expect(() => parsePlanSubmissionBundle(`
+name: Bad Dependencies
+repoUrl: git@github.com:test/repo.git
+externalDependencies: bad
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Plan stack "externalDependencies" must be an array');
+
+    expect(() => parsePlan(`
+name: Legacy Parse Entry
+repoUrl: git@github.com:test/repo.git
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Stacked workflow YAML must be loaded with parsePlanSubmissionBundle()');
   });
 
   it('parses plan with dependencies', () => {

@@ -14,6 +14,7 @@ export interface PlanSummary {
   name: string;
   steps: string[];
   taskCount: number;
+  workflowCount?: number;
 }
 
 interface PlanTask {
@@ -39,7 +40,39 @@ export function summarizePlanText(planText: string): PlanSummary | null {
   const name = parsed.name;
   if (typeof name !== 'string' || name.trim().length === 0) return null;
 
-  const rawTasks = parsed.tasks;
+  const rawWorkflows = parsed.workflows;
+  if (Array.isArray(rawWorkflows)) {
+    if (rawWorkflows.length === 0) return null;
+    const workflowNames: string[] = [];
+    let taskCount = 0;
+    for (const rawWorkflow of rawWorkflows) {
+      if (!isRecord(rawWorkflow)) return null;
+      const workflowName = rawWorkflow.name;
+      if (typeof workflowName !== 'string' || workflowName.trim().length === 0) return null;
+      const workflowTasks = parseTasks(rawWorkflow.tasks);
+      if (!workflowTasks) return null;
+      workflowNames.push(summarizeDescription(workflowName));
+      taskCount += workflowTasks.length;
+    }
+    return { name, steps: workflowNames, taskCount, workflowCount: rawWorkflows.length };
+  }
+
+  const tasks = parseTasks(parsed.tasks);
+  if (!tasks) return null;
+
+  const ordered = topoSort(tasks);
+  const steps = ordered.map((t) => summarizeDescription(t.description));
+
+  return { name, steps, taskCount: tasks.length };
+}
+
+// ── Internals ───────────────────────────────────────────────
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseTasks(rawTasks: unknown): PlanTask[] | null {
   if (!Array.isArray(rawTasks) || rawTasks.length === 0) return null;
 
   const tasks: PlanTask[] = [];
@@ -55,16 +88,7 @@ export function summarizePlanText(planText: string): PlanSummary | null {
     tasks.push({ id, description, dependencies });
   }
 
-  const ordered = topoSort(tasks);
-  const steps = ordered.map((t) => summarizeDescription(t.description));
-
-  return { name, steps, taskCount: tasks.length };
-}
-
-// ── Internals ───────────────────────────────────────────────
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return tasks;
 }
 
 /**
@@ -74,47 +98,50 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 function topoSort(tasks: PlanTask[]): PlanTask[] {
   const byId = new Map<string, PlanTask>();
-  for (const task of tasks) byId.set(task.id, task);
-
   const indegree = new Map<string, number>();
-  const dependents = new Map<string, string[]>();
-  for (const task of tasks) {
-    indegree.set(task.id, 0);
-    dependents.set(task.id, []);
+  const outgoing = new Map<string, string[]>();
+
+  for (const t of tasks) {
+    byId.set(t.id, t);
+    indegree.set(t.id, 0);
+    outgoing.set(t.id, []);
   }
 
-  for (const task of tasks) {
-    for (const dep of task.dependencies) {
-      if (!byId.has(dep)) return tasks; // unknown dependency → original order
-      indegree.set(task.id, (indegree.get(task.id) ?? 0) + 1);
-      dependents.get(dep)!.push(task.id);
+  for (const t of tasks) {
+    for (const dep of t.dependencies) {
+      if (!byId.has(dep)) {
+        return tasks; // unknown dep: preserve listed order
+      }
+      indegree.set(t.id, (indegree.get(t.id) ?? 0) + 1);
+      outgoing.get(dep)!.push(t.id);
     }
   }
 
-  // Ready queue, seeded in original listed order for stability.
-  const ready: string[] = [];
-  for (const task of tasks) {
-    if ((indegree.get(task.id) ?? 0) === 0) ready.push(task.id);
-  }
+  const queue: string[] = tasks.filter((t) => (indegree.get(t.id) ?? 0) === 0).map((t) => t.id);
+  const ordered: PlanTask[] = [];
 
-  const result: PlanTask[] = [];
-  while (ready.length > 0) {
-    const id = ready.shift()!;
-    result.push(byId.get(id)!);
-    for (const next of dependents.get(id)!) {
-      const remaining = (indegree.get(next) ?? 0) - 1;
-      indegree.set(next, remaining);
-      if (remaining === 0) ready.push(next);
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const task = byId.get(id)!;
+    ordered.push(task);
+
+    for (const nextId of outgoing.get(id) ?? []) {
+      const next = (indegree.get(nextId) ?? 0) - 1;
+      indegree.set(nextId, next);
+      if (next === 0) queue.push(nextId);
     }
   }
 
-  if (result.length !== tasks.length) return tasks; // cycle → original order
-  return result;
+  if (ordered.length !== tasks.length) {
+    return tasks; // cycle: preserve listed order
+  }
+
+  return ordered;
 }
 
 function summarizeDescription(description: string): string {
   const normalized = description.replace(/\s+/g, ' ').trim();
-  const words = normalized.split(' ');
+  const words = normalized.split(' ').filter(Boolean);
   if (words.length <= MAX_STEP_WORDS) return normalized;
-  return words.slice(0, MAX_STEP_WORDS).join(' ') + ' …';
+  return `${words.slice(0, MAX_STEP_WORDS).join(' ')} …`;
 }
