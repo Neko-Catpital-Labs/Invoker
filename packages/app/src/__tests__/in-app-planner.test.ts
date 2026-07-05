@@ -289,6 +289,48 @@ describe('planning chat', () => {
     await expect(second).resolves.toEqual({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
   });
 
+
+  it('submits planner drafts after stripping legacy auto-fix fields', async () => {
+    const legacyPlan = `Here is the plan.
+
+\`\`\`yaml
+name: Legacy AutoFix Draft
+onFinish: none
+autoFixRetries: 2
+tasks:
+  - id: make-selected-lists-scroll
+    description: Make selected lists scroll
+    command: pnpm test
+    dependencies: []
+    autoFix: false
+\`\`\``;
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(legacyPlan);
+    const sessions = createInAppPlanningChatSessions();
+    const sent = await sendPlanningChatMessage({
+      message: 'draft',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    if (!sent.ok) throw new Error(sent.error);
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({ planName: 'Legacy AutoFix Draft', workflowId: 'wf-1' });
+
+    await expect(submitPlanningChatDraft({
+      sessionId: sent.sessionId,
+    }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({ ok: true, planName: 'Legacy AutoFix Draft', workflowId: 'wf-1' });
+
+    const submittedPlan = loadGeneratedPlan.mock.calls[0]?.[0] as string;
+    expect(submittedPlan).toContain('id: make-selected-lists-scroll');
+    expect(submittedPlan).not.toContain('autoFix');
+    expect(submittedPlan).not.toContain('autoFixRetries');
+  });
+
   it('rejects submit for an unknown session', async () => {
     await expect(submitPlanningChatDraft({
       sessionId: 'missing',
