@@ -24,6 +24,8 @@ import type { InvokerConfig } from './config.js';
 export interface LoadedGeneratedPlan {
   planName: string;
   workflowId: string;
+  workflowIds?: string[];
+  workflowCount?: number;
 }
 
 export interface InAppPlannerDeps {
@@ -192,6 +194,7 @@ async function createSession(
       defaultBranch: deps.config.defaultBranch,
       repoUrl: deps.config.defaultRepoUrl,
       experimentalPlanner: deps.config.experimentalPlanner,
+      preferStackedWorkflows: true,
       planningCommandBuilder: deps.planningCommandBuilder,
     }),
     createdAt,
@@ -247,6 +250,7 @@ export async function planFromGoal(
       defaultBranch: deps.config.defaultBranch,
       repoUrl: deps.config.defaultRepoUrl,
       experimentalPlanner: deps.config.experimentalPlanner,
+      preferStackedWorkflows: true,
       planningCommandBuilder: deps.planningCommandBuilder,
     });
     const plannerOutput = await conversation.sendMessage(goal);
@@ -256,7 +260,13 @@ export async function planFromGoal(
     }
 
     const loaded = await deps.loadGeneratedPlan(planText);
-    return { ok: true, planName: loaded.planName, workflowId: loaded.workflowId };
+    return {
+      ok: true,
+      planName: loaded.planName,
+      workflowId: loaded.workflowId,
+      workflowIds: loaded.workflowIds,
+      workflowCount: loaded.workflowCount,
+    };
   } catch (error) {
     return {
       ok: false,
@@ -463,8 +473,21 @@ export async function submitPlanningChatDraft(
       session.submittedPlanName = loaded.planName;
       session.submittedWorkflowId = loaded.workflowId;
       session.updatedAt = new Date().toISOString();
-      appendSessionMessage(session, 'system', `Plan "${loaded.planName}" submitted to Invoker. Review it, then Run.`, 'success');
-      return { ok: true, planName: loaded.planName, workflowId: loaded.workflowId };
+      appendSessionMessage(
+        session,
+        'system',
+        loaded.workflowCount && loaded.workflowCount > 1
+          ? `Plan "${loaded.planName}" submitted as ${loaded.workflowCount} stacked workflows. Review them, then Run.`
+          : `Plan "${loaded.planName}" submitted to Invoker. Review it, then Run.`,
+        'success',
+      );
+      return {
+        ok: true,
+        planName: loaded.planName,
+        workflowId: loaded.workflowId,
+        workflowIds: loaded.workflowIds,
+        workflowCount: loaded.workflowCount,
+      };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     } finally {

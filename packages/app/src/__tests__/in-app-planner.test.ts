@@ -26,6 +26,31 @@ tasks:
     command: echo second
 \`\`\``;
 
+const WORKERS_SURFACE_STACKED_PLAN = `Here is the plan.
+
+\`\`\`yaml
+name: Workers Surface
+repoUrl: git@github.com:test/repo.git
+workflows:
+  - name: Workers Surface Contracts
+    tasks:
+      - id: define-worker-contracts
+        description: Define worker contracts
+        prompt: Update shared contracts for workers
+        dependencies: []
+      - id: verify-worker-contracts
+        description: Verify worker contracts
+        command: pnpm test packages/contracts
+        dependencies: [define-worker-contracts]
+  - name: Workers Surface UI
+    tasks:
+      - id: build-workers-ui
+        description: Build workers UI
+        prompt: Implement the workers surface
+        dependencies: []
+        command: pnpm test packages/ui
+\`\`\``;
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -65,6 +90,30 @@ describe('planFromGoal', () => {
     expect(sendMessage).toHaveBeenCalledWith('Add README');
     expect(loadGeneratedPlan).toHaveBeenCalledTimes(1);
     expect(loadGeneratedPlan.mock.calls[0]?.[0]).toContain('name: Mock Plan');
+  });
+
+  it('returns workflow ids and counts for stacked planner drafts', async () => {
+    const sendMessage = vi.spyOn(PlanConversation.prototype, 'sendMessage').mockResolvedValue(WORKERS_SURFACE_STACKED_PLAN);
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Workers Surface',
+      workflowId: 'wf-2',
+      workflowIds: ['wf-1', 'wf-2'],
+      workflowCount: 2,
+    });
+
+    await expect(planFromGoal({ goal: 'Build Workers Surface' }, {
+      config: {},
+      loadGeneratedPlan,
+    })).resolves.toEqual({
+      ok: true,
+      planName: 'Workers Surface',
+      workflowId: 'wf-2',
+      workflowIds: ['wf-1', 'wf-2'],
+      workflowCount: 2,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith('Build Workers Surface');
+    expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('workflows:'));
   });
 
   it('does not load invalid planner output', async () => {
@@ -236,6 +285,30 @@ describe('planning chat', () => {
     expect(result.ok && result.reply).not.toContain('```yaml');
   });
 
+  it('returns a stacked workflow summary when the assistant drafts workflow bundles', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(WORKERS_SURFACE_STACKED_PLAN);
+    const sessions = createInAppPlanningChatSessions();
+    const result = await sendPlanningChatMessage({
+      message: 'draft the Workers Surface plan',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      draftPlanAvailable: true,
+      draftPlanSummary: {
+        name: 'Workers Surface',
+        taskCount: 3,
+        workflowCount: 2,
+        steps: ['Workers Surface Contracts', 'Workers Surface UI'],
+      },
+    });
+  });
+
   it('submits the latest valid draft plan', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
@@ -249,14 +322,25 @@ describe('planning chat', () => {
       planningCommandBuilder,
     });
     if (!sent.ok) throw new Error(sent.error);
-    const loadGeneratedPlan = vi.fn().mockResolvedValue({ planName: 'Mock Plan', workflowId: 'wf-1' });
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+      workflowIds: ['wf-1'],
+      workflowCount: 1,
+    });
 
     await expect(submitPlanningChatDraft({
       sessionId: sent.sessionId,
     }, {
       sessions,
       loadGeneratedPlan,
-    })).resolves.toEqual({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
+    })).resolves.toEqual({
+      ok: true,
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+      workflowIds: ['wf-1'],
+      workflowCount: 1,
+    });
     expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
   });
   it('coalesces concurrent submit requests for one session', async () => {
@@ -329,6 +413,43 @@ tasks:
     expect(submittedPlan).toContain('id: make-selected-lists-scroll');
     expect(submittedPlan).not.toContain('autoFix');
     expect(submittedPlan).not.toContain('autoFixRetries');
+  });
+
+  it('submits stacked drafts as stacked workflows', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(WORKERS_SURFACE_STACKED_PLAN);
+    const sessions = createInAppPlanningChatSessions();
+    const sent = await sendPlanningChatMessage({
+      message: 'draft',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    if (!sent.ok) throw new Error(sent.error);
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Workers Surface',
+      workflowId: 'wf-2',
+      workflowIds: ['wf-1', 'wf-2'],
+      workflowCount: 2,
+    });
+
+    await expect(submitPlanningChatDraft({
+      sessionId: sent.sessionId,
+    }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({
+      ok: true,
+      planName: 'Workers Surface',
+      workflowId: 'wf-2',
+      workflowIds: ['wf-1', 'wf-2'],
+      workflowCount: 2,
+    });
+    expect(sessions.get(sent.sessionId)?.messages.at(-1)?.text).toBe(
+      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then Run.',
+    );
   });
 
   it('rejects submit for an unknown session', async () => {

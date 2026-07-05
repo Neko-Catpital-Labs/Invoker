@@ -1047,17 +1047,54 @@ function startHeadlessMode(): void {
         return { workflowId, tasks };
       };
 
-      const loadGeneratedPlan = async (planText: string): Promise<{ planName: string; workflowId: string }> => {
-        const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
-        const plan = applyConfiguredPlanDefaults(parsePlan(planText));
+      const loadGeneratedPlan = async (
+        planText: string,
+      ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => {
+        const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
+        const submission = parsePlanSubmissionBundle(planText);
         const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-        backupPlan(plan, undefined, logger);
-        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-        const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-        if (!workflow) {
+        const loadedWorkflowIds: string[] = [];
+        let upstream: { workflowId: string; featureBranch: string } | undefined;
+
+        for (const parsedPlan of submission.plans) {
+          let plan = applyConfiguredPlanDefaults(parsedPlan);
+          if (upstream) {
+            plan = {
+              ...plan,
+              baseBranch: upstream.featureBranch,
+              externalDependencies: [
+                ...(plan.externalDependencies ?? []),
+                {
+                  workflowId: upstream.workflowId,
+                  taskId: '__merge__',
+                  requiredStatus: 'completed',
+                  gatePolicy: 'completed',
+                } as const,
+              ],
+            };
+          }
+          backupPlan(plan, undefined, logger);
+          orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+          const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+          if (!workflow) {
+            throw new Error('Loaded plan did not create a workflow.');
+          }
+          existingWorkflowIds.add(workflow.id);
+          loadedWorkflowIds.push(workflow.id);
+          upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
+        }
+
+        const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
+        if (!workflowId) {
           throw new Error('Loaded plan did not create a workflow.');
         }
-        return { planName: plan.name, workflowId: workflow.id };
+
+        return {
+          planName: submission.name,
+          workflowId,
+          workflowIds: loadedWorkflowIds,
+          workflowCount: loadedWorkflowIds.length,
+        };
       };
 
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
@@ -1123,14 +1160,9 @@ function startHeadlessMode(): void {
           }
           case 'invoker:load-plan': {
             const planText = String(payload.args[0] ?? '');
-            const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
-            const plan = applyConfiguredPlanDefaults(parsePlan(planText));
-            backupPlan(plan, undefined, logger);
-            orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+            await loadGeneratedPlan(planText);
             return undefined;
           }
-          case 'invoker:start':
-            return orchestrator.startExecution();
           case 'invoker:stop': {
             logger.info('stop — destroying all daemon executors', { module: 'ipc-delegate' });
             const failInFlightTasks = (): void => {
@@ -3562,21 +3594,58 @@ function createEmbeddedTerminalBackendFromConfig(
     async function loadGeneratedPlanPreview(
       planText: string,
       options?: { preserveTaskHandles?: boolean; logLabel?: string },
-    ): Promise<{ planName: string; workflowId: string }> {
-      const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
-      const plan = applyConfiguredPlanDefaults(parsePlan(planText));
+    ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> {
+      const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
+      const submission = parsePlanSubmissionBundle(planText);
       const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-      logger.info(`${options?.logLabel ?? 'plan-from-goal'}: loading "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
+      const loadedWorkflowIds: string[] = [];
+      let upstream: { workflowId: string; featureBranch: string } | undefined;
+      logger.info(
+        `${options?.logLabel ?? 'plan-from-goal'}: loading "${submission.name}" (${submission.plans.length} workflow${submission.plans.length === 1 ? '' : 's'})`,
+        { module: 'ipc' },
+      );
       if (!options?.preserveTaskHandles) {
         taskHandles.clear();
       }
-      backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-      if (!workflow) {
+
+      for (const parsedPlan of submission.plans) {
+        let plan = applyConfiguredPlanDefaults(parsedPlan);
+        if (upstream) {
+          plan = {
+            ...plan,
+            baseBranch: upstream.featureBranch,
+            externalDependencies: [
+              ...(plan.externalDependencies ?? []),
+              {
+                workflowId: upstream.workflowId,
+                taskId: '__merge__',
+                requiredStatus: 'completed',
+                gatePolicy: 'completed',
+              } as const,
+            ],
+          };
+        }
+        backupPlan(plan, undefined, logger);
+        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+        const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+        if (!workflow) {
+          throw new Error('Loaded plan did not create a workflow.');
+        }
+        existingWorkflowIds.add(workflow.id);
+        loadedWorkflowIds.push(workflow.id);
+        upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
+      }
+
+      const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
+      if (!workflowId) {
         throw new Error('Loaded plan did not create a workflow.');
       }
-      return { planName: plan.name, workflowId: workflow.id };
+      return {
+        planName: submission.name,
+        workflowId,
+        workflowIds: loadedWorkflowIds,
+        workflowCount: loadedWorkflowIds.length,
+      };
     }
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     let testPlanningChatResponse: { planYaml: string; planName: string; reply?: string } | null = null;
@@ -3585,7 +3654,7 @@ function createEmbeddedTerminalBackendFromConfig(
     registerGuiMutationHandler('invoker:plan-from-goal', async (...args: unknown[]) => {
       if (process.env.NODE_ENV === 'test' && testPlanFromGoalResponse) {
         const loaded = await loadGeneratedPlanPreview(testPlanFromGoalResponse.planYaml);
-        return { ok: true, planName: testPlanFromGoalResponse.planName, workflowId: loaded.workflowId };
+        return { ok: true, planName: testPlanFromGoalResponse.planName, workflowId: loaded.workflowId, workflowIds: loaded.workflowIds, workflowCount: loaded.workflowCount };
       }
       return planFromGoalInApp(args[0] as InAppPlanRequest, {
         config: invokerConfig,
@@ -3608,11 +3677,14 @@ function createEmbeddedTerminalBackendFromConfig(
     });
     registerGuiMutationHandler('invoker:planning-chat-send', async (request: unknown) => {
       if (process.env.NODE_ENV === 'test' && testPlanningChatResponse) {
+        const { summarizePlanText } = await import('@invoker/surfaces');
+        const draftPlanSummary = summarizePlanText(testPlanningChatResponse.planYaml) ?? undefined;
         return {
           ok: true,
           sessionId: 'test-session',
           reply: testPlanningChatResponse.reply ?? 'Draft plan ready.',
           draftPlanAvailable: true,
+          draftPlanSummary,
         };
       }
       return sendPlanningChatMessage(request as InAppPlanningChatRequest, {
@@ -3629,7 +3701,7 @@ function createEmbeddedTerminalBackendFromConfig(
           preserveTaskHandles: true,
           logLabel: 'planning-chat-submit',
         });
-        return { ok: true, planName: testPlanningChatResponse.planName, workflowId: loaded.workflowId };
+        return { ok: true, planName: testPlanningChatResponse.planName, workflowId: loaded.workflowId, workflowIds: loaded.workflowIds, workflowCount: loaded.workflowCount };
       }
       return submitPlanningChatDraft(request as InAppPlanningSubmitRequest, {
         sessions: planningChatSessions,
@@ -3644,12 +3716,7 @@ function createEmbeddedTerminalBackendFromConfig(
     });
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
-      const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
-      const plan = applyConfiguredPlanDefaults(parsePlan(planText));
-      logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
-      taskHandles.clear();
-      backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      await loadGeneratedPlanPreview(planText, { logLabel: 'load-plan' });
     });
 
     if (process.env.NODE_ENV === 'test') {

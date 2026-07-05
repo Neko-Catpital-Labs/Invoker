@@ -34,6 +34,33 @@ tasks:
     expect(summary!.taskCount).toBe(2);
   });
 
+  it('summarizes a Workers Surface workflow stack by workflow order', () => {
+    const yaml = `
+name: Workers Surface
+workflows:
+  - name: Workers Surface Contracts
+    tasks:
+      - id: verify-contracts
+        description: Verify contracts
+        dependencies: [define-contracts]
+      - id: define-contracts
+        description: Define contracts
+  - name: Workers Surface UI
+    tasks:
+      - id: build-ui
+        description: Build UI
+      - id: verify-ui
+        description: Verify UI
+        dependencies: [build-ui]
+`;
+    const summary = summarizePlanText(yaml);
+    expect(summary).not.toBeNull();
+    expect(summary!.name).toBe('Workers Surface');
+    expect(summary!.workflowCount).toBe(2);
+    expect(summary!.taskCount).toBe(4);
+    expect(summary!.steps).toEqual(['Workers Surface Contracts', 'Workers Surface UI']);
+  });
+
   it('truncates a description longer than 8 words to 8 words + ellipsis', () => {
     const words = Array.from({ length: 40 }, (_, i) => `word${i + 1}`);
     const yaml = `
@@ -85,6 +112,15 @@ tasks:
   - id: a
     description: Fine
   - id: b
+`;
+    expect(summarizePlanText(yaml)).toBeNull();
+  });
+
+  it('returns null when a stacked child workflow has no tasks', () => {
+    const yaml = `
+name: Bad Workers Surface
+workflows:
+  - name: Missing Tasks
 `;
     expect(summarizePlanText(yaml)).toBeNull();
   });

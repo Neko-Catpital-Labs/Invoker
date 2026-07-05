@@ -165,6 +165,45 @@ tasks:
     expect(plan.tasks[0].requiresManualApproval).toBe(true);
   });
 
+  it('accepts stacked workflow YAML and strips legacy fields recursively', () => {
+    const text = `\`\`\`yaml
+name: "Workers Surface"
+repoUrl: git@github.com:test/repo.git
+autoFixRetries: 3
+workflows:
+  - name: "Workers Surface Contracts"
+    autoFixRetries: 2
+    tasks:
+      - id: define-worker-contracts
+        description: "Define worker contracts"
+        prompt: "Update shared contracts for workers"
+        dependencies: []
+        autoFix: true
+      - id: verify-worker-contracts
+        description: "Verify worker contracts"
+        command: "pnpm test packages/contracts"
+        dependencies: [define-worker-contracts]
+  - name: "Workers Surface UI"
+    tasks:
+      - id: build-workers-ui
+        description: "Build workers UI"
+        prompt: "Implement the workers surface"
+        dependencies: []
+\`\`\``;
+    const result = extractYamlPlan(text);
+    expect(result).not.toBeNull();
+    const plan = parsePlanText(result!);
+    expect(plan.name).toBe('Workers Surface');
+    expect(plan.tasks).toBeUndefined();
+    expect(plan.workflows.map((workflow: any) => workflow.name)).toEqual([
+      'Workers Surface Contracts',
+      'Workers Surface UI',
+    ]);
+    expect(plan.autoFixRetries).toBeUndefined();
+    expect(plan.workflows[0].autoFixRetries).toBeUndefined();
+    expect(plan.workflows[0].tasks[0].autoFix).toBeUndefined();
+  });
+
   it('preserves discovered repo commands without rewriting them', () => {
     const text = `\`\`\`yaml
 name: "Preserve Commands"
@@ -662,6 +701,20 @@ describe('PlanConversation prompt construction', () => {
     // Manual remains the verification-only default; automatic still documented.
     expect(prompt).toContain('"manual" (default)');
     expect(prompt).toContain('"automatic"');
+  });
+
+  it('buildCursorPrompt can prefer stacked workflows', () => {
+    const conv = new PlanConversation({
+      repoUrl: 'git@github.com:test/repo.git',
+      preferStackedWorkflows: true,
+    });
+    (conv as any).messages.push({ role: 'user', content: 'Build the Workers Surface' });
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('prefer a workflow stack');
+    expect(prompt).toContain('workflows:');
+    expect(prompt).toContain('Each downstream workflow is based on the previous workflow');
+    expect(prompt).toContain('Build the Workers Surface');
   });
 
   it('agent mode refuses Invoker YAML and redirects to plan:', () => {
