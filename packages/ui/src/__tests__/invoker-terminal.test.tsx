@@ -123,6 +123,49 @@ describe('Invoker terminal (component)', () => {
     expect(mock.api.start).not.toHaveBeenCalled();
   });
 
+  it('shows stacked workflow counts and submit messaging', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Here is the plan.',
+      draftPlanAvailable: true,
+      draftPlanSummary: {
+        name: 'Workers Surface',
+        taskCount: 4,
+        workflowCount: 2,
+        steps: ['Workers Surface Contracts', 'Workers Surface UI'],
+      },
+    })) as any;
+    mock.api.planningChatSubmit = vi.fn(async () => ({
+      ok: true,
+      planName: 'Workers Surface',
+      workflowId: 'wf-2',
+      workflowIds: ['wf-1', 'wf-2'],
+      workflowCount: 2,
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft the Workers Surface plan');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft plan ready: "Workers Surface" (2 workflows).');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
+      expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
+      expect(screen.getByText('Plan graph')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
+      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then Run.',
+    );
+  });
+
   it('shows submit errors beside the ready draft and allows retry', async () => {
     const submitError = 'Task "make-selected-lists-scroll" uses "autoFix", which is no longer supported.';
     mock.api.planningChatSend = vi.fn(async () => ({
