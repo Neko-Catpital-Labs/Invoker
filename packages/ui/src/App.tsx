@@ -526,6 +526,7 @@ export function App() {
   const nextTerminalLineIdRef = useRef(2);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
+  const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
   const [planningTerminalExpanded, setPlanningTerminalExpanded] = useState(false);
   const activePlanningSession = useMemo(
     () => planningSessions.find((session) => session.id === activePlanningSessionId) ?? planningSessions[0] ?? makeInitialPlanningSession(),
@@ -1850,17 +1851,20 @@ export function App() {
 
   const handlePlanningSubmitDraft = useCallback(async () => {
     if (!planningSessionId) {
-      appendTerminalLine('No planning conversation yet.', 'system', 'error');
+      setPlanningSubmitError({ title: 'Plan could not be submitted', message: 'No planning conversation yet.' });
+      appendTerminalLine('Plan could not be submitted:\nNo planning conversation yet.', 'system', 'error');
       return;
     }
     if (!invoker?.planningChatSubmit) {
-      appendTerminalLine('Planner is not available.', 'system', 'error');
+      setPlanningSubmitError({ title: 'Plan could not be submitted', message: 'Planner is not available.' });
+      appendTerminalLine('Plan could not be submitted:\nPlanner is not available.', 'system', 'error');
       return;
     }
     updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: true }));
     try {
       const result = await invoker.planningChatSubmit({ sessionId: planningSessionId });
       if (result.ok) {
+        setPlanningSubmitError(null);
         setHasLoadedPlan(true);
         setHasStarted(false);
         setSidebarSurface('home');
@@ -1883,11 +1887,14 @@ export function App() {
         appendTerminalLine(`Plan "${result.planName}" submitted to Invoker. Review it, then Run.`, 'system', 'success');
       } else {
         updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: false }));
-        appendTerminalLine(result.error, 'system', 'error');
+        setPlanningSubmitError({ title: 'Plan could not be submitted', message: result.error });
+        appendTerminalLine(`Plan could not be submitted:\n${result.error}`, 'system', 'error');
       }
     } catch (err) {
       updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: false }));
-      appendTerminalLine(err instanceof Error ? err.message : 'Failed to submit the plan.', 'system', 'error');
+      const message = err instanceof Error ? err.message : 'Failed to submit the plan.';
+      setPlanningSubmitError({ title: 'Plan could not be submitted', message });
+      appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
     }
   }, [appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
 
@@ -1896,6 +1903,7 @@ export function App() {
     if (!input || activePlanningSessionBusy || activePlanningSessionSubmitted) return;
     appendTerminalLine(input, 'user');
     setPlanningInput('');
+    setPlanningSubmitError(null);
 
     if (input.toLowerCase() === 'run') {
       if (!hasLoadedPlan || hasStarted) {
@@ -1962,10 +1970,13 @@ export function App() {
       } else {
         updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
         appendTerminalLine(result.error, 'system', 'error');
+        setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
       updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
-      appendTerminalLine(err instanceof Error ? err.message : 'Failed to reach the planner.', 'system', 'error');
+      const message = err instanceof Error ? err.message : 'Failed to reach the planner.';
+      setPlanningSubmitError({ title: 'Planner could not respond', message });
+      appendTerminalLine(message, 'system', 'error');
     }
   }, [
     activePlanningSessionBusy,
@@ -2813,6 +2824,7 @@ export function App() {
             presetOptions={planningPresetOptions}
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
+            submitError={planningSubmitError}
             readOnly={activePlanningSessionSubmitted}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
@@ -3049,6 +3061,7 @@ export function App() {
             presetOptions={planningPresetOptions}
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
+            submitError={planningSubmitError}
             expanded
             onValueChange={setPlanningInput}
             readOnly={activePlanningSessionSubmitted}
