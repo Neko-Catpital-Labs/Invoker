@@ -63,6 +63,21 @@ describe('buildWebInvokerDispatch', () => {
     expect(await dispatch('invoker:get-execution-harnesses', [])).toEqual(harnesses);
   });
 
+  it('get-planning-presets returns configured planning presets', async () => {
+    const { dispatch } = makeDispatch({
+      loadConfig: () => ({
+        defaultSlackHarnessPreset: 'omp+claude',
+        slackHarnessPresets: {
+          custom: { tool: 'codex' },
+        },
+      } as any),
+    });
+    expect(await dispatch('invoker:get-planning-presets', [])).toEqual(expect.arrayContaining([
+      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: true },
+      { key: 'custom', label: 'custom', tool: 'codex', model: undefined, isDefault: false },
+    ]));
+  });
+
   it('get-execution-defaults returns configured task execution defaults', async () => {
     const { dispatch } = makeDispatch({
       loadConfig: () => ({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' } as any),
