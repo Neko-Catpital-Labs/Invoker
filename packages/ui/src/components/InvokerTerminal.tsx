@@ -147,23 +147,25 @@ export function InvokerTerminal({
                 ? `Draft plan ready: "${draftPlanSummary.name}" (${draftPlanSummary.taskCount} steps).`
                 : 'Draft plan ready.'}
             </span>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={onSubmitDraft}
-                disabled={busy}
-                className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-medium text-emerald-950 hover:bg-emerald-200 disabled:cursor-wait disabled:opacity-50"
-              >
-                {submitError ? 'Retry submit' : 'Submit to Invoker'}
-              </button>
-              <button
-                type="button"
-                onClick={focusComposer}
-                className="rounded-full border border-emerald-400/40 px-4 py-2 text-sm text-emerald-100 hover:border-emerald-200"
-              >
-                Keep chatting
-              </button>
-            </div>
+            {!submitError && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onSubmitDraft}
+                  disabled={busy}
+                  className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-medium text-emerald-950 hover:bg-emerald-200 disabled:cursor-wait disabled:opacity-50"
+                >
+                  Submit to Invoker
+                </button>
+                <button
+                  type="button"
+                  onClick={focusComposer}
+                  className="rounded-full border border-emerald-400/40 px-4 py-2 text-sm text-emerald-100 hover:border-emerald-200"
+                >
+                  Keep chatting
+                </button>
+              </div>
+            )}
           </div>
           {submitError && (
             <div
@@ -190,7 +192,7 @@ export function InvokerTerminal({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void navigator.clipboard?.writeText(submitError.message)}
+                  onClick={() => { navigator.clipboard?.writeText(submitError.message).catch(() => {}); }}
                   className="rounded-full border border-red-300/40 px-4 py-2 text-sm text-red-100 hover:border-red-100"
                 >
                   Copy error
