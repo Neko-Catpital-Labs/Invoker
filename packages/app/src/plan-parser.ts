@@ -414,9 +414,23 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
 }
 
 function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): RawPlan {
+  const stackExternalDependencies = stack.externalDependencies === undefined
+    ? []
+    : Array.isArray(stack.externalDependencies)
+      ? stack.externalDependencies
+      : (() => {
+          throw new PlanParseError('Plan stack "externalDependencies" must be an array when provided.');
+        })();
+  const workflowExternalDependencies = workflow.externalDependencies === undefined
+    ? []
+    : Array.isArray(workflow.externalDependencies)
+      ? workflow.externalDependencies
+      : (() => {
+          throw new PlanParseError(`Workflow "${workflow.name ?? '<unnamed>'}" "externalDependencies" must be an array when provided.`);
+        })();
   const externalDependencies = [
-    ...(stack.externalDependencies ?? []),
-    ...(workflow.externalDependencies ?? []),
+    ...stackExternalDependencies,
+    ...workflowExternalDependencies,
   ];
 
   return {
@@ -453,6 +467,19 @@ export function parsePlanSubmissionBundle(yamlContent: string): PlanSubmissionBu
   if (raw.tasks !== undefined) {
     throw new PlanParseError('Plan stack must put tasks inside each workflow, not at the top level.');
   }
+  const stackHasOwn = (key: string): boolean =>
+    Object.prototype.hasOwnProperty.call(raw as object, key);
+  if (stackHasOwn('autoFix')) {
+    throw new PlanParseError(
+      'Plan stack-level "autoFix" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
+    );
+  }
+  if (stackHasOwn('autoFixRetries')) {
+    throw new PlanParseError(
+      'Plan stack-level "autoFixRetries" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
+    );
+  }
+  assertNoLegacyRoutingKeys('Plan stack', raw as object);
 
   const plans = raw.workflows.map((workflow, index) => {
     if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) {
@@ -465,7 +492,11 @@ export function parsePlanSubmissionBundle(yamlContent: string): PlanSubmissionBu
 }
 
 export function parsePlan(yamlContent: string): PlanDefinition {
-  return parsePlanSubmissionBundle(yamlContent).plans[0];
+  const submission = parsePlanSubmissionBundle(yamlContent);
+  if (submission.isStack) {
+    throw new PlanParseError('Stacked workflow YAML must be loaded with parsePlanSubmissionBundle().');
+  }
+  return submission.plans[0];
 }
 
 /**

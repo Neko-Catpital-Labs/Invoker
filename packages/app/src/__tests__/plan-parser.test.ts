@@ -169,7 +169,7 @@ workflows:
     ]);
   });
 
-  it('rejects empty or mixed stacked workflow bundles', () => {
+  it('rejects invalid stacked workflow bundles', () => {
     expect(() => parsePlanSubmissionBundle(`
 name: Empty Stack
 repoUrl: git@github.com:test/repo.git
@@ -188,6 +188,38 @@ workflows:
       - id: child
         description: Child task
 `)).toThrow('Plan stack must put tasks inside each workflow');
+
+    expect(() => parsePlanSubmissionBundle(`
+name: Legacy Stack
+repoUrl: git@github.com:test/repo.git
+autoFixRetries: 1
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Plan stack-level "autoFixRetries" is no longer supported');
+
+    expect(() => parsePlanSubmissionBundle(`
+name: Bad Dependencies
+repoUrl: git@github.com:test/repo.git
+externalDependencies: bad
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Plan stack "externalDependencies" must be an array');
+
+    expect(() => parsePlan(`
+name: Legacy Parse Entry
+repoUrl: git@github.com:test/repo.git
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Stacked workflow YAML must be loaded with parsePlanSubmissionBundle()');
   });
 
   it('parses plan with dependencies', () => {
