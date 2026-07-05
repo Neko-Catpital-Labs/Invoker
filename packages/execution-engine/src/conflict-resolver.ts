@@ -50,7 +50,7 @@ export interface ConflictResolverHost {
   execGitIn(args: string[], dir: string): Promise<string>;
   createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
-  spawnAgentFix(prompt: string, cwd: string, agentName?: string): Promise<{ stdout: string; sessionId: string }>;
+  spawnAgentFix(prompt: string, cwd: string, agentName?: string, executionModel?: string): Promise<{ stdout: string; sessionId: string }>;
   getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
 }
 
@@ -217,7 +217,7 @@ export async function resolveConflictImpl(
     if (!target) {
       throw new Error(`No remote target config for "${poolMemberId}" — cannot resolve conflict on remote`);
     }
-    await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target, agentName, resolvedExecutionModel);
+    await resolveConflictRemote(host, taskId, taskBranch, conflictInfo, rawCwd, target, agentName, resolvedExecutionModel);
     return;
   }
 
@@ -271,8 +271,7 @@ export async function resolveConflictImpl(
         `4. Staging the resolved files with 'git add'`,
         `5. Completing the merge with 'git commit --no-edit'`,
       ].join('\n');
-      const executionModel = resolvedExecutionModel ?? resolveExecutionModelForAgent(task, agentName);
-      await host.spawnAgentFix(prompt, cwd, agentName, executionModel);
+      await host.spawnAgentFix(prompt, cwd, agentName, resolvedExecutionModel);
     }
 
     console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
@@ -311,12 +310,13 @@ function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
+  executionModel?: string,
 ): { shellCommand: string; sessionId: string } {
   const name = agentName ?? DEFAULT_EXECUTION_AGENT;
   if (agentRegistry) {
     const agent = agentRegistry.get(name);
     if (agent?.buildFixCommand) {
-      const spec = agent.buildFixCommand(prompt);
+      const spec = agent.buildFixCommand(prompt, { executionModel });
       const sessionId = spec.sessionId ?? randomUUID();
       const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
       return { shellCommand: cmd, sessionId };
@@ -353,7 +353,7 @@ export function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId
 
 async function resolveConflictRemote(
   host: ConflictResolverHost,
-  task: ReturnType<Orchestrator['getTask']> & {},
+  taskId: string,
   taskBranch: string,
   conflictInfo: { failedBranch: string; conflictFiles: string[] },
   remoteCwd: string,
@@ -379,12 +379,11 @@ async function resolveConflictRemote(
     ? `Merge upstream ${conflictInfo.failedBranch} — ${depTask.description}`
     : `Merge upstream ${conflictInfo.failedBranch}`;
 
-  const executionModel = resolvedExecutionModel ?? resolveExecutionModelForAgent(task, agentName);
   const { shellCommand: agentCmd } = buildRemoteAgentCommand(
     prompt,
     host.agentRegistry,
     agentName,
-    executionModel,
+    resolvedExecutionModel,
   );
   const agentCmdB64 = Buffer.from(agentCmd).toString('base64');
   const mergeMsgB64 = Buffer.from(conflictMergeMsg).toString('base64');
@@ -406,7 +405,7 @@ fi
 `;
 
   await execRemoteSsh(target, script, 'remote_conflict_fix');
-  console.log(`[resolveConflict] Successfully resolved remote conflict for ${task.id}`);
+  console.log(`[resolveConflict] Successfully resolved remote conflict for ${taskId}`);
 }
 
 /**
@@ -708,9 +707,10 @@ export function spawnAgentFixViaRegistry(
   cwd: string,
   agent: ExecutionAgent,
   driver?: SessionDriver,
+  executionModel?: string,
 ): Promise<{ stdout: string; sessionId: string }> {
   const promptTransport = materializeLocalPrompt(prompt);
-  const spec = agent.buildFixCommand?.(promptTransport.effectivePrompt);
+  const spec = agent.buildFixCommand?.(promptTransport.effectivePrompt, { executionModel });
   if (!spec) {
     promptTransport.cleanup();
     throw new Error(`Agent "${agent.name}" does not support fix commands`);
