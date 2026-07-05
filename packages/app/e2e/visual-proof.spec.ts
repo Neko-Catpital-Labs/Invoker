@@ -41,6 +41,52 @@ const QUEUE_SEMANTICS_PLAN = {
     { id: 'qs-blocked', description: 'Blocked by running task', command: 'echo blocked', dependencies: ['qs-running'] },
   ],
 };
+
+const WORKERS_SURFACE_STACKED_PLAN = {
+  name: 'Workers Surface',
+  repoUrl: E2E_REPO_URL,
+  baseBranch: 'master',
+  onFinish: 'pull_request' as const,
+  mergeMode: 'external_review' as const,
+  workflows: [
+    {
+      name: 'Workers Surface Contracts',
+      featureBranch: 'plan/workers-surface-contracts',
+      tasks: [
+        {
+          id: 'define-worker-contracts',
+          description: 'Define worker contracts',
+          prompt: 'Update shared contracts for workers.',
+          dependencies: [],
+        },
+        {
+          id: 'verify-worker-contracts',
+          description: 'Verify worker contracts',
+          command: 'pnpm test packages/contracts',
+          dependencies: ['define-worker-contracts'],
+        },
+      ],
+    },
+    {
+      name: 'Workers Surface UI',
+      featureBranch: 'plan/workers-surface-ui',
+      tasks: [
+        {
+          id: 'build-workers-ui',
+          description: 'Build workers UI',
+          prompt: 'Implement the workers surface.',
+          dependencies: [],
+        },
+        {
+          id: 'verify-workers-ui',
+          description: 'Verify workers UI',
+          command: 'pnpm test packages/ui',
+          dependencies: ['build-workers-ui'],
+        },
+      ],
+    },
+  ],
+};
 const QUEUE_ASSIGNING_PLAN = {
   name: 'Queue assigning proof',
   repoUrl: E2E_REPO_URL,
@@ -546,6 +592,58 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('workflow-inspector-title')).toContainText('Terminal Planned Flow');
     await expect(page.getByText('What to expect')).toHaveCount(0);
     await captureScreenshot(page, 'terminal-planned-graph');
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanningChatResponse(null);
+    });
+  });
+
+  test('terminal planning submits Workers Surface as stacked workflows', async ({ page }) => {
+    const plannedYaml = yamlStringify(WORKERS_SURFACE_STACKED_PLAN);
+    await page.evaluate(async ({ planYaml, planName }) => {
+      await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'I drafted the stacked plan.' });
+    }, { planYaml: plannedYaml, planName: 'Workers Surface' });
+
+    await expect(page.getByRole('heading', { name: 'What do you want to build?' })).toBeVisible();
+    await expect(page.getByTestId('invoker-terminal-input')).toBeVisible();
+    await page.getByTestId('invoker-terminal-input').fill('Build the Workers Surface');
+    await page.getByRole('button', { name: 'Send' }).click();
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
+    await page.getByRole('button', { name: 'Submit to Invoker' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Workers Surface Contracts/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Workers Surface UI/ })).toBeVisible();
+    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Workers Surface Contracts');
+    await captureScreenshot(page, 'stacked-workflows');
+
+    const stack = await page.evaluate(async () => {
+      const workflows = await window.invoker.listWorkflows();
+      return workflows
+        .filter((workflow: any) => workflow.name === 'Workers Surface Contracts' || workflow.name === 'Workers Surface UI')
+        .map((workflow: any) => ({
+          id: workflow.id,
+          name: workflow.name,
+          baseBranch: workflow.baseBranch,
+          featureBranch: workflow.featureBranch,
+          externalDependencies: workflow.externalDependencies,
+        }));
+    });
+
+    expect(stack).toHaveLength(2);
+    const contracts = stack.find((workflow) => workflow.name === 'Workers Surface Contracts');
+    const ui = stack.find((workflow) => workflow.name === 'Workers Surface UI');
+    expect(contracts).toBeDefined();
+    expect(ui).toBeDefined();
+    expect(ui!.baseBranch).toBe(contracts!.featureBranch);
+    expect(ui!.externalDependencies).toEqual([
+      {
+        workflowId: contracts!.id,
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'completed',
+      },
+    ]);
 
     await page.evaluate(async () => {
       await window.invoker.setTestPlanningChatResponse(null);
