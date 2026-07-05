@@ -47,6 +47,7 @@ export interface InAppPlanningChatSession {
   updatedAt: string;
   nextMessageId: number;
   pendingSend?: Promise<void>;
+  pendingSubmit?: Promise<InAppPlanningSubmitResponse>;
 }
 
 export type InAppPlanningChatSessions = Map<string, InAppPlanningChatSession>;
@@ -54,6 +55,17 @@ export type InAppPlanningChatSessions = Map<string, InAppPlanningChatSession>;
 export function createInAppPlanningChatSessions(): InAppPlanningChatSessions {
   return new Map();
 }
+
+function isModuleResolutionError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes('Cannot find module')
+    || error.message.includes('Cannot find package')
+    || error.message.includes('ERR_MODULE_NOT_FOUND')
+    || error.message.includes('ERR_UNKNOWN_FILE_EXTENSION')
+  );
+}
+
 async function loadPlannerSurfaces(): Promise<{
   BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset>;
   DEFAULT_HARNESS_PRESET: string;
@@ -65,8 +77,23 @@ async function loadPlannerSurfaces(): Promise<{
     // Static import cannot work in required-fast CI because that job boots the built app
     // before the workspace @invoker/surfaces package has produced dist/index.js.
     return await import('@invoker/surfaces');
-  } catch {
-    return await import('../../surfaces/src/index.ts');
+  } catch (packageError) {
+    if (!isModuleResolutionError(packageError)) {
+      throw packageError;
+    }
+    const builtSurfacesModulePath = '../../surfaces/dist/index.js';
+    try {
+      return await import(builtSurfacesModulePath);
+    } catch (distError) {
+      if (!isModuleResolutionError(distError)) {
+        throw distError;
+      }
+      if (process.versions.electron) {
+        throw new Error('Unable to load @invoker/surfaces. Build packages/surfaces first so dist/index.js exists.');
+      }
+      const sourceSurfacesModulePath = '../../surfaces/src/index.ts';
+      return await import(sourceSurfacesModulePath);
+    }
   }
 }
 
@@ -415,28 +442,37 @@ export async function submitPlanningChatDraft(
   if (session.status === 'submitted') {
     return { ok: false, error: 'This planning session was already submitted.' };
   }
+  if (session.pendingSubmit) {
+    return session.pendingSubmit;
+  }
 
   const planText = session.conversation.getDraftedPlan();
   if (!planText) {
     return { ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' };
   }
 
-  try {
-    const { summarizePlanText } = await loadPlannerSurfaces();
-    if (!summarizePlanText(planText)) {
-      return { ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' };
-    }
+  const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
+    try {
+      const { summarizePlanText } = await loadPlannerSurfaces();
+      if (!summarizePlanText(planText)) {
+        return { ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' };
+      }
 
-    const loaded = await deps.loadGeneratedPlan(planText);
-    session.status = 'submitted';
-    session.submittedPlanName = loaded.planName;
-    session.submittedWorkflowId = loaded.workflowId;
-    session.updatedAt = new Date().toISOString();
-    appendSessionMessage(session, 'system', `Plan "${loaded.planName}" submitted to Invoker. Review it, then Run.`, 'success');
-    return { ok: true, planName: loaded.planName, workflowId: loaded.workflowId };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
+      const loaded = await deps.loadGeneratedPlan(planText);
+      session.status = 'submitted';
+      session.submittedPlanName = loaded.planName;
+      session.submittedWorkflowId = loaded.workflowId;
+      session.updatedAt = new Date().toISOString();
+      appendSessionMessage(session, 'system', `Plan "${loaded.planName}" submitted to Invoker. Review it, then Run.`, 'success');
+      return { ok: true, planName: loaded.planName, workflowId: loaded.workflowId };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      session.pendingSubmit = undefined;
+    }
+  })();
+  session.pendingSubmit = submitAttempt;
+  return submitAttempt;
 }
 
 export function resetPlanningChat(

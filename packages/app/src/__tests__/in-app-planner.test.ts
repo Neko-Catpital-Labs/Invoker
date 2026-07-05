@@ -8,6 +8,7 @@ import {
   resetPlanningChat,
   sendPlanningChatMessage,
   submitPlanningChatDraft,
+  type LoadedGeneratedPlan,
 } from '../in-app-planner.js';
 
 const VALID_PLAN = `Here is the plan.
@@ -257,6 +258,35 @@ describe('planning chat', () => {
       loadGeneratedPlan,
     })).resolves.toEqual({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
     expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
+  });
+  it('coalesces concurrent submit requests for one session', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
+    const sessions = createInAppPlanningChatSessions();
+    const sent = await sendPlanningChatMessage({
+      message: 'draft',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    if (!sent.ok) throw new Error(sent.error);
+
+    let resolveLoad: ((value: LoadedGeneratedPlan) => void) | undefined;
+    const loadGeneratedPlan = vi.fn(() => new Promise<LoadedGeneratedPlan>((resolve) => {
+      resolveLoad = resolve;
+    }));
+
+    const first = submitPlanningChatDraft({ sessionId: sent.sessionId }, { sessions, loadGeneratedPlan });
+    const second = submitPlanningChatDraft({ sessionId: sent.sessionId }, { sessions, loadGeneratedPlan });
+    await vi.dynamicImportSettled();
+
+    expect(loadGeneratedPlan).toHaveBeenCalledTimes(1);
+    resolveLoad?.({ planName: 'Mock Plan', workflowId: 'wf-1' });
+
+    await expect(first).resolves.toEqual({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
+    await expect(second).resolves.toEqual({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
   });
 
   it('rejects submit for an unknown session', async () => {
