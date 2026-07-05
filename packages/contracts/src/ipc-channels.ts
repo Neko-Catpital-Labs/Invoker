@@ -235,6 +235,8 @@ export type InAppPlanResponse =
       ok: true;
       planName: string;
       workflowId: string;
+      workflowIds?: string[];
+      workflowCount?: number;
     }
   | {
       ok: false;
@@ -252,6 +254,7 @@ export interface PlanningPresetOption {
 export interface InAppPlanningPlanSummary {
   name: string;
   taskCount: number;
+  workflowCount?: number;
   steps: string[];
 }
 export type InAppPlanningSessionStatus =
@@ -332,6 +335,8 @@ export type InAppPlanningSubmitResponse =
       ok: true;
       planName: string;
       workflowId: string;
+      workflowIds?: string[];
+      workflowCount?: number;
     }
   | {
       ok: false;
