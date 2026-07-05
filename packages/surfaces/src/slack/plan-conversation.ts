@@ -150,7 +150,7 @@ tasks:
         description: "Approach A"
         prompt: "Try approach A"
     requiresManualApproval: false
-    autoFix: false               # auto-retry with experiments on failure
+
 \`\`\`
 
 Rules:
@@ -161,7 +161,7 @@ Rules:
    - Ask at most 1-2 clarifying questions only when the answer would materially change the plan. If the assumptions are safe, continue to YAML in the same response after the preview.
 3. Keep plans focused — 3-8 tasks maximum. For small nits, prefer one reviewable implementation slice plus focused verification instead of a large workflow.
 4. File-count guidance is a soft heuristic, not a hard validator gate. Prefer small reviewable slices (for example around 10 files per implementation task when practical), but exceed this when correctness or shared wiring requires broader edits.
-5. Each task should have either a \`command\` or a \`prompt\`, not both.
+5. Each task should have either a \`command\` or a \`prompt\`, not both. Do not include legacy \`autoFix\` or \`autoFixRetries\` fields anywhere in the YAML; auto-fix retries are configured only in ~/.invoker/config.json.
 6. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` discovered from the target repo (e.g. that repo's package scripts, build commands, or focused checks such as \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
    Test command rules:
    - Inspect repo manifests and existing docs/scripts before choosing commands.
@@ -548,7 +548,14 @@ export function extractYamlPlan(text: string): string | null {
       }
     }
 
-    // Return serialized YAML as provided — no defaulting or repo-specific command rewriting.
+    // Return serialized YAML with planner-only legacy fields stripped. The parser still
+    // rejects these fields in user-authored plan files so stale plans fail loudly there.
+    delete plan.autoFix;
+    delete plan.autoFixRetries;
+    for (const task of plan.tasks) {
+      delete task.autoFix;
+      delete task.autoFixRetries;
+    }
     return stringifyYaml(plan);
   } catch (err) {
     console.warn(`extractYamlPlan: YAML parse error: ${err instanceof Error ? err.message : String(err)}`);
