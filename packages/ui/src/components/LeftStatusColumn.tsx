@@ -12,6 +12,7 @@ interface LeftStatusColumnProps {
   collapsed: boolean;
   onSelectSurface: (surface: SidebarSurface) => void;
   onToggleCollapsed: () => void;
+  planningSessionCount: number;
   onOpenSettings: () => void;
 }
 
@@ -72,6 +73,18 @@ function WorkflowsIcon(): JSX.Element {
     </SidebarIcon>
   );
 }
+function PlanningTerminalIcon(): JSX.Element {
+  return (
+    <SidebarIcon>
+      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 5.25h15A1.5 1.5 0 0 1 21 6.75v9a1.5 1.5 0 0 1-1.5 1.5h-6L9 20.25v-3h-4.5A1.5 1.5 0 0 1 3 15.75v-9a1.5 1.5 0 0 1 1.5-1.5Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="m7.5 9 2 2-2 2" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 13h4.5" />
+      </svg>
+    </SidebarIcon>
+  );
+}
+
 
 function SettingsIcon(): JSX.Element {
   return (
@@ -136,6 +149,7 @@ export function LeftStatusColumn({
   collapsed,
   onSelectSurface,
   onToggleCollapsed,
+  planningSessionCount,
   onOpenSettings,
 }: LeftStatusColumnProps): JSX.Element {
   const workflowEntries = getSortedWorkflows(workflows, tasks);
@@ -183,6 +197,43 @@ export function LeftStatusColumn({
               <div className="mt-1 text-xs text-gray-500">Home</div>
             </div>
           </div>
+        )}
+      </button>
+
+      <button
+        type="button"
+        aria-label="Planning Terminal"
+        data-testid="sidebar-planning"
+        data-sidebar-nav-item
+        data-sidebar-nav-order="2"
+        aria-current={selectedSurface === 'planning' ? 'page' : undefined}
+        onClick={() => onSelectSurface('planning')}
+        className={[
+          'mt-4',
+          navButtonClass(selectedSurface === 'planning', collapsed),
+        ].join(' ')}
+      >
+        {collapsed ? (
+          <div className="relative inline-flex h-9 w-9 items-center justify-center">
+            <span><PlanningTerminalIcon /></span>
+            {planningSessionCount > 0 && (
+              <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none ${countClass('neutral')}`}>
+                {planningSessionCount}
+              </span>
+            )}
+          </div>
+        ) : (
+          <>
+            <span className="flex min-w-0 items-center gap-3">
+              <span className="inline-flex rounded-md border border-gray-800 bg-gray-900/70 p-1.5 text-gray-300">
+                <PlanningTerminalIcon />
+              </span>
+              <span className="truncate">Planning Terminal</span>
+            </span>
+            <span className={`rounded-full px-2 py-0.5 text-[11px] ${countClass('neutral')}`}>
+              {planningSessionCount}
+            </span>
+          </>
         )}
       </button>
 
@@ -245,7 +296,8 @@ export function LeftStatusColumn({
               ? 'No tasks are running right now.'
               : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`
           )}
-          {selectedSurface === 'home' && 'Terminal planning and graph details live here.'}
+          {selectedSurface === 'home' && 'Plan graph details live here.'}
+          {selectedSurface === 'planning' && `${planningSessionCount} planning chat${planningSessionCount === 1 ? '' : 's'}.`}
         </div>
       )}
 

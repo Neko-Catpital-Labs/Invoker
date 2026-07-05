@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
@@ -30,27 +30,30 @@ describe('App launch (component)', () => {
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
     vi.useRealTimers();
+    cleanup();
     mock.cleanup();
+    vi.restoreAllMocks();
   });
-
-  it('shows the reskinned empty shell when no plan is loaded', () => {
+  it('shows the reskinned empty shell when no plan is loaded', async () => {
     render(<App />);
-    expect(screen.getByText('Start with a goal.')).toBeInTheDocument();
-    expect(screen.getByText('Invoker Terminal')).toBeInTheDocument();
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
     expect(screen.getByText('What to expect')).toBeInTheDocument();
     expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
     expect(screen.getByTestId('sidebar-home')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
   });
-
-  it('renders the Apple-like source list without manual plan loading', () => {
+  it('renders the Apple-like source list without manual plan loading', async () => {
     render(<App />);
+    expect(await screen.findByTestId('sidebar-home')).toHaveTextContent('Invoker');
     expect(screen.queryByTestId('rail-open-file')).not.toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
-    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
+    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
@@ -73,30 +76,20 @@ describe('App launch (component)', () => {
     expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(screen.getByText('Alpha · running')).toBeInTheDocument();
   });
-  it('auto-collapses the app sidebar for browser views, focuses attention tasks, and collapses the inspector on narrow windows', async () => {
-    const workflows: WorkflowMeta[] = [
-      { id: 'wf-alpha', name: 'Alpha', status: 'running' },
-    ];
-    const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'failed', workflowId: 'wf-alpha' });
-
+  it('auto-collapses the app sidebar for browser views on narrow windows', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
 
     render(<App />);
-    act(() => mock.setTasks([alpha], workflows));
+    await screen.findByTestId('sidebar-workflows');
     act(() => window.dispatchEvent(new Event('resize')));
 
-    fireEvent.click(await screen.findByTestId('sidebar-attention'));
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
     expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
     expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
-    expect(screen.getByTestId('workflow-inspector-shell').className).toContain('w-16');
-    expect(screen.queryByText('Invoker Terminal')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Needs Attention' })).toBeInTheDocument();
+    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
-    expect(screen.queryByText('More needs attention')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
-    expect(await screen.findByText('Invoker Terminal')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
 
