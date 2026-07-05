@@ -22,6 +22,8 @@ export interface ConversationMessage {
   content: string;
 }
 
+export type ConversationMode = 'agent' | 'plan';
+
 export type PlanningCommandBuilder = (opts: {
   tool: string;
   model?: string;
@@ -45,6 +47,8 @@ export interface PlanConversationConfig {
   tool?: string;
   /** Model to use (e.g. 'auto', 'sonnet-4'). Omit to use the CLI default. */
   model?: string;
+  /** Agent prompt mode. `agent` is a normal coding session; `plan` drafts Invoker YAML. */
+  mode?: ConversationMode;
   /** Injected builder that maps {tool, model, prompt} → CLI command + args. */
   planningCommandBuilder?: PlanningCommandBuilder;
   /** Root directory for codebase exploration. */
@@ -107,17 +111,24 @@ export function isNegation(text: string): boolean {
 
 // ── System Prompt ───────────────────────────────────────────
 
-function buildSystemPrompt(defaultBranch: string, repoUrl?: string): string {
+function buildAgentSystemPrompt(): string {
+  return `You are a normal coding agent running in a git worktree for a Slack thread.
+
+Default behavior:
+- Treat the thread like an ordinary OMP/Codex coding session.
+- Answer questions, run local commands, inspect files, edit code, and run focused verification when useful.
+- Do NOT generate Invoker YAML in this thread. If the user asks for an Invoker plan, tell them to start a new plan thread with \`plan: <request>\` — plan drafts from an agent thread cannot be submitted.
+- Do NOT submit or start an Invoker workflow. Agent threads reject \`submit\`; only a \`plan:\` thread can be submitted.
+- Keep Slack replies short and concrete: changed files, verification, and any remaining risk.`;
+}
+
+function buildPlanSystemPrompt(defaultBranch: string, repoUrl?: string): string {
   const repoUrlLine = repoUrl
     ? `repoUrl: "${repoUrl}"          # git clone URL for the repository`
     : `repoUrl: "git@github.com:user/repo.git"  # git clone URL for the repository`;
-  return `You are an assistant for the Invoker orchestrator. You have two modes:
+  return `You are an assistant for the Invoker orchestrator. The user explicitly requested an Invoker plan.
 
-**Direct answer mode** — For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase). Explore the codebase as needed and report the result directly. Do NOT generate a YAML plan for these.
-
-**Plan mode** — For multi-step implementation tasks (adding features, fixing bugs, refactoring code). Generate a YAML task plan as described below.
-
-Use your judgment: if the request can be answered with 1-2 commands or a short explanation, use direct answer mode. If it requires coordinated changes across multiple files, use plan mode.
+Generate a YAML task plan as described below. Answer simple follow-up questions directly only when they are about the plan being drafted.
 
 A plan has this structure:
 \`\`\`yaml
@@ -163,8 +174,8 @@ Rules:
 7. Use meaningful task IDs (kebab-case).
 8. When ready, output the plan inside a \`\`\`yaml code block.
 9. Always include \`dependencies\` (even if empty array).
-10. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
-11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.
+10. After generating a plan, tell the user they can submit it by replying with \`submit\`.
+11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically after explicit Slack approval.
 12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
 }
 
@@ -202,6 +213,7 @@ export class PlanConversation {
   private cursorCommand: string;
   private tool?: string;
   private model?: string;
+  private mode: ConversationMode;
   private planningCommandBuilder?: PlanningCommandBuilder;
   private messages: ConversationMessage[] = [];
   private _submittedPlanText: string | null = null;
@@ -220,6 +232,7 @@ export class PlanConversation {
     this.cursorCommand = config.cursorCommand ?? 'agent';
     this.tool = config.tool;
     this.model = config.model;
+    this.mode = config.mode ?? 'plan';
     this.planningCommandBuilder = config.planningCommandBuilder;
     this.workingDir = config.workingDir;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -263,6 +276,7 @@ export class PlanConversation {
               .join(''),
       })).filter((m) => m.content.length > 0);
       this._planSubmitted = saved.planSubmitted;
+      this.mode = saved.mode ?? this.mode;
 
       this.log('plan-conversation', 'info', `Restored conversation ${this.threadTs}: ${saved.messages.length} messages`);
     } catch (err) {
@@ -311,6 +325,10 @@ export class PlanConversation {
     return this._planSubmitted;
   }
 
+  get conversationMode(): ConversationMode {
+    return this.mode;
+  }
+
   /** Returns the last complete YAML plan drafted in this conversation, or null. */
   getDraftedPlan(): string | null {
     return this.extractLastPlanFromMessages();
@@ -338,7 +356,9 @@ export class PlanConversation {
    * and the complete conversation history.
    */
   buildCursorPrompt(): string {
-    const systemPrompt = buildSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl);
+    const systemPrompt = this.mode === 'plan'
+      ? buildPlanSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl)
+      : buildAgentSystemPrompt();
     const parts: string[] = [systemPrompt];
 
     if (this.messages.length > 1) {
@@ -353,7 +373,9 @@ export class PlanConversation {
     const lastMessage = this.messages[this.messages.length - 1];
     if (lastMessage) {
       parts.push(`\nUser's latest message:\n${lastMessage.content}`);
-      parts.push('\nRespond to the latest message. If it requires a plan, explore the codebase and generate one.');
+      parts.push(this.mode === 'plan'
+        ? '\nRespond to the latest message. If it requires a plan, explore the codebase and generate one.'
+        : '\nRespond to the latest message as a normal coding agent in this worktree.');
     }
 
     if (this.experimentalPlanner) {
@@ -449,12 +471,14 @@ export class PlanConversation {
         role: m.role,
         content: m.content,
       }));
-
       this.conversationRepo.saveConversation(
         this.threadTs,
         messages,
         null,
         this._planSubmitted,
+        undefined,
+        undefined,
+        this.mode,
       );
     } catch (err) {
       this.log('plan-conversation', 'error', `Failed to save conversation ${this.threadTs}: ${err}`);

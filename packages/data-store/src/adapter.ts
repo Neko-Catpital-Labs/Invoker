@@ -8,12 +8,15 @@
 import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
 import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
 
+
+export type ConversationMode = 'agent' | 'plan';
 // ── Conversation Types ─────────────────────────────────────
 
 export interface Conversation {
   threadTs: string;
   channelId: string;
   userId: string;
+  mode?: ConversationMode;
   extractedPlan: string | null;   // JSON-serialized PlanDefinition
   planSubmitted: boolean;
   createdAt: string;
@@ -230,7 +233,7 @@ export interface PersistenceAdapter {
   // Conversations (Slack thread-based)
   saveConversation(conversation: Conversation): void;
   loadConversation(threadTs: string): Conversation | undefined;
-  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void;
+  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'mode' | 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void;
   deleteConversation(threadTs: string): void;
 
   // Conversation queries

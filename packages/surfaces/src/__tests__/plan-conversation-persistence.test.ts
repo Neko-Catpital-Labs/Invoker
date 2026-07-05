@@ -82,10 +82,11 @@ describe('PlanConversation persistence', () => {
     adapter.close();
   });
 
-  function createConversation(threadTs: string): PlanConversation {
+  function createConversation(threadTs: string, mode: 'agent' | 'plan' = 'plan'): PlanConversation {
     return new PlanConversation({
       threadTs,
       conversationRepo: repo,
+      mode,
     });
   }
 
@@ -100,6 +101,19 @@ describe('PlanConversation persistence', () => {
       const saved = repo.loadConversation('ts-1');
       expect(saved).not.toBeNull();
       expect(saved!.messages.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('persists conversation mode for recovery', async () => {
+      const conv = createConversation('ts-agent-mode', 'agent');
+      mockCursorResponse('Done locally.');
+      await conv.sendMessage('Fix the local docs');
+
+      const saved = repo.loadConversation('ts-agent-mode');
+      expect(saved?.mode).toBe('agent');
+
+      const recovered = createConversation('ts-agent-mode');
+      await recovered.init();
+      expect(recovered.conversationMode).toBe('agent');
     });
 
     it('no longer persists extractedPlan (plan is scanned on demand)', async () => {
