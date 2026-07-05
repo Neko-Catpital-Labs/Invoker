@@ -19,7 +19,7 @@ interface InvokerTerminalProps {
   selectedPresetKey: string;
   presetOptions: PlanningPresetOptionView[];
   draftPlanAvailable: boolean;
-  draftPlanSummary?: { name: string; taskCount: number };
+  draftPlanSummary?: { name: string; taskCount: number; workflowCount?: number };
   submitError?: SubmitErrorView | null;
   readOnly?: boolean;
   expanded?: boolean;
@@ -144,7 +144,7 @@ export function InvokerTerminal({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span>
               {draftPlanSummary
-                ? `Draft plan ready: "${draftPlanSummary.name}" (${draftPlanSummary.taskCount} steps).`
+                ? `Draft plan ready: "${draftPlanSummary.name}" (${draftPlanSummary.workflowCount && draftPlanSummary.workflowCount > 1 ? `${draftPlanSummary.workflowCount} workflows` : `${draftPlanSummary.taskCount} step${draftPlanSummary.taskCount === 1 ? '' : 's'}`}).`
                 : 'Draft plan ready.'}
             </span>
             <div className="flex items-center gap-2">

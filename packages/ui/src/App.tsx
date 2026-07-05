@@ -1884,7 +1884,13 @@ export function App() {
           updatedAt: new Date().toISOString(),
         }));
         await refreshTaskGraph();
-        appendTerminalLine(`Plan "${result.planName}" submitted to Invoker. Review it, then Run.`, 'system', 'success');
+        appendTerminalLine(
+          result.workflowCount && result.workflowCount > 1
+            ? `Plan "${result.planName}" submitted as ${result.workflowCount} stacked workflows. Review them, then Run.`
+            : `Plan "${result.planName}" submitted to Invoker. Review it, then Run.`,
+          'system',
+          'success',
+        );
       } else {
         updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: false }));
         setPlanningSubmitError({ title: 'Plan could not be submitted', message: result.error });
