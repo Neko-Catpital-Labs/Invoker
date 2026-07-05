@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -121,6 +121,47 @@ describe('Invoker terminal (component)', () => {
     fireEvent.click(screen.getByTestId('sidebar-planning'));
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review it, then Run.');
     expect(mock.api.start).not.toHaveBeenCalled();
+  });
+
+  it('shows submit errors beside the ready draft and allows retry', async () => {
+    const submitError = 'Task "make-selected-lists-scroll" uses "autoFix", which is no longer supported.';
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Here is the plan.',
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Selected lists scroll', taskCount: 4, steps: ['First', 'Second', 'Third', 'Fourth'] },
+    })) as any;
+    mock.api.planningChatSubmit = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: submitError })
+      .mockResolvedValueOnce({ ok: true, planName: 'Selected lists scroll', workflowId: 'wf-1' }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft the full plan');
+    await screen.findByTestId('invoker-terminal-ready-bar');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+
+    const errorPanel = await screen.findByTestId('invoker-terminal-submit-error');
+    expect(errorPanel).toHaveTextContent('Plan could not be submitted');
+    expect(errorPanel).toHaveTextContent(submitError);
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(`Plan could not be submitted: ${submitError}`);
+    expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft plan ready: "Selected lists scroll" (4 steps).');
+    expect(mock.api.refreshTaskGraph).not.toHaveBeenCalled();
+
+    fireEvent.click(within(errorPanel).getByRole('button', { name: 'Retry submit' }));
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(2);
+      expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
+      expect(screen.getByText('Plan graph')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. Review it, then Run.');
+    expect(screen.queryByTestId('invoker-terminal-submit-error')).not.toBeInTheDocument();
   });
 
   it('explains that run needs a submitted plan first', async () => {

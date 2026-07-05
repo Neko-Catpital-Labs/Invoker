@@ -20,6 +20,7 @@ interface InvokerTerminalProps {
   presetOptions: PlanningPresetOptionView[];
   draftPlanAvailable: boolean;
   draftPlanSummary?: { name: string; taskCount: number };
+  submitError?: SubmitErrorView | null;
   readOnly?: boolean;
   expanded?: boolean;
   onValueChange: (value: string) => void;
@@ -31,6 +32,11 @@ interface InvokerTerminalProps {
   onCollapse?: () => void;
 }
 
+interface SubmitErrorView {
+  title: string;
+  message: string;
+}
+
 export function InvokerTerminal({
   lines,
   busy,
@@ -39,6 +45,7 @@ export function InvokerTerminal({
   presetOptions,
   draftPlanAvailable,
   draftPlanSummary,
+  submitError,
   readOnly = false,
   expanded = false,
   onValueChange,
@@ -132,30 +139,65 @@ export function InvokerTerminal({
       {draftPlanAvailable && !readOnly && (
         <div
           data-testid="invoker-terminal-ready-bar"
-          className="sticky bottom-0 z-10 mx-4 mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-950/70 px-4 py-3 text-sm text-emerald-100 shadow-lg"
+          className="sticky bottom-0 z-10 mx-4 mb-3 space-y-3 rounded-2xl border border-emerald-500/30 bg-emerald-950/70 px-4 py-3 text-sm text-emerald-100 shadow-lg"
         >
-          <span>
-            {draftPlanSummary
-              ? `Draft plan ready: "${draftPlanSummary.name}" (${draftPlanSummary.taskCount} steps).`
-              : 'Draft plan ready.'}
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onSubmitDraft}
-              disabled={busy}
-              className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-medium text-emerald-950 hover:bg-emerald-200 disabled:cursor-wait disabled:opacity-50"
-            >
-              Submit to Invoker
-            </button>
-            <button
-              type="button"
-              onClick={focusComposer}
-              className="rounded-full border border-emerald-400/40 px-4 py-2 text-sm text-emerald-100 hover:border-emerald-200"
-            >
-              Keep chatting
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>
+              {draftPlanSummary
+                ? `Draft plan ready: "${draftPlanSummary.name}" (${draftPlanSummary.taskCount} steps).`
+                : 'Draft plan ready.'}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onSubmitDraft}
+                disabled={busy}
+                className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-medium text-emerald-950 hover:bg-emerald-200 disabled:cursor-wait disabled:opacity-50"
+              >
+                {submitError ? 'Retry submit' : 'Submit to Invoker'}
+              </button>
+              <button
+                type="button"
+                onClick={focusComposer}
+                className="rounded-full border border-emerald-400/40 px-4 py-2 text-sm text-emerald-100 hover:border-emerald-200"
+              >
+                Keep chatting
+              </button>
+            </div>
           </div>
+          {submitError && (
+            <div
+              data-testid="invoker-terminal-submit-error"
+              className="rounded-2xl border border-red-500/40 bg-red-950/70 px-4 py-3 text-red-100"
+            >
+              <div className="text-sm font-semibold text-red-100">{submitError.title}</div>
+              <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-red-200">{submitError.message}</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={onSubmitDraft}
+                  disabled={busy}
+                  className="rounded-full bg-red-200 px-4 py-2 text-sm font-medium text-red-950 hover:bg-red-100 disabled:cursor-wait disabled:opacity-50"
+                >
+                  Retry submit
+                </button>
+                <button
+                  type="button"
+                  onClick={focusComposer}
+                  className="rounded-full border border-red-300/40 px-4 py-2 text-sm text-red-100 hover:border-red-100"
+                >
+                  Keep chatting
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void navigator.clipboard?.writeText(submitError.message)}
+                  className="rounded-full border border-red-300/40 px-4 py-2 text-sm text-red-100 hover:border-red-100"
+                >
+                  Copy error
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
