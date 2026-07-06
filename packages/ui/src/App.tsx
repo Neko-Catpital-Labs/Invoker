@@ -506,12 +506,22 @@ export function App() {
   const queueStatus = useQueueStatus();
   const [workerStatus, refreshWorkerStatus] = useWorkerStatus();
   const handleStartWorker = useCallback(async (kind: string) => {
-    await invoker.startWorker(kind);
-    await refreshWorkerStatus();
+    if (!invoker) return;
+    try {
+      await invoker.startWorker(kind);
+      await refreshWorkerStatus();
+    } catch (err) {
+      console.error('Failed to start worker:', err);
+    }
   }, [invoker, refreshWorkerStatus]);
   const handleStopWorker = useCallback(async (kind: string) => {
-    await invoker.stopWorker(kind);
-    await refreshWorkerStatus();
+    if (!invoker) return;
+    try {
+      await invoker.stopWorker(kind);
+      await refreshWorkerStatus();
+    } catch (err) {
+      console.error('Failed to stop worker:', err);
+    }
   }, [invoker, refreshWorkerStatus]);
   const runningTaskIds = useMemo(
     () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
