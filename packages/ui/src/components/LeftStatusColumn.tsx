@@ -184,7 +184,7 @@ export function LeftStatusColumn({
       data-testid="app-sidebar"
       className={[
         'flex h-full shrink-0 flex-col border-r border-gray-800 bg-gray-950/85 py-4 text-sm text-gray-200 transition-all duration-150',
-        collapsed ? 'w-16 px-2' : 'w-72 px-3',
+        collapsed ? 'w-16 px-2' : 'w-60 px-3',
       ].join(' ')}
     >
       <button

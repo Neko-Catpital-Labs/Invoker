@@ -176,7 +176,7 @@ export function createMockInvoker(
       arch: 'x64',
       appVersion: '0.0.1',
       isPackaged: false,
-      tools: [],
+      tools: [{ id: 'codex', name: 'Codex', required: false, installed: true, installHint: 'Installed' }],
       bundledSkills: {
         available: false,
         promptRecommended: false,
