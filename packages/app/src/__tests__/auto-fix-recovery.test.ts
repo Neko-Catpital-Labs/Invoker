@@ -250,6 +250,18 @@ describe('auto-fix recovery candidate validation', () => {
         reason: 'already-queued-intent',
       }),
     );
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'recovery.worker.skip',
+      expect.objectContaining({
+        workerId: 'auto-fix-recovery',
+        kind: 'recovery',
+        owner: 'auto-fix',
+        action: 'skip',
+        phase: 'worker-autofix-skip',
+        reason: 'already-queued-intent',
+      }),
+    );
   });
 
   it('deduplicates repeated wakeups for the same failed task', async () => {
@@ -330,6 +342,25 @@ describe('auto-fix recovery scan submission', () => {
       'normal',
       'invoker:fix-with-agent',
       buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
+    );
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'worker-autofix-submitted',
+        channel: 'invoker:fix-with-agent',
+      }),
+    );
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'recovery.worker.submit',
+      expect.objectContaining({
+        workerId: 'auto-fix-recovery',
+        kind: 'recovery',
+        owner: 'auto-fix',
+        action: 'submit',
+        phase: 'worker-autofix-submitted',
+      }),
     );
   });
 });

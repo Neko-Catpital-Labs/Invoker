@@ -25,6 +25,11 @@ export const RECOVERY_WORKER_KIND = 'recovery';
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
 const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
 
+const AUTO_FIX_WORKER_AUDIT_EVENTS: Record<string, { eventType: string; action: 'submit' | 'skip' }> = {
+  'worker-autofix-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
+  'worker-autofix-skip': { eventType: 'recovery.worker.skip', action: 'skip' },
+};
+
 export interface AutoFixRecoveryStore {
   listWorkflows(): ReadonlyArray<{ id: string }>;
   loadTasks(workflowId: string): TaskState[];
@@ -217,6 +222,23 @@ function logAutoFixWorkerEvent(
 ): void {
   const payload = { phase, worker: RECOVERY_WORKER_KIND, ...details };
   options.store.logEvent?.(taskId, 'debug.auto-fix', payload);
+
+  const auditEvent = AUTO_FIX_WORKER_AUDIT_EVENTS[phase];
+  if (auditEvent) {
+    options.store.logEvent?.(taskId, auditEvent.eventType, {
+      workerId: 'auto-fix-recovery',
+      kind: RECOVERY_WORKER_KIND,
+      owner: 'auto-fix',
+      action: auditEvent.action,
+      phase,
+      ...(typeof details.reason === 'string' ? { reason: details.reason } : {}),
+      ...(typeof details.status === 'string' ? { status: details.status } : {}),
+      ...(typeof details.workflowId === 'string' || details.workflowId === null ? { workflowId: details.workflowId } : {}),
+      ...(typeof details.autoFixAttempts === 'number' || details.autoFixAttempts === null ? { autoFixAttempts: details.autoFixAttempts } : {}),
+      details: { worker: RECOVERY_WORKER_KIND, ...details },
+    });
+  }
+
   options.logger.debug?.(`[worker:${RECOVERY_WORKER_KIND}] ${phase}`, {
     module: 'auto-fix-recovery',
     taskId,
