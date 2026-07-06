@@ -562,7 +562,7 @@ export interface OrchestratorConfig {
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
   maxConcurrency?: number;
-  /** Positive values enable auto-fix; attempts are not capped by workflow-core. */
+  /** Worker-owned maximum auto-fix attempts per failed task. Positive finite values are caps; zero disables worker-submitted fixes. */
   defaultAutoFixRetries?: number;
   /**
    * Rules that validate task execution environment against command patterns.
@@ -3870,7 +3870,14 @@ export class Orchestrator {
   }
 
   getAutoFixRetryBudget(taskId: string): number {
-    return this.defaultAutoFixRetries > 0 ? Number.POSITIVE_INFINITY : 0;
+    return this.defaultAutoFixRetries;
+  }
+
+  private getAutoFixAttemptCount(task: TaskState): number {
+    const raw = task.execution.autoFixAttempts;
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
+    const attempts = Math.floor(raw);
+    return attempts > 0 ? attempts : 0;
   }
 
   private isRuntimeAutoFixEligibleTask(task: TaskState): boolean {
@@ -3885,7 +3892,8 @@ export class Orchestrator {
     if (task.status !== 'failed') return false;
     if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
     const max = this.getAutoFixRetryBudget(taskId);
-    return max > 0;
+    if (max <= 0) return false;
+    return this.getAutoFixAttemptCount(task) < max;
   }
 
   getAllTasks(): TaskState[] {
