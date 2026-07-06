@@ -217,7 +217,7 @@ export async function resolveConflictImpl(
     if (!target) {
       throw new Error(`No remote target config for "${poolMemberId}" — cannot resolve conflict on remote`);
     }
-    await resolveConflictRemote(host, taskId, taskBranch, conflictInfo, rawCwd, target, agentName, resolvedExecutionModel);
+    await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target, agentName, resolvedExecutionModel);
     return;
   }
 
@@ -271,7 +271,8 @@ export async function resolveConflictImpl(
         `4. Staging the resolved files with 'git add'`,
         `5. Completing the merge with 'git commit --no-edit'`,
       ].join('\n');
-      await host.spawnAgentFix(prompt, cwd, agentName, resolvedExecutionModel);
+      const executionModel = resolvedExecutionModel ?? resolveExecutionModelForAgent(task, agentName);
+      await host.spawnAgentFix(prompt, cwd, agentName, executionModel);
     }
 
     console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
@@ -364,7 +365,7 @@ function resolveExecutionModelForAgent(
 
 async function resolveConflictRemote(
   host: ConflictResolverHost,
-  taskId: string,
+  task: ReturnType<Orchestrator['getTask']> & {},
   taskBranch: string,
   conflictInfo: { failedBranch: string; conflictFiles: string[] },
   remoteCwd: string,
@@ -390,11 +391,12 @@ async function resolveConflictRemote(
     ? `Merge upstream ${conflictInfo.failedBranch} — ${depTask.description}`
     : `Merge upstream ${conflictInfo.failedBranch}`;
 
+  const executionModel = resolvedExecutionModel ?? resolveExecutionModelForAgent(task, agentName);
   const { shellCommand: agentCmd } = buildRemoteAgentCommand(
     prompt,
     host.agentRegistry,
     agentName,
-    resolvedExecutionModel,
+    executionModel,
   );
   const agentCmdB64 = Buffer.from(agentCmd).toString('base64');
   const mergeMsgB64 = Buffer.from(conflictMergeMsg).toString('base64');
@@ -415,8 +417,22 @@ else
 fi
 `;
 
-  await execRemoteSsh(target, script, 'remote_conflict_fix');
-  console.log(`[resolveConflict] Successfully resolved remote conflict for ${taskId}`);
+  const sshArgs = [
+    ...buildSshConnectionArgs({
+      sshKeyPath: target.sshKeyPath,
+      port: target.port,
+      user: target.user,
+      host: target.host,
+    }, { batchMode: true }),
+    'bash', '-s',
+  ];
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('ssh', sshArgs, { stdio: ['pipe', 'inherit', 'inherit'], env: cleanElectronEnv() });
+    child.stdin?.write(script);
+    child.stdin?.end();
+    child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`ssh conflict resolve failed (exit=${code})`)));
+    child.on('error', reject);
+  });
 }
 
 /**
