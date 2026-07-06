@@ -179,13 +179,7 @@ async function createSession(
     title: typeof request?.title === 'string' && request.title.trim() ? request.title.trim() : 'Untitled plan',
     presetKey,
     status: 'still_discussing',
-    messages: [{
-      id: 1,
-      role: 'system',
-      text: 'Ask Invoker what you want to build.',
-      tone: 'muted',
-      createdAt,
-    }],
+    messages: [],
     conversation: new PlanConversation({
       tool: preset.tool,
       model: preset.model,
@@ -199,7 +193,7 @@ async function createSession(
     }),
     createdAt,
     updatedAt: createdAt,
-    nextMessageId: 2,
+    nextMessageId: 1,
   };
   deps.sessions.set(session.id, session);
   return session;

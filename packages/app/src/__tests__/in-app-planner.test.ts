@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PlanConversation } from '../../../surfaces/src/index.ts';
 import {
   createInAppPlanningChatSessions,
+  createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
   listInAppPlanningPresets,
   planFromGoal,
@@ -149,6 +150,22 @@ describe('listInAppPlanningPresets', () => {
 
 describe('planning chat', () => {
   const planningCommandBuilder = vi.fn(() => ({ command: 'planner', args: ['prompt'] }));
+
+  it('creates new sessions with an empty transcript', async () => {
+    const sessions = createInAppPlanningChatSessions();
+
+    const result = await createPlanningChatSession({
+      presetKey: 'codex',
+    }, {
+      config: {},
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(result.ok && result.session.messages).toEqual([]);
+    expect(sessions.get(result.ok ? result.session.id : '')?.messages).toEqual([]);
+  });
 
   it('rejects blank messages without creating a session', async () => {
     const sessions = createInAppPlanningChatSessions();
