@@ -257,6 +257,34 @@ const TERMINAL_PLANNED_PLAN = {
   name: 'Terminal Planned Flow',
 };
 
+const PLAN_RELOAD_FIRST_PLAN = {
+  name: 'Plan Reload First Run',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    {
+      id: 'reload-first-task',
+      description: 'Initial reload task',
+      command: 'echo first reload task',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
+const PLAN_RELOAD_SECOND_PLAN = {
+  name: 'Plan Reload Replacement Run',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    {
+      id: 'reload-second-task',
+      description: 'Replacement reload task',
+      command: 'echo second reload task',
+      dependencies: [] as string[],
+    },
+  ],
+};
+
 
 const SSH_TERMINAL_RESUME_PLAN = {
   name: 'SSH Terminal Resume Visual Proof',
@@ -527,6 +555,43 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
   await selectWorkflowNode(page, workflow!.id);
   return workflow!.id;
 }
+
+async function openApprovalModalForTask(page: Page, taskIdSuffix: string): Promise<void> {
+  await page.evaluate(async (suffix) => {
+    const result = await window.invoker.getTasks();
+    const tasks = Array.isArray(result) ? result : result.tasks;
+    const task = tasks.find((entry: { id: string }) => (
+      entry.id === suffix || entry.id.endsWith(`/${suffix}`) || entry.id.endsWith(suffix)
+    ));
+    if (!task) throw new Error(`${suffix} not found for approval modal proof`);
+
+    const rootElement = document.getElementById('root') as (HTMLElement & Record<string, any>) | null;
+    if (!rootElement) throw new Error('React root not found');
+    const reactContainerKey = Object.keys(rootElement).find((key) => key.startsWith('__reactContainer$'));
+    const rootFiber = reactContainerKey ? rootElement[reactContainerKey] : null;
+    if (!rootFiber) throw new Error('React root fiber not found');
+
+    let modalDispatch: ((value: unknown) => void) | null = null;
+    const visit = (fiber: any): void => {
+      if (!fiber || modalDispatch) return;
+      let hook = fiber.memoizedState;
+      while (hook && !modalDispatch) {
+        if (hook.memoizedState?.type === 'none' && typeof hook.queue?.dispatch === 'function') {
+          modalDispatch = hook.queue.dispatch;
+          return;
+        }
+        hook = hook.next;
+      }
+      visit(fiber.child);
+      visit(fiber.sibling);
+    };
+
+    visit(rootFiber.current ?? rootFiber);
+    if (!modalDispatch) throw new Error('Approval modal state dispatcher not found');
+    modalDispatch({ type: 'approval', task, action: 'approve' });
+  }, taskIdSuffix);
+}
+
 async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId: string, now: Date): Promise<void> {
   const adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
   try {
@@ -644,6 +709,61 @@ test.describe('Visual proof capture', () => {
         gatePolicy: 'completed',
       },
     ]);
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanningChatResponse(null);
+    });
+  });
+
+  test('plan-reload-start-state-reset — second loaded plan exposes start control again', async ({ page }) => {
+    const submitPlanningDraft = async (plan: { name: string }, request: string) => {
+      const planYaml = yamlStringify(plan);
+      await page.evaluate(async ({ planYaml, planName }) => {
+        await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'Draft plan ready.' });
+      }, { planYaml, planName: plan.name });
+
+      await page.getByTestId('sidebar-planning').click();
+      await expect(page.getByTestId('invoker-terminal-input')).toBeVisible({ timeout: 5000 });
+      await page.getByTestId('invoker-terminal-input').fill(request);
+      await page.getByRole('button', { name: 'Send' }).click();
+      await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
+      await page.getByRole('button', { name: 'Submit to Invoker' }).click();
+      await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+      await page.waitForFunction(
+        (planName) => window.invoker.listWorkflows().then((workflows) => (
+          workflows.some((workflow: { name?: string }) => workflow.name === planName)
+        )),
+        plan.name,
+        { timeout: 10000 },
+      );
+      await expect(page.getByTestId('rail-start')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('rail-start')).toHaveText(/^(Run|Start)$/);
+    };
+
+    await submitPlanningDraft(PLAN_RELOAD_FIRST_PLAN, 'Draft the first reload proof plan');
+    await page.getByTestId('rail-start').click();
+    await expect(page.getByTestId('rail-start')).toHaveCount(0);
+
+    await page.getByTestId('sidebar-planning').click();
+    await page.getByRole('button', { name: 'New chat' }).click();
+    await expect(page.getByTestId('invoker-terminal-input')).toBeEnabled();
+    await submitPlanningDraft(PLAN_RELOAD_SECOND_PLAN, 'Draft the replacement reload proof plan');
+
+    const replacementWorkflowId = await page.evaluate(async (planName) => {
+      const workflows = await window.invoker.listWorkflows();
+      return workflows.find((workflow: { id: string; name?: string }) => workflow.name === planName)?.id ?? null;
+    }, PLAN_RELOAD_SECOND_PLAN.name);
+    expect(replacementWorkflowId).toBeTruthy();
+    await page.getByTestId(`workflow-node-${replacementWorkflowId}`).click();
+    await expect(page.getByTestId('workflow-inspector-title')).toContainText(PLAN_RELOAD_SECOND_PLAN.name);
+
+    const startControl = page.getByTestId('rail-start');
+    await expect(startControl).toBeVisible();
+    await expect(startControl).toHaveText(/^(Run|Start)$/);
+    await expect(page.getByTestId('rail-stop')).toHaveCount(0);
+    await expect(page.locator('.react-flow__node[data-testid$="reload-second-task"]')).toBeVisible();
+
+    await captureScreenshot(page, 'plan-reload-start-state-reset');
 
     await page.evaluate(async () => {
       await window.invoker.setTestPlanningChatResponse(null);
@@ -1667,12 +1787,88 @@ test.describe('Visual proof capture', () => {
     await page.locator('.react-flow__node[data-testid$="task-beta"]').click();
     await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
     await expect(page.getByTestId('inspector-approve-button')).toHaveText('Approve Fix');
-    await page.getByTestId('inspector-approve-button').click();
+    await openApprovalModalForTask(page, 'task-beta');
     await expect(page.getByRole('heading', { name: 'Approve AI Fix' })).toBeVisible();
     await expect(page.locator('.fixed').getByText('Second test task depending on alpha')).toBeVisible();
 
     await captureScreenshot(page, 'approve-fix-modal-with-session-log');
     await assertPageScreenshot(page, 'approve-fix-modal-with-session-log');
+  });
+
+  test('approval-modal-refreshed-fix-session-state — refreshed approval keeps active agent session', async ({ page, testDir }) => {
+    const staleSessionId = 'sess-stale-claude-approval';
+    const currentSessionId = 'sess-current-codex-refreshed-approval';
+    const sessionDir = path.join(testDir, 'agent-sessions');
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionDir, `${currentSessionId}.jsonl`),
+      [
+        JSON.stringify({
+          timestamp: '2025-01-01T00:00:01.000Z',
+          type: 'item.completed',
+          item: { type: 'user_message', text: 'Refresh the fix approval state before review.' },
+        }),
+        JSON.stringify({
+          timestamp: '2025-01-01T00:00:02.000Z',
+          type: 'item.completed',
+          item: { type: 'agent_message', text: 'Current Codex session is active for approval.' },
+        }),
+        JSON.stringify({ timestamp: '2025-01-01T00:00:03.000Z', type: 'turn.completed' }),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    await loadPlan(page, TEST_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-beta',
+        changes: {
+          status: 'awaiting_approval',
+          execution: {
+            pendingFixError: 'Stale approval error',
+            agentSessionId: staleSessionId,
+            agentName: 'claude',
+            lastAgentSessionId: staleSessionId,
+            lastAgentName: 'claude',
+          },
+        },
+      },
+    ]);
+    await page.locator('.react-flow__node[data-testid$="task-beta"]').click();
+    await expect(page.getByTestId('inspector-approve-button')).toHaveText('Approve Fix');
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-beta',
+        changes: {
+          status: 'awaiting_approval',
+          execution: {
+            pendingFixError: 'Current approval error',
+            agentSessionId: currentSessionId,
+            agentName: 'codex',
+            lastAgentSessionId: currentSessionId,
+            lastAgentName: 'codex',
+          },
+        },
+      },
+    ]);
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.waitForTimeout(300);
+    await page.locator('.react-flow__node[data-testid$="task-beta"]').click();
+    await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
+    await expect(page.getByTestId('inspector-approve-button')).toHaveText('Approve Fix');
+
+    await openApprovalModalForTask(page, 'task-beta');
+    await expect(page.getByRole('heading', { name: 'Approve AI Fix' })).toBeVisible();
+    const sessionContext = page.getByTestId('claude-session-context');
+    await expect(sessionContext).toContainText('Codex Session');
+    await expect(sessionContext).toContainText(currentSessionId);
+    await expect(sessionContext).toContainText('Current Codex session is active for approval.');
+    await expect(sessionContext).toContainText('State: finished');
+    await expect(sessionContext).not.toContainText(staleSessionId);
+    await expect(sessionContext).not.toContainText('Claude Session');
+
+    await captureScreenshot(page, 'approval-modal-refreshed-fix-session-state');
   });
 
   test('queue view concurrency display', async ({ page }) => {
