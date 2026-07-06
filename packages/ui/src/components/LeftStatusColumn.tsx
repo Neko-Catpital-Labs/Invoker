@@ -1,13 +1,15 @@
 import type { QueueStatus } from '@invoker/contracts';
 import type { JSX } from 'react';
-import type { TaskState, WorkflowMeta } from '../types.js';
+import type { TaskState, WorkflowMeta, WorkerStatusSnapshot } from '../types.js';
 import type { SidebarSurface } from '../lib/workflow-progress-surfaces.js';
 import { getAttentionTaskEntries, getRunningTaskEntries, getSortedWorkflows } from '../lib/workflow-progress-surfaces.js';
+import { countActiveWorkerActions } from '../lib/worker-display.js';
 
 interface LeftStatusColumnProps {
   workflows: Map<string, WorkflowMeta>;
   tasks: Map<string, TaskState>;
   queueStatus: QueueStatus | null;
+  workerStatus: WorkerStatusSnapshot | null;
   selectedSurface: SidebarSurface;
   collapsed: boolean;
   onSelectSurface: (surface: SidebarSurface) => void;
@@ -57,6 +59,16 @@ function RunningIcon(): JSX.Element {
       <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
         <circle cx="12" cy="12" r="8.25" />
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 7.5v4.75l3 1.75" />
+      </svg>
+    </SidebarIcon>
+  );
+}
+function WorkerIcon(): JSX.Element {
+  return (
+    <SidebarIcon>
+      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 7.5h9v7.5h-9z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 3.75v2.25M15 3.75v2.25M9 16.5v2.25M15 16.5v2.25M3.75 9h2.25M3.75 13.5h2.25M18 9h2.25M18 13.5h2.25" />
       </svg>
     </SidebarIcon>
   );
@@ -145,6 +157,7 @@ export function LeftStatusColumn({
   workflows,
   tasks,
   queueStatus,
+  workerStatus,
   selectedSurface,
   collapsed,
   onSelectSurface,
@@ -155,10 +168,14 @@ export function LeftStatusColumn({
   const workflowEntries = getSortedWorkflows(workflows, tasks);
   const attentionEntries = getAttentionTaskEntries(tasks, workflows);
   const runningEntries = getRunningTaskEntries(tasks, workflows, queueStatus);
+  const runningWorkers = workerStatus?.workers.filter((worker) => worker.lifecycle === 'running').length ?? 0;
+  const registeredWorkers = workerStatus?.workers.length ?? 0;
+  const activeWorkerActions = workerStatus ? countActiveWorkerActions(workerStatus.workers) : 0;
 
   const sources: SourceItem[] = [
     { key: 'attention', label: 'Needs Attention', count: attentionEntries.length, tone: 'attention', icon: <AttentionIcon /> },
     { key: 'running', label: 'Running', count: runningEntries.length, tone: 'running', icon: <RunningIcon /> },
+    { key: 'workers', label: 'Workers', count: registeredWorkers, tone: activeWorkerActions > 0 ? 'running' : 'neutral', icon: <WorkerIcon /> },
     { key: 'workflows', label: 'Workflows', count: workflowEntries.length, tone: 'neutral', icon: <WorkflowsIcon /> },
   ];
 
@@ -295,6 +312,11 @@ export function LeftStatusColumn({
             runningEntries.length === 0
               ? 'No tasks are running right now.'
               : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`
+          )}
+          {selectedSurface === 'workers' && (
+            workerStatus === null
+              ? 'Worker status is not available yet.'
+              : `${runningWorkers} process${runningWorkers === 1 ? '' : 'es'} running · ${activeWorkerActions} active action${activeWorkerActions === 1 ? '' : 's'}`
           )}
           {selectedSurface === 'home' && 'Plan graph details live here.'}
           {selectedSurface === 'planning' && `${planningSessionCount} planning chat${planningSessionCount === 1 ? '' : 's'}.`}
