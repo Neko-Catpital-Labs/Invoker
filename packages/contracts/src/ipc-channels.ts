@@ -144,6 +144,81 @@ export interface QueueStatus {
   running: Array<{ taskId: string; description: string }>;
   queued: Array<{ taskId: string; priority: number; description: string }>;
 }
+export type WorkerLifecycleStatus = 'running' | 'stopped' | 'exited';
+export type WorkerPolicyStatus = 'enabled' | 'disabled' | 'unknown';
+export type WorkerControlAction = 'start' | 'stop';
+export type WorkerActionStatus =
+  | 'queued'
+  | 'pending'
+  | 'running'
+  | 'needs_input'
+  | 'review_ready'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'abandoned'
+  | 'cancelled';
+
+export interface WorkerActionSummary {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface WorkerRecoverySummary {
+  workerId: string;
+  owner: string;
+  lastWakeupAt?: string;
+  lastScanAt?: string;
+  lastSubmitAt?: string;
+  lastSkipAt?: string;
+  lastSkipReason?: string;
+  lastSkipTaskId?: string;
+  wakeups: number;
+  scans: number;
+  submissions: number;
+  skips: number;
+}
+
+export interface WorkerStatusEntry {
+  kind: string;
+  note: string;
+  runtimeKind?: string;
+  instanceId?: string;
+  lifecycle: WorkerLifecycleStatus;
+  policy: WorkerPolicyStatus;
+  policyReason?: string;
+  autoStarts: boolean;
+  startable: boolean;
+  stoppable: boolean;
+  controlDisabledReason?: string;
+  startedAt?: string;
+  stoppedAt?: string;
+  lastError?: string;
+  recentActions: WorkerActionSummary[];
+  recovery?: WorkerRecoverySummary;
+}
+
+export interface WorkerStatusSnapshot {
+  generatedAt: string;
+  workers: WorkerStatusEntry[];
+}
+
 
 export type UIActionGraphNodeType =
   | 'user-action'
@@ -835,6 +910,18 @@ export const IpcChannels = {
   'invoker:get-queue-status': {} as {
     request: [];
     response: QueueStatus;
+  },
+  'invoker:get-worker-status': {} as {
+    request: [];
+    response: WorkerStatusSnapshot;
+  },
+  'invoker:start-worker': {} as {
+    request: [kind: string];
+    response: WorkerStatusEntry;
+  },
+  'invoker:stop-worker': {} as {
+    request: [kind: string];
+    response: WorkerStatusEntry;
   },
   'invoker:get-action-graph': {} as {
     request: [];
