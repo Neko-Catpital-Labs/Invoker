@@ -16,7 +16,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { ActionGraphResponse, RuntimeStatus, TerminalOutputEvent, WorkflowMutationAcceptedResult } from '@invoker/contracts';
+import type { ActionGraphResponse, RuntimeStatus, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -35,6 +35,8 @@ export interface MockInvoker {
   setActionGraph: (response: ActionGraphResponse) => void;
   /** Replace the runtime status returned by getRuntimeStatus. */
   setRuntimeStatus: (status: RuntimeStatus) => void;
+  /** Replace the worker status snapshot returned by getWorkerStatus. */
+  setWorkerStatus: (status: WorkerStatusSnapshot) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -60,6 +62,10 @@ export function createMockInvoker(
     ownerMode: true,
     readOnly: false,
     mode: 'local-owner',
+  };
+  let workerStatus: WorkerStatusSnapshot = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    workers: [],
   };
 
   const accepted = (channel: string, workflowId = 'wf-1'): WorkflowMutationAcceptedResult => ({
@@ -265,6 +271,15 @@ export function createMockInvoker(
       running: [],
       queued: [],
     })),
+    getWorkerStatus: vi.fn(async () => workerStatus),
+    startWorker: vi.fn(async (kind: string) => {
+      const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
+      return row;
+    }),
+    stopWorker: vi.fn(async (kind: string) => {
+      const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
+      return row;
+    }),
     getActionGraph: vi.fn(async () => actionGraphSnapshot),
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
@@ -293,6 +308,9 @@ export function createMockInvoker(
   }
   function setRuntimeStatus(status: RuntimeStatus) {
     runtimeStatus = status;
+  }
+  function setWorkerStatus(status: WorkerStatusSnapshot) {
+    workerStatus = status;
   }
 
 
@@ -335,12 +353,26 @@ export function createMockInvoker(
     setTasks,
     setActionGraph,
     setRuntimeStatus,
+    setWorkerStatus,
     fireDelta,
     fireGraphEvent,
     fireWorkflowsChanged,
     fireTerminalOutput,
     install,
     cleanup,
+  };
+}
+
+function makeMockWorkerStatusEntry(kind: string): WorkerStatusEntry {
+  return {
+    kind,
+    note: '',
+    lifecycle: 'stopped',
+    policy: 'unknown',
+    autoStarts: false,
+    startable: false,
+    stoppable: false,
+    recentActions: [],
   };
 }
 
