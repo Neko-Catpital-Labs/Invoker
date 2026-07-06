@@ -4,6 +4,7 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+- Add a read-only workers snapshot API that lists built-in and configured external workers, current owner running state, and recent worker action / auto-fix recovery logs.
 - Add a local master-head full-test repair cron that runs the destructive suite, asks OMP/Codex to fix confirmed failures, reruns the suite, and opens one validated PR per broken upstream SHA.
 - Make the browser UI load heavy Action Graph data only when that tab opens, trim huge diagnostic strings, gzip large `/invoke` JSON responses, and stop checking PR statuses on initial page load.
 - Move the Slack bot out of the Invoker app into its own always-on `@invoker/slack-manager` daemon. Previously the bot ran inside Invoker, so when Invoker died the bot died with it and no one could ask it to bring Invoker back. The manager now owns the Slack connection, keeps its planning sessions and per-workflow channel map in its own database, and drives Invoker over IPC (`headless.query`/`exec`/`run`). It watches Invoker's health and relaunches the GUI when it goes down, and a new `@Invoker restart` verb (Approve to confirm) brings it back on demand; a backoff guard prevents restart storms. Invoker itself now launches with Slack disabled — the manager is the sole Slack surface, supervised independently via a systemd user unit (cron keepalive fallback).
@@ -19,6 +20,7 @@ All notable changes to Invoker will be documented in this file.
 
 
 - Add task deletion across the desktop app, HTTP API, and headless commands. Deleting a task now kills it first when needed, rewires direct dependents to the deleted task's upstream dependencies, and blocks deleting the last task in a workflow so users delete the whole workflow instead.
+
 
 ## 0.0.6
 

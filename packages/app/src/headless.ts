@@ -17,7 +17,7 @@ import {
   TaskRunner,
   acquireWorkerLock,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
@@ -423,7 +423,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
   );
 
   if (subCommand === 'list') {
@@ -483,6 +483,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       autoFix: {
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+        getAutoFixExecutionModel: () => deps.invokerConfig.defaultExecutionModel,
       },
     });
     await worker.tick('manual');

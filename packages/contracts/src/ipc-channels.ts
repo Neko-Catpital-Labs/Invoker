@@ -106,6 +106,39 @@ export interface ActivityLogEntry {
   level: string;
   message: string;
 }
+export type WorkerSource = 'built-in' | 'external';
+export type WorkerAvailability = 'available' | 'unavailable';
+
+export interface WorkerSnapshotLogEntry {
+  source: 'worker_action' | 'task_event';
+  at: string;
+  workerKind: string;
+  workflowId?: string;
+  taskId?: string;
+  actionType?: string;
+  eventType?: string;
+  status?: string;
+  phase?: string;
+  action?: string;
+  reason?: string;
+  summary?: string;
+  payload?: unknown;
+}
+
+export interface WorkerSnapshot {
+  kind: string;
+  note: string;
+  source: WorkerSource;
+  availability: WorkerAvailability;
+  running?: boolean;
+  recentLogs: WorkerSnapshotLogEntry[];
+}
+
+export interface WorkersSnapshotResponse {
+  generatedAt: string;
+  workers: WorkerSnapshot[];
+}
+
 
 export interface ClaudeMessage {
   role: 'user' | 'assistant';
@@ -839,6 +872,10 @@ export const IpcChannels = {
   'invoker:get-action-graph': {} as {
     request: [];
     response: ActionGraphResponse;
+  },
+  'invoker:get-workers': {} as {
+    request: [];
+    response: WorkersSnapshotResponse;
   },
   'invoker:get-remote-targets': {} as {
     request: [];

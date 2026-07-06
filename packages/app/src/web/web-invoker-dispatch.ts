@@ -19,7 +19,7 @@ import type {
   SystemDiagnostics,
 } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import type { AgentRegistry, WorkerRuntime } from '@invoker/execution-engine';
 import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
 import { resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
 import { listInAppPlanningPresets } from '../in-app-planner.js';
@@ -29,6 +29,7 @@ import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
 import { collectSystemDiagnostics } from '../system-diagnostics.js';
 import { resolveAgentSession } from '../headless-query-list.js';
 import { buildTaskGraphSnapshot } from './task-graph-snapshot.js';
+import { buildWorkersSnapshot } from '../workers-snapshot.js';
 
 export interface WebInvokerDispatchDeps {
   orchestrator: Orchestrator;
@@ -46,6 +47,7 @@ export interface WebInvokerDispatchDeps {
   getSystemDiagnostics?: () => SystemDiagnostics;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   checkPrStatuses?: () => void | Promise<void>;
+  getOwnerWorkers?: () => readonly { kind: string; runtime: Pick<WorkerRuntime, 'isRunning'> }[];
   logger?: Logger;
 }
 
@@ -111,6 +113,12 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           orchestrator,
           persistence,
           invokerConfig: deps.loadConfig(),
+        });
+      case 'invoker:get-workers':
+        return buildWorkersSnapshot({
+          persistence,
+          invokerConfig: deps.loadConfig(),
+          ownerWorkers: deps.getOwnerWorkers?.(),
         });
       case 'invoker:get-events':
         return persistence.getEvents(String(args[0]));
