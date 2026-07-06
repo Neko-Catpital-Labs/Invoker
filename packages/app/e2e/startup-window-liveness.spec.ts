@@ -50,6 +50,7 @@ test('GUI window appears before delayed workflow mutation recovery finishes', as
         INVOKER_E2E_MARKER_ROOT: markerRoot,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
         INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000',
+        INVOKER_USER_DATA_DIR: electronUserDataDir,
         PATH: `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`,
       },
     });

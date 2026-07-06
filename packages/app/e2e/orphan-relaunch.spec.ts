@@ -75,6 +75,7 @@ base.describe('Orphan task relaunch on restart', () => {
           INVOKER_ALLOW_DELETE_ALL: '1',
           INVOKER_E2E_ENABLE_COMPOSITOR: '1',
           INVOKER_REPO_CONFIG_PATH: configPath,
+          INVOKER_USER_DATA_DIR: electronUserDataDir,
         },
       });
       const page1 = await app1.firstWindow();
