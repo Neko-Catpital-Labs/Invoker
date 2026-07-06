@@ -245,6 +245,87 @@ describe('TaskRunner launch-dispatch wiring', () => {
     expect(launchOutbox.failCalls).toHaveLength(0);
   });
 
+  it('dispatches the member-resolved OMP model to executor.start', async () => {
+    const task = makeTask({
+      config: { workflowId: 'wf-d', runnerKind: 'ssh', poolId: 'ssh-pool', executionAgent: 'omp' },
+    });
+    let completeCallback: ((response: WorkResponse) => void) | undefined;
+    const executor = {
+      type: 'ssh' as const,
+      start: vi.fn().mockImplementation(async (request: { actionId: string; inputs: { executionAgent?: string; executionModel?: string } }) => ({
+        executionId: `exec-${request.actionId}`,
+        taskId: request.actionId,
+        workspacePath: '/tmp/mock-ws',
+        branch: `experiment/${request.actionId}-mock`,
+      })),
+      onComplete: vi.fn().mockImplementation((_handle: unknown, cb: (response: WorkResponse) => void) => {
+        completeCallback = cb;
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill: vi.fn().mockResolvedValue(undefined),
+      destroyAll: vi.fn().mockResolvedValue(undefined),
+    };
+    const orchestrator = {
+      getTask: vi.fn().mockReturnValue(task),
+      getAllTasks: vi.fn().mockReturnValue([task]),
+      markTaskRunningAfterLaunch: vi.fn().mockReturnValue(true),
+      handleWorkerResponse: vi.fn().mockReturnValue([]),
+      deferTask: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      loadAttempts: vi.fn().mockReturnValue([]),
+      logEvent: vi.fn(),
+    };
+    const runner = new TaskRunner({
+      orchestrator: orchestrator as any,
+      persistence: persistence as any,
+      executorRegistry: {
+        get: vi.fn().mockReturnValue(executor),
+        getAll: vi.fn().mockReturnValue([['ssh', executor]]),
+        getDefault: vi.fn().mockReturnValue(executor),
+      } as any,
+      cwd: '/tmp/test-runner-dispatch',
+      logger: makeLogger(),
+      remoteTargetsProvider: () => ({
+        'remote-a': { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      }),
+      executionPoolsProvider: () => ({
+        'ssh-pool': {
+          members: [
+            {
+              type: 'ssh',
+              id: 'remote-a',
+              capabilities: {
+                execution: {
+                  omp: {
+                    modelPolicy: { kind: 'fixed', model: 'anthropic/claude-opus-4' },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+    });
+
+    const run = runner.executeTask(task);
+    await vi.waitFor(() => expect(executor.start).toHaveBeenCalled());
+    expect(executor.start.mock.calls[0]?.[0].inputs.executionAgent).toBe('omp');
+    expect(executor.start.mock.calls[0]?.[0].inputs.executionModel).toBe('anthropic/claude-opus-4');
+    completeCallback?.({
+      requestId: 'req',
+      actionId: task.id,
+      attemptId: task.execution.selectedAttemptId,
+      executionGeneration: task.execution.generation ?? 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await run;
+  });
+
   it('is a no-op for the outbox when dispatchOpts is omitted', async () => {
     const task = makeTask();
     const env = buildRunnerEnv(task, { startThrows: new Error('start sentinel') });
