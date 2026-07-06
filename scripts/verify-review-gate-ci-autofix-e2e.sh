@@ -212,9 +212,8 @@ const merge = tasks.find((t) => t.config && t.config.isMergeNode);
 if (!merge) process.exit(1);
 const status = merge.status;
 const reviewStatus = merge.execution?.reviewStatus || "";
-const attempts = merge.execution?.autoFixAttempts || 0;
-console.log(`merge=${status} reviewStatus=${reviewStatus} autoFixAttempts=${attempts}`);
-if (attempts > 0 && process.argv[2] === "1" && (status === "awaiting_approval" || status === "review_ready" || status === "completed")) {
+console.log(`merge=${status} reviewStatus=${reviewStatus}`);
+if (process.argv[2] === "1" && (status === "awaiting_approval" || status === "review_ready" || status === "completed")) {
   process.exit(0);
 }
 process.exit(2);
