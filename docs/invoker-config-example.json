@@ -31,16 +31,10 @@
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile",
-      "remoteHeartbeatIntervalSeconds": 30,
-      "capabilities": {
-        "execution": {
-          "claude": { "modelPolicy": { "kind": "implicit" } },
-          "codex": { "modelPolicy": { "kind": "implicit" } }
-        }
-      }
+      "remoteHeartbeatIntervalSeconds": 30
     },
     "build-server-b": {
-      "comment": "Second SSH target advertising an execution-model menu for OMP",
+      "comment": "Second SSH target for running different tasks on a different host",
       "host": "192.168.1.101",
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_build_b",
@@ -49,18 +43,7 @@
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile",
-      "remoteHeartbeatIntervalSeconds": 30,
-      "capabilities": {
-        "execution": {
-          "omp": {
-            "modelPolicy": {
-              "kind": "select",
-              "models": ["anthropic/claude-opus-4", "openai/gpt-5"],
-              "defaultModel": "anthropic/claude-opus-4"
-            }
-          }
-        }
-      }
+      "remoteHeartbeatIntervalSeconds": 30
     }
   },
 
@@ -70,32 +53,7 @@
       "members": [
         { "type": "ssh", "id": "staging-server" },
         { "type": "ssh", "id": "build-server-b" },
-        {
-          "type": "worktree",
-          "id": "local-fallback",
-          "maxConcurrentTasks": 2,
-          "capabilities": {
-            "planning": {
-              "cursor": { "modelPolicy": { "kind": "fixed", "model": "claude" } },
-              "omp": {
-                "modelPolicy": {
-                  "kind": "select",
-                  "models": ["anthropic/claude-opus-4", "openai/gpt-5"],
-                  "defaultModel": "anthropic/claude-opus-4"
-                }
-              }
-            },
-            "execution": {
-              "omp": {
-                "modelPolicy": {
-                  "kind": "select",
-                  "models": ["anthropic/claude-opus-4", "openai/gpt-5"],
-                  "defaultModel": "anthropic/claude-opus-4"
-                }
-              }
-            }
-          }
-        }
+        { "type": "worktree", "id": "local-fallback", "maxConcurrentTasks": 2 }
       ],
       "selectionStrategy": "roundRobin",
       "maxConcurrentTasksPerMember": 1
@@ -109,9 +67,6 @@
       "selectionStrategy": "roundRobin",
       "maxConcurrentTasksPerMember": 1
     }
-  },
-  "defaultExecution": {
-    "executionAgent": "claude"
   },
   "defaultPoolId": "mixed-local-ssh",
 
