@@ -278,7 +278,7 @@ Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh
 
 ### Auto-fix worker (single shared engine)
 
-Auto-fix recovery runs through **one** shared worker engine in `@invoker/execution-engine`. Two doors reach that same single engine: `invoker-cli worker autofix` (production) and `./run.sh --headless worker autofix` (dev). Whichever door you use, the worker is **foreground** — it lives and dies with the process, with no detached background service. A single-instance lock means only one auto-fix worker runs at a time: a second start, from either door, refuses rather than spawning a second loop. A sweep-and-assert guard test fails the build if auto-fix is ever triggered outside this shared worker engine. See [docs/architecture/recovery-lifecycle-workers.md](docs/architecture/recovery-lifecycle-workers.md).
+Auto-fix recovery runs through **one** shared worker engine in `@invoker/execution-engine`. Two doors reach that same single engine: `invoker-cli worker autofix` (production) and `./run.sh --headless worker autofix` (dev). Whichever door you use, the worker is **foreground** — it lives and dies with the process, with no detached background service. `autoFixRetries` is worker policy: it caps worker-submitted fixes per failed task, while tasks only store the attempts already used. A single-instance lock means only one auto-fix worker runs at a time: a second start, from either door, refuses rather than spawning a second loop. A sweep-and-assert guard test fails the build if auto-fix is ever triggered outside this shared worker engine. See [docs/architecture/recovery-lifecycle-workers.md](docs/architecture/recovery-lifecycle-workers.md).
 
 ## Architecture (at a glance)
 
