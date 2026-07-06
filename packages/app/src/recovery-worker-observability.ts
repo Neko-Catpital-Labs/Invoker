@@ -19,7 +19,6 @@ export interface RecoveryWorkerAuditPayload {
   readonly trigger?: string;
   readonly status?: string;
   readonly workflowId?: string | null;
-  readonly autoFixAttempts?: number | null;
   readonly details?: Record<string, unknown>;
 }
 
@@ -94,9 +93,6 @@ export function buildRecoveryWorkerAuditPayload(
     ? details.workflowId
     : undefined;
   const status = typeof details.status === 'string' ? details.status : undefined;
-  const autoFixAttempts = typeof details.autoFixAttempts === 'number' || details.autoFixAttempts === null
-    ? details.autoFixAttempts
-    : undefined;
 
   return {
     workerId: RECOVERY_WORKER_ID,
@@ -108,7 +104,6 @@ export function buildRecoveryWorkerAuditPayload(
     ...(trigger !== undefined ? { trigger } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(workflowId !== undefined ? { workflowId } : {}),
-    ...(autoFixAttempts !== undefined ? { autoFixAttempts } : {}),
     details,
   };
 }

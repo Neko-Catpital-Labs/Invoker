@@ -50,7 +50,6 @@ const expectedExecutionFields = [
   'launchCompletedAt',
   'mergeConflict',
   'selectedAttemptId',
-  'autoFixAttempts',
 ].sort();
 
 
@@ -88,7 +87,6 @@ describe('task reset policy', () => {
     expect(patch.status).toBe('pending');
     expect(patch.config).toEqual({ summary: undefined });
     expect(patch.execution).toMatchObject({
-      autoFixAttempts: 0,
       branch: undefined,
       commit: undefined,
       workspacePath: undefined,
@@ -113,7 +111,6 @@ describe('task reset policy', () => {
     const patchKeys = Object.keys(patch);
 
     expect(patch).toMatchObject({
-      autoFixAttempts: 0,
       commit: undefined,
       pendingFixError: undefined,
       launchStartedAt: undefined,
@@ -134,7 +131,6 @@ describe('task reset policy', () => {
     const patchKeys = Object.keys(patch);
 
     expect(patch).toMatchObject({
-      autoFixAttempts: 0,
       pendingFixError: undefined,
       launchStartedAt: undefined,
       launchCompletedAt: undefined,
@@ -153,7 +149,6 @@ describe('task reset policy', () => {
     const patchKeys = Object.keys(patch);
 
     expect(patch).toMatchObject({
-      autoFixAttempts: 0,
       blockedBy: undefined,
       branch: undefined,
       commit: undefined,
@@ -263,7 +258,6 @@ describe('task reset policy', () => {
       isFixingWithAI: true,
       agentSessionId: 'session-stale',
       containerId: 'container-stale',
-      autoFixAttempts: 3,
     });
     const changes = buildTaskResetChanges('retryTask', {
       execution: { generation: 5 },

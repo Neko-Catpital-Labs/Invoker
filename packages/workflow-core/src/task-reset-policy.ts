@@ -91,7 +91,6 @@ export const TASK_EXECUTION_RESET_RULES = {
   launchCompletedAt: clearFor(launchReset),
   mergeConflict: preserve,
   selectedAttemptId: preserve,
-  autoFixAttempts: zeroFor(['recreate', 'detach', 'retryTask', 'retryWorkflow']),
 } satisfies TaskExecutionResetRulebook;
 
 export function buildTaskResetExecutionPatch(
