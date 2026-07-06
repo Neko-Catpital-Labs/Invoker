@@ -320,7 +320,7 @@ export function LeftStatusColumn({
               ? 'No workers returned by Invoker yet.'
               : `${workerCount} worker${workerCount === 1 ? '' : 's'} registered.`
           )}
-          {selectedSurface === 'home' && 'Plan graph details live here.'}
+          {selectedSurface === 'home' && 'Terminal planning and graph details live here.'}
           {selectedSurface === 'planning' && `${planningSessionCount} planning chat${planningSessionCount === 1 ? '' : 's'}.`}
         </div>
       )}

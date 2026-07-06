@@ -3209,8 +3209,8 @@ export function App() {
                   remoteTargets={remoteTargets}
                   executionPools={executionPools}
                   executionAgents={executionAgents}
-                  onApprove={(task) => void handleApprove(task.id)}
-                  onReject={(task) => void handleReject(task.id)}
+                  onApprove={openApprovalModal}
+                  onReject={openRejectModal}
                   onSetMergeBranch={handleSetMergeBranch}
                   onSetMergeMode={handleSetMergeMode}
                   onToggleCollapsed={handleToggleInspectorCollapsed}
@@ -3460,4 +3460,3 @@ export function App() {
     </div>
   );
 }
-
