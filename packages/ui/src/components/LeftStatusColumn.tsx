@@ -296,7 +296,7 @@ export function LeftStatusColumn({
               ? 'No tasks are running right now.'
               : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`
           )}
-          {selectedSurface === 'home' && 'Plan graph details live here.'}
+          {selectedSurface === 'home' && 'Terminal planning and graph details live here.'}
           {selectedSurface === 'planning' && `${planningSessionCount} planning chat${planningSessionCount === 1 ? '' : 's'}.`}
         </div>
       )}

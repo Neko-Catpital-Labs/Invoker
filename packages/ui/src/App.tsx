@@ -421,9 +421,9 @@ function WorkflowContextMenu({
   );
 }
 
-function EmptyGraphTutorial(): JSX.Element {
+function EmptyGraphTutorial({ planningTerminal }: { planningTerminal?: JSX.Element }): JSX.Element {
   return (
-    <aside className="h-full w-full border-l border-gray-800 bg-gray-900/90 p-4">
+    <aside className="flex h-full w-full flex-col border-l border-gray-800 bg-gray-900/90 p-4">
       <div className="rounded-xl border border-gray-800 bg-gray-950/70 p-4">
         <h2 className="text-sm font-semibold text-gray-100">What to expect</h2>
         <ol className="mt-3 space-y-3 text-sm text-gray-400">
@@ -441,18 +441,20 @@ function EmptyGraphTutorial(): JSX.Element {
           </li>
         </ol>
       </div>
+      {planningTerminal}
     </aside>
   );
 }
 
-function EmptyInspectorPlaceholder(): JSX.Element {
+function EmptyInspectorPlaceholder({ planningTerminal }: { planningTerminal?: JSX.Element }): JSX.Element {
   return (
-    <aside className="h-full w-full border-l border-gray-800 bg-gray-900/90 p-4">
+    <aside className="flex h-full w-full flex-col border-l border-gray-800 bg-gray-900/90 p-4">
       <div className="rounded-xl border border-dashed border-gray-800 bg-gray-950/50 p-4">
         <h2 className="text-sm font-semibold text-gray-100">No task selected</h2>
         <p className="mt-2 text-sm text-gray-400">Select a task in the graph to see details.</p>
         <p className="mt-2 text-xs text-gray-500">Status, logs, and actions will appear here.</p>
       </div>
+      {planningTerminal}
     </aside>
   );
 }
@@ -1906,7 +1908,7 @@ export function App() {
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
-    if (!input || activePlanningSessionBusy || activePlanningSessionSubmitted) return;
+    if (!input || activePlanningSessionBusy) return;
     appendTerminalLine(input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
@@ -1927,6 +1929,11 @@ export function App() {
       } finally {
         updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, busy: false }));
       }
+      return;
+    }
+
+    if (activePlanningSessionSubmitted) {
+      appendTerminalLine('This planning session was already submitted. Create a new chat to revise the plan.', 'system', 'muted');
       return;
     }
 
@@ -2780,6 +2787,27 @@ export function App() {
 
   const planningReadyCount = planningSessions.filter((session) => session.status === 'draft_ready').length;
 
+  const renderHomePlanningTerminal = (): JSX.Element => (
+    <div className="mt-4 min-h-[420px] flex-1 overflow-hidden rounded-xl border border-gray-800 bg-gray-950/50">
+      <InvokerTerminal
+        lines={terminalLines}
+        busy={activePlanningSessionBusy}
+        value={planningInput}
+        selectedPresetKey={selectedPlanningPresetKey}
+        presetOptions={planningPresetOptions}
+        draftPlanAvailable={draftPlanAvailable}
+        draftPlanSummary={draftPlanSummary}
+        submitError={planningSubmitError}
+        readOnly={false}
+        onValueChange={setPlanningInput}
+        onSubmit={() => void handlePlanningSubmit()}
+        onSubmitDraft={() => void handlePlanningSubmitDraft()}
+        onPresetChange={setSelectedPlanningPresetKey}
+        onExpand={() => setPlanningTerminalExpanded(true)}
+      />
+    </div>
+  );
+
   const renderPlanningTerminalSurface = (): JSX.Element => (
     <div className="flex-1 flex overflow-hidden">
       <div data-testid="planning-session-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
@@ -3022,9 +3050,9 @@ export function App() {
               className={`${showEmptyGraphTutorial || showInspectorPlaceholder ? 'w-96' : effectiveInspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
             >
               {showEmptyGraphTutorial ? (
-                <EmptyGraphTutorial />
+                <EmptyGraphTutorial planningTerminal={renderHomePlanningTerminal()} />
               ) : showInspectorPlaceholder ? (
-                <EmptyInspectorPlaceholder />
+                <EmptyInspectorPlaceholder planningTerminal={renderHomePlanningTerminal()} />
               ) : (
                 <WorkflowInspector
                   workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
@@ -3037,8 +3065,8 @@ export function App() {
                   remoteTargets={remoteTargets}
                   executionPools={executionPools}
                   executionAgents={executionAgents}
-                  onApprove={(task) => void handleApprove(task.id)}
-                  onReject={(task) => void handleReject(task.id)}
+                  onApprove={openApprovalModal}
+                  onReject={openRejectModal}
                   onSetMergeBranch={handleSetMergeBranch}
                   onSetMergeMode={handleSetMergeMode}
                   onToggleCollapsed={handleToggleInspectorCollapsed}
@@ -3288,4 +3316,3 @@ export function App() {
     </div>
   );
 }
-
