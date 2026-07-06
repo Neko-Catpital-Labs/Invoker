@@ -8,8 +8,8 @@
 #   durable.
 #
 # Fixed behavior:
-#   The failing task records task.failed, debug.auto-fix schedule-enqueued, and
-#   a persisted invoker:fix-with-agent row in workflow_mutation_intents.
+#   The failing task records task.failed, debug.auto-fix worker-autofix-submitted,
+#   and a persisted invoker:fix-with-agent row in workflow_mutation_intents.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
