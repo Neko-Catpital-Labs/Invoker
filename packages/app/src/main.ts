@@ -116,7 +116,7 @@ import {
   registerBuiltinAgents,
   registerBuiltinWorkers,
   type AgentRegistry,
-  type WorkerRuntime,
+  type WorkerRegistry,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import { FileAndDbLogger } from './logger.js';
@@ -234,6 +234,13 @@ import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
+import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import {
+  AUTO_STARTED_OWNER_WORKER_KINDS,
+  createLocalWorkerStatusSnapshot,
+  createWorkerRuntimeController,
+  type WorkerRuntimeController,
+} from './worker-control.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
@@ -288,16 +295,14 @@ import {
 import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
 import { logProcessError } from './process-error-handling.js';
 
-const REGISTERED_OWNER_WORKER_KINDS = [
-  PR_STATUS_WORKER_KIND,
-  CI_FAILURE_WORKER_KIND,
-] as const;
-type RegisteredOwnerWorkerSubmit = WorkerRuntimeDependencies['submitter']['submit'];
 
 function submitRegisteredOwnerWorkerMutation(
-  ...args: Parameters<RegisteredOwnerWorkerSubmit>
-): ReturnType<RegisteredOwnerWorkerSubmit> {
-  const [workflowId, priority, channel, mutationArgs, options] = args;
+  workflowId: string,
+  priority: WorkflowMutationPriority,
+  channel: string,
+  mutationArgs: unknown[],
+  options?: { deferDrain?: boolean },
+): number {
   if (!workflowMutationCoordinator) {
     throw new Error('Workflow mutation coordinator is unavailable');
   }
@@ -328,27 +333,14 @@ function buildRegisteredOwnerWorkerDeps(
     },
   };
 }
-
-function startRegisteredOwnerWorkers(deps: WorkerRuntimeDependencies): WorkerRuntime[] {
-  const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
-  const workers: WorkerRuntime[] = [];
-  for (const kind of REGISTERED_OWNER_WORKER_KINDS) {
-    const definition = registry.get(kind);
-    if (!definition) {
-      deps.logger.warn(`registered owner worker "${kind}" is unavailable`, { module: 'worker-registry' });
-      continue;
-    }
-    const worker = definition.factory(deps);
-    worker.start();
-    workers.push(worker);
-  }
-  return workers;
+function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
+  return registerExternalWorkersFromConfig(
+    invokerConfig.externalWorkers,
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+  );
 }
 
-async function stopRegisteredOwnerWorkers(workers: WorkerRuntime[]): Promise<void> {
-  const stopping = workers.splice(0).map((worker) => worker.stop().catch(() => undefined));
-  await Promise.all(stopping);
-}
+
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -977,7 +969,7 @@ function startHeadlessMode(): void {
     }
 
     let exitCode = 0;
-    const registeredOwnerWorkers: WorkerRuntime[] = [];
+    let workerRuntimeController: WorkerRuntimeController | null = null;
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
     try {
@@ -1186,6 +1178,18 @@ function startHeadlessMode(): void {
             await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
             failInFlightTasks();
             return undefined;
+          }
+          case 'invoker:start-worker': {
+            if (!workerRuntimeController) {
+              throw new Error('Worker runtime controller is unavailable');
+            }
+            return workerRuntimeController.start(String(payload.args[0]));
+          }
+          case 'invoker:stop-worker': {
+            if (!workerRuntimeController) {
+              throw new Error('Worker runtime controller is unavailable');
+            }
+            return workerRuntimeController.stop(String(payload.args[0]));
           }
           case 'invoker:inject-task-states': {
             if (process.env.NODE_ENV !== 'test') {
@@ -1661,6 +1665,7 @@ function startHeadlessMode(): void {
             getUiPerfStats: () => headlessDeps.getUiPerfStats?.() ?? {},
             resetUiPerfStats: () => headlessDeps.resetUiPerfStats?.(),
             getStreamSequence: () => 0,
+            getWorkerStatus: () => workerRuntimeController?.snapshot() ?? { generatedAt: new Date().toISOString(), workers: [] },
             resolveInvokerHomeRoot,
             orchestrator,
             persistence,
@@ -1735,14 +1740,20 @@ function startHeadlessMode(): void {
           logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
         });
 
-        registeredOwnerWorkers.push(...startRegisteredOwnerWorkers(
-          buildRegisteredOwnerWorkerDeps(
+        workerRuntimeController = createWorkerRuntimeController({
+          registry: createRegisteredWorkerRegistry(),
+          deps: buildRegisteredOwnerWorkerDeps(
             persistence,
             async () => {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
           ),
-        ));
+          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          persistence,
+          autoFixRetries: invokerConfig.autoFixRetries,
+          canControl: () => !readOnlyMode,
+        });
+        workerRuntimeController.startAutoStartedWorkers();
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
@@ -1762,7 +1773,7 @@ function startHeadlessMode(): void {
     } finally {
       standaloneLaunchDispatcherController?.stop();
       lifecycleEventBridge?.stop();
-      await stopRegisteredOwnerWorkers(registeredOwnerWorkers);
+      await workerRuntimeController?.stopAll();
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
       }
@@ -1851,7 +1862,7 @@ function createEmbeddedTerminalBackendFromConfig(
   const planningCommandBuilder = createPlanningCommandBuilderFromRegistry(agentRegistry);
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
-  const registeredOwnerWorkers: WorkerRuntime[] = [];
+  let workerRuntimeController: WorkerRuntimeController | null = null;
   let apiServer: ApiServer | null = null;
   let webBridge: WebBridge | null = null;
   let ownerMode = true;
@@ -2670,6 +2681,10 @@ function createEmbeddedTerminalBackendFromConfig(
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:clear':
         return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:start-worker':
+        return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:stop-worker':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resume-workflow': {
         const workflows = detachedViewerWorkflows ?? persistence.listWorkflows();
         const firstWorkflow = workflows[0] as { id?: unknown } | undefined;
@@ -3407,6 +3422,7 @@ function createEmbeddedTerminalBackendFromConfig(
           ownerModeLabel: 'gui',
           getUiPerfStats: () => getUiPerfStats(),
           resetUiPerfStats: () => resetUiPerfStats(),
+          getWorkerStatus: () => workerRuntimeController?.snapshot() ?? { generatedAt: new Date().toISOString(), workers: [] },
           getStreamSequence: () => getTaskDeltaStreamSequence(),
           resolveInvokerHomeRoot,
           orchestrator,
@@ -3509,14 +3525,20 @@ function createEmbeddedTerminalBackendFromConfig(
     }
 
     if (ownerMode) {
-      registeredOwnerWorkers.push(...startRegisteredOwnerWorkers(
-        buildRegisteredOwnerWorkerDeps(
+      workerRuntimeController = createWorkerRuntimeController({
+        registry: createRegisteredWorkerRegistry(),
+        deps: buildRegisteredOwnerWorkerDeps(
           persistence,
           async () => {
             await requireTaskExecutor().checkMergeGateStatuses();
           },
         ),
-      ));
+        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        persistence,
+        autoFixRetries: invokerConfig.autoFixRetries,
+        canControl: () => ownerMode,
+      });
+      workerRuntimeController.startAutoStartedWorkers();
     }
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
@@ -4146,9 +4168,54 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
+    registerGuiMutationHandler('invoker:start-worker', async (kindArg: unknown) => {
+      if (!workerRuntimeController) {
+        throw new Error('Worker runtime controller is unavailable');
+      }
+      return workerRuntimeController.start(String(kindArg));
+    });
+
+    registerGuiMutationHandler('invoker:stop-worker', async (kindArg: unknown) => {
+      if (!workerRuntimeController) {
+        throw new Error('Worker runtime controller is unavailable');
+      }
+      return workerRuntimeController.stop(String(kindArg));
+    });
+
     ipcMain.handle('invoker:get-queue-status', () => {
       return orchestrator.getQueueStatus();
     });
+    ipcMain.handle('invoker:get-worker-status', async () => {
+      if (!ownerMode) {
+        try {
+          const delegated = await messageBus.request<{ kind: string }, { workerStatus?: unknown }>(
+            'headless.query',
+            { kind: 'worker-status' },
+          );
+          if (delegated && typeof delegated === 'object' && 'workerStatus' in delegated) {
+            return delegated.workerStatus;
+          }
+        } catch (err) {
+          logger.warn(
+            `get-worker-status owner delegation failed; falling back to local read-only snapshot: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { module: 'ipc' },
+          );
+        }
+        return createLocalWorkerStatusSnapshot({
+          registry: createRegisteredWorkerRegistry(),
+          persistence,
+          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        });
+      }
+      return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+        registry: createRegisteredWorkerRegistry(),
+        persistence,
+        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      });
+    });
+
 
     ipcMain.handle('invoker:get-action-graph', async () => {
       if (!ownerMode) {
@@ -5064,7 +5131,7 @@ function createEmbeddedTerminalBackendFromConfig(
       try {
         if (apiServer) await apiServer.close().catch(() => {});
         if (webBridge) await webBridge.close().catch(() => {});
-        await stopRegisteredOwnerWorkers(registeredOwnerWorkers);
+        await workerRuntimeController?.stopAll();
         if (dbPollInterval) clearInterval(dbPollInterval);
         if (activityPollInterval) clearInterval(activityPollInterval);
         if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
