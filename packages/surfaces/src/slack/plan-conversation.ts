@@ -29,6 +29,7 @@ export type PlanningCommandBuilder = (opts: {
   model?: string;
   prompt: string;
 }) => { command: string; args: string[] };
+export type RawPlannerOutputHandler = (chunk: string) => void;
 
 export function defaultPlanningCommand(
   cursorCommand: string,
@@ -68,6 +69,8 @@ export interface PlanConversationConfig {
   experimentalPlanner?: boolean;
   /** Prefer top-level `workflows:` stack plans for multi-slice reviewable work. */
   preferStackedWorkflows?: boolean;
+  /** Optional callback for raw stdout chunks emitted by the planner subprocess. */
+  onRawPlannerOutput?: RawPlannerOutputHandler;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
 }
@@ -268,6 +271,7 @@ export class PlanConversation {
   private experimentalPlanner?: boolean;
   private preferStackedWorkflows?: boolean;
   private log: LogFn;
+  private onRawPlannerOutput?: RawPlannerOutputHandler;
   private _initialized = false;
 
   constructor(config: PlanConversationConfig) {
@@ -284,6 +288,7 @@ export class PlanConversation {
     this.repoUrl = config.repoUrl;
     this.experimentalPlanner = config.experimentalPlanner;
     this.preferStackedWorkflows = config.preferStackedWorkflows;
+    this.onRawPlannerOutput = config.onRawPlannerOutput;
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -458,6 +463,13 @@ export class PlanConversation {
         const chunkStr = chunk.toString();
         stdout += chunkStr;
         stdoutChunks++;
+        if (this.onRawPlannerOutput) {
+          try {
+            this.onRawPlannerOutput(chunkStr);
+          } catch (err) {
+            this.log('plan-conversation', 'error', `Raw planner output handler failed: ${err}`);
+          }
+        }
         this.log('plan-conversation', 'info', `[PERF] cursor_stdout chunk #${stdoutChunks}: +${chunkStr.length} bytes (total=${stdout.length}, elapsed=${Date.now() - spawnStart}ms)`);
       });
 
