@@ -28,11 +28,16 @@ describe('CodeRabbit PR #3050 — Enter-to-submit ignores IME composition', () =
     mock.cleanup();
   });
 
-  it('does not submit while an IME composition is in progress', async () => {
-    render(<App />);
+  async function openPlanningTerminal() {
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
     });
+  }
+
+  it('does not submit while an IME composition is in progress', async () => {
+    render(<App />);
+    await openPlanningTerminal();
 
     const input = screen.getByTestId('invoker-terminal-input');
     fireEvent.change(input, { target: { value: 'こんにちは' } });

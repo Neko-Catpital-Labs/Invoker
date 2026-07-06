@@ -47,6 +47,7 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
   });
   it('renders the Apple-like source list without manual plan loading', async () => {
     render(<App />);
@@ -57,7 +58,55 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
+  });
+
+  it('renders the read-only Workers surface with registry logs', async () => {
+    mock.setWorkers({
+      generatedAt: '2026-07-06T10:00:00.000Z',
+      workers: [
+        {
+          kind: 'autofix',
+          note: 'Fixes failed tasks automatically.',
+          source: 'built-in',
+          availability: 'available',
+          running: false,
+          recentLogs: [],
+        },
+        {
+          kind: 'preview',
+          note: 'External preview worker.',
+          source: 'external',
+          availability: 'available',
+          running: true,
+          recentLogs: [{
+            source: 'worker_action',
+            at: '2026-07-06T09:59:00.000Z',
+            workerKind: 'preview',
+            workflowId: 'wf-1',
+            taskId: 'wf-1/task-1',
+            actionType: 'render-preview',
+            status: 'completed',
+            summary: 'Rendered preview',
+          }],
+        },
+      ],
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-workers'));
+
+    expect(await screen.findByRole('heading', { name: 'Workers' })).toBeInTheDocument();
+    expect(screen.getByText('Read-only registry')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'autofix' })).toBeInTheDocument();
+    expect(screen.getByText('Fixes failed tasks automatically.')).toBeInTheDocument();
+    expect(screen.getByText('No worker responses have been logged yet.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'preview' })).toBeInTheDocument();
+    expect(screen.getByText('External preview worker.')).toBeInTheDocument();
+    expect(screen.getByText('Worker response')).toBeInTheDocument();
+    expect(screen.getByText('Rendered preview')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /trigger|run worker/i })).not.toBeInTheDocument();
   });
 
   it('returns home when Invoker is selected at the top', async () => {

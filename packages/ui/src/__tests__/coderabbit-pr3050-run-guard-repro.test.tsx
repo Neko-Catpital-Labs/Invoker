@@ -30,6 +30,13 @@ describe('CodeRabbit PR #3050 — "run" respects the already-started guard', () 
     mock.cleanup();
   });
 
+  async function openPlanningTerminal() {
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
+    });
+  }
+
   function submitPlanningText(text: string) {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
@@ -46,14 +53,16 @@ describe('CodeRabbit PR #3050 — "run" respects the already-started guard', () 
     mock.api.planningChatSend = vi.fn(async () => draftReply);
 
     render(<App />);
-    await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
-    });
+    await openPlanningTerminal();
 
     submitPlanningText('draft the full plan');
     await screen.findByTestId('invoker-terminal-ready-bar');
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+    await screen.findByText('Plan graph');
+    await openPlanningTerminal();
     await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then Run.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
 
     submitPlanningText('run');
     await waitFor(() => {

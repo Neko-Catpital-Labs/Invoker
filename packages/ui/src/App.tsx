@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
+import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, SystemDiagnostics, TerminalSessionDescriptor, WorkerSnapshot, WorkerSnapshotLogEntry, WorkersSnapshotResponse } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { useTasks } from './hooks/useTasks.js';
@@ -58,7 +58,6 @@ import {
   type GraphCameraCommandIssuer,
   type GraphScope,
 } from './lib/graph-camera.js';
-import type { SystemDiagnostics } from '@invoker/contracts';
 
 type ModalState =
   | { type: 'none' }
@@ -163,6 +162,49 @@ function relativePlanningUpdatedAt(value: string): string {
   if (hours < 24) return `Updated ${hours}h ago`;
   const days = Math.round(hours / 24);
   return `Updated ${days}d ago`;
+}
+
+function formatWorkerSource(source: WorkerSnapshot['source']): string {
+  return source === 'built-in' ? 'Built-in' : 'External';
+}
+
+function formatWorkerState(worker: WorkerSnapshot): string {
+  if (worker.availability === 'unavailable') return 'Unavailable';
+  if (worker.running === true) return 'Running';
+  if (worker.running === false) return 'Idle';
+  return 'Available';
+}
+
+function workerStateClass(worker: WorkerSnapshot): string {
+  if (worker.availability === 'unavailable') return 'bg-red-950/70 text-red-100';
+  if (worker.running === true) return 'bg-blue-950/70 text-blue-100';
+  if (worker.running === false) return 'bg-gray-800 text-gray-200';
+  return 'bg-emerald-950/70 text-emerald-100';
+}
+
+function formatWorkerLogKind(log: WorkerSnapshotLogEntry): string {
+  return log.source === 'worker_action' ? 'Worker response' : 'Task log';
+}
+
+function formatWorkerLogTitle(log: WorkerSnapshotLogEntry): string {
+  return log.summary
+    ?? log.reason
+    ?? log.phase
+    ?? log.action
+    ?? log.status
+    ?? log.actionType
+    ?? log.eventType
+    ?? 'Worker log entry';
+}
+
+function formatWorkerLogContext(log: WorkerSnapshotLogEntry): string {
+  const parts: string[] = [log.at];
+  if (log.actionType) parts.push(log.actionType);
+  if (log.eventType) parts.push(log.eventType);
+  if (log.status) parts.push(log.status);
+  if (log.workflowId) parts.push(`workflow ${log.workflowId}`);
+  if (log.taskId) parts.push(`task ${log.taskId}`);
+  return parts.join(' · ');
 }
 
 
@@ -512,6 +554,8 @@ export function App() {
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [workersSnapshot, setWorkersSnapshot] = useState<WorkersSnapshotResponse | null>(null);
+  const [workersError, setWorkersError] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
@@ -658,6 +702,39 @@ export function App() {
       });
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
+
+  useEffect(() => {
+    if (sidebarSurface !== 'workers') return;
+    let cancelled = false;
+    let inFlight = false;
+
+    const pollWorkers = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const snapshot = await invoker?.getWorkers?.();
+        if (!cancelled && snapshot) {
+          setWorkersSnapshot(snapshot);
+          setWorkersError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setWorkersError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void pollWorkers();
+    const interval = window.setInterval(() => {
+      void pollWorkers();
+    }, 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [invoker, sidebarSurface]);
 
   useEffect(() => {
     window.invoker?.terminalList?.().then((list) => {
@@ -2663,6 +2740,13 @@ export function App() {
     ? 'No active tasks right now.'
     : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`;
 
+  const workerEntries = workersSnapshot?.workers ?? [];
+  const workersSubtitle = workersError
+    ? 'Unable to load workers'
+    : workersSnapshot
+      ? `${workerEntries.length} worker${workerEntries.length === 1 ? '' : 's'}`
+      : 'Loading workers';
+
   const browserSurfaceTitle = sidebarSurface === 'workflows'
     ? 'Workflows'
     : sidebarSurface === 'attention'
@@ -2842,6 +2926,91 @@ export function App() {
       </div>
     </div>
   );
+
+  const renderWorkerLogEntry = (log: WorkerSnapshotLogEntry, index: number): JSX.Element => (
+    <li key={`${log.at}-${log.source}-${index}`} className="rounded-lg border border-gray-800 bg-gray-950/50 px-3 py-2">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-medium uppercase tracking-[0.16em] text-gray-500">{formatWorkerLogKind(log)}</span>
+        <span className="shrink-0 text-[11px] text-gray-500">{log.at}</span>
+      </div>
+      <div className="mt-1 text-sm text-gray-200">{formatWorkerLogTitle(log)}</div>
+      <div className="mt-1 text-xs text-gray-500">{formatWorkerLogContext(log)}</div>
+    </li>
+  );
+
+  const renderWorkersSurface = (): JSX.Element => (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-100">Workers</h2>
+            <p className="mt-1 text-sm text-gray-400">{workersSubtitle}</p>
+            <div className="mt-2 inline-flex rounded-full bg-gray-800 px-2.5 py-1 text-[11px] font-medium text-gray-200">
+              Read-only registry
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Return home"
+            onClick={handleDismissBrowserSurface}
+            className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+          >
+            Home
+          </button>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto bg-gray-900 p-4">
+        {workersError ? (
+          renderBrowserEmptyState('Could not load workers', workersError)
+        ) : workerEntries.length === 0 ? (
+          renderBrowserEmptyState('No workers returned', 'Invoker did not return any registered workers yet.')
+        ) : (
+          <div className="grid gap-4 xl:grid-cols-2">
+            {workerEntries.map((worker) => (
+              <section key={`${worker.source}:${worker.kind}`} className="rounded-xl border border-gray-800 bg-gray-950/45 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="truncate text-base font-semibold text-gray-100">{worker.kind}</h3>
+                    <p className="mt-1 text-sm text-gray-400">{worker.note}</p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ${workerStateClass(worker)}`}>
+                    {formatWorkerState(worker)}
+                  </span>
+                </div>
+                <dl className="mt-4 grid grid-cols-3 gap-3 text-xs">
+                  <div>
+                    <dt className="text-gray-500">Kind</dt>
+                    <dd className="mt-1 truncate text-gray-200">{worker.kind}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-gray-500">Source</dt>
+                    <dd className="mt-1 text-gray-200">{formatWorkerSource(worker.source)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-gray-500">State</dt>
+                    <dd className="mt-1 text-gray-200">{formatWorkerState(worker)}</dd>
+                  </div>
+                </dl>
+                <div className="mt-4">
+                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Latest responses and logs</div>
+                  {worker.recentLogs.length === 0 ? (
+                    <div className="mt-2 rounded-lg border border-dashed border-gray-800 px-3 py-4 text-sm text-gray-500">
+                      No worker responses have been logged yet.
+                    </div>
+                  ) : (
+                    <ul className="mt-2 space-y-2">
+                      {worker.recentLogs.map(renderWorkerLogEntry)}
+                    </ul>
+                  )}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   const renderBrowserRail = (): JSX.Element => (
     <div data-testid="browser-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
       <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
@@ -2987,6 +3156,7 @@ export function App() {
           tasks={tasks}
           queueStatus={queueStatus}
           planningSessionCount={planningSessions.length}
+          workerCount={workerEntries.length}
           selectedSurface={sidebarSurface}
           collapsed={sidebarCollapsed}
           onSelectSurface={handleSelectSidebarSurface}
@@ -3003,6 +3173,8 @@ export function App() {
               renderGraphWorkspace('Plan graph', homeSubtitle, true)
             ) : sidebarSurface === 'planning' ? (
               renderPlanningTerminalSurface()
+            ) : sidebarSurface === 'workers' ? (
+              renderWorkersSurface()
             ) : (
               <div className="flex-1 flex overflow-hidden">
                 {renderBrowserRail()}
@@ -3013,7 +3185,7 @@ export function App() {
             {sidebarSurface === 'home' && viewMode === 'dag' && renderGraphTerminalChrome()}
           </main>
 
-          {sidebarSurface !== 'planning' && (
+          {sidebarSurface !== 'planning' && sidebarSurface !== 'workers' && (
             <div
               data-testid="workflow-inspector-shell"
               data-keyboard-region="inspector"
@@ -3037,8 +3209,8 @@ export function App() {
                   remoteTargets={remoteTargets}
                   executionPools={executionPools}
                   executionAgents={executionAgents}
-                  onApprove={(task) => void handleApprove(task.id)}
-                  onReject={(task) => void handleReject(task.id)}
+                  onApprove={openApprovalModal}
+                  onReject={openRejectModal}
                   onSetMergeBranch={handleSetMergeBranch}
                   onSetMergeMode={handleSetMergeMode}
                   onToggleCollapsed={handleToggleInspectorCollapsed}
@@ -3288,4 +3460,3 @@ export function App() {
     </div>
   );
 }
-

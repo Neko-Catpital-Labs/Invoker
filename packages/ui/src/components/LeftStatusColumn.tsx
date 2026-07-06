@@ -13,11 +13,12 @@ interface LeftStatusColumnProps {
   onSelectSurface: (surface: SidebarSurface) => void;
   onToggleCollapsed: () => void;
   planningSessionCount: number;
+  workerCount: number;
   onOpenSettings: () => void;
 }
 
 interface SourceItem {
-  key: Exclude<SidebarSurface, 'home'>;
+  key: Exclude<SidebarSurface, 'home' | 'planning'>;
   label: string;
   count: number;
   tone: 'neutral' | 'attention' | 'running';
@@ -57,6 +58,22 @@ function RunningIcon(): JSX.Element {
       <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
         <circle cx="12" cy="12" r="8.25" />
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 7.5v4.75l3 1.75" />
+      </svg>
+    </SidebarIcon>
+  );
+}
+
+function WorkersIcon(): JSX.Element {
+  return (
+    <SidebarIcon>
+      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 15.75h9" />
+        <rect x="4.5" y="4.5" width="15" height="15" rx="2.25" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 4.5V3" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 4.5V3" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 21v-1.5" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 21v-1.5" />
       </svg>
     </SidebarIcon>
   );
@@ -150,6 +167,7 @@ export function LeftStatusColumn({
   onSelectSurface,
   onToggleCollapsed,
   planningSessionCount,
+  workerCount,
   onOpenSettings,
 }: LeftStatusColumnProps): JSX.Element {
   const workflowEntries = getSortedWorkflows(workflows, tasks);
@@ -160,6 +178,7 @@ export function LeftStatusColumn({
     { key: 'attention', label: 'Needs Attention', count: attentionEntries.length, tone: 'attention', icon: <AttentionIcon /> },
     { key: 'running', label: 'Running', count: runningEntries.length, tone: 'running', icon: <RunningIcon /> },
     { key: 'workflows', label: 'Workflows', count: workflowEntries.length, tone: 'neutral', icon: <WorkflowsIcon /> },
+    { key: 'workers', label: 'Workers', count: workerCount, tone: 'neutral', icon: <WorkersIcon /> },
   ];
 
   return (
@@ -296,7 +315,12 @@ export function LeftStatusColumn({
               ? 'No tasks are running right now.'
               : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`
           )}
-          {selectedSurface === 'home' && 'Plan graph details live here.'}
+          {selectedSurface === 'workers' && (
+            workerCount === 0
+              ? 'No workers returned by Invoker yet.'
+              : `${workerCount} worker${workerCount === 1 ? '' : 's'} registered.`
+          )}
+          {selectedSurface === 'home' && 'Terminal planning and graph details live here.'}
           {selectedSurface === 'planning' && `${planningSessionCount} planning chat${planningSessionCount === 1 ? '' : 's'}.`}
         </div>
       )}
