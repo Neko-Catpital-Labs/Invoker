@@ -15,6 +15,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     getWorkflowStatus: vi.fn(() => ({ 'wf-1': 'running' })),
     getTasksSnapshot: vi.fn(({ refresh }) => ({ tasks: [], workflows: [], refreshed: refresh })),
     getActionGraphSnapshot: vi.fn(() => ({ nodes: [] })),
+    getWorkersSnapshot: vi.fn(() => ({ workers: [] })),
     listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
     loadWorkflowBundle: vi.fn((id: string) => ({ workflow: { id }, tasks: [] })),
     getReviewGate: vi.fn(() => ({ gate: true })),
@@ -43,6 +44,7 @@ describe('answerOwnerReadQuery', () => {
     expect(answerOwnerReadQuery({ kind: 'queue' }, h)).toEqual({ runningCount: 2 });
     expect(answerOwnerReadQuery({ kind: 'workflow-status' }, h)).toEqual({ 'wf-1': 'running' });
     expect(answerOwnerReadQuery({ kind: 'action-graph' }, h)).toEqual({ nodes: [] });
+    expect(answerOwnerReadQuery({ kind: 'workers' }, h)).toEqual({ workers: [] });
   });
 
   it('refreshes the snapshot only for task-graph-refresh', () => {
@@ -141,6 +143,7 @@ describe('buildOwnerReadQueryHandlers', () => {
       orchestrator: { ...f.orchestrator, ...orch } as never,
       persistence: { ...f.persistence, ...persist } as never,
       getActionGraphSnapshot: () => ({ ag: 1 }),
+      getWorkersSnapshot: () => ({ workers: [] }),
     });
   }
 

@@ -15,6 +15,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     getWorkflowStatus: vi.fn(() => ({})),
     getTasksSnapshot: vi.fn(() => ({ tasks: [], workflows: [] })),
     getActionGraphSnapshot: vi.fn(() => ({ nodes: [] })),
+    getWorkersSnapshot: vi.fn(() => ({ workers: [] })),
     listWorkflows: vi.fn(() => []),
     loadWorkflowBundle: vi.fn(() => ({ workflow: null, tasks: [] })),
     getReviewGate: vi.fn(() => null),

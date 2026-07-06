@@ -30,6 +30,7 @@ export interface OwnerReadQueryHandlers {
   getWorkflowStatus: (workflowId?: string) => Record<string, unknown>;
   getTasksSnapshot: (opts: { refresh: boolean }) => Record<string, unknown>;
   getActionGraphSnapshot: () => Record<string, unknown>;
+  getWorkersSnapshot: () => Record<string, unknown>;
   listWorkflows: () => unknown[];
   loadWorkflowBundle: (workflowId: string) => Record<string, unknown>;
   getReviewGate: (workflowId: string) => unknown;
@@ -83,6 +84,8 @@ export function answerOwnerReadQuery(
       return handlers.getTasksSnapshot({ refresh: true });
     case 'action-graph':
       return handlers.getActionGraphSnapshot();
+    case 'workers':
+      return handlers.getWorkersSnapshot();
     case 'workflows':
       return { workflows: handlers.listWorkflows() };
     case 'workflow':
@@ -161,6 +164,8 @@ export interface OwnerReadQueryDeps {
   persistence: ReadPersistence;
   /** App-level action-graph projection (needs invokerConfig, which lives in the app). */
   getActionGraphSnapshot: () => Record<string, unknown>;
+  /** App-level workers projection (needs invokerConfig and owner runtime state). */
+  getWorkersSnapshot: () => Record<string, unknown>;
 }
 
 /** Build the handler set both owners pass to {@link answerOwnerReadQuery}. */
@@ -183,6 +188,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
       };
     },
     getActionGraphSnapshot: deps.getActionGraphSnapshot,
+    getWorkersSnapshot: deps.getWorkersSnapshot,
     listWorkflows: () => persistence.listWorkflows(),
     loadWorkflowBundle: (workflowId: string) => {
       orchestrator.syncFromDb(workflowId);
