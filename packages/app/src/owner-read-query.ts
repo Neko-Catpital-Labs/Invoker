@@ -27,6 +27,7 @@ export interface OwnerReadQueryHandlers {
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
   getQueueStatus: () => Record<string, unknown>;
+  getWorkerStatus: () => Record<string, unknown>;
   getWorkflowStatus: (workflowId?: string) => Record<string, unknown>;
   getTasksSnapshot: (opts: { refresh: boolean }) => Record<string, unknown>;
   getActionGraphSnapshot: () => Record<string, unknown>;
@@ -75,6 +76,8 @@ export function answerOwnerReadQuery(
       return { ownerMode: handlers.ownerModeLabel, ...handlers.getUiPerfStats() };
     case 'queue':
       return handlers.getQueueStatus();
+    case 'worker-status':
+      return { workerStatus: handlers.getWorkerStatus() };
     case 'workflow-status':
       return handlers.getWorkflowStatus(body.workflowId);
     case 'tasks':
@@ -156,6 +159,7 @@ export interface OwnerReadQueryDeps {
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
   getStreamSequence: () => number;
+  getWorkerStatus: () => Record<string, unknown>;
   resolveInvokerHomeRoot: () => string;
   orchestrator: ReadOrchestrator;
   persistence: ReadPersistence;
@@ -172,6 +176,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     getUiPerfStats: deps.getUiPerfStats,
     resetUiPerfStats: deps.resetUiPerfStats,
     getQueueStatus: () => orchestrator.getQueueStatus() as unknown as Record<string, unknown>,
+    getWorkerStatus: deps.getWorkerStatus,
     getWorkflowStatus: (workflowId?: string) => orchestrator.getWorkflowStatus(workflowId) as unknown as Record<string, unknown>,
     getTasksSnapshot: ({ refresh }) => {
       if (refresh) orchestrator.syncAllFromDb();
