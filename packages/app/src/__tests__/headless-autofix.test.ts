@@ -2,12 +2,33 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { spawn } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 import { runHeadless } from '../headless.js';
 import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkflowMutationPriority } from '@invoker/data-store';
 
+
+vi.mock('node:child_process', () => ({
+  spawn: vi.fn(),
+}));
+
+const spawnMock = vi.mocked(spawn);
+
+function mockChild(exitCode: number): ReturnType<typeof spawn> {
+  const child = new EventEmitter() as ReturnType<typeof spawn>;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  setImmediate(() => {
+    child.stdout?.end();
+    child.stderr?.end();
+    child.emit('close', exitCode, null);
+  });
+  return child;
+}
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   const { config, execution, ...rest } = overrides;
   return {
@@ -19,7 +40,6 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
     config: { workflowId: 'wf-1', ...(config ?? {}) },
     execution: {
       error: 'boom',
-      autoFixAttempts: 0,
       generation: 1,
       selectedAttemptId: 'attempt-1',
       ...(execution ?? {}),
@@ -43,7 +63,7 @@ describe('headless auto-fix cutover', () => {
   });
 });
 
-describe('headless worker autofix', () => {
+describe('headless workers', () => {
   it('runs a one-shot scan under the single-instance lock and enqueues the normal fix command intent', async () => {
     const task = makeTask();
     const enqueueWorkflowMutationIntent = vi.fn((
@@ -101,9 +121,47 @@ describe('headless worker autofix', () => {
     }
 
     expect(stdout).toContain('Worker kinds');
-    expect(stdout).toContain('autofix');
+    for (const kind of ['autofix', 'pr-status', 'ci-failure', 'coderabbit-address', 'pr-conflict-rebase', 'mergify-requeue']) {
+      expect(stdout).toContain(kind);
+    }
   });
 
+
+  it.each([
+    ['coderabbit-address', 'CodeRabbit address worker scan completed.'],
+    ['pr-conflict-rebase', 'PR conflict rebase worker scan completed.'],
+    ['mergify-requeue', 'Mergify requeue worker scan completed.'],
+  ])('runs a one-shot %s worker scan', async (kind, expectedOutput) => {
+    spawnMock.mockReset();
+    spawnMock.mockReturnValueOnce(mockChild(0));
+    let stdout = '';
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: any) => {
+      stdout += chunk.toString();
+      return true;
+    });
+    const homeRoot = mkdtempSync(join(tmpdir(), 'invoker-headless-pr-worker-'));
+    const previousDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = homeRoot;
+
+    try {
+      await runHeadless(['worker', kind], {
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn() },
+        persistence: {
+          enqueueWorkflowMutationIntent: vi.fn(),
+        },
+        invokerConfig: {},
+        repoRoot: '/repo',
+      } as any);
+    } finally {
+      write.mockRestore();
+      if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = previousDbDir;
+      rmSync(homeRoot, { recursive: true, force: true });
+    }
+
+    expect(stdout).toContain(expectedOutput);
+    expect(spawnMock).toHaveBeenCalledOnce();
+  });
   it('rejects unknown worker kinds with a clear error', async () => {
     await expect(runHeadless(['worker', 'missing-kind'], {} as any)).rejects.toThrow(
       'Unknown worker kind: "missing-kind"',

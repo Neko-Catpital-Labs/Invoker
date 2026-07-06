@@ -14,10 +14,14 @@ import { makeEnvelope } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import {
   AUTO_FIX_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
+  MERGIFY_REQUEUE_WORKER_KIND,
+  PR_CONFLICT_REBASE_WORKER_KIND,
   TaskRunner,
   acquireWorkerLock,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
+  createAutoFixAttemptLedger,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
@@ -423,7 +427,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
   );
 
   if (subCommand === 'list') {
@@ -471,6 +475,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     }
     throw err;
   }
+  const autoFixAttemptLedger = createAutoFixAttemptLedger();
   try {
     const worker = definition.factory({
       store: deps.persistence,
@@ -483,7 +488,9 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       autoFix: {
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+        attemptLedger: autoFixAttemptLedger,
       },
+      prMaintenance: buildHeadlessPrMaintenanceConfig(deps),
     });
     await worker.tick('manual');
     await worker.stop();
@@ -492,8 +499,41 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     // blocks the next legitimate start.
     lock.release();
   }
-  const label = definition.kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : definition.kind;
-  process.stdout.write(`${label} worker scan completed.\n`);
+  process.stdout.write(`${workerDisplayName(definition.kind)} worker scan completed.\n`);
+}
+
+function buildHeadlessPrMaintenanceConfig(deps: HeadlessDeps): WorkerRuntimeDependencies['prMaintenance'] {
+  const prMaintenance = deps.invokerConfig.prMaintenance;
+  return {
+    coderabbitAddress: {
+      repoRoot: prMaintenance?.coderabbitAddress?.repoRoot ?? deps.repoRoot,
+      ...(prMaintenance?.coderabbitAddress?.env ? { env: prMaintenance.coderabbitAddress.env } : {}),
+      ...(typeof prMaintenance?.coderabbitAddress?.pollIntervalMs === 'number' ? { intervalMs: prMaintenance.coderabbitAddress.pollIntervalMs } : {}),
+    },
+    prConflictRebase: {
+      repoRoot: prMaintenance?.prConflictRebase?.repoRoot ?? deps.repoRoot,
+      ...(prMaintenance?.prConflictRebase?.env ? { env: prMaintenance.prConflictRebase.env } : {}),
+      ...(typeof prMaintenance?.prConflictRebase?.pollIntervalMs === 'number' ? { intervalMs: prMaintenance.prConflictRebase.pollIntervalMs } : {}),
+    },
+    mergifyRequeue: {
+      repoRoot: prMaintenance?.mergifyRequeue?.repoRoot ?? deps.repoRoot,
+      ...(prMaintenance?.mergifyRequeue?.env ? { env: prMaintenance.mergifyRequeue.env } : {}),
+      ...(typeof prMaintenance?.mergifyRequeue?.pollIntervalMs === 'number' ? { intervalMs: prMaintenance.mergifyRequeue.pollIntervalMs } : {}),
+      ...(prMaintenance?.mergifyRequeue?.pythonExecutable ? { pythonExecutable: prMaintenance.mergifyRequeue.pythonExecutable } : {}),
+      ...(prMaintenance?.mergifyRequeue?.repo ? { repo: prMaintenance.mergifyRequeue.repo } : {}),
+      ...(prMaintenance?.mergifyRequeue?.author ? { author: prMaintenance.mergifyRequeue.author } : {}),
+      ...(prMaintenance?.mergifyRequeue?.stateFile ? { stateFile: prMaintenance.mergifyRequeue.stateFile } : {}),
+      ...(prMaintenance?.mergifyRequeue?.extraArgs ? { extraArgs: prMaintenance.mergifyRequeue.extraArgs } : {}),
+    },
+  };
+}
+
+function workerDisplayName(kind: string): string {
+  if (kind === AUTO_FIX_WORKER_KIND) return 'Auto-fix';
+  if (kind === CODERABBIT_ADDRESS_WORKER_KIND) return 'CodeRabbit address';
+  if (kind === PR_CONFLICT_REBASE_WORKER_KIND) return 'PR conflict rebase';
+  if (kind === MERGIFY_REQUEUE_WORKER_KIND) return 'Mergify requeue';
+  return kind;
 }
 
 function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {

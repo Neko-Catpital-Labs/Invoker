@@ -215,7 +215,6 @@ export interface TaskExecution {
     readonly conflictFiles: readonly string[];
   };
   readonly selectedAttemptId?: string;
-  readonly autoFixAttempts?: number;
 }
 
 // ── Task State ──────────────────────────────────────────────

@@ -56,10 +56,14 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    ...(deps.hideE2eWindow ? { x: -32000, y: -32000, skipTaskbar: true } : {}),
+    ...(deps.hideE2eWindow
+      ? { x: -32000, y: -32000, skipTaskbar: true, paintWhenInitiallyHidden: true }
+      : {}),
     // Show explicitly after load/timeout rather than relying on Electron's
     // implicit initial map behavior, which has regressed on some Linux/X11
-    // sessions and leaves the BrowserWindow unmapped.
+    // sessions and leaves the BrowserWindow unmapped. E2E windows stay hidden:
+    // Playwright can still drive the renderer, and the test run cannot steal
+    // focus or intercept mouse clicks from a live Invoker session.
     show: false,
     webPreferences: {
       preload: path.join(deps.appRootDir, 'preload.js'),
@@ -128,11 +132,9 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
     const showWindow = (): void => {
       if (mainWindow.isDestroyed() || showTriggered) return;
       showTriggered = true;
-      deps.logger.info('main window show()', { module: 'window' });
-      deps.recordStartupMark('window.show');
-      if (deps.hideE2eWindow) {
-        mainWindow.showInactive();
-      } else {
+      deps.logger.info(deps.hideE2eWindow ? 'main window ready while hidden' : 'main window show()', { module: 'window' });
+      deps.recordStartupMark(deps.hideE2eWindow ? 'window.hidden-ready' : 'window.show');
+      if (!deps.hideE2eWindow) {
         mainWindow.show();
         mainWindow.focus();
       }

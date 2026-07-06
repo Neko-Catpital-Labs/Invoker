@@ -135,7 +135,6 @@ export interface TaskExecution {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
-  readonly autoFixAttempts?: number;
 }
 
 // ── Task State ──────────────────────────────────────────────

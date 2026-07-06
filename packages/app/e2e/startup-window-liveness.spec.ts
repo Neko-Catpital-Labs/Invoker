@@ -9,7 +9,7 @@ import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-re
 const repoRoot = resolveRepoRoot(__dirname);
 const STARTUP_BUDGET_MS = 12000;
 
-test('GUI window appears before delayed workflow mutation recovery finishes', async () => {
+test('GUI renderer becomes ready while the test window stays invisible', async () => {
   const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-startup-liveness-'));
   try {
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
@@ -41,6 +41,7 @@ test('GUI window appears before delayed workflow mutation recovery finishes', as
       env: {
         ...process.env,
         NODE_ENV: 'test',
+        INVOKER_USER_DATA_DIR: electronUserDataDir,
         INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
         INVOKER_DB_DIR: testDir,
         INVOKER_IPC_SOCKET: ipcSocketPath,
@@ -58,6 +59,11 @@ test('GUI window appears before delayed workflow mutation recovery finishes', as
       const elapsedMs = Date.now() - startedAt;
       expect(elapsedMs).toBeLessThan(STARTUP_BUDGET_MS);
       await page.waitForLoadState('domcontentloaded');
+      const windowVisible = await electronApp.evaluate(({ BrowserWindow }) => {
+        const win = BrowserWindow.getAllWindows()[0];
+        return win?.isVisible() ?? false;
+      });
+      expect(windowVisible).toBe(false);
       await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 5000 });
     } finally {
       await electronApp.close();

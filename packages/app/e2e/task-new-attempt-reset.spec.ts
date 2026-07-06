@@ -76,6 +76,7 @@ async function launchApp(testDir: string, configPath: string): Promise<{ app: El
     env: {
       ...process.env,
       NODE_ENV: 'test',
+      INVOKER_USER_DATA_DIR: electronUserDataDir,
       TZ: 'UTC',
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'daemon',
       INVOKER_DB_DIR: testDir,

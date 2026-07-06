@@ -9,15 +9,25 @@ import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
+  MERGIFY_REQUEUE_WORKER_KIND,
+  PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   type WorkerRegistry,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 
+import type { InvokerConfig } from './config.js';
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
 
-export const AUTO_STARTED_OWNER_WORKER_KINDS = [PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND] as const;
+export function getAutoStartedOwnerWorkerKinds(config: Pick<InvokerConfig, 'prMaintenance'>): string[] {
+  const kinds = [AUTO_FIX_WORKER_KIND, PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND];
+  if (config.prMaintenance?.coderabbitAddress?.enabled === true) kinds.push(CODERABBIT_ADDRESS_WORKER_KIND);
+  if (config.prMaintenance?.prConflictRebase?.enabled === true) kinds.push(PR_CONFLICT_REBASE_WORKER_KIND);
+  if (config.prMaintenance?.mergifyRequeue?.enabled === true) kinds.push(MERGIFY_REQUEUE_WORKER_KIND);
+  return kinds;
+}
 
 export interface WorkerRuntimeController {
   startAutoStartedWorkers(): void;
@@ -39,6 +49,9 @@ const BUILT_IN_WORKER_KINDS = new Set<string>([
   AUTO_FIX_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
+  PR_CONFLICT_REBASE_WORKER_KIND,
+  MERGIFY_REQUEUE_WORKER_KIND,
 ]);
 
 export function createWorkerRuntimeController(options: {
@@ -46,7 +59,6 @@ export function createWorkerRuntimeController(options: {
   deps: WorkerRuntimeDependencies;
   autoStartKinds: readonly string[];
   persistence: WorkerStatusPersistence;
-  /** Compatibility input; retry budget is enforced inside worker policy, not by controller start gating. */
   autoFixRetries?: number;
   canControl: () => boolean;
 }): WorkerRuntimeController {
@@ -61,6 +73,11 @@ export function createWorkerRuntimeController(options: {
     return definition;
   };
 
+  const assertStartAllowed = (kind: string): void => {
+    if (isDisabledByAutoFixRetries(kind, options.autoFixRetries)) {
+      throw new Error(`Worker "${kind}" is disabled by autoFixRetries=0`);
+    }
+  };
 
   const rowForKind = (kind: string): WorkerStatusEntry => {
     const definition = options.registry.get(kind);
@@ -73,7 +90,7 @@ export function createWorkerRuntimeController(options: {
       handle: handles.get(kind),
       stoppedAt: stoppedAtByKind.get(kind),
       autoStarts: options.autoStartKinds.includes(kind),
-      policy: policyForKind(kind),
+      policy: policyForKind(kind, options.autoFixRetries),
       persistence: options.persistence,
       canControl: options.canControl(),
     });
@@ -90,12 +107,14 @@ export function createWorkerRuntimeController(options: {
     startAutoStartedWorkers(): void {
       for (const kind of options.autoStartKinds) {
         if (!options.registry.get(kind)) continue;
+        if (isDisabledByAutoFixRetries(kind, options.autoFixRetries)) continue;
         this.start(kind);
       }
     },
 
     start(kind: string): WorkerStatusEntry {
       const definition = requireDefinition(kind);
+      assertStartAllowed(kind);
 
       const existing = handles.get(kind);
       if (existing) {
@@ -115,6 +134,7 @@ export function createWorkerRuntimeController(options: {
       stoppedAtByKind.delete(kind);
       return rowForKind(kind);
     },
+
     async stop(kind: string): Promise<WorkerStatusEntry> {
       requireDefinition(kind);
       const handle = handles.get(kind);
@@ -170,7 +190,11 @@ function buildWorkerStatusEntry(args: {
   const lifecycle = args.handle
     ? args.handle.runtime.isRunning() ? 'running' : 'exited'
     : 'stopped';
-  const controlDisabledReason = getControlDisabledReason(args.canControl);
+  const policyReason = args.policy === 'disabled' ? 'autoFixRetries=0' : undefined;
+  const controlDisabledReason = getControlDisabledReason({
+    canControl: args.canControl,
+    policyReason,
+  });
   const runtime = args.handle?.runtime;
   return {
     kind: args.definitionKind,
@@ -178,6 +202,7 @@ function buildWorkerStatusEntry(args: {
     ...(runtime ? { runtimeKind: runtime.identity.kind, instanceId: runtime.identity.instanceId } : {}),
     lifecycle,
     policy: args.policy,
+    ...(policyReason ? { policyReason } : {}),
     autoStarts: args.autoStarts,
     startable: lifecycle !== 'running' && args.policy !== 'disabled' && args.canControl,
     stoppable: lifecycle === 'running' && args.canControl,
@@ -189,13 +214,21 @@ function buildWorkerStatusEntry(args: {
   };
 }
 
-function policyForKind(kind: string): WorkerPolicyStatus {
+function policyForKind(kind: string, autoFixRetries: number | undefined): WorkerPolicyStatus {
+  if (isDisabledByAutoFixRetries(kind, autoFixRetries)) return 'disabled';
   if (BUILT_IN_WORKER_KINDS.has(kind)) return 'enabled';
   return 'unknown';
 }
 
-function getControlDisabledReason(canControl: boolean): string | undefined {
-  if (!canControl) return 'Controls unavailable';
+function isDisabledByAutoFixRetries(kind: string, autoFixRetries: number | undefined): boolean {
+  return (kind === AUTO_FIX_WORKER_KIND || kind === CI_FAILURE_WORKER_KIND)
+    && autoFixRetries !== undefined
+    && autoFixRetries <= 0;
+}
+
+function getControlDisabledReason(args: { canControl: boolean; policyReason?: string }): string | undefined {
+  if (args.policyReason) return args.policyReason;
+  if (!args.canControl) return 'Controls unavailable';
   return undefined;
 }
 

@@ -35,6 +35,13 @@ describe('CodeRabbit PR #3050 — "run" respects the already-started guard', () 
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
 
+  async function openPlanningTerminal() {
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
+    });
+  }
+
   it('does not re-invoke start after a run has already started', async () => {
     const draftReply: InAppPlanningChatResponse = {
       ok: true,
@@ -46,15 +53,16 @@ describe('CodeRabbit PR #3050 — "run" respects the already-started guard', () 
     mock.api.planningChatSend = vi.fn(async () => draftReply);
 
     render(<App />);
-    await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
-    });
+    await openPlanningTerminal();
 
     submitPlanningText('draft the full plan');
     await screen.findByTestId('invoker-terminal-ready-bar');
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(1);
+    });
+    await openPlanningTerminal();
     await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then Run.');
-
     submitPlanningText('run');
     await waitFor(() => {
       expect(mock.api.start).toHaveBeenCalledTimes(1);

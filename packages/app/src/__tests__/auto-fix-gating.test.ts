@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { shouldSkipAutoFixForError } from '../auto-fix-gating.js';
+import {
+  normalizeAutoFixRetryBudget,
+  shouldSkipAutoFixForError,
+} from '../auto-fix-gating.js';
 
 describe('auto-fix-gating', () => {
   it('does not skip auto-fix for non-string errors', () => {
@@ -33,4 +36,13 @@ describe('auto-fix-gating', () => {
     expect(shouldSkipAutoFixForError('Cancel')).toBe(false);
     expect(shouldSkipAutoFixForError('Not Cancelled: warning only')).toBe(false);
   });
+  it('normalizes finite retry budgets as caps', () => {
+    expect(normalizeAutoFixRetryBudget(3)).toBe(3);
+    expect(normalizeAutoFixRetryBudget(3.8)).toBe(3);
+    expect(normalizeAutoFixRetryBudget(0)).toBe(0);
+    expect(normalizeAutoFixRetryBudget(-1)).toBe(0);
+    expect(normalizeAutoFixRetryBudget(Number.POSITIVE_INFINITY)).toBe(Number.POSITIVE_INFINITY);
+  });
+
+
 });

@@ -29,6 +29,13 @@ describe('CodeRabbit PR #3050 — draft state cleared after submit', () => {
     mock.cleanup();
   });
 
+  async function openPlanningTerminal() {
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
+    });
+  }
+
   it('dismisses the ready bar after a successful submit', async () => {
     const draftReply: InAppPlanningChatResponse = {
       ok: true,
@@ -40,17 +47,18 @@ describe('CodeRabbit PR #3050 — draft state cleared after submit', () => {
     mock.api.planningChatSend = vi.fn(async () => draftReply);
 
     render(<App />);
-    await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
-    });
+    await openPlanningTerminal();
 
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'draft the full plan' } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
 
     await screen.findByTestId('invoker-terminal-ready-bar');
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(1);
+    });
+    await openPlanningTerminal();
     await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then Run.');
-
     // The submit succeeded; the ready bar must be gone so it cannot resubmit the same session.
     await waitFor(() => {
       expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
