@@ -501,6 +501,7 @@ jobs:
               e2e/edit-task-prompt.spec.ts
               e2e/fix-with-claude.spec.ts
               e2e/fix-with-agent-transition.spec.ts
+              e2e/autofix-worker-ui.spec.ts
               e2e/orphan-relaunch.spec.ts
               e2e/gap-recovery-bench.spec.ts
               e2e/system-setup-visual-proof.spec.ts
