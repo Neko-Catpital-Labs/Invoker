@@ -12,12 +12,9 @@ vi.mock('@xyflow/react', async () => {
 // Dynamic import is required so App sees the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 
-// CodeRabbit PR #3050 (discussion r3523490880): the "run" text command called
-// handleStart() directly, guarded only by `!hasLoadedPlan`. Unlike the Start
-// button (`showStart = hasLoadedPlan && !hasStarted`) it omitted the `hasStarted`
-// check, so typing "run" again after a run already started re-invoked
-// invoker.start(). This repro starts a run, then types "run" again and asserts
-// start() is not called a second time. Buggy code fires start() twice -> FAIL.
+// Submitted planning sessions are read-only. Starting work goes through the
+// graph Run button, and once a run starts the button disappears so it cannot
+// call invoker.start() a second time.
 describe('CodeRabbit PR #3050 — "run" respects the already-started guard', () => {
   let mock: MockInvoker;
 
@@ -35,6 +32,13 @@ describe('CodeRabbit PR #3050 — "run" respects the already-started guard', () 
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
 
+  async function openPlanningTerminal() {
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
+    });
+  }
+
   it('does not re-invoke start after a run has already started', async () => {
     const draftReply: InAppPlanningChatResponse = {
       ok: true,
@@ -46,24 +50,26 @@ describe('CodeRabbit PR #3050 — "run" respects the already-started guard', () 
     mock.api.planningChatSend = vi.fn(async () => draftReply);
 
     render(<App />);
-    await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
-    });
+    await openPlanningTerminal();
 
     submitPlanningText('draft the full plan');
     await screen.findByTestId('invoker-terminal-ready-bar');
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(1);
+    });
+    await openPlanningTerminal();
     await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then Run.');
-
-    submitPlanningText('run');
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    fireEvent.click(await screen.findByTestId('rail-start'));
     await waitFor(() => {
       expect(mock.api.start).toHaveBeenCalledTimes(1);
-      expect(screen.getByText('Run started.')).toBeInTheDocument();
     });
+    expect(screen.queryByTestId('rail-start')).not.toBeInTheDocument();
 
-    // Run is already in progress; a second "run" must be rejected, not fire start again.
-    submitPlanningText('run');
-    await screen.findByText('Run already started.');
+    await openPlanningTerminal();
+    expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
+    expect(screen.getByTestId('invoker-terminal-harness')).toBeDisabled();
     expect(mock.api.start).toHaveBeenCalledTimes(1);
   });
 });
