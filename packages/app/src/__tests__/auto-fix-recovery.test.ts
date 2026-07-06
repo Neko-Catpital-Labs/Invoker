@@ -166,14 +166,43 @@ describe('auto-fix recovery candidate validation', () => {
     });
   });
 
-  it('keeps failed tasks eligible after previous auto-fix attempts', () => {
-    const task = makeTask({ execution: { error: 'boom', autoFixAttempts: 100, generation: 1, selectedAttemptId: 'attempt-1' } });
+  it('skips failed tasks after the worker retry budget is exhausted', () => {
+    const task = makeTask({ execution: { error: 'boom', autoFixAttempts: 3, generation: 1, selectedAttemptId: 'attempt-1' } });
     const harness = makeRecoveryPolicyHarness(task);
 
     const candidates = collectValidatedAutoFixRecoveryCandidates(harness.options);
 
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]?.task.execution.autoFixAttempts).toBe(100);
+    expect(candidates).toHaveLength(0);
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'worker-autofix-skip',
+        reason: 'worker-retry-budget-exhausted',
+        autoFixAttempts: 3,
+        workerRetryBudget: 3,
+      }),
+    );
+  });
+
+  it('reports disabled worker retry budget as worker policy', () => {
+    const harness = makeRecoveryPolicyHarness();
+
+    const candidates = collectValidatedAutoFixRecoveryCandidates({
+      ...harness.options,
+      defaultAutoFixRetries: 0,
+    });
+
+    expect(candidates).toHaveLength(0);
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'worker-autofix-skip',
+        reason: 'worker-retry-budget-disabled',
+        workerRetryBudget: 0,
+      }),
+    );
   });
 
   it.each([

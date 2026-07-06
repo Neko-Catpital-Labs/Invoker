@@ -64,7 +64,7 @@ function deps(): WorkerRuntimeDependencies {
   } as WorkerRuntimeDependencies;
 }
 
-function controller(options: { autoFixRetries?: number } = {}) {
+function controller() {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
   const runtimes = new Map<string, TestWorkerRuntime[]>();
   const register = (kind: string, note: string, runtimeKind = kind) => {
@@ -93,14 +93,13 @@ function controller(options: { autoFixRetries?: number } = {}) {
       autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
       persistence: persistence() as never,
       canControl: () => true,
-      autoFixRetries: options.autoFixRetries,
     }),
   };
 }
 
 describe('createWorkerRuntimeController', () => {
   it('auto-start starts only pr-status and ci-failure', () => {
-    const setup = controller({ autoFixRetries: 3 });
+    const setup = controller();
 
     setup.controller.startAutoStartedWorkers();
     const snapshot = setup.controller.snapshot();
@@ -112,7 +111,7 @@ describe('createWorkerRuntimeController', () => {
   });
 
   it('autofix remains stopped until explicitly started', () => {
-    const setup = controller({ autoFixRetries: 3 });
+    const setup = controller();
 
     setup.controller.startAutoStartedWorkers();
     expect(setup.runtimes.get(AUTO_FIX_WORKER_KIND)).toBeUndefined();
@@ -124,7 +123,7 @@ describe('createWorkerRuntimeController', () => {
   });
 
   it('duplicate start is idempotent', () => {
-    const setup = controller({ autoFixRetries: 3 });
+    const setup = controller();
 
     setup.controller.start(PR_STATUS_WORKER_KIND);
     setup.controller.start(PR_STATUS_WORKER_KIND);
@@ -133,7 +132,7 @@ describe('createWorkerRuntimeController', () => {
   });
 
   it('stop is idempotent', async () => {
-    const setup = controller({ autoFixRetries: 3 });
+    const setup = controller();
 
     const stoppedBeforeStart = await setup.controller.stop(PR_STATUS_WORKER_KIND);
     expect(stoppedBeforeStart.lifecycle).toBe('stopped');
@@ -147,31 +146,26 @@ describe('createWorkerRuntimeController', () => {
     expect(setup.runtimes.get(PR_STATUS_WORKER_KIND)?.[0]?.stops).toBe(1);
   });
 
-  it('autoFixRetries=0 disables autofix and ci-failure starts', () => {
-    const setup = controller({ autoFixRetries: 0 });
+  it('retry budget policy does not disable worker starts', () => {
+    const setup = controller();
 
-    expect(() => setup.controller.start(AUTO_FIX_WORKER_KIND)).toThrow('Worker "autofix" is disabled by autoFixRetries=0');
-    expect(() => setup.controller.start(CI_FAILURE_WORKER_KIND)).toThrow('Worker "ci-failure" is disabled by autoFixRetries=0');
-    setup.controller.startAutoStartedWorkers();
-    expect(setup.controller.snapshot().workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
-    expect(setup.runtimes.get(CI_FAILURE_WORKER_KIND)).toBeUndefined();
+    const autoFix = setup.controller.start(AUTO_FIX_WORKER_KIND);
+    const ciFailure = setup.controller.start(CI_FAILURE_WORKER_KIND);
 
-
-    const snapshot = setup.controller.snapshot();
-    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)).toMatchObject({
-      policy: 'disabled',
-      policyReason: 'autoFixRetries=0',
+    expect(autoFix).toMatchObject({
+      lifecycle: 'running',
+      policy: 'enabled',
       startable: false,
     });
-    expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)).toMatchObject({
-      policy: 'disabled',
-      policyReason: 'autoFixRetries=0',
+    expect(ciFailure).toMatchObject({
+      lifecycle: 'running',
+      policy: 'enabled',
       startable: false,
     });
   });
 
   it('an exited external worker row reports exited', () => {
-    const setup = controller({ autoFixRetries: 3 });
+    const setup = controller();
 
     setup.controller.start('external-preview');
     setup.runtimes.get('external-preview')?.[0]?.forceExit();

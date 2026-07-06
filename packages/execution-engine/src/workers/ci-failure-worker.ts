@@ -19,6 +19,7 @@ import {
   type ReviewGateCiContext,
   type ReviewGateLineageFields,
 } from '../auto-fix-intents.js';
+import { normalizeAutoFixRetryBudget } from '../auto-fix-gating.js';
 import type {
   ReviewGateCiFailedLifecycleEvent,
   ReviewGateFailedCheck,
@@ -66,7 +67,6 @@ export interface CiFailureWorkerPolicyOptions {
   defaultAutoFixRetries?: number;
   getAutoFixAgent?: () => string | undefined;
   getAutoFixExecutionModel?: () => string | undefined;
-  getRetryBudget?: (task: TaskState) => number;
   drainEvents?: () => ReviewGateCiFailedLifecycleEvent[];
 }
 
@@ -134,11 +134,8 @@ export function ciFailureActionKey(event: Pick<
   ].join(':');
 }
 
-function retryBudgetForTask(task: TaskState, options: CiFailureWorkerPolicyOptions): number {
-  const raw = options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0;
-  if (raw === Number.POSITIVE_INFINITY) return Number.POSITIVE_INFINITY;
-  if (!Number.isFinite(raw)) return 0;
-  return Math.floor(raw) > 0 ? Number.POSITIVE_INFINITY : 0;
+function retryBudgetForWorker(options: CiFailureWorkerPolicyOptions): number {
+  return normalizeAutoFixRetryBudget(options.defaultAutoFixRetries ?? 0);
 }
 
 function retryBudgetLabel(budget: number): number | 'unlimited' {
@@ -391,15 +388,15 @@ async function handleCiFailureEvent(
     return;
   }
 
-  const maxAttempts = retryBudgetForTask(task, options);
-  if (maxAttempts <= 0) {
-    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because retry budget is disabled', {
-      reason: 'retry-budget-disabled',
-      maxAttempts,
+  const workerRetryBudget = retryBudgetForWorker(options);
+  if (workerRetryBudget <= 0) {
+    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because worker retry budget is disabled', {
+      reason: 'worker-retry-budget-disabled',
+      workerRetryBudget,
     });
     logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
-      reason: 'retry-budget-disabled',
-      maxAttempts,
+      reason: 'worker-retry-budget-disabled',
+      workerRetryBudget,
     });
     return;
   }
@@ -415,6 +412,20 @@ async function handleCiFailureEvent(
     logCiFailureWorkerEvent(options, event, 'worker-ci-failure-stale', {
       reason: stale.reason,
       ...stale.details,
+    });
+    return;
+  }
+
+  if ((task.execution.autoFixAttempts ?? 0) >= workerRetryBudget) {
+    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because worker retry budget is exhausted', {
+      reason: 'worker-retry-budget-exhausted',
+      workerRetryBudget: retryBudgetLabel(workerRetryBudget),
+      autoFixAttempts: task.execution.autoFixAttempts ?? 0,
+    });
+    logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
+      reason: 'worker-retry-budget-exhausted',
+      workerRetryBudget: retryBudgetLabel(workerRetryBudget),
+      autoFixAttempts: task.execution.autoFixAttempts ?? 0,
     });
     return;
   }
@@ -453,7 +464,7 @@ async function handleCiFailureEvent(
     {
       channel: FIX_WITH_AGENT_CHANNEL,
       autoFixAttempts: task.execution.autoFixAttempts ?? 0,
-      maxAttempts: retryBudgetLabel(maxAttempts),
+      workerRetryBudget: retryBudgetLabel(workerRetryBudget),
     },
     intentId,
     selectedAgent,
@@ -465,7 +476,7 @@ async function handleCiFailureEvent(
     agent: selectedAgent ?? null,
     executionModel: executionModel ?? null,
     autoFixAttempts: task.execution.autoFixAttempts ?? 0,
-    maxAttempts: retryBudgetLabel(maxAttempts),
+    workerRetryBudget: retryBudgetLabel(workerRetryBudget),
   });
 }
 
