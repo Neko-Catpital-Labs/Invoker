@@ -2149,12 +2149,10 @@ export function App() {
     setViewMode('dag');
     if (nextSurface === 'home') {
       setSidebarSurface('home');
-      setSidebarCollapsed(false);
       setInspectorManualOpen(false);
       return;
     }
     setSidebarSurface(nextSurface);
-    setSidebarCollapsed(true);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
   }, []);
@@ -2162,7 +2160,6 @@ export function App() {
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
     setSidebarSurface('home');
-    setSidebarCollapsed(false);
     setInspectorManualOpen(false);
     setViewMode('dag');
   }, []);

@@ -655,7 +655,7 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
     await expect(page.getByRole('button', { name: /Menu Proof Workflow/ }).first()).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
     await expect(page.getByText('Invoker Terminal')).toHaveCount(0);
     await captureScreenshot(page, 'workflows-browser');
 
@@ -684,7 +684,7 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('sidebar-attention').click();
     await expect(page.getByTestId('browser-rail').getByRole('heading', { name: 'Needs Attention' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
     await expect(page.getByRole('heading', { name: 'First test task' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Partial terminal drawer' })).toBeVisible();
     await expect(page.getByText('More needs attention')).toHaveCount(0);
@@ -715,15 +715,16 @@ test.describe('Visual proof capture', () => {
   });
 
 
-  test('collapsible workflow browsers', async ({ page }) => {
+  test('explicit sidebar toggle controls workflow browser width', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
-    await captureScreenshot(page, 'collapsed-workflow-browsers');
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
 
     await page.getByTestId('sidebar-collapse-toggle').click();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await captureScreenshot(page, 'collapsed-workflow-browsers');
   });
   test('dag loaded', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
