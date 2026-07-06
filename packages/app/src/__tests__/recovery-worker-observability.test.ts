@@ -39,7 +39,7 @@ describe('recovery-worker-observability', () => {
           id: 4,
           taskId: 'wf-1/task-b',
           eventType: recoveryWorkerEventType('submit'),
-          payload: JSON.stringify(buildRecoveryWorkerAuditPayload('submit', 'schedule-enqueued', { workflowId: 'wf-1' })),
+          payload: JSON.stringify(buildRecoveryWorkerAuditPayload('submit', 'worker-autofix-submitted', { workflowId: 'wf-1' })),
           createdAt: '2026-06-22T10:00:03.000Z',
         },
         {
