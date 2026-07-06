@@ -240,8 +240,26 @@ describe('SQLiteAdapter', () => {
       const result = (adapter as any).db.exec('PRAGMA index_list(events)') as Array<{ values: unknown[][] }>;
       const indexNames = (result[0]?.values ?? []).map((row) => String(row[1]));
       expect(indexNames).toContain('idx_events_task_id_id');
+      expect(indexNames).toContain('idx_events_event_type_id');
     });
 
+    it('lists recent task events by event type and limit', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/task-1'));
+      adapter.saveTask('wf-1', makeTask('wf-1/task-2'));
+      adapter.logEvent('wf-1/task-1', 'debug.auto-fix', { phase: 'skip' });
+      adapter.logEvent('wf-1/task-1', 'other', { phase: 'ignore' });
+      adapter.logEvent('wf-1/task-2', 'recovery.worker.skip', { phase: 'schedule-skip' });
+
+      expect(adapter.listTaskEvents({
+        eventTypes: ['debug.auto-fix', 'recovery.worker.skip'],
+        limit: 2,
+      }).map((event) => `${event.taskId}:${event.eventType}`)).toEqual([
+        'wf-1/task-2:recovery.worker.skip',
+        'wf-1/task-1:debug.auto-fix',
+      ]);
+      expect(adapter.listTaskEvents({ limit: 0 })).toEqual([]);
+    });
     it('creates execution_model and worker_actions schema objects', () => {
       expect(tableColumns(adapter, 'tasks')).toContain('execution_model');
       expect(tableColumns(adapter, 'worker_actions')).toEqual(expect.arrayContaining([

@@ -106,10 +106,9 @@ import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry, TaskRunner,
   WorktreeExecutor,
-  CI_FAILURE_WORKER_KIND,
+  BUILTIN_WORKER_KINDS,
   initializeShellEnvironment,
   createWorkerRegistry,
-  PR_STATUS_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   DEFAULT_EXECUTION_AGENT,
@@ -231,6 +230,7 @@ import {
 } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
+import { buildWorkersSnapshot } from './workers-snapshot.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
@@ -288,10 +288,11 @@ import {
 import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
 import { logProcessError } from './process-error-handling.js';
 
-const REGISTERED_OWNER_WORKER_KINDS = [
-  PR_STATUS_WORKER_KIND,
-  CI_FAILURE_WORKER_KIND,
-] as const;
+const REGISTERED_OWNER_WORKER_KINDS = BUILTIN_WORKER_KINDS;
+type RegisteredOwnerWorker = {
+  kind: string;
+  runtime: WorkerRuntime;
+};
 type RegisteredOwnerWorkerSubmit = WorkerRuntimeDependencies['submitter']['submit'];
 
 function submitRegisteredOwnerWorkerMutation(
@@ -329,24 +330,24 @@ function buildRegisteredOwnerWorkerDeps(
   };
 }
 
-function startRegisteredOwnerWorkers(deps: WorkerRuntimeDependencies): WorkerRuntime[] {
+function startRegisteredOwnerWorkers(deps: WorkerRuntimeDependencies): RegisteredOwnerWorker[] {
   const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
-  const workers: WorkerRuntime[] = [];
+  const workers: RegisteredOwnerWorker[] = [];
   for (const kind of REGISTERED_OWNER_WORKER_KINDS) {
     const definition = registry.get(kind);
     if (!definition) {
       deps.logger.warn(`registered owner worker "${kind}" is unavailable`, { module: 'worker-registry' });
       continue;
     }
-    const worker = definition.factory(deps);
-    worker.start();
-    workers.push(worker);
+    const runtime = definition.factory(deps);
+    runtime.start();
+    workers.push({ kind, runtime });
   }
   return workers;
 }
 
-async function stopRegisteredOwnerWorkers(workers: WorkerRuntime[]): Promise<void> {
-  const stopping = workers.splice(0).map((worker) => worker.stop().catch(() => undefined));
+async function stopRegisteredOwnerWorkers(workers: RegisteredOwnerWorker[]): Promise<void> {
+  const stopping = workers.splice(0).map((worker) => worker.runtime.stop().catch(() => undefined));
   await Promise.all(stopping);
 }
 
@@ -977,7 +978,7 @@ function startHeadlessMode(): void {
     }
 
     let exitCode = 0;
-    const registeredOwnerWorkers: WorkerRuntime[] = [];
+    const registeredOwnerWorkers: RegisteredOwnerWorker[] = [];
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
     try {
@@ -1666,6 +1667,8 @@ function startHeadlessMode(): void {
             persistence,
             getActionGraphSnapshot: () =>
               buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
+            getWorkersSnapshot: () =>
+              buildWorkersSnapshot({ persistence, invokerConfig, ownerWorkers: registeredOwnerWorkers }) as unknown as Record<string, unknown>,
           }), {
             orchestrator,
             persistence,
@@ -1851,7 +1854,7 @@ function createEmbeddedTerminalBackendFromConfig(
   const planningCommandBuilder = createPlanningCommandBuilderFromRegistry(agentRegistry);
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
-  const registeredOwnerWorkers: WorkerRuntime[] = [];
+  const registeredOwnerWorkers: RegisteredOwnerWorker[] = [];
   let apiServer: ApiServer | null = null;
   let webBridge: WebBridge | null = null;
   let ownerMode = true;
@@ -3097,6 +3100,7 @@ function createEmbeddedTerminalBackendFromConfig(
             presets: invokerConfig.slackHarnessPresets ?? DEFAULT_SLACK_HARNESS_PRESETS,
             defaultPreset: invokerConfig.defaultSlackHarnessPreset ?? 'cursor+claude',
           }),
+          getOwnerWorkers: () => registeredOwnerWorkers,
           logger,
         });
         webBridge = startWebBridge({
@@ -3413,6 +3417,8 @@ function createEmbeddedTerminalBackendFromConfig(
           persistence,
           getActionGraphSnapshot: () =>
             buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
+          getWorkersSnapshot: () =>
+            buildWorkersSnapshot({ persistence, invokerConfig, ownerWorkers: registeredOwnerWorkers }) as unknown as Record<string, unknown>,
         }), {
           orchestrator,
           persistence,
@@ -4164,6 +4170,22 @@ function createEmbeddedTerminalBackendFromConfig(
         }
       }
       return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
+    });
+
+    ipcMain.handle('invoker:get-workers', async () => {
+      if (!ownerMode) {
+        try {
+          return await messageBus.request('headless.query', { kind: 'workers' });
+        } catch (err) {
+          logger.warn(
+            `get-workers owner delegation failed; falling back to local read-only snapshot: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { module: 'ipc' },
+          );
+        }
+      }
+      return buildWorkersSnapshot({ persistence, invokerConfig, ownerWorkers: registeredOwnerWorkers });
     });
 
     ipcMain.handle('invoker:report-ui-perf', (_event, metric: string, data?: Record<string, unknown>) => {

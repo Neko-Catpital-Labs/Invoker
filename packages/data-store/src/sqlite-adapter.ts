@@ -51,6 +51,7 @@ import type {
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
+  TaskEventListFilters,
   ActivityLogEntry,
   Conversation,
   ConversationMessage,
@@ -1900,6 +1901,38 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   // ── Events ────────────────────────────────────────────
+
+  listTaskEvents(filters: TaskEventListFilters = {}): TaskEvent[] {
+    if (filters.limit !== undefined && Math.floor(filters.limit) <= 0) {
+      return [];
+    }
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filters.taskId) {
+      where.push('task_id = ?');
+      params.push(filters.taskId);
+    }
+    if (filters.eventTypes && filters.eventTypes.length > 0) {
+      where.push(`event_type IN (${filters.eventTypes.map(() => '?').join(', ')})`);
+      params.push(...filters.eventTypes);
+    }
+    let limitSql = '';
+    if (filters.limit !== undefined) {
+      limitSql = ' LIMIT ?';
+      params.push(Math.floor(filters.limit));
+    }
+    const rows = this.queryAll(
+      `SELECT * FROM events ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC${limitSql}`,
+      params,
+    );
+    return rows.map((row: any) => ({
+      id: row.id,
+      taskId: row.task_id,
+      eventType: row.event_type,
+      payload: row.payload ?? undefined,
+      createdAt: row.created_at,
+    }));
+  }
 
   logEvent(taskId: string, eventType: string, payload?: unknown): void {
     this.execRun(`
