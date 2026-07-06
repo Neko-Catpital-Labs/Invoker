@@ -4,6 +4,7 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+- Move auto-fix attempt counts out of SQLite task state and into in-memory worker runtime policy.
 - Add a local master-head full-test repair cron that runs the destructive suite, asks OMP/Codex to fix confirmed failures, reruns the suite, and opens one validated PR per broken upstream SHA.
 - Make the browser UI load heavy Action Graph data only when that tab opens, trim huge diagnostic strings, gzip large `/invoke` JSON responses, and stop checking PR statuses on initial page load.
 - Move the Slack bot out of the Invoker app into its own always-on `@invoker/slack-manager` daemon. Previously the bot ran inside Invoker, so when Invoker died the bot died with it and no one could ask it to bring Invoker back. The manager now owns the Slack connection, keeps its planning sessions and per-workflow channel map in its own database, and drives Invoker over IPC (`headless.query`/`exec`/`run`). It watches Invoker's health and relaunches the GUI when it goes down, and a new `@Invoker restart` verb (Approve to confirm) brings it back on demand; a backoff guard prevents restart storms. Invoker itself now launches with Slack disabled — the manager is the sole Slack surface, supervised independently via a systemd user unit (cron keepalive fallback).
@@ -16,9 +17,11 @@ All notable changes to Invoker will be documented in this file.
 - Stop treating every lobby/DM `@Invoker` mention as a build request. Mentions and a new `/invoker` slash command now recognize explicit verbs — `status`, `recreate`, `rebase`, `retry`, `cancel` (one workflow or `all`), and `submit` — and run the real workflow operation. A fuzzy operational ask falls back to an LLM classifier that proposes the action and waits for confirmation. Destructive all-workflow operations always confirm (Approve/Cancel buttons or a `yes`/`no` reply), and `submit` shows a plain-English, one-line-per-step summary of the plan to approve instead of raw YAML. The Slack app manifest now enables the `/invoker` slash command and Block Kit interactivity.
 - Make Slack lobby mentions normal agent threads by default: plain `@Invoker fix X` now runs a recoverable OMP/Codex-style repo session, `local:` and `run local:` are aliases for that path, workflow count/status questions route to Invoker status directly, `exec local:`/`local command:` run raw shell, and `plan:` is the explicit opt-in for Invoker YAML plus `submit` approval.
 - Stream live progress for bulk lobby workflow operations into the Slack thread: a long `recreate`/`rebase`/`cancel all` now edits one in-thread message with a running `done/total` count (and the workflow being processed) as it works, instead of going silent between the "On it…" acknowledgement and the final summary.
+- Treat `autoFixRetries` as a real finite cap for auto-fix and CI-repair workers. A value like `3` now stops after three submitted attempts for a failed task instead of enabling unlimited retries.
+- Auto-start the auto-fix worker in owner processes and remove direct failed-delta auto-fix scheduling from the app layer. Failures now wake the worker through lifecycle events, then the worker submits the normal fix intent.
 - Emit first-class recovery.worker submit/skip audit events from the auto-fix worker and add a mocked browser E2E proving worker-triggered fixes reach the Approve Fix UI.
-- Treat `autoFixRetries` as worker policy, not task policy. Worker starts are no longer disabled by retry budget, while the worker still caps submissions against each task's consumed `autoFixAttempts`.
 - Add task deletion across the desktop app, HTTP API, and headless commands. Deleting a task now kills it first when needed, rewires direct dependents to the deleted task's upstream dependencies, and blocks deleting the last task in a workflow so users delete the whole workflow instead.
+- Keep the launch dispatcher topping up ready work before each poll, so queued tasks do not sit idle after launch rows expire or are abandoned.
 
 ## 0.0.6
 

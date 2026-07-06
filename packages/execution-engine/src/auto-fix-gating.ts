@@ -9,13 +9,6 @@ export function normalizeAutoFixRetryBudget(raw: unknown): number {
   return budget > 0 ? budget : 0;
 }
 
-export function normalizeAutoFixAttemptCount(raw: unknown): number {
-  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
-    return 0;
-  }
-  const attempts = Math.floor(raw);
-  return attempts > 0 ? attempts : 0;
-}
 
 export function shouldSkipAutoFixForError(errorText: unknown): boolean {
   if (typeof errorText !== 'string') {
