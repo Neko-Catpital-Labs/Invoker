@@ -39,7 +39,7 @@ describe('Visual proof snapshots', () => {
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
-    expect(screen.getByText('Terminal planning and graph details live here.')).toBeInTheDocument();
+    expect(screen.getByText('Describe the change in the terminal to generate a plan.')).toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
     expect(screen.queryByText('System Setup')).not.toBeInTheDocument();

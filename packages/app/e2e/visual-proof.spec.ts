@@ -581,6 +581,8 @@ test.describe('Visual proof capture', () => {
     }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow' });
 
     await page.getByTestId('sidebar-planning').click();
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(page.getByTestId('planning-session-rail')).toHaveClass(/w-64/);
     await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Add README');
     await page.getByRole('button', { name: 'Send' }).click();
@@ -661,7 +663,7 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('browser-rail-dismiss').click();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
@@ -683,6 +685,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     await page.getByTestId('sidebar-attention').click();
+    await expect(page.getByTestId('browser-rail')).toHaveClass(/w-64/);
     await expect(page.getByTestId('browser-rail').getByRole('heading', { name: 'Needs Attention' })).toBeVisible();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
     await expect(page.getByRole('heading', { name: 'First test task' })).toBeVisible();
@@ -723,7 +726,7 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'collapsed-workflow-browsers');
 
     await page.getByTestId('sidebar-collapse-toggle').click();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-72/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
   test('dag loaded', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
