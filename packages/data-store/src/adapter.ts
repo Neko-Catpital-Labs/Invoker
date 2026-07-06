@@ -100,6 +100,13 @@ export interface TaskEvent {
   createdAt: string;
 }
 
+export interface TaskEventListFilters {
+  taskId?: string;
+  eventTypes?: string[];
+  limit?: number;
+}
+
+
 export interface ActivityLogEntry {
   id: number;
   timestamp: string;
@@ -221,6 +228,7 @@ export interface PersistenceAdapter {
   deleteWorkflow(workflowId: string): void;
 
   // Events (audit trail)
+  listTaskEvents(filters?: TaskEventListFilters): TaskEvent[];
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
   getEvents(taskId: string): TaskEvent[];
   getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number): TaskEvent[];

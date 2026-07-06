@@ -23,6 +23,8 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
     },
     persistence: {
       listWorkflows: () => [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
+      listWorkerActions: () => [],
+      listTaskEvents: () => [],
     },
     mutations: { approveTask },
     agentRegistry: { listExecutionHarnesses: () => [] },
@@ -86,6 +88,21 @@ describe('buildWebInvokerDispatch', () => {
       executionAgent: 'omp',
       executionModel: 'chatgpt-5.4',
     });
+  });
+
+  it('get-workers returns the read-only worker snapshot with running state', async () => {
+    const { dispatch } = makeDispatch({
+      getOwnerWorkers: () => [{ kind: 'autofix', runtime: { isRunning: () => true } }],
+      loadConfig: () => ({ externalWorkers: [{ kind: 'preview', launch: { executable: '/bin/preview' } }] }),
+    });
+    const result = await dispatch('invoker:get-workers', []) as { workers: Array<{ kind: string; source: string; running?: boolean }> };
+    expect(result.workers.map((worker) => `${worker.source}:${worker.kind}`)).toEqual([
+      'built-in:autofix',
+      'built-in:pr-status',
+      'built-in:ci-failure',
+      'external:preview',
+    ]);
+    expect(result.workers.find((worker) => worker.kind === 'autofix')?.running).toBe(true);
   });
 
   it('approve routes to the mutation facade', async () => {
