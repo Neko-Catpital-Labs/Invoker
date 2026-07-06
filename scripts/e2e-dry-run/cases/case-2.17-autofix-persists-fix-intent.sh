@@ -101,6 +101,20 @@ import sqlite3
 import sys
 
 db_path, task_id = sys.argv[1], sys.argv[2]
+
+def parse_payload(raw):
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except json.JSONDecodeError:
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
 conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 conn.row_factory = sqlite3.Row
 
@@ -110,13 +124,14 @@ events = conn.execute(
 ).fetchall()
 
 has_failed = any(row["event_type"] == "task.failed" for row in events)
-has_schedule_enqueued = False
+has_worker_submit = False
 for row in events:
-    if row["event_type"] != "debug.auto-fix":
-        continue
-    payload = json.loads(row["payload"]) if row["payload"] else {}
-    if payload.get("phase") == "schedule-enqueued":
-        has_schedule_enqueued = True
+    payload = parse_payload(row["payload"])
+    if row["event_type"] == "debug.auto-fix" and payload.get("phase") == "worker-autofix-submitted":
+        has_worker_submit = True
+        break
+    if row["event_type"] == "recovery.worker.submit" and payload.get("action") == "submit":
+        has_worker_submit = True
         break
 
 intents = conn.execute(
@@ -132,7 +147,7 @@ for row in intents:
         has_fix_intent = True
         break
 
-raise SystemExit(0 if (has_failed and has_schedule_enqueued and has_fix_intent) else 1)
+raise SystemExit(0 if (has_failed and has_worker_submit and has_fix_intent) else 1)
 PY
   then
     FOUND=1
@@ -142,7 +157,7 @@ PY
 done
 
 if [ "$FOUND" -ne 1 ]; then
-  echo "FAIL case 2.17: expected task.failed + debug.auto-fix schedule-enqueued + persisted invoker:fix-with-agent intent"
+  echo "FAIL case 2.17: expected task.failed + worker-autofix-submitted/recovery.worker.submit + persisted invoker:fix-with-agent intent"
   python3 - <<'PY' "$DB_PATH" "$TASK_ID"
 import sqlite3, sys
 db_path, task_id = sys.argv[1], sys.argv[2]

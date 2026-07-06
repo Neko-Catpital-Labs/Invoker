@@ -16,8 +16,7 @@ All notable changes to Invoker will be documented in this file.
 - Stop treating every lobby/DM `@Invoker` mention as a build request. Mentions and a new `/invoker` slash command now recognize explicit verbs — `status`, `recreate`, `rebase`, `retry`, `cancel` (one workflow or `all`), and `submit` — and run the real workflow operation. A fuzzy operational ask falls back to an LLM classifier that proposes the action and waits for confirmation. Destructive all-workflow operations always confirm (Approve/Cancel buttons or a `yes`/`no` reply), and `submit` shows a plain-English, one-line-per-step summary of the plan to approve instead of raw YAML. The Slack app manifest now enables the `/invoker` slash command and Block Kit interactivity.
 - Make Slack lobby mentions normal agent threads by default: plain `@Invoker fix X` now runs a recoverable OMP/Codex-style repo session, `local:` and `run local:` are aliases for that path, workflow count/status questions route to Invoker status directly, `exec local:`/`local command:` run raw shell, and `plan:` is the explicit opt-in for Invoker YAML plus `submit` approval.
 - Stream live progress for bulk lobby workflow operations into the Slack thread: a long `recreate`/`rebase`/`cancel all` now edits one in-thread message with a running `done/total` count (and the workflow being processed) as it works, instead of going silent between the "On it…" acknowledgement and the final summary.
-
-
+- Emit first-class recovery.worker submit/skip audit events from the auto-fix worker and add a mocked browser E2E proving worker-triggered fixes reach the Approve Fix UI.
 - Add task deletion across the desktop app, HTTP API, and headless commands. Deleting a task now kills it first when needed, rewires direct dependents to the deleted task's upstream dependencies, and blocks deleting the last task in a workflow so users delete the whole workflow instead.
 
 ## 0.0.6
