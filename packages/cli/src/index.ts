@@ -10,6 +10,7 @@ import {
   TaskRunner,
   WorktreeExecutor,
   acquireWorkerLock,
+  createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
   registerExternalWorkers,
@@ -526,6 +527,7 @@ async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>
   // Open the try before constructing/starting the worker so persistence is
   // always closed even if construction or start throws (otherwise the SQLite
   // handle leaks when control unwinds to main()'s catch).
+  const autoFixAttemptLedger = createAutoFixAttemptLedger();
   try {
     const worker = definition.factory({
       logger: silentLogger,
@@ -537,6 +539,7 @@ async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>
       },
       autoFix: {
         defaultAutoFixRetries: autoFixRetries,
+        attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => autoFixAgent,
       },
     });
