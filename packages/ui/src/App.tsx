@@ -2835,7 +2835,7 @@ export function App() {
 
   const renderPlanningTerminalSurface = (): JSX.Element => (
     <div className="flex-1 flex overflow-hidden">
-      <div data-testid="planning-session-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
+      <div data-testid="planning-session-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
         <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
           <div>
             <h2 className="text-sm font-semibold text-gray-100">Planning Terminal</h2>
@@ -2896,7 +2896,7 @@ export function App() {
     </div>
   );
   const renderBrowserRail = (): JSX.Element => (
-    <div data-testid="browser-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
+    <div data-testid="browser-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
       <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
         <div>
           <h2 className="text-sm font-semibold text-gray-100">{browserSurfaceTitle}</h2>
@@ -3099,8 +3099,8 @@ export function App() {
                   remoteTargets={remoteTargets}
                   executionPools={executionPools}
                   executionAgents={executionAgents}
-                  onApprove={(task) => void handleApprove(task.id)}
-                  onReject={(task) => void handleReject(task.id)}
+                  onApprove={openApprovalModal}
+                  onReject={openRejectModal}
                   onSetMergeBranch={handleSetMergeBranch}
                   onSetMergeMode={handleSetMergeMode}
                   onToggleCollapsed={handleToggleInspectorCollapsed}
