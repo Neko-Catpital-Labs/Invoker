@@ -174,6 +174,7 @@ test.describe('Headless thundering herd', () => {
         ...headlessTestEnv(testDir),
         INVOKER_HEADLESS_STANDALONE: '1',
         INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS: '60000',
+        INVOKER_USER_DATA_DIR: userDataDir,
       },
     });
 
