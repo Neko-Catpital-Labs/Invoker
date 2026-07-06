@@ -11,7 +11,7 @@ import {
   buildFixWithAgentMutationArgs,
   listOpenFixIntentsForTask,
 } from './auto-fix-intents.js';
-import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
+import { normalizeAutoFixAttemptCount, normalizeAutoFixRetryBudget, shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from './lifecycle-events.js';
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
 import type { WorkerRegistry } from './worker-registry.js';
@@ -51,7 +51,7 @@ export interface AutoFixRecoverySubmitter {
   ): number;
 }
 export interface AutoFixWorkerConfig {
-  /** Positive config enables auto-fix; attempts are not capped. */
+  /** Worker-owned maximum auto-fix attempts per failed task. Positive finite values are caps; zero leaves the worker unable to submit fixes. */
   defaultAutoFixRetries?: number;
   /** Resolves the agent that performs each auto-fix, when one is configured. */
   getAutoFixAgent?: () => string | undefined;
@@ -66,7 +66,6 @@ export interface AutoFixRecoveryPolicyOptions {
   logger: Logger;
   defaultAutoFixRetries?: number;
   getAutoFixAgent?: () => string | undefined;
-  getRetryBudget?: (task: TaskState) => number;
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
 }
 /** Register the built-in auto-fix worker. */
@@ -160,24 +159,19 @@ export function listAutoFixRecoveryScanCandidates(
   return candidates;
 }
 
-function retryBudgetForTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): number {
-  const raw = options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0;
-  if (raw === Number.POSITIVE_INFINITY) return Number.POSITIVE_INFINITY;
-  if (!Number.isFinite(raw)) return 0;
-  return Math.floor(raw) > 0 ? Number.POSITIVE_INFINITY : 0;
+function retryBudgetForWorker(options: AutoFixRecoveryPolicyOptions): number {
+  return normalizeAutoFixRetryBudget(options.defaultAutoFixRetries ?? 0);
 }
 
 function retryBudgetLabel(budget: number): number | 'unlimited' {
   return budget === Number.POSITIVE_INFINITY ? 'unlimited' : budget;
 }
 
-function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): boolean {
+function isRuntimeAutoFixEligibleTask(task: TaskState): boolean {
   if (task.status !== 'failed') return false;
   if (task.config.isReconciliation) return false;
   if (task.config.parentTask) return false;
   if (shouldSkipAutoFixForError(task.execution.error)) return false;
-  const max = retryBudgetForTask(task, options);
-  if (max <= 0) return false;
   return true;
 }
 
@@ -321,14 +315,32 @@ function validateAutoFixCandidate(
   }
   const latestRef = snapshotComparison.ref;
 
-  if (!isRuntimeAutoFixEligibleTask(latest, options)) {
+  const autoFixAttempts = normalizeAutoFixAttemptCount(latest.execution.autoFixAttempts);
+  const workerRetryBudget = retryBudgetForWorker(options);
+  if (!isRuntimeAutoFixEligibleTask(latest)) {
     skipAutoFixCandidate(options, candidate, 'not-eligible', {
       status: latest.status,
-      autoFixAttempts: latest.execution.autoFixAttempts ?? 0,
-      maxRetries: retryBudgetLabel(retryBudgetForTask(latest, options)),
+      autoFixAttempts,
+      workerRetryBudget: retryBudgetLabel(workerRetryBudget),
       isReconciliation: Boolean(latest.config.isReconciliation),
       hasParentTask: Boolean(latest.config.parentTask),
       skippedForError: shouldSkipAutoFixForError(latest.execution.error),
+    });
+    return undefined;
+  }
+  if (workerRetryBudget <= 0) {
+    skipAutoFixCandidate(options, candidate, 'worker-retry-budget-disabled', {
+      status: latest.status,
+      autoFixAttempts,
+      workerRetryBudget: retryBudgetLabel(workerRetryBudget),
+    });
+    return undefined;
+  }
+  if (autoFixAttempts >= workerRetryBudget) {
+    skipAutoFixCandidate(options, candidate, 'worker-retry-budget-exhausted', {
+      status: latest.status,
+      autoFixAttempts,
+      workerRetryBudget: retryBudgetLabel(workerRetryBudget),
     });
     return undefined;
   }
@@ -383,8 +395,8 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         taskStateVersion: candidate.taskStateVersion,
         attemptId: candidate.attemptId ?? null,
         agent: selectedAgent ?? null,
-        autoFixAttempts: candidate.task.execution.autoFixAttempts ?? 0,
-        maxRetries: retryBudgetLabel(retryBudgetForTask(candidate.task, options)),
+        autoFixAttempts: normalizeAutoFixAttemptCount(candidate.task.execution.autoFixAttempts),
+        workerRetryBudget: retryBudgetLabel(retryBudgetForWorker(options)),
       });
     }
   };
