@@ -43,6 +43,7 @@ import {
   guiOwnerBootstrapTimeoutMs,
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
+  resolveElectronUserDataDir,
   runElectronReadyBootstrap,
   shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
@@ -59,8 +60,9 @@ configureEarlyElectronApp({ app, enableTestCompositor, isHeadless: earlyHeadless
 
 // Isolate userData (and with it the single-instance lock) for e2e runs so a
 // test instance can launch alongside a normally running Invoker.
-if (process.env.INVOKER_USER_DATA_DIR) {
-  app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
+const isolatedUserDataDir = resolveElectronUserDataDir();
+if (isolatedUserDataDir) {
+  app.setPath('userData', isolatedUserDataDir);
 }
 
 import { Orchestrator, CommandService, OrchestratorError, OrchestratorErrorCode, buildWorkflowInvalidationDeps } from '@invoker/workflow-core';
