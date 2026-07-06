@@ -51,6 +51,7 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
       INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
       PATH: `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`,
       ...(extraEnv ?? {}),
+      INVOKER_USER_DATA_DIR: electronUserDataDir,
     },
   });
 }

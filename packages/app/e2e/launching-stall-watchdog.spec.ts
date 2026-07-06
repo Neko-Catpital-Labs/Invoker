@@ -62,6 +62,7 @@ base.describe('Launch stall watchdog', () => {
           INVOKER_REPO_CONFIG_PATH: configPath,
           INVOKER_EXECUTING_STALL_TIMEOUT_MS: '3000',
           INVOKER_STARTUP_POLL_DELAY_MS: '0',
+          INVOKER_USER_DATA_DIR: electronUserDataDir,
         },
       });
       const page = await app.firstWindow();
@@ -170,6 +171,7 @@ base.describe('Launch stall watchdog', () => {
           INVOKER_REPO_CONFIG_PATH: configPath,
           INVOKER_EXECUTING_STALL_TIMEOUT_MS: '3000',
           INVOKER_STARTUP_POLL_DELAY_MS: '0',
+          INVOKER_USER_DATA_DIR: electronUserDataDir,
         },
       });
       const page = await app.firstWindow();

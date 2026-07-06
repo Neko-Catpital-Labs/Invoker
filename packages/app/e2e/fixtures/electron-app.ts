@@ -137,6 +137,7 @@ exit 64
         ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
         ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
         PATH: pathEnv,
+        INVOKER_USER_DATA_DIR: electronUserDataDir,
       },
     });
     await use(app);

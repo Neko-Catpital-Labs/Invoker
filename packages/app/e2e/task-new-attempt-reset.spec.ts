@@ -87,6 +87,7 @@ async function launchApp(testDir: string, configPath: string): Promise<{ app: El
         process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '5000',
       INVOKER_EMBEDDED_TERMINAL_BACKEND:
         process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND ?? 'pty',
+      INVOKER_USER_DATA_DIR: electronUserDataDir,
     },
   });
   const page = await app.firstWindow();

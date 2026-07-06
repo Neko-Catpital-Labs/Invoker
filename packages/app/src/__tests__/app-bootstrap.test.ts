@@ -5,6 +5,7 @@ import {
   guiOwnerBootstrapTimeoutMs,
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
+  resolveElectronUserDataDir,
   runElectronReadyBootstrap,
   shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
@@ -102,6 +103,25 @@ describe('app-bootstrap', () => {
 
     expect(setActivationPolicy).not.toHaveBeenCalled();
     expect(hideDock).not.toHaveBeenCalled();
+  });
+
+  it('uses explicit isolated Electron userData when provided', () => {
+    expect(resolveElectronUserDataDir({
+      INVOKER_USER_DATA_DIR: '/tmp/invoker-user-data',
+      INVOKER_DB_DIR: '/tmp/invoker-db',
+      NODE_ENV: 'test',
+    })).toBe('/tmp/invoker-user-data');
+  });
+
+  it('derives isolated Electron userData from the test DB dir', () => {
+    expect(resolveElectronUserDataDir({
+      INVOKER_DB_DIR: '/tmp/invoker-db',
+      NODE_ENV: 'test',
+    })).toBe('/tmp/invoker-db/electron-user-data');
+  });
+
+  it('does not override live Electron userData by default', () => {
+    expect(resolveElectronUserDataDir({})).toBeNull();
   });
 
   it('runs ready bootstrap only after Electron readiness resolves', async () => {
