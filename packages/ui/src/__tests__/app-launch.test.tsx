@@ -47,6 +47,34 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
+  });
+  it('opens worker status from the left panel', async () => {
+    mock.setWorkerStatus({
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workers: [
+        {
+          kind: 'pr-status',
+          note: 'PR status',
+          lifecycle: 'running',
+          policy: 'enabled',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+          runtimeKind: 'pr-status',
+          recentActions: [],
+        },
+      ],
+    });
+
+    render(<App />);
+
+    const workersButton = await screen.findByTestId('sidebar-workers');
+    expect(workersButton).toHaveTextContent('Workers');
+    fireEvent.click(workersButton);
+
+    expect(await screen.findByTestId('worker-activity-card')).toBeInTheDocument();
+    expect(screen.getByText('PR status')).toBeInTheDocument();
   });
   it('renders the Apple-like source list without manual plan loading', async () => {
     render(<App />);
@@ -57,6 +85,7 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
   });
 

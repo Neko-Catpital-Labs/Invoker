@@ -16,6 +16,7 @@ import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowM
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
+import { useWorkerStatus } from './hooks/useWorkerStatus.js';
 import { useActionGraphSnapshot } from './hooks/useActionGraphSnapshot.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
@@ -31,6 +32,7 @@ import { SystemSetupModal } from './components/SystemSetupModal.js';
 import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
+import { WorkerDetailsPanel } from './components/WorkerDetailsPanel.js';
 import { groupWorkflowCoreActivity } from './lib/workflow-core-activity.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
@@ -502,6 +504,25 @@ export function App() {
   );
   const invoker = useInvoker();
   const queueStatus = useQueueStatus();
+  const [workerStatus, refreshWorkerStatus] = useWorkerStatus();
+  const handleStartWorker = useCallback(async (kind: string) => {
+    if (!invoker) return;
+    try {
+      await invoker.startWorker(kind);
+      await refreshWorkerStatus();
+    } catch (err) {
+      console.error('Failed to start worker:', err);
+    }
+  }, [invoker, refreshWorkerStatus]);
+  const handleStopWorker = useCallback(async (kind: string) => {
+    if (!invoker) return;
+    try {
+      await invoker.stopWorker(kind);
+      await refreshWorkerStatus();
+    } catch (err) {
+      console.error('Failed to stop worker:', err);
+    }
+  }, [invoker, refreshWorkerStatus]);
   const runningTaskIds = useMemo(
     () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
     [queueStatus],
@@ -512,6 +533,7 @@ export function App() {
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedWorkerKind, setSelectedWorkerKind] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
@@ -759,6 +781,7 @@ export function App() {
   }, []);
 
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
+  const selectedWorker = workerStatus?.workers.find((worker) => worker.kind === selectedWorkerKind) ?? null;
   const contextMenuTask = contextMenu ? tasks.get(contextMenu.taskId) ?? null : null;
   const selectedWorkflowTaskCount = useMemo(() => {
     if (!selectedWorkflowId) return 0;
@@ -1485,6 +1508,18 @@ export function App() {
     sidebarSurface,
     workflowEntries,
   ]);
+
+  useEffect(() => {
+    if (!workerStatus?.workers.some((worker) => worker.kind === selectedWorkerKind)) {
+      setSelectedWorkerKind(null);
+    }
+  }, [selectedWorkerKind, workerStatus]);
+
+  useEffect(() => {
+    if (sidebarSurface !== 'workers') return;
+    if (selectedWorkerKind && workerStatus?.workers.some((worker) => worker.kind === selectedWorkerKind)) return;
+    setSelectedWorkerKind(workerStatus?.workers[0]?.kind ?? null);
+  }, [selectedWorkerKind, sidebarSurface, workerStatus]);
   useEffect(() => {
     if (viewMode !== 'dag' || sidebarSurface === 'home' || displayedSelectedWorkflowGraph === null) {
       return;
@@ -2071,8 +2106,6 @@ export function App() {
       console.error('Failed to delete workflows:', err);
     }
   }, [clearTasks, invoker]);
-
-  // True when all tasks have reached a terminal state.
   const allSettled = useMemo(() => {
     if (tasks.size === 0) return false;
     for (const task of tasks.values()) {
@@ -2088,7 +2121,8 @@ export function App() {
   const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
   const autoCollapseInspector = sidebarSurface !== 'home' && viewportWidth < 1440;
   const effectiveInspectorCollapsed = inspectorCollapsed || (autoCollapseInspector && !inspectorManualOpen);
-  const showInspectorPlaceholder = !showEmptyGraphTutorial && !selectedTask && !selectedWorkflow && !(viewMode === 'actionGraph' && selectedActionNode);
+  const showWorkerDetailsPanel = viewMode === 'queue' && sidebarSurface === 'workers';
+  const showInspectorPlaceholder = !showEmptyGraphTutorial && !showWorkerDetailsPanel && !selectedTask && !selectedWorkflow && !(viewMode === 'actionGraph' && selectedActionNode);
 
   useEffect(() => {
     if (sidebarSurface === 'home' || !autoCollapseInspector) {
@@ -2130,7 +2164,13 @@ export function App() {
       setViewMode('dag');
       return;
     }
-    setSidebarSurface('home');
+    if (nextView === 'queue') {
+      setSidebarSurface('workers');
+      setInspectorCollapsed(true);
+      setInspectorManualOpen(false);
+    } else {
+      setSidebarSurface('home');
+    }
     setViewMode(nextView);
   }, [selectedActionNodeId]);
 
@@ -2146,6 +2186,15 @@ export function App() {
 
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
+    if (nextSurface === 'workers') {
+      setSidebarSurface('workers');
+      setSidebarCollapsed(true);
+      setInspectorCollapsed(true);
+      setInspectorManualOpen(false);
+      setStatusFilters(new Set<WorkflowStatus>());
+      setViewMode('queue');
+      return;
+    }
     setViewMode('dag');
     if (nextSurface === 'home') {
       setSidebarSurface('home');
@@ -2593,10 +2642,14 @@ export function App() {
       {viewMode === 'queue' ? (
         <QueueView
           tasks={tasks}
-          queueStatus={queueStatus}
+          workerStatus={workerStatus}
+          readOnly={runtimeStatus?.readOnly === true}
+          onStartWorker={handleStartWorker}
+          onStopWorker={handleStopWorker}
           onTaskClick={handleTaskClick}
-          onCancel={handleCancelTask}
           selectedTaskId={selectedTaskId}
+          selectedWorkerKind={selectedWorkerKind}
+          onSelectWorker={setSelectedWorkerKind}
         />
       ) : viewMode === 'history' ? (
         <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
@@ -2986,6 +3039,7 @@ export function App() {
           workflows={workflows}
           tasks={tasks}
           queueStatus={queueStatus}
+          workerStatus={workerStatus}
           planningSessionCount={planningSessions.length}
           selectedSurface={sidebarSurface}
           collapsed={sidebarCollapsed}
@@ -3025,6 +3079,14 @@ export function App() {
                 <EmptyGraphTutorial />
               ) : showInspectorPlaceholder ? (
                 <EmptyInspectorPlaceholder />
+              ) : showWorkerDetailsPanel ? (
+                <WorkerDetailsPanel
+                  worker={selectedWorker}
+                  tasks={tasks}
+                  collapsed={effectiveInspectorCollapsed}
+                  onToggleCollapsed={handleToggleInspectorCollapsed}
+                  onTaskClick={handleTaskClick}
+                />
               ) : (
                 <WorkflowInspector
                   workflow={displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow}
