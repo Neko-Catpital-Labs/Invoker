@@ -63,7 +63,7 @@ function mockSpawnChildErrorEvent(err: Error & { code?: string }) {
   return child;
 }
 
-function makeExecutionAgent(buildFixCommand: (prompt: string) => { cmd: string; args: string[]; sessionId?: string }): ExecutionAgent {
+function makeExecutionAgent(buildFixCommand: ExecutionAgent['buildFixCommand']): ExecutionAgent {
   return {
     name: 'codex',
     stdinMode: 'ignore',
@@ -96,6 +96,21 @@ describe('fix prompt transport for oversized prompts', () => {
     expect(captured.prompt).toContain('The full task instructions are in this file:');
     expect(captured.prompt).toContain('invoker-agent-prompt-');
     expect(captured.prompt).not.toContain(hugePrompt.slice(0, 200));
+  });
+  it('passes executionModel to local fix command builders', async () => {
+    const { spawn } = await import('node:child_process');
+    const buildFixCommand = vi.fn((prompt: string, options?: { executionModel?: string }) => ({
+      cmd: 'codex',
+      args: ['exec', '--json', ...(options?.executionModel ? ['--model', options.executionModel] : []), prompt],
+      sessionId: 'local-model-sess',
+    }));
+    const agent = makeExecutionAgent(buildFixCommand);
+
+    vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('ok', 0) as any);
+
+    const result = await spawnAgentFixViaRegistry('small prompt', '/tmp', agent, undefined, 'gpt-5.1-codex-max');
+    expect(result.sessionId).toBe('local-model-sess');
+    expect(buildFixCommand).toHaveBeenCalledWith('small prompt', { executionModel: 'gpt-5.1-codex-max' });
   });
 
   it('remote fix path writes oversized prompt to remote temp file and passes short bootstrap prompt', async () => {

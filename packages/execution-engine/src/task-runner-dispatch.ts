@@ -47,7 +47,7 @@ export async function dispatchExecutor(
   let handle!: ExecutorHandle;
   while (true) {
     bench('selectExecutor.start');
-    executor = host.selectExecutor(task, attemptedPoolMemberKeys);
+    executor = host.selectExecutor(task, attemptedPoolMemberKeys).executor;
     const poolSelectionForStart = host.pendingPoolSelections.get(task.id);
     if (!host.acquirePoolSelectionLease(task, attemptId, poolSelectionForStart)) {
       if (poolSelectionForStart) {
