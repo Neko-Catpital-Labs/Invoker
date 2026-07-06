@@ -16,7 +16,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { ActionGraphResponse, RuntimeStatus, TerminalOutputEvent, WorkflowMutationAcceptedResult } from '@invoker/contracts';
+import type { ActionGraphResponse, RuntimeStatus, TerminalOutputEvent, WorkflowMutationAcceptedResult, WorkersSnapshotResponse } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -35,6 +35,8 @@ export interface MockInvoker {
   setActionGraph: (response: ActionGraphResponse) => void;
   /** Replace the runtime status returned by getRuntimeStatus. */
   setRuntimeStatus: (status: RuntimeStatus) => void;
+  /** Replace the worker registry snapshot returned by getWorkers. */
+  setWorkers: (response: WorkersSnapshotResponse) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -60,6 +62,10 @@ export function createMockInvoker(
     ownerMode: true,
     readOnly: false,
     mode: 'local-owner',
+  };
+  let workersSnapshot: WorkersSnapshotResponse = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    workers: [],
   };
 
   const accepted = (channel: string, workflowId = 'wf-1'): WorkflowMutationAcceptedResult => ({
@@ -266,6 +272,7 @@ export function createMockInvoker(
       queued: [],
     })),
     getActionGraph: vi.fn(async () => actionGraphSnapshot),
+    getWorkers: vi.fn(async () => workersSnapshot),
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
   };
@@ -293,6 +300,10 @@ export function createMockInvoker(
   }
   function setRuntimeStatus(status: RuntimeStatus) {
     runtimeStatus = status;
+  }
+
+  function setWorkers(response: WorkersSnapshotResponse) {
+    workersSnapshot = response;
   }
 
 
@@ -335,6 +346,7 @@ export function createMockInvoker(
     setTasks,
     setActionGraph,
     setRuntimeStatus,
+    setWorkers,
     fireDelta,
     fireGraphEvent,
     fireWorkflowsChanged,
