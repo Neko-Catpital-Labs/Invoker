@@ -16,6 +16,7 @@ import {
   AUTO_FIX_WORKER_KIND,
   TaskRunner,
   acquireWorkerLock,
+  createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
   resolveInvokerHomeRoot,
@@ -471,6 +472,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     }
     throw err;
   }
+  const autoFixAttemptLedger = createAutoFixAttemptLedger();
   try {
     const worker = definition.factory({
       store: deps.persistence,
@@ -482,6 +484,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       logger: deps.logger,
       autoFix: {
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+        attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
     });

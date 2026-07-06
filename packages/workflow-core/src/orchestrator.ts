@@ -562,7 +562,7 @@ export interface OrchestratorConfig {
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
   maxConcurrency?: number;
-  /** Worker-owned maximum auto-fix attempts per failed task. Positive finite values are caps; zero disables worker-submitted fixes. */
+  /** Maximum auto-fix attempts per failed task. Positive finite values are caps; zero disables auto-fix. */
   defaultAutoFixRetries?: number;
   /**
    * Rules that validate task execution environment against command patterns.
@@ -3873,12 +3873,6 @@ export class Orchestrator {
     return this.defaultAutoFixRetries;
   }
 
-  private getAutoFixAttemptCount(task: TaskState): number {
-    const raw = task.execution.autoFixAttempts;
-    if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
-    const attempts = Math.floor(raw);
-    return attempts > 0 ? attempts : 0;
-  }
 
   private isRuntimeAutoFixEligibleTask(task: TaskState): boolean {
     if (task.config.isReconciliation) return false;
@@ -3891,9 +3885,7 @@ export class Orchestrator {
     if (!task) return false;
     if (task.status !== 'failed') return false;
     if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
-    const max = this.getAutoFixRetryBudget(taskId);
-    if (max <= 0) return false;
-    return this.getAutoFixAttemptCount(task) < max;
+    return this.getAutoFixRetryBudget(taskId) > 0;
   }
 
   getAllTasks(): TaskState[] {
