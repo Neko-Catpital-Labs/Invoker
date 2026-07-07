@@ -134,6 +134,8 @@ export function handoffPrompt(request: string): string {
     `Use this host's native planning mode when the host supports entering it from this command. If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved.`,
     'If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow skill://make-pr/SKILL.md before PR authoring or publication.',
     'If the request involves multiple review slices, first read and follow skill://review-compression/SKILL.md before writing workflow YAML.',
+    'Stack semantics: an Invoker workflow plan file is not itself a PR stack; tasks are execution steps inside a workflow, optional reviewGate.artifacts is the intended review-stack metadata for reviewable artifacts and ordering, and actual published GitHub PRs are external publication evidence.',
+    'Do not derive PR count or PR order claims from onFinish: pull_request or from a lone plan file. PR count or PR order claims must use reviewGate.artifacts when present, or otherwise inspect actual GitHub PR evidence before answering.',
     'Write the planning artifact to plans/invoker-handoff.md.',
     'Convert the approved Markdown plan to plans/invoker-handoff.yaml.',
     'Validate with invoker_validate_plan before submitting.',
