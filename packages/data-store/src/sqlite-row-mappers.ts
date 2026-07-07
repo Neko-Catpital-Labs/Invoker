@@ -124,7 +124,6 @@ export function mapRowToTask(row: any): TaskState {
       launchCompletedAt: row.launch_completed_at ? new Date(row.launch_completed_at) : undefined,
       generation: row.execution_generation ?? 0,
       selectedAttemptId: row.selected_attempt_id ?? undefined,
-      autoFixAttempts: row.auto_fix_attempts ?? undefined,
     },
     taskStateVersion: row.task_state_version ?? 1,
   };
