@@ -600,7 +600,7 @@ describe('useTasks', () => {
     expect(result.current.workflows.get('wf-1')?.status).toBe('failed');
   });
 
-  it('drops a deleted workflow within 1s of its removal deltas without a manual refresh', async () => {
+  it('drops a deleted workflow within 500ms of its removal deltas without a manual refresh', async () => {
     // Regression: deleting a workflow published workflows-changed (workflow
     // absent) before the task removal deltas flushed, so the task-backed
     // preservation kept the entry alive; the final zero-task rollup patch then
@@ -646,7 +646,8 @@ describe('useTasks', () => {
     expect(result.current.workflows.get('wf-doomed')?.name).toBe('Doomed workflow');
 
     const deletionStartedAt = performance.now();
-    await act(async () => {
+    // Removal deltas flush the batch window immediately — no 100ms timer wait.
+    act(() => {
       taskGraphEventHandler!({
         type: 'delta',
         delta: { type: 'removed', taskId: 'wf-doomed/task-a', previousTaskStateVersion: 1 },
@@ -657,18 +658,17 @@ describe('useTasks', () => {
         delta: { type: 'removed', taskId: 'wf-doomed/task-b', previousTaskStateVersion: 1 },
         workflowRollups: [{ workflowId: 'wf-doomed', status: 'pending', rollup: makeWorkflowRollup('pending'), removed: true }],
       });
-      await new Promise((resolve) => setTimeout(resolve, 110));
     });
 
     // Propagation budget: deltas already delivered, so the UI must converge
-    // within the 1s deletion budget without any snapshot refresh.
+    // within the 500ms deletion budget without any snapshot refresh.
     await waitFor(
       () => {
         expect(result.current.workflows.has('wf-doomed')).toBe(false);
       },
-      { timeout: 1000 },
+      { timeout: 500 },
     );
-    expect(performance.now() - deletionStartedAt).toBeLessThan(1000);
+    expect(performance.now() - deletionStartedAt).toBeLessThan(500);
     expect(result.current.tasks.has('wf-doomed/task-a')).toBe(false);
     expect(result.current.tasks.has('wf-doomed/task-b')).toBe(false);
     expect(result.current.workflows.get('wf-keeper')?.name).toBe('Keeper workflow');
