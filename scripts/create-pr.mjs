@@ -41,7 +41,7 @@ import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import aws4 from 'aws4';
-import { getPrBodyWarnings, validatePrBody } from './validate-pr-body.mjs';
+import { getPrAtomicityBlockers, getPrBodyWarnings, validatePrBody } from './validate-pr-body.mjs';
 
 const DEFAULT_BASE_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'origin';
 const HAS_EXPLICIT_NON_ORIGIN_BASE_REMOTE = Boolean(
@@ -249,6 +249,23 @@ function printPrBodyWarnings(body, changedFiles = [], diffText = '') {
   for (const warning of warnings) {
     console.error(`- ${warning}`);
   }
+}
+
+function assertNoStackAtomicityBlockers(baseBranch, mergifyState, diffText) {
+  if (!isStackedPrContext(baseBranch, mergifyState)) return;
+
+  const blockers = getPrAtomicityBlockers({ diffText });
+  if (blockers.length === 0) return;
+
+  throw new Error(
+    [
+      'Stack PR atomicity validation failed.',
+      ...blockers.map((blocker) => `- ${blocker}`),
+      '',
+      'Split the stack before publication.',
+      'If you just resliced one PR, re-audit every rebuilt slice before rerunning `mergify stack push` or `node scripts/create-pr.mjs --update-existing`.',
+    ].join('\n'),
+  );
 }
 
 // ── Image injection ─────────────────────────────────────────────────────────
@@ -802,6 +819,7 @@ async function main() {
   if (mergifyState.managed && requestedUpdatePath) {
     assertPublishedMergifyBranch(currentBranch, mergifyState.trackedBaseRef);
   }
+  assertNoStackAtomicityBlockers(args.base, mergifyState, diffText);
 
   if (isStackedPrContext(args.base, mergifyState)) {
     assertValidStackPrTitle(args.title);

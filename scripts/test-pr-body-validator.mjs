@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { getPrBodyWarnings, getReviewMetadata, validatePrBody, validatePrScope } from './validate-pr-body.mjs';
+import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, validatePrBody, validatePrScope } from './validate-pr-body.mjs';
 
 function assert(condition, message) {
   if (!condition) {
@@ -300,6 +300,39 @@ Animated restart proof showing the drafted chat, app relaunch, and restored chat
 assert(
   restartAnimatedProofErrors.length === 0,
   'restart proof with gif should pass',
+);
+
+const unrelatedAreasDiff = `diff --git a/packages/app/src/app.ts b/packages/app/src/app.ts
+--- a/packages/app/src/app.ts
++++ b/packages/app/src/app.ts
+@@ -0,0 +1 @@
++export const app = true;
+diff --git a/packages/cli/src/index.ts b/packages/cli/src/index.ts
+--- a/packages/cli/src/index.ts
++++ b/packages/cli/src/index.ts
+@@ -0,0 +1 @@
++export const cli = true;
+diff --git a/packages/slack-manager/src/invoker-launcher.ts b/packages/slack-manager/src/invoker-launcher.ts
+--- a/packages/slack-manager/src/invoker-launcher.ts
++++ b/packages/slack-manager/src/invoker-launcher.ts
+@@ -0,0 +1 @@
++export const slack = true;
+`;
+const atomicityBlockers = getPrAtomicityBlockers({ diffText: unrelatedAreasDiff });
+assert(
+  atomicityBlockers.some((warning) => warning.includes('unrelated-areas')),
+  'stack atomicity blockers should include unrelated top-level areas',
+);
+const largeChangeWarnings = getPrBodyWarnings(validMinimal, {
+  changedFiles: Array.from({ length: 11 }, (_, index) => `packages/app/src/file-${index}.ts`),
+});
+assert(
+  largeChangeWarnings.some((warning) => warning.includes('PR changes 11 files')),
+  'large file-count warning should stay in the warning path',
+);
+assert(
+  getPrAtomicityBlockers({}).length === 0,
+  'missing diff context should not invent atomicity blockers',
 );
 
 const lightweightErrors = await validatePrBody(lightweight);
