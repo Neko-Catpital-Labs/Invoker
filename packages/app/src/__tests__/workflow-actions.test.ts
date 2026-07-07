@@ -1394,7 +1394,7 @@ describe('fixWithAgentAction', () => {
     });
   });
 
-  it('surfaces corrupt merge gates when the saved fix workspace is not a git repo', async () => {
+  it('fixWithAgentAction rejects invalid merge-gate workspaces before fix execution', async () => {
     const orchestrator = {
       getTask: vi.fn(() => makeTask({
         id: 'merge-a',
@@ -1433,6 +1433,8 @@ describe('fixWithAgentAction', () => {
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
       commandService: makeCommandService(),
+    }, {
+      agentName: 'Codex',
     })).rejects.toThrow('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository');
 
     expect(taskExecutor.execGitIn).toHaveBeenCalledWith(
@@ -1440,10 +1442,12 @@ describe('fixWithAgentAction', () => {
       '/tmp/invoker-empty-launch-placeholder',
     );
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
       'merge-a',
-      expect.stringContaining('\n[Fix with claude] Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+      expect.stringContaining('\n[Fix with Codex] Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
     );
     expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
       'merge-a',
