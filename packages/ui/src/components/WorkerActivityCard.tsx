@@ -4,10 +4,11 @@ import { formatWorkerValue, getActiveWorkerAction, getWorkerDisplayCopy } from '
 interface WorkerActivityCardProps {
   snapshot: WorkerStatusSnapshot | null;
   selectedWorkerKind: string | null;
-  readOnly: boolean;
-  onStartWorker: (kind: string) => Promise<void> | void;
-  onStopWorker: (kind: string) => Promise<void> | void;
+  readOnly?: boolean;
+  onStartWorker?: (kind: string) => Promise<void> | void;
+  onStopWorker?: (kind: string) => Promise<void> | void;
   onSelectWorker: (kind: string) => void;
+  showControls?: boolean;
 }
 
 function processClass(worker: WorkerStatusEntry): string {
@@ -46,10 +47,11 @@ function activityExplanation(worker: WorkerStatusEntry): string {
 export function WorkerActivityCard({
   snapshot,
   selectedWorkerKind,
-  readOnly,
+  readOnly = false,
   onStartWorker,
   onStopWorker,
   onSelectWorker,
+  showControls = true,
 }: WorkerActivityCardProps) {
   return (
     <div data-testid="worker-activity-card">
@@ -68,11 +70,13 @@ export function WorkerActivityCard({
             const showStart = worker.lifecycle !== 'running';
             const isControlDisabled = Boolean(disabledTitle);
             const selected = selectedWorkerKind === worker.kind;
-            const footer = worker.kind === 'pr-status'
-              ? 'No queue task is expected for this worker.'
-              : selected
-                ? 'Details are in the right panel.'
-                : null;
+            const latestLog = worker.recentLogs[0];
+            const latestAction = worker.recentActions[0];
+            const footer = latestLog
+              ? `Latest log: ${latestLog.summary ?? formatWorkerValue(latestLog.eventType ?? latestLog.actionType ?? latestLog.source)}`
+              : latestAction
+                ? `Latest response: ${latestAction.summary ?? `${formatWorkerValue(latestAction.actionType)} · ${formatWorkerValue(latestAction.status)}`}`
+                : 'No worker responses have been logged yet.';
             return (
               <div
                 key={worker.kind}
@@ -96,6 +100,8 @@ export function WorkerActivityCard({
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold text-gray-100">{copy.name}</div>
                     <div className="mt-0.5 text-xs text-gray-500">Kind: {worker.kind}</div>
+                    {worker.note ? <div className="mt-1 text-xs text-gray-400">{worker.note}</div> : null}
+                    <div className="mt-1 text-xs text-gray-500">Source: {formatWorkerValue(worker.source)}</div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] ${processClass(worker)}`}>
                         Process: {formatWorkerValue(worker.lifecycle)}
@@ -115,24 +121,26 @@ export function WorkerActivityCard({
                       )}
                     </div>
                     <div className="mt-2 text-sm text-gray-300">{activityExplanation(worker)}</div>
-                    {footer ? <div className="mt-1 text-xs text-gray-500">{footer}</div> : null}
+                    <div className="mt-1 text-xs text-gray-500">{footer}</div>
                   </div>
-                  <button
-                    type="button"
-                    className="shrink-0 rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-gray-700"
-                    title={disabledTitle}
-                    disabled={isControlDisabled}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
-                    }}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (showStart) void onStartWorker(worker.kind);
-                      else void onStopWorker(worker.kind);
-                    }}
-                  >
-                    {showStart ? 'Start process' : 'Stop process'}
-                  </button>
+                  {showControls ? (
+                    <button
+                      type="button"
+                      className="shrink-0 rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-gray-700"
+                      title={disabledTitle}
+                      disabled={isControlDisabled}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (showStart) void onStartWorker?.(worker.kind);
+                        else void onStopWorker?.(worker.kind);
+                      }}
+                    >
+                      {showStart ? 'Start process' : 'Stop process'}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             );

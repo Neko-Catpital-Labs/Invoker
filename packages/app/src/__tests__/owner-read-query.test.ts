@@ -13,6 +13,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     resetUiPerfStats: vi.fn(),
     getQueueStatus: vi.fn(() => ({ runningCount: 2 })),
     getWorkerStatus: vi.fn(() => ({ generatedAt: 'now', workers: [] })),
+    getWorkers: vi.fn(() => ({ generatedAt: 'workers-now', workers: [] })),
     getWorkflowStatus: vi.fn(() => ({ 'wf-1': 'running' })),
     getTasksSnapshot: vi.fn(({ refresh }) => ({ tasks: [], workflows: [], refreshed: refresh })),
     getActionGraphSnapshot: vi.fn(() => ({ nodes: [] })),
@@ -43,6 +44,7 @@ describe('answerOwnerReadQuery', () => {
     const h = makeHandlers();
     expect(answerOwnerReadQuery({ kind: 'queue' }, h)).toEqual({ runningCount: 2 });
     expect(answerOwnerReadQuery({ kind: 'worker-status' }, h)).toEqual({ workerStatus: { generatedAt: 'now', workers: [] } });
+    expect(answerOwnerReadQuery({ kind: 'workers' }, h)).toEqual({ generatedAt: 'workers-now', workers: [] });
     expect(answerOwnerReadQuery({ kind: 'workflow-status' }, h)).toEqual({ 'wf-1': 'running' });
     expect(answerOwnerReadQuery({ kind: 'action-graph' }, h)).toEqual({ nodes: [] });
   });
@@ -140,6 +142,7 @@ describe('buildOwnerReadQueryHandlers', () => {
       resetUiPerfStats: () => {},
       getStreamSequence: () => 5,
       getWorkerStatus: () => ({ generatedAt: 'now', workers: [] }),
+      getWorkers: () => ({ generatedAt: 'workers-now', workers: [] }),
       resolveInvokerHomeRoot: () => '/home',
       orchestrator: { ...f.orchestrator, ...orch } as never,
       persistence: { ...f.persistence, ...persist } as never,
@@ -157,6 +160,7 @@ describe('buildOwnerReadQueryHandlers', () => {
     expect(h.replayOutput('t1', 9)).toEqual([{ id: 't1', off: 9 }]);
     expect(h.getAllCompletedTasks()).toEqual([{ id: 'done' }]);
     expect(h.getWorkerStatus()).toEqual({ generatedAt: 'now', workers: [] });
+    expect(h.getWorkers()).toEqual({ generatedAt: 'workers-now', workers: [] });
   });
 
   it('loadWorkflowBundle syncs that workflow first, then returns workflow + tasks', () => {
