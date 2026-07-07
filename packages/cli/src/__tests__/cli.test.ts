@@ -6,7 +6,7 @@ import { LocalBus } from '@invoker/transport';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../index.js';
-import { HANDOFF_PROMPT_DESCRIPTION, handoffPrompt, submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
+import { HANDOFF_PROMPT_DESCRIPTION, createProcessRunner, handoffPrompt, resolveCliInvocation, submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
 
 const repoRoot = resolve(__dirname, '../../../..');
 const cliPath = resolve(repoRoot, 'packages/cli/dist/index.js');
@@ -305,6 +305,23 @@ tasks:
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('Invalid YAML');
+  });
+
+  it('resolves standalone MCP CLI argv without treating run as a script path', () => {
+    expect(resolveCliInvocation('/bin/invoker-cli', '/bin/invoker-cli', ['run', fixturePlan, '--json'])).toEqual({
+      command: '/bin/invoker-cli',
+      args: ['run', fixturePlan, '--json'],
+    });
+    expect(resolveCliInvocation('/usr/bin/node', cliPath, ['run', fixturePlan, '--json'])).toEqual({
+      command: '/usr/bin/node',
+      args: [cliPath, 'run', fixturePlan, '--json'],
+    });
+  });
+
+  it('returns MCP runner path errors as rejected run promises', async () => {
+    const pendingRun = createProcessRunner('').run(['run', fixturePlan, '--json']);
+
+    await expect(pendingRun).rejects.toThrow('Unable to resolve CLI path for spawning invoker-cli');
   });
 
   it('submits MCP plans in live mode by default', async () => {
