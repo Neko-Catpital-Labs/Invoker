@@ -90,6 +90,7 @@ import type {
   WorkflowMeta,
   WorkflowMutationAcceptedResult,
   WorkResponse,
+  TerminalSessionDescriptor,
 } from '@invoker/contracts';
 import { SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -1873,6 +1874,74 @@ function createEmbeddedTerminalBackendFromConfig(
   const embeddedTerminalManager = new EmbeddedTerminalManager({
     backend: createEmbeddedTerminalBackendFromConfig(resolveEmbeddedTerminalBackendConfig(invokerConfig)),
   });
+  const terminalRowToDescriptor = (row: ReturnType<SQLiteAdapter['listTerminalSessions']>[number]): TerminalSessionDescriptor => ({
+    sessionId: row.sessionId,
+    taskId: row.taskId,
+    status: row.status,
+    exitCode: row.exitCode,
+    cwd: row.cwd,
+    command: row.command,
+    args: row.args,
+    mode: row.mode,
+    attached: row.attached,
+    createdAt: row.createdAt,
+    outputSnapshot: row.outputSnapshot,
+  });
+
+  const restorePersistedTerminalSessions = (): void => {
+    const nowIso = () => new Date().toISOString();
+    for (const row of persistence.listTerminalSessions()) {
+      if (!persistence.loadTask(row.taskId)) {
+        persistence.deleteTerminalSession(row.sessionId);
+        continue;
+      }
+      if (row.status !== 'running') continue;
+      if (row.mode === 'attached') {
+        persistence.updateTerminalSession(row.sessionId, { status: 'exited', updatedAt: nowIso() });
+        continue;
+      }
+      try {
+        embeddedTerminalManager.restoreSpawnSession({
+          sessionId: row.sessionId,
+          taskId: row.taskId,
+          targetKey: row.targetKey,
+          spec: {
+            cwd: row.cwd,
+            command: row.command,
+            args: row.args,
+            linuxTerminalTail: row.linuxTerminalTail,
+          },
+          cwd: row.cwd ?? process.cwd(),
+          createdAt: row.createdAt,
+          outputSnapshot: row.outputSnapshot,
+        });
+      } catch {
+        persistence.updateTerminalSession(row.sessionId, { status: 'exited', updatedAt: nowIso() });
+      }
+    }
+  };
+
+  const registerTerminalSessionPersistence = (): void => {
+    embeddedTerminalManager.on('session-updated', (record) => {
+      persistence.upsertTerminalSession({
+        sessionId: record.sessionId,
+        taskId: record.taskId,
+        targetKey: record.targetKey,
+        status: record.status,
+        exitCode: record.exitCode,
+        cwd: record.cwd,
+        command: record.spec.command,
+        args: record.spec.args,
+        linuxTerminalTail: record.spec.linuxTerminalTail,
+        mode: record.mode,
+        attached: record.attached,
+        outputSnapshot: record.outputSnapshot,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      });
+    });
+    restorePersistedTerminalSessions();
+  };
   embeddedTerminalManager.on('output', (payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('invoker:terminal-output', payload);
@@ -3281,6 +3350,7 @@ function createEmbeddedTerminalBackendFromConfig(
     // - daemon: GUI is a client; a background daemon owns workflow writes, and startup failure is serious.
     // - gui/local: GUI owns workflow writes directly with no daemon.
     // - auto: GUI uses an existing daemon when one is available, otherwise it runs locally as owner.
+
     const guiOwnerPreference = resolveGuiOwnerPreference();
     let daemonGuiOwner = false;
     if (guiOwnerPreference === 'daemon') {
@@ -3348,6 +3418,10 @@ function createEmbeddedTerminalBackendFromConfig(
         guiUsingDaemonOwner = false;
         recordStartupMark('initServices.readOnly.end', { ownerMode: false, ownerId: owner.ownerId });
       }
+    }
+
+    if (ownerMode) {
+      registerTerminalSessionPersistence();
     }
 
     if (ownerMode) {
@@ -5041,7 +5115,15 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     ipcMain.handle('invoker:terminal-list', async () => {
-      return embeddedTerminalManager.list();
+      const live = new Map(embeddedTerminalManager.list().map((session) => [session.sessionId, session]));
+      const merged = persistence.listTerminalSessions().map((row) => live.get(row.sessionId) ?? terminalRowToDescriptor(row));
+      const persistedIds = new Set(merged.map((session) => session.sessionId));
+      for (const session of live.values()) {
+        if (!persistedIds.has(session.sessionId)) {
+          merged.push(session);
+        }
+      }
+      return merged;
     });
 
     ipcMain.handle('invoker:terminal-write', async (_event, sessionId: string, data: string) => {
@@ -5053,7 +5135,9 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     ipcMain.handle('invoker:terminal-close', async (_event, sessionId: string) => {
-      return embeddedTerminalManager.close(sessionId);
+      const result = embeddedTerminalManager.close(sessionId);
+      persistence.deleteTerminalSession(sessionId);
+      return result.ok ? result : { ok: true };
     });
 
     Menu.setApplicationMenu(
@@ -5122,7 +5206,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
       try {
         if (apiServer) await apiServer.close().catch(() => {});
-        if (webBridge) await webBridge.close().catch(() => {});
+        embeddedTerminalManager.closeAll({ preserveForRestart: true });
         await workerRuntimeController?.stopAll();
         if (dbPollInterval) clearInterval(dbPollInterval);
         if (activityPollInterval) clearInterval(activityPollInterval);
