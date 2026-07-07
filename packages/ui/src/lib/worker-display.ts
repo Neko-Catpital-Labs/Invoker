@@ -27,7 +27,8 @@ export const ACTIVE_WORKER_ACTION_STATUSES: ReadonlySet<WorkerActionStatus> = ne
   'review_ready',
 ]);
 
-export function formatWorkerValue(value: string): string {
+export function formatWorkerValue(value: string | undefined): string {
+  if (!value) return 'Unknown';
   return value
     .split(/[-_]/g)
     .filter(Boolean)
