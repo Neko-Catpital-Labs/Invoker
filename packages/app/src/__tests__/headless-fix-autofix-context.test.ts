@@ -19,7 +19,7 @@ vi.mock('../global-topup.js', async (importActual) => {
   return { ...actual, finalizeMutationWithGlobalTopup: finalizeMock };
 });
 
-function makeDeps(autoFixAttempts: number | null, executionOverrides: Record<string, unknown> = {}, configOverrides: Record<string, unknown> = {}) {
+function makeDeps(executionOverrides: Record<string, unknown> = {}, configOverrides: Record<string, unknown> = {}) {
   const updateTask = vi.fn();
   const task = {
     id: 'wf-1/task-1',
@@ -28,7 +28,7 @@ function makeDeps(autoFixAttempts: number | null, executionOverrides: Record<str
     dependencies: [],
     createdAt: new Date(),
     config: { workflowId: 'wf-1' },
-    execution: { error: 'boom', autoFixAttempts, ...executionOverrides },
+    execution: { error: 'boom', ...executionOverrides },
     taskStateVersion: 1,
   };
   const deps = {
@@ -53,7 +53,7 @@ function makeDeps(autoFixAttempts: number | null, executionOverrides: Record<str
   return { deps, updateTask };
 }
 
-describe('headless fix auto-fix accounting', () => {
+describe('headless fix auto-fix context', () => {
   afterEach(() => {
     fixWithAgentActionMock.mockClear();
     finalizeMock.mockClear();
@@ -62,7 +62,7 @@ describe('headless fix auto-fix accounting', () => {
 
   it('does not increment auto-fix attempts for a manual fix', async () => {
     const { runHeadless } = await import('../headless.js');
-    const { deps, updateTask } = makeDeps(2);
+    const { deps, updateTask } = makeDeps();
 
     await runHeadless(['fix', 'wf-1/task-1', 'claude'], deps);
 
@@ -71,28 +71,19 @@ describe('headless fix auto-fix accounting', () => {
     expect(fixWithAgentActionMock.mock.calls[0][2]).toMatchObject({ reviewGateContext: undefined });
   });
 
-  it('consumes exactly one retry when the request is explicitly --auto-fix', async () => {
+  it('does not persist retry counts when the request is explicitly --auto-fix', async () => {
     const { runHeadless } = await import('../headless.js');
-    const { deps, updateTask } = makeDeps(2);
+    const { deps, updateTask } = makeDeps();
 
     await runHeadless(['fix', 'wf-1/task-1', 'claude', '--auto-fix'], deps);
 
-    expect(updateTask).toHaveBeenCalledTimes(1);
-    expect(updateTask).toHaveBeenCalledWith('wf-1/task-1', { execution: { autoFixAttempts: 3 } });
-  });
-
-  it('starts the budget at one when no attempts have been recorded yet', async () => {
-    const { runHeadless } = await import('../headless.js');
-    const { deps, updateTask } = makeDeps(null);
-
-    await runHeadless(['fix', 'wf-1/task-1', '--auto-fix'], deps);
-
-    expect(updateTask).toHaveBeenCalledWith('wf-1/task-1', { execution: { autoFixAttempts: 1 } });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(fixWithAgentActionMock).toHaveBeenCalledTimes(1);
   });
 
   it('uses configured default agent when manual fix omits an agent', async () => {
     const { runHeadless } = await import('../headless.js');
-    const { deps } = makeDeps(0, {}, { defaultExecutionAgent: 'custom-agent' });
+    const { deps } = makeDeps({}, { defaultExecutionAgent: 'custom-agent' });
 
     await runHeadless(['fix', 'wf-1/task-1'], deps);
 
@@ -101,7 +92,7 @@ describe('headless fix auto-fix accounting', () => {
 
   it('uses configured default agent when resolve-conflict omits an agent', async () => {
     const { runHeadless } = await import('../headless.js');
-    const { deps } = makeDeps(0, {}, { defaultExecutionAgent: 'custom-agent' });
+    const { deps } = makeDeps({}, { defaultExecutionAgent: 'custom-agent' });
 
     await runHeadless(['resolve-conflict', 'wf-1/task-1'], deps);
 
@@ -116,7 +107,7 @@ describe('headless fix auto-fix accounting', () => {
   it('passes a decoded review-gate CI context through to the fix action', async () => {
     const { runHeadless } = await import('../headless.js');
     const reviewGateContext = { reviewId: 'review-1', generation: 0, fixContext: 'fix checks' };
-    const { deps } = makeDeps(0);
+    const { deps } = makeDeps();
 
     await runHeadless(
       ['fix', 'wf-1/task-1', '--review-gate-ci', encodeReviewGateCiContext(reviewGateContext)],

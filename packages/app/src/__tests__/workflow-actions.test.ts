@@ -577,7 +577,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { autoFixAttempts: 0, error: mergeError },
+        execution: { error: mergeError },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -638,7 +638,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: 'boom', workspacePath: '/tmp/task-a' },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -677,7 +677,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: 'boom' },
+        execution: { error: 'boom' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -733,7 +733,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -778,7 +778,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -817,7 +817,7 @@ describe('autoFixOnFailure', () => {
         id: 'merge-a',
         status: 'failed',
         config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a' },
+        execution: { workspacePath: '/tmp/merge-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -875,15 +875,15 @@ describe('autoFixOnFailure', () => {
     let phase = 0;
     const phases: Record<string, unknown>[] = [
       // Phase 0: entry check + lineage capture (cycle 1)
-      { status: 'failed', execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 } },
+      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 1: after fix returns, lineage check + finalize + approveTask (cycle 1)
-      { status: 'awaiting_approval', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
+      { status: 'awaiting_approval', execution: { workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 2: post-finalize check — task re-failed after publish
-      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict', selectedAttemptId: 'att-1', generation: 1 } },
+      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 3: inline retry entry + lineage capture (cycle 2)
-      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-3', generation: 3 } },
+      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-3', generation: 3 } },
       // Phase 4: after fix returns, lineage check + finalize + approveTask (cycle 2)
-      { status: 'awaiting_approval', execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-3', generation: 3 } },
+      { status: 'awaiting_approval', execution: { workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-3', generation: 3 } },
     ];
     const getTask = vi.fn(() => {
       const idx = Math.min(phase, phases.length - 1);
@@ -964,7 +964,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1', executionAgent: 'claude' },
-        execution: { autoFixAttempts: 0, workspacePath: '/tmp/task-a' },
+        execution: { workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -1015,7 +1015,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1', executionAgent: 'codex' },
-        execution: { autoFixAttempts: 0, workspacePath: '/tmp/task-a' },
+        execution: { workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -1067,7 +1067,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -2248,7 +2248,6 @@ describe('autoFixOnFailure lineage guard', () => {
             status: 'failed',
             config: { workflowId: 'wf-1' },
             execution: {
-              autoFixAttempts: 0,
               error: 'boom',
               selectedAttemptId: 'att-1',
               generation: 5,
@@ -2303,7 +2302,6 @@ describe('autoFixOnFailure lineage guard', () => {
             status: 'failed',
             config: { workflowId: 'wf-1' },
             execution: {
-              autoFixAttempts: 0,
               error: 'boom',
               selectedAttemptId: 'att-1',
               generation: 5,
@@ -2357,7 +2355,6 @@ describe('autoFixOnFailure lineage guard', () => {
         status: 'failed',
         config: { workflowId: 'wf-1' },
         execution: {
-          autoFixAttempts: 0,
           error: 'boom',
           selectedAttemptId: 'att-1',
           generation: 5,
