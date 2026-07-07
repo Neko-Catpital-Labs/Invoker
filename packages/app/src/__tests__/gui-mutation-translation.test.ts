@@ -3,10 +3,14 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const mainSource = readFileSync(path.resolve(__dirname, '..', 'main.ts'), 'utf8');
+const workflowTaskActionsSource = readFileSync(
+  path.resolve(__dirname, '..', 'execution', 'workflow-task-actions.ts'),
+  'utf8',
+);
 
 function getTranslatorSource(): string {
   const start = mainSource.indexOf('function translateGuiMutationToHeadless');
-  const end = mainSource.indexOf('  async function performSharedApproveTask', start);
+  const end = mainSource.indexOf('  const guiMutationRegistrationContext', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   return mainSource.slice(start, end);
@@ -21,19 +25,19 @@ function getStandaloneClassifierSource(): string {
 }
 
 function getPerformDeleteWorkflowSource(): string {
-  const start = mainSource.indexOf('async function performDeleteWorkflow');
-  const end = mainSource.indexOf('  async function performDetachWorkflow', start);
+  const start = workflowTaskActionsSource.indexOf('async function performDeleteWorkflow');
+  const end = workflowTaskActionsSource.indexOf('  async function performDetachWorkflow', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return mainSource.slice(start, end);
+  return workflowTaskActionsSource.slice(start, end);
 }
 
 function getPerformDetachWorkflowSource(): string {
-  const start = mainSource.indexOf('async function performDetachWorkflow');
-  const end = mainSource.indexOf('  /** Orchestrator error codes', start);
+  const start = workflowTaskActionsSource.indexOf('async function performDetachWorkflow');
+  const end = workflowTaskActionsSource.indexOf('  /** Orchestrator error codes', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return mainSource.slice(start, end);
+  return workflowTaskActionsSource.slice(start, end);
 }
 
 function getSetMergeBranchSource(): string {
