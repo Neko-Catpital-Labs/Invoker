@@ -56,31 +56,22 @@ describe('resolveConflictAction', () => {
     expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
   });
 
-  it('auto-approves after conflict resolution when configured', async () => {
-    const approve = vi.fn(async () => [{ id: 'task-a', status: 'completed', config: {}, execution: {} }]);
-    const getTask = orchestrator.getTask;
+  it('does not approve inline after conflict resolution', async () => {
+    const approve = vi.fn();
     orchestrator = {
       ...orchestrator,
-      getTask,
       approve,
     };
-    const taskExecutorWithApprove = {
-      ...taskExecutor,
-      executeTasks: vi.fn(),
-      publishAfterFix: vi.fn(),
-    };
 
-    await resolveConflictAction('task-a', {
+    const result = await resolveConflictAction('task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutorWithApprove as unknown as TaskRunner,
-      autoApproveAIFixes: true,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
+    expect(result).toEqual({ autoApproved: false, started: [] });
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
-    expect(approve).toHaveBeenCalledWith('task-a');
-    expect(taskExecutorWithApprove.executeTasks).not.toHaveBeenCalled();
-    expect(taskExecutorWithApprove.publishAfterFix).not.toHaveBeenCalled();
+    expect(approve).not.toHaveBeenCalled();
   });
 
   it('on failure appends output and reverts conflict resolution (does not set awaiting approval)', async () => {

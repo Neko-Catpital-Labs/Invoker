@@ -349,12 +349,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               agent = parsed.agent;
             } catch { /* not JSON, ignore */ }
           }
-          const result = await mutations.resolveConflict(taskId, agent);
+          await mutations.resolveConflict(taskId, agent);
           json(res, 200, {
             ok: true,
             taskId,
             action: 'resolve_conflict',
-            status: result.autoApproved ? 'auto_approved' : 'awaiting_approval',
+            status: 'awaiting_approval',
           });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });

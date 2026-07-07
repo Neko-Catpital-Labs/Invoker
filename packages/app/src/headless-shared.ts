@@ -100,7 +100,6 @@ export function buildHeadlessApiServerDeps(
       persistence: deps.persistence,
       taskExecutor,
       dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
-      autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
       killRunningTask: async (taskId: string) => {
         await taskExecutor.killActiveExecution(taskId);
       },
