@@ -56,6 +56,10 @@ State the one thing the reviewer is being asked to approve.
 
 Choose exactly one: `behavior`, `refactor`, `proof`, `cleanup`, `policy`, or `docs`.
 
+## Review Unit
+
+Choose the matching review unit, such as `tooling-policy`, `routing`, or `docs`.
+
 ## Safety Invariant
 
 Explain why this slice is safe to review locally.
@@ -107,18 +111,24 @@ If the change is small and has no architectural impact, omit `## Architecture` r
 
 If the change is UI-impacting, use `skills/visual-proof/SKILL.md` first and include its screenshot/video markdown in `## Visual Proof`. UI-impacting means the user-visible experience changes, even when no file under `packages/ui/**` changes. This includes `packages/ui/**`, Electron window lifecycle files, preload, main process window wiring, app menu changes, task status changes, task error or output text shown in panels, approval/reject behavior, workflow state shown in the DAG or inspector, and web-surface output.
 
+Use visible markdown sections for review metadata. Do not hide `Review Claim`, `Review Lane`, `Review Unit`, `Safety Invariant`, or `Slice Rationale` inside `<details>` or other HTML disclosure blocks. Review metadata must render directly in the PR body.
+
 When an existing PR changes after its body or proof was written, rerun this skill from the current diff before updating the PR. If the new diff touches UI-impacting files, rerun `skills/visual-proof/SKILL.md` and replace old screenshot or video links with fresh proof for the current code. Do not reuse earlier proof media after UI behavior changes.
 Visual proof must show the changed behavior itself, not just the changed screen area. Before creating or updating the PR, open every screenshot or video and verify the user-visible target is present and identifiable. For conditional or event-driven UI, drive the exact condition that triggers the new state and capture that state. A generic task panel, unchanged sidebar, unrelated graph, or stale screenshot is not proof, even when the right file changed.
+
+If the changed behavior spans multiple states or a state transition — for example restart persistence, before/after workflow transitions, progress animations, opening then dismissing overlays, or any proof labeled “before” and “after” — use animated proof. A gif, mp4, webm, or walkthrough video is required; static screenshots alone are not enough.
 
 In the PR body, caption each visual proof item with the concrete thing the reviewer should see, for example "amber Workspace recreated notice in the task inspector." If the reviewer cannot tell what changed from the image and caption, recapture proof before publishing.
 
 Before/after visual proof images must use distinct local filenames before `node scripts/create-pr.mjs` uploads them. The uploader keys media by basename inside one upload prefix, so `before/foo.png` and `after/foo.png` can collapse to one final URL. Copy or rename the files first, for example `/tmp/proof/foo-before.png` and `/tmp/proof/foo-after.png`, then put those unique paths in the PR body.
 
+The final published PR body must not leave repo-relative proof paths in markdown. Use `node scripts/create-pr.mjs` so local proof files are uploaded or rewritten to published URLs before the PR is created or updated.
+
 If the changed behavior is a cursor, pointer, hover-only affordance, or other state that a static screenshot cannot show, do not present an unchanged screenshot as proof of the behavior. Add a short video, an inspectable state proof, or a focused test reference, and say plainly why the screenshot alone cannot show it.
 
 When a PR changes skill instructions under `skills/**/SKILL.md`, add or update a focused skill contract test for the exact issue being fixed. The test must fail if the instruction that prevents the regression is removed.
 
-Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Review Claim / ## Review Lane / ## Safety Invariant / ## Slice Rationale / ## Non-goals / ## Test Plan / ## Revert Plan` as the floor, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
+Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Review Claim / ## Review Lane / ## Review Unit / ## Safety Invariant / ## Slice Rationale / ## Non-goals / ## Test Plan / ## Revert Plan` as the floor, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
 
 ## Diff atomicity gate
 

@@ -28,7 +28,8 @@
  *
  * PR body validation:
  *   Enforces the canonical PR schema:
- *   ## Summary with collapsed Review metadata, ## Non-goals,
+ *   ## Summary, ## Review Claim, ## Review Lane, ## Review Unit,
+ *   ## Safety Invariant, ## Slice Rationale, ## Non-goals,
  *   ## Test Plan, ## Revert Plan, plus optional ## Architecture
  *   and required ## Visual Proof for UI changes.
  */
@@ -152,9 +153,10 @@ Stack flow:
   3. Run \`node scripts/create-pr.mjs --title "[Graph Blanking](3a) <slice title>" --base <branch> --body-file <file> --update-existing\`
 
 PR body schema:
-  Required: ## Summary with collapsed Review metadata, ## Non-goals, ## Test Plan, ## Revert Plan
+  Required: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
   Optional: ## Architecture (must include ### Before and ### After when present)
   UI-impacting diffs require ## Visual Proof with screenshot or video proof.
+  Animated proof is required for restarts and multi-state transitions.
   Template: scripts/pr-body-template.md`);
   process.exit(1);
 }
@@ -268,15 +270,23 @@ async function injectImages(body, dryRun) {
   if (localFiles.length === 0) return body;
 
   const r2Config = loadR2Config();
+  const urlMap = new Map();
   if (!r2Config && !dryRun) {
-    console.error('Warning: R2 config not found. Local image paths will not be replaced.');
-    console.error('Set imageStorage in ~/.invoker/config.json or export R2_* env vars.');
-    return body;
+    const nwo = getRepoNwo();
+    const branch = getCurrentBranch();
+    for (const filePath of localFiles) {
+      if (!isTrackedFile(filePath)) continue;
+      urlMap.set(filePath, buildGitHubRawMediaUrl(nwo, branch, filePath));
+    }
+    if (urlMap.size === 0) {
+      console.error('Warning: R2 config not found and local media files are not tracked. Visual proof URLs will not be replaced.');
+      console.error('Set imageStorage in ~/.invoker/config.json, export R2_* env vars, or commit the proof assets first.');
+      return body;
+    }
+    console.error('Warning: R2 config not found. Falling back to GitHub raw URLs for tracked proof assets.');
   }
 
   const prefix = generatePrefix();
-  const urlMap = new Map();
-
   for (const filePath of localFiles) {
     if (urlMap.has(filePath)) continue;
     const name = basename(filePath);
@@ -285,7 +295,7 @@ async function injectImages(body, dryRun) {
     if (dryRun) {
       urlMap.set(filePath, `https://DRY-RUN/${key}`);
       console.error(`[dry-run] Would upload: ${filePath} → ${key}`);
-    } else {
+    } else if (r2Config) {
       try {
         const publicUrl = await uploadToR2(filePath, key, r2Config);
         urlMap.set(filePath, publicUrl);
@@ -300,6 +310,20 @@ async function injectImages(body, dryRun) {
     const replacement = urlMap.get(url);
     return replacement ? `${bracket}(${replacement})` : full;
   });
+}
+
+function isTrackedFile(filePath) {
+  try {
+    runGit(['ls-files', '--error-unmatch', filePath], { stdio: ['ignore', 'ignore', 'ignore'] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function buildGitHubRawMediaUrl(nwo, branch, filePath) {
+  const normalizedPath = filePath.replace(/\\/g, '/').replace(/^\.\/+/, '');
+  return `https://github.com/${nwo}/blob/${branch}/${normalizedPath}?raw=1`;
 }
 
 // ── Git + GitHub helpers ────────────────────────────────────────────────────

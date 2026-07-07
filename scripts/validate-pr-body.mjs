@@ -22,7 +22,7 @@ const REQUIRED_SECTIONS = [
   '## Test Plan',
   '## Revert Plan',
 ];
-const VISIBLE_METADATA_SECTIONS = [
+const REQUIRED_METADATA_SECTIONS = [
   '## Review Claim',
   '## Review Lane',
   '## Review Unit',
@@ -136,38 +136,72 @@ function countWords(text) {
     .filter(Boolean).length;
 }
 
+function getVisualProofBody(body) {
+  return getSectionBody(body, '## Visual Proof');
+}
+
 function hasVisualProofMedia(body) {
-  const visualProof = getSectionBody(body, '## Visual Proof');
+  const visualProof = getVisualProofBody(body);
   if (!visualProof) return false;
 
   return /!\[[^\]]*\]\([^)]+\)/.test(visualProof)
-    || /\[[^\]]*(?:video|walkthrough|recording)[^\]]*\]\([^)]+\)/i.test(visualProof)
+    || /\[[^\]]*(?:video|walkthrough|recording|animation|gif)[^\]]*\]\([^)]+\)/i.test(visualProof)
     || /\bhttps?:\/\/\S+\.(?:png|jpe?g|gif|webp|webm|mp4)\b/i.test(visualProof);
 }
 
-function normalizeSectionValue(sectionBody) {
-  return normalizeReviewUnit(sectionBody);
+function hasAnimatedVisualProofMedia(body) {
+  const visualProof = getVisualProofBody(body);
+  if (!visualProof) return false;
+
+  return /!\[[^\]]*\]\([^)]+\.(?:gif|webm|mp4)(?:\?[^)]*)?\)/i.test(visualProof)
+    || /\[[^\]]*(?:video|walkthrough|recording|animation|gif)[^\]]*\]\([^)]+\)/i.test(visualProof)
+    || /\bhttps?:\/\/\S+\.(?:gif|webm|mp4)\b/i.test(visualProof);
 }
 
-function getReviewMetadataBlock(body) {
+function visualProofNeedsAnimation(body) {
+  const visualProof = getVisualProofBody(body);
+  if (!visualProof) return false;
+
+  return (
+    /\brestart|relaunch|reload\b/i.test(visualProof)
+    || /\btransition|state change\b/i.test(visualProof)
+    || (/\bbefore\b/i.test(visualProof) && /\bafter\b/i.test(visualProof))
+  );
+}
+
+function getLegacyReviewMetadataBlock(body) {
   const summary = getSectionBody(body, '## Summary');
   const match = summary.match(/<details\b([^>]*)>\s*<summary>\s*Review metadata\s*<\/summary>([\s\S]*?)<\/details>/i);
   if (!match) return { body: '', openAttributes: '' };
   return { body: match[2].trim(), openAttributes: match[1] };
 }
 
-function getReviewMetadataValue(metadata, label) {
-  return getLabelSection(metadata, label);
+function hasVisibleReviewMetadata(body) {
+  return REQUIRED_METADATA_SECTIONS.some((heading) => getSectionBody(body, heading));
+}
+
+function normalizeSectionValue(sectionBody) {
+  return normalizeReviewUnit(sectionBody);
 }
 
 export function getReviewMetadata(body) {
-  const block = getReviewMetadataBlock(body);
+  if (hasVisibleReviewMetadata(body)) {
+    return {
+      reviewClaim: getSectionBody(body, '## Review Claim'),
+      reviewLane: normalizeSectionValue(getSectionBody(body, '## Review Lane')),
+      reviewUnit: normalizeReviewUnit(getSectionBody(body, '## Review Unit')),
+      safetyInvariant: getSectionBody(body, '## Safety Invariant'),
+      sliceRationale: getSectionBody(body, '## Slice Rationale'),
+    };
+  }
+
+  const legacy = getLegacyReviewMetadataBlock(body);
   return {
-    reviewClaim: getReviewMetadataValue(block.body, 'Review Claim'),
-    reviewLane: normalizeSectionValue(getReviewMetadataValue(block.body, 'Review Lane')),
-    reviewUnit: normalizeReviewUnit(getReviewMetadataValue(block.body, 'Review Unit')),
-    safetyInvariant: getReviewMetadataValue(block.body, 'Safety Invariant'),
-    sliceRationale: getReviewMetadataValue(block.body, 'Slice Rationale'),
+    reviewClaim: getLabelSection(legacy.body, 'Review Claim'),
+    reviewLane: normalizeSectionValue(getLabelSection(legacy.body, 'Review Lane')),
+    reviewUnit: normalizeReviewUnit(getLabelSection(legacy.body, 'Review Unit')),
+    safetyInvariant: getLabelSection(legacy.body, 'Safety Invariant'),
+    sliceRationale: getLabelSection(legacy.body, 'Slice Rationale'),
   };
 }
 
@@ -179,6 +213,7 @@ function classifyScopeKind(filePath) {
   const path = filePath.replace(/\\/g, '/');
 
   if (path.startsWith('scripts/repro/')) return 'proof';
+  if (path.startsWith('packages/app/e2e/visual-proof/')) return 'product-test';
   if (path.startsWith('skills/') || path.startsWith('docs/') || path.endsWith('.md')) return 'docs';
   if (path.startsWith('scripts/')) return 'policy';
   if (
@@ -186,10 +221,10 @@ function classifyScopeKind(filePath) {
     || path.includes('/__tests__/')
     || /\.(spec|test)\.[jt]sx?$/.test(path)
   ) {
-    if (/(benchmark|performance|visual-proof)/.test(path)) return 'proof';
+    if (/(benchmark|performance)/.test(path)) return 'proof';
     return 'product-test';
   }
-  if (/(benchmark|performance|visual-proof)/.test(path)) return 'proof';
+  if (/(benchmark|performance)/.test(path)) return 'proof';
   if (path.startsWith('packages/')) return 'product';
   return 'other';
 }
@@ -290,21 +325,15 @@ export function getPrBodyWarnings(body, options = {}) {
 export async function validatePrBody(body, options = {}) {
   const errors = [];
   const trimmed = body.trim();
-
   if (!trimmed) {
     return [
-      'PR body is empty. Use the canonical schema: ## Summary with a collapsed Review metadata block, ## Non-goals, ## Test Plan, and ## Revert Plan.',
+      'PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, and ## Revert Plan.',
     ];
   }
 
   for (const heading of REQUIRED_SECTIONS) {
     if (!trimmed.includes(heading)) {
       errors.push(`Missing required section: ${heading}`);
-    }
-  }
-  for (const heading of VISIBLE_METADATA_SECTIONS) {
-    if (trimmed.includes(heading)) {
-      errors.push(`${heading} belongs in the collapsed Review metadata block inside ## Summary, not as a visible top-level section.`);
     }
   }
 
@@ -324,25 +353,39 @@ export async function validatePrBody(body, options = {}) {
     }
   }
 
-  const reviewMetadata = getReviewMetadataBlock(trimmed);
-  if (!reviewMetadata.body) {
-    errors.push('## Summary must include a collapsed <details> block with <summary>Review metadata</summary>.');
-  } else if (/\bopen\b/i.test(reviewMetadata.openAttributes)) {
-    errors.push('Review metadata details must be collapsed by default; remove the open attribute.');
+  const legacyReviewMetadata = getLegacyReviewMetadataBlock(trimmed);
+  const reviewMetadataFromVisibleSections = hasVisibleReviewMetadata(trimmed);
+  if (legacyReviewMetadata.body && !reviewMetadataFromVisibleSections) {
+    errors.push('Do not hide review metadata in <details>. Use visible ## Review Claim / ## Review Lane / ## Review Unit / ## Safety Invariant / ## Slice Rationale sections.');
   }
 
-  for (const label of REQUIRED_METADATA_LABELS) {
-    if (!getReviewMetadataValue(reviewMetadata.body, label)) {
-      errors.push(`Review metadata is missing required field: ${label}:`);
+  const reviewMetadata = getReviewMetadata(trimmed);
+  const reviewClaim = reviewMetadata.reviewClaim;
+  const reviewLane = reviewMetadata.reviewLane;
+  const reviewUnit = reviewMetadata.reviewUnit;
+  const safetyInvariant = reviewMetadata.safetyInvariant;
+  const sliceRationale = reviewMetadata.sliceRationale;
+
+  if (reviewMetadataFromVisibleSections) {
+    for (const heading of REQUIRED_METADATA_SECTIONS) {
+      if (!getSectionBody(trimmed, heading)) {
+        errors.push(`Missing required section: ${heading}`);
+      }
+    }
+  } else if (!legacyReviewMetadata.body) {
+    errors.push('Missing review metadata. Add visible ## Review Claim / ## Review Lane / ## Review Unit / ## Safety Invariant / ## Slice Rationale sections.');
+  } else {
+    for (const label of REQUIRED_METADATA_LABELS) {
+      if (!getLabelSection(legacyReviewMetadata.body, label)) {
+        errors.push(`Review metadata is missing required field: ${label}:`);
+      }
     }
   }
 
-  const reviewLane = normalizeSectionValue(getReviewMetadataValue(reviewMetadata.body, 'Review Lane'));
   if (reviewLane && !VALID_REVIEW_LANES.has(reviewLane)) {
     errors.push(`Invalid review lane: ${reviewLane}. Expected one of ${Array.from(VALID_REVIEW_LANES).join(', ')}.`);
   }
 
-  const reviewUnit = normalizeReviewUnit(getReviewMetadataValue(reviewMetadata.body, 'Review Unit'));
   errors.push(...validateReviewUnitValue(reviewUnit, 'PR body'));
   errors.push(...validateReviewLaneUnitCompatibility({
     reviewLane,
@@ -350,17 +393,22 @@ export async function validatePrBody(body, options = {}) {
     context: 'PR body',
   }));
 
-  const reviewClaim = getReviewMetadataValue(reviewMetadata.body, 'Review Claim');
   if (reviewClaim && !reviewClaim.trim()) {
-    errors.push('Review metadata field Review Claim must not be empty.');
+    errors.push('## Review Claim must not be empty.');
+  }
+  if (safetyInvariant && !safetyInvariant.trim()) {
+    errors.push('## Safety Invariant must not be empty.');
+  }
+  if (sliceRationale && !sliceRationale.trim()) {
+    errors.push('## Slice Rationale must not be empty.');
   }
   errors.push(...validateReviewUnitFocus({
     declaredReviewUnit: reviewUnit,
     context: 'PR body',
     texts: [
-      stripDetailsBlocks(getSectionBody(trimmed, '## Summary')),
+      getSectionBody(trimmed, '## Summary'),
       reviewClaim,
-      getReviewMetadataValue(reviewMetadata.body, 'Slice Rationale'),
+      sliceRationale,
     ],
   }));
 
@@ -369,6 +417,10 @@ export async function validatePrBody(body, options = {}) {
   if (options.requiresVisualProof && !hasVisualProofMedia(trimmed)) {
     errors.push(
       'UI-impacting changes require a ## Visual Proof section with at least one screenshot image or video/walkthrough link.',
+    );
+  } else if (options.requiresVisualProof && visualProofNeedsAnimation(trimmed) && !hasAnimatedVisualProofMedia(trimmed)) {
+    errors.push(
+      'Restart or multi-state visual proof must include animated media such as a gif, webm, mp4, or walkthrough/video link.',
     );
   }
 
@@ -401,9 +453,9 @@ function usage() {
   console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>) [--require-visual-proof] [--changed-files-file <file>] [--diff-file <file>]
 
 Validates the canonical PR schema:
-  Required: ## Summary with a collapsed Review metadata block, ## Non-goals, ## Test Plan, ## Revert Plan
+  Required: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
   Optional: ## Architecture (must include ### Before and ### After when present)
-  UI changes: pass --require-visual-proof to require screenshot or video proof.
+  UI changes: pass --require-visual-proof to require screenshot or video proof; restart or multi-state proof must be animated.
   --changed-files-file <file>  Newline-separated changed file paths for scope checks.
   --diff-file <file>           Unified diff text to run the diff atomicity engine.`);
   process.exit(1);
