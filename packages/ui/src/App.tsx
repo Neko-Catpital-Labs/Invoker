@@ -123,6 +123,20 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
   };
 }
 
+function summaryToPlanningSessionView(summary: InAppPlanningSessionSummary): PlanningSessionView {
+  return {
+    ...summary,
+    messages: summary.messages.map((message) => ({
+      id: message.id,
+      text: message.text,
+      role: message.role,
+      tone: message.tone,
+    })),
+    input: '',
+    busy: false,
+  };
+}
+
 function planningStatusLabel(status: InAppPlanningSessionStatus): string {
   switch (status) {
     case 'waiting_for_answer':
@@ -546,6 +560,7 @@ export function App() {
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(2);
+  const planningSessionRestoreBlockedRef = useRef(false);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
@@ -554,6 +569,11 @@ export function App() {
     () => planningSessions.find((session) => session.id === activePlanningSessionId) ?? planningSessions[0] ?? makeInitialPlanningSession(),
     [activePlanningSessionId, planningSessions],
   );
+
+  useEffect(() => {
+    if (!activePlanningSession.presetKey || activePlanningSession.presetKey === selectedPlanningPresetKey) return;
+    setSelectedPlanningPresetKey(activePlanningSession.presetKey);
+  }, [activePlanningSession.presetKey, selectedPlanningPresetKey]);
   const terminalLines = activePlanningSession.messages;
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
@@ -689,6 +709,30 @@ export function App() {
         setTerminalDrawerState('partial');
       }
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.invoker?.planningChatList?.()
+      .then((result) => {
+        if (cancelled) return;
+        if (planningSessionRestoreBlockedRef.current) return;
+        if (!result?.sessions?.length) return;
+        const restoredSessions = result.sessions.map(summaryToPlanningSessionView);
+        setPlanningSessions(restoredSessions);
+        setActivePlanningSessionId(restoredSessions[0]?.id ?? 'local-planning-session-1');
+        const starterSession = makeInitialPlanningSession();
+        const maxLineId = Math.max(
+          0,
+          ...starterSession.messages.map((line) => line.id),
+          ...restoredSessions.flatMap((session) => session.messages.map((line) => line.id)),
+        );
+        nextTerminalLineIdRef.current = maxLineId + 1;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1856,6 +1900,7 @@ export function App() {
   }, [activePlanningSessionId, updatePlanningSessionById]);
 
   const setPlanningInput = useCallback((value: string) => {
+    if (value.length > 0) planningSessionRestoreBlockedRef.current = true;
     updateActivePlanningSession((session) => ({ ...session, input: value }));
   }, [updateActivePlanningSession]);
 
@@ -2039,6 +2084,7 @@ export function App() {
   ]);
 
   const handleCreatePlanningSession = useCallback(() => {
+    planningSessionRestoreBlockedRef.current = true;
     const index = nextPlanningSessionLocalIdRef.current;
     nextPlanningSessionLocalIdRef.current += 1;
     const now = new Date().toISOString();

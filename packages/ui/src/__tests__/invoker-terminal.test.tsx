@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makePlanningSessionSummary, type MockInvoker } from './helpers/mock-invoker.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -24,10 +24,10 @@ describe('Invoker terminal (component)', () => {
     mock.cleanup();
   });
 
-  async function openPlanningTerminal() {
+  async function openPlanningTerminal(expectedPresetKey = 'codex') {
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
+      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue(expectedPresetKey);
     });
   }
 
@@ -252,6 +252,136 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getAllByText('Submitted').length).toBeGreaterThan(0);
   });
 
+
+  it('hydrates restored planning chats from the backend list', async () => {
+    vi.mocked(mock.api.planningChatList).mockResolvedValueOnce({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'saved-newest',
+          title: 'Newest saved chat',
+          updatedAt: '2026-07-07T00:05:00.000Z',
+          messages: [
+            { id: 10, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-07-07T00:00:00.000Z' },
+            { id: 11, role: 'user', text: 'Saved user request', createdAt: '2026-07-07T00:01:00.000Z' },
+            { id: 12, role: 'assistant', text: 'Saved assistant draft', createdAt: '2026-07-07T00:02:00.000Z' },
+          ],
+        }),
+        makePlanningSessionSummary({
+          id: 'saved-older',
+          title: 'Older saved chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          updatedAt: '2026-07-07T00:04:00.000Z',
+        }),
+      ],
+    });
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    await waitFor(() => {
+      expect(screen.getByText('2 chats · 1 ready')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Newest saved chat' })).toBeInTheDocument();
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Saved user request');
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Saved assistant draft');
+    });
+    expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft plan ready: \"Saved plan\" (1 step).');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'saved-newest' });
+    });
+  });
+
+  it('keeps a local planning draft when backend restore resolves later', async () => {
+    let resolvePlanningList: (value: any) => void = () => {};
+    vi.mocked(mock.api.planningChatList).mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePlanningList = resolve;
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), {
+      target: { value: 'local draft before restore' },
+    });
+
+    await act(async () => {
+      resolvePlanningList({
+        ok: true,
+        sessions: [makePlanningSessionSummary({
+          id: 'saved-late',
+          title: 'Late saved chat',
+          updatedAt: '2026-07-07T00:05:00.000Z',
+        })],
+      });
+    });
+
+    expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('local draft before restore');
+    expect(screen.queryByRole('heading', { name: 'Late saved chat' })).not.toBeInTheDocument();
+  });
+
+  it('restores interrupted planning chats idle and sends continuation with the saved preset', async () => {
+    vi.mocked(mock.api.planningChatList).mockResolvedValueOnce({
+      ok: true,
+      sessions: [makePlanningSessionSummary({
+        id: 'saved-interrupted',
+        title: 'Interrupted saved chat',
+        status: 'still_discussing',
+        presetKey: 'omp+claude',
+        draftPlanAvailable: false,
+        draftPlanSummary: undefined,
+        messages: [
+          { id: 1, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-07-07T00:00:00.000Z' },
+          { id: 2, role: 'user', text: 'Continue the work', createdAt: '2026-07-07T00:01:00.000Z' },
+          { id: 3, role: 'system', text: 'Planner was interrupted before it could answer. Send another message to continue.', tone: 'error', createdAt: '2026-07-07T00:02:00.000Z' },
+        ],
+      })],
+    });
+
+    render(<App />);
+    await openPlanningTerminal('omp+claude');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Planner was interrupted before it could answer. Send another message to continue.');
+    });
+    expect(screen.queryByText('Working…')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-input')).toBeEnabled();
+
+    submitPlanningText('continue');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        sessionId: 'saved-interrupted',
+        message: 'continue',
+        presetKey: 'omp+claude',
+      });
+    });
+  });
+
+  it('restores submitted planning chats as read-only without a ready bar', async () => {
+    vi.mocked(mock.api.planningChatList).mockResolvedValueOnce({
+      ok: true,
+      sessions: [makePlanningSessionSummary({
+        id: 'saved-submitted',
+        title: 'Submitted saved chat',
+        status: 'submitted',
+        draftPlanAvailable: true,
+      })],
+    });
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Submitted saved chat' })).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+  });
   it('opens the expanded planning chat and Escape closes it without clearing transcript', async () => {
     render(<App />);
     await openPlanningTerminal();
