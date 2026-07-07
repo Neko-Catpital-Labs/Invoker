@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
+import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
 import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
@@ -36,7 +36,6 @@ import {
   type PlanDefinition,
   type TaskState,
 } from '@invoker/workflow-core';
-import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC } from './external-dependencies.js';
 import { logCaughtException } from './logging.js';
 import { runMcpServer } from './mcp-server.js';
 import { runDoctor, runSetup } from './onboarding.js';
