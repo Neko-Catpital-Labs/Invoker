@@ -36,8 +36,8 @@ files. One YAML file is one Invoker workflow; multiple `tasks:` entries inside
 that file are not a workflow stack.
 
 Split into multiple workflow files when the plan has more than one review slice,
-layer, implementation prompt task, package boundary, UI+non-UI boundary, or
-PR-worthy commit. Submit the resulting chain with
+atomic feature, thin feature sub-slice, implementation prompt task, package
+boundary, UI+non-UI boundary, or PR-worthy commit. Submit the resulting chain with
 `scripts/submit-workflow-chain.sh`, using `__UPSTREAM_WORKFLOW_ID__` in later
 templates so each workflow depends on the previous workflow's `__merge__` task.
 
@@ -59,32 +59,28 @@ not split.
 - **Independent files** → tasks creating/modifying unrelated files.
 - **Independent verification tasks** → file-existence and grep checks are read-only; run them in parallel when they do not verify a prior implementation task.
 
-## Layered decomposition contract (hard requirement for implementation plans)
+## Atomic-feature decomposition contract (hard requirement for implementation plans)
 
 For plans with `onFinish` set to `pull_request` or `merge`, each task `description` must include:
 
-1. **`Layer:`** one of:
-   - `persistence`
-   - `domain`
-   - `transport`
-   - `api`
-   - `contact_surface`
-   - `app_bridge`
-   - `owner_delegation`
-   - `ui_activation`
-   - `app_regression`
-   - `e2e_regression`
-   - `ui`
-   - `docs`
+1. **`Feature:`** one atomic feature: a coherent user-visible, policy, API,
+   data, or docs capability whose tasks are meaningful together.
 2. **`Feature state:`** one of:
    - `active`
    - `dormant`
+
+Thin sub-slices within the same feature are optional. When needed, add
+**`Feature step:`** with an integer to express the feature's internal sequence;
+do not use a fixed layer ladder as the required task axis.
 
 `onFinish: none` verify-only plans are exempt.
 
 ### Review compression contract
 
 Apply `skills/review-compression/SKILL.md` before authoring implementation tasks.
+Slicing an implemented diff into reviewable PRs is owned by
+`skills/make-pr/SKILL.md` driven by `skills/review-compression/SKILL.md`, not by
+task layering.
 Each implementation task must include these description headings:
 
 - `Review claim:` the one sentence a reviewer is being asked to approve.
@@ -108,11 +104,15 @@ yields six helper modules is six chained workflows, not one "extract phases"
 task. See the **Decomposition & Extraction Refactors** section of
 `../review-compression/SKILL.md`.
 
-### Cross-layer direction
+### Feature step dependency direction
 
-- Dependencies should flow from lower/foundational layers to higher/integration layers.
-- A lower-layer task depending on a higher-layer task is rejected unless the task includes:
-  - `Layer exception: allowed`
+- This is a lightweight feature-level dependency-direction check.
+- Dependencies preserve feature-internal order without imposing a global layer ladder.
+- When tasks share the same `Feature:` and use `Feature step:`, later sub-slices
+  may depend only on equal or earlier `Feature step:` values of the same feature.
+- A dependency that must point to a later same-feature step is rejected unless the
+  task includes:
+  - `Feature step exception: allowed`
   - a short rationale in the same description block.
 
 ### Dormant tasks
@@ -120,16 +120,20 @@ task. See the **Decomposition & Extraction Refactors** section of
 - `Feature state: dormant` tasks are valid and expected for staged rollouts.
 - Dormant tasks must still include **`Acceptance criteria:`** so review and verification remain objective.
 
-### Review decomposition benchmark
+### Atomic-feature decomposition benchmark
 
-Large prompt-edit style changes should split into dependency-ordered layer workflows:
+Large prompt-edit style changes should start from the coherent atomic feature
+being implemented. If one feature needs thin sub-slices, use `Feature step:` to
+show the internal sequence instead of assigning tasks to a fixed layer ladder:
 
-1. `contact surface`
-2. `app bridge` and `owner delegation`
-3. `ui activation`
-4. `app` + `e2e` regressions
+1. `Feature: prompt edit bridge`
+2. `Feature step: 1` for the minimal dormant or compatibility-safe surface
+3. `Feature step: 2` for the activation or owner-delegation path
+4. `Feature step: 3` for focused regressions tied to that same feature
 
-This split maps directly to review slices and should not be collapsed into one monolithic workflow.
+This feature split keeps implementation tasks coherent. PR-sized review splitting
+happens later in `skills/make-pr/SKILL.md` using
+`skills/review-compression/SKILL.md`.
 
 ## Sizing
 
@@ -186,7 +190,7 @@ Example cleanup command:
 - id: cleanup-experiment-artifacts-inv-123
   description: |
     Remove persisted experiment artifact after implementation handoff.
-    Layer: docs
+    Feature: experiment artifact handoff
     Feature state: active
     Files:
     - docs/context/inv-123/experiment-brief.md

@@ -53,8 +53,8 @@ Complex plan with diamond dependencies. Uses `onFinish: pull_request` for manual
 - `fixtures/negative/anti-pattern-d-missing-dependencies.yaml` — Dependencies field is required
 - `fixtures/negative/anti-pattern-e-no-verification.yaml` — Implementation tasks need verification
 - `fixtures/negative/anti-pattern-f-dangerous-commands.yaml` — Avoid destructive commands (`rm -rf`, force push)
-- `fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml` — Monolithic `wf-1777929074509-8`-style workflow missing dependency-first layered decomposition metadata
-- `fixtures/negative/anti-pattern-h-layer-order-violation.yaml` — Lower layer depends on higher layer without `Layer exception: allowed`
+- `fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml` — Monolithic `wf-1777929074509-8`-style workflow missing dependency-first atomic-feature decomposition metadata
+- `fixtures/negative/anti-pattern-h-layer-order-violation.yaml` — Same-feature dependency points to a later `Feature step:` without `Feature step exception: allowed`
 - `fixtures/negative/anti-pattern-j-zero-context-missing-metadata.yaml` — Prompt task omits strict zero-context handoff metadata required for implementation plans
 - `fixtures/negative/anti-pattern-k-missing-review-compression.yaml` — Implementation task omits review claim, safety invariant, slice rationale, and architectural effect metadata
 
@@ -112,21 +112,19 @@ When the source is a policy or architecture document with a decision table, the 
 
 ---
 
-## 9. Dependency-first layered decomposition with dormant support
+## 9. Dependency-first atomic-feature decomposition with dormant support
 
-Use this pattern when a change is too large for a single reviewable workflow. For implementation plans (`onFinish != none`), include task-level `Layer:` and `Feature state:` metadata, wire dependencies in layer order, and keep dormant work explicit.
+Use this pattern when a change is too large for a single reviewable workflow. For implementation plans (`onFinish != none`), include task-level `Feature:` and `Feature state:` metadata, keep each task mapped to one atomic feature, and keep dormant work explicit. Thin sub-slices within a feature are optional and may carry an integer `Feature step:`.
 
 **See positive fixture**: `fixtures/positive/07-prompt-edit-layered-split-with-dormant.yaml`
 **See negative fixture**: `fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml`
 
 **Pattern**:
-- Break monolithic prompt-edit changes into review slices:
-  1. contact surface
-  2. app bridge / owner delegation
-  3. ui activation
-  4. app + e2e regressions
+- Name one coherent atomic feature with `Feature:` for every implementation task.
+- Use optional `Feature step:` integers only for thin sub-slices within the same feature.
 - Use `Feature state: dormant` for planned-but-not-activated tasks, but still include `Acceptance criteria:`.
-- Use dependencies to enforce order; if a lower layer must depend on a higher layer, include `Layer exception: allowed` and rationale.
+- Use a lightweight feature-level dependency-direction check: later sub-slices may depend only on equal or earlier `Feature step:` values of the same feature unless the task includes `Feature step exception: allowed` with rationale.
+- Slicing an implemented diff into reviewable PRs is owned by `skills/make-pr/SKILL.md` driven by `skills/review-compression/SKILL.md`, not by task layering.
 
 ---
 
@@ -139,7 +137,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 - Large refactors → `onFinish: pull_request`, diamond DAGs
 - Invoker-on-Invoker PR publication → keep `mergeMode: external_review`, then use `mergify stack push` as the repo-specific publication step
 - Policy matrix / architecture docs → preserve row-level coverage with `coverage-map.json` and `stack-manifest.json`
-- Dependency-first layered decomposition → enforce `Layer:` + `Feature state:` metadata, preserve dependency direction, allow explicit dormant tasks
+- Dependency-first atomic-feature decomposition → enforce `Feature:` + `Feature state:` metadata, preserve feature-step dependency direction, allow explicit dormant tasks
 
 **Validation enforces**:
 - Every prompt task must have a verification command task or proof lane
@@ -147,7 +145,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 - Avoid `npx vitest run`; use repo-supported scripts or explicit package-local commands
 - Dependencies field required (even if empty)
 - No dangerous commands without manual approval
-- For implementation plans: `Layer:` + `Feature state:` headings, allowed values, and layer-consistent dependency direction
+- For implementation plans: `Feature:` + `Feature state:` headings, optional `Feature step:` integers for thin sub-slices, and feature-step dependency direction
 - For implementation-plan prompt tasks: `Files:` / `Change types:` / `Acceptance criteria:` headings in `description`, zero-context prompt framing, and deterministic pass/fail expectations
 
 **References**:
