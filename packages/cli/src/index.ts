@@ -501,6 +501,7 @@ function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorke
  * poll loop, so the two doors can never run competing scans. The CLI owns the
  * foreground lifetime — owner discovery, connect message, the SIGINT/SIGTERM
  * block, and a deterministic stop.
+ */
 async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
