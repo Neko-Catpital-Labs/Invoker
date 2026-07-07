@@ -64,6 +64,11 @@ function applyWorkflowRollupPatches(
   }
   const next = new Map(previous);
   for (const patch of patches) {
+    if (patch.removed) {
+      // Safety invariant: drop, never patch — patching resurrects a ghost node.
+      next.delete(patch.workflowId);
+      continue;
+    }
     const existing = next.get(patch.workflowId);
     next.set(patch.workflowId, {
       ...(existing ?? { id: patch.workflowId, name: patch.workflowId }),
@@ -290,6 +295,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
           });
         }
 
+        const removedWorkflowIds: string[] = [];
         for (const event of deltaEvents) {
           if (event.type !== 'delta') continue;
           const delta = event.delta;
@@ -308,6 +314,11 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
             shouldRefreshWorkflows = true;
           }
           nextTasks = applyDelta(nextTasks, delta);
+          for (const patch of event.workflowRollups) {
+            if (patch.removed && nextWorkflows.has(patch.workflowId)) {
+              removedWorkflowIds.push(patch.workflowId);
+            }
+          }
           nextWorkflows = applyWorkflowRollupPatches(nextWorkflows, event.workflowRollups);
         }
 
@@ -319,6 +330,12 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         workflowsRef.current = nextWorkflows;
         setTasks(nextTasks);
         setWorkflows(nextWorkflows);
+        if (removedWorkflowIds.length > 0) {
+          // Pairs with the main-process delete log to measure delete → UI removal.
+          void window.invoker.reportUiPerf?.('workflow_removed_applied', {
+            workflowIds: removedWorkflowIds,
+          });
+        }
         if (shouldRefreshWorkflows) {
           void refreshWorkflowMetadata();
         }
