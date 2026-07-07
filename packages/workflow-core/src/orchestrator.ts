@@ -112,6 +112,7 @@ import {
   getKnownFreshBaseCommitImpl,
   beginFixSessionImpl,
   revertFixSessionImpl,
+  reclaimStalledFixSessionImpl,
   getMergeNodeImpl,
 } from './orchestrator/merge.js';
 import type { MergeHost } from './orchestrator/merge.js';
@@ -2636,6 +2637,17 @@ export class Orchestrator {
     },
   ): void {
     revertFixSessionImpl(this as unknown as MergeHost, taskId, opts);
+  }
+
+  /**
+   * Reclaim a fix session orphaned by owner death: revert it to its entry
+   * status. Driven by the stalled-fix-session watchdog.
+   */
+  reclaimStalledFixSession(
+    taskId: string,
+    opts: { reason: string; expectedLineage?: TaskLineageExpectation },
+  ): 'reverted' | 'noop' {
+    return reclaimStalledFixSessionImpl(this as unknown as MergeHost, taskId, opts);
   }
 
   /**
