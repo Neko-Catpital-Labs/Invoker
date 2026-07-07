@@ -385,6 +385,61 @@ function shouldSkipExistingAction(
   return false;
 }
 
+function firstLine(text: string | undefined): string | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.split('\n', 1)[0];
+}
+
+/**
+ * Fold a terminal mutation-intent outcome back into the dedupe action row.
+ *
+ * The worker records its action as `queued` when it submits a fix intent, but
+ * nothing updated the row when the intent later failed or completed. A failed
+ * intent left the action `queued` forever: the UI showed a repair "queued up"
+ * that would never execute, and `shouldSkipExistingAction` treated the stale
+ * `queued` row as open work, blocking every retry of the same failed check.
+ */
+function reconcileFinishedIntentAction(
+  options: CiFailureWorkerPolicyOptions,
+  event: ReviewGateCiFailedLifecycleEvent,
+): void {
+  const externalKey = ciFailureActionKey(event);
+  const existing = options.store.getWorkerAction?.(CI_FAILURE_WORKER_KIND, externalKey);
+  if (!existing || !existing.intentId) return;
+  if (existing.status !== 'queued' && existing.status !== 'pending' && existing.status !== 'running') return;
+
+  const terminalIntents = options.store.listWorkflowMutationIntents?.(event.workflowId, ['completed', 'failed']) ?? [];
+  const intent = terminalIntents.find((candidate) => String(candidate.id) === existing.intentId);
+  if (!intent) return;
+
+  const now = new Date().toISOString();
+  const status: WorkerActionStatus = intent.status === 'completed' ? 'completed' : 'failed';
+  const summary = status === 'completed'
+    ? 'CI repair intent completed'
+    : `CI repair intent failed: ${firstLine(intent.error) ?? 'unknown error'}`;
+  const payload = existing.payload && typeof existing.payload === 'object'
+    ? { ...(existing.payload as Record<string, unknown>) }
+    : {};
+  options.store.upsertWorkerAction?.({
+    ...existing,
+    status,
+    summary,
+    payload: {
+      ...payload,
+      reconciledIntentStatus: intent.status,
+      intentError: intent.error ?? null,
+    },
+    updatedAt: now,
+    completedAt: now,
+  });
+  logCiFailureWorkerEvent(options, event, 'worker-ci-failure-intent-reconciled', {
+    intentId: existing.intentId,
+    intentStatus: intent.status,
+    actionStatus: status,
+  });
+}
+
 async function handleCiFailureEvent(
   options: CiFailureWorkerPolicyOptions,
   event: ReviewGateCiFailedLifecycleEvent,
@@ -399,6 +454,8 @@ async function handleCiFailureEvent(
   }
 
   const workerRetryBudget = retryBudgetForTask(task, options);
+
+  reconcileFinishedIntentAction(options, event);
 
   if (shouldSkipExistingAction(options, event)) return;
 
