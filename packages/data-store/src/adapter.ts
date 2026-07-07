@@ -195,6 +195,27 @@ export interface WorkerActionListFilters {
   limit?: number;
 }
 
+export interface TerminalSessionRecord {
+  sessionId: string;
+  taskId: string;
+  targetKey: string;
+  status: 'running' | 'exited';
+  exitCode?: number;
+  cwd?: string;
+  command?: string;
+  args?: string[];
+  linuxTerminalTail?: 'exec_bash' | 'pause';
+  mode: 'spawn' | 'attached';
+  attached: boolean;
+  outputSnapshot: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TerminalSessionPatch = Partial<
+  Pick<TerminalSessionRecord, 'status' | 'exitCode' | 'outputSnapshot' | 'updatedAt'>
+>;
+
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: WorkflowSaveInput): void;

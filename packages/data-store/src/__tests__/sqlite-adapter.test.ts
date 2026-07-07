@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
-import type { Workflow, Conversation, WorkerActionWrite } from '../adapter.js';
+import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord } from '../adapter.js';
 import { createAttempt } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
@@ -36,6 +36,29 @@ describe('SQLiteAdapter', () => {
       config: {},
       execution: {},
       taskStateVersion: 1,
+      ...overrides,
+    };
+  }
+
+  function makeTerminalSession(
+    sessionId: string,
+    taskId: string,
+    overrides: Partial<TerminalSessionRecord> = {},
+  ): TerminalSessionRecord {
+    return {
+      sessionId,
+      taskId,
+      targetKey: `target-${sessionId}`,
+      status: 'running',
+      cwd: '/tmp/invoker-terminal-test',
+      command: 'bash',
+      args: ['-lc', 'echo terminal'],
+      linuxTerminalTail: 'exec_bash',
+      mode: 'spawn',
+      attached: false,
+      outputSnapshot: 'terminal output\n',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:01.000Z',
       ...overrides,
     };
   }
@@ -131,6 +154,163 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('terminal_sessions', () => {
+    it('creates the terminal_sessions schema with strict checks', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      expect(tableColumns(adapter, 'terminal_sessions')).toEqual([
+        'session_id',
+        'task_id',
+        'target_key',
+        'status',
+        'exit_code',
+        'cwd',
+        'command',
+        'args_json',
+        'linux_terminal_tail',
+        'mode',
+        'attached',
+        'output_snapshot',
+        'created_at',
+        'updated_at',
+      ]);
+      expect(tableIndexes(adapter, 'terminal_sessions')).toEqual(
+        expect.arrayContaining([
+          'idx_terminal_sessions_task_updated',
+          'idx_terminal_sessions_status_updated',
+          'idx_terminal_sessions_running_target',
+        ]),
+      );
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO terminal_sessions (
+          session_id, task_id, target_key, status, mode, attached, output_snapshot, created_at, updated_at
+        ) VALUES ('term-bad-status', 't1', 'target-bad-status', 'paused', 'spawn', 0, '', '2026-07-07T00:00:00.000Z', '2026-07-07T00:00:00.000Z')`,
+      )).toThrow();
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO terminal_sessions (
+          session_id, task_id, target_key, status, mode, attached, output_snapshot, created_at, updated_at
+        ) VALUES ('term-bad-mode', 't1', 'target-bad-mode', 'running', 'pty', 0, '', '2026-07-07T00:00:00.000Z', '2026-07-07T00:00:00.000Z')`,
+      )).toThrow();
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO terminal_sessions (
+          session_id, task_id, target_key, status, mode, attached, output_snapshot, created_at, updated_at
+        ) VALUES ('term-bad-attached', 't1', 'target-bad-attached', 'running', 'spawn', 2, '', '2026-07-07T00:00:00.000Z', '2026-07-07T00:00:00.000Z')`,
+      )).toThrow();
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO terminal_sessions (
+          session_id, task_id, target_key, status, mode, attached, output_snapshot, created_at, updated_at, args_json
+        ) VALUES ('term-bad-args', 't1', 'target-bad-args', 'running', 'spawn', 0, '', '2026-07-07T00:00:00.000Z', '2026-07-07T00:00:00.000Z', 'not-json')`,
+      )).toThrow();
+    });
+
+    it('round-trips terminal sessions across adapter reopen', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-terminal-sessions-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.saveWorkflow(testWorkflow);
+        first.saveTask('wf-1', makeTask('t1'));
+        first.upsertTerminalSession(makeTerminalSession('term-1', 't1', {
+          targetKey: 'target-1',
+          status: 'running',
+          exitCode: undefined,
+          cwd: '/tmp/terminal-cwd',
+          command: 'zsh',
+          args: ['-l'],
+          linuxTerminalTail: 'pause',
+          mode: 'spawn',
+          attached: false,
+          outputSnapshot: 'restored output\n',
+          createdAt: '2026-07-07T01:00:00.000Z',
+          updatedAt: '2026-07-07T01:00:02.000Z',
+        }));
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.loadTerminalSession('term-1')).toEqual({
+          sessionId: 'term-1',
+          taskId: 't1',
+          targetKey: 'target-1',
+          status: 'running',
+          exitCode: undefined,
+          cwd: '/tmp/terminal-cwd',
+          command: 'zsh',
+          args: ['-l'],
+          linuxTerminalTail: 'pause',
+          mode: 'spawn',
+          attached: false,
+          outputSnapshot: 'restored output\n',
+          createdAt: '2026-07-07T01:00:00.000Z',
+          updatedAt: '2026-07-07T01:00:02.000Z',
+        });
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('updates and deletes terminal session rows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.upsertTerminalSession(makeTerminalSession('term-1', 't1'));
+
+      adapter.updateTerminalSession('term-1', {
+        status: 'exited',
+        exitCode: 7,
+        updatedAt: '2026-07-07T02:00:00.000Z',
+      });
+
+      expect(adapter.loadTerminalSession('term-1')).toMatchObject({
+        status: 'exited',
+        exitCode: 7,
+        updatedAt: '2026-07-07T02:00:00.000Z',
+      });
+
+      adapter.deleteTerminalSession('term-1');
+      expect(adapter.loadTerminalSession('term-1')).toBeUndefined();
+    });
+
+    it('uses safe defaults for malformed persisted terminal rows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      (adapter as any).db.run(
+        `INSERT INTO terminal_sessions (
+          session_id, task_id, target_key, status, mode, attached, output_snapshot, created_at, updated_at, args_json
+        ) VALUES ('term-object-args', 't1', 'target-object-args', 'running', 'spawn', 0, '', '2026-07-07T00:00:00.000Z', '2026-07-07T00:00:00.000Z', '{"bad":true}')`,
+      );
+      (adapter as any).db.run('PRAGMA ignore_check_constraints = ON');
+      (adapter as any).db.run(
+        `INSERT INTO terminal_sessions (
+          session_id, task_id, target_key, status, mode, attached, output_snapshot, created_at, updated_at
+        ) VALUES ('term-unknown-status', 't1', 'target-unknown-status', 'paused', 'spawn', 0, '', '2026-07-07T00:00:00.000Z', '2026-07-07T00:00:00.000Z')`,
+      );
+      (adapter as any).db.run('PRAGMA ignore_check_constraints = OFF');
+
+      expect(adapter.loadTerminalSession('term-object-args')?.args).toEqual([]);
+      expect(adapter.listTerminalSessions().map((row) => row.sessionId)).not.toContain('term-unknown-status');
+      expect(adapter.loadTerminalSession('term-unknown-status')).toBeUndefined();
+    });
+
+    it('removes terminal rows when deleting workflows and tasks', () => {
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-delete-one' });
+      adapter.saveTask('wf-delete-one', makeTask('wf-delete-one/t1'));
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-delete-all' });
+      adapter.saveTask('wf-delete-all', makeTask('wf-delete-all/t1'));
+      adapter.upsertTerminalSession(makeTerminalSession('term-delete-one', 'wf-delete-one/t1'));
+      adapter.upsertTerminalSession(makeTerminalSession('term-delete-all', 'wf-delete-all/t1'));
+
+      adapter.deleteWorkflow('wf-delete-one');
+
+      expect(adapter.loadTerminalSession('term-delete-one')).toBeUndefined();
+      expect(adapter.loadTerminalSession('term-delete-all')).toBeDefined();
+
+      adapter.deleteAllWorkflows();
+
+      expect(adapter.listTerminalSessions()).toEqual([]);
+    });
+  });
+
   describe('saveTask + loadTasks', () => {
     it('round-trips a task through save and load', () => {
       adapter.saveWorkflow(testWorkflow);
@@ -180,6 +360,19 @@ describe('SQLiteAdapter', () => {
       expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM events WHERE task_id = 't1'")).toBe(0);
       expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM task_output WHERE task_id = 't1'")).toBe(0);
       expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM output_spool WHERE task_id = 't1'")).toBe(0);
+    });
+
+    it('deleteTask removes terminal sessions for the deleted task', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+      adapter.upsertTerminalSession(makeTerminalSession('term-t1', 't1'));
+      adapter.upsertTerminalSession(makeTerminalSession('term-t2', 't2'));
+
+      adapter.deleteTask('t1');
+
+      expect(adapter.loadTerminalSession('term-t1')).toBeUndefined();
+      expect(adapter.loadTerminalSession('term-t2')).toBeDefined();
     });
 
     it('persists executionModel through saveTask, updateTask, and loadTask', () => {
