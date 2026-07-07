@@ -8,8 +8,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import type { PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
 import { validateInvokerConfig } from './config-validation.js';
-
 export type HarnessModelPolicy =
   | { kind: 'implicit' }
   | { kind: 'fixed'; model: string }
@@ -51,6 +51,13 @@ export interface DefaultExecutionConfig {
    * Only applied when the resolved task executionAgent matches this default agent.
    */
   executionModel?: string;
+}
+export interface OwnerPrMaintenanceConfig extends PrMaintenanceWorkerConfig {
+  /**
+   * Disabled by default. Set true before owner-managed workers consume this
+   * config block.
+   */
+  enabled?: boolean;
 }
 
 export interface InvokerConfig {
@@ -293,6 +300,11 @@ export interface InvokerConfig {
     strategy?: 'enforce' | 'route';
   }>;
   /**
+   * Owner-managed PR-maintenance worker launch settings.
+   * Disabled by default until `enabled` is explicitly true.
+   */
+  prMaintenance?: OwnerPrMaintenanceConfig;
+  /**
    * Operator-declared external worker list, with each worker identified by registry kind.
    * The loader consumes this later; absent means no external workers.
    */
@@ -306,6 +318,16 @@ export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarn
   omp: { tool: 'omp' },
   codex: { tool: 'codex' },
 };
+export function resolveRegisteredOwnerPrMaintenanceConfig(
+  config: InvokerConfig,
+): PrMaintenanceWorkerConfig | undefined {
+  const prMaintenance = config.prMaintenance;
+  if (!prMaintenance || prMaintenance.enabled !== true) {
+    return undefined;
+  }
+  const { enabled: _enabled, ...workerConfig } = prMaintenance;
+  return workerConfig;
+}
 
 function readJsonSafe(path: string): InvokerConfig {
   if (!existsSync(path)) {
