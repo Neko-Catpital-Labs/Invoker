@@ -148,7 +148,7 @@ function usage(): string {
     '  --planner-url <url>   Planner service URL for `setup planner`.',
     '  --access-token <tok>  Planner service access token for `setup planner`.',
     `  --planner-package <spec>  Planner MCP package spec for \`setup planner\`. Defaults to ${DEFAULT_DRAFTER_MCP_PACKAGE_SPEC}.`,
-    '  --target <path>       MCP config path for `setup planner`. Required unless INVOKER_MCP_CONFIG_PATH is set.',
+    '  --target <path>       MCP config path for planner setup. Defaults to ~/.invoker/mcp.json.',
     '  --uninstall           Remove the experimental planner MCP entry and disable its Invoker flag.',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
     '  --standalone     Skip IPC and run with an isolated CLI database.',

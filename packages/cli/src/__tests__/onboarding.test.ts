@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES } from '@invoker/contracts';
 
 import {
+  defaultExperimentalPlannerMcpPath,
+  ensureExperimentalPlannerMcp,
   buildDoctorChecks,
   generateSlackManifest,
   installExperimentalPlannerMcp,
@@ -111,16 +113,40 @@ describe('buildDoctorChecks', () => {
   });
 });
 describe('runSetup', () => {
-  it('keeps Slack enabled by default and lets the user opt out', async () => {
+  it('installs the public planner MCP by default without enabling planner behavior', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-home-'));
+    const saved = {
+      HOME: process.env.HOME,
+      target: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
     const lines: string[] = [];
-    const code = await runSetup([], {
-      print: (line) => lines.push(line),
-      prompt: async () => 'n',
-    });
+    try {
+      process.env.HOME = home;
+      delete process.env.INVOKER_MCP_CONFIG_PATH;
 
-    expect(lines.join('\n')).toContain('Invoker setup');
-    expect(lines.join('\n')).toContain('Run `invoker-cli setup slack` later');
-    expect(typeof code).toBe('number');
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      });
+
+      const mcpPath = join(home, '.invoker', 'mcp.json');
+      const invokerConfigPath = join(home, '.invoker', 'config.json');
+      expect(lines.join('\n')).toContain('Invoker setup');
+      expect(lines.join('\n')).toContain(`Experimental planner MCP installed into ${mcpPath}`);
+      expect(lines.join('\n')).toContain('experimentalPlanner flag: off');
+      expect(lines.join('\n')).toContain('Run `invoker-cli setup slack` later');
+      expect(JSON.parse(readFileSync(mcpPath, 'utf8')).mcpServers['experimental-planner']).toEqual({
+        type: 'stdio',
+        command: 'uvx',
+        args: ['--from', DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES.drafterMcp.commandName],
+      });
+      expect(existsSync(invokerConfigPath)).toBe(false);
+      expect(typeof code).toBe('number');
+    } finally {
+      restoreEnv('HOME', saved.HOME);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.target);
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('writes Slack env from environment values without prompts', async () => {
@@ -261,34 +287,28 @@ describe('experimental planner MCP setup', () => {
     }
   });
 
-  it('uses INVOKER_MCP_CONFIG_PATH when no target is passed', () => {
+  it('uses a packaged Invoker MCP config path when no target is passed', () => {
     const dir = mkdtempSync(join(tmpdir(), 'invoker-planner-setup-'));
-    const targetPath = join(dir, 'mcp.json');
     const configPath = join(dir, 'config.json');
-    const savedTarget = process.env.INVOKER_MCP_CONFIG_PATH;
-    try {
-      process.env.INVOKER_MCP_CONFIG_PATH = targetPath;
-
-      const state = installExperimentalPlannerMcp({ configPath });
-
-      expect(state.targetPath).toBe(targetPath);
-      expect(readExperimentalPlannerSetup({ configPath }).installed).toBe(true);
-    } finally {
-      restoreEnv('INVOKER_MCP_CONFIG_PATH', savedTarget);
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('requires an MCP target instead of assuming OMP is installed', () => {
+    const targetPath = join(dir, 'mcp.json');
     const savedTarget = process.env.INVOKER_MCP_CONFIG_PATH;
     try {
       delete process.env.INVOKER_MCP_CONFIG_PATH;
 
-      expect(() => installExperimentalPlannerMcp({ configPath: join(tmpdir(), 'invoker-config.json') })).toThrow(
-        'Missing MCP config path. Pass --target <path> or set INVOKER_MCP_CONFIG_PATH.',
-      );
+      const state = ensureExperimentalPlannerMcp({ configPath });
+
+      expect(defaultExperimentalPlannerMcpPath(configPath)).toBe(targetPath);
+      expect(state).toEqual({ targetPath, configPath, installed: true, experimentalPlanner: false });
+      const mcpConfig = JSON.parse(readFileSync(targetPath, 'utf8'));
+      expect(mcpConfig.mcpServers['experimental-planner'].args).toEqual([
+        '--from',
+        DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
+        EXTERNAL_DEPENDENCIES.drafterMcp.commandName,
+      ]);
+      expect(existsSync(configPath)).toBe(false);
     } finally {
       restoreEnv('INVOKER_MCP_CONFIG_PATH', savedTarget);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

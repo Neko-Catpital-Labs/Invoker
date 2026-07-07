@@ -100,7 +100,7 @@ describe('invoker-cli', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('invoker-cli setup [planner|slack]');
     expect(result.stdout).toContain('--planner-url <url>');
-    expect(result.stdout).toContain('Required unless INVOKER_MCP_CONFIG_PATH is set');
+    expect(result.stdout).toContain('Defaults to ~/.invoker/mcp.json');
   });
 
   it('lists worker kinds from the registry', async () => {
