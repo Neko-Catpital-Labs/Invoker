@@ -298,6 +298,13 @@ export interface PersistenceAdapter {
   listWorkflowChannels(): WorkflowChannel[];
   deleteWorkflowChannel(workflowId: string): void;
 
+  // In-app planning chat sessions
+  upsertInAppPlanningSession(record: InAppPlanningSessionRecord): void;
+  loadInAppPlanningSession(sessionId: string): InAppPlanningSessionRecord | undefined;
+  listInAppPlanningSessions(): InAppPlanningSessionRecord[];
+  updateInAppPlanningSession(sessionId: string, patch: InAppPlanningSessionPatch): void;
+  deleteInAppPlanningSession(sessionId: string): void;
+
   // Task output (stdout/stderr persistence)
   appendTaskOutput(taskId: string, data: string): void;
   getTaskOutput(taskId: string): string;

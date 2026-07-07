@@ -60,6 +60,8 @@ import type {
   WorkerActionWrite,
   TerminalSessionPatch,
   TerminalSessionRecord,
+  InAppPlanningSessionPatch,
+  InAppPlanningSessionRecord,
 } from './adapter.js';
 import {
   SCHEMA_DDL,
@@ -389,6 +391,28 @@ type TerminalSessionRow = {
   output_snapshot?: unknown;
   created_at?: unknown;
   updated_at?: unknown;
+};
+
+type InAppPlanningSessionRow = {
+  session_id?: unknown;
+  title?: unknown;
+  preset_key?: unknown;
+  status?: unknown;
+  draft_plan_summary_json?: unknown;
+  submitted_workflow_id?: unknown;
+  submitted_plan_name?: unknown;
+  pending_response?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
+};
+
+type InAppPlanningMessageRow = {
+  session_id?: unknown;
+  message_id?: unknown;
+  role?: unknown;
+  text?: unknown;
+  tone?: unknown;
+  created_at?: unknown;
 };
 
 function parseTerminalArgsJson(value: unknown): string[] {
@@ -2420,6 +2444,188 @@ export class SQLiteAdapter implements PersistenceAdapter {
       createdAt: row.created_at,
     }));
   }
+
+  private mapInAppPlanningMessageRow(row: InAppPlanningMessageRow) {
+    return {
+      id: Number(row.message_id ?? 0),
+      role: String(row.role ?? 'system') as 'system' | 'user' | 'assistant',
+      text: String(row.text ?? ''),
+      tone: typeof row.tone === 'string' ? row.tone as 'muted' | 'error' | undefined : undefined,
+      createdAt: String(row.created_at ?? ''),
+    };
+  }
+
+  private mapInAppPlanningSessionRow(row: InAppPlanningSessionRow): InAppPlanningSessionRecord {
+    let draftPlanSummary;
+    if (typeof row.draft_plan_summary_json === 'string' && row.draft_plan_summary_json.length > 0) {
+      try {
+        draftPlanSummary = JSON.parse(row.draft_plan_summary_json);
+      } catch {
+        draftPlanSummary = undefined;
+      }
+    }
+    const messages = this.queryAll(
+      'SELECT * FROM in_app_planning_messages WHERE session_id = ? ORDER BY message_id ASC',
+      [String(row.session_id ?? '')],
+    ) as InAppPlanningMessageRow[];
+    return {
+      id: String(row.session_id ?? ''),
+      title: String(row.title ?? ''),
+      presetKey: String(row.preset_key ?? ''),
+      status: String(row.status ?? 'still_discussing') as InAppPlanningSessionRecord['status'],
+      messages: messages.map((message) => this.mapInAppPlanningMessageRow(message)),
+      draftPlanSummary,
+      submittedWorkflowId: typeof row.submitted_workflow_id === 'string' ? row.submitted_workflow_id : undefined,
+      submittedPlanName: typeof row.submitted_plan_name === 'string' ? row.submitted_plan_name : undefined,
+      pendingResponse: Number(row.pending_response ?? 0) !== 0,
+      createdAt: String(row.created_at ?? ''),
+      updatedAt: String(row.updated_at ?? ''),
+    };
+  }
+
+  upsertInAppPlanningSession(record: InAppPlanningSessionRecord): void {
+    this.runTransaction(() => {
+      this.db.run(
+        `INSERT INTO in_app_planning_sessions (
+          session_id,
+          title,
+          preset_key,
+          status,
+          draft_plan_summary_json,
+          submitted_workflow_id,
+          submitted_plan_name,
+          pending_response,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET
+          title = excluded.title,
+          preset_key = excluded.preset_key,
+          status = excluded.status,
+          draft_plan_summary_json = excluded.draft_plan_summary_json,
+          submitted_workflow_id = excluded.submitted_workflow_id,
+          submitted_plan_name = excluded.submitted_plan_name,
+          pending_response = excluded.pending_response,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at`,
+        [
+          record.id,
+          record.title,
+          record.presetKey,
+          record.status,
+          record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
+          record.submittedWorkflowId ?? null,
+          record.submittedPlanName ?? null,
+          record.pendingResponse ? 1 : 0,
+          record.createdAt,
+          record.updatedAt,
+        ],
+      );
+      this.db.run('DELETE FROM in_app_planning_messages WHERE session_id = ?', [record.id]);
+      for (const message of record.messages) {
+        this.db.run(
+          `INSERT INTO in_app_planning_messages (
+            session_id,
+            message_id,
+            role,
+            text,
+            tone,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            record.id,
+            message.id,
+            message.role,
+            message.text,
+            message.tone ?? null,
+            message.createdAt,
+          ],
+        );
+      }
+    });
+  }
+
+  loadInAppPlanningSession(sessionId: string): InAppPlanningSessionRecord | undefined {
+    const row = this.queryOne('SELECT * FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
+    return row ? this.mapInAppPlanningSessionRow(row as InAppPlanningSessionRow) : undefined;
+  }
+
+  listInAppPlanningSessions(): InAppPlanningSessionRecord[] {
+    const rows = this.queryAll(
+      'SELECT * FROM in_app_planning_sessions ORDER BY updated_at ASC, created_at ASC',
+    ) as InAppPlanningSessionRow[];
+    return rows.map((row) => this.mapInAppPlanningSessionRow(row));
+  }
+
+  updateInAppPlanningSession(sessionId: string, patch: InAppPlanningSessionPatch): void {
+    this.runTransaction(() => {
+      const setClauses: string[] = [];
+      const values: unknown[] = [];
+      if (Object.hasOwn(patch, 'title')) {
+        setClauses.push('title = ?');
+        values.push(patch.title ?? null);
+      }
+      if (Object.hasOwn(patch, 'status')) {
+        setClauses.push('status = ?');
+        values.push(patch.status ?? null);
+      }
+      if (Object.hasOwn(patch, 'draftPlanSummary')) {
+        setClauses.push('draft_plan_summary_json = ?');
+        values.push(patch.draftPlanSummary ? JSON.stringify(patch.draftPlanSummary) : null);
+      }
+      if (Object.hasOwn(patch, 'submittedWorkflowId')) {
+        setClauses.push('submitted_workflow_id = ?');
+        values.push(patch.submittedWorkflowId ?? null);
+      }
+      if (Object.hasOwn(patch, 'submittedPlanName')) {
+        setClauses.push('submitted_plan_name = ?');
+        values.push(patch.submittedPlanName ?? null);
+      }
+      if (Object.hasOwn(patch, 'pendingResponse')) {
+        setClauses.push('pending_response = ?');
+        values.push(patch.pendingResponse ? 1 : 0);
+      }
+      if (Object.hasOwn(patch, 'updatedAt')) {
+        setClauses.push('updated_at = ?');
+        values.push(patch.updatedAt ?? null);
+      }
+      if (setClauses.length > 0) {
+        values.push(sessionId);
+        this.db.run(`UPDATE in_app_planning_sessions SET ${setClauses.join(', ')} WHERE session_id = ?`, values);
+      }
+      if (Object.hasOwn(patch, 'messages')) {
+        this.db.run('DELETE FROM in_app_planning_messages WHERE session_id = ?', [sessionId]);
+        for (const message of patch.messages ?? []) {
+          this.db.run(
+            `INSERT INTO in_app_planning_messages (
+              session_id,
+              message_id,
+              role,
+              text,
+              tone,
+              created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)`,
+            [
+              sessionId,
+              message.id,
+              message.role,
+              message.text,
+              message.tone ?? null,
+              message.createdAt,
+            ],
+          );
+        }
+      }
+    });
+  }
+
+  deleteInAppPlanningSession(sessionId: string): void {
+    this.runTransaction(() => {
+      this.db.run('DELETE FROM in_app_planning_messages WHERE session_id = ?', [sessionId]);
+      this.db.run('DELETE FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
+    });
+  }
+
 
   // ── Workflow Channels (Slack workflow↔channel mapping) ──
 

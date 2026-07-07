@@ -155,6 +155,36 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_workflow_channels_channel
         ON workflow_channels(channel_id);
 
+      CREATE TABLE IF NOT EXISTS in_app_planning_sessions (
+        session_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        preset_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        draft_plan_summary_json TEXT,
+        submitted_workflow_id TEXT,
+        submitted_plan_name TEXT,
+        pending_response INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_in_app_planning_sessions_updated
+        ON in_app_planning_sessions(updated_at);
+
+      CREATE TABLE IF NOT EXISTS in_app_planning_messages (
+        session_id TEXT NOT NULL,
+        message_id INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        tone TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (session_id, message_id),
+        FOREIGN KEY (session_id) REFERENCES in_app_planning_sessions(session_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_in_app_planning_messages_session
+        ON in_app_planning_messages(session_id, message_id);
+
       CREATE TABLE IF NOT EXISTS task_output (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id TEXT NOT NULL,
