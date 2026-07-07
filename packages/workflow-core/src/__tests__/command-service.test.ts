@@ -26,7 +26,7 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     resumeTaskAfterFixApproval: vi.fn().mockResolvedValue([] as TaskState[]),
     reject: vi.fn(),
     getTask: vi.fn().mockReturnValue(undefined),
-    revertConflictResolution: vi.fn(),
+    revertFixSession: vi.fn(),
     provideInput: vi.fn(),
     retryTask: vi.fn().mockReturnValue([]),
     recreateTask: vi.fn().mockReturnValue([]),
@@ -114,10 +114,10 @@ describe('CommandService', () => {
 
       expect(result).toEqual({ ok: true, data: undefined });
       expect(orchestrator.reject).toHaveBeenCalledWith('t-1', 'bad');
-      expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+      expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
     });
 
-    it('calls revertConflictResolution when pendingFixError exists', async () => {
+    it('calls revertFixSession when pendingFixError exists', async () => {
       (orchestrator.getTask as ReturnType<typeof vi.fn>).mockReturnValue({
         execution: { pendingFixError: 'merge conflict' },
       });
@@ -125,9 +125,9 @@ describe('CommandService', () => {
       const result = await service.reject(envelope);
 
       expect(result).toEqual({ ok: true, data: undefined });
-      expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
+      expect(orchestrator.revertFixSession).toHaveBeenCalledWith(
         't-1',
-        'merge conflict',
+        { savedError: 'merge conflict' },
       );
       expect(orchestrator.reject).not.toHaveBeenCalled();
     });

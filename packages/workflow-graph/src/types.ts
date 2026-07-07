@@ -201,6 +201,13 @@ export interface TaskExecution {
   readonly selectedExperiments?: readonly string[];
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly pendingFixError?: string;
+  /**
+   * Resting status recorded when a fix session began (`failed`,
+   * `review_ready`, or `awaiting_approval`). Present only while the session
+   * is open (fixing or parked awaiting approval); `revertFixSession` restores
+   * this status and every session exit clears it.
+   */
+  readonly fixSessionEntryStatus?: TaskStatus;
   readonly isFixingWithAI?: boolean;
   readonly reviewUrl?: string;
   readonly reviewId?: string;

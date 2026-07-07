@@ -39,6 +39,7 @@ const expectedExecutionFields = [
   'selectedExperiments',
   'experimentResults',
   'pendingFixError',
+  'fixSessionEntryStatus',
   'isFixingWithAI',
   'reviewUrl',
   'reviewId',

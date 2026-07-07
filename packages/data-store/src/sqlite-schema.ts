@@ -141,36 +141,6 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_conv_messages_thread
         ON conversation_messages(thread_ts, seq);
 
-      CREATE TABLE IF NOT EXISTS in_app_planning_sessions (
-        session_id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        preset_key TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted')),
-        draft_plan_summary_json TEXT CHECK (draft_plan_summary_json IS NULL OR json_valid(draft_plan_summary_json)),
-        submitted_workflow_id TEXT,
-        submitted_plan_name TEXT,
-        pending_response INTEGER NOT NULL DEFAULT 0 CHECK (pending_response IN (0, 1)),
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS in_app_planning_messages (
-        session_id TEXT NOT NULL,
-        message_id INTEGER NOT NULL,
-        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
-        text TEXT NOT NULL,
-        tone TEXT CHECK (tone IS NULL OR tone IN ('muted', 'error', 'success')),
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (session_id, message_id),
-        FOREIGN KEY (session_id) REFERENCES in_app_planning_sessions(session_id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_in_app_planning_sessions_updated
-        ON in_app_planning_sessions(updated_at);
-
-      CREATE INDEX IF NOT EXISTS idx_in_app_planning_messages_session
-        ON in_app_planning_messages(session_id, message_id);
-
       CREATE TABLE IF NOT EXISTS workflow_channels (
         workflow_id TEXT PRIMARY KEY,
         channel_id TEXT NOT NULL,
@@ -398,6 +368,9 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_terminal_sessions_status_updated
         ON terminal_sessions(status, updated_at);
 
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_terminal_sessions_running_target
+        ON terminal_sessions(target_key)
+        WHERE status = 'running';
     `;
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
@@ -466,6 +439,8 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
   'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
   'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
+  // fix_session_entry_status: resting status recorded while a fix session is open
+  'ALTER TABLE tasks ADD COLUMN fix_session_entry_status TEXT',
 ];
 
 /**
