@@ -11,6 +11,8 @@ description: >
 
 Use this skill when the work is already done and the user wants a PR created, updated, rewritten, split, or republished.
 
+Read this skill and `skills/visual-proof/SKILL.md` from the PR's target base branch (for example `git show origin/master:skills/make-pr/SKILL.md`) before authoring proof or PR bodies. Working branches and merge clones can carry stale policy copies, and the validators enforce the base branch's rules.
+
 For stacked PRs, apply `skills/review-compression/SKILL.md` before you write titles or PR bodies. If one branch mixes more than one local review claim, split the stack first.
 For decomposition or extraction refactors (splitting a large file into modules), one PR moves one cohesive unit: create the target file, move ONE function/class/phase, re-point references, keep the public surface stable. The next unit is the next PR. Bundling several extractions into one branch ("extract prepare + dispatch + finalize") is the default mistake this rule prevents — see the **Decomposition & Extraction Refactors** section of `skills/review-compression/SKILL.md`.
 
@@ -117,6 +119,8 @@ When an existing PR changes after its body or proof was written, rerun this skil
 Visual proof must show the changed behavior itself, not just the changed screen area. Before creating or updating the PR, open every screenshot or video and verify the user-visible target is present and identifiable. For conditional or event-driven UI, drive the exact condition that triggers the new state and capture that state. A generic task panel, unchanged sidebar, unrelated graph, or stale screenshot is not proof, even when the right file changed.
 
 If the changed behavior spans multiple states or a state transition — for example restart persistence, before/after workflow transitions, progress animations, opening then dismissing overlays, or any proof labeled “before” and “after” — use animated proof. A gif, mp4, webm, or walkthrough video is required; static screenshots alone are not enough.
+
+When the claim is that a state persists across an action — navigation, restart, refresh, resize — each screenshot must also show the action happened. Number the frames as a sequence and make every frame identify its step through an on-screen cue: the moved selection highlight, the changed route, or the swapped panel, with the preserved state unchanged beside it. Two frames that differ only in the preserved state do not prove the action occurred; if no on-screen cue distinguishes the steps, rely on the walkthrough video as the primary proof.
 
 In the PR body, caption each visual proof item with the concrete thing the reviewer should see, for example "amber Workspace recreated notice in the task inspector." If the reviewer cannot tell what changed from the image and caption, recapture proof before publishing.
 

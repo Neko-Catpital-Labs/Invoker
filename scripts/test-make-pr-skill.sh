@@ -65,6 +65,10 @@ must_contain "$SKILL_MD" "do not present an unchanged screenshot as proof of the
 
 must_contain "$SKILL_MD" "If the changed behavior spans multiple states or a state transition" "make-pr skill must call out restart and transition proof"
 must_contain "$SKILL_MD" "A gif, mp4, webm, or walkthrough video is required" "make-pr skill must require animated proof for restart or multi-state behavior"
+must_contain "$SKILL_MD" "each screenshot must also show the action happened" "make-pr persistence proof frames must show the triggering action"
+must_contain "$SKILL_MD" "Two frames that differ only in the preserved state do not prove the action occurred" "make-pr must reject persistence proof without visible action evidence"
+must_contain "$SKILL_MD" "from the PR's target base branch" "make-pr must be read from the target base, not a stale working-branch copy"
+must_contain "$SKILL_MD" "Working branches and merge clones can carry stale policy copies" "make-pr must warn that branch copies of the skill drift behind master"
 must_contain "$SKILL_MD" "must not leave repo-relative proof paths in markdown" "make-pr skill must forbid broken repo-relative proof links in published PRs"
 
 # The publication checklist must stop empty PR slices before create/update/stack publish.
