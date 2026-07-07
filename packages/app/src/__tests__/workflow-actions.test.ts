@@ -1356,6 +1356,7 @@ describe('fixWithAgentAction', () => {
       appendTaskOutput: vi.fn(),
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
       updateWorkflow: vi.fn(),
+      logEvent: vi.fn(),
     };
     const taskExecutor = {
       preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
@@ -1373,6 +1374,16 @@ describe('fixWithAgentAction', () => {
     expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
       'task-a',
       expect.stringContaining('Startup merge conflict detected; recreating workflow wf-1 from a fresh base.'),
+    );
+    expect(persistence.logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'task.workflow_recreated',
+      expect.objectContaining({
+        level: 'warn',
+        workflowId: 'wf-1',
+        reason: 'missing-workspace-startup-merge-conflict',
+        message: 'Workspace was missing, so Invoker recreated workflow wf-1 from a fresh base instead of fixing this task in-place.',
+      }),
     );
     expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));

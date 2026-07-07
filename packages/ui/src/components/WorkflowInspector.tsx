@@ -33,6 +33,9 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'reviewId',
   'reviewUrl',
   'status',
+  'reason',
+  'route',
+  'workflowId',
 ]);
 
 const LOG_LEVELS: readonly TaskLogLevel[] = ['debug', 'info', 'warn', 'error'];
@@ -89,6 +92,24 @@ function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry
       : event.eventType,
     detail: formatLogDetail(payload),
     createdAt: event.createdAt,
+  };
+}
+
+interface WorkspaceRecreateNotice {
+  message: string;
+  workflowId?: string;
+}
+
+function workspaceRecreateNoticeFromEvent(event: TaskAuditEvent): WorkspaceRecreateNotice | undefined {
+  if (event.eventType !== 'task.workflow_recreated') return undefined;
+  const payload = parseEventPayload(event.payload);
+  const payloadMessage = payload?.message;
+  const workflowId = typeof payload?.workflowId === 'string' ? payload.workflowId : undefined;
+  return {
+    message: typeof payloadMessage === 'string' && payloadMessage.trim()
+      ? payloadMessage
+      : 'Invoker recreated this workflow from a fresh workspace because the old workspace was missing.',
+    workflowId,
   };
 }
 
@@ -344,6 +365,10 @@ export function WorkflowInspector({
     && onReject,
   );
   const statusHeading = task ? 'Task Status' : 'Status';
+  const workspaceRecreateNotice = [...taskLogEvents]
+    .reverse()
+    .map(workspaceRecreateNoticeFromEvent)
+    .find((notice): notice is WorkspaceRecreateNotice => Boolean(notice));
   const logEntries = taskLogEvents.map(taskEventToLogEntry);
   const visibleLogEntries = logEntries
     .filter((entry) => LOG_LEVEL_RANK[entry.level] >= LOG_LEVEL_RANK[logLevelFilter])
@@ -463,6 +488,16 @@ export function WorkflowInspector({
             </div>
           )}
         </section>
+
+        {workspaceRecreateNotice && (
+          <section data-testid="workspace-recreate-notice" className="rounded border border-amber-700 bg-amber-950/40 p-3">
+            <h3 className="text-[11px] uppercase tracking-wide text-amber-200">Workspace recreated</h3>
+            <p className="mt-1 text-xs text-amber-100 break-words">{workspaceRecreateNotice.message}</p>
+            {workspaceRecreateNotice.workflowId && (
+              <p className="mt-2 text-[11px] text-amber-300">Workflow: {workspaceRecreateNotice.workflowId}</p>
+            )}
+          </section>
+        )}
 
         {actionNode && (
           <section data-testid="workflow-inspector-action-node" className="rounded border border-blue-500/40 bg-blue-950/20 p-3">
