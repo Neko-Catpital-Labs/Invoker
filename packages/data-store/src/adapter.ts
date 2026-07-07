@@ -142,6 +142,14 @@ export type WorkerActionStatus =
   | 'abandoned'
   | 'cancelled';
 
+export interface TaskEventListFilters {
+  taskId?: string;
+  eventTypes?: readonly string[];
+  sortBy?: 'asc' | 'desc';
+  limit?: number;
+}
+
+
 export interface WorkerActionRecord {
   id: string;
   workerKind: string;
@@ -272,6 +280,7 @@ export interface PersistenceAdapter {
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
   getEvents(taskId: string): TaskEvent[];
   getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
+  listTaskEvents?(filters?: TaskEventListFilters): TaskEvent[];
 
   // Worker actions (durable worker-owned action state/history)
   getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
