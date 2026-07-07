@@ -6,11 +6,15 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SKILL_MD="$REPO_ROOT/skills/make-pr/SKILL.md"
 REVIEW_COMPRESSION_MD="$REPO_ROOT/skills/review-compression/SKILL.md"
 
+# Tiny shell helpers only. This test does not parse GitHub payloads.
+# It locks specific policy lines in the skill docs so the regression fails
+# if someone removes the instruction text later.
 fail() {
   echo "FAIL: $*" >&2
   exit 1
 }
 
+# Require one exact literal string in the target markdown file.
 must_contain() {
   local file="$1"
   local needle="$2"
@@ -59,8 +63,16 @@ must_contain "$SKILL_MD" "do not present an unchanged screenshot as proof of the
 # The publication checklist must stop empty PR slices before create/update/stack publish.
 must_contain "$SKILL_MD" "has no file changes against its selected base" "make-pr skill must reject branches with no reviewable file diff"
 must_contain "$SKILL_MD" "contains an empty commit slice" "make-pr skill must reject empty commit slices"
+must_contain "$SKILL_MD" "No custom payload parsing is required here" "make-pr skill must explain that the post-push audit checks rendered PR metadata, not ad hoc payload parsing"
 must_contain "$SKILL_MD" 'node scripts/create-pr.mjs`' "make-pr skill must apply the empty-slice rule to normal PR creation"
 must_contain "$SKILL_MD" "node scripts/create-pr.mjs --update-existing" "make-pr skill must apply the empty-slice rule to PR updates"
 must_contain "$SKILL_MD" "mergify stack push" "make-pr skill must apply the empty-slice rule to Mergify stack publication"
+# Mergify-published stacks must be audited and repaired before yielding.
+must_contain "$SKILL_MD" "After \`mergify stack push\`, you MUST audit the live PRs immediately" "make-pr skill must require a post-push audit of live PR metadata"
+must_contain "$SKILL_MD" "empty description or a bare \`Depends-On:\` line are a publication failure" "make-pr skill must reject placeholder Mergify PR metadata"
+must_contain "$SKILL_MD" "Read each live PR (\`gh pr view\` or \`pr://\`) for title, body, base, and head" "make-pr skill must inspect live PR metadata after publication"
+must_contain "$SKILL_MD" "aligned stack title prefix" "make-pr skill must require aligned stack titles after publication"
+must_contain "$SKILL_MD" "remote-only head branch name" "make-pr skill must document the Mergify branch-name mismatch case"
+must_contain "$SKILL_MD" "gh pr edit --title ... --body-file ..." "make-pr skill must allow immediate metadata repair when create-pr cannot map the published branch"
 
 echo "OK: make-pr skill contract checks passed"
