@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 export interface InvokerTerminalLine {
   id: number;
@@ -10,6 +10,12 @@ export interface InvokerTerminalLine {
 interface PlanningPresetOptionView {
   key: string;
   label: string;
+}
+
+const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+
+function isTranscriptNearBottom(element: HTMLDivElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
 }
 
 interface InvokerTerminalProps {
@@ -30,6 +36,7 @@ interface InvokerTerminalProps {
   onExpand: () => void;
   onCloseExpanded?: () => void;
   onCollapse?: () => void;
+  activeConversationKey: string;
 }
 
 interface SubmitErrorView {
@@ -55,8 +62,34 @@ export function InvokerTerminal({
   onExpand,
   onCloseExpanded,
   onCollapse,
+  activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+
+  const scrollTranscriptToBottom = useCallback((): void => {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    transcript.scrollTop = transcript.scrollHeight;
+  }, []);
+
+  useLayoutEffect(() => {
+    setShouldFollowTranscript(true);
+    scrollTranscriptToBottom();
+  }, [activeConversationKey, scrollTranscriptToBottom]);
+
+  useLayoutEffect(() => {
+    if (shouldFollowTranscript) {
+      scrollTranscriptToBottom();
+    }
+  }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+
+  const handleTranscriptScroll = useCallback((): void => {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    setShouldFollowTranscript(isTranscriptNearBottom(transcript));
+  }, []);
 
   useEffect(() => {
     if (!busy && !readOnly) {
@@ -113,7 +146,9 @@ export function InvokerTerminal({
       </div>
 
       <div
+        ref={transcriptRef}
         data-testid="invoker-terminal-transcript"
+        onScroll={handleTranscriptScroll}
         className={`min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 text-sm ${expanded ? '' : 'max-h-64'}`}
       >
         {lines.map((line) => {
