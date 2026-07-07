@@ -687,6 +687,46 @@ describe('WorkflowInspector', () => {
     }
   });
 
+  it('shows a visible notice when fix recreated the workflow because workspace was missing', async () => {
+    (window as unknown as {
+      invoker: { getEvents: (taskId: string) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
+    }).invoker = {
+      getEvents: vi.fn(async () => [
+        {
+          id: 1,
+          eventType: 'task.workflow_recreated',
+          payload: JSON.stringify({
+            level: 'warn',
+            workflowId: 'wf-1',
+            reason: 'missing-workspace-startup-merge-conflict',
+            message: 'Workspace was missing, so Invoker recreated workflow wf-1 from a fresh base instead of fixing this task in-place.',
+          }),
+          createdAt: '2025-01-01T00:00:04.000Z',
+        },
+      ]),
+    };
+
+    try {
+      render(
+        <WorkflowInspector
+          workflow={workflow}
+          task={makeTask({ status: 'failed' })}
+          collapsed={false}
+          advancedExpanded={false}
+          onToggleCollapsed={() => {}}
+          onToggleAdvanced={() => {}}
+        />,
+      );
+
+      const notice = await screen.findByTestId('workspace-recreate-notice');
+      expect(notice).toHaveTextContent('Workspace recreated');
+      expect(notice).toHaveTextContent('Workspace was missing, so Invoker recreated workflow wf-1 from a fresh base instead of fixing this task in-place.');
+      expect(notice).toHaveTextContent('Workflow: wf-1');
+    } finally {
+      delete (window as unknown as { invoker?: unknown }).invoker;
+    }
+  });
+
   it('shows a retrying log error when task events fail to load', async () => {
     (window as unknown as {
       invoker: { getEvents: (taskId: string) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };

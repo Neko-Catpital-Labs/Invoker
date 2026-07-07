@@ -879,6 +879,12 @@ export async function fixWithAgentAction(
     throw new Error(msg);
   }
   if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
+    persistence.logEvent?.(taskId, 'task.workflow_recreated', {
+      level: 'warn',
+      workflowId: recoveryRoute.workflowId,
+      reason: 'missing-workspace-startup-merge-conflict',
+      message: `Workspace was missing, so Invoker recreated workflow ${recoveryRoute.workflowId} from a fresh base instead of fixing this task in-place.`,
+    });
     if (options.recreateOutputLabel) {
       persistence.appendTaskOutput(
         taskId,
