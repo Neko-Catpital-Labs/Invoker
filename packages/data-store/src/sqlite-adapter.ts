@@ -456,6 +456,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
 
+
     try {
       const { DatabaseSync } = await loadNativeSqlite();
       const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
@@ -844,6 +845,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       }
     }
     this.migrateWorkflowStatusColumn();
+    this.dropTaskAutoFixAttemptsColumn();
 
     // Replace old attempt_number index with created_at index, etc.
     for (const sql of POST_MIGRATION_STATEMENTS) {
@@ -875,6 +877,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (foreignKeysEnabled) {
       this.db.run('PRAGMA foreign_keys = ON');
     }
+    this.dirty = true;
+  }
+
+  private dropTaskAutoFixAttemptsColumn(): void {
+    if (this.readOnly) return;
+    const columns = this.queryAll('PRAGMA table_info(tasks)') as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === 'auto_fix_attempts')) return;
+    this.db.run('ALTER TABLE tasks DROP COLUMN auto_fix_attempts');
     this.dirty = true;
   }
 
@@ -1565,7 +1575,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedAttemptId: 'selected_attempt_id',
         agentName: 'agent_name',
         lastAgentName: 'last_agent_name',
-        autoFixAttempts: 'auto_fix_attempts',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
