@@ -47,6 +47,14 @@ function createErrorProcess(errorMessage: string): any {
   return proc;
 }
 
+function createPendingProcess(): any {
+  const proc = new EventEmitter() as any;
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.kill = vi.fn();
+  return proc;
+}
+
 function mockCursorResponse(text: string) {
   mockSpawn.mockReturnValueOnce(createMockProcess(text));
 }
@@ -599,6 +607,45 @@ describe('PlanConversation', () => {
   it('handles Cursor CLI error', async () => {
     mockSpawn.mockReturnValueOnce(createErrorProcess('Command not found'));
     await expect(conversation.sendMessage('Hello')).rejects.toThrow('Failed to spawn agent');
+  });
+
+  it('rejects with AbortError without spawning when the caller signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(conversation.sendMessage('Hello', controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(conversation.history).toHaveLength(0);
+  });
+
+  it('kills an in-flight planner subprocess and rejects with AbortError when aborted', async () => {
+    const proc = createPendingProcess();
+    mockSpawn.mockReturnValueOnce(proc);
+    const controller = new AbortController();
+    const removeAbortListener = vi.spyOn(controller.signal, 'removeEventListener');
+
+    const promise = conversation.sendMessage('Hello', controller.signal);
+    await Promise.resolve();
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    controller.abort();
+
+    const err = await promise.then(
+      () => null,
+      (caught) => caught as Error,
+    );
+    expect(err).not.toBeNull();
+    expect(err?.name).toBe('AbortError');
+    expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(removeAbortListener).toHaveBeenCalledWith('abort', expect.any(Function));
+
+    proc.stdout.emit('data', Buffer.from('late response'));
+    proc.emit('close', 0);
+    await Promise.resolve();
+
+    expect(conversation.history).toEqual([{ role: 'user', content: 'Hello' }]);
   });
 
   it('handles non-zero exit code', async () => {

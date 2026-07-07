@@ -93,12 +93,12 @@ export class SessionHandle {
    * Send a message in this session's conversation.
    * Updates lastAccessedAt on every call.
    */
-  async sendMessage(message: string): Promise<string> {
+  async sendMessage(message: string, signal?: AbortSignal): Promise<string> {
     if (this.disposed) {
       throw new Error(`Session ${this.id} has been disposed`);
     }
     this.metadata.lastAccessedAt = new Date();
-    return this.conversation.sendMessage(message);
+    return this.conversation.sendMessage(message, signal);
   }
 
   /**
