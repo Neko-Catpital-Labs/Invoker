@@ -347,11 +347,16 @@ export function parseThreadRequest(text: string): ThreadRequest | null {
 
 /** Shared interface between SessionHandle and PlanConversation for handler code. */
 interface ConversationLike {
-  sendMessage(message: string): Promise<string>;
+  sendMessage(message: string, signal?: AbortSignal): Promise<string>;
   getDraftedPlan(): string | null;
   readonly conversationMode: ConversationMode;
   readonly planSubmitted: boolean;
   readonly submittedPlanText: string | null;
+}
+
+interface PlannerTurn {
+  requestId: number;
+  controller: AbortController;
 }
 
 /** An action staged for a thread, awaiting a yes/no (text or button) confirmation. */
@@ -419,6 +424,9 @@ export class SlackSurface implements Surface {
   private planningContexts = new Map<string, PlanningContext>();
   /** Maps thread_ts → an action awaiting yes/no (or button) confirmation. */
   private pendingConfirms = new Map<string, PendingConfirm>();
+  /** Maps thread_ts → the currently active planner turn. */
+  private plannerTurns = new Map<string, PlannerTurn>();
+  private nextPlannerTurnId = 0;
 
   // ── Slack-native workflow extensions ──────────────────────
   private lobbyChannelId: string;
@@ -1595,6 +1603,31 @@ ${text}`;
 
   // ── Shared Conversation Message Handler ────────────────
 
+  private startPlannerTurn(threadTs: string): PlannerTurn {
+    this.plannerTurns.get(threadTs)?.controller.abort();
+
+    const turn = {
+      requestId: ++this.nextPlannerTurnId,
+      controller: new AbortController(),
+    };
+    this.plannerTurns.set(threadTs, turn);
+    return turn;
+  }
+
+  private isCurrentPlannerTurn(threadTs: string, turn: PlannerTurn): boolean {
+    return this.plannerTurns.get(threadTs)?.requestId === turn.requestId;
+  }
+
+  private finishPlannerTurn(threadTs: string, turn: PlannerTurn): void {
+    if (this.isCurrentPlannerTurn(threadTs, turn)) {
+      this.plannerTurns.delete(threadTs);
+    }
+  }
+
+  private isAbortError(err: unknown): boolean {
+    return !!err && typeof err === 'object' && (err as { name?: unknown }).name === 'AbortError';
+  }
+
   private async handleConversationMessage(
     conversation: ConversationLike,
     text: string,
@@ -1605,6 +1638,8 @@ ${text}`;
     const tEntry = Date.now();
     this.log('slack', 'info', `[TRACE] handleConversationMessage (thread_ts=${threadTs}, text="${text.slice(0, 80)}")`);
 
+    const turn = this.startPlannerTurn(threadTs);
+    const isCurrentTurn = () => this.isCurrentPlannerTurn(threadTs, turn);
     const typingStarted = await this.startTypingIndicator(channel, threadTs);
     const tSetup = Date.now();
 
@@ -1612,9 +1647,26 @@ ${text}`;
     let heartbeatTimer: NodeJS.Timeout | undefined;
     const heartbeatTimestamps: string[] = [];
     let heartbeatInFlight = false;
+    const clearHeartbeatTimer = () => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
+    };
+    const deleteHeartbeatsIfCurrent = async () => {
+      for (const hbTs of heartbeatTimestamps) {
+        if (!isCurrentTurn()) return false;
+        try {
+          await this.deleteMessage(channel, hbTs);
+        } catch (err) {
+          this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${err}`);
+        }
+      }
+      return true;
+    };
     if (heartbeatMs > 0) {
       heartbeatTimer = setInterval(async () => {
-        if (heartbeatInFlight) return;
+        if (!isCurrentTurn() || heartbeatInFlight) return;
         heartbeatInFlight = true;
         try {
           const result = await this.sayWithRateLimitRetry(say, {
@@ -1632,42 +1684,46 @@ ${text}`;
     }
 
     try {
-      const reply = await conversation.sendMessage(text);
+      const reply = await conversation.sendMessage(text, turn.controller.signal);
       const tCursor = Date.now();
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      for (const hbTs of heartbeatTimestamps) {
-        try {
-          await this.deleteMessage(channel, hbTs);
-        } catch (err) {
-          this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${err}`);
-        }
-      }
+      clearHeartbeatTimer();
+      if (!isCurrentTurn()) return;
+      if (!(await deleteHeartbeatsIfCurrent())) return;
       const tHeartbeatCleanup = Date.now();
       this.log('slack', 'info', `[TRACE] conversation.sendMessage returned (threadTs=${threadTs}, replyLen=${reply.length}, planSubmitted=${conversation.planSubmitted})`);
 
+      if (!isCurrentTurn()) return;
       if (typingStarted) {
         await this.stopTypingIndicator(channel, threadTs);
       }
+      if (!isCurrentTurn()) return;
 
       const chunks = splitForSlack(sanitizeSlashCommands(reply));
 
       const ackTs = this.ackMessages.get(threadTs);
       if (ackTs) {
+        if (!isCurrentTurn()) return;
         const updated = await this.updateMessage(channel, ackTs, { text: chunks[0], blocks: [] });
+        if (!isCurrentTurn()) return;
         this.ackMessages.delete(threadTs);
         if (updated) {
           this.log('slack', 'info', `[ACK] Replaced immediate acknowledgment with actual response (thread_ts=${threadTs}, ack_ts=${ackTs}, chunks=${chunks.length})`);
         } else {
           this.log('slack', 'warn', `[ACK] Failed to replace ack, falling back to new message (thread_ts=${threadTs}, ack_ts=${ackTs})`);
+          if (!isCurrentTurn()) return;
           await this.deleteMessage(channel, ackTs);
+          if (!isCurrentTurn()) return;
           await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
         }
       } else {
+        if (!isCurrentTurn()) return;
         await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
       }
 
       for (let i = 1; i < chunks.length; i++) {
+        if (!isCurrentTurn()) return;
         await this.sleep(this.messagePacingMs);
+        if (!isCurrentTurn()) return;
         await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
       }
       const tPosting = Date.now();
@@ -1676,16 +1732,17 @@ ${text}`;
 
       this.log('slack', 'info', `[PERF] thread_ts=${threadTs} setup=${tSetup - tEntry}ms cursor=${tCursor - tSetup}ms heartbeatCleanup=${tHeartbeatCleanup - tCursor}ms posting=${tPosting - tHeartbeatCleanup}ms chunks=${chunks.length} total=${tEnd - tEntry}ms`);
     } catch (err) {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      for (const hbTs of heartbeatTimestamps) {
-        try {
-          await this.deleteMessage(channel, hbTs);
-        } catch (deleteErr) {
-          this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${deleteErr}`);
-        }
-      }
+      clearHeartbeatTimer();
+      if (!isCurrentTurn()) return;
+      if (!(await deleteHeartbeatsIfCurrent())) return;
+      if (!isCurrentTurn()) return;
       if (typingStarted) {
         await this.stopTypingIndicator(channel, threadTs);
+      }
+      if (!isCurrentTurn()) return;
+      if (this.isAbortError(err)) {
+        this.log('slack', 'info', `[SESSION_ABORTED] Plan conversation aborted (thread_ts=${threadTs})`);
+        return;
       }
 
       const tErr = Date.now();
@@ -1702,6 +1759,9 @@ ${text}`;
         text: `Error: ${err instanceof Error ? err.message : String(err)}`,
         thread_ts: threadTs,
       });
+    } finally {
+      clearHeartbeatTimer();
+      this.finishPlannerTurn(threadTs, turn);
     }
   }
 

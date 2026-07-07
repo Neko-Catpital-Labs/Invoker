@@ -175,7 +175,7 @@ describe('Slack thread isolation', () => {
       // sendMessage should have been called twice on the SAME instance
       expect(initialConversation.sendMessage).toHaveBeenCalledTimes(2);
       // First call from @mention, second from thread reply
-      expect(initialConversation.sendMessage).toHaveBeenNthCalledWith(2, 'Add authentication too');
+      expect(initialConversation.sendMessage).toHaveBeenNthCalledWith(2, 'Add authentication too', expect.any(AbortSignal));
     });
 
     it('does not cross-contaminate messages between threads', async () => {
@@ -211,8 +211,8 @@ describe('Slack thread isolation', () => {
       expect(convE.sendMessage).toHaveBeenCalledTimes(1);
 
       // Verify the correct messages went to the correct threads
-      expect(convD.sendMessage).toHaveBeenCalledWith('Follow-up for D');
-      expect(convE.sendMessage).not.toHaveBeenCalledWith('Follow-up for D');
+      expect(convD.sendMessage).toHaveBeenCalledWith('Follow-up for D', expect.any(AbortSignal));
+      expect(convE.sendMessage).not.toHaveBeenCalledWith('Follow-up for D', expect.any(AbortSignal));
     });
   });
 
@@ -366,7 +366,7 @@ describe('Slack thread isolation', () => {
       });
 
       expect(conv.sendMessage).toHaveBeenCalledTimes(2);
-      expect(conv.sendMessage).toHaveBeenNthCalledWith(2, 'yes');
+      expect(conv.sendMessage).toHaveBeenNthCalledWith(2, 'yes', expect.any(AbortSignal));
     });
   });
 
@@ -413,7 +413,7 @@ describe('Slack thread isolation', () => {
         event: { text: 'continue H', ts: '800.800', thread_ts: 'thread-H', user: 'U1' },
         say,
       });
-      expect(convH.sendMessage).toHaveBeenCalledWith('continue H');
+      expect(convH.sendMessage).toHaveBeenCalledWith('continue H', expect.any(AbortSignal));
     });
   });
 });

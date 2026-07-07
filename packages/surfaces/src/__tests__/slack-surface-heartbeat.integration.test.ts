@@ -96,6 +96,28 @@ async function triggerMention(surface: SlackSurface, text: string): Promise<void
   });
 }
 
+async function triggerThreadReply(surface: SlackSurface, text: string, threadTs = '1000.001'): Promise<void> {
+  const app = surface.getApp() as any;
+  const messageHandler = app._eventHandlers.find(
+    (h: MockHandler) => h.pattern === 'message',
+  )?.handler;
+  const say = vi.fn().mockImplementation(async ({ text: t, thread_ts }) => {
+    const ts = `msg.${apiCalls.length}`;
+    apiCalls.push({ method: 'postMessage', channel: 'C-test', text: t, ts });
+    return { ts, ok: true };
+  });
+  await messageHandler({
+    event: { text, ts: '1000.002', thread_ts: threadTs, user: 'U1', channel: 'C-test' },
+    say,
+  });
+}
+
+function abortError(message = 'Planner turn was superseded'): Error {
+  const err = new Error(message);
+  err.name = 'AbortError';
+  return err;
+}
+
 // ── Tests ───────────────────────────────────────────────────
 
 describe('SlackSurface Heartbeat - Integration Tests', () => {
@@ -211,6 +233,47 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
     await vi.advanceTimersByTimeAsync(15_000);
     const countAfter = apiCalls.filter(c => c.text?.includes('Still thinking')).length;
     expect(countAfter).toBe(countBefore);
+  });
+
+  it('aborts a superseded same-thread turn and suppresses its stale abort error', async () => {
+    surface = new SlackSurface({
+      botToken: 'xoxb-test',
+      appToken: 'xapp-test',
+      signingSecret: 'test-secret',
+      channelId: 'C-test',
+      planningHeartbeatIntervalSeconds: 0,
+      enableImmediateAck: false,
+      useTypingIndicator: false,
+    });
+
+    let rejectFirst!: (err: Error) => void;
+    let firstStarted!: (signal: AbortSignal) => void;
+    const firstStartedPromise = new Promise<AbortSignal>((resolve) => { firstStarted = resolve; });
+
+    mockSendMessage
+      .mockImplementationOnce((_text: string, signal?: AbortSignal) => {
+        firstStarted(signal!);
+        return new Promise<string>((_, reject) => { rejectFirst = reject; });
+      })
+      .mockResolvedValueOnce('Replacement response');
+
+    await surface.start(async () => {});
+
+    const firstTurn = triggerMention(surface, 'original request');
+    const firstSignal = await firstStartedPromise;
+    expect(firstSignal.aborted).toBe(false);
+
+    await triggerThreadReply(surface, 'replacement request');
+
+    expect(firstSignal.aborted).toBe(true);
+    expect(mockSendMessage).toHaveBeenCalledTimes(2);
+    expect(mockSendMessage.mock.calls[1][1]).toBeInstanceOf(AbortSignal);
+
+    rejectFirst(abortError());
+    await firstTurn;
+
+    expect(apiCalls.some(c => c.text === 'Replacement response')).toBe(true);
+    expect(apiCalls.some(c => c.text?.startsWith('Error:'))).toBe(false);
   });
 
   it('does not send heartbeats when interval is 0', async () => {
