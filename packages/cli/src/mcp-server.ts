@@ -17,11 +17,32 @@ export const HANDOFF_PROMPT_DESCRIPTION = 'Plan a requested change, trigger PR s
 type SubmitSuccess = { ok: true; workflowId: string; stdout: string };
 type SubmitFailure = { ok: false; exitCode: number; stdout: string; stderr: string; error?: string };
 
-function createProcessRunner(cliPath = process.argv[1] ?? ''): McpCliRunner {
+export function resolveCliInvocation(
+  execPath: string,
+  cliPath: string,
+  args: string[],
+): { command: string; args: string[] } {
+  if (!cliPath) {
+    throw new Error('Unable to resolve CLI path for spawning invoker-cli');
+  }
+  if (cliPath === execPath) {
+    return { command: execPath, args };
+  }
+  return { command: execPath, args: [cliPath, ...args] };
+}
+
+export function createProcessRunner(cliPath = process.argv[1] ?? ''): McpCliRunner {
   return {
     run(args, options) {
       const complete = Promise.withResolvers<{ exitCode: number; stdout: string; stderr: string }>();
-      const child = spawn(process.execPath, [cliPath, ...args], {
+      let invocation: { command: string; args: string[] };
+      try {
+        invocation = resolveCliInvocation(process.execPath, cliPath, args);
+      } catch (err) {
+        complete.reject(err);
+        return complete.promise;
+      }
+      const child = spawn(invocation.command, invocation.args, {
         cwd: options?.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
