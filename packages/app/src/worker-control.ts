@@ -32,6 +32,7 @@ type WorkerStatusPersistence = Pick<SQLiteAdapter, 'listWorkerActions' | 'listWo
 interface RuntimeHandle {
   runtime: WorkerRuntime;
   startedAt: string;
+  unsubscribes: Array<() => void>;
   stoppedAt?: string;
 }
 
@@ -78,8 +79,15 @@ export function createWorkerRuntimeController(options: {
       canControl: options.canControl(),
     });
   };
+  const disposeSubscriptions = (handle: RuntimeHandle): void => {
+    for (const unsubscribe of handle.unsubscribes.splice(0)) {
+      unsubscribe();
+    }
+  };
+
 
   const stopHandle = async (kind: string, handle: RuntimeHandle): Promise<void> => {
+    disposeSubscriptions(handle);
     await handle.runtime.stop();
     const stoppedAt = new Date().toISOString();
     stoppedAtByKind.set(kind, stoppedAt);
@@ -102,15 +110,27 @@ export function createWorkerRuntimeController(options: {
         if (existing.runtime.isRunning()) {
           return rowForKind(kind);
         }
+        disposeSubscriptions(existing);
         void existing.runtime.stop().catch(() => undefined);
         handles.delete(kind);
       }
 
       const runtime = definition.factory(options.deps);
       runtime.start();
+      const unsubscribes = options.deps.messageBus
+        ? (definition.subscriptions?.(options.deps) ?? []).map((subscription) => options.deps.messageBus!.subscribe(
+          subscription.channel,
+          (message: unknown) => {
+            if (subscription.shouldWake(message)) {
+              runtime.wake('wake');
+            }
+          },
+        ))
+        : [];
       handles.set(kind, {
         runtime,
         startedAt: new Date().toISOString(),
+        unsubscribes,
       });
       stoppedAtByKind.delete(kind);
       return rowForKind(kind);

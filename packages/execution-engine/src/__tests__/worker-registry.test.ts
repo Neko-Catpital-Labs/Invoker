@@ -53,6 +53,32 @@ describe('worker registry', () => {
 
     expect(registry.list().map((d) => d.kind)).toEqual([AUTO_FIX_WORKER_KIND]);
   });
+  it('keeps owner-owned wake subscriptions on a registered definition', () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registry.register({
+      kind: 'subscribed-worker',
+      note: 'Wakes on test events.',
+      factory: () => ({
+        identity: { kind: 'subscribed-worker', instanceId: 'subscribed-worker-1' },
+        start: () => {},
+        wake: () => {},
+        tick: async () => {},
+        stop: async () => {},
+        isRunning: () => false,
+      }),
+      subscriptions: () => [{
+        channel: 'test.channel',
+        shouldWake: (message: { wake?: boolean }) => message.wake === true,
+      }],
+    });
+
+    const definition = registry.get('subscribed-worker');
+    expect(definition?.subscriptions?.(deps())).toEqual([
+      expect.objectContaining({ channel: 'test.channel' }),
+    ]);
+    expect(definition?.subscriptions?.(deps())[0]?.shouldWake({ wake: false })).toBe(false);
+    expect(definition?.subscriptions?.(deps())[0]?.shouldWake({ wake: true })).toBe(true);
+  });
 
   it('registers every built-in worker in one call', () => {
     const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());

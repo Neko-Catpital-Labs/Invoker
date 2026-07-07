@@ -10,6 +10,18 @@ import type { WorkerRuntime } from './worker-runtime.js';
 
 /** Builds a worker runtime from injected dependencies. */
 export type WorkerFactory<TDeps = unknown> = (deps: TDeps) => WorkerRuntime;
+/** Predicate-based wake subscription owned by the Invoker process. */
+export interface WorkerWakeSubscription<TMessage = unknown> {
+  /** Message bus channel to subscribe to. */
+  readonly channel: string;
+  /** Return true when the worker should wake for this message. */
+  readonly shouldWake: (message: TMessage) => boolean;
+}
+
+/** Builds owner-owned wake subscriptions from injected dependencies. */
+export type WorkerSubscriptionFactory<TDeps = unknown> = (
+  deps: TDeps,
+) => readonly WorkerWakeSubscription[];
 
 /** A single worker declared in the registry. */
 export interface WorkerDefinition<TDeps = unknown> {
@@ -19,6 +31,8 @@ export interface WorkerDefinition<TDeps = unknown> {
   readonly note: string;
   /** Builds the worker runtime from injected dependencies. */
   readonly factory: WorkerFactory<TDeps>;
+  /** Optional owner-owned wake subscriptions installed while the runtime runs. */
+  readonly subscriptions?: WorkerSubscriptionFactory<TDeps>;
 }
 
 /** Mutable collection of worker definitions keyed by kind. */
