@@ -210,6 +210,31 @@ describe('loadConfig', () => {
     expect(config.externalWorkers).toEqual(externalWorkers);
   });
 
+  it('reads PR maintenance worker config from user config', () => {
+    const prMaintenance = {
+      targetRepo: 'Neko-Catpital-Labs/Invoker',
+      author: 'EdbertChan',
+      coderabbit: {
+        login: 'coderabbitai[bot]',
+        maxAttempts: 3,
+        workDir: '/tmp/pr-cron-work',
+        executionAgent: 'omp',
+        timeoutMs: 45 * 60_000,
+      },
+      mergeConflict: {
+        maxAttempts: 3,
+        confirmTimeoutMs: 120_000,
+        confirmPollIntervalMs: 5_000,
+      },
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ prMaintenance }),
+    );
+    const config = loadConfig();
+    expect(config.prMaintenance).toEqual(prMaintenance);
+  });
+
   it('reads imageStorage from user config', () => {
     const imageStorage = {
       provider: 'r2',
@@ -639,4 +664,3 @@ describe('resolveEmbeddedTerminalBackendConfig', () => {
     )).toThrow(/Invalid embedded terminal backend/);
   });
 });
-

@@ -12,7 +12,7 @@ import {
   acquireWorkerLock,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
   registerExternalWorkers,
   WorkerLockHeldError,
   registerBuiltinAgents,
@@ -111,6 +111,25 @@ type CliRuntimeConfig = {
   autoFixExecutionModel?: string;
   autoApproveAIFixes?: boolean;
   externalWorkers?: ExternalWorkerConfig[];
+  prMaintenance?: {
+    targetRepo?: string;
+    author?: string;
+    coderabbit?: {
+      login?: string;
+      maxAttempts?: number;
+      workDir?: string;
+      executionAgent?: string;
+      executionModel?: string;
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+    };
+    mergeConflict?: {
+      maxAttempts?: number;
+      confirmTimeoutMs?: number;
+      confirmPollIntervalMs?: number;
+      pollIntervalMs?: number;
+    };
+  };
 };
 
 const silentLogger: Logger = {
@@ -132,7 +151,7 @@ function usage(): string {
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli setup [slack] [--check|--from-env]',
     '  invoker-cli mcp',
-    '  invoker-cli worker [autofix|list]',
+    '  invoker-cli worker [kind|list]',
     '  invoker-cli --help',
     '  invoker-cli --version',
     '',
@@ -464,6 +483,7 @@ function readWorkerConfig(homeRoot: string): {
   autoFixRetries?: number;
   autoFixAgent?: string;
   externalWorkers?: ExternalWorkerConfig[];
+  prMaintenance?: CliRuntimeConfig['prMaintenance'];
 } {
   const configPath = join(homeRoot, 'config.json');
   if (!existsSync(configPath)) return {};
@@ -473,6 +493,7 @@ function readWorkerConfig(homeRoot: string): {
       autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
       autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
       externalWorkers: Array.isArray(parsed.externalWorkers) ? parsed.externalWorkers : undefined,
+      prMaintenance: parsed.prMaintenance,
     };
   } catch {
     return {};
@@ -504,7 +525,7 @@ function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorke
 async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
-  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
+  const { autoFixRetries, autoFixAgent, prMaintenance } = readWorkerConfig(homeRoot);
 
   // Single-instance guard: refuse if another worker of this kind (this door or
   // the dev `--headless worker <kind>` door) already holds the cross-process
@@ -537,11 +558,30 @@ async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>
         submit: (workflowId, priority, channel, mutationArgs) =>
           persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority),
       },
+      headless: {
+        exec: async (args, options) => {
+          try {
+            const response = await withTimeout(
+              bus.request('headless.exec', {
+                args,
+                noTrack: options?.noTrack,
+                waitForApproval: options?.waitForApproval,
+                traceId: createTraceId('invoker-cli.worker.headless.exec'),
+              }),
+              options?.timeoutMs ?? 30_000,
+            );
+            return { ok: true, response };
+          } catch (err) {
+            return { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+        },
+      },
       autoFix: {
         defaultAutoFixRetries: autoFixRetries,
         attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => autoFixAgent,
       },
+      prMaintenance,
     });
 
     worker.start();
@@ -585,7 +625,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
       const registry = registerExternalWorkers(
-        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+        registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
         readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
       );
       if (subcommand === 'list') {
