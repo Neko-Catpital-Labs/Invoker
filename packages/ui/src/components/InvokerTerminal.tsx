@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 
 export interface InvokerTerminalLine {
   id: number;
@@ -37,6 +37,13 @@ interface SubmitErrorView {
   message: string;
 }
 
+const PLANNING_CHAT_INPUT_REPORT_INTERVAL_MS = 250;
+const PLANNING_CHAT_RENDER_REPORT_INTERVAL_MS = 500;
+
+function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 export function InvokerTerminal({
   lines,
   busy,
@@ -57,6 +64,99 @@ export function InvokerTerminal({
   onCollapse,
 }: InvokerTerminalProps): JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const renderStartedAt = performance.now();
+  const inputPerfRef = useRef({
+    lastReportAt: 0,
+    skippedEvents: 0,
+    maxHandlerMs: 0,
+    lastValueLength: value.length,
+  });
+  const renderPerfRef = useRef({
+    lastReportAt: 0,
+    skippedCommits: 0,
+    maxCommitMs: 0,
+    lastInputLength: value.length,
+  });
+  const transcriptStats = useMemo(() => {
+    let charCount = 0;
+    for (const line of lines) {
+      charCount += line.text.length;
+    }
+    return { lineCount: lines.length, charCount };
+  }, [lines]);
+
+  useEffect(() => {
+    inputPerfRef.current.lastValueLength = value.length;
+  }, [value.length]);
+
+  useEffect(() => {
+    const now = performance.now();
+    const commitMs = now - renderStartedAt;
+    const state = renderPerfRef.current;
+    state.maxCommitMs = Math.max(state.maxCommitMs, commitMs);
+    const firstReport = state.lastReportAt === 0;
+    const inputLengthChanged = state.lastInputLength !== value.length;
+    if (
+      firstReport ||
+      inputLengthChanged ||
+      commitMs >= 16 ||
+      now - state.lastReportAt >= PLANNING_CHAT_RENDER_REPORT_INTERVAL_MS
+    ) {
+      reportPlanningChatPerf('planning_chat_render_commit', {
+        commitMs: Math.round(commitMs * 100) / 100,
+        maxCommitMs: Math.round(state.maxCommitMs * 100) / 100,
+        skippedCommits: state.skippedCommits,
+        inputLength: value.length,
+        transcriptLineCount: transcriptStats.lineCount,
+        transcriptCharCount: transcriptStats.charCount,
+        busy,
+        readOnly,
+        expanded,
+      });
+      state.lastReportAt = now;
+      state.lastInputLength = value.length;
+      state.skippedCommits = 0;
+      state.maxCommitMs = 0;
+    } else {
+      state.lastInputLength = value.length;
+      state.skippedCommits += 1;
+    }
+  }, [busy, expanded, readOnly, renderStartedAt, transcriptStats.charCount, transcriptStats.lineCount, value.length]);
+
+  const handleValueChange = (nextValue: string): void => {
+    const startedAt = performance.now();
+    const previousLength = inputPerfRef.current.lastValueLength;
+    onValueChange(nextValue);
+    const handlerMs = performance.now() - startedAt;
+    const now = performance.now();
+    const state = inputPerfRef.current;
+    state.maxHandlerMs = Math.max(state.maxHandlerMs, handlerMs);
+    const firstReport = state.lastReportAt === 0;
+    if (
+      firstReport ||
+      handlerMs >= 8 ||
+      now - state.lastReportAt >= PLANNING_CHAT_INPUT_REPORT_INTERVAL_MS
+    ) {
+      reportPlanningChatPerf('planning_chat_input_change', {
+        handlerMs: Math.round(handlerMs * 100) / 100,
+        maxHandlerMs: Math.round(state.maxHandlerMs * 100) / 100,
+        skippedEvents: state.skippedEvents,
+        inputLength: nextValue.length,
+        deltaChars: nextValue.length - previousLength,
+        transcriptLineCount: transcriptStats.lineCount,
+        transcriptCharCount: transcriptStats.charCount,
+        busy,
+        readOnly,
+        expanded,
+      });
+      state.lastReportAt = now;
+      state.skippedEvents = 0;
+      state.maxHandlerMs = 0;
+    } else {
+      state.skippedEvents += 1;
+    }
+    state.lastValueLength = nextValue.length;
+  };
 
   useEffect(() => {
     if (!busy && !readOnly) {
@@ -215,7 +315,7 @@ export function InvokerTerminal({
           value={value}
           disabled={busy || readOnly}
           rows={expanded ? 8 : 3}
-          onChange={(event) => onValueChange(event.target.value)}
+          onChange={(event) => handleValueChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
               event.preventDefault();

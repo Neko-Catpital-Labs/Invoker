@@ -32,6 +32,17 @@ const NEXT_STATE_BY_STATE: Record<TerminalDrawerState, { next: TerminalDrawerSta
   maximized: { next: 'minimized', label: 'Minimize' },
 };
 
+const TERMINAL_OUTPUT_BURST_REPORT_INTERVAL_MS = 250;
+const TERMINAL_FIT_REPORT_INTERVAL_MS = 1000;
+
+function roundPerfMs(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function reportTerminalPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 interface TerminalDrawerProps {
   state: TerminalDrawerState;
   onCycle: () => void;
@@ -72,12 +83,20 @@ function seedTerminalOutputSnapshot(
     )
   ) {
     try {
+      const writeStartedAt = performance.now();
       term.write(outputSnapshot);
+      const writeMs = performance.now() - writeStartedAt;
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
         term,
       };
+      reportTerminalPerf('embedded_terminal_seed_output_snapshot', {
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        charCount: outputSnapshot.length,
+        writeMs: roundPerfMs(writeMs),
+      });
     } catch (err) {
       console.warn(
         `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
@@ -99,6 +118,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
 
     let term: XTermTerminal;
     let fit: FitAddon;
+    const attachStartedAt = performance.now();
     try {
       term = new XTermTerminal({
         fontSize: 12,
@@ -111,6 +131,12 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
+      reportTerminalPerf('embedded_terminal_attach', {
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        durationMs: roundPerfMs(performance.now() - attachStartedAt),
+        hasOutputSnapshot: Boolean(session.outputSnapshot),
+      });
     } catch {
       return;
     }
@@ -118,6 +144,52 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     fitRef.current = fit;
 
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    let outputBurst:
+      | {
+        startedAt: number;
+        eventCount: number;
+        charCount: number;
+        maxChunkChars: number;
+        maxWriteMs: number;
+      }
+      | null = null;
+    let outputBurstTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushOutputBurst = (): void => {
+      if (outputBurstTimer) {
+        clearTimeout(outputBurstTimer);
+        outputBurstTimer = null;
+      }
+      const burst = outputBurst;
+      if (!burst) return;
+      outputBurst = null;
+      reportTerminalPerf('embedded_terminal_output_burst', {
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        eventCount: burst.eventCount,
+        charCount: burst.charCount,
+        maxChunkChars: burst.maxChunkChars,
+        maxWriteMs: roundPerfMs(burst.maxWriteMs),
+        durationMs: roundPerfMs(performance.now() - burst.startedAt),
+      });
+    };
+    const recordOutputWrite = (charCount: number, writeMs: number): void => {
+      if (!outputBurst) {
+        outputBurst = {
+          startedAt: performance.now(),
+          eventCount: 0,
+          charCount: 0,
+          maxChunkChars: 0,
+          maxWriteMs: 0,
+        };
+      }
+      outputBurst.eventCount += 1;
+      outputBurst.charCount += charCount;
+      outputBurst.maxChunkChars = Math.max(outputBurst.maxChunkChars, charCount);
+      outputBurst.maxWriteMs = Math.max(outputBurst.maxWriteMs, writeMs);
+      if (!outputBurstTimer) {
+        outputBurstTimer = setTimeout(flushOutputBurst, TERMINAL_OUTPUT_BURST_REPORT_INTERVAL_MS);
+      }
+    };
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -127,16 +199,36 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const writeStartedAt = performance.now();
         term.write(event.data);
+        recordOutputWrite(event.data.length, performance.now() - writeStartedAt);
       } catch {
         /* terminal disposed */
       }
     });
 
+    let lastFitReportAt = 0;
     const tryFit = () => {
       try {
+        const fitStartedAt = performance.now();
         fit.fit();
+        const fitMs = performance.now() - fitStartedAt;
         void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+        const now = performance.now();
+        if (
+          lastFitReportAt === 0 ||
+          fitMs >= 8 ||
+          now - lastFitReportAt >= TERMINAL_FIT_REPORT_INTERVAL_MS
+        ) {
+          lastFitReportAt = now;
+          reportTerminalPerf('embedded_terminal_fit', {
+            sessionId: session.sessionId,
+            taskId: session.taskId,
+            fitMs: roundPerfMs(fitMs),
+            cols: term.cols,
+            rows: term.rows,
+          });
+        }
       } catch {
         /* host has zero size or fit unsupported */
       }
@@ -172,6 +264,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       }
       termRef.current = null;
       fitRef.current = null;
+      flushOutputBurst();
     };
   }, [session.sessionId]);
 

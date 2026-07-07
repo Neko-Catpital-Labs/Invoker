@@ -1002,6 +1002,28 @@ function startHeadlessMode(): void {
           maxRendererCumulativeLagMs: 0,
           maxRendererTickDeltaMs: 0,
           maxRendererLongTaskMs: 0,
+          planningChatInputReports: 0,
+          planningChatInputEvents: 0,
+          maxPlanningChatInputHandlerMs: 0,
+          maxPlanningChatInputLength: 0,
+          planningChatRenderReports: 0,
+          maxPlanningChatRenderCommitMs: 0,
+          maxPlanningChatTranscriptLines: 0,
+          maxPlanningChatTranscriptChars: 0,
+          embeddedTerminalAttachReports: 0,
+          maxEmbeddedTerminalAttachMs: 0,
+          embeddedTerminalSeedReports: 0,
+          embeddedTerminalSeedChars: 0,
+          maxEmbeddedTerminalSeedWriteMs: 0,
+          embeddedTerminalOutputBurstReports: 0,
+          embeddedTerminalOutputEvents: 0,
+          embeddedTerminalOutputChars: 0,
+          maxEmbeddedTerminalOutputBurstEvents: 0,
+          maxEmbeddedTerminalOutputBurstChars: 0,
+          maxEmbeddedTerminalOutputChunkChars: 0,
+          maxEmbeddedTerminalOutputWriteMs: 0,
+          embeddedTerminalFitReports: 0,
+          maxEmbeddedTerminalFitMs: 0,
         }),
         resetUiPerfStats: () => {},
         waitForApproval,
@@ -2043,6 +2065,28 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataCoalescedRequests: 0,
     largeTaskDeltaBatches: 0,
     maxTaskDeltaBatchSize: 0,
+    planningChatInputReports: 0,
+    planningChatInputEvents: 0,
+    maxPlanningChatInputHandlerMs: 0,
+    maxPlanningChatInputLength: 0,
+    planningChatRenderReports: 0,
+    maxPlanningChatRenderCommitMs: 0,
+    maxPlanningChatTranscriptLines: 0,
+    maxPlanningChatTranscriptChars: 0,
+    embeddedTerminalAttachReports: 0,
+    maxEmbeddedTerminalAttachMs: 0,
+    embeddedTerminalSeedReports: 0,
+    embeddedTerminalSeedChars: 0,
+    maxEmbeddedTerminalSeedWriteMs: 0,
+    embeddedTerminalOutputBurstReports: 0,
+    embeddedTerminalOutputEvents: 0,
+    embeddedTerminalOutputChars: 0,
+    maxEmbeddedTerminalOutputBurstEvents: 0,
+    maxEmbeddedTerminalOutputBurstChars: 0,
+    maxEmbeddedTerminalOutputChunkChars: 0,
+    maxEmbeddedTerminalOutputWriteMs: 0,
+    embeddedTerminalFitReports: 0,
+    maxEmbeddedTerminalFitMs: 0,
   };
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
@@ -2105,6 +2149,28 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
     uiPerfStats.largeTaskDeltaBatches = 0;
     uiPerfStats.maxTaskDeltaBatchSize = 0;
+    uiPerfStats.planningChatInputReports = 0;
+    uiPerfStats.planningChatInputEvents = 0;
+    uiPerfStats.maxPlanningChatInputHandlerMs = 0;
+    uiPerfStats.maxPlanningChatInputLength = 0;
+    uiPerfStats.planningChatRenderReports = 0;
+    uiPerfStats.maxPlanningChatRenderCommitMs = 0;
+    uiPerfStats.maxPlanningChatTranscriptLines = 0;
+    uiPerfStats.maxPlanningChatTranscriptChars = 0;
+    uiPerfStats.embeddedTerminalAttachReports = 0;
+    uiPerfStats.maxEmbeddedTerminalAttachMs = 0;
+    uiPerfStats.embeddedTerminalSeedReports = 0;
+    uiPerfStats.embeddedTerminalSeedChars = 0;
+    uiPerfStats.maxEmbeddedTerminalSeedWriteMs = 0;
+    uiPerfStats.embeddedTerminalOutputBurstReports = 0;
+    uiPerfStats.embeddedTerminalOutputEvents = 0;
+    uiPerfStats.embeddedTerminalOutputChars = 0;
+    uiPerfStats.maxEmbeddedTerminalOutputBurstEvents = 0;
+    uiPerfStats.maxEmbeddedTerminalOutputBurstChars = 0;
+    uiPerfStats.maxEmbeddedTerminalOutputChunkChars = 0;
+    uiPerfStats.maxEmbeddedTerminalOutputWriteMs = 0;
+    uiPerfStats.embeddedTerminalFitReports = 0;
+    uiPerfStats.maxEmbeddedTerminalFitMs = 0;
   };
 
   const getUiPerfStats = (): Record<string, unknown> => ({
@@ -4341,6 +4407,10 @@ function createEmbeddedTerminalBackendFromConfig(
         metric,
         ...(data ?? {}),
       };
+      const numberMetric = (key: string): number | undefined => {
+        const value = data?.[key];
+        return typeof value === 'number' ? value : undefined;
+      };
       if (
         metric === 'startup_bootstrap_state' ||
         metric === 'startup_snapshot_applied' ||
@@ -4367,6 +4437,73 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
+      }
+      if (metric === 'planning_chat_input_change') {
+        uiPerfStats.planningChatInputReports += 1;
+        uiPerfStats.planningChatInputEvents += numberMetric('skippedEvents') ?? 0;
+        uiPerfStats.planningChatInputEvents += 1;
+        const handlerMs = numberMetric('maxHandlerMs') ?? numberMetric('handlerMs');
+        if (handlerMs !== undefined) {
+          uiPerfStats.maxPlanningChatInputHandlerMs = Math.max(uiPerfStats.maxPlanningChatInputHandlerMs, handlerMs);
+        }
+        const inputLength = numberMetric('inputLength');
+        if (inputLength !== undefined) {
+          uiPerfStats.maxPlanningChatInputLength = Math.max(uiPerfStats.maxPlanningChatInputLength, inputLength);
+        }
+      }
+      if (metric === 'planning_chat_render_commit') {
+        uiPerfStats.planningChatRenderReports += 1;
+        const commitMs = numberMetric('maxCommitMs') ?? numberMetric('commitMs');
+        if (commitMs !== undefined) {
+          uiPerfStats.maxPlanningChatRenderCommitMs = Math.max(uiPerfStats.maxPlanningChatRenderCommitMs, commitMs);
+        }
+        const transcriptLineCount = numberMetric('transcriptLineCount');
+        if (transcriptLineCount !== undefined) {
+          uiPerfStats.maxPlanningChatTranscriptLines = Math.max(uiPerfStats.maxPlanningChatTranscriptLines, transcriptLineCount);
+        }
+        const transcriptCharCount = numberMetric('transcriptCharCount');
+        if (transcriptCharCount !== undefined) {
+          uiPerfStats.maxPlanningChatTranscriptChars = Math.max(uiPerfStats.maxPlanningChatTranscriptChars, transcriptCharCount);
+        }
+      }
+      if (metric === 'embedded_terminal_attach') {
+        uiPerfStats.embeddedTerminalAttachReports += 1;
+        const durationMs = numberMetric('durationMs');
+        if (durationMs !== undefined) {
+          uiPerfStats.maxEmbeddedTerminalAttachMs = Math.max(uiPerfStats.maxEmbeddedTerminalAttachMs, durationMs);
+        }
+      }
+      if (metric === 'embedded_terminal_seed_output_snapshot') {
+        uiPerfStats.embeddedTerminalSeedReports += 1;
+        uiPerfStats.embeddedTerminalSeedChars += numberMetric('charCount') ?? 0;
+        const writeMs = numberMetric('writeMs');
+        if (writeMs !== undefined) {
+          uiPerfStats.maxEmbeddedTerminalSeedWriteMs = Math.max(uiPerfStats.maxEmbeddedTerminalSeedWriteMs, writeMs);
+        }
+      }
+      if (metric === 'embedded_terminal_output_burst') {
+        uiPerfStats.embeddedTerminalOutputBurstReports += 1;
+        const eventCount = numberMetric('eventCount') ?? 0;
+        const charCount = numberMetric('charCount') ?? 0;
+        uiPerfStats.embeddedTerminalOutputEvents += eventCount;
+        uiPerfStats.embeddedTerminalOutputChars += charCount;
+        uiPerfStats.maxEmbeddedTerminalOutputBurstEvents = Math.max(uiPerfStats.maxEmbeddedTerminalOutputBurstEvents, eventCount);
+        uiPerfStats.maxEmbeddedTerminalOutputBurstChars = Math.max(uiPerfStats.maxEmbeddedTerminalOutputBurstChars, charCount);
+        const maxChunkChars = numberMetric('maxChunkChars');
+        if (maxChunkChars !== undefined) {
+          uiPerfStats.maxEmbeddedTerminalOutputChunkChars = Math.max(uiPerfStats.maxEmbeddedTerminalOutputChunkChars, maxChunkChars);
+        }
+        const maxWriteMs = numberMetric('maxWriteMs');
+        if (maxWriteMs !== undefined) {
+          uiPerfStats.maxEmbeddedTerminalOutputWriteMs = Math.max(uiPerfStats.maxEmbeddedTerminalOutputWriteMs, maxWriteMs);
+        }
+      }
+      if (metric === 'embedded_terminal_fit') {
+        uiPerfStats.embeddedTerminalFitReports += 1;
+        const fitMs = numberMetric('fitMs');
+        if (fitMs !== undefined) {
+          uiPerfStats.maxEmbeddedTerminalFitMs = Math.max(uiPerfStats.maxEmbeddedTerminalFitMs, fitMs);
+        }
       }
       uiPerfStats.rendererReports += 1;
       try {
