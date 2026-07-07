@@ -3314,6 +3314,48 @@ function createEmbeddedTerminalBackendFromConfig(
                   }
                 }
 
+                // Stalled-fix-session watchdog: a fix session whose owner died
+                // mid-fix (heartbeat stopped, attempt lease expired) is invisible
+                // to the running-task path above because its status is
+                // `fixing_with_ai`, not `running`. Evaluate it as an executing
+                // task; a live fix refreshes its lease every 30s via
+                // withAttemptHeartbeat, so only an orphaned one is ever stalled.
+                if (task.status === 'fixing_with_ai') {
+                  const fixStartedAt = parseExecutionDate(task.execution.startedAt);
+                  const { executingStalled, staleReason } = evaluateExecutingStall({
+                    now,
+                    phase: 'executing',
+                    runnerKind: task.config.runnerKind,
+                    executingStartedAt: fixStartedAt,
+                    leaseExpiresAt,
+                    executorHeartbeatAt: previousHeartbeat,
+                    remoteHeartbeatAt: remoteHeartbeat,
+                    executingStallTimeoutMs,
+                  });
+                  if (executingStalled) {
+                    const fixAgeMs = fixStartedAt ? now.getTime() - fixStartedAt.getTime() : 0;
+                    const reason =
+                      `Fix session stalled: task remained in fixing_with_ai for ${Math.floor(fixAgeMs / 1000)}s ` +
+                      `without a live fix handle (${staleReason}).`;
+                    logger.error(`[fix-session-stall] reclaiming "${task.id}": ${reason}`, { module: 'db-poll' });
+                    const outcome = orchestrator.reclaimStalledFixSession(task.id, {
+                      reason,
+                      expectedLineage: {
+                        taskId: task.id,
+                        selectedAttemptId: task.execution.selectedAttemptId,
+                        generation: task.execution.generation ?? 0,
+                      },
+                    });
+                    logger.info(
+                      `[fix-session-stall] reclaim outcome=${outcome} task="${task.id}" ` +
+                        `selectedAttemptId=${task.execution.selectedAttemptId ?? 'none'} ` +
+                        `leaseExpiresAt=${leaseExpiresAt?.toISOString() ?? 'none'}`,
+                      { module: 'db-poll' },
+                    );
+                    continue;
+                  }
+                }
+
                 const snapshot = JSON.stringify(task);
                 const prev = lastKnownTaskStates.get(task.id);
                 if (!prev) {
