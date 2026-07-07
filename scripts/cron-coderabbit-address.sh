@@ -20,6 +20,7 @@
 #      INVOKER_PR_CODERABBIT_MAX_ATTEMPTS (default 3),
 #      INVOKER_PR_CODERABBIT_STATE_FILE (ledger path),
 #      INVOKER_PR_CRON_WORKDIR (checkout root),
+#      INVOKER_PR_CRON_WORKDIR_MAX_AGE_DAYS (default 7),
 #      INVOKER_PR_CRON_OMP_MODEL (omp model, optional),
 #      INVOKER_OMP_COMMAND (omp binary, default omp),
 #      INVOKER_PR_CRON_DRY_RUN=1 (print intended actions only).
@@ -31,9 +32,11 @@ source "$(dirname "$0")/cron-pr-lib.sh"
 MAX_CODERABBIT_ATTEMPTS="${INVOKER_PR_CODERABBIT_MAX_ATTEMPTS:-3}"
 STATE_FILE="${INVOKER_PR_CODERABBIT_STATE_FILE:-${HOME}/.invoker/coderabbit-address-submissions.tsv}"
 WORKDIR="${INVOKER_PR_CRON_WORKDIR:-${HOME}/.invoker/pr-cron-work}"
+WORKDIR_MAX_AGE_DAYS="${INVOKER_PR_CRON_WORKDIR_MAX_AGE_DAYS:-7}"
 
 cron_lock
 ledger_init "$STATE_FILE"
+prune_stale_pr_workdirs "$WORKDIR" "$WORKDIR_MAX_AGE_DAYS"
 
 # Fetch one comments endpoint, normalizing gh's per-page arrays into one array.
 fetch_cr_endpoint() {
@@ -78,6 +81,7 @@ prepare_checkout() {
     log_line "PR #$num: gh pr checkout failed" >&2
     return 1
   fi
+  touch "$dir/$PR_CRON_WORKDIR_STAMP_NAME" >/dev/null 2>&1 || true
   CHECKOUT_DIR="$dir"
 }
 
