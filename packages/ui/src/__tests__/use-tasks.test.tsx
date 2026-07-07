@@ -599,4 +599,80 @@ describe('useTasks', () => {
 
     expect(result.current.workflows.get('wf-1')?.status).toBe('failed');
   });
+
+  it('drops a deleted workflow within 1s of its removal deltas without a manual refresh', async () => {
+    // Regression: deleting a workflow published workflows-changed (workflow
+    // absent) before the task removal deltas flushed, so the task-backed
+    // preservation kept the entry alive; the final zero-task rollup patch then
+    // resurrected it as a ghost "pending" node that only a manual refresh
+    // cleared. The removal patch (removed: true) must drop it in-stream.
+    const taskA = makeUITask({ id: 'wf-doomed/task-a', workflowId: 'wf-doomed', status: 'completed' });
+    const taskB = makeUITask({ id: 'wf-doomed/task-b', workflowId: 'wf-doomed', status: 'completed' });
+    const keeperTask = makeUITask({ id: 'wf-keeper/task-a', workflowId: 'wf-keeper', status: 'running' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [taskA, taskB, keeperTask],
+      workflows: [
+        { id: 'wf-doomed', name: 'Doomed workflow', status: 'completed' },
+        { id: 'wf-keeper', name: 'Keeper workflow', status: 'running' },
+      ],
+    };
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [keeperTask], workflows: [] });
+    const reportUiPerf = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      reportUiPerf,
+      onTaskGraphEvent: vi.fn((cb: (event: unknown) => void) => {
+        taskGraphEventHandler = cb;
+        return () => {};
+      }),
+      onWorkflowsChanged: vi.fn((cb: (wfList: unknown[]) => void) => {
+        workflowsChangedHandler = cb;
+        return () => {};
+      }),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(workflowsChangedHandler).toBeDefined();
+      expect(taskGraphEventHandler).toBeDefined();
+    });
+
+    // Coalesced metadata publish lands first — deleted workflow already absent,
+    // but its tasks are still in the map, so the entry is preserved (the race).
+    act(() => {
+      workflowsChangedHandler!([{ id: 'wf-keeper', name: 'Keeper workflow', status: 'running' }]);
+    });
+    expect(result.current.workflows.get('wf-doomed')?.name).toBe('Doomed workflow');
+
+    const deletionStartedAt = performance.now();
+    await act(async () => {
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: { type: 'removed', taskId: 'wf-doomed/task-a', previousTaskStateVersion: 1 },
+        workflowRollups: [{ workflowId: 'wf-doomed', status: 'completed', rollup: makeWorkflowRollup('completed', { completed: 1 }) }],
+      });
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: { type: 'removed', taskId: 'wf-doomed/task-b', previousTaskStateVersion: 1 },
+        workflowRollups: [{ workflowId: 'wf-doomed', status: 'pending', rollup: makeWorkflowRollup('pending'), removed: true }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 110));
+    });
+
+    // Propagation budget: deltas already delivered, so the UI must converge
+    // within the 1s deletion budget without any snapshot refresh.
+    await waitFor(
+      () => {
+        expect(result.current.workflows.has('wf-doomed')).toBe(false);
+      },
+      { timeout: 1000 },
+    );
+    expect(performance.now() - deletionStartedAt).toBeLessThan(1000);
+    expect(result.current.tasks.has('wf-doomed/task-a')).toBe(false);
+    expect(result.current.tasks.has('wf-doomed/task-b')).toBe(false);
+    expect(result.current.workflows.get('wf-keeper')?.name).toBe('Keeper workflow');
+    expect(getTasks).not.toHaveBeenCalled();
+    expect(reportUiPerf).toHaveBeenCalledWith('workflow_removed_applied', { workflowIds: ['wf-doomed'] });
+  });
 });
