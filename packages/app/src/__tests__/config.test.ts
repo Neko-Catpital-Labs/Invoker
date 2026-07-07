@@ -1,4 +1,7 @@
+import type * as NodeOs from 'node:os';
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { resolveInvokerConfigPath } from '@invoker/contracts';
 import {
   loadConfig,
   resolveConfigFilePath,
@@ -23,7 +26,7 @@ afterEach(() => {
 });
 
 vi.mock('node:os', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:os')>();
+  const actual = await importOriginal<typeof NodeOs>();
   return {
     ...actual,
     homedir: () => `${actual.tmpdir()}/invoker-config-test-${process.pid}/home`,
@@ -602,7 +605,9 @@ describe('loadConfig', () => {
       JSON.stringify({ defaultBranch: 'main' }),
     );
     process.env.INVOKER_REPO_CONFIG_PATH = '   ';
-    expect(resolveConfigFilePath()).toBe(join(fakeHome, '.invoker', 'config.json'));
+    const expected = join(fakeHome, '.invoker', 'config.json');
+    expect(resolveInvokerConfigPath(process.env, fakeHome)).toBe(expected);
+    expect(resolveConfigFilePath()).toBe(expected);
     expect(loadConfig().defaultBranch).toBe('main');
   });
 });
