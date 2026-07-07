@@ -62,5 +62,12 @@ must_contain "$SKILL_MD" "contains an empty commit slice" "make-pr skill must re
 must_contain "$SKILL_MD" 'node scripts/create-pr.mjs`' "make-pr skill must apply the empty-slice rule to normal PR creation"
 must_contain "$SKILL_MD" "node scripts/create-pr.mjs --update-existing" "make-pr skill must apply the empty-slice rule to PR updates"
 must_contain "$SKILL_MD" "mergify stack push" "make-pr skill must apply the empty-slice rule to Mergify stack publication"
+# Mergify-published stacks must be audited and repaired before yielding.
+must_contain "$SKILL_MD" "After \`mergify stack push\`, you MUST audit the live PRs immediately" "make-pr skill must require a post-push audit of live PR metadata"
+must_contain "$SKILL_MD" "empty description or a bare \`Depends-On:\` line are a publication failure" "make-pr skill must reject placeholder Mergify PR metadata"
+must_contain "$SKILL_MD" "Read each live PR (\`gh pr view\` or \`pr://\`) for title, body, base, and head" "make-pr skill must inspect live PR metadata after publication"
+must_contain "$SKILL_MD" "aligned stack title prefix" "make-pr skill must require aligned stack titles after publication"
+must_contain "$SKILL_MD" "remote-only head branch name" "make-pr skill must document the Mergify branch-name mismatch case"
+must_contain "$SKILL_MD" "gh pr edit --title ... --body-file ..." "make-pr skill must allow immediate metadata repair when create-pr cannot map the published branch"
 
 echo "OK: make-pr skill contract checks passed"
