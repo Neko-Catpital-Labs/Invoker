@@ -237,9 +237,9 @@ import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
-  AUTO_STARTED_OWNER_WORKER_KINDS,
   createLocalWorkerStatusSnapshot,
   createWorkerRuntimeController,
+  getAutoStartedOwnerWorkerKinds,
   type WorkerRuntimeController,
 } from './worker-control.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
@@ -334,6 +334,9 @@ function buildRegisteredOwnerWorkerDeps(
       attemptLedger: autoFixAttemptLedger,
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
+    },
+    autoApprove: {
+      enabled: invokerConfig.autoApproveAIFixes === true,
     },
   };
 }
@@ -1751,9 +1754,10 @@ function startHeadlessMode(): void {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
           ),
-          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
           persistence,
           autoFixRetries: invokerConfig.autoFixRetries,
+          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
           canControl: () => !readOnlyMode,
         });
         workerRuntimeController.startAutoStartedWorkers();
@@ -2199,7 +2203,6 @@ function createEmbeddedTerminalBackendFromConfig(
         commandService,
         taskExecutor: requireTaskExecutor(),
         mutationTiming: activeMutationContext?.mutationTiming,
-        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
       },
       {
         agentName,
@@ -3052,7 +3055,6 @@ function createEmbeddedTerminalBackendFromConfig(
         persistence,
         commandService,
         taskExecutor: requireTaskExecutor(),
-        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
         killRunningTask,
       });
       apiServer = startApiServer({
@@ -3525,9 +3527,10 @@ function createEmbeddedTerminalBackendFromConfig(
             await requireTaskExecutor().checkMergeGateStatuses();
           },
         ),
-        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
         persistence,
         autoFixRetries: invokerConfig.autoFixRetries,
+        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
         canControl: () => ownerMode,
       });
       workerRuntimeController.startAutoStartedWorkers();
@@ -4198,13 +4201,13 @@ function createEmbeddedTerminalBackendFromConfig(
         return createLocalWorkerStatusSnapshot({
           registry: createRegisteredWorkerRegistry(),
           persistence,
-          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
         });
       }
       return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
-        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
       });
     });
 
@@ -4659,7 +4662,6 @@ function createEmbeddedTerminalBackendFromConfig(
           orchestrator,
           persistence,
           taskExecutor: requireTaskExecutor(),
-          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
         }, agentName, activeMutationContext?.signal);
         await finalizeMutationWithGlobalTopup({
           orchestrator,
