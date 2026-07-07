@@ -66,15 +66,24 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
 
 async function closeApp(app: ElectronApplication): Promise<void> {
   const child = app.process();
+  let childExited = child.exitCode !== null || child.signalCode !== null;
+  const childExitPromise = new Promise<void>((resolve) => {
+    const markChildExited = () => {
+      childExited = true;
+      resolve();
+    };
+    child.once('exit', markChildExited);
+    child.once('close', markChildExited);
+  });
   const closePromise = app.close().catch(() => undefined);
   const timedOut = await Promise.race([
     closePromise.then(() => false),
     delay(5_000).then(() => true),
   ]);
-  if (timedOut) {
+  if (timedOut && !childExited) {
     child.kill('SIGTERM');
-    await Promise.race([closePromise, delay(2_000)]);
-    if (!child.killed) child.kill('SIGKILL');
+    await Promise.race([closePromise, childExitPromise, delay(2_000)]);
+    if (!childExited) child.kill('SIGKILL');
   }
 }
 

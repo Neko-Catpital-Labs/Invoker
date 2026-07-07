@@ -560,6 +560,7 @@ export function App() {
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(2);
+  const planningSessionRestoreBlockedRef = useRef(false);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
@@ -715,6 +716,7 @@ export function App() {
     window.invoker?.planningChatList?.()
       .then((result) => {
         if (cancelled) return;
+        if (planningSessionRestoreBlockedRef.current) return;
         if (!result?.sessions?.length) return;
         const restoredSessions = result.sessions.map(summaryToPlanningSessionView);
         setPlanningSessions(restoredSessions);
@@ -1898,6 +1900,7 @@ export function App() {
   }, [activePlanningSessionId, updatePlanningSessionById]);
 
   const setPlanningInput = useCallback((value: string) => {
+    if (value.length > 0) planningSessionRestoreBlockedRef.current = true;
     updateActivePlanningSession((session) => ({ ...session, input: value }));
   }, [updateActivePlanningSession]);
 
@@ -2081,6 +2084,7 @@ export function App() {
   ]);
 
   const handleCreatePlanningSession = useCallback(() => {
+    planningSessionRestoreBlockedRef.current = true;
     const index = nextPlanningSessionLocalIdRef.current;
     nextPlanningSessionLocalIdRef.current += 1;
     const now = new Date().toISOString();

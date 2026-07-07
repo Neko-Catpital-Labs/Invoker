@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makePlanningSessionSummary, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -294,6 +294,34 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'saved-newest' });
     });
+  });
+
+  it('keeps a local planning draft when backend restore resolves later', async () => {
+    let resolvePlanningList: (value: any) => void = () => {};
+    vi.mocked(mock.api.planningChatList).mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePlanningList = resolve;
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), {
+      target: { value: 'local draft before restore' },
+    });
+
+    await act(async () => {
+      resolvePlanningList({
+        ok: true,
+        sessions: [makePlanningSessionSummary({
+          id: 'saved-late',
+          title: 'Late saved chat',
+          updatedAt: '2026-07-07T00:05:00.000Z',
+        })],
+      });
+    });
+
+    expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('local draft before restore');
+    expect(screen.queryByRole('heading', { name: 'Late saved chat' })).not.toBeInTheDocument();
   });
 
   it('restores interrupted planning chats idle and sends continuation with the saved preset', async () => {
