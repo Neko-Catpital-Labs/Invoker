@@ -108,6 +108,9 @@ If the change is small and has no architectural impact, omit `## Architecture` r
 If the change is UI-impacting, use `skills/visual-proof/SKILL.md` first and include its screenshot/video markdown in `## Visual Proof`. UI-impacting means the user-visible experience changes, even when no file under `packages/ui/**` changes. This includes `packages/ui/**`, Electron window lifecycle files, preload, main process window wiring, app menu changes, task status changes, task error or output text shown in panels, approval/reject behavior, workflow state shown in the DAG or inspector, and web-surface output.
 
 When an existing PR changes after its body or proof was written, rerun this skill from the current diff before updating the PR. If the new diff touches UI-impacting files, rerun `skills/visual-proof/SKILL.md` and replace old screenshot or video links with fresh proof for the current code. Do not reuse earlier proof media after UI behavior changes.
+Visual proof must show the changed behavior itself, not just the changed screen area. Before creating or updating the PR, open every screenshot or video and verify the user-visible target is present and identifiable. For conditional or event-driven UI, drive the exact condition that triggers the new state and capture that state. A generic task panel, unchanged sidebar, unrelated graph, or stale screenshot is not proof, even when the right file changed.
+
+In the PR body, caption each visual proof item with the concrete thing the reviewer should see, for example "amber Workspace recreated notice in the task inspector." If the reviewer cannot tell what changed from the image and caption, recapture proof before publishing.
 
 When a PR changes skill instructions under `skills/**/SKILL.md`, add or update a focused skill contract test for the exact issue being fixed. The test must fail if the instruction that prevents the regression is removed.
 
