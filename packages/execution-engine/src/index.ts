@@ -46,4 +46,6 @@ export * from './auto-fix-gating.js';
 export * from './auto-fix-attempt-ledger.js';
 export * from './auto-fix-intents.js';
 export * from './lifecycle-events.js';
+export * from './pr-maintenance-events.js';
+export * from './workers/github-pr-events-worker.js';
 export * from './external-worker.js';
