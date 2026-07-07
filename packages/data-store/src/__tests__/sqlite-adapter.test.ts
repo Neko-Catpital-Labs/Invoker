@@ -2217,6 +2217,26 @@ describe('SQLiteAdapter', () => {
       );
       expect(adapter.getEvents('t1', 'desc', 0)).toEqual([]);
     });
+
+    it('lists recent task events across tasks by event type', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+
+      adapter.logEvent('t1', 'debug.auto-fix', { phase: 'worker-autofix-skip' });
+      adapter.logEvent('t2', 'other.event');
+      adapter.logEvent('t2', 'recovery.worker.submit', { phase: 'worker-autofix-submitted' });
+
+      const events = adapter.listTaskEvents({
+        eventTypes: ['debug.auto-fix', 'recovery.worker.submit'],
+        sortBy: 'desc',
+        limit: 2,
+      });
+
+      expect(events.map((event) => event.eventType)).toEqual(['recovery.worker.submit', 'debug.auto-fix']);
+      expect(events.map((event) => event.taskId)).toEqual(['t2', 't1']);
+      expect(adapter.listTaskEvents({ eventTypes: [], limit: 2 })).toEqual([]);
+    });
   });
 
   describe('JSON fields', () => {
