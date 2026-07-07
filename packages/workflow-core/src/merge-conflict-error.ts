@@ -60,21 +60,36 @@ function parseLineSeparatedFiles(value: string): string[] {
     .map((file) => file.trim())
     .filter(isRecoverableConflictFile);
 }
+function normalizeNewlines(value: string): string {
+  return value.split('\r\n').join('\n');
+}
+
 
 function parseLocalTextMergeConflict(value: string): ParsedMergeConflictError | undefined {
-  const match = value.match(/Merge conflict merging\s+(.+?):\s*([^\n]+)/);
-  const failedBranch = match?.[1]?.trim() ?? '';
-  const conflictFiles = parseCommaSeparatedFiles(match?.[2] ?? '');
+  const prefix = 'Merge conflict merging';
+  const prefixIndex = value.indexOf(prefix);
+  if (prefixIndex < 0) return undefined;
+  const afterPrefix = value.slice(prefixIndex + prefix.length).trimStart();
+  const colonIndex = afterPrefix.indexOf(':');
+  if (colonIndex <= 0) return undefined;
+  const failedBranch = afterPrefix.slice(0, colonIndex).trim();
+  const conflictLine = afterPrefix.slice(colonIndex + 1).split('\n', 1)[0]?.trim() ?? '';
+  const conflictFiles = parseCommaSeparatedFiles(conflictLine);
   if (!failedBranch || conflictFiles.length === 0) return undefined;
   return { failedBranch, conflictFiles };
 }
 
 function parseRemoteTextMergeConflict(value: string): ParsedMergeConflictError | undefined {
-  const match = value.match(
-    /Merge conflict merging upstream branch "([^"]+)" on remote\.\s*\r?\nConflicting files:\r?\n([\s\S]+)/,
-  );
-  const failedBranch = match?.[1]?.trim() ?? '';
-  const conflictFiles = parseLineSeparatedFiles(match?.[2] ?? '');
+  const normalized = normalizeNewlines(value);
+  const prefix = 'Merge conflict merging upstream branch "';
+  const prefixIndex = normalized.indexOf(prefix);
+  if (prefixIndex < 0) return undefined;
+  const branchStart = prefixIndex + prefix.length;
+  const branchEnd = normalized.indexOf('" on remote.\nConflicting files:\n', branchStart);
+  if (branchEnd < 0) return undefined;
+  const failedBranch = normalized.slice(branchStart, branchEnd).trim();
+  const filesStart = branchEnd + '" on remote.\nConflicting files:\n'.length;
+  const conflictFiles = parseLineSeparatedFiles(normalized.slice(filesStart));
   if (!failedBranch || conflictFiles.length === 0) return undefined;
   return { failedBranch, conflictFiles };
 }
