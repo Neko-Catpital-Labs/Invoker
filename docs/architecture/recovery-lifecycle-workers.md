@@ -79,7 +79,7 @@ Workers may subscribe to the same lifecycle event stream. Contention is controll
 
 ## Auto-Fix Worker
 
-Automatic fix attempts are owned by a **single** shared auto-fix worker engine in `@invoker/execution-engine`. Both doors — `invoker-cli worker autofix` (production) and `./run.sh --headless worker autofix` (dev) — drive that one engine. The engine subscribes to lifecycle wakeups, scans persisted state, and decides whether an auto-fix command should be submitted.
+Automatic fix attempts are owned by a **single** shared auto-fix worker engine in `@invoker/execution-engine`. Both doors — `invoker-cli worker autofix` (production) and `./run.sh --headless worker autofix` (dev) — drive that one engine. The engine subscribes to lifecycle wakeups, scans persisted state, and decides whether an auto-fix command should be submitted. `autoFixRetries` belongs to that worker policy; a task records only `autoFixAttempts`, not its own retry budget.
 
 Lifetime and concurrency are constrained so the single engine stays single:
 
@@ -90,7 +90,7 @@ The engine should only act when persisted state shows that:
 
 1. The workflow or task is in a state eligible for auto-fix.
 2. No newer generation has superseded the failed state.
-3. Auto-fix policy allows another attempt.
+3. The worker retry budget allows another attempt for that failed task.
 4. No incompatible recovery action is already in progress.
 
 When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition. A sweep-and-assert guard test fails the build if any auto-fix is triggered outside this shared worker engine.
