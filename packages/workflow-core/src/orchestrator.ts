@@ -111,8 +111,9 @@ import {
   recreateWorkflowFromFreshBaseImpl,
   getKnownFreshBaseCommitImpl,
   beginConflictResolutionImpl,
-  beginAutoFixSessionImpl,
+  beginFixSessionImpl,
   revertConflictResolutionImpl,
+  revertFixSessionImpl,
   getMergeNodeImpl,
 } from './orchestrator/merge.js';
 import type { MergeHost } from './orchestrator/merge.js';
@@ -1864,7 +1865,7 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = {
       status: 'completed',
-      execution: { completedAt: new Date() },
+      execution: { completedAt: new Date(), fixSessionEntryStatus: undefined },
     };
     const updated = this.writeAndSync(taskId, changes);
     this.updateSelectedAttempt(taskId, {
@@ -1913,7 +1914,7 @@ export class Orchestrator {
     const now = new Date();
     const changes: TaskStateChanges = {
       status: 'running',
-      execution: { pendingFixError: undefined, startedAt: now, lastHeartbeatAt: now },
+      execution: { pendingFixError: undefined, fixSessionEntryStatus: undefined, startedAt: now, lastHeartbeatAt: now },
     };
     const updated = this.writeAndSync(taskId, changes);
     this.updateSelectedAttempt(taskId, {
@@ -1937,7 +1938,7 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = {
       status: 'failed',
-      execution: { error: reason ?? 'Rejected', completedAt: new Date() },
+      execution: { error: reason ?? 'Rejected', completedAt: new Date(), fixSessionEntryStatus: undefined },
     };
     const updated = this.writeAndSync(taskId, changes);
     this.updateSelectedAttempt(taskId, {
@@ -2610,29 +2611,46 @@ export class Orchestrator {
   }
 
   /**
-   * Transition a failed task to fixing_with_ai before an async conflict resolution.
-   * Clears terminal failure fields on the row so SQLite does not show stale error/exit/completed.
-   * Returns the saved error string so the caller can revert on failure.
+   * Begin a fix session from an explicit resting state (`failed`,
+   * `review_ready`, or `awaiting_approval`). Records the entry status on the
+   * task so `revertFixSession` — possibly running after a restart, from an
+   * approve/reject surface — restores exactly where the session started.
+   * Refuses to begin while a pending fix is parked awaiting approval.
+   */
+  beginFixSession(
+    taskId: string,
+    opts: { savedError?: string; expectedLineage?: TaskLineageExpectation } = {},
+  ): { savedError: string } {
+    return beginFixSessionImpl(this as unknown as MergeHost, taskId, opts);
+  }
+
+  /**
+   * Revert a fix session to its recorded entry status. Sessions with no
+   * recorded entry (legacy rows) restore `failed`; a revert with no session
+   * evidence is an idempotent no-op.
+   */
+  revertFixSession(
+    taskId: string,
+    opts: {
+      savedError: string;
+      fixError?: string;
+      expectedLineage?: TaskLineageExpectation;
+    },
+  ): void {
+    revertFixSessionImpl(this as unknown as MergeHost, taskId, opts);
+  }
+
+  /**
+   * @deprecated Use `beginFixSession`. Failed-only entry guard kept for
+   * callers not yet migrated; removed once call sites move over.
    */
   beginConflictResolution(taskId: string, expectedLineage?: TaskLineageExpectation): { savedError: string } {
     return beginConflictResolutionImpl(this as unknown as MergeHost, taskId, expectedLineage);
   }
 
   /**
-   * Begin an AI fix session from either a failed task or an external review
-   * gate state. Review-gate CI failures use this path because the merge task
-   * may still be review_ready/awaiting_approval while the PR checks are red.
-   */
-  beginAutoFixSession(
-    taskId: string,
-    opts: { savedError?: string; expectedLineage?: TaskLineageExpectation } = {},
-  ): { savedError: string } {
-    return beginAutoFixSessionImpl(this as unknown as MergeHost, taskId, opts);
-  }
-
-  /**
-   * Revert a conflict resolution attempt: restore the task to failed
-   * with its original error and re-parsed mergeConflict field.
+   * @deprecated Use `revertFixSession`. Always restores `failed`; removed
+   * once call sites move over.
    */
   revertConflictResolution(
     taskId: string,
@@ -2985,7 +3003,7 @@ export class Orchestrator {
    * "only command edit has explicit handling today; no general
    * fix-context mutation policy" and the chart's "Fix-session
    * inconsistency" subsection calls out the bespoke
-   * `beginConflictResolution` / `revertConflictResolution` rollback
+   * `beginFixSession` / `revertFixSession` rollback
    * as "one special active invalidation mechanism, not a general
    * one". Step 10 lifts that bespoke fix-session handling into a
    * proper orchestrator policy seam (`Orchestrator.editTaskFixContext`)

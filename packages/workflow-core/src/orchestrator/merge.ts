@@ -14,7 +14,7 @@
  * exactly so merge/experiment behavior and the TASK_DELTA contract stay stable.
  */
 
-import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskStatus, Attempt } from '@invoker/workflow-graph';
 import type { Logger } from '@invoker/contracts';
 import { parseMergeConflictError } from '../merge-conflict-error.js';
 import type { TaskStateMachine } from '../state-machine.js';
@@ -127,6 +127,65 @@ export function getKnownFreshBaseCommitImpl(host: MergeHost, workflowId: string)
   return host.knownFreshBaseCommits.get(workflowId);
 }
 
+/**
+ * Resting states a fix session may begin from — and therefore the only
+ * states `revertFixSessionImpl` will ever restore. Explicit allow-list:
+ *
+ * - `failed`             — the classic fix-a-broken-task flow.
+ * - `review_ready`       — a merge gate with an open review whose PR checks
+ *                          went red; the gate task itself never failed.
+ * - `awaiting_approval`  — a manual gate waiting on a human.
+ *
+ * Everything else is deliberately out: `pending`/`running`/`needs_input`/
+ * `blocked` belong to the launch and input lifecycles (restoring `running`
+ * would claim a live process that does not exist), and `completed`/`closed`/
+ * `stale` are terminal — a revert that resurrects finished work is a
+ * different, dangerous operation.
+ */
+export const FIX_SESSION_ENTRY_STATUSES = ['failed', 'review_ready', 'awaiting_approval'] as const;
+export type FixSessionEntryStatus = (typeof FIX_SESSION_ENTRY_STATUSES)[number];
+
+function isFixSessionEntryStatus(status: TaskStatus): status is FixSessionEntryStatus {
+  return (FIX_SESSION_ENTRY_STATUSES as readonly TaskStatus[]).includes(status);
+}
+
+/**
+ * Begin a fix session: record the entry status on the task (persisted, so a
+ * later revert — possibly after a restart, from an approve/reject surface —
+ * knows exactly where to return), then move the task to `fixing_with_ai`.
+ *
+ * At most one session may be open per task: beginning while a pending fix is
+ * parked (`pendingFixError` set) is refused; the human must approve or reject
+ * the parked fix first.
+ */
+export function beginFixSessionImpl(
+  host: MergeHost,
+  taskId: string,
+  opts: { savedError?: string; expectedLineage?: TaskLineageExpectation } = {},
+): { savedError: string } {
+  host.refreshFromDb();
+  const task = host.stateGetTask(taskId);
+  if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+  if (!host.taskMatchesLineageExpectation(task, opts.expectedLineage)) {
+    throw new Error(`Task ${taskId} lineage is stale for fix session start`);
+  }
+  if (task.execution.pendingFixError !== undefined) {
+    throw new Error(
+      `Task ${taskId} already has a pending fix awaiting approval or rejection; approve or reject it before starting another fix`,
+    );
+  }
+  if (!isFixSessionEntryStatus(task.status)) {
+    throw new Error(
+      `Task ${taskId} is not in a fix-session entry state (status: ${task.status}; allowed: ${FIX_SESSION_ENTRY_STATUSES.join(', ')})`,
+    );
+  }
+  return startFixSession(host, task, task.status, opts.savedError);
+}
+
+/**
+ * @deprecated Use `beginFixSessionImpl`. Failed-only entry guard kept for
+ * callers not yet migrated; removed once call sites move over.
+ */
 export function beginConflictResolutionImpl(
   host: MergeHost,
   taskId: string,
@@ -139,68 +198,19 @@ export function beginConflictResolutionImpl(
     throw new Error(`Task ${taskId} lineage is stale for conflict resolution start`);
   }
   if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
-
-  const savedError = task.execution.error ?? '';
-  const startedAt = new Date();
-
-  const id = task.id;
-  const changes: TaskStateChanges = {
-    status: 'fixing_with_ai',
-    execution: {
-      error: undefined,
-      exitCode: undefined,
-      completedAt: undefined,
-      mergeConflict: undefined,
-      isFixingWithAI: false,
-      startedAt,
-      lastHeartbeatAt: startedAt,
-    },
-  };
-  const changesWithGeneration = host.withBumpedExecutionGeneration(task, changes);
-  const conflictUpdated = host.writeAndSync(taskId, changesWithGeneration);
-  const attemptId = host.replaceSelectedAttempt(task);
-  host.taskRepository.updateAttempt(attemptId, {
-    status: 'running',
-    startedAt,
-    lastHeartbeatAt: startedAt,
-    branch: task.execution.branch,
-    commit: task.execution.commit,
-    workspacePath: task.execution.workspacePath,
-    agentSessionId: task.execution.agentSessionId,
-    containerId: task.execution.containerId,
-    mergeConflict: undefined,
-    error: undefined,
-    exitCode: undefined,
-  });
-  const delta: TaskDelta = host.buildUpdateDelta(task, conflictUpdated, changesWithGeneration);
-  host.persistence.logEvent?.(id, 'task.fixing_with_ai', changesWithGeneration);
-  publishTaskDelta(host.messageBus, delta);
-
-  return { savedError };
+  return startFixSession(host, task, task.status, undefined);
 }
 
-export function beginAutoFixSessionImpl(
+function startFixSession(
   host: MergeHost,
-  taskId: string,
-  opts: { savedError?: string; expectedLineage?: TaskLineageExpectation } = {},
+  task: TaskState,
+  entryStatus: FixSessionEntryStatus,
+  savedErrorOverride: string | undefined,
 ): { savedError: string } {
-  host.refreshFromDb();
-  const task = host.stateGetTask(taskId);
-  if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-  if (!host.taskMatchesLineageExpectation(task, opts.expectedLineage)) {
-    throw new Error(`Task ${taskId} lineage is stale for auto-fix start`);
-  }
-  if (
-    task.status !== 'failed' &&
-    task.status !== 'review_ready' &&
-    task.status !== 'awaiting_approval'
-  ) {
-    throw new Error(`Task ${taskId} is not in an auto-fixable state (status: ${task.status})`);
-  }
-
-  const savedError = opts.savedError ?? task.execution.error ?? '';
+  const savedError = savedErrorOverride ?? task.execution.error ?? '';
   const startedAt = new Date();
   const id = task.id;
+
   const changes: TaskStateChanges = {
     status: 'fixing_with_ai',
     execution: {
@@ -209,6 +219,7 @@ export function beginAutoFixSessionImpl(
       completedAt: undefined,
       mergeConflict: undefined,
       isFixingWithAI: false,
+      fixSessionEntryStatus: entryStatus,
       startedAt,
       lastHeartbeatAt: startedAt,
     },
@@ -232,9 +243,96 @@ export function beginAutoFixSessionImpl(
   const delta: TaskDelta = host.buildUpdateDelta(task, updated, changesWithGeneration);
   host.persistence.logEvent?.(id, 'task.fixing_with_ai', changesWithGeneration);
   publishTaskDelta(host.messageBus, delta);
+
   return { savedError };
 }
 
+/**
+ * Revert a fix session to the entry status recorded by `beginFixSessionImpl`.
+ *
+ * Valid at two points of the session: while the fix runs (`fixing_with_ai`)
+ * and after it parked awaiting a human (`awaiting_approval` +
+ * `pendingFixError`, the reject path). Restore means "status equals entry
+ * status" — monotonic fields stay monotonic: the execution generation stays
+ * bumped (it guards against orphaned async work) and the replaced attempt
+ * stays replaced, marked failed.
+ *
+ * Legacy rows (a session begun before the entry status was recorded) restore
+ * `failed`, which is exact: every pre-existing session came through the
+ * failed-only guard. A revert with no session and no legacy evidence is an
+ * idempotent no-op — reverts run inside catch blocks and retried mutation
+ * intents, where throwing would mask the original error.
+ */
+export function revertFixSessionImpl(
+  host: MergeHost,
+  taskId: string,
+  opts: {
+    savedError: string;
+    fixError?: string;
+    expectedLineage?: TaskLineageExpectation;
+  },
+): void {
+  host.refreshFromDb();
+  const task = host.stateGetTask(taskId);
+  if (!task) {
+    throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+  }
+  if (!host.taskMatchesLineageExpectation(task, opts.expectedLineage)) return;
+
+  const recorded = task.execution.fixSessionEntryStatus;
+  const entryStatus: FixSessionEntryStatus | undefined =
+    recorded !== undefined && isFixSessionEntryStatus(recorded)
+      ? recorded
+      : task.status === 'fixing_with_ai' ||
+          task.status === 'failed' ||
+          task.execution.pendingFixError !== undefined
+        ? 'failed' // legacy session or failed-task error rewrite: pre-column behavior
+        : undefined;
+  if (entryStatus === undefined) {
+    host.persistence.logEvent?.(task.id, 'task.fix_session_revert_noop', {
+      status: task.status,
+      fixError: opts.fixError ?? null,
+    });
+    return;
+  }
+
+  if (entryStatus === 'failed') {
+    restoreFailedEntry(host, task, opts.savedError, opts.fixError);
+    return;
+  }
+
+  const completedAt = new Date();
+  const attemptError = opts.fixError
+    ? `[Fix with Agent failed] ${opts.fixError}`
+    : opts.savedError;
+  const changes: TaskStateChanges = {
+    status: entryStatus,
+    execution: {
+      error: undefined,
+      isFixingWithAI: false,
+      pendingFixError: undefined,
+      fixSessionEntryStatus: undefined,
+      completedAt,
+    },
+  };
+  const updated = host.writeAndSync(taskId, changes);
+  host.updateSelectedAttempt(taskId, {
+    status: 'failed',
+    error: attemptError,
+    completedAt,
+  });
+  const delta: TaskDelta = host.buildUpdateDelta(task, updated, changes);
+  host.persistence.logEvent?.(task.id, 'task.fix_session_reverted', {
+    restoreStatus: entryStatus,
+    fixError: opts.fixError ?? null,
+  });
+  publishTaskDelta(host.messageBus, delta);
+}
+
+/**
+ * @deprecated Use `revertFixSessionImpl`. Always restores `failed`; removed
+ * once call sites move over.
+ */
 export function revertConflictResolutionImpl(
   host: MergeHost,
   taskId: string,
@@ -248,8 +346,16 @@ export function revertConflictResolutionImpl(
     throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
   }
   if (!host.taskMatchesLineageExpectation(task, expectedLineage)) return;
-  const id = task.id;
+  restoreFailedEntry(host, task, savedError, fixError);
+}
 
+function restoreFailedEntry(
+  host: MergeHost,
+  task: TaskState,
+  savedError: string,
+  fixError?: string,
+): void {
+  const id = task.id;
   const normalizedSavedError = stripFixFailureWrapper(savedError);
   const mergeConflict = parseMergeConflictError(normalizedSavedError);
 
@@ -263,11 +369,13 @@ export function revertConflictResolutionImpl(
       error: displayError,
       mergeConflict,
       isFixingWithAI: false,
+      pendingFixError: undefined,
+      fixSessionEntryStatus: undefined,
       completedAt,
     },
   };
-  const revertUpdated = host.writeAndSync(taskId, changes);
-  host.updateSelectedAttempt(taskId, {
+  const revertUpdated = host.writeAndSync(id, changes);
+  host.updateSelectedAttempt(id, {
     status: 'failed',
     error: displayError,
     mergeConflict,

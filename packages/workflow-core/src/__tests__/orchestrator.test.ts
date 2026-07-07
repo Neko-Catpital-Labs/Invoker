@@ -2716,7 +2716,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('a2')!.status).toBe('pending');
 
       // Fix with Claude → awaiting_approval
-      orchestrator.beginConflictResolution('a1');
+      orchestrator.beginFixSession('a1');
       orchestrator.setFixAwaitingApproval('a1', 'some error');
       expect(orchestrator.getTask('a1')!.status).toBe('awaiting_approval');
 
@@ -8120,8 +8120,8 @@ describe('Orchestrator', () => {
   // while `fixing_with_ai`" maps the `fixContext` mutation to
   // InvalidationAction = 'retryTask' with InvalidationScope = 'task'
   // applied to the failed/fixing task. Step 10 lifts the previously
-  // bespoke fix-session handling (`beginConflictResolution` /
-  // `revertConflictResolution`) into a proper orchestrator policy
+  // bespoke fix-session handling (`beginFixSession` /
+  // `revertFixSession`) into a proper orchestrator policy
   // seam: `Orchestrator.editTaskFixContext` owns the same-content
   // no-op detection, cancel-first interruption when the task is
   // actively running an AI fix (`fixing_with_ai`), the
@@ -8171,7 +8171,7 @@ describe('Orchestrator', () => {
     }
 
     function driveTaskToFixingWithAi(taskId: string): void {
-      orchestrator.beginConflictResolution(taskId);
+      orchestrator.beginFixSession(taskId);
       expect(orchestrator.getTask(taskId)?.status).toBe('fixing_with_ai');
       publishedDeltas = [];
     }

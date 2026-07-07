@@ -471,7 +471,6 @@ function parseInAppPlanningPlanSummary(value: unknown): InAppPlanningPlanSummary
     steps: candidate.steps,
   };
 }
-
 export class SQLiteAdapter implements PersistenceAdapter {
   private db: NativeDatabaseCompat;
   private nativeDb: DatabaseSync;
@@ -1522,7 +1521,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         last_agent_session_id, last_agent_name,
         action_request_id, experiments,
         created_at, launch_phase, launch_started_at, launch_completed_at, started_at, completed_at, last_heartbeat_at,
-        utilization, pending_fix_error,
+        utilization, pending_fix_error, fix_session_entry_status,
         review_url, review_id, review_status, review_provider_id, review_gate,
         is_fixing_with_ai,
         execution_generation,
@@ -1542,7 +1541,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?,
+        ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?,
         ?, ?,
@@ -1599,6 +1598,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.lastHeartbeatAt?.toISOString() ?? null,
       null,
       exec.pendingFixError ?? null,
+      exec.fixSessionEntryStatus ?? null,
       exec.reviewUrl ?? null,
       exec.reviewId ?? null,
       exec.reviewStatus ?? null,
@@ -1702,6 +1702,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         containerId: 'container_id',
         selectedExperiment: 'selected_experiment',
         pendingFixError: 'pending_fix_error',
+        fixSessionEntryStatus: 'fix_session_entry_status',
         reviewUrl: 'review_url',
         reviewId: 'review_id',
         reviewStatus: 'review_status',
@@ -2045,7 +2046,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
     });
   }
-
   private getTaskIdsForWorkflow(workflowId: string): string[] {
     const rows = this.queryAll(
       'SELECT id FROM tasks WHERE workflow_id = ?',
@@ -3378,7 +3378,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       return undefined;
     }
   }
-
   private rowToAttempt(row: any): Attempt {
     return mapRowToAttempt(row);
   }

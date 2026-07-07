@@ -105,10 +105,11 @@ export class CommandService {
       () => {
         const task = this.orchestrator.getTask(envelope.payload.taskId);
         if (task?.execution.pendingFixError !== undefined) {
-          this.orchestrator.revertConflictResolution(
-            envelope.payload.taskId,
-            task.execution.pendingFixError,
-          );
+          // Revert the fix session to its recorded entry status: rejecting a
+          // review-gate fix returns the gate to review_ready, not failed.
+          this.orchestrator.revertFixSession(envelope.payload.taskId, {
+            savedError: task.execution.pendingFixError,
+          });
         } else {
           this.orchestrator.reject(
             envelope.payload.taskId,

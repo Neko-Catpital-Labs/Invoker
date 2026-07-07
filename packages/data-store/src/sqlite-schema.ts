@@ -397,7 +397,6 @@ export const SCHEMA_DDL = `
 
       CREATE INDEX IF NOT EXISTS idx_terminal_sessions_status_updated
         ON terminal_sessions(status, updated_at);
-
     `;
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
@@ -466,6 +465,8 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
   'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
   'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
+  // fix_session_entry_status: resting status recorded while a fix session is open
+  'ALTER TABLE tasks ADD COLUMN fix_session_entry_status TEXT',
 ];
 
 /**
