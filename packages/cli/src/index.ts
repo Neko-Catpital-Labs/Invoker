@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
+import { resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
 import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
@@ -38,6 +38,7 @@ import {
 } from '@invoker/workflow-core';
 import { logCaughtException } from './logging.js';
 import { runMcpServer } from './mcp-server.js';
+import { runPlannerMcpServer } from './planner-mcp-server.js';
 import { runDoctor, runSetup } from './onboarding.js';
 
 const VERSION = '0.0.6';
@@ -71,6 +72,7 @@ type LiveSubmissionResult = {
 type CliDeps = {
   createMessageBus?: () => Promise<MessageBus> | MessageBus;
   runMcpServer?: () => Promise<void>;
+  runPlannerMcpServer?: () => Promise<void>;
 };
 
 type CliRuntimeConfig = {
@@ -133,6 +135,7 @@ function usage(): string {
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli setup [planner|slack] [--check|--from-env] [--json]',
     '  invoker-cli mcp',
+    '  invoker-cli planner-mcp',
     '  invoker-cli worker [autofix|list]',
     '  invoker-cli --help',
     '  invoker-cli --version',
@@ -142,13 +145,12 @@ function usage(): string {
     '  doctor          Validate tools, config, and your default planning preset.',
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
-    '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
+    '  planner-mcp     Start the bundled Drafter planner MCP stdio server.',
     '',
     'Options:',
     '  --planner-url <url>   Planner service URL for `setup planner`.',
     '  --access-token <tok>  Planner service access token for `setup planner`.',
-    `  --planner-package <spec>  Planner MCP package spec for \`setup planner\`. Defaults to ${DEFAULT_DRAFTER_MCP_PACKAGE_SPEC}.`,
-    '  --target <path>       MCP config path for `setup planner`. Required unless INVOKER_MCP_CONFIG_PATH is set.',
+    '  --target <path>       MCP config path for planner setup. Defaults to ~/.invoker/mcp.json.',
     '  --uninstall           Remove the experimental planner MCP entry and disable its Invoker flag.',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
     '  --standalone     Skip IPC and run with an isolated CLI database.',
@@ -591,6 +593,10 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'mcp') {
       await (deps.runMcpServer ?? runMcpServer)();
+      return 0;
+    }
+    if (argv[0] === 'planner-mcp') {
+      await (deps.runPlannerMcpServer ?? runPlannerMcpServer)();
       return 0;
     }
     if (argv[0] === 'worker') {

@@ -6,9 +6,7 @@ import { createInterface } from 'node:readline/promises';
 import {
   assembleReadinessChecks,
   buildReport,
-  DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
   DEFAULT_TOOL_REQUIREMENTS,
-  EXTERNAL_DEPENDENCIES,
   formatReport,
   type IsInstalled,
   type PlanningPresetSpec,
@@ -21,13 +19,14 @@ import { formatCaughtException, logCaughtException } from './logging.js';
 type JsonRecord = Record<string, unknown>;
 
 const EXPERIMENTAL_PLANNER_SERVER_KEY = 'experimental-planner';
-const EXPERIMENTAL_PLANNER_PACKAGE_NAME = DEFAULT_DRAFTER_MCP_PACKAGE_SPEC;
-const EXPERIMENTAL_PLANNER_COMMAND_NAME = EXTERNAL_DEPENDENCIES.drafterMcp.commandName;
-function experimentalPlannerServerSpec(packageSpec: string = EXPERIMENTAL_PLANNER_PACKAGE_NAME): JsonRecord {
+const EXPERIMENTAL_PLANNER_COMMAND = 'invoker-cli';
+const EXPERIMENTAL_PLANNER_ARGS = ['planner-mcp'];
+
+function experimentalPlannerServerSpec(): JsonRecord {
   return {
     type: 'stdio',
-    command: 'uvx',
-    args: ['--from', packageSpec, EXPERIMENTAL_PLANNER_COMMAND_NAME],
+    command: EXPERIMENTAL_PLANNER_COMMAND,
+    args: EXPERIMENTAL_PLANNER_ARGS,
   };
 }
 
@@ -40,17 +39,19 @@ export function defaultConfigPath(): string {
 export function envFilePath(): string {
   return join(invokerHomeDir(), '.env');
 }
+export function defaultExperimentalPlannerMcpPath(configPath: string = defaultConfigPath()): string {
+  return join(dirname(configPath), 'mcp.json');
+}
+
 export function manifestFilePath(): string {
   return join(invokerHomeDir(), 'slack-app-manifest.json');
 }
-export function experimentalPlannerMcpPath(): string | undefined {
-  return process.env.INVOKER_MCP_CONFIG_PATH;
+export function experimentalPlannerMcpPath(configPath: string = defaultConfigPath()): string {
+  return process.env.INVOKER_MCP_CONFIG_PATH ?? defaultExperimentalPlannerMcpPath(configPath);
 }
 
-function requireExperimentalPlannerMcpPath(targetPath?: string): string {
-  const resolvedPath = targetPath ?? experimentalPlannerMcpPath();
-  if (resolvedPath) return resolvedPath;
-  throw new Error('Missing MCP config path. Pass --target <path> or set INVOKER_MCP_CONFIG_PATH.');
+function resolveExperimentalPlannerMcpPath(targetPath: string | undefined, configPath: string): string {
+  return targetPath ?? experimentalPlannerMcpPath(configPath);
 }
 
 // ── Tool probing & install ───────────────────────────────────
@@ -139,12 +140,10 @@ function isExperimentalPlannerServer(value: unknown): boolean {
   if (!isJsonRecord(value)) return false;
   const args = value.args;
   return value.type === 'stdio'
-    && value.command === 'uvx'
+    && value.command === EXPERIMENTAL_PLANNER_COMMAND
     && Array.isArray(args)
-    && args.length === 3
-    && args[0] === '--from'
-    && typeof args[1] === 'string'
-    && args[2] === EXPERIMENTAL_PLANNER_COMMAND_NAME;
+    && args.length === EXPERIMENTAL_PLANNER_ARGS.length
+    && args.every((arg, index) => arg === EXPERIMENTAL_PLANNER_ARGS[index]);
 }
 
 export interface ExperimentalPlannerSetupOptions {
@@ -153,7 +152,6 @@ export interface ExperimentalPlannerSetupOptions {
   plannerUrl?: string;
   accessToken?: string;
   uninstall?: boolean;
-  plannerPackage?: string;
 }
 
 export interface ExperimentalPlannerSetupState {
@@ -172,8 +170,8 @@ export function setExperimentalPlannerFlag(enabled: boolean, configPath: string 
 }
 
 export function readExperimentalPlannerSetup(options: ExperimentalPlannerSetupOptions = {}): ExperimentalPlannerSetupState {
-  const targetPath = requireExperimentalPlannerMcpPath(options.targetPath);
   const configPath = options.configPath ?? defaultConfigPath();
+  const targetPath = resolveExperimentalPlannerMcpPath(options.targetPath, configPath);
   const invokerConfig = existsSync(configPath) ? readMutableJson(configPath, {}) : {};
   const mcpConfig = existsSync(targetPath) ? readMutableJson(targetPath, {}) : {};
   const servers = isJsonRecord(mcpConfig.mcpServers) ? mcpConfig.mcpServers : {};
@@ -185,9 +183,9 @@ export function readExperimentalPlannerSetup(options: ExperimentalPlannerSetupOp
   };
 }
 
-export function installExperimentalPlannerMcp(options: ExperimentalPlannerSetupOptions = {}): ExperimentalPlannerSetupState {
-  const targetPath = requireExperimentalPlannerMcpPath(options.targetPath);
+function writeExperimentalPlannerMcpEntry(options: ExperimentalPlannerSetupOptions = {}): ExperimentalPlannerSetupState {
   const configPath = options.configPath ?? defaultConfigPath();
+  const targetPath = resolveExperimentalPlannerMcpPath(options.targetPath, configPath);
   const mcpConfig = readMutableJson(targetPath, { $schema: 'https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json' });
   const existingServers = mutableMcpServers(mcpConfig, targetPath);
   const servers: JsonRecord = { ...existingServers };
@@ -198,7 +196,7 @@ export function installExperimentalPlannerMcp(options: ExperimentalPlannerSetupO
     const env: JsonRecord = {};
     if (options.plannerUrl) env.PLANNER_URL = options.plannerUrl;
     if (options.accessToken) env.PLANNER_ACCESS_TOKEN = options.accessToken;
-    const spec = experimentalPlannerServerSpec(options.plannerPackage);
+    const spec = experimentalPlannerServerSpec();
     servers[EXPERIMENTAL_PLANNER_SERVER_KEY] = Object.keys(env).length > 0 ? { ...spec, env } : spec;
   }
 
@@ -208,8 +206,17 @@ export function installExperimentalPlannerMcp(options: ExperimentalPlannerSetupO
   if (writesPlannerAccessToken && existsSync(targetPath)) chmodSync(targetPath, 0o600);
   writeFileSync(targetPath, `${JSON.stringify(mcpConfig, null, 2)}\n`, writesPlannerAccessToken ? { mode: 0o600 } : undefined);
   if (writesPlannerAccessToken) chmodSync(targetPath, 0o600);
-  setExperimentalPlannerFlag(!options.uninstall, configPath);
   return readExperimentalPlannerSetup({ targetPath, configPath });
+}
+
+export function ensureExperimentalPlannerMcp(options: ExperimentalPlannerSetupOptions = {}): ExperimentalPlannerSetupState {
+  return writeExperimentalPlannerMcpEntry(options);
+}
+
+export function installExperimentalPlannerMcp(options: ExperimentalPlannerSetupOptions = {}): ExperimentalPlannerSetupState {
+  const state = writeExperimentalPlannerMcpEntry(options);
+  setExperimentalPlannerFlag(!options.uninstall, state.configPath);
+  return readExperimentalPlannerSetup({ targetPath: state.targetPath, configPath: state.configPath });
 }
 
 export function buildDoctorChecks(cfg: CliConfigState, isInstalled: IsInstalled = commandExists): PrerequisiteCheck[] {
@@ -476,7 +483,6 @@ interface ParsedSetupArgs {
   targetPath?: string;
   plannerUrl?: string;
   accessToken?: string;
-  plannerPackage?: string;
   fromEnv: boolean;
 }
 
@@ -507,10 +513,6 @@ function parseSetupArgs(argv: string[]): ParsedSetupArgs {
       const value = argv[++i];
       if (!value) throw new Error('Missing value for --access-token');
       parsed.accessToken = value;
-    } else if (arg === '--planner-package') {
-      const value = argv[++i];
-      if (!value) throw new Error('Missing value for --planner-package');
-      parsed.plannerPackage = value;
     } else {
       throw new Error(`Unknown setup option: ${arg}`);
     }
@@ -539,13 +541,12 @@ async function maybeInstallPlanner(parsed: ParsedSetupArgs, io: SetupIO): Promis
     targetPath: parsed.targetPath,
     plannerUrl: parsed.plannerUrl,
     accessToken: parsed.accessToken ?? process.env.PLANNER_ACCESS_TOKEN,
-    plannerPackage: parsed.plannerPackage ?? process.env.INVOKER_PLANNER_PACKAGE,
     uninstall: parsed.uninstall,
   });
   if (parsed.json) {
     io.print(JSON.stringify(state));
   } else if (parsed.uninstall) {
-    io.print(`Removed experimental planner MCP from ${state.targetPath}.`);
+    io.print(`Kept experimental planner MCP available at ${state.targetPath}.`);
     io.print(`Disabled experimentalPlanner in ${state.configPath}.`);
   } else {
     io.print(`Installed experimental planner MCP into ${state.targetPath}.`);
@@ -582,8 +583,13 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
     const core = buildReport(buildDoctorChecks(loadCliConfig()));
     io.print(formatReport(core));
     io.print('');
-
-    if (!wantSlack && !fromEnv && await promptYes(io, 'Set up the experimental planner MCP now? [y/N] ')) {
+    const plannerState = ensureExperimentalPlannerMcp({
+      targetPath: parsed.targetPath,
+    });
+    io.print(`Experimental planner MCP available at ${plannerState.targetPath}.`);
+    io.print(`experimentalPlanner flag: ${plannerState.experimentalPlanner ? 'on' : 'off'}`);
+    io.print('');
+    if (!wantSlack && !fromEnv && await promptYes(io, 'Enable the experimental planner now? [y/N] ')) {
       await maybeInstallPlanner(parsed, io);
       io.print('');
     }
@@ -593,7 +599,7 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
       doSlack = await promptYes(io, 'Set up the Slack integration now? [y/N] ');
     }
     if (!doSlack) {
-      io.print('\nYou are good to go for CLI and UI workflows. Run `invoker-cli setup planner` later to add the experimental planner. Run `invoker-cli setup slack` later to add Slack.');
+      io.print('\nYou are good to go for CLI and UI workflows. Run `invoker-cli setup planner` later to enable the experimental planner. Run `invoker-cli setup slack` later to add Slack.');
       return core.ok ? 0 : 1;
     }
 

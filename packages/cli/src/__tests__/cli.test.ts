@@ -95,12 +95,19 @@ describe('invoker-cli', () => {
     expect(result.stdout).toContain('Emit only a machine-readable result summary on stdout.');
   });
 
+  it('--help lists the bundled planner MCP command', async () => {
+    const result = await runCli(['--help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('invoker-cli planner-mcp');
+    expect(result.stdout).toContain('Start the bundled Drafter planner MCP stdio server.');
+  });
+
   it('--help lists the planner setup command', async () => {
     const result = await runCli(['--help']);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('invoker-cli setup [planner|slack]');
     expect(result.stdout).toContain('--planner-url <url>');
-    expect(result.stdout).toContain('Required unless INVOKER_MCP_CONFIG_PATH is set');
+    expect(result.stdout).toContain('Defaults to ~/.invoker/mcp.json');
   });
 
   it('lists worker kinds from the registry', async () => {
@@ -135,6 +142,15 @@ describe('invoker-cli', () => {
 
     expect(code).toBe(0);
     expect(runMcpServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('planner-mcp command starts the bundled planner MCP server runner', async () => {
+    const runPlannerMcpServer = vi.fn(async () => {});
+
+    const code = await main(['planner-mcp'], { runPlannerMcpServer });
+
+    expect(code).toBe(0);
+    expect(runPlannerMcpServer).toHaveBeenCalledTimes(1);
   });
 
   it('runs the hello-world fixture with an isolated db dir', async () => {
