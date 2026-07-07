@@ -11,7 +11,7 @@ export function useWorkerStatus(pollMs = 2000): readonly [snapshot: WorkerStatus
 
   const fetchStatus = useCallback(async () => {
     try {
-      const status = await window.invoker?.getWorkerStatus();
+      const status = await window.invoker?.getWorkers();
       if (mountedRef.current && status) {
         setSnapshot(status);
       }

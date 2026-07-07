@@ -324,10 +324,13 @@ export type {
   ReviewGateQueryResponse,
   WorkerActionSummary,
   WorkerActionStatus,
+  WorkerAvailability,
   WorkerControlAction,
   WorkerLifecycleStatus,
+  WorkerLogEntry,
   WorkerPolicyStatus,
   WorkerRecoverySummary,
+  WorkerSource,
   WorkerStatusEntry,
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
