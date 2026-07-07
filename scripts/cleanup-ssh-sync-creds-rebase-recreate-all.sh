@@ -4,10 +4,9 @@ set -euo pipefail
 # Clean Invoker-managed state on every configured SSH remote, sync local
 # Claude/Codex credentials to those remotes, then rebase-recreate all workflows.
 #
-# This script reads the same config source as Invoker:
-#   INVOKER_REPO_CONFIG_PATH=/path/to/config.json
-# or, when unset:
+# This script reads the normal Invoker config source:
 #   ~/.invoker/config.json
+# Use INVOKER_REPO_CONFIG_PATH=/path/to/config.json only for isolated runs/tests.
 #
 # Usage:
 #   scripts/cleanup-ssh-sync-creds-rebase-recreate-all.sh --dry-run
@@ -44,7 +43,7 @@ Options:
   -h, --help               Show this help.
 
 Environment:
-  INVOKER_REPO_CONFIG_PATH       Repo-specific Invoker config path.
+  INVOKER_REPO_CONFIG_PATH       Override config path for isolated runs/tests.
   INVOKER_SSH_CREDENTIAL_PATHS   Colon-separated local paths to sync.
                                 Defaults to Claude/Codex auth + config files.
 EOF
