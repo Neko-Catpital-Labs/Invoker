@@ -59,6 +59,10 @@ export class WorkflowRollupProjection {
     }
 
     this.removeTaskFromWorkflow(taskId, workflowId);
+    const remainingTaskIds = this.taskIdsByWorkflowId.get(workflowId);
+    if (!remainingTaskIds || remainingTaskIds.size === 0) {
+      return [{ ...this.patchFor(workflowId), removed: true }];
+    }
     return this.patchWorkflowById(workflowId);
   }
 
