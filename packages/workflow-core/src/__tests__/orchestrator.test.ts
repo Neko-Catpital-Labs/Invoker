@@ -743,7 +743,7 @@ describe('Orchestrator', () => {
       expect(persistence.listWorkflows().find((workflow) => workflow.id === workflowId)?.status).toBe('running');
     });
 
-    it('keeps auto-fix eligible after prior attempts and resets attempts when a workflow is recreated', () => {
+    it('exhausts auto-fix at the worker cap and resets attempts when a workflow is recreated', () => {
       orchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
@@ -767,7 +767,7 @@ describe('Orchestrator', () => {
 
       persistence.updateTask(taskId, { status: 'failed', execution: { autoFixAttempts: 3 } });
       orchestrator.syncAllFromDb();
-      expect(orchestrator.shouldAutoFix(taskId)).toBe(true);
+      expect(orchestrator.shouldAutoFix(taskId)).toBe(false);
 
       orchestrator.recreateWorkflow(workflowId);
 
@@ -3475,7 +3475,7 @@ describe('Orchestrator', () => {
   // ── Auto-Fix ────────────────────────────────────────────
 
   describe('auto-fix via synthetic spawn_experiments', () => {
-    it('uses positive default auto-fix config as an uncapped enable switch for older failed tasks', () => {
+    it('uses worker-owned auto-fix config as a per-task attempt cap', () => {
       const hydratePersistence = new InMemoryPersistence();
       const hydrateBus = new InMemoryBus();
 
@@ -3496,18 +3496,18 @@ describe('Orchestrator', () => {
       const hydratedOrchestrator = new Orchestrator({
         persistence: hydratePersistence,
         messageBus: hydrateBus,
-        defaultAutoFixRetries: 1,
+        defaultAutoFixRetries: 3,
       });
 
       hydratedOrchestrator.syncFromDb('wf-hydrated');
 
-      expect(hydratedOrchestrator.getAutoFixRetryBudget('t1')).toBe(Number.POSITIVE_INFINITY);
+      expect(hydratedOrchestrator.getAutoFixRetryBudget('t1')).toBe(3);
       expect(hydratedOrchestrator.shouldAutoFix('t1')).toBe(true);
 
-      hydratePersistence.updateTask('t1', { execution: { autoFixAttempts: 100 } });
+      hydratePersistence.updateTask('t1', { execution: { autoFixAttempts: 3 } });
       hydratedOrchestrator.syncFromDb('wf-hydrated');
 
-      expect(hydratedOrchestrator.shouldAutoFix('t1')).toBe(true);
+      expect(hydratedOrchestrator.shouldAutoFix('t1')).toBe(false);
     });
 
     it('plain failed tasks stay failed in workflow-core', () => {

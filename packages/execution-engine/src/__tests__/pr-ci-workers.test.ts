@@ -203,11 +203,11 @@ describe('PR status and CI failure workers', () => {
     });
   });
 
-  it('queues CI repair even after previous auto-fix attempts', async () => {
+  it('skips CI repair after the worker retry budget is exhausted', async () => {
     const event = makeEvent();
     const harness = makeHarness(makeTask({
       execution: {
-        autoFixAttempts: 100,
+        autoFixAttempts: 1,
       },
     }));
     const tick = createCiFailureTick({
@@ -220,7 +220,16 @@ describe('PR status and CI failure workers', () => {
 
     await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1 });
 
-    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
+      status: 'skipped',
+      summary: expect.stringContaining('worker retry budget is exhausted'),
+      payload: expect.objectContaining({
+        reason: 'worker-retry-budget-exhausted',
+        workerRetryBudget: 1,
+        autoFixAttempts: 1,
+      }),
+    });
   });
 
   it('rejects stale CI failure events when the PR head changed before submit', async () => {
