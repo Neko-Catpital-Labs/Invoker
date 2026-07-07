@@ -33,6 +33,8 @@ Order slices so a reviewer reads the evidence before the change it justifies (se
   - Invoker-on-Invoker stacks may use `mergify stack push`
   - unrelated target repos should keep their own normal PR workflow unless they independently use Mergify Stacks
 
+
+- For published Mergify stacks, maintain one machine-managed stack comment on every PR in the stack. The comment lists the full stack bottom-to-top and must be refreshed whenever the stack changes.
 ## Preferred PR schema
 
 Default to this structure:
@@ -181,6 +183,8 @@ Update an existing PR with:
 node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md --update <pr-number>
 ```
 
+For stacked PRs, `create-pr` also refreshes the machine-managed full-stack comment across every PR in the connected stack. The comment marks the target PR with `← this PR`.
+
 For Mergify-managed stack PRs, this update path is REQUIRED after `mergify stack push`. Do not leave the Mergify-generated placeholder title/body live.
 After `mergify stack push`, you MUST audit the live PRs immediately. Default Mergify-created titles/bodies like an empty description or a bare `Depends-On:` line are a publication failure, not a follow-up chore.
 
@@ -193,7 +197,6 @@ No custom payload parsing is required here. The check is simple: verify the rend
 4. If Mergify generated a remote-only head branch name that `create-pr` cannot map from the local branch, use `gh pr edit --title ... --body-file ...` immediately rather than leaving placeholder metadata live.
 
 Do not stop after `mergify stack push` until the GitHub-side metadata matches the intended titles and bodies.
-
 
 This script handles local image path upload/injection when configured. It also rejects UI-impacting diffs unless the body includes visual proof media.
 
@@ -236,8 +239,9 @@ If review says one published stack slice is still too broad:
 6. Switch to each generated stack branch.
 7. Get the real base branch with `gh pr view --json baseRefName --jq .baseRefName`.
 8. Update each PR with `node scripts/create-pr.mjs --title "..." --base <actual-base-branch> --body-file <file> --update-existing`.
+9. After any stack reorder, replacement slice, or new top slice, rerun `create-pr --update-existing` on one published branch so the machine-managed stack comment is refreshed across the whole stack.
 
-9. Audit the live PR metadata on GitHub. If any replacement PR still shows an empty description or only `Depends-On:`, repair it immediately.
+10. Audit the live PR metadata on GitHub. If any replacement PR still shows an empty description or only `Depends-On:`, repair it immediately.
 Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` cannot map the local branch to the published Mergify branch. Use it to repair live metadata immediately, not as the default path.
 
 
@@ -253,6 +257,7 @@ Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` canno
 - for stacked PRs, after any split or restack, re-audit the full rebuilt stack before publishing or updating PRs
 - for stacked PRs, auto-fold conflict-only, import-only, or other no-new-claim fixup slices into the previous slice before publication
 - for stacked PRs, update title/body through `node scripts/create-pr.mjs --update-existing ...`, not `gh pr edit`
+- for stacked PRs, verify that `create-pr` refreshed the machine-managed full-stack comment across every PR in the stack
 - for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`; classify by user-visible behavior, not by path alone
 If you include `## Architecture`, keep the diagrams renderable by GitHub Mermaid.
 Always quote labels that contain prose, punctuation, or code-ish text such as `reviewGate.artifacts[]`.
