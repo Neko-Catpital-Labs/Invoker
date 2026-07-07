@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { LocalBus } from '@invoker/transport';
@@ -115,9 +115,65 @@ describe('invoker-cli', () => {
     expect(code).toBe(0);
     expect(output.stdout).toContain('Worker kinds');
     expect(output.stdout).toContain('autofix');
+    expect(output.stdout).toContain('autoapprove');
     output.restore();
   });
 
+
+  it('reads worker config from INVOKER_REPO_CONFIG_PATH for worker list', async () => {
+    const output = captureProcessOutput();
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-worker-config-'));
+    const previous = process.env.INVOKER_REPO_CONFIG_PATH;
+    try {
+      const configPath = join(dir, 'config.json');
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          externalWorkers: [{ kind: 'external-from-env', launch: { executable: 'node', args: ['-v'] } }],
+        }),
+        'utf8',
+      );
+      process.env.INVOKER_REPO_CONFIG_PATH = configPath;
+
+      const code = await main(['worker', 'list'], {
+        createMessageBus: () => {
+          throw new Error('worker list should not open IPC');
+        },
+      });
+
+      expect(code).toBe(0);
+      expect(output.stdout).toContain('external-from-env');
+    } finally {
+      if (previous === undefined) delete process.env.INVOKER_REPO_CONFIG_PATH;
+      else process.env.INVOKER_REPO_CONFIG_PATH = previous;
+      output.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('restores INVOKER_REPO_CONFIG_PATH after standalone run with --config', async () => {
+    const output = captureProcessOutput();
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-cli-config-restore-'));
+    const previous = process.env.INVOKER_REPO_CONFIG_PATH;
+    const previousValue = '/tmp/previous-invoker-config.json';
+    try {
+      process.env.INVOKER_REPO_CONFIG_PATH = previousValue;
+      const configPath = join(dir, 'config.json');
+      const planPath = join(dir, 'invalid.yaml');
+      writeFileSync(configPath, JSON.stringify({ maxConcurrency: 1 }), 'utf8');
+      writeFileSync(planPath, 'name: [broken\\n', 'utf8');
+
+      const code = await main(['run', planPath, '--standalone', '--db-dir', join(dir, 'db'), '--config', configPath]);
+
+      expect(code).toBe(1);
+      expect(process.env.INVOKER_REPO_CONFIG_PATH).toBe(previousValue);
+    } finally {
+      if (previous === undefined) delete process.env.INVOKER_REPO_CONFIG_PATH;
+      else process.env.INVOKER_REPO_CONFIG_PATH = previous;
+      output.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('rejects unknown worker kinds with a clear non-zero error', async () => {
     const output = captureProcessOutput();
 

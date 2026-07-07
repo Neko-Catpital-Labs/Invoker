@@ -2,9 +2,10 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
+import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, resolveInvokerConfigPath, resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
 import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
 import {
+  AUTO_APPROVE_WORKER_KIND,
   AUTO_FIX_WORKER_KIND,
   ExecutorRegistry,
   TaskRunner,
@@ -12,7 +13,7 @@ import {
   acquireWorkerLock,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
   registerExternalWorkers,
   WorkerLockHeldError,
   registerBuiltinAgents,
@@ -360,8 +361,8 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
   mkdirSync(dbDir, { recursive: true });
 
   const previousInvokerDbDir = process.env.INVOKER_DB_DIR;
+  const previousInvokerRepoConfigPath = process.env.INVOKER_REPO_CONFIG_PATH;
   if (options.config) {
-    process.env.INVOKER_CONFIG = resolve(options.config);
     process.env.INVOKER_REPO_CONFIG_PATH = resolve(options.config);
   }
   process.env.INVOKER_DB_DIR = dbDir;
@@ -447,6 +448,11 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
     } else {
       process.env.INVOKER_DB_DIR = previousInvokerDbDir;
     }
+    if (previousInvokerRepoConfigPath === undefined) {
+      delete process.env.INVOKER_REPO_CONFIG_PATH;
+    } else {
+      process.env.INVOKER_REPO_CONFIG_PATH = previousInvokerRepoConfigPath;
+    }
     persistence.close();
   }
 }
@@ -472,15 +478,18 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
 function readWorkerConfig(homeRoot: string): {
   autoFixRetries?: number;
   autoFixAgent?: string;
+  autoApproveAIFixes?: boolean;
   externalWorkers?: ExternalWorkerConfig[];
 } {
-  const configPath = join(homeRoot, 'config.json');
+  void homeRoot;
+  const configPath = resolveInvokerConfigPath(process.env, homedir());
   if (!existsSync(configPath)) return {};
   try {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as CliRuntimeConfig;
     return {
       autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
       autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
+      autoApproveAIFixes: typeof parsed.autoApproveAIFixes === 'boolean' ? parsed.autoApproveAIFixes : undefined,
       externalWorkers: Array.isArray(parsed.externalWorkers) ? parsed.externalWorkers : undefined,
     };
   } catch (err) {
@@ -490,7 +499,7 @@ function readWorkerConfig(homeRoot: string): {
 }
 
 function workerDisplayName(kind: string): string {
-  return kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : kind;
+  return kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : kind === AUTO_APPROVE_WORKER_KIND ? 'Autoapprove' : kind;
 }
 
 function printWorkerKinds<TDeps>(registry: WorkerRegistry<TDeps>): void {
@@ -515,7 +524,7 @@ function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorke
 async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
-  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
+  const { autoFixRetries, autoFixAgent, autoApproveAIFixes } = readWorkerConfig(homeRoot);
 
   // Single-instance guard: refuse if another worker of this kind (this door or
   // the dev `--headless worker <kind>` door) already holds the cross-process
@@ -552,6 +561,9 @@ async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>
         defaultAutoFixRetries: autoFixRetries,
         attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => autoFixAgent,
+      },
+      autoApprove: {
+        enabled: autoApproveAIFixes === true,
       },
     });
 
@@ -596,7 +608,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
       const registry = registerExternalWorkers(
-        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+        registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
         readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
       );
       if (subcommand === 'list') {
