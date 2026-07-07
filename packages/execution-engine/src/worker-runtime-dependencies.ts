@@ -8,11 +8,37 @@ import type {
 } from './auto-fix-recovery.js';
 import type { CiFailureWorkerStore, CiFailureWorkerSubmitter } from './workers/ci-failure-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
+import type {
+  WorkerGitHubClient,
+  WorkerHeadlessClient,
+  WorkerStateStore,
+} from './worker-types.js';
+import type { CodeRabbitUpdateAgent } from './workers/coderabbit-update-worker.js';
+
+export interface PrMaintenanceWorkerConfig {
+  targetRepo?: string;
+  author?: string;
+  coderabbit?: {
+    login?: string;
+    maxAttempts?: number;
+    workDir?: string;
+    executionAgent?: string;
+    executionModel?: string;
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+  };
+  mergeConflict?: {
+    maxAttempts?: number;
+    confirmTimeoutMs?: number;
+    confirmPollIntervalMs?: number;
+    pollIntervalMs?: number;
+  };
+}
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore & CiFailureWorkerStore;
+  store: AutoFixRecoveryStore & CiFailureWorkerStore & WorkerStateStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter;
   /** Operator logger. */
@@ -23,4 +49,12 @@ export interface WorkerRuntimeDependencies {
   reviewGate?: PrStatusReviewGate;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
+  /** GitHub PR/comment surface used by PR maintenance workers. */
+  github?: WorkerGitHubClient;
+  /** Headless command transport used by PR maintenance workers. */
+  headless?: WorkerHeadlessClient;
+  /** Agent runner used to address CodeRabbit feedback. */
+  codeRabbitUpdateAgent?: CodeRabbitUpdateAgent;
+  /** PR maintenance worker tuning. */
+  prMaintenance?: PrMaintenanceWorkerConfig;
 }

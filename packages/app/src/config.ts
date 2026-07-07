@@ -40,6 +40,42 @@ export interface ExternalWorkerConfig {
   /** Process invocation used by the loader to start the external worker. */
   launch: ExternalWorkerLaunchConfig;
 }
+
+export interface PrMaintenanceConfig {
+  /** GitHub owner/repo scanned by PR maintenance workers. Default Neko-Catpital-Labs/Invoker. */
+  targetRepo?: string;
+  /** GitHub PR author scanned by PR maintenance workers. Default EdbertChan. */
+  author?: string;
+  /** CodeRabbit feedback update worker settings. */
+  coderabbit?: {
+    /** CodeRabbit bot login. Default coderabbitai[bot]. */
+    login?: string;
+    /** Maximum agent attempts for one latest-comment marker. Default 3. */
+    maxAttempts?: number;
+    /** Checkout root for agent work. Default ~/.invoker/pr-cron-work. */
+    workDir?: string;
+    /** Execution agent for addressing feedback. Default omp. */
+    executionAgent?: string;
+    /** Optional execution model passed to the update agent. */
+    executionModel?: string;
+    /** Agent timeout in milliseconds. Default 45 minutes. */
+    timeoutMs?: number;
+    /** Worker poll interval in milliseconds. Default 5 minutes. */
+    pollIntervalMs?: number;
+  };
+  /** Merge-conflict rebase worker settings. */
+  mergeConflict?: {
+    /** Maximum rebase-recreate attempts for one workflow generation. Default 3. */
+    maxAttempts?: number;
+    /** Confirmation timeout in milliseconds. Default 120 seconds. */
+    confirmTimeoutMs?: number;
+    /** Confirmation poll interval in milliseconds. Default 5 seconds. */
+    confirmPollIntervalMs?: number;
+    /** Worker poll interval in milliseconds. Default 5 minutes. */
+    pollIntervalMs?: number;
+  };
+}
+
 export interface DefaultExecutionConfig {
   /**
    * Default task execution harness when a task omits executionAgent.
@@ -297,6 +333,8 @@ export interface InvokerConfig {
    * The loader consumes this later; absent means no external workers.
    */
   externalWorkers?: ExternalWorkerConfig[];
+  /** Built-in PR maintenance workers for CodeRabbit updates and merge-conflict rebases. */
+  prMaintenance?: PrMaintenanceConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
