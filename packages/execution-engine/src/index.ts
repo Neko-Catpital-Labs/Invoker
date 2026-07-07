@@ -15,6 +15,13 @@ export * from './docker-executor.js';
 export * from './worktree-executor.js';
 export * from './merge-gate-executor.js';
 export * from './ssh-executor.js';
+export {
+  buildSshConnectionArgs,
+  buildSshTransportOptions,
+  type SshTargetConnection,
+} from './ssh-transport-options.js';
+export { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from './ssh-git-exec.js';
+
 export * from './repo-pool.js';
 export * from './registry.js';
 export * from './task-runner.js';
