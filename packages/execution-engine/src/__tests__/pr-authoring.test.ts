@@ -160,10 +160,49 @@ const PR_2170_COMMIT_MESSAGE_BODY = [
   '- Safe to revert? Yes',
 ].join('\n');
 
-// Canonical shape: review-compression fields live in a collapsed Review
-// metadata block inside ## Summary; Non-goals/Test Plan/Revert Plan are
-// top-level. Mirrors scripts/validate-pr-body.mjs.
+// Canonical shape: review-compression fields are visible top-level sections.
+// Mirrors scripts/validate-pr-body.mjs.
 const COMPLIANT_REVIEW_STACK_BODY = [
+  '## Summary',
+  '',
+  'Plain explanation of the slice.',
+  '',
+  '## Review Claim',
+  '',
+  'Approve the one thing this slice does.',
+  '',
+  '## Review Lane',
+  '',
+  'cleanup',
+  '',
+  '## Review Unit',
+  '',
+  'scalar',
+  '',
+  '## Safety Invariant',
+  '',
+  'Why this slice is safe to review locally.',
+  '',
+  '## Slice Rationale',
+  '',
+  'Why the work is split here.',
+  '',
+  '## Non-goals',
+  '',
+  '- Does not change behavior.',
+  '',
+  '## Test Plan',
+  '',
+  '- [x] `pnpm test`',
+  '',
+  '## Revert Plan',
+  '',
+  '- Safe to revert? Yes',
+].join('\n');
+
+// Legacy shape rejected since the schema flip: metadata hidden in a collapsed
+// <details> block inside ## Summary.
+const LEGACY_DETAILS_REVIEW_STACK_BODY = [
   '## Summary',
   '',
   'Plain explanation of the slice.',
@@ -193,12 +232,10 @@ const COMPLIANT_REVIEW_STACK_BODY = [
 ].join('\n');
 
 describe('validateReviewStackPrBody', () => {
-  it('rejects a commit-message body that lacks the review metadata block + Non-goals (PR #2170)', () => {
+  it('rejects a commit-message body that lacks the metadata sections + Non-goals (PR #2170)', () => {
     const errors = validateReviewStackPrBody(PR_2170_COMMIT_MESSAGE_BODY);
     expect(errors).toContain('Missing required section: ## Non-goals');
-    expect(errors).toContain(
-      '## Summary must include a collapsed <details> block with <summary>Review metadata</summary>.',
-    );
+    expect(errors).toContain('Missing required section: ## Review Claim');
     // The same body passes the looser canonical validator — proving why #2170
     // shipped: the Invoker stack path never applied the stricter schema.
     expect(validateCanonicalPrBody(PR_2170_COMMIT_MESSAGE_BODY)).toEqual([]);
@@ -208,22 +245,31 @@ describe('validateReviewStackPrBody', () => {
     expect(validateReviewStackPrBody(COMPLIANT_REVIEW_STACK_BODY)).toEqual([]);
   });
 
-  it('rejects visible top-level metadata sections', () => {
-    const visible = COMPLIANT_REVIEW_STACK_BODY + '\n\n## Review Claim\n\nshould be in metadata';
-    const errors = validateReviewStackPrBody(visible);
-    expect(errors.some((e) => e.includes('## Review Claim belongs in the collapsed Review metadata block'))).toBe(true);
+  it('rejects metadata hidden in a legacy <details> block', () => {
+    const errors = validateReviewStackPrBody(LEGACY_DETAILS_REVIEW_STACK_BODY);
+    expect(errors.some((e) => e.includes('Do not hide review metadata in <details>'))).toBe(true);
+    expect(errors).toContain('Missing required section: ## Review Claim');
   });
 
-  it('rejects a metadata block missing a required field', () => {
-    const missingUnit = COMPLIANT_REVIEW_STACK_BODY.replace('Review Unit: scalar\n', '');
+  it('rejects a body missing one metadata section', () => {
+    const missingUnit = COMPLIANT_REVIEW_STACK_BODY.replace('## Review Unit\n\nscalar\n\n', '');
     const errors = validateReviewStackPrBody(missingUnit);
-    expect(errors).toContain('Review metadata is missing required field: Review Unit:');
+    expect(errors).toContain('Missing required section: ## Review Unit');
+  });
+
+  it('rejects a metadata section with an empty body', () => {
+    const emptyClaim = COMPLIANT_REVIEW_STACK_BODY.replace(
+      'Approve the one thing this slice does.',
+      '',
+    );
+    const errors = validateReviewStackPrBody(emptyClaim);
+    expect(errors).toContain('Missing required section: ## Review Claim');
   });
 
   it('rejects an empty body with a schema hint', () => {
     const errors = validateReviewStackPrBody('');
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain('Review metadata block');
+    expect(errors[0]).toContain('## Review Claim');
   });
 
   it('does not count schema headings that appear inside fenced code blocks', () => {
@@ -241,34 +287,13 @@ describe('validateReviewStackPrBody', () => {
     expect(errors).toContain('Missing required section: ## Non-goals');
   });
 
-  it('does not accept a Review metadata block that only appears inside a code fence', () => {
-    const fencedMeta = [
-      '## Summary',
-      '',
-      'Prose.',
-      '',
-      '```md',
-      '<details>',
-      '<summary>Review metadata</summary>',
-      'Review Claim: c',
-      'Review Lane: cleanup',
-      'Review Unit: scalar',
-      'Safety Invariant: s',
-      'Slice Rationale: r',
-      '</details>',
-      '```',
-      '',
-      '## Non-goals',
-      '- none',
-      '',
-      '## Test Plan',
-      '- [x] x',
-      '',
-      '## Revert Plan',
-      '- yes',
-    ].join('\n');
+  it('does not count metadata sections that only appear inside a code fence', () => {
+    const fencedMeta = COMPLIANT_REVIEW_STACK_BODY.replace(
+      '## Review Claim\n',
+      '```md\n## Review Claim\n```\n',
+    );
     const errors = validateReviewStackPrBody(fencedMeta);
-    expect(errors).toContain('## Summary must include a collapsed <details> block with <summary>Review metadata</summary>.');
+    expect(errors).toContain('Missing required section: ## Review Claim');
   });
 
   it('requires real Markdown headings, not section names mentioned inline', () => {
@@ -296,7 +321,7 @@ describe('make-pr stack publish body contract', () => {
     });
     expect(prompt).toContain('"body":"string"');
     expect(prompt).toContain('artifact.body MUST be the exact PR body');
-    expect(prompt).toContain('Review metadata');
+    expect(prompt).toContain('Never hide review metadata');
     expect(prompt).toContain('Review Unit');
     expect(prompt).toContain('Do NOT let Mergify default the PR body');
   });

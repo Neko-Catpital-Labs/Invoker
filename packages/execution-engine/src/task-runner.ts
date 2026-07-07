@@ -53,6 +53,7 @@ import {
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import {
   buildCanonicalPrBody,
+  isInvokerRepoUrl,
   buildMakePrStackPublishPrompt,
   buildMakePrPrompt,
   parseMakePrStackPublishResult,
@@ -2316,8 +2317,16 @@ export class TaskRunner {
     workflowSummary: string;
     structuredContext?: PrAuthoringContext;
     cwd: string;
+    repoUrl?: string;
   }): Promise<{ body: string; sessionId: string; agentName: string }> {
+    const strictReviewStack = isInvokerRepoUrl(args.repoUrl);
     if (!this.executionAgentRegistry) {
+      if (strictReviewStack) {
+        throw new Error(
+          '[pr-authoring] executionAgentRegistry missing and target is the Invoker repo; '
+            + 'refusing canonical fallback PR body (it cannot pass scripts/validate-pr-body.mjs).',
+        );
+      }
       this.logger.warn(
         '[pr-authoring] executionAgentRegistry missing, using canonical fallback PR body.',
       );
@@ -2352,15 +2361,19 @@ export class TaskRunner {
         featureBranch: args.featureBranch,
         workflowSummary: args.workflowSummary,
         structuredContext: args.structuredContext,
+        strictReviewStack,
       });
 
       try {
         this.logger.info(
           `[pr-authoring] body authoring starting agent=${agent.name} `
-            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr`,
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr`
+            + (strictReviewStack ? ' schema=review-stack' : ''),
         );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
-        const validationErrors = validateCanonicalPrBody(result.body);
+        const validationErrors = strictReviewStack
+          ? validateReviewStackPrBody(result.body)
+          : validateCanonicalPrBody(result.body);
         if (validationErrors.length > 0) {
           this.logger.warn(
             `[pr-authoring] body validation failed agent=${agent.name} `
@@ -2378,6 +2391,13 @@ export class TaskRunner {
           `${agent.name}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    }
+
+    if (strictReviewStack) {
+      throw new Error(
+        '[pr-authoring] All AI agents failed to author a review-stack PR body for the Invoker repo; '
+          + `refusing canonical fallback (it cannot pass scripts/validate-pr-body.mjs). Errors: ${errors.join(' | ')}`,
+      );
     }
 
     // No AI agent succeeded — emit deterministic canonical PR body
