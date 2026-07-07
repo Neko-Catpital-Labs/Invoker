@@ -728,6 +728,40 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
+
+  test('sidebar-collapse-state — manual sidebar width survives left rail navigation', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    const sidebar = page.getByTestId('app-sidebar');
+
+    await page.getByTestId('sidebar-workflows').click();
+    await expect(sidebar).toHaveClass(/w-16/);
+
+    await page.getByTestId('sidebar-collapse-toggle').click();
+    await expect(sidebar).toHaveClass(/w-60/);
+
+    // Screenshot before the width assertion so a buggy build captures the
+    // snap-back (regression: navigation overwrote the manual collapse choice).
+    await page.getByTestId('sidebar-attention').click();
+    await captureScreenshot(page, 'sidebar-collapse-state-expanded-after-navigation');
+    await expect(sidebar).toHaveClass(/w-60/);
+
+    for (const surface of ['running', 'workers', 'workflows'] as const) {
+      await page.getByTestId(`sidebar-${surface}`).click();
+      await expect(sidebar).toHaveClass(/w-60/);
+    }
+
+    await page.getByTestId('sidebar-collapse-toggle').click();
+    await expect(sidebar).toHaveClass(/w-16/);
+
+    await page.getByTestId('sidebar-home').click();
+    await captureScreenshot(page, 'sidebar-collapse-state-collapsed-on-home');
+    await expect(sidebar).toHaveClass(/w-16/);
+
+    for (const surface of ['planning', 'workflows'] as const) {
+      await page.getByTestId(`sidebar-${surface}`).click();
+      await expect(sidebar).toHaveClass(/w-16/);
+    }
+  });
   test('dag loaded', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
