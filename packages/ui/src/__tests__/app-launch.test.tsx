@@ -56,6 +56,9 @@ describe('App launch (component)', () => {
         {
           kind: 'pr-status',
           note: 'PR status',
+          source: 'built-in',
+          availability: 'available',
+          running: true,
           lifecycle: 'running',
           policy: 'enabled',
           autoStarts: true,
@@ -63,6 +66,7 @@ describe('App launch (component)', () => {
           stoppable: true,
           runtimeKind: 'pr-status',
           recentActions: [],
+          recentLogs: [],
         },
       ],
     });
