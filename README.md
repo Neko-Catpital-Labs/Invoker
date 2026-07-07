@@ -142,7 +142,7 @@ The tutorial creates a tiny local git repo, generates both Codex and Claude plan
 
 Invoker reads user config from `~/.invoker/config.json`.
 
-If you want a repo-specific config file, point the app at it explicitly:
+Use that file for production settings. `INVOKER_REPO_CONFIG_PATH` is only for tests or isolated CLI runs:
 
 ```bash
 INVOKER_REPO_CONFIG_PATH=$PWD/.invoker.local.json ./run.sh

@@ -96,8 +96,8 @@ unset ELECTRON_RUN_AS_NODE
 
 # In headless mode, validate config fast (before any build) and then ensure dist exists.
 if [ "$1" = "--headless" ]; then
+  # INVOKER_REPO_CONFIG_PATH is an explicit test/CLI override; production uses ~/.invoker/config.json.
   # Fast-path config validation in bash so malformed JSON fails immediately
-  # without waiting for a dist build.
   _cfg_path="${INVOKER_REPO_CONFIG_PATH:-$HOME/.invoker/config.json}"
   if [ -f "$_cfg_path" ]; then
     if ! node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$_cfg_path" 2>/dev/null; then

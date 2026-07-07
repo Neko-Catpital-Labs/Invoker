@@ -3,19 +3,20 @@
  * group, matching `run.sh`'s headless-Linux path. Tracks the spawned child so a
  * forced restart can tear down a manager-managed instance before respawning.
  *
- * Slack credentials are stripped from the child env: post-cutover Invoker has no
- * Slack surface, and the manager owns the only Slack connection.
+ * Slack credentials and config path overrides are stripped from the child env:
+ * post-cutover Invoker has no Slack surface and reads ~/.invoker/config.json.
  */
-
 import { spawn, type ChildProcess } from 'node:child_process';
 import { openSync } from 'node:fs';
 
-const SLACK_ENV_VARS = [
+const STRIPPED_CHILD_ENV_VARS = [
   'SLACK_BOT_TOKEN',
   'SLACK_APP_TOKEN',
   'SLACK_SIGNING_SECRET',
   'SLACK_CHANNEL_ID',
   'SLACK_LOBBY_CHANNEL_ID',
+  'INVOKER_REPO_CONFIG_PATH',
+  'INVOKER_CONFIG',
 ];
 
 export interface InvokerLauncherOptions {
@@ -45,7 +46,7 @@ export function createInvokerLauncher(options: InvokerLauncherOptions): InvokerL
       }
 
       const env: NodeJS.ProcessEnv = { ...process.env, LIBGL_ALWAYS_SOFTWARE: '1' };
-      for (const key of SLACK_ENV_VARS) delete env[key];
+      for (const key of STRIPPED_CHILD_ENV_VARS) delete env[key];
 
       const out = openSync(options.logPath, 'a');
       child = spawn(

@@ -1,4 +1,5 @@
 import { registerAutoFixWorker } from './auto-fix-recovery.js';
+import { registerAutoApproveWorker } from './workers/auto-approve-worker.js';
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
 import type { WorkerRegistry } from './worker-registry.js';
 import { registerCiFailureWorker } from './workers/ci-failure-worker.js';
@@ -9,6 +10,7 @@ export function registerBuiltinWorkers(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registerAutoFixWorker(registry);
+  registerAutoApproveWorker(registry);
   registerPrStatusWorker(registry);
   registerCiFailureWorker(registry);
   return registry;

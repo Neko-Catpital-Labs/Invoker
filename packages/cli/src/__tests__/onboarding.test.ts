@@ -1,12 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolveInvokerConfigPath } from '@invoker/contracts';
 
 import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES } from '@invoker/contracts';
 
 import {
   buildDoctorChecks,
+  defaultConfigPath,
   generateSlackManifest,
   installExperimentalPlannerMcp,
   loadInvokerEnv,
@@ -108,6 +110,26 @@ describe('buildDoctorChecks', () => {
   it('passes the default-preset check when its tool is installed', () => {
     const checks = buildDoctorChecks({ ...cfg, defaultPreset: 'omp' }, (cmd) => cmd === 'omp');
     expect(checks.find((c) => c.id === 'default-preset')?.status).toBe('ok');
+  });
+});
+
+describe('defaultConfigPath', () => {
+  const previous = process.env.INVOKER_REPO_CONFIG_PATH;
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.INVOKER_REPO_CONFIG_PATH;
+    else process.env.INVOKER_REPO_CONFIG_PATH = previous;
+  });
+
+  it('matches the shared config resolver for default, override, and blank override', () => {
+    delete process.env.INVOKER_REPO_CONFIG_PATH;
+    expect(defaultConfigPath()).toBe(resolveInvokerConfigPath(process.env, homedir()));
+
+    process.env.INVOKER_REPO_CONFIG_PATH = '/tmp/invoker-cli-config.json';
+    expect(defaultConfigPath()).toBe(resolveInvokerConfigPath(process.env, homedir()));
+
+    process.env.INVOKER_REPO_CONFIG_PATH = '   ';
+    expect(defaultConfigPath()).toBe(resolveInvokerConfigPath(process.env, homedir()));
   });
 });
 describe('runSetup', () => {

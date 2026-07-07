@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  AUTO_APPROVE_WORKER_KIND,
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
   createWorkerRegistry,
@@ -9,8 +10,8 @@ import {
 } from '@invoker/execution-engine';
 
 import {
-  AUTO_STARTED_OWNER_WORKER_KINDS,
   createWorkerRuntimeController,
+  getAutoStartedOwnerWorkerKinds,
 } from '../worker-control.js';
 
 interface TestWorkerRuntime extends WorkerRuntime {
@@ -64,7 +65,7 @@ function deps(): WorkerRuntimeDependencies {
   } as WorkerRuntimeDependencies;
 }
 
-function controller() {
+function controller(options: { autoFixRetries?: number; autoApproveAIFixes?: boolean; autoStartKinds?: readonly string[] } = {}) {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
   const runtimes = new Map<string, TestWorkerRuntime[]>();
   const register = (kind: string, note: string, runtimeKind = kind) => {
@@ -81,6 +82,7 @@ function controller() {
     });
   };
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
+  register(AUTO_APPROVE_WORKER_KIND, 'Approves AI fixes.');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
   register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
   register('external-preview', 'External preview worker.');
@@ -90,36 +92,70 @@ function controller() {
     controller: createWorkerRuntimeController({
       registry,
       deps: deps(),
-      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      autoStartKinds: options.autoStartKinds ?? getAutoStartedOwnerWorkerKinds({ autoApproveAIFixes: options.autoApproveAIFixes }),
       persistence: persistence() as never,
+      autoFixRetries: options.autoFixRetries,
+      autoApproveAIFixes: options.autoApproveAIFixes,
       canControl: () => true,
     }),
   };
 }
 
 describe('createWorkerRuntimeController', () => {
-  it('auto-start starts only pr-status and ci-failure', () => {
-    const setup = controller();
+  it('auto-starts autoapprove only when AI fix auto-approval is enabled', () => {
+    expect(getAutoStartedOwnerWorkerKinds({ autoApproveAIFixes: true })).toEqual([
+      AUTO_FIX_WORKER_KIND,
+      AUTO_APPROVE_WORKER_KIND,
+      PR_STATUS_WORKER_KIND,
+      CI_FAILURE_WORKER_KIND,
+    ]);
+    expect(getAutoStartedOwnerWorkerKinds({})).toEqual([
+      AUTO_FIX_WORKER_KIND,
+      PR_STATUS_WORKER_KIND,
+      CI_FAILURE_WORKER_KIND,
+    ]);
+  });
+
+  it('auto-start starts autofix, pr-status, and ci-failure by default', () => {
+    const setup = controller({ autoFixRetries: 3 });
 
     setup.controller.startAutoStartedWorkers();
     const snapshot = setup.controller.snapshot();
 
+    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
-    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
+    expect(snapshot.workers.find((worker) => worker.kind === AUTO_APPROVE_WORKER_KIND)).toMatchObject({
+      lifecycle: 'stopped',
+      policy: 'disabled',
+      policyReason: 'autoApproveAIFixes=false',
+      startable: false,
+    });
   });
 
-  it('autofix remains stopped until explicitly started', () => {
-    const setup = controller();
+  it('auto-start starts autoapprove when configured', () => {
+    const setup = controller({ autoFixRetries: 3, autoApproveAIFixes: true });
 
     setup.controller.startAutoStartedWorkers();
-    expect(setup.runtimes.get(AUTO_FIX_WORKER_KIND)).toBeUndefined();
+    const row = setup.controller.snapshot().workers.find((worker) => worker.kind === AUTO_APPROVE_WORKER_KIND);
 
+    expect(row).toMatchObject({
+      lifecycle: 'running',
+      policy: 'enabled',
+      startable: false,
+    });
+  });
+
+  it('autofix duplicate start is idempotent after autostart', () => {
+    const setup = controller({ autoFixRetries: 3 });
+
+    setup.controller.startAutoStartedWorkers();
     const row = setup.controller.start(AUTO_FIX_WORKER_KIND);
 
     expect(row.lifecycle).toBe('running');
     expect(row.runtimeKind).toBe('recovery');
+    expect(setup.runtimes.get(AUTO_FIX_WORKER_KIND)).toHaveLength(1);
   });
 
   it('duplicate start is idempotent', () => {
@@ -146,22 +182,25 @@ describe('createWorkerRuntimeController', () => {
     expect(setup.runtimes.get(PR_STATUS_WORKER_KIND)?.[0]?.stops).toBe(1);
   });
 
-  it('retry budget policy does not disable worker starts', () => {
-    const setup = controller();
+  it('autoFixRetries=0 disables autofix and ci-failure but not autoapprove', () => {
+    const setup = controller({ autoFixRetries: 0, autoApproveAIFixes: true });
 
-    const autoFix = setup.controller.start(AUTO_FIX_WORKER_KIND);
-    const ciFailure = setup.controller.start(CI_FAILURE_WORKER_KIND);
+    expect(() => setup.controller.start(AUTO_FIX_WORKER_KIND)).toThrow('Worker "autofix" is disabled by autoFixRetries=0');
+    expect(() => setup.controller.start(CI_FAILURE_WORKER_KIND)).toThrow('Worker "ci-failure" is disabled by autoFixRetries=0');
+    expect(() => setup.controller.start(AUTO_APPROVE_WORKER_KIND)).not.toThrow();
 
-    expect(autoFix).toMatchObject({
-      lifecycle: 'running',
-      policy: 'enabled',
+    const snapshot = setup.controller.snapshot();
+    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)).toMatchObject({
+      policy: 'disabled',
+      policyReason: 'autoFixRetries=0',
       startable: false,
     });
-    expect(ciFailure).toMatchObject({
-      lifecycle: 'running',
-      policy: 'enabled',
+    expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)).toMatchObject({
+      policy: 'disabled',
+      policyReason: 'autoFixRetries=0',
       startable: false,
     });
+    expect(snapshot.workers.find((worker) => worker.kind === AUTO_APPROVE_WORKER_KIND)?.lifecycle).toBe('running');
   });
 
   it('an exited external worker row reports exited', () => {

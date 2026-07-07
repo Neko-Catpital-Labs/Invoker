@@ -13,12 +13,13 @@ import type { BundledSkillsInstallMode } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import {
+  AUTO_APPROVE_WORKER_KIND,
   AUTO_FIX_WORKER_KIND,
   TaskRunner,
   acquireWorkerLock,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  registerBuiltinWorkers,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
@@ -424,7 +425,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
   );
 
   if (subCommand === 'list') {
@@ -487,6 +488,9 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
+      autoApprove: {
+        enabled: deps.invokerConfig.autoApproveAIFixes === true,
+      },
     });
     await worker.tick('manual');
     await worker.stop();
@@ -495,7 +499,9 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     // blocks the next legitimate start.
     lock.release();
   }
-  const label = definition.kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : definition.kind;
+  const label = definition.kind === AUTO_FIX_WORKER_KIND
+    ? 'Auto-fix'
+    : definition.kind === AUTO_APPROVE_WORKER_KIND ? 'Autoapprove' : definition.kind;
   process.stdout.write(`${label} worker scan completed.\n`);
 }
 
