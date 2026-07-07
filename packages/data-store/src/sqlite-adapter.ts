@@ -443,6 +443,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
     }
 
+    if (isFile && options?.readOnly === true && (existsSync(`${dbPath}-wal`) || existsSync(`${dbPath}-shm`))) {
+      throw new Error(
+        `Cannot open SQLite database read-only while WAL sidecars exist for ${dbPath}. ` +
+        'Close the writable owner cleanly before opening a file-backed read-only adapter.',
+      );
+    }
+
     // Enforce owner-only writable initialization for file-backed databases
     if (isFile && requestWritable && !options?.ownerCapability) {
       throw new Error(
