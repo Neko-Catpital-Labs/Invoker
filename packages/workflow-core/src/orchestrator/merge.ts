@@ -14,7 +14,7 @@
  * exactly so merge/experiment behavior and the TASK_DELTA contract stay stable.
  */
 
-import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskStatus, Attempt } from '@invoker/workflow-graph';
 import type { Logger } from '@invoker/contracts';
 import { parseMergeConflictError } from '../merge-conflict-error.js';
 import type { TaskStateMachine } from '../state-machine.js';
@@ -233,6 +233,67 @@ export function beginAutoFixSessionImpl(
   host.persistence.logEvent?.(id, 'task.fixing_with_ai', changesWithGeneration);
   publishTaskDelta(host.messageBus, delta);
   return { savedError };
+}
+
+/**
+ * Statuses an auto-fix session may restore on revert. Mirrors the entry
+ * states accepted by `beginAutoFixSessionImpl`: a review-gate CI fix starts
+ * from `review_ready`/`awaiting_approval` and must return there on failure —
+ * flipping an open review gate to `failed` would knock it out of the
+ * review-gate polling loop.
+ */
+const AUTO_FIX_RESTORABLE_STATUSES: readonly TaskStatus[] = ['review_ready', 'awaiting_approval'];
+
+export function revertAutoFixSessionImpl(
+  host: MergeHost,
+  taskId: string,
+  opts: {
+    savedError: string;
+    fixError?: string;
+    /** Task status captured before `beginAutoFixSession`; defaults to `failed`. */
+    restoreStatus?: TaskStatus;
+    expectedLineage?: TaskLineageExpectation;
+  },
+): void {
+  const restoreStatus = opts.restoreStatus !== undefined && AUTO_FIX_RESTORABLE_STATUSES.includes(opts.restoreStatus)
+    ? opts.restoreStatus
+    : 'failed';
+  if (restoreStatus === 'failed') {
+    revertConflictResolutionImpl(host, taskId, opts.savedError, opts.fixError, opts.expectedLineage);
+    return;
+  }
+
+  host.refreshFromDb();
+  const task = host.stateGetTask(taskId);
+  if (!task) {
+    throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+  }
+  if (!host.taskMatchesLineageExpectation(task, opts.expectedLineage)) return;
+
+  const completedAt = new Date();
+  const attemptError = opts.fixError
+    ? `[Fix with Agent failed] ${opts.fixError}`
+    : opts.savedError;
+  const changes: TaskStateChanges = {
+    status: restoreStatus,
+    execution: {
+      error: undefined,
+      isFixingWithAI: false,
+      completedAt,
+    },
+  };
+  const updated = host.writeAndSync(taskId, changes);
+  host.updateSelectedAttempt(taskId, {
+    status: 'failed',
+    error: attemptError,
+    completedAt,
+  });
+  const delta: TaskDelta = host.buildUpdateDelta(task, updated, changes);
+  host.persistence.logEvent?.(task.id, 'task.auto_fix_reverted', {
+    restoreStatus,
+    fixError: opts.fixError ?? null,
+  });
+  publishTaskDelta(host.messageBus, delta);
 }
 
 export function revertConflictResolutionImpl(

@@ -113,6 +113,7 @@ import {
   beginConflictResolutionImpl,
   beginAutoFixSessionImpl,
   revertConflictResolutionImpl,
+  revertAutoFixSessionImpl,
   getMergeNodeImpl,
 } from './orchestrator/merge.js';
 import type { MergeHost } from './orchestrator/merge.js';
@@ -2628,6 +2629,25 @@ export class Orchestrator {
     opts: { savedError?: string; expectedLineage?: TaskLineageExpectation } = {},
   ): { savedError: string } {
     return beginAutoFixSessionImpl(this as unknown as MergeHost, taskId, opts);
+  }
+
+  /**
+   * Revert an auto-fix session begun by `beginAutoFixSession`. When the
+   * session started from a review-gate state (`review_ready` /
+   * `awaiting_approval`), pass that status as `restoreStatus` so a failed fix
+   * returns the gate to the review-polling loop instead of marking an open
+   * review gate `failed`. Defaults to the `revertConflictResolution` shape.
+   */
+  revertAutoFixSession(
+    taskId: string,
+    opts: {
+      savedError: string;
+      fixError?: string;
+      restoreStatus?: TaskStatus;
+      expectedLineage?: TaskLineageExpectation;
+    },
+  ): void {
+    revertAutoFixSessionImpl(this as unknown as MergeHost, taskId, opts);
   }
 
   /**

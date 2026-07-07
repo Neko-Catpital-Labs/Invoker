@@ -864,6 +864,13 @@ export async function fixWithAgentAction(
   const task = orchestrator.getTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
+  // Review-gate CI fixes target a merge gate that is still in an open review
+  // state (`review_ready` / `awaiting_approval`) — the gate task itself never
+  // failed, only a CI check on its review PR did. They must enter the fix
+  // lifecycle through `beginAutoFixSession` (which accepts those states) and
+  // must never flip an open gate to `failed` on the way out.
+  const isReviewGateCiFix = options.reviewGateContext !== undefined;
+  const entryStatus = task.status;
   if (options.reviewGateContext) {
     assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task);
   }
@@ -875,7 +882,9 @@ export async function fixWithAgentAction(
     const msg = invalidMergeWorkspaceMessage(recoveryRoute);
     const errorLabel = options.failureOutputLabel ?? `Fix with ${effectiveAgentName}`;
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] ${msg}`);
-    orchestrator.revertConflictResolution(taskId, savedError, msg);
+    if (!isReviewGateCiFix) {
+      orchestrator.revertConflictResolution(taskId, savedError, msg);
+    }
     throw new Error(msg);
   }
   if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
@@ -901,7 +910,9 @@ export async function fixWithAgentAction(
 
   const entryLineage = captureTaskLineage(taskId, orchestrator);
   assertLineageCurrent(entryLineage, orchestrator, options.signal);
-  const { savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId);
+  const { savedError: persistedSavedError } = isReviewGateCiFix
+    ? orchestrator.beginAutoFixSession(taskId)
+    : orchestrator.beginConflictResolution(taskId);
   const lineage = captureTaskLineage(taskId, orchestrator);
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
@@ -931,7 +942,15 @@ export async function fixWithAgentAction(
     assertLineageCurrent(lineage, orchestrator, options.signal);
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
     assertLineageCurrent(lineage, orchestrator, options.signal);
-    orchestrator.revertConflictResolution(taskId, persistedSavedError, msg);
+    if (isReviewGateCiFix) {
+      orchestrator.revertAutoFixSession(taskId, {
+        savedError: persistedSavedError,
+        fixError: msg,
+        restoreStatus: entryStatus,
+      });
+    } else {
+      orchestrator.revertConflictResolution(taskId, persistedSavedError, msg);
+    }
     throw err;
   }
 }

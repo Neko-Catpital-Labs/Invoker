@@ -2446,8 +2446,10 @@ describe('fixWithAgentAction review-gate CI context', () => {
         execution: { error: 'ci failed', ...execution },
       })),
       beginConflictResolution: vi.fn(() => ({ savedError: 'ci failed' })),
+      beginAutoFixSession: vi.fn(() => ({ savedError: 'ci failed' })),
       setFixAwaitingApproval: vi.fn(),
       revertConflictResolution: vi.fn(),
+      revertAutoFixSession: vi.fn(),
     };
   }
 
@@ -2471,6 +2473,7 @@ describe('fixWithAgentAction review-gate CI context', () => {
 
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.beginAutoFixSession).not.toHaveBeenCalled();
   });
 
   it('fixes with the carried fix context when the review-gate context is current', async () => {
@@ -2504,6 +2507,46 @@ describe('fixWithAgentAction review-gate CI context', () => {
     expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
       'task-a', 'output', 'claude', 'ci failed', 'make the failed checks pass',
     );
+    // Review-gate CI fixes must enter through beginAutoFixSession: the gate
+    // may be review_ready/awaiting_approval, which beginConflictResolution rejects.
+    expect(orchestrator.beginAutoFixSession).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
+  });
+
+  it('restores the entry status when a review-gate CI fix fails', async () => {
+    const orchestrator = makeReviewGateOrchestrator({
+      selectedAttemptId: 'attempt-1',
+      generation: 3,
+      reviewId: 'review-1',
+      branch: 'experiment/foo',
+    });
+    const persistence = { getTaskOutput: vi.fn(() => 'output'), appendTaskOutput: vi.fn() };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockRejectedValue(new Error('agent exploded')),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'claude',
+      reviewGateContext: {
+        reviewId: 'review-1',
+        generation: 3,
+        selectedAttemptId: 'attempt-1',
+        branch: 'experiment/foo',
+        fixContext: 'make the failed checks pass',
+      },
+    })).rejects.toThrow('agent exploded');
+
+    expect(orchestrator.revertAutoFixSession).toHaveBeenCalledWith('task-a', {
+      savedError: 'ci failed',
+      fixError: 'agent exploded',
+      restoreStatus: 'failed',
+    });
+    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
   });
 });

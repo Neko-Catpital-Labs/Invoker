@@ -4,6 +4,7 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+- Make review-gate CI auto-fix actually execute: fix intents for a `review_ready`/`awaiting_approval` merge gate now enter the fix lifecycle through `beginAutoFixSession` instead of dying on the `beginConflictResolution` failed-only guard, and a failing agent fix restores the gate to its review state instead of marking an open gate failed. The ci-failure worker also folds terminal fix-intent outcomes back into its dedupe action, so a failed intent no longer leaves a repair showing "queued" forever and the worker retries within its attempt budget.
 - Move auto-fix attempt counts out of SQLite task state and into in-memory worker runtime policy.
 - Add a local master-head full-test repair cron that runs the destructive suite, asks OMP/Codex to fix confirmed failures, reruns the suite, and opens one validated PR per broken upstream SHA.
 - Make the browser UI load heavy Action Graph data only when that tab opens, trim huge diagnostic strings, gzip large `/invoke` JSON responses, and stop checking PR statuses on initial page load.
