@@ -2,6 +2,8 @@
 // Pure and browser-safe: callers inject the `isInstalled` probe (Node `spawn`) and the parsed
 // config, so this module never imports `node:child_process`/`node:fs` (the UI bundles contracts).
 
+import { DEFAULT_TOOL_REQUIREMENTS, type ToolRequirement } from './external-dependencies.ts';
+
 export type PrerequisiteStatus = 'ok' | 'warn' | 'error';
 
 export interface PrerequisiteCheck {
@@ -19,15 +21,6 @@ export interface PlanningPresetSpec {
 
 export type IsInstalled = (command: string) => boolean;
 
-export interface ToolRequirement {
-  id: string;
-  name: string;
-  command: string;
-  requiredFor: string;
-  /** Missing required tools are `error`; missing optional ones are advisory `warn`. */
-  required?: boolean;
-  installHint?: string;
-}
 
 export function checkTool(req: ToolRequirement, isInstalled: IsInstalled): PrerequisiteCheck {
   if (isInstalled(req.command)) {
@@ -136,18 +129,7 @@ export function formatReport(report: PrerequisiteReport, options: { json?: boole
     .join('\n');
 }
 
-/** Canonical tools Invoker uses. `cursor`/`omp`/`codex`/`claude` are the planning/execution agents. */
-export const DEFAULT_TOOL_REQUIREMENTS: ToolRequirement[] = [
-  { id: 'git', name: 'Git', command: 'git', requiredFor: 'repo checkout, branches, merges', required: true, installHint: 'brew install git (or apt-get install git)' },
-  { id: 'pnpm', name: 'pnpm', command: 'pnpm', requiredFor: 'workspace installs and builds', required: true, installHint: 'npm install -g pnpm' },
-  { id: 'gh', name: 'GitHub CLI', command: 'gh', requiredFor: 'GitHub PR and release flows', installHint: 'brew install gh' },
-  { id: 'docker', name: 'Docker', command: 'docker', requiredFor: 'container executors', installHint: 'brew install docker' },
-  { id: 'ssh', name: 'OpenSSH', command: 'ssh', requiredFor: 'remote SSH executors', installHint: 'apt-get install openssh-client' },
-  { id: 'codex', name: 'Codex CLI', command: 'codex', requiredFor: 'codex presets', installHint: 'npm install -g @openai/codex' },
-  { id: 'claude', name: 'Claude CLI', command: 'claude', requiredFor: 'claude-model presets', installHint: 'npm install -g @anthropic-ai/claude-code' },
-  { id: 'cursor', name: 'Cursor Agent', command: 'cursor', requiredFor: 'cursor presets', installHint: 'install Cursor, then enable the agent CLI' },
-  { id: 'omp', name: 'omp', command: 'omp', requiredFor: 'omp presets', installHint: 'install the omp CLI' },
-];
+export { DEFAULT_TOOL_REQUIREMENTS, type ToolRequirement };
 
 export interface ReadinessInput {
   tools: ToolRequirement[];

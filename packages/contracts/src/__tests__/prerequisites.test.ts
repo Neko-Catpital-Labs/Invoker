@@ -1,4 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import {
+  DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
+  DEFAULT_TOOL_REQUIREMENTS,
+  EXTERNAL_DEPENDENCIES,
+} from '../index.js';
+
 
 import {
   buildReport,
@@ -16,6 +22,44 @@ const presets: Record<string, PlanningPresetSpec> = {
   omp: { tool: 'omp' },
   codex: { tool: 'codex' },
 };
+
+describe('external dependency manifest', () => {
+  it('derives doctor tool checks from the shared dependency list', () => {
+    expect(DEFAULT_TOOL_REQUIREMENTS.map((req) => req.id)).toEqual([
+      'git',
+      'pnpm',
+      'gh',
+      'docker',
+      'ssh',
+      'codex',
+      'claude',
+      'cursor',
+      'omp',
+    ]);
+    for (const req of DEFAULT_TOOL_REQUIREMENTS) {
+      const dependency = EXTERNAL_DEPENDENCIES[req.id as keyof typeof EXTERNAL_DEPENDENCIES];
+      expect(dependency).toMatchObject({
+        id: req.id,
+        name: req.name,
+        command: req.command,
+        requiredFor: req.requiredFor,
+      });
+    }
+    expect(EXTERNAL_DEPENDENCIES.node.versionRange).toBe('26.x');
+    expect(EXTERNAL_DEPENDENCIES.pnpm.version).toBe('10.31.0');
+  });
+
+  it('pins the Drafter MCP as an independently versioned package', () => {
+    expect(EXTERNAL_DEPENDENCIES.drafterMcp).toMatchObject({
+      packageName: 'drafter-mcp',
+      version: '0.1.0',
+      commandName: 'drafter-mcp',
+      runner: 'uvx',
+      configEnvVar: 'INVOKER_MCP_CONFIG_PATH',
+    });
+    expect(DEFAULT_DRAFTER_MCP_PACKAGE_SPEC).toBe('drafter-mcp==0.1.0');
+  });
+});
 
 describe('checkTool', () => {
   it('passes when the command is installed', () => {
