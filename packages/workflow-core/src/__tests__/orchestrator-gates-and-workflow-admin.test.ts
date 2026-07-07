@@ -563,7 +563,7 @@ describe('Orchestrator', () => {
     });
   });
 
-  describe('beginConflictResolution / revertConflictResolution', () => {
+  describe('beginFixSession / revertFixSession (failed entry)', () => {
     const mergeConflictError = JSON.stringify({
       type: 'merge_conflict',
       failedBranch: 'experiment/upstream-branch-abc123',
@@ -598,7 +598,7 @@ describe('Orchestrator', () => {
 
     it('sets task to fixing_with_ai, clears terminal execution fields, and emits delta', () => {
       const failedAttemptId = orchestrator.getTask('t2')!.execution.selectedAttemptId;
-      orchestrator.beginConflictResolution('t2');
+      orchestrator.beginFixSession('t2');
 
       const task = orchestrator.getTask('t2')!;
       const fixAttemptId = task.execution.selectedAttemptId;
@@ -623,7 +623,7 @@ describe('Orchestrator', () => {
 
     it('resets startedAt and lastHeartbeatAt timestamps', () => {
       const before = Date.now();
-      orchestrator.beginConflictResolution('t2');
+      orchestrator.beginFixSession('t2');
       const after = Date.now();
 
       const task = orchestrator.getTask('t2')!;
@@ -636,17 +636,17 @@ describe('Orchestrator', () => {
     });
 
     it('returns savedError for later revert', () => {
-      const { savedError } = orchestrator.beginConflictResolution('t2');
+      const { savedError } = orchestrator.beginFixSession('t2');
       expect(savedError).toBe(mergeConflictError);
     });
 
-    it('revertConflictResolution restores failed state with mergeConflict', () => {
-      const { savedError } = orchestrator.beginConflictResolution('t2');
+    it('revertFixSession restores failed state with mergeConflict', () => {
+      const { savedError } = orchestrator.beginFixSession('t2');
       const fixAttemptId = orchestrator.getTask('t2')!.execution.selectedAttemptId;
       expect(orchestrator.getTask('t2')!.status).toBe('fixing_with_ai');
 
       publishedDeltas = [];
-      orchestrator.revertConflictResolution('t2', savedError);
+      orchestrator.revertFixSession('t2', { savedError: savedError });
 
       const task = orchestrator.getTask('t2')!;
       expect(task.status).toBe('failed');
@@ -667,17 +667,17 @@ describe('Orchestrator', () => {
       expect(failedDeltas).toHaveLength(1);
     });
 
-    it('revertConflictResolution uses agent-agnostic fix failure prefix', () => {
-      const { savedError } = orchestrator.beginConflictResolution('t2');
-      orchestrator.revertConflictResolution('t2', savedError, 'startup failed');
+    it('revertFixSession uses agent-agnostic fix failure prefix', () => {
+      const { savedError } = orchestrator.beginFixSession('t2');
+      orchestrator.revertFixSession('t2', { savedError: savedError, fixError: 'startup failed' });
       const task = orchestrator.getTask('t2')!;
       expect(task.execution.error).toContain('[Fix with Agent failed] startup failed');
     });
 
-    it('revertConflictResolution does not duplicate an existing fix failure wrapper', () => {
+    it('revertFixSession does not duplicate an existing fix failure wrapper', () => {
       const wrappedSavedError =
         '[Fix with Claude failed] first attempt failed\n\n' + mergeConflictError;
-      orchestrator.revertConflictResolution('t2', wrappedSavedError, 'second attempt failed');
+      orchestrator.revertFixSession('t2', { savedError: wrappedSavedError, fixError: 'second attempt failed' });
       const task = orchestrator.getTask('t2')!;
       expect(task.execution.error).toContain('[Fix with Agent failed] second attempt failed');
       expect(task.execution.error).not.toContain('first attempt failed');
@@ -687,14 +687,14 @@ describe('Orchestrator', () => {
       });
     });
 
-    it('throws if task is not failed', () => {
-      expect(() => orchestrator.beginConflictResolution('t1')).toThrow(
-        'is not failed',
+    it('throws if task is not in a fix-session entry state', () => {
+      expect(() => orchestrator.beginFixSession('t1')).toThrow(
+        'not in a fix-session entry state',
       );
     });
 
     it('throws if task does not exist', () => {
-      expect(() => orchestrator.beginConflictResolution('nonexistent')).toThrow(
+      expect(() => orchestrator.beginFixSession('nonexistent')).toThrow(
         'not found',
       );
     });
@@ -710,14 +710,135 @@ describe('Orchestrator', () => {
         }),
       );
 
-      const { savedError } = orchestrator.beginConflictResolution('t2');
-      orchestrator.revertConflictResolution('t2', savedError);
+      const { savedError } = orchestrator.beginFixSession('t2');
+      orchestrator.revertFixSession('t2', { savedError: savedError });
 
       const task = orchestrator.getTask('t2')!;
       expect(task.status).toBe('failed');
       expect(task.execution.error).toBe('plain error string');
       expect(task.execution.mergeConflict).toBeUndefined();
       expect(task.execution.isFixingWithAI).toBeFalsy();
+    });
+  });
+
+  describe('beginFixSession / revertFixSession', () => {
+    beforeEach(() => {
+      orchestrator.loadPlan({
+        name: 'fix-session-plan',
+        tasks: [
+          { id: 's1', description: 'Root task' },
+          { id: 's2', description: 'Downstream task', dependencies: ['s1'] },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 's1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 's2', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+      publishedDeltas = [];
+    });
+
+    function mergeGateInReviewReady(): string {
+      const mergeId = orchestrator.getAllTasks().find((t) => t.config.isMergeNode)!.id;
+      persistence.updateTask(mergeId, { status: 'review_ready', execution: { error: undefined } });
+      orchestrator.getWorkflowStatus(); // force refreshFromDb
+      expect(orchestrator.getTask(mergeId)!.status).toBe('review_ready');
+      return mergeId;
+    }
+
+    it('records the entry status and restores review_ready on revert', () => {
+      const mergeId = mergeGateInReviewReady();
+      const { savedError } = orchestrator.beginFixSession(mergeId);
+
+      const during = orchestrator.getTask(mergeId)!;
+      expect(during.status).toBe('fixing_with_ai');
+      expect(during.execution.fixSessionEntryStatus).toBe('review_ready');
+      const bumpedGeneration = during.execution.generation ?? 0;
+      expect(bumpedGeneration).toBeGreaterThan(0);
+
+      orchestrator.revertFixSession(mergeId, { savedError, fixError: 'agent exploded' });
+
+      const after = orchestrator.getTask(mergeId)!;
+      expect(after.status).toBe('review_ready');
+      expect(after.execution.error).toBeUndefined();
+      expect(after.execution.pendingFixError).toBeUndefined();
+      expect(after.execution.fixSessionEntryStatus).toBeUndefined();
+      // Monotonic fields stay monotonic: revert is not a time machine.
+      expect(after.execution.generation).toBe(bumpedGeneration);
+      expect(persistence.loadAttempt(during.execution.selectedAttemptId!)?.status).toBe('failed');
+    });
+
+    it('restores failed entries with the wrapped error and clears the session', () => {
+      const { savedError } = orchestrator.beginFixSession('s2');
+      expect(orchestrator.getTask('s2')!.execution.fixSessionEntryStatus).toBe('failed');
+
+      orchestrator.revertFixSession('s2', { savedError, fixError: 'startup failed' });
+
+      const task = orchestrator.getTask('s2')!;
+      expect(task.status).toBe('failed');
+      expect(task.execution.error).toContain('[Fix with Agent failed] startup failed');
+      expect(task.execution.fixSessionEntryStatus).toBeUndefined();
+    });
+
+    it('reverts a parked fix (reject path) back to the recorded review_ready entry', () => {
+      const mergeId = mergeGateInReviewReady();
+      const { savedError } = orchestrator.beginFixSession(mergeId);
+      orchestrator.setFixAwaitingApproval(mergeId, savedError || 'ci failed');
+
+      const parked = orchestrator.getTask(mergeId)!;
+      expect(parked.status).toBe('awaiting_approval');
+      expect(parked.execution.fixSessionEntryStatus).toBe('review_ready');
+
+      orchestrator.revertFixSession(mergeId, { savedError: parked.execution.pendingFixError ?? '' });
+
+      const after = orchestrator.getTask(mergeId)!;
+      expect(after.status).toBe('review_ready');
+      expect(after.execution.pendingFixError).toBeUndefined();
+      expect(after.execution.fixSessionEntryStatus).toBeUndefined();
+    });
+
+    it('refuses to begin while a pending fix is parked', () => {
+      const { savedError } = orchestrator.beginFixSession('s2');
+      orchestrator.setFixAwaitingApproval('s2', savedError || 'boom');
+      expect(() => orchestrator.beginFixSession('s2')).toThrow('pending fix awaiting approval');
+    });
+
+    it('refuses to begin from non-entry states', () => {
+      expect(() => orchestrator.beginFixSession('s1')).toThrow(
+        'not in a fix-session entry state',
+      );
+    });
+
+    it('revert without a session on a review gate is an idempotent no-op', () => {
+      const mergeId = mergeGateInReviewReady();
+      orchestrator.revertFixSession(mergeId, { savedError: '', fixError: 'nothing began' });
+      expect(orchestrator.getTask(mergeId)!.status).toBe('review_ready');
+    });
+
+    it('legacy sessions without a recorded entry restore failed', () => {
+      orchestrator.beginFixSession('s2');
+      // Simulate a row written before the entry status existed.
+      persistence.updateTask('s2', { execution: { fixSessionEntryStatus: undefined } });
+      orchestrator.getWorkflowStatus();
+
+      orchestrator.revertFixSession('s2', { savedError: 'boom', fixError: 'legacy' });
+      const task = orchestrator.getTask('s2')!;
+      expect(task.status).toBe('failed');
+      expect(task.execution.error).toContain('[Fix with Agent failed] legacy');
+    });
+
+    it('approve of a parked fix clears the recorded entry', async () => {
+      const mergeId = mergeGateInReviewReady();
+      const { savedError } = orchestrator.beginFixSession(mergeId);
+      orchestrator.setFixAwaitingApproval(mergeId, savedError || 'ci failed');
+
+      await orchestrator.resumeTaskAfterFixApproval(mergeId);
+
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.execution.pendingFixError).toBeUndefined();
+      expect(task.execution.fixSessionEntryStatus).toBeUndefined();
     });
   });
 
@@ -746,7 +867,7 @@ describe('Orchestrator', () => {
     });
 
     it('setFixAwaitingApproval transitions to awaiting_approval with pendingFixError', () => {
-      orchestrator.beginConflictResolution('f2');
+      orchestrator.beginFixSession('f2');
       expect(orchestrator.getTask('f2')!.status).toBe('fixing_with_ai');
       expect(orchestrator.getTask('f2')!.execution.isFixingWithAI).toBeFalsy();
       const fixAttemptId = orchestrator.getTask('f2')!.execution.selectedAttemptId;
@@ -759,7 +880,7 @@ describe('Orchestrator', () => {
     });
 
     it('setFixAwaitingApproval delta includes agentSessionId from DB', () => {
-      orchestrator.beginConflictResolution('f2');
+      orchestrator.beginFixSession('f2');
       // Simulate conflict-resolver persisting sessionId directly to DB
       persistence.updateTask('f2', {
         execution: {
@@ -786,7 +907,7 @@ describe('Orchestrator', () => {
     });
 
     it('pendingFixError is readable via getTask', () => {
-      orchestrator.beginConflictResolution('f2');
+      orchestrator.beginFixSession('f2');
       orchestrator.setFixAwaitingApproval('f2', 'original error');
       expect(orchestrator.getTask('f2')!.execution.pendingFixError).toBe('original error');
     });
@@ -796,7 +917,7 @@ describe('Orchestrator', () => {
     });
 
     it('restartTask clears the fix state', () => {
-      orchestrator.beginConflictResolution('f2');
+      orchestrator.beginFixSession('f2');
       orchestrator.setFixAwaitingApproval('f2', 'error');
       orchestrator.retryTask('f2');
       const task = orchestrator.getTask('f2')!;
@@ -805,10 +926,10 @@ describe('Orchestrator', () => {
       expect(task.execution.pendingFixError).toBeUndefined();
     });
 
-    it('revertConflictResolution restores failed state', () => {
-      orchestrator.beginConflictResolution('f2');
+    it('revertFixSession restores failed state', () => {
+      orchestrator.beginFixSession('f2');
       orchestrator.setFixAwaitingApproval('f2', 'test failed: expected 1 to be 2');
-      orchestrator.revertConflictResolution('f2', 'test failed: expected 1 to be 2');
+      orchestrator.revertFixSession('f2', { savedError: 'test failed: expected 1 to be 2' });
       const task = orchestrator.getTask('f2')!;
       expect(task.status).toBe('failed');
       expect(task.execution.error).toBe('test failed: expected 1 to be 2');
@@ -825,7 +946,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('f2')!.config.isMergeNode).toBeFalsy();
       expect(orchestrator.getTask('f2')!.status).toBe('failed');
 
-      const { savedError } = orchestrator.beginConflictResolution('f2');
+      const { savedError } = orchestrator.beginFixSession('f2');
       expect(savedError).toBe(mergeConflictError);
       expect(orchestrator.getTask('f2')!.status).toBe('fixing_with_ai');
       const fixAttemptId = orchestrator.getTask('f2')!.execution.selectedAttemptId;
@@ -848,7 +969,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('f2')!.config.isMergeNode).toBeFalsy();
       expect(orchestrator.getTask('f2')!.status).toBe('failed');
 
-      const { savedError } = orchestrator.beginConflictResolution('f2');
+      const { savedError } = orchestrator.beginFixSession('f2');
       expect(savedError).toBe(plainTextError);
       expect(orchestrator.getTask('f2')!.status).toBe('fixing_with_ai');
       const fixAttemptId = orchestrator.getTask('f2')!.execution.selectedAttemptId;
@@ -915,7 +1036,7 @@ describe('Orchestrator', () => {
       // Move fd2 through the fix attempt into awaiting_approval
       // with a pendingFixError. This is exactly the state an
       // `approveTask` invocation lands on in the fix flow.
-      const { savedError } = orchestrator.beginConflictResolution('fd2');
+      const { savedError } = orchestrator.beginFixSession('fd2');
       // Hydrate workspace lineage on the task so the preservation
       // half of the assertion is meaningful (the in-memory mock
       // does not synthesize branch/workspacePath itself).
@@ -974,8 +1095,8 @@ describe('Orchestrator', () => {
       expect(cancelWorkflowSpy).not.toHaveBeenCalled();
     });
 
-    it('reject (revertConflictResolution): status -> failed (original error), generation unchanged on edited task and dependents, no retry/recreate/cancel spy fires', () => {
-      const { savedError } = orchestrator.beginConflictResolution('fd2');
+    it('reject (revertFixSession): status -> failed (original error), generation unchanged on edited task and dependents, no retry/recreate/cancel spy fires', () => {
+      const { savedError } = orchestrator.beginFixSession('fd2');
       orchestrator.setFixAwaitingApproval('fd2', savedError);
       expect(orchestrator.getTask('fd2')!.status).toBe('awaiting_approval');
       expect(orchestrator.getTask('fd2')!.execution.pendingFixError).toBe(savedError);
@@ -992,7 +1113,7 @@ describe('Orchestrator', () => {
       const cancelTaskSpy = vi.spyOn(orchestrator, 'cancelTask');
       const cancelWorkflowSpy = vi.spyOn(orchestrator, 'cancelWorkflow');
 
-      orchestrator.revertConflictResolution('fd2', savedError);
+      orchestrator.revertFixSession('fd2', { savedError: savedError });
 
       const fd2After = orchestrator.getTask('fd2')!;
       expect(fd2After.status).toBe('failed');
@@ -1016,7 +1137,7 @@ describe('Orchestrator', () => {
       // Non-fix path: a task parked in `awaiting_approval` without
       // a `pendingFixError`. This is the branch `rejectTask` takes
       // when the task is NOT in a fix flow (it routes to
-      // `Orchestrator.reject` instead of `revertConflictResolution`).
+      // `Orchestrator.reject` instead of `revertFixSession`).
       orchestrator.retryTask('fd2');
       expect(orchestrator.getTask('fd2')!.status).toBe('running');
       orchestrator.setTaskAwaitingApproval('fd2');
@@ -1073,7 +1194,7 @@ describe('Orchestrator', () => {
           outputs: { exitCode: 1, error: 'merge conflict' },
         }),
       );
-      orchestrator.beginConflictResolution(mergeNode.id);
+      orchestrator.beginFixSession(mergeNode.id);
       orchestrator.setFixAwaitingApproval(mergeNode.id, 'merge conflict');
       return mergeNode.id;
     }
