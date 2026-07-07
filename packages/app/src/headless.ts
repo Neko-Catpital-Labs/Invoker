@@ -19,10 +19,11 @@ import {
   createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
+  registerPrMaintenanceWorkers,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
-  type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
+import type { WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import {
   parseMetadataValue,
   setTaskMetadata,
@@ -38,11 +39,10 @@ import {
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
-import {
-  collectRecoveryWorkerStatus,
-  type RecoveryWorkerStatus,
-} from './recovery-worker-observability.js';
+import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
+import type { RecoveryWorkerStatus } from './recovery-worker-observability.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import { resolveRegisteredOwnerPrMaintenanceConfig } from './config.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -58,8 +58,6 @@ export {
 export type { DelegationOutcome } from './headless-delegation.js';
 
 import {
-  type HeadlessDeps,
-  type QueryFlags,
   BOLD,
   RESET,
   YELLOW,
@@ -71,6 +69,7 @@ import {
   restoreWorkflowForTaskUnlessDeleteAllWon,
   withRestoredTaskUnlessDeleteAllWon,
 } from './headless-shared.js';
+import type { HeadlessDeps, QueryFlags } from './headless-shared.js';
 
 export { createHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
 export type { HeadlessDeps, QueryFlags };
@@ -424,7 +423,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerPrMaintenanceWorkers(registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>())),
   );
 
   if (subCommand === 'list') {
@@ -487,6 +486,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
+      prMaintenance: resolveRegisteredOwnerPrMaintenanceConfig(deps.invokerConfig),
     });
     await worker.tick('manual');
     await worker.stop();
@@ -607,7 +607,7 @@ ${BOLD}Lifecycle:${RESET}
   delete-all                                           Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
-  worker [kind|list|status]                           Run/list registry worker kinds (autofix scans failed tasks)
+  worker [kind|list|status]                           Run/list registry worker kinds (autofix and PR-maintenance one-shot workers)
 
 ${BOLD}Deprecated${RESET} (use new names above):
   list → query workflows       status → query tasks       task-status → query task
