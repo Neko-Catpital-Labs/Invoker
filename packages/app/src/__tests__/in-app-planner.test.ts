@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PlanConversation } from '../../../surfaces/src/index.ts';
 import {
   createInAppPlanningChatSessions,
+  createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
   listInAppPlanningPresets,
   planFromGoal,
@@ -179,6 +180,24 @@ describe('planning chat', () => {
     })).resolves.toEqual({ ok: false, sessionId: undefined, error: 'Unknown planner preset "bad".' });
     expect(sessions.size).toBe(0);
   });
+  it('creates an explicit empty session without a starter message', async () => {
+    const sessions = createInAppPlanningChatSessions();
+
+    await expect(createPlanningChatSession({
+      presetKey: 'codex',
+    }, {
+      config: {},
+      sessions,
+      planningCommandBuilder,
+    })).resolves.toMatchObject({
+      ok: true,
+      session: {
+        status: 'still_discussing',
+        messages: [],
+      },
+    });
+  });
+
 
   it('creates a first session and returns the assistant reply', async () => {
     const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('I can help.');
@@ -198,6 +217,8 @@ describe('planning chat', () => {
     expect(result.ok && result.sessionId).toBeTruthy();
     expect(sessions.size).toBe(1);
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
+    expect(sessions.get(result.ok ? result.sessionId : '')?.messages.map((line) => line.text)).toEqual(['hello', 'I can help.']);
+
   });
 
   it('tells the in-app planner to resolve ambiguity before drafting', async () => {

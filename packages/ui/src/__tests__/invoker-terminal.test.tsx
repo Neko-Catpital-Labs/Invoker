@@ -36,6 +36,22 @@ describe('Invoker terminal (component)', () => {
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
 
+  it('renders a flush empty planning pane', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    const transcript = screen.getByTestId('invoker-terminal-transcript');
+    const terminalShell = transcript.closest('section');
+    expect(screen.getByText('Planning chat window')).toBeInTheDocument();
+    expect(screen.getAllByText('Still discussing').length).toBeGreaterThan(0);
+    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Talk it through, then submit the plan to Invoker.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ask Invoker what you want to build.')).not.toBeInTheDocument();
+    expect(transcript).toBeEmptyDOMElement();
+    expect(terminalShell?.className).not.toContain('rounded-3xl');
+    expect(terminalShell?.className).not.toContain('shadow-2xl');
+  });
+
   it('generates a planning reply from plain language', async () => {
     render(<App />);
     await openPlanningTerminal();
@@ -268,10 +284,13 @@ describe('Invoker terminal (component)', () => {
 
     expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('');
     expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('I can help draft that.');
+    expect(screen.queryByText('Ask Invoker what you want to build.')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-transcript')).toBeEmptyDOMElement();
 
     fireEvent.click(screen.getByText('hello'));
 
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
+
   });
 
   it('keeps a new planning chat editable while another session is working', async () => {

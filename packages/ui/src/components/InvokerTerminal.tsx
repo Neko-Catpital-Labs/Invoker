@@ -69,52 +69,46 @@ export function InvokerTerminal({
   };
 
   return (
-    <section className={`flex min-h-0 flex-col rounded-3xl border border-gray-800 bg-gray-950/95 shadow-2xl ${expanded ? 'h-full' : ''}`}>
-      <div className="flex items-start justify-between gap-4 border-b border-gray-900 px-5 py-4">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight text-gray-50">What do you want to build?</h1>
-          <p className="mt-1 text-sm text-gray-400">Talk it through, then submit the plan to Invoker.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {busy && <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs text-blue-200">Working…</span>}
-          {readOnly && <span className="rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300">Submitted</span>}
-          {expanded ? (
-            <button
-              type="button"
-              aria-label="Close planning chat"
-              onClick={onCloseExpanded}
-              className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-300 hover:border-gray-600 hover:text-gray-100"
-            >
-              Close
-            </button>
-          ) : (
-            <>
-              {onCollapse && (
-                <button
-                  type="button"
-                  aria-label="Collapse planning chat"
-                  onClick={onCollapse}
-                  className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-300 hover:border-gray-600 hover:text-gray-100"
-                >
-                  Collapse
-                </button>
-              )}
+    <section className={`flex h-full min-h-0 flex-col ${expanded ? 'bg-gray-950' : ''}`}>
+      <div className="flex items-center justify-end gap-2 border-b border-gray-800 px-5 py-4">
+        {busy && <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs text-blue-200">Working…</span>}
+        {readOnly && <span className="rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300">Submitted</span>}
+        {expanded ? (
+          <button
+            type="button"
+            aria-label="Close planning chat"
+            onClick={onCloseExpanded}
+            className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-300 hover:border-gray-600 hover:text-gray-100"
+          >
+            Close
+          </button>
+        ) : (
+          <>
+            {onCollapse && (
               <button
                 type="button"
-                aria-label="Expand planning chat"
-                onClick={onExpand}
+                aria-label="Collapse planning chat"
+                onClick={onCollapse}
                 className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-300 hover:border-gray-600 hover:text-gray-100"
               >
-                Expand
+                Collapse
               </button>
-            </>
-          )}
-        </div>
+            )}
+            <button
+              type="button"
+              aria-label="Expand planning chat"
+              onClick={onExpand}
+              className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-300 hover:border-gray-600 hover:text-gray-100"
+            >
+              Expand
+            </button>
+          </>
+        )}
       </div>
 
       <div
         data-testid="invoker-terminal-transcript"
-        className={`min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 text-sm ${expanded ? '' : 'max-h-64'}`}
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 text-sm"
       >
         {lines.map((line) => {
           const toneClass = line.tone === 'error'

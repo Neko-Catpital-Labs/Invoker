@@ -129,7 +129,7 @@ export function createMockInvoker(
         title: 'Untitled plan',
         status: 'still_discussing',
         presetKey: 'codex',
-        messages: [{ id: 1, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-01-01T00:00:00.000Z' }],
+        messages: [],
         draftPlanAvailable: false,
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:00:00.000Z',

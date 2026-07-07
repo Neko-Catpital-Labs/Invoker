@@ -584,6 +584,11 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
     await expect(page.getByTestId('planning-session-rail')).toHaveClass(/w-64/);
     await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await expect(page.getByText('Planning chat window')).toBeVisible();
+    await expect(page.getByText('Still discussing').first()).toBeVisible();
+    await expect(page.getByText('What do you want to build?')).toHaveCount(0);
+    await expect(page.getByText('Ask Invoker what you want to build.')).toHaveCount(0);
+
     await page.getByTestId('invoker-terminal-input').fill('Add README');
     await page.getByRole('button', { name: 'Send' }).click();
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
@@ -605,8 +610,12 @@ test.describe('Visual proof capture', () => {
     await page.evaluate(async ({ planYaml, planName }) => {
       await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'I drafted the stacked plan.' });
     }, { planYaml: plannedYaml, planName: 'Workers Surface' });
+    await page.getByTestId('sidebar-planning').click();
 
-    await expect(page.getByRole('heading', { name: 'What do you want to build?' })).toBeVisible();
+    await expect(page.getByText('Planning chat window')).toBeVisible();
+    await expect(page.getByText('Still discussing').first()).toBeVisible();
+    await expect(page.getByText('What do you want to build?')).toHaveCount(0);
+    await expect(page.getByText('Ask Invoker what you want to build.')).toHaveCount(0);
     await expect(page.getByTestId('invoker-terminal-input')).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Build the Workers Surface');
     await page.getByRole('button', { name: 'Send' }).click();

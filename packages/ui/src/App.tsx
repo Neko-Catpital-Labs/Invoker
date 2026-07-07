@@ -114,7 +114,7 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     title: 'Untitled plan',
     status: 'still_discussing',
     presetKey: '',
-    messages: [{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' }],
+    messages: [],
     input: '',
     draftPlanAvailable: false,
     busy: false,
@@ -545,7 +545,7 @@ export function App() {
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
-  const nextTerminalLineIdRef = useRef(2);
+  const nextTerminalLineIdRef = useRef(1);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
@@ -2045,7 +2045,6 @@ export function App() {
       id: `local-planning-session-${index}`,
       presetKey: selectedPlanningPresetKey,
     };
-    nextTerminalLineIdRef.current += 1;
     setPlanningSessions((prev) => [session, ...prev]);
     setActivePlanningSessionId(session.id);
     setSidebarSurface('planning');
@@ -2874,7 +2873,7 @@ export function App() {
             </button>
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto bg-gray-900 p-4">
+        <div className="min-h-0 flex-1 overflow-hidden bg-gray-900">
           <InvokerTerminal
             lines={terminalLines}
             busy={activePlanningSessionBusy}

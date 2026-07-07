@@ -49,6 +49,17 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
   });
+  it('opens planning as a flat empty chat pane', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+
+    expect(await screen.findByText('Planning chat window')).toBeInTheDocument();
+    expect(screen.getAllByText('Still discussing').length).toBeGreaterThan(0);
+    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ask Invoker what you want to build.')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-transcript')).toBeEmptyDOMElement();
+  });
+
   it('opens worker status from the left panel', async () => {
     mock.setWorkerStatus({
       generatedAt: '2026-01-01T00:00:00.000Z',
