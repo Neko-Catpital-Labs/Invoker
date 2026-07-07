@@ -49,6 +49,32 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
   });
 
+  it('reports planning chat input and render perf through the bridge', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+    (mock.api.reportUiPerf as ReturnType<typeof vi.fn>).mockClear();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_change',
+        expect.objectContaining({
+          inputLength: 5,
+          deltaChars: 5,
+          transcriptLineCount: expect.any(Number),
+        }),
+      );
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_render_commit',
+        expect.objectContaining({
+          inputLength: 5,
+          transcriptLineCount: expect.any(Number),
+        }),
+      );
+    });
+  });
+
   it('sends plain language when Enter is pressed', async () => {
     render(<App />);
     await openPlanningTerminal();
