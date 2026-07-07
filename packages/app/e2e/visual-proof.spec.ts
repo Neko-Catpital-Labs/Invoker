@@ -738,11 +738,12 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(sidebar).toHaveClass(/w-60/);
+    await captureScreenshot(page, 'sidebar-collapse-state-1-workflows-manually-expanded');
 
-    // Screenshot before the width assertion so a buggy build captures the
-    // snap-back (regression: navigation overwrote the manual collapse choice).
+    // Screenshots precede the width assertions so a buggy build still records
+    // the snap-back frame (regression: navigation overwrote the manual choice).
     await page.getByTestId('sidebar-attention').click();
-    await captureScreenshot(page, 'sidebar-collapse-state-expanded-after-navigation');
+    await captureScreenshot(page, 'sidebar-collapse-state-2-attention-after-navigation');
     await expect(sidebar).toHaveClass(/w-60/);
 
     for (const surface of ['running', 'workers', 'workflows'] as const) {
@@ -752,9 +753,10 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(sidebar).toHaveClass(/w-16/);
+    await captureScreenshot(page, 'sidebar-collapse-state-3-workflows-manually-collapsed');
 
     await page.getByTestId('sidebar-home').click();
-    await captureScreenshot(page, 'sidebar-collapse-state-collapsed-on-home');
+    await captureScreenshot(page, 'sidebar-collapse-state-4-home-still-collapsed');
     await expect(sidebar).toHaveClass(/w-16/);
 
     for (const surface of ['planning', 'workflows'] as const) {
