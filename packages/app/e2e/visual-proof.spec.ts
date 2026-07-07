@@ -576,9 +576,13 @@ test.describe('Visual proof capture', () => {
 
   test('terminal planning loads graph', async ({ page }) => {
     const plannedYaml = yamlStringify(TERMINAL_PLANNED_PLAN);
-    await page.evaluate(async ({ planYaml, planName }) => {
-      await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'I drafted the plan.' });
-    }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow' });
+    // Mirror the real planner reply shape: prose followed by the full fenced
+    // plan YAML. The transcript must render every line of it untruncated
+    // (regression: planning terminal plan truncation).
+    const fullPlanReply = `I drafted the plan.\n\n\`\`\`yaml\n${plannedYaml}\`\`\``;
+    await page.evaluate(async ({ planYaml, planName, reply }) => {
+      await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply });
+    }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow', reply: fullPlanReply });
 
     await page.getByTestId('sidebar-planning').click();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
@@ -586,6 +590,37 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Add README');
     await page.getByRole('button', { name: 'Send' }).click();
+
+    // The conversation renders in the terminal transcript: the user message,
+    // the assistant prose, and the drafted plan YAML from first to last line.
+    const transcript = page.getByTestId('invoker-terminal-transcript');
+    await expect(transcript).toContainText('Add README');
+    await expect(transcript).toContainText('I drafted the plan.');
+    await expect(transcript).toContainText('name: Terminal Planned Flow');
+    await expect(transcript).toContainText('sleep 5 && echo hello-alpha');
+    await expect(transcript).toContainText('sleep 2 && echo hello-gamma');
+
+    await captureScreenshot(page, 'terminal-planned-conversation');
+
+    // Expand the chat and scroll the transcript to the very end: the last
+    // YAML line must be reachable, proving nothing was cut off.
+    await page.getByRole('button', { name: 'Expand planning chat' }).click();
+    await expect(page.getByTestId('invoker-terminal-expanded')).toBeVisible();
+    const expandedTranscript = page
+      .getByTestId('invoker-terminal-expanded')
+      .getByTestId('invoker-terminal-transcript');
+    const scrollGap = await expandedTranscript.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+      return el.scrollHeight - el.scrollTop - el.clientHeight;
+    });
+    expect(scrollGap).toBeLessThanOrEqual(1);
+    const tailText = await expandedTranscript.evaluate((el) => el.textContent ?? '');
+    expect(tailText.trimEnd().endsWith('```')).toBe(true);
+    expect(tailText).toContain('command: echo B');
+    await captureScreenshot(page, 'terminal-planned-conversation-end');
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('invoker-terminal-expanded')).toHaveCount(0);
+
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
     await page.getByRole('button', { name: 'Submit to Invoker' }).click();
 
@@ -594,6 +629,14 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('workflow-inspector-title')).toContainText('Terminal Planned Flow');
     await expect(page.getByText('What to expect')).toHaveCount(0);
     await captureScreenshot(page, 'terminal-planned-graph');
+
+    // Returning to the Planning Terminal keeps the full conversation:
+    // submitting must not clear or truncate the transcript.
+    await page.getByTestId('sidebar-planning').click();
+    await expect(transcript).toContainText('Add README');
+    await expect(transcript).toContainText('sleep 2 && echo hello-gamma');
+    await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker. Review it, then Run.');
+    await captureScreenshot(page, 'terminal-planned-conversation-after-submit');
 
     await page.evaluate(async () => {
       await window.invoker.setTestPlanningChatResponse(null);
