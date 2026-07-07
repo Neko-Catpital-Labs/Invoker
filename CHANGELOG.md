@@ -4,6 +4,7 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+- Hold merge PRs that Invoker opens against its own repo to the full review-stack PR body before publication. When no agent can author a compliant body, PR creation fails loudly instead of shipping a fallback body that the PR Body CI check rejects.
 - Restore Planning Terminal chats after desktop restart, including visible transcripts and draft-ready state.
 - Persist embedded terminal tabs across desktop app restarts, restoring their recent output and reopening spawn-backed sessions.
 - Move auto-fix attempt counts out of SQLite task state and into in-memory worker runtime policy.
