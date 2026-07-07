@@ -245,6 +245,7 @@ export interface MergeRunnerHost {
     workflowSummary: string;
     structuredContext?: PrAuthoringContext;
     cwd: string;
+    repoUrl?: string;
   }): Promise<{ body: string; sessionId: string; agentName: string }>;
   detectDefaultBranch(): Promise<string>;
   gitLogMessage(commitHash: string, cwd?: string): Promise<string>;
@@ -279,6 +280,7 @@ async function authorPrBodyForMerge(
     workflowSummary: string;
     structuredContext?: PrAuthoringContext;
     cwd: string;
+    repoUrl?: string;
   },
 ): Promise<string> {
   if (!host.authorPrBodyWithSkill) {
@@ -749,6 +751,7 @@ export async function runMergeGateActionImpl(
             workflowSummary: fullSummary ?? '',
             structuredContext: structuredCtx,
             cwd: gateWorkspacePath!,
+            repoUrl: workflow?.repoUrl,
           });
 
           // Create PR via provider (consolidation already done above).
@@ -1032,6 +1035,7 @@ export async function approveMergeImpl(
         workflowSummary: fullSummary ?? '',
         structuredContext,
         cwd: worktreeDir,
+        repoUrl: workflow.repoUrl,
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, prBody, worktreeDir);
       mergeTrace('PR_CREATED', { featureBranch, baseBranch, reviewUrl });
@@ -1354,6 +1358,7 @@ export async function publishAfterFixImpl(
           workflowSummary: fullSummary ?? '',
           structuredContext: structuredCtxReview,
           cwd: consolidateDir,
+          repoUrl: workflow?.repoUrl,
         });
 
         logTaskProgress(host, task.id, 'info', 'Creating review PR', {
@@ -1421,6 +1426,7 @@ export async function publishAfterFixImpl(
         workflowSummary: fullSummary ?? '',
         structuredContext: structuredCtx,
         cwd: consolidateDir,
+        repoUrl: workflow?.repoUrl,
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', prBody, consolidateDir);
       console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
@@ -1753,6 +1759,7 @@ export async function consolidateAndMergeImpl(
         workflowSummary: body ?? '',
         structuredContext: structuredCtx3,
         cwd: worktreeDir,
+        repoUrl: repoUrlForMerge,
       });
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', prBody, worktreeDir);
       console.log(`[merge] Created pull request: ${reviewUrl}`);
