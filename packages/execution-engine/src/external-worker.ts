@@ -152,6 +152,7 @@ export function registerExternalWorkers<TDeps>(
     registry.register({
       kind: config.kind,
       note: `Supervises external worker process ${config.launch.executable}.`,
+      source: 'external',
       factory: (_deps: TDeps) => createExternalWorkerRuntime(config),
     });
   }

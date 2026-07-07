@@ -201,6 +201,7 @@ import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-r
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
   AUTO_STARTED_OWNER_WORKER_KINDS,
+  createLocalWorkerStatusSnapshot,
   createWorkerRuntimeController,
   type WorkerRuntimeController,
 } from './worker-control.js';
@@ -1602,7 +1603,16 @@ function startHeadlessMode(): void {
             getUiPerfStats: () => headlessDeps.getUiPerfStats?.() ?? {},
             resetUiPerfStats: () => headlessDeps.resetUiPerfStats?.(),
             getStreamSequence: () => 0,
-            getWorkerStatus: () => workerRuntimeController?.snapshot() ?? { generatedAt: new Date().toISOString(), workers: [] },
+            getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+              registry: createRegisteredWorkerRegistry(),
+              persistence,
+              autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+            }),
+            getWorkers: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+              registry: createRegisteredWorkerRegistry(),
+              persistence,
+              autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+            }),
             resolveInvokerHomeRoot,
             orchestrator,
             persistence,
@@ -2276,6 +2286,11 @@ function createEmbeddedTerminalBackendFromConfig(
           detachWorkflow: (workflowId, upstreamWorkflowId) =>
             requireGuiMutationTaskActions().performDetachWorkflow(workflowId, upstreamWorkflowId),
           getBundledSkillsStatus,
+          getWorkers: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+            registry: createRegisteredWorkerRegistry(),
+            persistence,
+            autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          }),
           getSystemDiagnostics: () => collectSystemDiagnostics({
             appVersion: app.getVersion(),
             isPackaged: app.isPackaged,
@@ -2550,7 +2565,16 @@ function createEmbeddedTerminalBackendFromConfig(
           ownerModeLabel: 'gui',
           getUiPerfStats: () => getUiPerfStats(),
           resetUiPerfStats: () => resetUiPerfStats(),
-          getWorkerStatus: () => workerRuntimeController?.snapshot() ?? { generatedAt: new Date().toISOString(), workers: [] },
+          getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+            registry: createRegisteredWorkerRegistry(),
+            persistence,
+            autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          }),
+          getWorkers: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+            registry: createRegisteredWorkerRegistry(),
+            persistence,
+            autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          }),
           getStreamSequence: () => getTaskDeltaStreamSequence(),
           resolveInvokerHomeRoot,
           orchestrator,
@@ -2822,6 +2846,32 @@ function createEmbeddedTerminalBackendFromConfig(
       resolveSetupCliPath,
       getBundledSkillsStatus,
       installPackagedSkills,
+    });
+
+    ipcMain.handle('invoker:get-workers', async () => {
+      if (!ownerMode) {
+        try {
+          return await messageBus.request('headless.query', { kind: 'workers' });
+        } catch (err) {
+          if (isMutationOwnerUnavailableError(err)) markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
+          logger.warn(
+            `get-workers owner delegation failed; falling back to local read-only snapshot: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { module: 'ipc' },
+          );
+        }
+        return createLocalWorkerStatusSnapshot({
+          registry: createRegisteredWorkerRegistry(),
+          persistence,
+          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        });
+      }
+      return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+        registry: createRegisteredWorkerRegistry(),
+        persistence,
+        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      });
     });
 
     ipcMain.handle('invoker:get-activity-logs', (_event, sinceId?: number, limit?: number) => {

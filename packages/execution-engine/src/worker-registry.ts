@@ -17,6 +17,8 @@ export interface WorkerDefinition<TDeps = unknown> {
   readonly kind: string;
   /** Human-readable note surfaced in operator output. */
   readonly note: string;
+  /** Registration source surfaced in read-only snapshots. */
+  readonly source?: 'built-in' | 'external';
   /** Builds the worker runtime from injected dependencies. */
   readonly factory: WorkerFactory<TDeps>;
 }

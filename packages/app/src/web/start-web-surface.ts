@@ -19,7 +19,7 @@ import type {
 } from '@invoker/contracts';
 import { Channels, type MessageBus } from '@invoker/transport';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import { registerBuiltinAgents, type AgentRegistry } from '@invoker/execution-engine';
+import { createWorkerRegistry, registerBuiltinAgents, registerBuiltinWorkers, type AgentRegistry, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import type { Orchestrator, TaskDelta } from '@invoker/workflow-core';
 import { loadConfig, type InvokerConfig } from '../config.js';
 import type { ApiMutationFacade } from '../api-server.js';
@@ -27,6 +27,8 @@ import { createTaskGraphEventPublisher } from '../task-graph-event-publisher.js'
 import { createTaskDeltaStreamSequence } from '../task-delta-stream-sequence.js';
 import { WorkflowRollupProjection } from '../workflow-rollup-projection.js';
 import { buildWebInvokerDispatch } from './web-invoker-dispatch.js';
+import { registerExternalWorkersFromConfig } from '../external-worker-loader.js';
+import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot } from '../worker-control.js';
 import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web-bridge-server.js';
 
 const DEFAULT_WEB_HOST = '127.0.0.1';
@@ -119,6 +121,14 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     deleteWorkflow: deps.deleteWorkflow,
     detachWorkflow: deps.detachWorkflow,
     getBundledSkillsStatus: deps.getBundledSkillsStatus,
+    getWorkers: () => createLocalWorkerStatusSnapshot({
+      registry: registerExternalWorkersFromConfig(
+        deps.config.externalWorkers,
+        registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+      ),
+      persistence: deps.persistence,
+      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+    }),
     logger: deps.logger,
   });
 

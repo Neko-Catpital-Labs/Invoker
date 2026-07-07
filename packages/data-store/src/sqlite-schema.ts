@@ -120,6 +120,9 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_events_task_id_id
         ON events(task_id, id);
 
+      CREATE INDEX IF NOT EXISTS idx_events_event_type_id
+        ON events(event_type, id);
+
       CREATE INDEX IF NOT EXISTS idx_events_type_created
         ON events(event_type, created_at);
 
@@ -541,6 +544,7 @@ export const POST_MIGRATION_STATEMENTS = [
   'DROP INDEX IF EXISTS idx_attempts_node',
   'CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_events_task_id_id ON events(task_id, id)',
+  'CREATE INDEX IF NOT EXISTS idx_events_event_type_id ON events(event_type, id)',
   'CREATE INDEX IF NOT EXISTS idx_events_type_created ON events(event_type, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id ON tasks(workflow_id)',
   'CREATE INDEX IF NOT EXISTS idx_worker_actions_task_updated ON worker_actions(task_id, updated_at)',

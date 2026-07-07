@@ -102,6 +102,7 @@ export function registerAutoFixWorker(
   registry.register({
     kind: AUTO_FIX_WORKER_KIND,
     note: 'Auto-fixes failed tasks by submitting fix-with-agent recovery intents.',
+    source: 'built-in',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createRecoveryWorker({
         logger: deps.logger,

@@ -17,6 +17,7 @@ import {
 import type { WorkerActionRecord } from '@invoker/data-store';
 import {
   AUTO_STARTED_OWNER_WORKER_KINDS,
+  createLocalWorkerStatusSnapshot,
   createWorkerRuntimeController,
   listWorkerActionHistory,
   listWorkerDecisions,
@@ -304,7 +305,68 @@ describe('createWorkerRuntimeController', () => {
     expect(worker?.recentActions).toHaveLength(5);
   });
 
-it('returns worker action history with paging metadata', () => {
+  it('combines worker action rows and auto-fix task events in recent logs', () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registry.register({
+      kind: AUTO_FIX_WORKER_KIND,
+      note: 'Auto-fixes failed tasks.',
+      source: 'built-in',
+      factory: () => runtime('recovery'),
+    });
+
+    const snapshot = createLocalWorkerStatusSnapshot({
+      registry,
+      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      persistence: {
+        listWorkerActions: vi.fn(() => [{
+          id: 'action-1',
+          workerKind: AUTO_FIX_WORKER_KIND,
+          actionType: 'fix-with-agent',
+          workflowId: 'wf-1',
+          taskId: 'wf-1/task-1',
+          subjectType: 'task',
+          subjectId: 'wf-1/task-1',
+          externalKey: 'wf-1/task-1',
+          status: 'queued',
+          attemptCount: 1,
+          payload: { reason: 'failed' },
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:01.000Z',
+        }]),
+        listTaskEvents: vi.fn(() => [{
+          id: 7,
+          taskId: 'wf-1/task-1',
+          eventType: 'debug.auto-fix',
+          payload: '{"phase":"worker-autofix-skip","reason":"not-eligible"}',
+          createdAt: '2026-01-01T00:00:02.000Z',
+        }]),
+        listWorkflows: vi.fn(() => []),
+        loadTasks: vi.fn(() => []),
+        getEvents: vi.fn(() => []),
+        getEventsByTypes: vi.fn(() => []),
+        countEventsByTypes: vi.fn(() => []),
+      } as never,
+    });
+
+    expect(snapshot.workers[0]).toMatchObject({
+      source: 'built-in',
+      availability: 'available',
+    });
+    expect(snapshot.workers[0]?.recentLogs).toEqual([
+      expect.objectContaining({
+        source: 'task_events',
+        eventType: 'debug.auto-fix',
+        payload: expect.objectContaining({ phase: 'worker-autofix-skip' }),
+      }),
+      expect.objectContaining({
+        source: 'worker_actions',
+        actionType: 'fix-with-agent',
+        status: 'queued',
+      }),
+    ]);
+  });
+
+  it('returns worker action history with paging metadata', () => {
     const listWorkerActions = vi.fn(() => Array.from({ length: 3 }, (_value, index) => ({
       id: `wa-${index}`,
       workerKind: 'history',

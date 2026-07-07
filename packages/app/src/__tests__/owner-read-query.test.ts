@@ -25,6 +25,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     listWorkerActionHistory: vi.fn((request) => ({ workerKind: request.workerKind, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
     listWorkerDecisions: vi.fn((request) => ({ decision: request.decision, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
     getWorkerStatus: vi.fn(() => ({ generatedAt: 'now', workers: [] })),
+    getWorkers: vi.fn(() => ({ generatedAt: 'workers-now', workers: [] })),
     getWorkflowStatus: vi.fn(() => ({ 'wf-1': 'running' })),
     getTasksSnapshot: vi.fn(({ refresh }) => ({ tasks: [], workflows: [], refreshed: refresh })),
     getActionGraphSnapshot: vi.fn(() => ({ nodes: [] })),
@@ -67,6 +68,7 @@ describe('answerOwnerReadQuery', () => {
     const h = makeHandlers();
     expect(answerOwnerReadQuery({ kind: 'queue' }, h)).toEqual({ runningCount: 2 });
     expect(answerOwnerReadQuery({ kind: 'worker-status' }, h)).toEqual({ workerStatus: { generatedAt: 'now', workers: [] } });
+    expect(answerOwnerReadQuery({ kind: 'workers' }, h)).toEqual({ generatedAt: 'workers-now', workers: [] });
     expect(answerOwnerReadQuery({ kind: 'worker-action-history', workerKind: 'autofix', limit: 2, offset: 4 }, h)).toEqual({
       workerActionHistory: { workerKind: 'autofix', actions: [], limit: 2, offset: 4, hasMore: false },
     });
@@ -176,6 +178,7 @@ describe('buildOwnerReadQueryHandlers', () => {
       resetUiPerfStats: () => {},
       getStreamSequence: () => 5,
       getWorkerStatus: () => ({ generatedAt: 'now', workers: [] }),
+      getWorkers: () => ({ generatedAt: 'workers-now', workers: [] }),
       resolveInvokerHomeRoot: () => '/home',
       orchestrator: { ...f.orchestrator, ...orch } as never,
       persistence: { ...f.persistence, ...persist } as never,
@@ -194,6 +197,7 @@ describe('buildOwnerReadQueryHandlers', () => {
     expect(h.getAllCompletedTasks()).toEqual([{ id: 'done' }]);
     expect(h.getHistoryTasks()).toEqual([{ id: 'hist-1', workflowName: 'Plan', lastEventAt: null, eventCount: 0 }]);
     expect(h.getWorkerStatus()).toEqual({ generatedAt: 'now', workers: [] });
+    expect(h.getWorkers()).toEqual({ generatedAt: 'workers-now', workers: [] });
     expect(h.listWorkerActionHistory({ workerKind: 'autofix', limit: 1, offset: 2 })).toEqual({
       workerKind: 'autofix',
       actions: [],
