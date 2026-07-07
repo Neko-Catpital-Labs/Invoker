@@ -298,11 +298,6 @@ export async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promis
   if (!restored) return;
   taskId = restored.resolvedTaskId;
 
-  if (parsed.autoFix) {
-    const task = deps.orchestrator.getTask(taskId);
-    const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
-    deps.persistence.updateTask(taskId, { execution: { autoFixAttempts: attemptsBefore + 1 } });
-  }
 
   const te = createHeadlessExecutor(deps);
   const agent = (parsed.agentName ?? resolveDefaultExecutionAgent(deps.invokerConfig)).toLowerCase();

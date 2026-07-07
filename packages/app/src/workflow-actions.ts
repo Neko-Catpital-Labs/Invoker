@@ -1135,7 +1135,7 @@ async function recordFixedIntegrationAnchor(
 
 /**
  * Automatically fix a failed task with an AI agent and restart it.
- * Increments autoFixAttempts; respects the max budget from shouldAutoFix().
+ * Worker retry limits are enforced before this action is queued.
  */
 export async function autoFixOnFailure(
   taskId: string,
@@ -1153,30 +1153,21 @@ export async function autoFixOnFailure(
   inlineRetryDepth = 0,
 ): Promise<void> {
   const { orchestrator, persistence, taskExecutor } = deps;
-  if (!orchestrator.shouldAutoFix(taskId)) return;
 
   const task = orchestrator.getTask(taskId);
   if (!task || task.status !== 'failed') return;
 
   const entryLineage = captureTaskLineage(taskId, orchestrator);
   assertLineageCurrent(entryLineage, orchestrator, deps.signal);
-  const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
-  const max = orchestrator.getAutoFixRetryBudget(taskId);
   const savedError = task.execution.error ?? '';
   const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
-  console.log(`[auto-fix] "${taskId}" attempt ${attempts}/${max}`);
+  console.log(`[auto-fix] "${taskId}" starting`);
   persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'auto-fix-start',
     status: task.status,
-    attemptsBefore: task.execution.autoFixAttempts ?? 0,
-    attemptsAfter: attempts,
-    maxRetries: max,
     hasExecutionError: Boolean(task.execution.error),
     hasMergeConflict: Boolean(task.execution.mergeConflict),
   });
-
-  // Increment counter FIRST (before any delta can re-trigger)
-  persistence.updateTask(taskId, { execution: { autoFixAttempts: attempts } });
 
   const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
   let persistedSavedError: string | undefined;
@@ -1241,8 +1232,6 @@ export async function autoFixOnFailure(
       persistence.logEvent?.(taskId, 'debug.auto-fix', {
         phase: 'auto-fix-skip-no-workspace',
         route: recoveryRoute.kind,
-        attempts,
-        maxRetries: max,
       });
       persistence.appendTaskOutput(taskId, `\n[Auto-fix] ${skipReason}`);
       return;
@@ -1288,7 +1277,7 @@ export async function autoFixOnFailure(
         startedStatuses: finalizeResult.started.map((t) => t.status),
       });
       const latestTask = orchestrator.getTask(taskId);
-      if (latestTask?.status === 'failed' && orchestrator.shouldAutoFix(taskId) && inlineRetryDepth < 1) {
+      if (latestTask?.status === 'failed' && inlineRetryDepth < 1) {
         persistence.logEvent?.(taskId, 'debug.auto-fix', {
           phase: 'auto-fix-post-route-inline-retry',
           reason: 'post-fix-publish-failed',
@@ -1339,7 +1328,7 @@ export async function autoFixOnFailure(
     if (diagnostics) {
       persistence.appendTaskOutput(taskId, `\n[Auto-fix Diagnostics]\n${diagnostics}`);
     }
-    persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`);
+    persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed: ${msg}`);
     const detailedMsg = diagnostics ? `${msg}\n\n${diagnostics}` : msg;
     if (persistedSavedError !== undefined) {
       if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
