@@ -11,6 +11,7 @@ import {
 import {
   AUTO_STARTED_OWNER_WORKER_KINDS,
   createWorkerRuntimeController,
+  listWorkerActionHistory,
 } from '../worker-control.js';
 
 interface TestWorkerRuntime extends WorkerRuntime {
@@ -174,5 +175,63 @@ describe('createWorkerRuntimeController', () => {
       lifecycle: 'exited',
       policy: 'unknown',
     });
+  });
+
+  it('keeps status recentActions capped to five items', () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registry.register({
+      kind: 'history',
+      note: 'History worker.',
+      factory: () => runtime('history'),
+    });
+    const listWorkerActions = vi.fn(() => Array.from({ length: 6 }, (_value, index) => ({
+      id: `wa-${index}`,
+      workerKind: 'history',
+      actionType: 'check',
+      subjectType: 'task',
+      subjectId: `task-${index}`,
+      externalKey: `key-${index}`,
+      status: 'completed',
+      attemptCount: 1,
+      createdAt: `2026-01-01T00:00:0${index}.000Z`,
+      updatedAt: `2026-01-01T00:00:0${index}.000Z`,
+    })));
+
+    const controller = createWorkerRuntimeController({
+      registry,
+      deps: deps(),
+      autoStartKinds: [],
+      persistence: { ...persistence(), listWorkerActions } as never,
+      canControl: () => true,
+    });
+
+    const worker = controller.snapshot().workers[0];
+    expect(listWorkerActions).toHaveBeenCalledWith({ workerKind: 'history', limit: 5 });
+    expect(worker?.recentActions).toHaveLength(5);
+  });
+
+  it('returns worker action history with paging metadata', () => {
+    const listWorkerActions = vi.fn(() => Array.from({ length: 3 }, (_value, index) => ({
+      id: `wa-${index}`,
+      workerKind: 'history',
+      actionType: 'check',
+      subjectType: 'task',
+      subjectId: `task-${index}`,
+      externalKey: `key-${index}`,
+      status: 'completed',
+      attemptCount: 1,
+      createdAt: `2026-01-01T00:00:0${index}.000Z`,
+      updatedAt: `2026-01-01T00:00:0${index}.000Z`,
+    })));
+
+    expect(listWorkerActionHistory({ listWorkerActions } as never, { workerKind: ' history ', limit: 2, offset: 4 })).toMatchObject({
+      workerKind: 'history',
+      actions: [{ id: 'wa-0' }, { id: 'wa-1' }],
+      limit: 2,
+      offset: 4,
+      hasMore: true,
+      nextOffset: 6,
+    });
+    expect(listWorkerActions).toHaveBeenCalledWith({ workerKind: 'history', limit: 3, offset: 4 });
   });
 });
