@@ -1,4 +1,6 @@
 import type {
+  WorkerActionHistoryRequest,
+  WorkerActionHistoryResponse,
   WorkerActionSummary,
   WorkerPolicyStatus,
   WorkerRecoverySummary,
@@ -28,6 +30,53 @@ export interface WorkerRuntimeController {
 }
 
 type WorkerStatusPersistence = Pick<SQLiteAdapter, 'listWorkerActions' | 'listWorkflows' | 'loadTasks' | 'getEvents'>;
+
+const DEFAULT_WORKER_ACTION_HISTORY_LIMIT = 20;
+const MAX_WORKER_ACTION_HISTORY_LIMIT = 100;
+
+function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const normalized = Math.floor(value);
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    return fallback;
+  }
+  return normalized;
+}
+
+function nonNegativeIntegerOrZero(value: number | undefined): number {
+  if (value === undefined) return 0;
+  const normalized = Math.floor(value);
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    return 0;
+  }
+  return normalized;
+}
+
+export function listWorkerActionHistory(
+  persistence: Pick<SQLiteAdapter, 'listWorkerActions'>,
+  request: WorkerActionHistoryRequest,
+): WorkerActionHistoryResponse {
+  const workerKind = typeof request?.workerKind === 'string' ? request.workerKind.trim() : '';
+  if (workerKind.length === 0) {
+    throw new Error('workerKind is required');
+  }
+  const limit = Math.min(
+    positiveIntegerOrDefault(request?.limit, DEFAULT_WORKER_ACTION_HISTORY_LIMIT),
+    MAX_WORKER_ACTION_HISTORY_LIMIT,
+  );
+  const offset = nonNegativeIntegerOrZero(request?.offset);
+  const rows = persistence.listWorkerActions({ workerKind, limit: limit + 1, offset });
+  const actions = rows.slice(0, limit).map(toWorkerActionSummary);
+  const hasMore = rows.length > limit;
+  return {
+    workerKind,
+    actions,
+    limit,
+    offset,
+    hasMore,
+    ...(hasMore ? { nextOffset: offset + actions.length } : {}),
+  };
+}
 
 interface RuntimeHandle {
   runtime: WorkerRuntime;
@@ -184,7 +233,7 @@ function buildWorkerStatusEntry(args: {
     ...(controlDisabledReason ? { controlDisabledReason } : {}),
     ...(args.handle?.startedAt ? { startedAt: args.handle.startedAt } : {}),
     ...(args.stoppedAt ? { stoppedAt: args.stoppedAt } : {}),
-    recentActions: args.persistence.listWorkerActions({ workerKind: args.definitionKind, limit: 5 }).map(toWorkerActionSummary),
+    recentActions: args.persistence.listWorkerActions({ workerKind: args.definitionKind, limit: 5 }).slice(0, 5).map(toWorkerActionSummary),
     ...(args.definitionKind === AUTO_FIX_WORKER_KIND ? { recovery: toWorkerRecoverySummary(args.persistence) } : {}),
   };
 }
@@ -199,7 +248,7 @@ function getControlDisabledReason(canControl: boolean): string | undefined {
   return undefined;
 }
 
-function toWorkerActionSummary(action: WorkerActionRecord): WorkerActionSummary {
+export function toWorkerActionSummary(action: WorkerActionRecord): WorkerActionSummary {
   return {
     id: action.id,
     workerKind: action.workerKind,

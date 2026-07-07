@@ -120,6 +120,63 @@ describe('registerReadOnlyIpcHandlers', () => {
       ready: false,
     });
   });
+
+  it('get-worker-action-history returns paged action summaries', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    const listWorkerActions = vi.fn(() => [
+      {
+        id: 'wa-1',
+        workerKind: 'autofix',
+        actionType: 'repair',
+        subjectType: 'task',
+        subjectId: 'wf-1/task-1',
+        externalKey: 'key-1',
+        status: 'completed',
+        attemptCount: 1,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      },
+      {
+        id: 'wa-2',
+        workerKind: 'autofix',
+        actionType: 'repair',
+        subjectType: 'task',
+        subjectId: 'wf-1/task-2',
+        externalKey: 'key-2',
+        status: 'failed',
+        attemptCount: 1,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+      },
+    ]);
+
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: { listWorkerActions } as never,
+      getOrchestrator: () => ({}) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 1,
+    });
+
+    await expect(handlers.get('invoker:get-worker-action-history')?.({}, { workerKind: 'autofix', limit: 1, offset: 3 })).resolves.toMatchObject({
+      workerKind: 'autofix',
+      actions: [{ id: 'wa-1' }],
+      limit: 1,
+      offset: 3,
+      hasMore: true,
+      nextOffset: 4,
+    });
+    expect(listWorkerActions).toHaveBeenCalledWith({ workerKind: 'autofix', limit: 2, offset: 3 });
+  });
   it('does not expose renderer write tools to read handlers', () => {
     expectReadContextWriteToolsAreAbsent();
   });
