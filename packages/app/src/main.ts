@@ -43,7 +43,6 @@ import {
   guiOwnerBootstrapTimeoutMs,
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
-  resolveElectronUserDataDir,
   runElectronReadyBootstrap,
   shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
@@ -60,9 +59,8 @@ configureEarlyElectronApp({ app, enableTestCompositor, isHeadless: earlyHeadless
 
 // Isolate userData (and with it the single-instance lock) for e2e runs so a
 // test instance can launch alongside a normally running Invoker.
-const isolatedUserDataDir = resolveElectronUserDataDir();
-if (isolatedUserDataDir) {
-  app.setPath('userData', isolatedUserDataDir);
+if (process.env.INVOKER_USER_DATA_DIR) {
+  app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
 }
 
 import { Orchestrator, CommandService, OrchestratorError, OrchestratorErrorCode, buildWorkflowInvalidationDeps } from '@invoker/workflow-core';
@@ -110,6 +108,7 @@ import {
   WorktreeExecutor,
   CI_FAILURE_WORKER_KIND,
   initializeShellEnvironment,
+  createAutoFixAttemptLedger,
   createWorkerRegistry,
   PR_STATUS_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
@@ -313,6 +312,8 @@ function submitRegisteredOwnerWorkerMutation(
   }
   return workflowMutationCoordinator.submit(workflowId, priority, channel, mutationArgs, options);
 }
+const autoFixAttemptLedger = createAutoFixAttemptLedger();
+
 
 function buildRegisteredOwnerWorkerDeps(
   store: WorkerRuntimeDependencies['store'],
@@ -330,6 +331,7 @@ function buildRegisteredOwnerWorkerDeps(
     },
     autoFix: {
       defaultAutoFixRetries: invokerConfig.autoFixRetries,
+      attemptLedger: autoFixAttemptLedger,
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
     },
@@ -1476,7 +1478,6 @@ function startHeadlessMode(): void {
           const payload = {
             phase,
             status: task?.status ?? 'missing',
-            autoFixAttempts: task?.execution.autoFixAttempts ?? null,
             ...buildStandaloneAutoFixQueueSnapshot(taskId),
             ...details,
           };
@@ -2154,7 +2155,6 @@ function createEmbeddedTerminalBackendFromConfig(
     const payload = {
       phase,
       status: task?.status ?? 'missing',
-      autoFixAttempts: task?.execution.autoFixAttempts ?? null,
       ...buildAutoFixQueueSnapshot(taskId),
       ...details,
     };
@@ -2190,16 +2190,6 @@ function createEmbeddedTerminalBackendFromConfig(
       { module: 'ipc' },
     );
 
-    if (source === 'auto-fix') {
-      const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
-      const attemptsAfter = attemptsBefore + 1;
-      persistence.updateTask(taskId, {
-        execution: {
-          autoFixAttempts: attemptsAfter,
-        },
-      });
-      logAutoFixDebug(taskId, 'dispatch-attempt-bumped', { attemptsBefore, attemptsAfter });
-    }
     const result = await fixWithAgentAction(
       taskId,
       {
