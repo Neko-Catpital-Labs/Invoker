@@ -89,6 +89,7 @@ export interface TaskConfig {
   readonly poolMemberId?: string;
   readonly isMergeNode?: boolean;
   readonly executionAgent?: string;
+  readonly executionModel?: string;
   readonly autoFixRetries?: number;
   readonly summary?: string;
   readonly problem?: string;
@@ -135,7 +136,6 @@ export interface TaskExecution {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
-  readonly autoFixAttempts?: number;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -192,6 +192,8 @@ export interface WorkflowRollupPatch {
   readonly workflowId: string;
   readonly status: WorkflowStatus;
   readonly rollup: WorkflowRollup;
+  /** True when the workflow no longer has any tasks (e.g. it was deleted); the entry must be dropped, not patched. */
+  readonly removed?: boolean;
 }
 
 

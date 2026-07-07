@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { useTasks } from './hooks/useTasks.js';
@@ -561,6 +561,7 @@ export function App() {
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionPools, setExecutionPools] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
+  const [executionHarnesses, setExecutionHarnesses] = useState<ExecutionHarnessOption[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(
     () => (typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__?.runtimeStatus ?? null : null),
@@ -654,7 +655,10 @@ export function App() {
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
-    window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+    window.invoker?.getExecutionHarnesses?.().then((harnesses) => {
+      setExecutionHarnesses(harnesses);
+      setExecutionAgents(harnesses.map((harness) => harness.name));
+    }).catch(() => {});
     window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
     window.invoker?.getPlanningPresets?.()
       .then((options) => {
@@ -675,6 +679,8 @@ export function App() {
     window.invoker?.terminalList?.().then((list) => {
       if (Array.isArray(list) && list.length > 0) {
         setTerminalSessions(list);
+        setActiveTerminalSessionId(list[list.length - 1]?.sessionId ?? null);
+        setTerminalDrawerState('partial');
       }
     }).catch(() => {});
   }, []);
@@ -2313,6 +2319,19 @@ export function App() {
     [invoker, trackAcceptedMutation],
   );
 
+  const handleEditModel = useCallback(
+    async (taskId: string, executionModel: string | null) => {
+      if (!invoker) return;
+      try {
+        const result = await invoker.editTaskModel(taskId, executionModel);
+        trackAcceptedMutation(result);
+      } catch (err) {
+        console.error('Failed to edit task model:', err);
+      }
+    },
+    [invoker, trackAcceptedMutation],
+  );
+
   const handleSetExternalGatePolicies = useCallback(
     async (taskId: string, updates: ExternalGatePolicyUpdate[]) => {
       if (!invoker) return;
@@ -3089,6 +3108,9 @@ export function App() {
                   remoteTargets={remoteTargets}
                   executionPools={executionPools}
                   executionAgents={executionAgents}
+                  executionHarnesses={executionHarnesses}
+                  onEditAgent={handleEditAgent}
+                  onEditModel={handleEditModel}
                   onApprove={openApprovalModal}
                   onReject={openRejectModal}
                   onSetMergeBranch={handleSetMergeBranch}

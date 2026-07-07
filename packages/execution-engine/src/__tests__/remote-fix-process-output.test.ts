@@ -75,7 +75,19 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     const { spawn } = await import('node:child_process');
     const dir = mkdtempSync(join(tmpdir(), 'invoker-remote-agent-env-'));
     const secretsFile = join(dir, 'secrets.env');
-    writeFileSync(secretsFile, "ANTHROPIC_API_KEY=test-key-with-'quote\nIGNORED_TOKEN=nope\n", { mode: 0o600 });
+    writeFileSync(
+      secretsFile,
+      [
+        "ANTHROPIC_API_KEY=test-key-with-'quote",
+        'OPENAI_BASE_URL=https://example.test/v1',
+        'MOONSHOT_API_KEY=kimi-key',
+        'BAILIAN_CODING_PLAN_API_KEY=qwen-key',
+        'OPENROUTER_API_KEY=openrouter-key',
+        'IGNORED_TOKEN=nope',
+        '',
+      ].join('\n'),
+      { mode: 0o600 },
+    );
     const child = mockSpawnChild('ok', 0) as any;
     vi.mocked(spawn).mockReturnValueOnce(child);
 
@@ -95,6 +107,10 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
 
       const script = child.stdin.write.mock.calls[0][0] as string;
       expect(script).toContain("export ANTHROPIC_API_KEY='test-key-with-'\\''quote'");
+      expect(script).toContain("export OPENAI_BASE_URL='https://example.test/v1'");
+      expect(script).toContain("export MOONSHOT_API_KEY='kimi-key'");
+      expect(script).toContain("export BAILIAN_CODING_PLAN_API_KEY='qwen-key'");
+      expect(script).toContain("export OPENROUTER_API_KEY='openrouter-key'");
       expect(script).not.toContain('IGNORED_TOKEN');
     } finally {
       rmSync(dir, { recursive: true, force: true });

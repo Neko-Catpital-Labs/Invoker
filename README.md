@@ -120,7 +120,7 @@ Packaged installs bundle the first-party Invoker AI helpers inside the app. Inst
 invoker-ui --install-skills
 ```
 
-Then, in Codex, Claude, Cursor, or OMP, run:
+Then, in Codex, Claude, Cursor, OMP, Kimi, or Qwen, run:
 
 ```text
 /invoker-plan-to-invoker "help me plan <change>"
@@ -142,7 +142,7 @@ The tutorial creates a tiny local git repo, generates both Codex and Claude plan
 
 Invoker reads user config from `~/.invoker/config.json`.
 
-If you want a repo-specific config file, point the app at it explicitly:
+Use that file for production settings. `INVOKER_REPO_CONFIG_PATH` is only for tests or isolated CLI runs:
 
 ```bash
 INVOKER_REPO_CONFIG_PATH=$PWD/.invoker.local.json ./run.sh
@@ -158,6 +158,7 @@ Minimal example:
   "defaultExecutionAgent": "codex",
   "autoFixRetries": 3,
   "autoFixAgent": "claude",
+  "defaultExecutionModel": "gpt-5-codex",
   "autoFixCi": false,
   "remoteTargets": {
     "staging-a": {
@@ -180,7 +181,17 @@ Minimal example:
 }
 ```
 
+`autoFixRetries` is a finite per-task cap. `3` means the worker keeps consumed attempts in process memory and can submit at most three auto-fix attempts for the same failed task lineage; `0` disables auto-fix workers.
+
 More examples: [docs/invoker-config-example.json](docs/invoker-config-example.json), [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md), [docs/docker-executor.md](docs/docker-executor.md).
+
+### Agent credentials
+
+Invoker uses the agent CLI's own login state for local work. For SSH and Docker work, put provider values in `~/.config/invoker/secrets.env`; SSH targets must also set `use_api_key: true`.
+
+- Kimi tasks require the `kimi` CLI on `PATH`. Use `kimi` → `/login` for OAuth, or set `MOONSHOT_API_KEY` / `KIMI_API_KEY` in the Invoker secrets file for API-key runs.
+- Qwen tasks require the `qwen` CLI on `PATH` and a configured auth type. Set it in Qwen settings, or launch Invoker with `INVOKER_QWEN_AUTH_TYPE=openai`, `anthropic`, `qwen-oauth`, `gemini`, or `vertex-ai`. API-key runs commonly use `BAILIAN_CODING_PLAN_API_KEY`, `DASHSCOPE_API_KEY`, `QWEN_API_KEY`, or OpenAI-compatible `OPENAI_API_KEY` / `OPENAI_BASE_URL`.
+- OMP non-default providers need their provider key, for example `OPENROUTER_API_KEY` for `openrouter/...` models or an Ollama server for `ollama/...` models.
 
 ### Multiple SSH Executors
 
@@ -248,6 +259,7 @@ tasks:
       Inspect the repository, identify the smallest implementation slice,
       and produce a concise plan with verification steps.
     executionAgent: codex
+    executionModel: gpt-5-codex
     dependencies: []
 
   - id: api
@@ -270,15 +282,15 @@ tasks:
     dependencies: [api, ui]
 ```
 
-If you need to turn a product or implementation plan into an Invoker workflow, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
+If you need to turn a product or implementation plan into an Invoker workflow, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, OMP, Kimi, or Qwen. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 
 If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
 
-Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Inspect recovery ownership and decisions with `./run.sh --headless worker status --output text|json|jsonl`. Normal `run`, `resume`, and retry commands do not start recovery loops; recovery is owned by the explicit recovery worker path. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
+Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Inspect recovery ownership and decisions with `./run.sh --headless worker status --output text|json|jsonl`. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
 
 ### Auto-fix worker (single shared engine)
 
-Auto-fix recovery runs through **one** shared worker engine in `@invoker/execution-engine`. Two doors reach that same single engine: `invoker-cli worker autofix` (production) and `./run.sh --headless worker autofix` (dev). Whichever door you use, the worker is **foreground** — it lives and dies with the process, with no detached background service. A single-instance lock means only one auto-fix worker runs at a time: a second start, from either door, refuses rather than spawning a second loop. A sweep-and-assert guard test fails the build if auto-fix is ever triggered outside this shared worker engine. See [docs/architecture/recovery-lifecycle-workers.md](docs/architecture/recovery-lifecycle-workers.md).
+Auto-fix recovery runs through **one** shared worker engine in `@invoker/execution-engine`. Owner processes auto-start that worker when `autoFixRetries > 0`; failure lifecycle events wake it, and its periodic scan covers missed wakeups. The manual dev door `./run.sh --headless worker autofix` runs the same engine for an explicit one-shot scan. `autoFixRetries` is enforced from a worker-local in-memory ledger before the worker submits another fix intent. A sweep-and-assert guard test fails the build if auto-fix is ever triggered outside this shared worker engine. See [docs/architecture/recovery-lifecycle-workers.md](docs/architecture/recovery-lifecycle-workers.md).
 
 ## Architecture (at a glance)
 

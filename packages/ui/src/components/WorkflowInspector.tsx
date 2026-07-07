@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
-import type { ActionGraphNode } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionHarnessOption } from '@invoker/contracts';
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
 type TaskLogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -33,6 +33,9 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'reviewId',
   'reviewUrl',
   'status',
+  'reason',
+  'route',
+  'workflowId',
 ]);
 
 const LOG_LEVELS: readonly TaskLogLevel[] = ['debug', 'info', 'warn', 'error'];
@@ -92,6 +95,24 @@ function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry
   };
 }
 
+interface WorkspaceRecreateNotice {
+  message: string;
+  workflowId?: string;
+}
+
+function workspaceRecreateNoticeFromEvent(event: TaskAuditEvent): WorkspaceRecreateNotice | undefined {
+  if (event.eventType !== 'task.workflow_recreated') return undefined;
+  const payload = parseEventPayload(event.payload);
+  const payloadMessage = payload?.message;
+  const workflowId = typeof payload?.workflowId === 'string' ? payload.workflowId : undefined;
+  return {
+    message: typeof payloadMessage === 'string' && payloadMessage.trim()
+      ? payloadMessage
+      : 'Invoker recreated this workflow from a fresh workspace because the old workspace was missing.',
+    workflowId,
+  };
+}
+
 function logLevelClass(level: TaskLogLevel): string {
   switch (level) {
     case 'error':
@@ -119,12 +140,14 @@ interface WorkflowInspectorProps {
   remoteTargets?: string[];
   executionPools?: string[];
   executionAgents?: string[];
+  executionHarnesses?: ExecutionHarnessOption[];
   actionNode?: ActionGraphNode | null;
   collapsed: boolean;
   advancedExpanded: boolean;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
   onEditPool?: (taskId: string, poolId: string) => void;
   onEditAgent?: (taskId: string, agentName: string) => void;
+  onEditModel?: (taskId: string, executionModel: string | null) => void;
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onApprove?: (task: TaskState) => void;
@@ -224,11 +247,13 @@ export function WorkflowInspector({
   reviewGate,
   executionPools,
   executionAgents,
+  executionHarnesses,
   actionNode,
   collapsed,
   advancedExpanded,
   onEditPool,
   onEditAgent,
+  onEditModel,
   onEditPrompt,
   onEditCommand,
   onApprove,
@@ -322,6 +347,15 @@ export function WorkflowInspector({
     names.add(currentAgent);
     return [...names].filter(Boolean);
   }, [currentAgent, executionAgents]);
+  const currentModel = task?.config.executionModel ?? '';
+  const modelOptions = useMemo(() => {
+    const harness = executionHarnesses?.find((option) => option.name === currentAgent);
+    const models = [...(harness?.supportedModels ?? [])];
+    if (currentModel && !models.some((model) => model.id === currentModel)) {
+      models.unshift({ id: currentModel, label: currentModel });
+    }
+    return models;
+  }, [currentAgent, currentModel, executionHarnesses]);
   const poolOptions = useMemo(() => {
     const ids = new Set(executionPools ?? []);
     if (task?.config.poolId) ids.add(task.config.poolId);
@@ -344,6 +378,10 @@ export function WorkflowInspector({
     && onReject,
   );
   const statusHeading = task ? 'Task Status' : 'Status';
+  const workspaceRecreateNotice = [...taskLogEvents]
+    .reverse()
+    .map(workspaceRecreateNoticeFromEvent)
+    .find((notice): notice is WorkspaceRecreateNotice => Boolean(notice));
   const logEntries = taskLogEvents.map(taskEventToLogEntry);
   const visibleLogEntries = logEntries
     .filter((entry) => LOG_LEVEL_RANK[entry.level] >= LOG_LEVEL_RANK[logLevelFilter])
@@ -464,6 +502,16 @@ export function WorkflowInspector({
           )}
         </section>
 
+        {workspaceRecreateNotice && (
+          <section data-testid="workspace-recreate-notice" className="rounded border border-amber-700 bg-amber-950/40 p-3">
+            <h3 className="text-[11px] uppercase tracking-wide text-amber-200">Workspace recreated</h3>
+            <p className="mt-1 text-xs text-amber-100 break-words">{workspaceRecreateNotice.message}</p>
+            {workspaceRecreateNotice.workflowId && (
+              <p className="mt-2 text-[11px] text-amber-300">Workflow: {workspaceRecreateNotice.workflowId}</p>
+            )}
+          </section>
+        )}
+
         {actionNode && (
           <section data-testid="workflow-inspector-action-node" className="rounded border border-blue-500/40 bg-blue-950/20 p-3">
             <h3 className="text-[11px] uppercase tracking-wide text-blue-200">Action Graph Detail</h3>
@@ -550,6 +598,26 @@ export function WorkflowInspector({
               >
                 {agentOptions.map((agentName) => (
                   <option key={agentName} value={agentName}>{capitalize(agentName)}</option>
+                ))}
+              </select>
+            </label>
+          </section>
+        )}
+
+        {task?.config.prompt && onEditModel && (
+          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+            <label className="flex items-center justify-between gap-3">
+              <span className="text-xs uppercase tracking-wide text-gray-400">AI Model</span>
+              <select
+                value={currentModel}
+                onChange={(event) => onEditModel(task.id, event.target.value || null)}
+                disabled={isTaskBusy}
+                className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                data-testid="execution-model-select"
+              >
+                <option value="">Default model</option>
+                {modelOptions.map((model) => (
+                  <option key={model.id} value={model.id}>{model.label}</option>
                 ))}
               </select>
             </label>
