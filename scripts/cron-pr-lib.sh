@@ -13,7 +13,7 @@
 #              TARGET_REPO, PR_AUTHOR, CODERABBIT_LOGIN, CRON_LOCK, DRY_RUN
 #   Functions: log_line, cron_lock, ledger_init, ledger_record, ledger_count,
 #              ledger_marker_seen, ledger_max_marker, gh_json,
-#              resolve_workflow_for_pr
+#              resolve_workflow_for_pr, prune_stale_pr_workdirs
 #
 # Both jobs run their mutating operation SYNCHRONOUSLY while holding a single
 # shared lock, so only one PR cron operation runs at a time (the other exits
@@ -178,4 +178,71 @@ resolve_workflow_for_pr() {
     return
   fi
   headless_query query review-gate "$pr" --output json
+}
+
+# ---------------------------------------------------------------------------
+# Local disk guardrail: prune stale PR checkout workdirs.
+# This is only used by Job 1 (cron-coderabbit-address) today, but lives here so
+# both jobs share the same policy when/if Job 2 needs checkouts later.
+# ---------------------------------------------------------------------------
+
+PR_CRON_WORKDIR_STAMP_NAME=".invoker-pr-cron-last-used"
+
+_stat_mtime_epoch() {
+  local path="${1:?path required}"
+  if stat -c %Y "$path" >/dev/null 2>&1; then
+    stat -c %Y "$path"
+    return
+  fi
+  stat -f %m "$path"
+}
+
+prune_stale_pr_workdirs() {
+  # prune_stale_pr_workdirs <root> <max_age_days>
+  local root="${1:?workdir root required}"
+  local max_age_days="${2:-7}"
+
+  if [ -z "$root" ] || [ "$root" = "/" ] || [ "$root" = "$HOME" ]; then
+    log_line "prune: refusing to prune unsafe root \"$root\"" >&2
+    return 1
+  fi
+
+  if [[ ! "$max_age_days" =~ ^[0-9]+$ ]]; then
+    log_line "prune: invalid max age days \"$max_age_days\" (expected integer)" >&2
+    return 1
+  fi
+
+  [ -d "$root" ] || return 0
+
+  local now cutoff
+  now="$(date +%s)"
+  cutoff="$(( now - max_age_days * 24 * 60 * 60 ))"
+
+  shopt -s nullglob
+  local dir name stamp mtime
+  for dir in "$root"/*; do
+    [ -d "$dir" ] || continue
+    name="$(basename "$dir")"
+    [[ "$name" =~ ^[0-9]+$ ]] || continue
+
+    stamp="$dir/$PR_CRON_WORKDIR_STAMP_NAME"
+    if [ -e "$stamp" ]; then
+      mtime="$(_stat_mtime_epoch "$stamp" 2>/dev/null || true)"
+    else
+      mtime="$(_stat_mtime_epoch "$dir" 2>/dev/null || true)"
+    fi
+
+    [ -n "${mtime:-}" ] || continue
+    [[ "$mtime" =~ ^[0-9]+$ ]] || continue
+
+    if [ "$mtime" -lt "$cutoff" ]; then
+      if [ "$DRY_RUN" = "1" ]; then
+        log_line "prune: would remove stale pr workdir \"$dir\" (mtime=$mtime cutoff=$cutoff age_days=$max_age_days)"
+      else
+        rm -rf "$dir"
+        log_line "prune: removed stale pr workdir \"$dir\" (age_days=$max_age_days)"
+      fi
+    fi
+  done
+  shopt -u nullglob
 }
