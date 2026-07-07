@@ -272,6 +272,7 @@ export function classifyReviewUnitsForPath(filePath) {
   if (
     path === 'scripts/pr-body-template.md'
     || path === 'scripts/test-create-pr-visual-proof.mjs'
+    || path.startsWith('scripts/fixtures/')
   ) return ['tooling-policy'];
   if (path.startsWith('packages/app/e2e/visual-proof/')) return ['activation-surface'];
   if (/(benchmark|performance|visual-proof)/.test(lowerPath)) return ['proof'];
