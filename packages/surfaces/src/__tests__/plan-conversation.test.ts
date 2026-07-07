@@ -596,6 +596,83 @@ describe('PlanConversation', () => {
     expect(secondPrompt).toContain('A REST API');
   });
 
+  it('emits raw stdout chunks in order before the planner closes', async () => {
+    const chunks: string[] = [];
+    const conv = new PlanConversation({ onRawPlannerOutput: (chunk) => chunks.push(chunk) });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await Promise.resolve();
+
+    proc.stdout.emit('data', Buffer.from('chunk1'));
+    expect(chunks).toEqual(['chunk1']);
+
+    proc.stdout.emit('data', Buffer.from('chunk2'));
+    expect(chunks).toEqual(['chunk1', 'chunk2']);
+
+    proc.emit('close', 0);
+    await expect(promise).resolves.toBe('chunk1chunk2');
+  });
+
+  it('keeps the final reply and assistant history as the assembled stdout', async () => {
+    const chunks: string[] = [];
+    const conv = new PlanConversation({ onRawPlannerOutput: (chunk) => chunks.push(chunk) });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await Promise.resolve();
+
+    proc.stdout.emit('data', Buffer.from('  final '));
+    proc.stdout.emit('data', Buffer.from('reply  '));
+    proc.emit('close', 0);
+
+    await expect(promise).resolves.toBe('final reply');
+    expect(chunks).toEqual(['  final ', 'reply  ']);
+    expect(conv.history).toEqual([
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'final reply' },
+    ]);
+  });
+
+  it('emits partial stdout before planner failure without persisting assistant history', async () => {
+    const chunks: string[] = [];
+    const repo = {
+      loadConversation: vi.fn(),
+      saveConversation: vi.fn(),
+      deleteConversation: vi.fn(),
+    };
+    const conv = new PlanConversation({
+      threadTs: 'ts-stream-fail',
+      conversationRepo: repo as any,
+      onRawPlannerOutput: (chunk) => chunks.push(chunk),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await Promise.resolve();
+
+    proc.stdout.emit('data', Buffer.from('partial '));
+    proc.stdout.emit('data', Buffer.from('reply'));
+    proc.emit('close', 1);
+
+    await expect(promise).rejects.toThrow('agent exited with code 1: partial reply');
+    expect(chunks).toEqual(['partial ', 'reply']);
+    expect(conv.history).toEqual([{ role: 'user', content: 'Hello' }]);
+    expect(repo.saveConversation).not.toHaveBeenCalled();
+  });
+
   it('handles Cursor CLI error', async () => {
     mockSpawn.mockReturnValueOnce(createErrorProcess('Command not found'));
     await expect(conversation.sendMessage('Hello')).rejects.toThrow('Failed to spawn agent');
