@@ -288,4 +288,29 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     expect((executor as any).execGitReadonly).toHaveBeenCalledTimes(1);
   });
 
+  it('throws an explicit, actionable error when the requested branch is not on origin', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+    // Keep the throw-path clone (never returned, so it can't be removed by hand)
+    // under the sandbox root instead of ~/.invoker, so afterEach cleans it up.
+    const prevDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = sandbox.root;
+
+    const executor = buildExecutor(sandbox.host);
+    let message = '';
+    try {
+      await executor.createMergeWorktree('plan/never-pushed', 'test-missing-base');
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (prevDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = prevDbDir;
+    }
+
+    expect(message).toContain('Branch "plan/never-pushed" required by the merge/gate step was not found on the remote');
+    expect(message).toContain('rerun the gate');
+    // Names the misleading "just recreate the task" path as insufficient.
+    expect(message).toContain('Recreating the task alone will not help');
+  });
+
 });
