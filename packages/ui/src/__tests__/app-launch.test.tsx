@@ -121,6 +121,32 @@ describe('App launch (component)', () => {
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
+  it('keeps the manual app sidebar width while switching left rail surfaces', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+
+    render(<App />);
+    await screen.findByTestId('sidebar-workflows');
+
+    const sidebar = screen.getByTestId('app-sidebar');
+    const toggle = screen.getByTestId('sidebar-collapse-toggle');
+
+    fireEvent.click(toggle);
+    expect(sidebar.className).toContain('w-16');
+
+    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+      fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
+      expect(sidebar.className).toContain('w-16');
+    }
+
+    fireEvent.click(toggle);
+    expect(sidebar.className).toContain('w-60');
+
+    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+      fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
+      expect(sidebar.className).toContain('w-60');
+    }
+  });
+
 
   it('shows workflow status chips and terminal drawer controls in home view', () => {
     render(<App />);
