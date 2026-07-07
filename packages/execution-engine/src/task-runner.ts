@@ -1760,8 +1760,12 @@ export class TaskRunner {
 
     if (!refSha) {
       throw new Error(
-        `Unable to resolve merge worktree ref "${ref}" in clone ${clonePath}. ` +
-        `Tried: ${candidates.join(', ')}`,
+        `Branch "${ref}" required by the merge/gate step was not found on the remote (${originUrl}). ` +
+        `This branch is retrieved from origin, but it is not there — it was never pushed to origin, ` +
+        `or it has since been deleted. Push the branch to origin (or point the workflow's base at a ` +
+        `branch that exists on origin), then rerun the gate. Recreating the task alone will not help ` +
+        `while the branch is missing from origin. ` +
+        `(resolved in clone ${clonePath}; tried ${candidates.join(', ')})`,
       );
     }
     await this.execGitIn(['checkout', '--detach', refSha], clonePath);
