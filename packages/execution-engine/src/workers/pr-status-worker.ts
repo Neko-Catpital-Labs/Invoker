@@ -31,6 +31,7 @@ export function registerPrStatusWorker(
   registry.register({
     kind: PR_STATUS_WORKER_KIND,
     note: 'Polls review-gate PR status through the registered TaskRunner review-gate check.',
+    source: 'built-in',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createPrStatusWorker({
         logger: deps.logger,

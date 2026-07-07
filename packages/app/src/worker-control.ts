@@ -1,11 +1,13 @@
 import type {
   WorkerActionSummary,
+  WorkerLogEntry,
   WorkerPolicyStatus,
   WorkerRecoverySummary,
+  WorkerSource,
   WorkerStatusEntry,
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
-import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
+import type { SQLiteAdapter, TaskEvent, WorkerActionRecord } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
@@ -17,7 +19,7 @@ import {
 
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
 
-export const AUTO_STARTED_OWNER_WORKER_KINDS = [PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND] as const;
+export const AUTO_STARTED_OWNER_WORKER_KINDS = [AUTO_FIX_WORKER_KIND, PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND] as const;
 
 export interface WorkerRuntimeController {
   startAutoStartedWorkers(): void;
@@ -27,7 +29,7 @@ export interface WorkerRuntimeController {
   snapshot(): WorkerStatusSnapshot;
 }
 
-type WorkerStatusPersistence = Pick<SQLiteAdapter, 'listWorkerActions' | 'listWorkflows' | 'loadTasks' | 'getEvents'>;
+type WorkerStatusPersistence = Pick<SQLiteAdapter, 'listWorkerActions' | 'listTaskEvents' | 'listWorkflows' | 'loadTasks' | 'getEvents'>;
 
 interface RuntimeHandle {
   runtime: WorkerRuntime;
@@ -70,12 +72,14 @@ export function createWorkerRuntimeController(options: {
     return buildWorkerStatusEntry({
       definitionKind: definition.kind,
       note: definition.note,
+      source: sourceForDefinition(definition),
       handle: handles.get(kind),
       stoppedAt: stoppedAtByKind.get(kind),
       autoStarts: options.autoStartKinds.includes(kind),
       policy: policyForKind(kind),
       persistence: options.persistence,
       canControl: options.canControl(),
+      runningKnown: true,
     });
   };
 
@@ -148,10 +152,12 @@ export function createLocalWorkerStatusSnapshot(options: {
     workers: options.registry.list().map((definition) => buildWorkerStatusEntry({
       definitionKind: definition.kind,
       note: definition.note,
+      source: sourceForDefinition(definition),
       autoStarts: options.autoStartKinds.includes(definition.kind),
       policy: 'unknown',
       persistence: options.persistence,
       canControl: false,
+      runningKnown: false,
     })),
   };
 }
@@ -160,21 +166,28 @@ export function createLocalWorkerStatusSnapshot(options: {
 function buildWorkerStatusEntry(args: {
   definitionKind: string;
   note: string;
+  source: WorkerSource;
   handle?: RuntimeHandle;
   stoppedAt?: string;
   autoStarts: boolean;
   policy: WorkerPolicyStatus;
   persistence: WorkerStatusPersistence;
   canControl: boolean;
+  runningKnown: boolean;
 }): WorkerStatusEntry {
   const lifecycle = args.handle
     ? args.handle.runtime.isRunning() ? 'running' : 'exited'
     : 'stopped';
   const controlDisabledReason = getControlDisabledReason(args.canControl);
   const runtime = args.handle?.runtime;
+  const rawActions = args.persistence.listWorkerActions({ workerKind: args.definitionKind, limit: 5 });
+  const recentActions = rawActions.map(toWorkerActionSummary);
   return {
     kind: args.definitionKind,
     note: args.note,
+    source: args.source,
+    availability: 'available',
+    ...(args.runningKnown ? { running: lifecycle === 'running' } : {}),
     ...(runtime ? { runtimeKind: runtime.identity.kind, instanceId: runtime.identity.instanceId } : {}),
     lifecycle,
     policy: args.policy,
@@ -184,9 +197,15 @@ function buildWorkerStatusEntry(args: {
     ...(controlDisabledReason ? { controlDisabledReason } : {}),
     ...(args.handle?.startedAt ? { startedAt: args.handle.startedAt } : {}),
     ...(args.stoppedAt ? { stoppedAt: args.stoppedAt } : {}),
-    recentActions: args.persistence.listWorkerActions({ workerKind: args.definitionKind, limit: 5 }).map(toWorkerActionSummary),
+    recentActions,
+    recentLogs: buildRecentWorkerLogs(args.definitionKind, args.persistence, rawActions),
     ...(args.definitionKind === AUTO_FIX_WORKER_KIND ? { recovery: toWorkerRecoverySummary(args.persistence) } : {}),
   };
+}
+
+
+function sourceForDefinition(definition: { kind: string; source?: 'built-in' | 'external' }): WorkerSource {
+  return definition.source ?? (BUILT_IN_WORKER_KINDS.has(definition.kind) ? 'built-in' : 'external');
 }
 
 function policyForKind(kind: string): WorkerPolicyStatus {
@@ -220,6 +239,97 @@ function toWorkerActionSummary(action: WorkerActionRecord): WorkerActionSummary 
     updatedAt: action.updatedAt,
     ...(action.completedAt ? { completedAt: action.completedAt } : {}),
   };
+}
+
+const AUTO_FIX_WORKER_EVENT_TYPES = [
+  'debug.auto-fix',
+  'recovery.worker.wakeup',
+  'recovery.worker.scan',
+  'recovery.worker.submit',
+  'recovery.worker.skip',
+] as const;
+
+function buildRecentWorkerLogs(
+  workerKind: string,
+  persistence: WorkerStatusPersistence,
+  actions: readonly WorkerActionRecord[],
+): WorkerLogEntry[] {
+  const actionLogs = actions.map(toWorkerActionLog);
+  const eventLogs = workerKind === AUTO_FIX_WORKER_KIND
+    ? listRecentAutoFixWorkerEvents(persistence).map((event) => toTaskEventLog(workerKind, event))
+    : [];
+
+  return [...actionLogs, ...eventLogs]
+    .sort((a, b) => workerLogTimestamp(b).localeCompare(workerLogTimestamp(a)) || a.id.localeCompare(b.id))
+    .slice(0, 10);
+}
+
+function listRecentAutoFixWorkerEvents(persistence: WorkerStatusPersistence): TaskEvent[] {
+  if (persistence.listTaskEvents) {
+    return persistence.listTaskEvents({
+      eventTypes: AUTO_FIX_WORKER_EVENT_TYPES,
+      sortBy: 'desc',
+      limit: 10,
+    });
+  }
+
+  const events: TaskEvent[] = [];
+  for (const workflow of persistence.listWorkflows()) {
+    for (const task of persistence.loadTasks(workflow.id)) {
+      for (const event of persistence.getEvents(task.id, 'desc', 20)) {
+        if (AUTO_FIX_WORKER_EVENT_TYPES.includes(event.eventType as typeof AUTO_FIX_WORKER_EVENT_TYPES[number])) {
+          events.push(event);
+        }
+      }
+    }
+  }
+  return events
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || String(b.id).localeCompare(String(a.id)))
+    .slice(0, 10);
+}
+
+function toWorkerActionLog(action: WorkerActionRecord): WorkerLogEntry {
+  return {
+    id: action.id,
+    workerKind: action.workerKind,
+    source: 'worker_actions',
+    actionType: action.actionType,
+    ...(action.workflowId ? { workflowId: action.workflowId } : {}),
+    ...(action.taskId ? { taskId: action.taskId } : {}),
+    subjectType: action.subjectType,
+    subjectId: action.subjectId,
+    externalKey: action.externalKey,
+    status: action.status,
+    ...(action.summary ? { summary: action.summary } : {}),
+    ...(action.payload !== undefined ? { payload: action.payload } : {}),
+    createdAt: action.createdAt,
+    updatedAt: action.updatedAt,
+  };
+}
+
+function toTaskEventLog(workerKind: string, event: TaskEvent): WorkerLogEntry {
+  return {
+    id: String(event.id),
+    workerKind,
+    source: 'task_events',
+    eventType: event.eventType,
+    taskId: event.taskId,
+    ...(event.payload !== undefined ? { payload: parseTaskEventPayload(event.payload) } : {}),
+    createdAt: event.createdAt,
+  };
+}
+
+function parseTaskEventPayload(payload: unknown): unknown {
+  if (typeof payload !== 'string') return payload;
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return payload;
+  }
+}
+
+function workerLogTimestamp(log: WorkerLogEntry): string {
+  return log.updatedAt ?? log.createdAt;
 }
 
 function toWorkerRecoverySummary(persistence: WorkerStatusPersistence): WorkerRecoverySummary {
