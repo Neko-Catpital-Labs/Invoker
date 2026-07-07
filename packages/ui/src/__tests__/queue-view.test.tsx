@@ -203,7 +203,7 @@ describe('QueueView', () => {
     expect(onTaskClick).not.toHaveBeenCalled();
   });
 
-  it('shows all registered workers in snapshot order', () => {
+  it('shows all built-in workers in snapshot order', () => {
     renderQueueView(
       new Map(),
       makeWorkerStatus([
@@ -231,6 +231,22 @@ describe('QueueView', () => {
           startable: false,
           stoppable: true,
         }),
+        makeWorker({
+          kind: 'coderabbit-address',
+          note: 'Addresses CodeRabbit review comments.',
+          lifecycle: 'running',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
+        makeWorker({
+          kind: 'pr-conflict-rebase',
+          note: 'Rebases conflicted pull requests.',
+          lifecycle: 'running',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
       ]),
     );
 
@@ -239,11 +255,15 @@ describe('QueueView', () => {
       'worker-row-autofix',
       'worker-row-pr-status',
       'worker-row-ci-failure',
+      'worker-row-coderabbit-address',
+      'worker-row-pr-conflict-rebase',
     ]);
-    expect(screen.getByText('Worker processes (3)')).toBeInTheDocument();
+    expect(screen.getByText('Worker processes (5)')).toBeInTheDocument();
     expect(screen.getByText('Autofix')).toBeInTheDocument();
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('CI failure repair')).toBeInTheDocument();
+    expect(screen.getByText('Coderabbit Address')).toBeInTheDocument();
+    expect(screen.getByText('Pr Conflict Rebase')).toBeInTheDocument();
   });
 
   it('shows disabled Autofix and CI rows when policy is disabled', () => {
