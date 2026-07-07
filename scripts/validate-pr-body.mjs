@@ -300,6 +300,15 @@ export function validatePrScope({ changedFiles = [], reviewLane = '', body = '' 
   return errors;
 }
 
+export function getPrAtomicityBlockers(options = {}) {
+  const diffText = options.diffText ?? '';
+  if (!diffText) return [];
+
+  return collectDiffAtomicityFindings({ diffText })
+    .filter((finding) => finding.severity === 'warning')
+    .map((finding) => `Diff atomicity blocker: ${formatDiffAtomicityFindings([finding])[0]}`);
+}
+
 export function getPrBodyWarnings(body, options = {}) {
   const warnings = [];
   const summary = getSectionBody(body, '## Summary');

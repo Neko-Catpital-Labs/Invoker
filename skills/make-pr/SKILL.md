@@ -150,6 +150,8 @@ Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. Th
 
 `scripts/create-pr.mjs` computes changed files and a full-context diff, then runs `scripts/lint-pr-diff-atomicity.mjs` through the PR body checker before image upload, push, or GitHub mutation.
 
+For Invoker stacked PRs, diff atomicity blockers are hard failures. Readability warnings like large file count stay warnings, but a stack slice that trips a diff-atomicity finding such as unrelated areas MUST be split before publication.
+
 If one branch mixes behavior, refactor, cleanup, or test-harness/proof work, split the work into separate PRs. Do not relabel the lane or weaken the checker to make a mixed branch pass.
 
 ## Command surface
@@ -228,17 +230,18 @@ If review says one published stack slice is still too broad:
 
 1. Re-run `skills/review-compression/SKILL.md`.
 2. If one published slice must split, keep the shared idea and create lettered replacement titles such as `(4a)` and `(4b)`.
-3. Run `mergify stack push`.
-4. Switch to each generated stack branch.
-5. Get the real base branch with `gh pr view --json baseRefName --jq .baseRefName`.
-6. Update each PR with `node scripts/create-pr.mjs --title "..." --base <actual-base-branch> --body-file <file> --update-existing`.
+3. If the split creates a conflict-only, import-only, or other no-new-claim fixup slice, fold that fixup into the previous slice before publication.
+4. Re-audit every rebuilt slice in the resulting stack, not just the PR that was flagged.
+5. Run `mergify stack push`.
+6. Switch to each generated stack branch.
+7. Get the real base branch with `gh pr view --json baseRefName --jq .baseRefName`.
+8. Update each PR with `node scripts/create-pr.mjs --title "..." --base <actual-base-branch> --body-file <file> --update-existing`.
 
-7. Audit the live PR metadata on GitHub. If any replacement PR still shows an empty description or only `Depends-On:`, repair it immediately.
+9. Audit the live PR metadata on GitHub. If any replacement PR still shows an empty description or only `Depends-On:`, repair it immediately.
 Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` cannot map the local branch to the published Mergify branch. Use it to repair live metadata immediately, not as the default path.
 
 
 ## Validation
-
 - ensure the branch is pushed
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible
@@ -246,9 +249,11 @@ Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` canno
 - keep Test Plan and Revert Plan content inside their collapsed `<details><summary>Test Plan</summary>` / `<summary>Revert Plan</summary>` blocks
 - do not create, update, or Mergify-publish a PR when the branch has no file changes against its selected base or contains an empty commit slice; fix the branch history before using `node scripts/create-pr.mjs`, `node scripts/create-pr.mjs --update-existing ...`, or `mergify stack push`
 - validate the body with `node scripts/validate-pr-body.mjs --body-file <file>`
+- for stacked PRs, treat diff-atomicity blockers as fatal, even when readability-only warnings still print
+- for stacked PRs, after any split or restack, re-audit the full rebuilt stack before publishing or updating PRs
+- for stacked PRs, auto-fold conflict-only, import-only, or other no-new-claim fixup slices into the previous slice before publication
 - for stacked PRs, update title/body through `node scripts/create-pr.mjs --update-existing ...`, not `gh pr edit`
 - for UI-impacting diffs, include `## Visual Proof` with screenshot or video proof before `node scripts/create-pr.mjs`; classify by user-visible behavior, not by path alone
-
 If you include `## Architecture`, keep the diagrams renderable by GitHub Mermaid.
 Always quote labels that contain prose, punctuation, or code-ish text such as `reviewGate.artifacts[]`.
 Reference:
