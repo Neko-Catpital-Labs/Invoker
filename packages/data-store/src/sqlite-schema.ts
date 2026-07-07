@@ -398,9 +398,6 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_terminal_sessions_status_updated
         ON terminal_sessions(status, updated_at);
 
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_terminal_sessions_running_target
-        ON terminal_sessions(target_key)
-        WHERE status = 'running';
     `;
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
