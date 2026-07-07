@@ -46,6 +46,11 @@ must_contain "$SKILL_MD" "Do not reuse earlier proof media after UI behavior cha
 must_contain "$SKILL_MD" "This script handles local image path upload/injection" "make-pr must route media upload through create-pr"
 must_contain "$SKILL_MD" "add or update a focused skill contract test for the exact issue being fixed" "make-pr must require focused tests for skill policy changes"
 must_contain "$SKILL_MD" "fail if the instruction that prevents the regression is removed" "make-pr skill tests must lock the regression rule"
+must_contain "$SKILL_MD" "Visual proof must show the changed behavior itself" "make-pr visual proof must show the actual changed behavior"
+must_contain "$SKILL_MD" "open every screenshot or video and verify the user-visible target is present" "make-pr visual proof must require inspecting proof media"
+must_contain "$SKILL_MD" "For conditional or event-driven UI, drive the exact condition that triggers the new state" "make-pr visual proof must cover conditional UI states"
+must_contain "$SKILL_MD" "A generic task panel, unchanged sidebar, unrelated graph, or stale screenshot is not proof" "make-pr visual proof must reject generic task-panel screenshots"
+must_contain "$SKILL_MD" "caption each visual proof item with the concrete thing the reviewer should see" "make-pr visual proof captions must name the visible target"
 
 # The publication checklist must stop empty PR slices before create/update/stack publish.
 must_contain "$SKILL_MD" "has no file changes against its selected base" "make-pr skill must reject branches with no reviewable file diff"
