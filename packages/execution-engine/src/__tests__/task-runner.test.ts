@@ -3787,6 +3787,9 @@ console.log(JSON.stringify(out));
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123';
         if (args[0] === 'rev-parse') return 'feature-sha';
+        // A successful push means the branch is retrievable on origin at the
+        // pushed tip. Model that so the post-push retrievability check passes.
+        if (args[0] === 'ls-remote') return `feature-sha\trefs/heads/${args[args.length - 1]}`;
         if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
         return '';
       };

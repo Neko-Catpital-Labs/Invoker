@@ -189,6 +189,41 @@ async function pushFeatureBranchWithRefLockRetry(
     ], dir);
     await execGitInMergeSafe(host, pushArgs, dir);
   }
+  await assertBranchRetrievableOnOrigin(host, dir, featureBranch);
+}
+
+export async function assertBranchRetrievableOnOrigin(
+  host: MergeRunnerHost,
+  dir: string,
+  branch: string,
+): Promise<void> {
+  const localSha = (await execGitInMergeSafe(host, ['rev-parse', '--verify', `${branch}^{commit}`], dir)
+    .catch(() => '')).trim();
+  if (!localSha) return;
+
+  const wantRef = `refs/heads/${branch}`;
+  const lsRemote = (await execGitInMergeSafe(host, ['ls-remote', '--heads', 'origin', '--', branch], dir)).trim();
+  const remoteSha = lsRemote
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .find((parts) => parts[1] === wantRef)?.[0] ?? '';
+
+  if (!remoteSha) {
+    throw new Error(
+      `Push verification failed: branch "${branch}" is not on origin after push. ` +
+      `A later merge/gate step retrieves this branch from origin, so the workflow ` +
+      `must not progress while it is unretrievable. Local tip ${localSha.slice(0, 12)} ` +
+      `was reported pushed, but origin has no ${wantRef}. ` +
+      `Re-run the merge, or check the push remote URL and credentials.`,
+    );
+  }
+  if (remoteSha !== localSha) {
+    throw new Error(
+      `Push verification failed: origin has "${branch}" at ${remoteSha.slice(0, 12)}, but the ` +
+      `push should have advanced it to ${localSha.slice(0, 12)}. Downstream retrieval would get ` +
+      `the wrong commit, so the workflow must not progress.`,
+    );
+  }
 }
 
 async function syncGateWorkspaceToFeatureBranch(
