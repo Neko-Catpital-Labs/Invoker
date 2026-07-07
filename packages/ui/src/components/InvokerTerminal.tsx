@@ -396,6 +396,8 @@ export function InvokerTerminal({
     inputRef.current?.focus();
   };
 
+  const composerDisabledCursorClass = busy ? 'disabled:cursor-wait' : readOnly ? 'disabled:cursor-not-allowed' : '';
+
   const handleValueChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     const startedAt = nowMs();
     const nextValue = event.target.value;
@@ -673,7 +675,7 @@ export function InvokerTerminal({
                 onChange={handleValueChange}
                 onKeyDown={handleInputKeyDown}
                 placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe the change, ask questions, or say “draft the full plan”.'}
-                className="min-h-20 w-full resize-none border-0 bg-transparent py-2 font-mono text-[13px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 disabled:cursor-wait"
+                className={`min-h-20 w-full resize-none border-0 bg-transparent py-2 font-mono text-[13px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 ${composerDisabledCursorClass}`}
               />
             </div>
             <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
