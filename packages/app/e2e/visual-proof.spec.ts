@@ -545,6 +545,15 @@ async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId
     adapter.close();
   }
 }
+async function openPlanningTerminal(page: Page): Promise<void> {
+  await page.getByTestId('sidebar-planning').click();
+  await expect(page.getByTestId('invoker-terminal-input')).toBeVisible({ timeout: 10000 });
+}
+
+async function submitPlanningText(page: Page, text: string): Promise<void> {
+  await page.getByTestId('invoker-terminal-input').fill(text);
+  await page.getByTestId('invoker-terminal-input').press('Enter');
+}
 
 test.describe('Read-only mode visual proof', () => {
   test.use({ guiOwnerMode: 'read-only-status' });
@@ -648,6 +657,53 @@ test.describe('Visual proof capture', () => {
     await expect(transcript).toContainText('sleep 2 && echo hello-gamma');
     await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker. Review it, then Run.');
     await captureScreenshot(page, 'terminal-planned-conversation-after-submit');
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanningChatResponse(null);
+    });
+  });
+  test('terminal planning captures an expanded long transcript', async ({ page }) => {
+    const plannedYaml = yamlStringify(TERMINAL_PLANNED_PLAN);
+    await page.evaluate(async ({ planYaml, planName, reply }) => {
+      await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply });
+    }, {
+      planYaml: plannedYaml,
+      planName: 'Terminal Planned Flow',
+      reply: [
+        'I drafted the transcript follow proof.',
+        'Each reply keeps the newest planning context visible for review.',
+        'The expanded screenshot should show a long planning conversation without losing the latest reply.',
+      ].join('\n\n'),
+    });
+
+    await openPlanningTerminal(page);
+    const transcript = page.getByTestId('invoker-terminal-transcript');
+    for (const prompt of [
+      'Draft the proof slice',
+      'Add the near-bottom regression',
+      'Add the manual-scroll regression',
+      'Add the conversation-switch regression',
+    ]) {
+      await submitPlanningText(page, prompt);
+      await expect(transcript).toContainText(prompt);
+      await expect(page.getByTestId('invoker-terminal-input')).toBeEnabled();
+    }
+
+    await page.getByRole('button', { name: 'Expand planning chat' }).click();
+    await expect(page.getByTestId('invoker-terminal-expanded')).toBeVisible();
+    const expandedTranscript = page
+      .getByTestId('invoker-terminal-expanded')
+      .getByTestId('invoker-terminal-transcript');
+    const transcriptState = await expandedTranscript.evaluate((el) => ({
+      scrollGap: el.scrollHeight - el.scrollTop - el.clientHeight,
+      text: el.textContent ?? '',
+    }));
+    expect(transcriptState.scrollGap).toBeLessThanOrEqual(1);
+    expect(transcriptState.text).toContain('Add the conversation-switch regression');
+    expect(transcriptState.text).toContain('I drafted the transcript follow proof.');
+    await captureScreenshot(page, 'terminal-planning-long-transcript');
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('invoker-terminal-expanded')).toHaveCount(0);
 
     await page.evaluate(async () => {
       await window.invoker.setTestPlanningChatResponse(null);

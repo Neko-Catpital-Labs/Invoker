@@ -313,8 +313,8 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('second session request'));
   });
 
-  it('follows new transcript lines until the user scrolls away from the bottom', async () => {
-    const props = {
+  function makeTerminalProps(overrides: Partial<Parameters<typeof InvokerTerminal>[0]> = {}) {
+    return {
       activeConversationKey: 'chat-1',
       lines: [{ id: 1, text: 'First line', role: 'system' as const }],
       busy: false,
@@ -327,56 +327,59 @@ describe('Invoker terminal (component)', () => {
       onSubmitDraft: vi.fn(),
       onPresetChange: vi.fn(),
       onExpand: vi.fn(),
+      ...overrides,
     };
+  }
+
+  it('scrolls a new assistant reply into view when the transcript is already near the bottom', async () => {
+    const props = makeTerminalProps();
+    const { rerender } = render(<InvokerTerminal {...props} />);
+    const transcript = screen.getByTestId('invoker-terminal-transcript');
+    Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 100 });
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 400 });
+
+    transcript.scrollTop = 268;
+    fireEvent.scroll(transcript);
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 500 });
+    rerender(<InvokerTerminal
+      {...props}
+      lines={[...props.lines, { id: 2, text: 'Second line', role: 'assistant' as const }]}
+    />);
+
+    await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+
+  it('keeps a later assistant reply from forcing the transcript down after manual upward scroll', async () => {
+    const props = makeTerminalProps();
     const { rerender } = render(<InvokerTerminal {...props} />);
     const transcript = screen.getByTestId('invoker-terminal-transcript');
     Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 100 });
     Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 400 });
 
     Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 500 });
-    rerender(<InvokerTerminal {...props} lines={[...props.lines, { id: 2, text: 'Second line', role: 'assistant' as const }]} />);
-
+    rerender(<InvokerTerminal
+      {...props}
+      lines={[...props.lines, { id: 2, text: 'Second line', role: 'assistant' as const }]}
+    />);
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
 
     transcript.scrollTop = 50;
     fireEvent.scroll(transcript);
     Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 600 });
-    rerender(<InvokerTerminal {...props} lines={[
-      ...props.lines,
-      { id: 2, text: 'Second line', role: 'assistant' as const },
-      { id: 3, text: 'Third line', role: 'assistant' as const },
-    ]} />);
+    rerender(<InvokerTerminal
+      {...props}
+      lines={[
+        ...props.lines,
+        { id: 2, text: 'Second line', role: 'assistant' as const },
+        { id: 3, text: 'Third line', role: 'assistant' as const },
+      ]}
+    />);
 
     expect(transcript.scrollTop).toBe(50);
-
-    transcript.scrollTop = 500;
-    fireEvent.scroll(transcript);
-    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 700 });
-    rerender(<InvokerTerminal {...props} lines={[
-      ...props.lines,
-      { id: 2, text: 'Second line', role: 'assistant' as const },
-      { id: 3, text: 'Third line', role: 'assistant' as const },
-      { id: 4, text: 'Fourth line', role: 'assistant' as const },
-    ]} />);
-
-    await waitFor(() => expect(transcript.scrollTop).toBe(700));
   });
 
-  it('resets transcript follow mode when the active planning conversation changes', async () => {
-    const props = {
-      activeConversationKey: 'chat-1',
-      lines: [{ id: 1, text: 'First chat', role: 'system' as const }],
-      busy: false,
-      value: '',
-      selectedPresetKey: 'codex',
-      presetOptions: [{ key: 'codex', label: 'Codex' }],
-      draftPlanAvailable: false,
-      onValueChange: vi.fn(),
-      onSubmit: vi.fn(),
-      onSubmitDraft: vi.fn(),
-      onPresetChange: vi.fn(),
-      onExpand: vi.fn(),
-    };
+  it('re-arms transcript follow mode when the active planning conversation changes', async () => {
+    const props = makeTerminalProps();
     const { rerender } = render(<InvokerTerminal {...props} />);
     const transcript = screen.getByTestId('invoker-terminal-transcript');
     Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 100 });
@@ -392,5 +395,17 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 600 });
+    rerender(<InvokerTerminal
+      {...props}
+      activeConversationKey="chat-2"
+      lines={[
+        { id: 2, text: 'Second chat', role: 'system' as const },
+        { id: 3, text: 'Second chat reply', role: 'assistant' as const },
+      ]}
+    />);
+
+    await waitFor(() => expect(transcript.scrollTop).toBe(600));
   });
 });
