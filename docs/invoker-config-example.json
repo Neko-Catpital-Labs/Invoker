@@ -1,6 +1,6 @@
 {
   "comment": "Example Invoker configuration file",
-  "description": "Default location: ~/.invoker/config.json. For repo-specific configs, set INVOKER_REPO_CONFIG_PATH when launching Invoker.",
+  "description": "Default location: ~/.invoker/config.json. INVOKER_REPO_CONFIG_PATH is a test/CLI override only.",
   "maxConcurrency": 6,
   "defaultExecutionAgent": "codex",
 
@@ -105,8 +105,8 @@
     "web_surface": "webToken enables the browser UI + Slack live status card surfaces. Env vars INVOKER_WEB_TOKEN / INVOKER_WEB_HOST / INVOKER_WEB_PORT override these. Set webHost to 0.0.0.0 to reach it from another machine (e.g. the DigitalOcean host); open http://<host>:<webPort>/?token=<webToken>.",
     "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
     "config_locations": [
-      "~/.invoker/config.json - Default user-level settings",
-      "INVOKER_REPO_CONFIG_PATH=/path/to/config.json - Explicit override for repo/test-specific config"
+      "~/.invoker/config.json - Normal production settings",
+      "INVOKER_REPO_CONFIG_PATH=/path/to/config.json - Test/CLI override only"
     ],
     "runner_kinds": [
       "worktree - Git worktree isolation (default)",

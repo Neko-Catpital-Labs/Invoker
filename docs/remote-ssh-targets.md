@@ -10,9 +10,7 @@ Each remote target is defined in the Invoker config with a host, user, and path 
 
 ## Configuration
 
-Add remote targets to `~/.invoker/config.json`.
-
-If you want to use a repo-specific config file, launch Invoker with `INVOKER_REPO_CONFIG_PATH=/path/to/config.json`.
+Add remote targets to `~/.invoker/config.json`. `INVOKER_REPO_CONFIG_PATH` is only for tests or isolated CLI runs.
 
 ```json
 {
