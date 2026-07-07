@@ -3,8 +3,16 @@ import { loadSecretsFile } from './secrets-loader.js';
 const AGENT_ENV_KEYS = new Set([
   'ANTHROPIC_API_KEY',
   'CLAUDE_API_KEY',
-  'OPENAI_API_KEY',
   'CODEX_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'OPENAI_MODEL',
+  'OPENROUTER_API_KEY',
+  'BAILIAN_CODING_PLAN_API_KEY',
+  'DASHSCOPE_API_KEY',
+  'QWEN_API_KEY',
+  'MOONSHOT_API_KEY',
+  'KIMI_API_KEY',
 ]);
 
 function shellQuote(value: string): string {

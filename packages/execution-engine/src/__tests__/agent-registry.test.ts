@@ -21,9 +21,9 @@ function makeExecutionAgent(name: string, opts?: {
 }
 
 describe('registerBuiltinAgents', () => {
-  it('registers claude, codex, and omp execution agents', () => {
+  it('registers claude, codex, omp, kimi, and qwen execution agents', () => {
     const names = registerBuiltinAgents().listExecution().map((agent) => agent.name);
-    expect(names).toEqual(expect.arrayContaining(['claude', 'codex', 'omp']));
+    expect(names).toEqual(expect.arrayContaining(['claude', 'codex', 'omp', 'kimi', 'qwen']));
   });
 
   it('exposes curated built-in model choices per harness', () => {
@@ -49,6 +49,21 @@ describe('registerBuiltinAgents', () => {
           { id: 'chatgpt-5.4', label: 'ChatGPT 5.4' },
           { id: 'anthropic/claude-opus-4', label: 'Anthropic Claude Opus 4' },
           { id: 'openai/gpt-5', label: 'OpenAI GPT-5' },
+          { id: 'openrouter/~moonshotai/kimi-latest', label: 'OpenRouter Kimi Latest' },
+          { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+          { id: 'ollama/qwen2.5-coder:7b', label: 'Ollama Qwen2.5 Coder 7B' },
+        ]),
+      }),
+      expect.objectContaining({
+        name: 'kimi',
+        supportedModels: expect.arrayContaining([
+          { id: 'kimi-k2.6', label: 'Kimi K2.6' },
+        ]),
+      }),
+      expect.objectContaining({
+        name: 'qwen',
+        supportedModels: expect.arrayContaining([
+          { id: 'qwen3-coder-plus', label: 'Qwen3 Coder Plus' },
         ]),
       }),
     ]));
