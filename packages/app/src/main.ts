@@ -129,6 +129,7 @@ import {
   resolveConfigFileState,
   resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
+  resolveRegisteredOwnerPrMaintenanceConfig,
   type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
 } from './config.js';
@@ -337,6 +338,7 @@ function buildRegisteredOwnerWorkerDeps(
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
     },
+    prMaintenance: resolveRegisteredOwnerPrMaintenanceConfig(invokerConfig),
   };
 }
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
