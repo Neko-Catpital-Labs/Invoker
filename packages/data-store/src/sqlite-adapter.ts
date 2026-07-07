@@ -947,6 +947,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.migrateWorkflowStatusColumn();
     this.dropTaskAutoFixAttemptsColumn();
 
+    if (!this.readOnly) {
+      this.reconcileTerminalSessionInvariants();
+    }
+
     // Replace old attempt_number index with created_at index, etc.
     for (const sql of POST_MIGRATION_STATEMENTS) {
       this.db.run(sql);
@@ -1177,6 +1181,38 @@ export class SQLiteAdapter implements PersistenceAdapter {
     } catch {
       // Tables/columns may not exist yet on first run.
     }
+  }
+
+  private reconcileTerminalSessionInvariants(): void {
+    const rows = this.queryAll(
+      `SELECT session_id, target_key
+       FROM terminal_sessions
+       WHERE status = 'running'
+       ORDER BY target_key ASC, updated_at DESC, created_at DESC, session_id DESC`,
+    ) as Array<{ session_id: string; target_key: string }>;
+
+    const seenTargets = new Set<string>();
+    const now = new Date().toISOString();
+    for (const row of rows) {
+      if (!row.target_key || !row.session_id) continue;
+      if (!seenTargets.has(row.target_key)) {
+        seenTargets.add(row.target_key);
+        continue;
+      }
+      this.db.run(
+        `UPDATE terminal_sessions
+            SET status = 'exited',
+                updated_at = ?
+          WHERE session_id = ?`,
+        [now, row.session_id],
+      );
+    }
+
+    this.db.run(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_terminal_sessions_running_target
+         ON terminal_sessions(target_key)
+         WHERE status = 'running'`,
+    );
   }
 
   // ── Workflows ─────────────────────────────────────────
@@ -3279,6 +3315,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
+
   private mapInAppPlanningSessionRow(row: InAppPlanningSessionRow): InAppPlanningSessionRecord | undefined {
     try {
       const id = typeof row.session_id === 'string' ? row.session_id : '';
@@ -3287,6 +3324,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
       const createdAt = typeof row.created_at === 'string' ? row.created_at : '';
       const updatedAt = typeof row.updated_at === 'string' ? row.updated_at : '';
       if (!id || !title || !presetKey || !createdAt || !updatedAt || !isInAppPlanningSessionStatus(row.status)) {
+        return undefined;
+      }
+      if (
+        row.status === 'submitted'
+        && (
+          typeof row.submitted_workflow_id !== 'string'
+          || typeof row.submitted_plan_name !== 'string'
+        )
+      ) {
         return undefined;
       }
 

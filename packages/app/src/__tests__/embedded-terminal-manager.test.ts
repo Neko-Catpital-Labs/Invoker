@@ -405,6 +405,39 @@ describe('EmbeddedTerminalManager', () => {
     expect(spawned.written).toEqual(['echo after\n']);
   });
 
+  it('rejects restoring a second running session for the same terminal target', () => {
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => spawned),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    mgr.restoreSpawnSession({
+      sessionId: 'restored-session-a',
+      taskId: 'task-restored',
+      targetKey: 'target-restored',
+      spec: { command: 'bash', args: ['-l'] },
+      cwd: '/tmp/restored',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      outputSnapshot: 'before restart\n',
+    });
+
+    expect(() => mgr.restoreSpawnSession({
+      sessionId: 'restored-session-b',
+      taskId: 'task-restored',
+      targetKey: 'target-restored',
+      spec: { command: 'bash', args: ['-l'] },
+      cwd: '/tmp/restored',
+      createdAt: '2026-07-07T00:00:01.000Z',
+      outputSnapshot: 'duplicate restart\n',
+    })).toThrow(/already has running session/);
+  });
+
   it('resize() is accepted by the bash backend as a no-op', () => {
     const child = createFakeChild();
     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
