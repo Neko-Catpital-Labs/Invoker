@@ -50,8 +50,13 @@ graph TD
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] `exact command`
 - [ ] `exact command`
+
+</details>
 
 ## Visual Proof
 
@@ -59,7 +64,12 @@ Required when the diff changes UI-impacting files. Include before/after screensh
 
 ## Revert Plan
 
+<details>
+<summary>Revert Plan</summary>
+
 - Safe to revert? Yes/No
 - Revert command: `git revert <sha>`
 - Post-revert steps: None
 - Data migration? No
+
+</details>

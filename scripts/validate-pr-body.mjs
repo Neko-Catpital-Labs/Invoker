@@ -36,6 +36,10 @@ const REQUIRED_METADATA_LABELS = [
   'Safety Invariant',
   'Slice Rationale',
 ];
+const COLLAPSED_PLAN_SECTIONS = [
+  { heading: '## Test Plan', label: 'Test Plan' },
+  { heading: '## Revert Plan', label: 'Revert Plan' },
+];
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'];
 const SUMMARY_WORD_LIMIT = 30;
 const VALID_REVIEW_LANES = new Set(['behavior', 'refactor', 'proof', 'cleanup', 'policy', 'docs']);
@@ -127,6 +131,17 @@ export async function validateMermaidBlocks(body, options = {}) {
 
 function getSectionBody(body, heading) {
   return getMarkdownSection(body, heading);
+}
+
+function getCollapsedPlanBlock(body, heading, label) {
+  const section = getSectionBody(body, heading);
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = section.match(new RegExp(
+    `<details\\b([^>]*)>\\s*<summary>\\s*${escaped}\\s*</summary>([\\s\\S]*?)</details>`,
+    'i',
+  ));
+  if (!match) return null;
+  return { body: match[2].trim(), openAttributes: match[1] };
 }
 
 function countWords(text) {
@@ -327,7 +342,7 @@ export async function validatePrBody(body, options = {}) {
   const trimmed = body.trim();
   if (!trimmed) {
     return [
-      'PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, and ## Revert Plan.',
+      'PR body is empty. Use the canonical schema: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, and ## Test Plan and ## Revert Plan with collapsed details blocks.',
     ];
   }
 
@@ -379,6 +394,21 @@ export async function validatePrBody(body, options = {}) {
       if (!getLabelSection(legacyReviewMetadata.body, label)) {
         errors.push(`Review metadata is missing required field: ${label}:`);
       }
+    }
+  }
+
+  for (const { heading, label } of COLLAPSED_PLAN_SECTIONS) {
+    if (!trimmed.includes(heading)) continue;
+    const block = getCollapsedPlanBlock(trimmed, heading, label);
+    if (!block) {
+      errors.push(`${heading} must wrap its content in a collapsed <details> block with <summary>${label}</summary>.`);
+      continue;
+    }
+    if (/\bopen\b/i.test(block.openAttributes)) {
+      errors.push(`${label} details must be collapsed by default; remove the open attribute.`);
+    }
+    if (!block.body) {
+      errors.push(`${label} details block must not be empty.`);
     }
   }
 
@@ -454,6 +484,7 @@ function usage() {
 
 Validates the canonical PR schema:
   Required: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
+  Test Plan and Revert Plan content must sit inside a collapsed <details><summary>Test Plan</summary> / <summary>Revert Plan</summary> block.
   Optional: ## Architecture (must include ### Before and ### After when present)
   UI changes: pass --require-visual-proof to require screenshot or video proof; restart or multi-state proof must be animated.
   --changed-files-file <file>  Newline-separated changed file paths for scope checks.

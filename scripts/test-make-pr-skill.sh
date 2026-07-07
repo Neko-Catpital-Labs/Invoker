@@ -35,6 +35,11 @@ must_contain "$SKILL_MD" "cleanup and docs come last" "make-pr skill must order 
 must_contain "$SKILL_MD" "lint-pr-diff-atomicity.mjs" "make-pr skill must mention the diff atomicity gate"
 must_contain "$SKILL_MD" "mixes behavior, refactor, cleanup, or test-harness/proof work" "make-pr skill must tell authors to split mixed work"
 
+# Test Plan and Revert Plan content must be collapsed in a details block.
+must_contain "$SKILL_MD" "<summary>Test Plan</summary>" "make-pr skill must collapse Test Plan content in a details block"
+must_contain "$SKILL_MD" "<summary>Revert Plan</summary>" "make-pr skill must collapse Revert Plan content in a details block"
+must_contain "$SKILL_MD" "rejects a plan section whose content is not collapsed" "make-pr skill must state the validator enforces collapsed plan sections"
+
 # The ordering section delegates the rest of the rules to review-compression,
 # so that referenced section must actually exist.
 must_contain "$SKILL_MD" "Ordering Rules" "make-pr skill must point at review-compression Ordering Rules"

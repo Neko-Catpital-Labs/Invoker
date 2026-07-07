@@ -92,8 +92,13 @@ graph TD
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] exact command
 - [ ] exact command
+
+</details>
 
 ## Visual Proof
 
@@ -101,10 +106,15 @@ Required when the diff changes UI-impacting files. Include before/after screensh
 
 ## Revert Plan
 
+<details>
+<summary>Revert Plan</summary>
+
 - Safe to revert? Yes/No
 - Revert command: `git revert <sha>` or equivalent
 - Post-revert steps: None / concrete steps
 - Data migration? No / concrete steps
+
+</details>
 ```
 
 If the change is small and has no architectural impact, omit `## Architecture` rather than forcing filler.
@@ -112,6 +122,8 @@ If the change is small and has no architectural impact, omit `## Architecture` r
 If the change is UI-impacting, use `skills/visual-proof/SKILL.md` first and include its screenshot/video markdown in `## Visual Proof`. UI-impacting means the user-visible experience changes, even when no file under `packages/ui/**` changes. This includes `packages/ui/**`, Electron window lifecycle files, preload, main process window wiring, app menu changes, task status changes, task error or output text shown in panels, approval/reject behavior, workflow state shown in the DAG or inspector, and web-surface output.
 
 Use visible markdown sections for review metadata. Do not hide `Review Claim`, `Review Lane`, `Review Unit`, `Safety Invariant`, or `Slice Rationale` inside `<details>` or other HTML disclosure blocks. Review metadata must render directly in the PR body.
+
+Test Plan and Revert Plan are the opposite: keep their `## Test Plan` / `## Revert Plan` headings visible, but their content must sit inside a collapsed `<details>` block with `<summary>Test Plan</summary>` / `<summary>Revert Plan</summary>`. `scripts/validate-pr-body.mjs` rejects a plan section whose content is not collapsed, and rejects the `open` attribute.
 
 When an existing PR changes after its body or proof was written, rerun this skill from the current diff before updating the PR. If the new diff touches UI-impacting files, rerun `skills/visual-proof/SKILL.md` and replace old screenshot or video links with fresh proof for the current code. Do not reuse earlier proof media after UI behavior changes.
 Visual proof must show the changed behavior itself, not just the changed screen area. Before creating or updating the PR, open every screenshot or video and verify the user-visible target is present and identifiable. For conditional or event-driven UI, drive the exact condition that triggers the new state and capture that state. A generic task panel, unchanged sidebar, unrelated graph, or stale screenshot is not proof, even when the right file changed.
@@ -128,7 +140,7 @@ If the changed behavior is a cursor, pointer, hover-only affordance, or other st
 
 When a PR changes skill instructions under `skills/**/SKILL.md`, add or update a focused skill contract test for the exact issue being fixed. The test must fail if the instruction that prevents the regression is removed.
 
-Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Review Claim / ## Review Lane / ## Review Unit / ## Safety Invariant / ## Slice Rationale / ## Non-goals / ## Test Plan / ## Revert Plan` as the floor, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
+Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Review Claim / ## Review Lane / ## Review Unit / ## Safety Invariant / ## Slice Rationale / ## Non-goals / ## Test Plan / ## Revert Plan` as the floor, keep Test Plan and Revert Plan content in their collapsed `<details>` blocks, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
 
 ## Diff atomicity gate
 
@@ -227,6 +239,7 @@ Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` canno
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible
 - ensure revert guidance is honest
+- keep Test Plan and Revert Plan content inside their collapsed `<details><summary>Test Plan</summary>` / `<summary>Revert Plan</summary>` blocks
 - do not create, update, or Mergify-publish a PR when the branch has no file changes against its selected base or contains an empty commit slice; fix the branch history before using `node scripts/create-pr.mjs`, `node scripts/create-pr.mjs --update-existing ...`, or `mergify stack push`
 - validate the body with `node scripts/validate-pr-body.mjs --body-file <file>`
 - for stacked PRs, update title/body through `node scripts/create-pr.mjs --update-existing ...`, not `gh pr edit`
