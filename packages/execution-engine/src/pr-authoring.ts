@@ -51,30 +51,18 @@ export interface PrAuthoringContext {
 }
 
 const REQUIRED_SECTIONS = ['## Summary', '## Test Plan', '## Revert Plan'] as const;
-// Canonical review-stack schema, mirrored structurally from
-// scripts/validate-pr-body.mjs — the authoritative validator the make-pr skill
-// runs. The review-compression fields live INSIDE a collapsed
-// <details>Review metadata</details> block in ## Summary, not as visible
-// top-level sections, so a bare commit-message body (e.g. PR #2170) is rejected.
 const REVIEW_STACK_REQUIRED_SECTIONS = [
   '## Summary',
   '## Non-goals',
   '## Test Plan',
   '## Revert Plan',
 ] as const;
-const REVIEW_STACK_VISIBLE_METADATA_SECTIONS = [
+const REVIEW_STACK_METADATA_SECTIONS = [
   '## Review Claim',
   '## Review Lane',
   '## Review Unit',
   '## Safety Invariant',
   '## Slice Rationale',
-] as const;
-const REVIEW_STACK_METADATA_LABELS = [
-  'Review Claim',
-  'Review Lane',
-  'Review Unit',
-  'Safety Invariant',
-  'Slice Rationale',
 ] as const;
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'] as const;
 const DEFAULT_MAX_INLINE_PROMPT_BYTES = 64 * 1024;
@@ -207,26 +195,13 @@ function getReviewMetadataBlock(body: string): { body: string; openAttributes: s
   return { body: match[2].trim(), openAttributes: match[1] };
 }
 
-/** True when the metadata block carries a non-empty `Label:` field. */
-function hasMetadataLabel(metadata: string, label: string): boolean {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|\\n)\\s*${escaped}:\\s*\\S`, 'i').test(metadata);
-}
-
-/**
- * Validate a published Invoker review-stack PR body. This mirrors the structural
- * checks in scripts/validate-pr-body.mjs (the authoritative validator the make-pr
- * skill is told to run): required top-level sections, no visible metadata
- * sections, and a collapsed Review metadata block carrying every required field.
- * A mergify-default commit-message body cannot pass. The deeper review-unit and
- * mermaid rules stay in validate-pr-body.mjs; this is the in-process backstop.
- */
 export function validateReviewStackPrBody(body: string): string[] {
   const trimmed = body.trim();
   if (!trimmed) {
     return [
-      'PR body is empty. Use the canonical review-stack schema: ## Summary with a collapsed '
-        + 'Review metadata block, ## Non-goals, ## Test Plan, and ## Revert Plan.',
+      'PR body is empty. Use the canonical review-stack schema: ## Summary, ## Review Claim, '
+        + '## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, '
+        + '## Test Plan, and ## Revert Plan.',
     ];
   }
 
@@ -236,13 +211,17 @@ export function validateReviewStackPrBody(body: string): string[] {
       errors.push(`Missing required section: ${heading}`);
     }
   }
-  for (const heading of REVIEW_STACK_VISIBLE_METADATA_SECTIONS) {
-    if (hasMarkdownHeading(trimmed, heading)) {
-      errors.push(
-        `${heading} belongs in the collapsed Review metadata block inside ## Summary, `
-          + 'not as a visible top-level section.',
-      );
-    }
+  const missingMetadataSections = REVIEW_STACK_METADATA_SECTIONS.filter(
+    (heading) => !getMarkdownSection(trimmed, heading),
+  );
+  for (const heading of missingMetadataSections) {
+    errors.push(`Missing required section: ${heading}`);
+  }
+  if (getReviewMetadataBlock(trimmed) && missingMetadataSections.length > 0) {
+    errors.push(
+      'Do not hide review metadata in <details>. Use visible ## Review Claim / ## Review Lane / '
+        + '## Review Unit / ## Safety Invariant / ## Slice Rationale sections.',
+    );
   }
   for (const heading of DISCOURAGED_HEADINGS) {
     if (hasMarkdownHeading(trimmed, heading)) {
@@ -256,20 +235,6 @@ export function validateReviewStackPrBody(body: string): string[] {
     for (const subsection of ['### Before', '### After']) {
       if (!hasMarkdownHeading(trimmed, subsection)) {
         errors.push(`Architecture section is missing required subsection: ${subsection}`);
-      }
-    }
-  }
-
-  const metadata = getReviewMetadataBlock(trimmed);
-  if (!metadata) {
-    errors.push('## Summary must include a collapsed <details> block with <summary>Review metadata</summary>.');
-  } else {
-    if (/\bopen\b/i.test(metadata.openAttributes)) {
-      errors.push('Review metadata details must be collapsed by default; remove the open attribute.');
-    }
-    for (const label of REVIEW_STACK_METADATA_LABELS) {
-      if (!hasMetadataLabel(metadata.body, label)) {
-        errors.push(`Review metadata is missing required field: ${label}:`);
       }
     }
   }
@@ -390,10 +355,10 @@ export function buildMakePrStackPublishPrompt(args: {
     '- Do not add Mergify-specific fields to the JSON.',
     '- Each artifact.body MUST be the exact PR body you published for that PR.',
     '- Each body MUST follow the canonical review-stack schema and pass '
-      + '`node scripts/validate-pr-body.mjs`. Required: ## Summary containing a collapsed '
-      + '<details><summary>Review metadata</summary> block with Review Claim, Review Lane, '
-      + 'Review Unit, Safety Invariant, and Slice Rationale fields; plus top-level ## Non-goals, '
-      + '## Test Plan, and ## Revert Plan. Do not use visible ## Review Claim / ## Review Lane sections.',
+      + '`node scripts/validate-pr-body.mjs`. Required visible sections: ## Summary, '
+      + '## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, '
+      + '## Slice Rationale, ## Non-goals, ## Test Plan, and ## Revert Plan. '
+      + 'Never hide review metadata inside a <details> block.',
     '- Do NOT let Mergify default the PR body to the commit message; author the body explicitly.',
     '',
     'Workflow summary:',
@@ -556,6 +521,7 @@ export function buildMakePrPrompt(args: {
   featureBranch: string;
   workflowSummary: string;
   structuredContext?: PrAuthoringContext;
+  strictReviewStack?: boolean;
 }): string {
   const lines = [
     `You are authoring the GitHub PR body for the branch "${args.featureBranch}" targeting "${args.baseBranch}".`,
@@ -570,6 +536,17 @@ export function buildMakePrPrompt(args: {
     '- Only include `## Architecture` when the change modifies component interactions, control flow, state flow, or data flow.',
     '- If the change is small and has no architectural impact, omit `## Architecture`.',
     '- Ensure the final body satisfies the canonical schema required by this repo.',
+  ];
+
+  if (args.strictReviewStack) {
+    lines.push(
+      '- This PR targets the Invoker repo: CI validates the published body with `scripts/validate-pr-body.mjs`.',
+      '- Required sections: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan.',
+      '- Review Claim, Review Lane, Review Unit, Safety Invariant, and Slice Rationale must be visible top-level ## sections; never hide them inside a <details> block.',
+    );
+  }
+
+  lines.push(
     '',
     'You may inspect the working tree, git diff, `scripts/pr-body-template.md`, and `scripts/validate-pr-body.mjs` before writing.',
     '',
@@ -577,7 +554,7 @@ export function buildMakePrPrompt(args: {
     '```md',
     args.workflowSummary.trim(),
     '```',
-  ];
+  );
 
   const ctx = args.structuredContext;
   if (ctx) {

@@ -1237,7 +1237,7 @@ describe('TaskRunner', () => {
             attempts.push('codex');
             return {
               cmd: 'node',
-              args: ['-e', 'var b=["## Summary","","Slice prose.","","<details>","<summary>Review metadata</summary>","","Review Claim: c","Review Lane: cleanup","Review Unit: scalar","Safety Invariant: s","Slice Rationale: r","","</details>","","## Non-goals","- none","","## Test Plan","- [x] pnpm test","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"contracts",title:"Contracts",url:"https://example.test/pr/1",providerId:"1",branch:"stack/contracts",baseBranch:"master",body:b},{id:"runtime",title:"Runtime",url:"https://example.test/pr/2",providerId:"2",branch:"stack/runtime",baseBranch:"stack/contracts",dependsOn:["contracts"],body:b}]}))'],
+              args: ['-e', 'var b=["## Summary","","Slice prose.","","## Review Claim","","c","","## Review Lane","","cleanup","","## Review Unit","","scalar","","## Safety Invariant","","s","","## Slice Rationale","","r","","## Non-goals","- none","","## Test Plan","- [x] pnpm test","","## Revert Plan","- Safe to revert? Yes"].join("\\n");process.stdout.write(JSON.stringify({artifacts:[{id:"contracts",title:"Contracts",url:"https://example.test/pr/1",providerId:"1",branch:"stack/contracts",baseBranch:"master",body:b},{id:"runtime",title:"Runtime",url:"https://example.test/pr/2",providerId:"2",branch:"stack/runtime",baseBranch:"stack/contracts",dependsOn:["contracts"],body:b}]}))'],
               sessionId: 'sess-codex',
             };
           },
@@ -1389,7 +1389,7 @@ describe('TaskRunner', () => {
         }),
         buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
       };
-      // A bare commit-message body: no ## Non-goals, no collapsed Review metadata block.
+      // A bare commit-message body: no ## Non-goals, no review metadata sections.
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
@@ -1416,9 +1416,12 @@ describe('TaskRunner', () => {
     it('publishReviewStackWithMakePrSkill validates the published body, not just the agent-reported one', async () => {
       // Agent reports a fully compliant body in JSON...
       const goodBody = [
-        '## Summary', '', 'x', '', '<details>', '<summary>Review metadata</summary>', '',
-        'Review Claim: c', 'Review Lane: cleanup', 'Review Unit: scalar',
-        'Safety Invariant: s', 'Slice Rationale: r', '', '</details>', '',
+        '## Summary', '', 'x', '',
+        '## Review Claim', '', 'c', '',
+        '## Review Lane', '', 'cleanup', '',
+        '## Review Unit', '', 'scalar', '',
+        '## Safety Invariant', '', 's', '',
+        '## Slice Rationale', '', 'r', '',
         '## Non-goals', '- none', '', '## Test Plan', '- [x] t', '', '## Revert Plan', '- yes',
       ].join('\n');
       const tempHome = createTempWorkspace();
@@ -1519,6 +1522,186 @@ describe('TaskRunner', () => {
         expect(result.body).toContain('## Summary');
         expect(result.body).toContain('## Test Plan');
         expect(result.body).toContain('## Revert Plan');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    const STRICT_COMPLIANT_REVIEW_STACK_BODY = [
+      '## Summary',
+      '',
+      'Authored change.',
+      '',
+      '## Review Claim',
+      '',
+      'One reviewable gate change.',
+      '',
+      '## Review Lane',
+      '',
+      'behavior',
+      '',
+      '## Review Unit',
+      '',
+      'write-path',
+      '',
+      '## Safety Invariant',
+      '',
+      'Existing tests cover the gate.',
+      '',
+      '## Slice Rationale',
+      '',
+      'Single slice.',
+      '',
+      '## Non-goals',
+      '',
+      '- Nothing else.',
+      '',
+      '## Test Plan',
+      '',
+      '- [x] `pnpm test`',
+      '',
+      '## Revert Plan',
+      '',
+      '- Safe to revert? Yes',
+    ].join('\n');
+
+    const CANONICAL_ONLY_BODY = '## Summary\n\nAuthored\n\n## Test Plan\n\n- [x] `pnpm test`\n\n## Revert Plan\n\n- Safe to revert? Yes';
+
+    function makeBodyEmittingAgent(tempHome: string, body: string) {
+      return {
+        name: 'codex',
+        stdinMode: 'ignore',
+        linuxTerminalTail: 'exec_bash',
+        bundledSkillRoot: join(tempHome, '.codex', 'skills'),
+        bundledSkills: ['make-pr'],
+        buildCommand: () => ({
+          cmd: 'node',
+          args: ['-e', `process.stdout.write(${JSON.stringify(body)})`],
+          sessionId: 'sess-strict-gate',
+        }),
+        buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+      };
+    }
+
+    function makeStrictGateExecutor(agent: any) {
+      return new TaskRunner({
+        orchestrator: {
+          getTask: () => null,
+          getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'codex' } })],
+        } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executionAgentRegistry: {
+          get: (name: string) => name === 'codex' ? agent : undefined,
+          getOrThrow: vi.fn().mockReturnValue(agent),
+          getSessionDriver: vi.fn().mockReturnValue(undefined),
+          listWithCapability: vi.fn().mockReturnValue([agent]),
+        } as any,
+        cwd: '/tmp',
+        logger: createMockLogger(),
+      });
+    }
+
+    it('authorPrBodyWithSkill rejects a canonical-only body and refuses fallback for Invoker repoUrl', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const executor = makeStrictGateExecutor(makeBodyEmittingAgent(tempHome, CANONICAL_ONLY_BODY));
+
+        await expect((executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Test Workflow',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: '## Summary\nSource summary',
+          cwd: '/tmp',
+          repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker',
+        })).rejects.toThrow(/refusing canonical fallback/);
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('authorPrBodyWithSkill accepts a review-stack-compliant body for Invoker repoUrl', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const executor = makeStrictGateExecutor(makeBodyEmittingAgent(tempHome, STRICT_COMPLIANT_REVIEW_STACK_BODY));
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Test Workflow',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: '## Summary\nSource summary',
+          cwd: '/tmp',
+          repoUrl: 'git@github.com:EdbertChan/Invoker.git',
+        });
+
+        expect(result.agentName).toBe('codex');
+        expect(result.body).toContain('## Non-goals');
+        expect(result.body).toContain('## Review Claim');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('authorPrBodyWithSkill throws for Invoker repoUrl when no execution agent registry is configured', async () => {
+      const executor = new TaskRunner({
+        orchestrator: {
+          getTask: () => null,
+          getAllTasks: () => [],
+        } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        logger: createMockLogger(),
+      });
+
+      await expect((executor as any).authorPrBodyWithSkill({
+        workflowId: 'wf-1',
+        title: 'Canonical Test',
+        baseBranch: 'master',
+        featureBranch: 'plan/canonical',
+        workflowSummary: 'Summary.',
+        cwd: '/tmp',
+        repoUrl: 'https://github.com/EdbertChan/Invoker',
+      })).rejects.toThrow(/cannot pass scripts\/validate-pr-body\.mjs/);
+    });
+
+    it('authorPrBodyWithSkill keeps the lenient gate and canonical fallback for non-Invoker repoUrl', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const executor = makeStrictGateExecutor(makeBodyEmittingAgent(tempHome, CANONICAL_ONLY_BODY));
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Test Workflow',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: '## Summary\nSource summary',
+          cwd: '/tmp',
+          repoUrl: 'https://github.com/other/repo',
+        });
+
+        expect(result.agentName).toBe('codex');
+        expect(result.body).toContain('## Test Plan');
       } finally {
         if (originalHome === undefined) delete process.env.HOME;
         else process.env.HOME = originalHome;
