@@ -545,7 +545,7 @@ export function App() {
   const graphActionsMenuRef = useRef<HTMLDivElement>(null);
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkerKind, setSelectedWorkerKind] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
@@ -2118,7 +2118,7 @@ export function App() {
       setHasStarted(false);
       setPlanName(null);
       setSidebarSurface('home');
-      setSidebarCollapsed(false);
+      setSidebarCollapsed(null);
       setViewMode('dag');
       setGraphActionsMenuOpen(false);
       setSelectedTaskId(null);
@@ -2143,7 +2143,7 @@ export function App() {
       setHasStarted(false);
       setPlanName(null);
       setSidebarSurface('home');
-      setSidebarCollapsed(false);
+      setSidebarCollapsed(null);
       setViewMode('dag');
       setGraphActionsMenuOpen(false);
       setSelectedTaskId(null);
@@ -2167,6 +2167,8 @@ export function App() {
   const showStart = hasLoadedPlan && !hasStarted;
   const showStop = hasStarted && !allSettled;
   const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
+  const autoCollapseSidebar = sidebarSurface !== 'home' && sidebarSurface !== 'planning' && viewportWidth < 1440;
+  const effectiveSidebarCollapsed = sidebarCollapsed ?? autoCollapseSidebar;
   const autoCollapseInspector = sidebarSurface !== 'home' && viewportWidth < 1440;
   const effectiveInspectorCollapsed = inspectorCollapsed || (autoCollapseInspector && !inspectorManualOpen);
   const showWorkerDetailsPanel = viewMode === 'queue' && sidebarSurface === 'workers';
@@ -2236,7 +2238,6 @@ export function App() {
     setGraphActionsMenuOpen(false);
     if (nextSurface === 'workers') {
       setSidebarSurface('workers');
-      setSidebarCollapsed(true);
       setInspectorCollapsed(true);
       setInspectorManualOpen(false);
       setStatusFilters(new Set<WorkflowStatus>());
@@ -2246,12 +2247,10 @@ export function App() {
     setViewMode('dag');
     if (nextSurface === 'home') {
       setSidebarSurface('home');
-      setSidebarCollapsed(false);
       setInspectorManualOpen(false);
       return;
     }
     setSidebarSurface(nextSurface);
-    setSidebarCollapsed(true);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
   }, []);
@@ -2259,9 +2258,7 @@ export function App() {
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
     setSidebarSurface('home');
-    setSidebarCollapsed(false);
     setInspectorManualOpen(false);
-    setViewMode('dag');
   }, []);
 
   // ── Task actions ──────────────────────────────────────────
@@ -3090,9 +3087,9 @@ export function App() {
           workerStatus={workerStatus}
           planningSessionCount={planningSessions.length}
           selectedSurface={sidebarSurface}
-          collapsed={sidebarCollapsed}
+          collapsed={effectiveSidebarCollapsed}
           onSelectSurface={handleSelectSidebarSurface}
-          onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
+          onToggleCollapsed={() => setSidebarCollapsed(!effectiveSidebarCollapsed)}
           onOpenSettings={() => {
             cancelPendingSystemSetupAutoOpen();
             setShowSystemSetup(true);
