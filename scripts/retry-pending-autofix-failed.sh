@@ -493,20 +493,10 @@ target_workflow_id() {
   printf '%s\n' "$target"
 }
 
-task_auto_fix_attempts() {
-  local file="$1"
-  local target="$2"
-
-  awk -F '\t' \
-    -v target="$target" \
-    '$1 == target { attempts = $2 } END { print attempts + 0 }' \
-    "$file"
-}
 
 write_exhausted_fixes_file() {
   local failed_tasks_file="$1"
-  local auto_fix_attempts_file="$2"
-  local exhausted_fixes_file="$3"
+  local exhausted_fixes_file="$2"
 
   : > "$exhausted_fixes_file"
   [ -s "$failed_tasks_file" ] || return 0
@@ -514,13 +504,8 @@ write_exhausted_fixes_file() {
   local target=""
   while IFS= read -r target; do
     [ -n "$target" ] || continue
-    local task_attempts submitted_attempts fix_attempts
-    task_attempts="$(task_auto_fix_attempts "$auto_fix_attempts_file" "$target")"
-    submitted_attempts="$(submission_count fix "$target")"
-    fix_attempts="$submitted_attempts"
-    if [ "$task_attempts" -gt "$fix_attempts" ]; then
-      fix_attempts="$task_attempts"
-    fi
+    local fix_attempts
+    fix_attempts="$(submission_count fix "$target")"
     if [ "$fix_attempts" -ge "$MAX_FIX_ATTEMPTS" ]; then
       printf '%s\n' "$target" >> "$exhausted_fixes_file"
     fi
@@ -1212,17 +1197,16 @@ build_targets() {
   local approvals_file="$5"
   local localize_ssh_file="$6"
   local infra_retry_file="$7"
-  local auto_fix_attempts_file="$8"
-  local stale_fixing_file="$9"
-  local stale_active_queue_file="${10}"
-  local stale_running_file="${11}"
-  local stale_ssh_pin_file="${12}"
-  local pending_tasks_file="${13}"
-  local blocking_tasks_file="${14}"
-  local status_counts_file="${15}"
-  local now_epoch="${16}"
+  local stale_fixing_file="$8"
+  local stale_active_queue_file="$9"
+  local stale_running_file="${10}"
+  local stale_ssh_pin_file="${11}"
+  local pending_tasks_file="${12}"
+  local blocking_tasks_file="${13}"
+  local status_counts_file="${14}"
+  local now_epoch="${15}"
 
-  python3 - "$tasks_file" "$queue_file" "$pending_workflows_file" "$failed_tasks_file" "$approvals_file" "$localize_ssh_file" "$infra_retry_file" "$auto_fix_attempts_file" "$stale_fixing_file" "$stale_active_queue_file" "$stale_running_file" "$stale_ssh_pin_file" "$pending_tasks_file" "$blocking_tasks_file" "$status_counts_file" "$now_epoch" "$INCLUDE_MERGE" "$RECOVER_STALE_AI_STATES" "$STALE_AI_STATE_SECONDS" "$STALE_ACTIVE_QUEUE_SECONDS" <<'PY'
+  python3 - "$tasks_file" "$queue_file" "$pending_workflows_file" "$failed_tasks_file" "$approvals_file" "$localize_ssh_file" "$infra_retry_file" "$stale_fixing_file" "$stale_active_queue_file" "$stale_running_file" "$stale_ssh_pin_file" "$pending_tasks_file" "$blocking_tasks_file" "$status_counts_file" "$now_epoch" "$INCLUDE_MERGE" "$RECOVER_STALE_AI_STATES" "$STALE_AI_STATE_SECONDS" "$STALE_ACTIVE_QUEUE_SECONDS" <<'PY'
 import datetime
 import json
 import pathlib
@@ -1236,19 +1220,18 @@ failed_tasks_path = pathlib.Path(sys.argv[4])
 approvals_path = pathlib.Path(sys.argv[5])
 localize_ssh_path = pathlib.Path(sys.argv[6])
 infra_retry_path = pathlib.Path(sys.argv[7])
-auto_fix_attempts_path = pathlib.Path(sys.argv[8])
-stale_fixing_path = pathlib.Path(sys.argv[9])
-stale_active_queue_path = pathlib.Path(sys.argv[10])
-stale_running_path = pathlib.Path(sys.argv[11])
-stale_ssh_pin_path = pathlib.Path(sys.argv[12])
-pending_tasks_path = pathlib.Path(sys.argv[13])
-blocking_tasks_path = pathlib.Path(sys.argv[14])
-status_counts_path = pathlib.Path(sys.argv[15])
-now_epoch = int(sys.argv[16])
-include_merge = sys.argv[17] == "true"
-recover_stale_ai_states = sys.argv[18] == "true"
-stale_ai_state_seconds = int(sys.argv[19])
-stale_active_queue_seconds = int(sys.argv[20])
+stale_fixing_path = pathlib.Path(sys.argv[8])
+stale_active_queue_path = pathlib.Path(sys.argv[9])
+stale_running_path = pathlib.Path(sys.argv[10])
+stale_ssh_pin_path = pathlib.Path(sys.argv[11])
+pending_tasks_path = pathlib.Path(sys.argv[12])
+blocking_tasks_path = pathlib.Path(sys.argv[13])
+status_counts_path = pathlib.Path(sys.argv[14])
+now_epoch = int(sys.argv[15])
+include_merge = sys.argv[16] == "true"
+recover_stale_ai_states = sys.argv[17] == "true"
+stale_ai_state_seconds = int(sys.argv[18])
+stale_active_queue_seconds = int(sys.argv[19])
 
 pending_workflows = set()
 pending_tasks = []
@@ -1261,7 +1244,6 @@ stale_fixing = []
 stale_active_queue = []
 stale_running = []
 stale_ssh_pin = []
-auto_fix_attempts = {}
 status_counts = Counter()
 terminal_task_statuses = {"completed", "complete", "review_ready"}
 active_queue_task_ids = set()
@@ -1279,11 +1261,6 @@ INFRA_FAILURE_PATTERNS = (
 def is_infra_failure(error_text: str) -> bool:
     return any(pattern in error_text for pattern in INFRA_FAILURE_PATTERNS)
 
-def parse_attempts(value) -> int:
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return 0
 
 def parse_epoch(value):
     if value is None:
@@ -1415,7 +1392,6 @@ for raw in tasks_path.read_text(encoding="utf-8").splitlines():
     elif status == "failed":
         blocking_tasks.append(task_id)
         failed_tasks.append(task_id)
-        auto_fix_attempts[task_id] = parse_attempts(execution.get("autoFixAttempts"))
         if is_infra_failure(error_text) and runner_kind != "worktree":
             infra_retry.append(task_id)
         if runner_kind == "ssh" or (runner_kind == "worktree" and pool_id):
@@ -1451,10 +1427,6 @@ localize_ssh_path.write_text(
 )
 infra_retry_path.write_text(
     "".join(f"{task_id}\n" for task_id in sorted(set(infra_retry))),
-    encoding="utf-8",
-)
-auto_fix_attempts_path.write_text(
-    "".join(f"{task_id}\t{auto_fix_attempts[task_id]}\n" for task_id in sorted(auto_fix_attempts)),
     encoding="utf-8",
 )
 stale_fixing_path.write_text(
@@ -1587,7 +1559,6 @@ def compact_execution(execution):
         "phase",
         "selectedAttemptId",
         "generation",
-        "autoFixAttempts",
         "isFixingWithAI",
         "lastHeartbeatAt",
         "launchStartedAt",
@@ -1894,7 +1865,6 @@ run_cycle() {
   local approvals_file="$cycle_dir/fix-approvals.txt"
   local localize_ssh_file="$cycle_dir/localize-ssh.txt"
   local infra_retry_file="$cycle_dir/infra-retry.txt"
-  local auto_fix_attempts_file="$cycle_dir/auto-fix-attempts.tsv"
   local stale_fixing_file="$cycle_dir/stale-fixing-ai.txt"
   local stale_active_queue_file="$cycle_dir/stale-active-queue-pending.txt"
   local stale_running_file="$cycle_dir/stale-running.txt"
@@ -1945,7 +1915,7 @@ run_cycle() {
     echo "cycle $cycle: failed to collect task states" >&2
     return 1
   fi
-  build_targets "$tasks_file" "$queue_file" "$pending_workflows_file" "$failed_tasks_file" "$approvals_file" "$localize_ssh_file" "$infra_retry_file" "$auto_fix_attempts_file" "$stale_fixing_file" "$stale_active_queue_file" "$stale_running_file" "$stale_ssh_pin_file" "$pending_tasks_file" "$blocking_tasks_file" "$status_counts_file" "$now_epoch"
+  build_targets "$tasks_file" "$queue_file" "$pending_workflows_file" "$failed_tasks_file" "$approvals_file" "$localize_ssh_file" "$infra_retry_file" "$stale_fixing_file" "$stale_active_queue_file" "$stale_running_file" "$stale_ssh_pin_file" "$pending_tasks_file" "$blocking_tasks_file" "$status_counts_file" "$now_epoch"
   write_duplicate_ssh_leases_file "$duplicate_ssh_leases_file"
   write_orphan_ssh_leases_file "$orphan_ssh_leases_file"
   write_ssh_running_without_lease_file "$ssh_running_without_lease_file"
@@ -1953,7 +1923,7 @@ run_cycle() {
   write_pool_capacity_blocked_file "$queue_file" "$pool_capacity_blocked_file" "$now_epoch" "$RESUME_COOLDOWN_SECONDS"
   write_ready_pending_without_dispatch_file "$ready_pending_without_dispatch_file"
   filter_ready_pending_capacity_blockers "$ready_pending_without_dispatch_file" "$pool_capacity_blocked_file"
-  write_exhausted_fixes_file "$failed_tasks_file" "$auto_fix_attempts_file" "$exhausted_fixes_file"
+  write_exhausted_fixes_file "$failed_tasks_file" "$exhausted_fixes_file"
   write_effective_blockers_file "$blocking_tasks_file" "$exhausted_fixes_file" "$effective_blocking_tasks_file"
 
   local retry_workflow_count pending_count pending_task_count blocking_task_count failed_count exhausted_fix_count approval_count localize_count infra_retry_count stale_fixing_count stale_active_queue_count stale_running_count stale_ssh_pin_count duplicate_ssh_lease_count orphan_ssh_lease_count ssh_running_without_lease_count ssh_running_active_lease_count pool_capacity_blocked_count ready_pending_without_dispatch_count
@@ -2215,13 +2185,8 @@ run_cycle() {
         echo "  skip fix $target (retried this cycle)"
         continue
       fi
-      local fix_attempts task_attempts submitted_attempts
-      task_attempts="$(task_auto_fix_attempts "$auto_fix_attempts_file" "$target")"
-      submitted_attempts="$(submission_count fix "$target")"
-      fix_attempts="$submitted_attempts"
-      if [ "$task_attempts" -gt "$fix_attempts" ]; then
-        fix_attempts="$task_attempts"
-      fi
+      local fix_attempts
+      fix_attempts="$(submission_count fix "$target")"
       if [ "$fix_attempts" -ge "$MAX_FIX_ATTEMPTS" ]; then
         echo "  skip fix $target (max fix attempts reached: $fix_attempts/$MAX_FIX_ATTEMPTS)"
         continue
@@ -2445,6 +2410,11 @@ SELFTEST_CODEX
     SELF_TEST_OWNER_READY=true
   }
 
+  local now_epoch
+  now_epoch="$(date +%s)"
+  local old_epoch
+  old_epoch=$((now_epoch - 1000))
+
   echo "self-test: incomplete workflows retry once and defer duplicate task actions"
   self_test_reset
   printf '%s\n' "wf-1000-1" "wf-1000-2" "wf-1000-3" > "$workflows_label_file"
@@ -2454,7 +2424,7 @@ SELFTEST_CODEX
     '{"id":"wf-1000-3","status":"running"}' > "$workflows_jsonl_file"
   : > "$tasks_dir/wf-1000-1.jsonl"
   : > "$tasks_dir/wf-1000-2.jsonl"
-  printf '%s\n' '{"id":"wf-1000-3/fail","status":"failed","config":{"workflowId":"wf-1000-3","runnerKind":"worktree"},"execution":{"error":"unit failure","autoFixAttempts":0}}' > "$tasks_dir/wf-1000-3.jsonl"
+  printf '%s\n' '{"id":"wf-1000-3/fail","status":"failed","config":{"workflowId":"wf-1000-3","runnerKind":"worktree"},"execution":{"error":"unit failure"}}' > "$tasks_dir/wf-1000-3.jsonl"
   run_cycle selftest-retry > "$test_root/retry.out" 2>&1 || { sed -n '1,160p' "$test_root/retry.out" >&2; return 1; }
   self_test_assert_contains "$commands_file" "retry wf-1000-3"
   self_test_assert_not_contains "$commands_file" "retry wf-1000-1"
@@ -2467,7 +2437,12 @@ SELFTEST_CODEX
   RETRY_FAILED=false
   printf '%s\n' "wf-1000-4" > "$workflows_label_file"
   printf '%s\n' '{"id":"wf-1000-4","status":"completed"}' > "$workflows_jsonl_file"
-  printf '%s\n' '{"id":"wf-1000-4/fail","status":"failed","config":{"workflowId":"wf-1000-4","runnerKind":"worktree"},"execution":{"error":"unit failure","autoFixAttempts":3}}' > "$tasks_dir/wf-1000-4.jsonl"
+  printf '%s\n' '{"id":"wf-1000-4/fail","status":"failed","config":{"workflowId":"wf-1000-4","runnerKind":"worktree"},"execution":{"error":"unit failure"}}' > "$tasks_dir/wf-1000-4.jsonl"
+  {
+    printf 'fix\twf-1000-4/fail\t%s\n' "$old_epoch"
+    printf 'fix\twf-1000-4/fail\t%s\n' "$old_epoch"
+    printf 'fix\twf-1000-4/fail\t%s\n' "$old_epoch"
+  } > "$SUBMISSIONS_FILE"
   run_cycle selftest-cap > "$test_root/cap.out" 2>&1 || { sed -n '1,160p' "$test_root/cap.out" >&2; return 1; }
   self_test_assert_not_contains "$commands_file" "fix wf-1000-4/fail codex"
   self_test_assert_contains "$test_root/cap.out" "max fix attempts reached: 3/3"
@@ -2477,14 +2452,16 @@ SELFTEST_CODEX
   RETRY_FAILED=false
   printf '%s\n' "wf-1000-4" > "$workflows_label_file"
   printf '%s\n' '{"id":"wf-1000-4","status":"completed"}' > "$workflows_jsonl_file"
-  printf '%s\n' '{"id":"wf-1000-4/fail","status":"failed","config":{"workflowId":"wf-1000-4","runnerKind":"worktree"},"execution":{"error":"unit failure","autoFixAttempts":2}}' > "$tasks_dir/wf-1000-4.jsonl"
+  printf '%s\n' '{"id":"wf-1000-4/fail","status":"failed","config":{"workflowId":"wf-1000-4","runnerKind":"worktree"},"execution":{"error":"unit failure"}}' > "$tasks_dir/wf-1000-4.jsonl"
+  {
+    printf 'fix\twf-1000-4/fail\t%s\n' "$old_epoch"
+    printf 'fix\twf-1000-4/fail\t%s\n' "$old_epoch"
+  } > "$SUBMISSIONS_FILE"
   run_cycle selftest-fix > "$test_root/fix.out" 2>&1 || { sed -n '1,160p' "$test_root/fix.out" >&2; return 1; }
   self_test_assert_contains "$commands_file" "fix wf-1000-4/fail codex"
 
   echo "self-test: pending investigation runs after workflow retry dedupe"
   self_test_reset
-  local now_epoch
-  now_epoch="$(date +%s)"
   printf 'retry-workflow\twf-1000-5\t%s\n' "$now_epoch" > "$SUBMISSIONS_FILE"
   printf '%s\n' "wf-1000-5" > "$workflows_label_file"
   printf '%s\n' '{"id":"wf-1000-5","status":"running"}' > "$workflows_jsonl_file"
@@ -2944,7 +2921,7 @@ PY
   printf '%s\n' '{"id":"wf-1000-14","status":"running"}' > "$workflows_jsonl_file"
   printf '%s\n' \
     '{"id":"wf-1000-14/pending","status":"pending","config":{"workflowId":"wf-1000-14","runnerKind":"worktree"},"execution":{}}' \
-    '{"id":"wf-1000-14/fail","status":"failed","config":{"workflowId":"wf-1000-14","runnerKind":"worktree"},"execution":{"error":"unit failure","autoFixAttempts":0}}' > "$tasks_dir/wf-1000-14.jsonl"
+    '{"id":"wf-1000-14/fail","status":"failed","config":{"workflowId":"wf-1000-14","runnerKind":"worktree"},"execution":{"error":"unit failure"}}' > "$tasks_dir/wf-1000-14.jsonl"
   {
     printf 'retry-workflow\twf-1000-14\t%s\n' "$now_epoch"
     printf 'retry-failed\twf-1000-14/fail\t%s\n' "$now_epoch"
@@ -2962,7 +2939,7 @@ PY
   self_test_reset
   printf '%s\n' "wf-1000-8" > "$workflows_label_file"
   printf '%s\n' '{"id":"wf-1000-8","status":"running"}' > "$workflows_jsonl_file"
-  printf '%s\n' '{"id":"wf-1000-8/fail","status":"failed","config":{"workflowId":"wf-1000-8","runnerKind":"worktree"},"execution":{"error":"unit failure","autoFixAttempts":0}}' > "$tasks_dir/wf-1000-8.jsonl"
+  printf '%s\n' '{"id":"wf-1000-8/fail","status":"failed","config":{"workflowId":"wf-1000-8","runnerKind":"worktree"},"execution":{"error":"unit failure"}}' > "$tasks_dir/wf-1000-8.jsonl"
   {
     printf 'retry-workflow\twf-1000-8\t%s\n' "$now_epoch"
     printf 'retry-failed\twf-1000-8/fail\t%s\n' "$now_epoch"
