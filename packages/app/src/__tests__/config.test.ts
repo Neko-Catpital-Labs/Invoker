@@ -209,6 +209,21 @@ describe('loadConfig', () => {
     const config = loadConfig();
     expect(config.externalWorkers).toEqual(externalWorkers);
   });
+  it('reads disabled PR-maintenance owner config from user config', () => {
+    const prMaintenance = {
+      enabled: false,
+      repoRoot: '/srv/invoker',
+      intervalMs: 120_000,
+      lockPath: '/tmp/pr-maintenance.lock',
+      shell: '/bin/zsh',
+      env: {
+        INVOKER_PR_TARGET: 'open',
+      },
+    };
+    writeUserConfig({ prMaintenance });
+    const config = loadConfig();
+    expect(config.prMaintenance).toEqual(prMaintenance);
+  });
 
   it('reads imageStorage from user config', () => {
     const imageStorage = {
