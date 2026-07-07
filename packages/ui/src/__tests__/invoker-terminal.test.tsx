@@ -1,15 +1,39 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
 });
+const xtermMock = vi.hoisted(() => {
+  class MockTerminal {
+    loadAddon = vi.fn();
+    open = vi.fn();
+    write = vi.fn();
+    onData = vi.fn(() => ({ dispose: vi.fn() }));
+    focus = vi.fn();
+    dispose = vi.fn();
+  }
 
-// Dynamic import is required so App sees the hoisted @xyflow/react mock.
+  class MockFitAddon {
+    fit = vi.fn();
+  }
+
+  return {
+    Terminal: MockTerminal,
+    FitAddon: MockFitAddon,
+  };
+});
+
+vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
+vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
+
+
+// Dynamic import is required so App sees the hoisted mocks.
 const { App } = await import('../App.js');
 
 describe('Invoker terminal (component)', () => {
@@ -35,6 +59,37 @@ describe('Invoker terminal (component)', () => {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
+  function expectRailListScrollContract(list: HTMLElement) {
+    expect(list.className).toContain('min-h-0 flex-1 overflow-y-auto p-3');
+    expect(list.parentElement).not.toBeNull();
+    expect(list.parentElement!.className).toContain('min-h-0 flex-1 flex flex-col');
+  }
+
+
+  it('uses shrinkable scroll containers for every left rail list', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha', status: 'running' },
+      { id: 'wf-beta', name: 'Beta', status: 'failed' },
+    ];
+    const runningTask = makeUITask({ id: 'task-running', description: 'Running task', status: 'running', workflowId: 'wf-alpha' });
+    const attentionTask = makeUITask({ id: 'task-failed', description: 'Failed task', status: 'failed', workflowId: 'wf-beta' });
+
+    mock.cleanup();
+    mock = createMockInvoker([runningTask, attentionTask], workflows);
+    mock.install();
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    expectRailListScrollContract(await screen.findByTestId('workflow-rail-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    expectRailListScrollContract(await screen.findByTestId('attention-task-rail-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    expectRailListScrollContract(await screen.findByTestId('running-task-rail-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expectRailListScrollContract(await screen.findByTestId('planning-session-rail-list'));
+  });
 
   it('generates a planning reply from plain language', async () => {
     render(<App />);
