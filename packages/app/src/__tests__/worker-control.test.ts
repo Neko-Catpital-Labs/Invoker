@@ -129,7 +129,7 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === AUTO_APPROVE_WORKER_KIND)).toMatchObject({
       lifecycle: 'stopped',
       policy: 'disabled',
-      policyReason: 'autoApproveAIFixes=false',
+      policyReason: 'autoApproveAIFixes=unset',
       startable: false,
     });
   });

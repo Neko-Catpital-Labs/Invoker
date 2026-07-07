@@ -224,9 +224,9 @@ function disabledPolicyReasonForKind(
   autoApproveAIFixes: boolean | undefined,
 ): string | undefined {
   if ((kind === AUTO_FIX_WORKER_KIND || kind === CI_FAILURE_WORKER_KIND) && autoFixRetries !== undefined && autoFixRetries <= 0) {
-    return 'autoFixRetries=0';
+    return `autoFixRetries=${autoFixRetries}`;
   }
-  if (kind === AUTO_APPROVE_WORKER_KIND && autoApproveAIFixes !== true) return 'autoApproveAIFixes=false';
+  if (kind === AUTO_APPROVE_WORKER_KIND && autoApproveAIFixes !== true) return `autoApproveAIFixes=${autoApproveAIFixes ?? 'unset'}`;
   return undefined;
 }
 
