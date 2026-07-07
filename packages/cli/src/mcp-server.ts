@@ -31,12 +31,18 @@ export function resolveCliInvocation(
   return { command: execPath, args: [cliPath, ...args] };
 }
 
-function createProcessRunner(cliPath = process.argv[1] ?? ''): McpCliRunner {
+export function createProcessRunner(cliPath = process.argv[1] ?? ''): McpCliRunner {
   return {
     run(args, options) {
       const complete = Promise.withResolvers<{ exitCode: number; stdout: string; stderr: string }>();
-      const { command, args: spawnArgs } = resolveCliInvocation(process.execPath, cliPath, args);
-      const child = spawn(command, spawnArgs, {
+      let invocation: { command: string; args: string[] };
+      try {
+        invocation = resolveCliInvocation(process.execPath, cliPath, args);
+      } catch (err) {
+        complete.reject(err);
+        return complete.promise;
+      }
+      const child = spawn(invocation.command, invocation.args, {
         cwd: options?.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
