@@ -11,7 +11,15 @@ import {
   buildFixWithAgentMutationArgs,
   listOpenFixIntentsForTask,
 } from './auto-fix-intents.js';
-import { normalizeAutoFixAttemptCount, normalizeAutoFixRetryBudget, shouldSkipAutoFixForError } from './auto-fix-gating.js';
+import {
+  autoFixAttemptLedgerKeyFromTask,
+  createAutoFixAttemptLedger,
+  type AutoFixAttemptLedger,
+} from './auto-fix-attempt-ledger.js';
+import {
+  normalizeAutoFixRetryBudget,
+  shouldSkipAutoFixForError,
+} from './auto-fix-gating.js';
 import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from './lifecycle-events.js';
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
 import type { WorkerRegistry } from './worker-registry.js';
@@ -51,8 +59,10 @@ export interface AutoFixRecoverySubmitter {
   ): number;
 }
 export interface AutoFixWorkerConfig {
-  /** Worker-owned maximum auto-fix attempts per failed task. Positive finite values are caps; zero leaves the worker unable to submit fixes. */
+  /** Maximum auto-fix attempts per failed task. Positive finite values are caps; zero disables auto-fix. */
   defaultAutoFixRetries?: number;
+  /** Runtime-local ledger for consumed auto-fix attempts. */
+  attemptLedger?: AutoFixAttemptLedger;
   /** Resolves the agent that performs each auto-fix, when one is configured. */
   getAutoFixAgent?: () => string | undefined;
   /** Resolves the execution model used by worker-submitted auto-fixes. */
@@ -64,8 +74,10 @@ export interface AutoFixRecoveryPolicyOptions {
   store: AutoFixRecoveryStore;
   submitter: AutoFixRecoverySubmitter;
   logger: Logger;
+  attemptLedger: AutoFixAttemptLedger;
   defaultAutoFixRetries?: number;
   getAutoFixAgent?: () => string | undefined;
+  getRetryBudget?: (task: TaskState) => number;
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
 }
 /** Register the built-in auto-fix worker. */
@@ -84,6 +96,7 @@ export function registerAutoFixWorker(
           submitter: deps.submitter,
           defaultAutoFixRetries: deps.autoFix?.defaultAutoFixRetries,
           getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
+          attemptLedger: deps.autoFix?.attemptLedger,
         },
       }),
   });
@@ -159,19 +172,22 @@ export function listAutoFixRecoveryScanCandidates(
   return candidates;
 }
 
-function retryBudgetForWorker(options: AutoFixRecoveryPolicyOptions): number {
-  return normalizeAutoFixRetryBudget(options.defaultAutoFixRetries ?? 0);
+function retryBudgetForTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): number {
+  return normalizeAutoFixRetryBudget(options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0);
 }
+
 
 function retryBudgetLabel(budget: number): number | 'unlimited' {
   return budget === Number.POSITIVE_INFINITY ? 'unlimited' : budget;
 }
 
-function isRuntimeAutoFixEligibleTask(task: TaskState): boolean {
+function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): boolean {
   if (task.status !== 'failed') return false;
   if (task.config.isReconciliation) return false;
   if (task.config.parentTask) return false;
   if (shouldSkipAutoFixForError(task.execution.error)) return false;
+  const max = retryBudgetForTask(task, options);
+  if (max <= 0) return false;
   return true;
 }
 
@@ -228,7 +244,6 @@ function logAutoFixWorkerEvent(
       ...(typeof details.reason === 'string' ? { reason: details.reason } : {}),
       ...(typeof details.status === 'string' ? { status: details.status } : {}),
       ...(typeof details.workflowId === 'string' || details.workflowId === null ? { workflowId: details.workflowId } : {}),
-      ...(typeof details.autoFixAttempts === 'number' || details.autoFixAttempts === null ? { autoFixAttempts: details.autoFixAttempts } : {}),
       details: { worker: RECOVERY_WORKER_KIND, ...details },
     });
   }
@@ -315,32 +330,17 @@ function validateAutoFixCandidate(
   }
   const latestRef = snapshotComparison.ref;
 
-  const autoFixAttempts = normalizeAutoFixAttemptCount(latest.execution.autoFixAttempts);
-  const workerRetryBudget = retryBudgetForWorker(options);
-  if (!isRuntimeAutoFixEligibleTask(latest)) {
-    skipAutoFixCandidate(options, candidate, 'not-eligible', {
+  const latestRetryBudget = retryBudgetForTask(latest, options);
+  if (!isRuntimeAutoFixEligibleTask(latest, options)) {
+    const reason = latestRetryBudget <= 0
+      ? 'retry-budget-disabled'
+      : 'not-eligible';
+    skipAutoFixCandidate(options, candidate, reason, {
       status: latest.status,
-      autoFixAttempts,
-      workerRetryBudget: retryBudgetLabel(workerRetryBudget),
+      workerRetryBudget: retryBudgetLabel(latestRetryBudget),
       isReconciliation: Boolean(latest.config.isReconciliation),
       hasParentTask: Boolean(latest.config.parentTask),
       skippedForError: shouldSkipAutoFixForError(latest.execution.error),
-    });
-    return undefined;
-  }
-  if (workerRetryBudget <= 0) {
-    skipAutoFixCandidate(options, candidate, 'worker-retry-budget-disabled', {
-      status: latest.status,
-      autoFixAttempts,
-      workerRetryBudget: retryBudgetLabel(workerRetryBudget),
-    });
-    return undefined;
-  }
-  if (autoFixAttempts >= workerRetryBudget) {
-    skipAutoFixCandidate(options, candidate, 'worker-retry-budget-exhausted', {
-      status: latest.status,
-      autoFixAttempts,
-      workerRetryBudget: retryBudgetLabel(workerRetryBudget),
     });
     return undefined;
   }
@@ -382,8 +382,30 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         skipAutoFixCandidate(options, candidate, 'duplicate-candidate');
         continue;
       }
+      const retryBudget = retryBudgetForTask(candidate.task, options);
+      const attemptDecision = options.attemptLedger.consume(
+        autoFixAttemptLedgerKeyFromTask(candidate.task),
+        retryBudget,
+      );
+      if (!attemptDecision.allowed) {
+        skipAutoFixCandidate(options, candidate, attemptDecision.reason, {
+          status: candidate.task.status,
+          workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+        });
+        continue;
+      }
       const configuredAgent = options.getAutoFixAgent?.()?.trim();
       const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+      options.logger.debug?.(`[worker:${RECOVERY_WORKER_KIND}] worker-autofix-attempt-consumed`, {
+        module: 'auto-fix-recovery',
+        taskId: candidate.taskId,
+        workflowId: candidate.workflowId,
+        generation: candidate.generation,
+        attemptId: candidate.attemptId ?? null,
+        attemptsBefore: attemptDecision.attemptsBefore,
+        attemptsAfter: attemptDecision.attemptsAfter,
+        workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+      });
       const args = buildFixWithAgentMutationArgs(candidate.task.id, selectedAgent, { autoFix: true });
       const intentId = options.submitter.submit(candidate.workflowId, 'normal', AUTO_FIX_COMMAND_CHANNEL, args);
       submittedThisTick.add(candidate.taskId);
@@ -395,8 +417,7 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         taskStateVersion: candidate.taskStateVersion,
         attemptId: candidate.attemptId ?? null,
         agent: selectedAgent ?? null,
-        autoFixAttempts: normalizeAutoFixAttemptCount(candidate.task.execution.autoFixAttempts),
-        workerRetryBudget: retryBudgetLabel(retryBudgetForWorker(options)),
+        workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
       });
     }
   };
@@ -409,7 +430,7 @@ export interface RecoveryWorkerOptions {
   installSignalHandlers?: boolean;
   tickOnStart?: boolean;
   messageBus?: MessageBus;
-  autoFix?: Omit<AutoFixRecoveryPolicyOptions, 'logger' | 'drainWakeupHints'>;
+  autoFix?: Omit<AutoFixRecoveryPolicyOptions, 'logger' | 'drainWakeupHints' | 'attemptLedger'> & { readonly attemptLedger?: AutoFixAttemptLedger };
   /** Test hook or alternate worker policy. Takes precedence over `autoFix`. */
   onTick?: WorkerTick;
 }
@@ -421,10 +442,14 @@ export interface RecoveryWorkerOptions {
 export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRuntime {
   const pendingWakeups: RecoveryWorkerWakeupHint[] = [];
   let lifecycleUnsubscribe: Unsubscribe | undefined;
+  const fallbackAttemptLedger = options.autoFix && !options.autoFix.attemptLedger
+    ? createAutoFixAttemptLedger()
+    : undefined;
   const onTick = options.onTick ?? (
     options.autoFix
       ? createAutoFixRecoveryTick({
         ...options.autoFix,
+        attemptLedger: options.autoFix.attemptLedger ?? fallbackAttemptLedger!,
         logger: options.logger,
         drainWakeupHints: () => pendingWakeups.splice(0),
       })
