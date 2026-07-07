@@ -42,6 +42,7 @@ export * from './builtin-workers.js';
 export * from './auto-fix-recovery.js';
 export * from './workers/pr-status-worker.js';
 export * from './workers/ci-failure-worker.js';
+export * from './workers/pr-maintenance-workers.js';
 export * from './auto-fix-gating.js';
 export * from './auto-fix-attempt-ledger.js';
 export * from './auto-fix-intents.js';
