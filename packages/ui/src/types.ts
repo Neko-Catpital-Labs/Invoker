@@ -191,6 +191,8 @@ export interface WorkflowRollupPatch {
   readonly workflowId: string;
   readonly status: WorkflowStatus;
   readonly rollup: WorkflowRollup;
+  /** True when the workflow no longer has any tasks (e.g. it was deleted); the entry must be dropped, not patched. */
+  readonly removed?: boolean;
 }
 
 
