@@ -208,12 +208,30 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
   };
 }
 
+function assertPersistablePlanningSession(
+  session: InAppPlanningChatSession,
+  pendingResponse: boolean,
+): void {
+  if (session.status === 'draft_ready' && !session.draftPlanSummary) {
+    throw new Error(`Planning session "${session.id}" is draft_ready without a draft summary.`);
+  }
+  if (session.status === 'submitted') {
+    if (pendingResponse) {
+      throw new Error(`Planning session "${session.id}" cannot stay pending after submission.`);
+    }
+    if (!session.submittedWorkflowId || !session.submittedPlanName) {
+      throw new Error(`Planning session "${session.id}" is submitted without submission metadata.`);
+    }
+  }
+}
+
 function persistPlanningSession(
   session: InAppPlanningChatSession,
   store: InAppPlanningSessionStore | undefined,
   pendingResponse: boolean,
 ): void {
   if (!store) return;
+  assertPersistablePlanningSession(session, pendingResponse);
   store.upsertInAppPlanningSession(sessionToRecord(session, pendingResponse));
 }
 
@@ -600,7 +618,7 @@ export async function restorePlanningChatSessions(
   // boots without surfaces/dist, so an eager load here would crash startup with no sessions.
   if (records.length === 0) return;
   const presets = await resolveHarnessPresets(deps.config);
-  const { PlanConversation } = await loadPlannerSurfaces();
+  const { PlanConversation, summarizePlanText } = await loadPlannerSurfaces();
 
   for (const record of records) {
     const preset = presets[record.presetKey];
@@ -626,27 +644,52 @@ export async function restorePlanningChatSessions(
     };
 
     let shouldPersist = false;
-    if (record.pendingResponse && record.status !== 'submitted') {
-      appendSessionMessage(
-        session,
-        'system',
-        'Planner was interrupted before it could answer. Send another message to continue.',
-        'error',
-      );
+    if (record.pendingResponse) {
+      if (record.status !== 'submitted') {
+        appendSessionMessage(
+          session,
+          'system',
+          'Planner was interrupted before it could answer. Send another message to continue.',
+          'error',
+        );
+      }
       shouldPersist = true;
     }
 
     const draftedPlan = conversation.getDraftedPlan();
-    if (session.status === 'draft_ready' && !draftedPlan) {
-      session.status = 'still_discussing';
-      session.draftPlanSummary = undefined;
-      appendSessionMessage(
-        session,
-        'system',
-        'The saved draft could not be restored. Ask the planner to draft it again.',
-        'error',
-      );
-      shouldPersist = true;
+    if (session.status === 'draft_ready') {
+      if (!draftedPlan) {
+        session.status = 'still_discussing';
+        session.draftPlanSummary = undefined;
+        session.draftPlanText = undefined;
+        appendSessionMessage(
+          session,
+          'system',
+          'The saved draft could not be restored. Ask the planner to draft it again.',
+          'error',
+        );
+        shouldPersist = true;
+      } else {
+        session.draftPlanText = draftedPlan;
+        if (!session.draftPlanSummary) {
+          const restoredSummary = summarizePlanText(draftedPlan);
+          if (!restoredSummary) {
+            session.status = 'still_discussing';
+            session.draftPlanSummary = undefined;
+            session.draftPlanText = undefined;
+            appendSessionMessage(
+              session,
+              'system',
+              'The saved draft could not be restored. Ask the planner to draft it again.',
+              'error',
+            );
+            shouldPersist = true;
+          } else {
+            session.draftPlanSummary = restoredSummary;
+            shouldPersist = true;
+          }
+        }
+      }
     } else if (draftedPlan) {
       session.draftPlanText = draftedPlan;
     }

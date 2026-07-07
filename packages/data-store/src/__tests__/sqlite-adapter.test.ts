@@ -295,6 +295,38 @@ describe('SQLiteAdapter', () => {
       }
     });
 
+    it('reconciles duplicate running terminal targets before enforcing the unique running-target index', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-terminal-target-invariants-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.saveWorkflow(testWorkflow);
+        first.saveTask('wf-1', makeTask('t1'));
+        first.saveTask('wf-1', makeTask('t2'));
+        first.upsertTerminalSession(makeTerminalSession('term-a', 't1', {
+          targetKey: 'target-dup',
+          status: 'running',
+          updatedAt: '2026-07-07T01:00:01.000Z',
+        }));
+        (first as any).db.run('DROP INDEX IF EXISTS idx_terminal_sessions_running_target');
+        first.upsertTerminalSession(makeTerminalSession('term-b', 't2', {
+          targetKey: 'target-dup',
+          status: 'running',
+          updatedAt: '2026-07-07T01:00:02.000Z',
+        }));
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.loadTerminalSession('term-a')?.status).toBe('exited');
+        expect(reopened.loadTerminalSession('term-b')?.status).toBe('running');
+        expect(tableIndexes(reopened, 'terminal_sessions')).toContain('idx_terminal_sessions_running_target');
+        expect(sqliteScalar(reopened, "SELECT COUNT(*) FROM terminal_sessions WHERE target_key = 'target-dup' AND status = 'running'")).toBe(1);
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('updates and deletes terminal session rows', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));

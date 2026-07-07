@@ -315,8 +315,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
         attach: opts.attach,
         unsubscribeOutput: () => {},
       };
-      this.sessions.set(sessionId, state);
-      this.targetIndex.set(targetKey, sessionId);
+      this.registerLiveSession(state);
 
       let unsubscribe: () => void;
       try {
@@ -324,10 +323,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
           this.emitOutput(state, data);
         });
       } catch (err) {
-        this.sessions.delete(sessionId);
-        if (this.targetIndex.get(targetKey) === sessionId) {
-          this.targetIndex.delete(targetKey);
-        }
+        this.removeLiveSession(state);
         throw err;
       }
       state.unsubscribeOutput = unsubscribe;
@@ -355,9 +351,19 @@ export class EmbeddedTerminalManager extends EventEmitter {
     outputSnapshot: string;
   }): TerminalSessionDescriptor {
     const existingSession = this.sessions.get(seed.sessionId);
-    if (existingSession) return describeSession(existingSession);
+    if (existingSession) {
+      if (
+        existingSession.taskId !== seed.taskId
+        || existingSession.targetKey !== seed.targetKey
+      ) {
+        throw new Error(`Terminal session "${seed.sessionId}" restored with mismatched identity.`);
+      }
+      return describeSession(existingSession);
+    }
     const existingTarget = this.getRunningDescriptorForTarget(seed.targetKey);
-    if (existingTarget) return existingTarget;
+    if (existingTarget && existingTarget.sessionId !== seed.sessionId) {
+      throw new Error(`Terminal target "${seed.targetKey}" already has running session "${existingTarget.sessionId}".`);
+    }
 
     return this.registerSpawnSession({
       sessionId: seed.sessionId,
@@ -446,11 +452,65 @@ export class EmbeddedTerminalManager extends EventEmitter {
       }
       this.sessions.clear();
       this.targetIndex.clear();
+      this.assertLiveSessionInvariants();
       return;
     }
 
     for (const state of Array.from(this.sessions.values())) {
       this.finalizeSession(state, undefined);
+    }
+  }
+
+  private registerLiveSession(state: SessionState): void {
+    const existingSession = this.sessions.get(state.sessionId);
+    if (existingSession) {
+      throw new Error(`Terminal session "${state.sessionId}" is already registered.`);
+    }
+
+    const existingTargetSessionId = this.targetIndex.get(state.targetKey);
+    if (existingTargetSessionId && existingTargetSessionId !== state.sessionId) {
+      const existingTargetSession = this.sessions.get(existingTargetSessionId);
+      if (existingTargetSession?.status === 'running') {
+        throw new Error(
+          `Terminal target "${state.targetKey}" is already registered to session "${existingTargetSessionId}".`,
+        );
+      }
+      this.targetIndex.delete(state.targetKey);
+      if (existingTargetSession) {
+        this.sessions.delete(existingTargetSessionId);
+      }
+    }
+
+    this.sessions.set(state.sessionId, state);
+    this.targetIndex.set(state.targetKey, state.sessionId);
+    this.assertLiveSessionInvariants();
+  }
+
+  private removeLiveSession(state: SessionState): void {
+    if (this.targetIndex.get(state.targetKey) === state.sessionId) {
+      this.targetIndex.delete(state.targetKey);
+    }
+    this.sessions.delete(state.sessionId);
+  }
+
+  private assertLiveSessionInvariants(): void {
+    for (const [targetKey, sessionId] of this.targetIndex.entries()) {
+      const state = this.sessions.get(sessionId);
+      if (!state) {
+        throw new Error(`Terminal target index for "${targetKey}" points to missing session "${sessionId}".`);
+      }
+      if (state.targetKey !== targetKey) {
+        throw new Error(`Terminal target index for "${targetKey}" points to mismatched session "${sessionId}".`);
+      }
+      if (state.status !== 'running') {
+        throw new Error(`Terminal target index for "${targetKey}" points to non-running session "${sessionId}".`);
+      }
+    }
+
+    for (const [sessionId, state] of this.sessions.entries()) {
+      if (this.targetIndex.get(state.targetKey) !== sessionId) {
+        throw new Error(`Terminal session "${sessionId}" is missing target index entry for "${state.targetKey}".`);
+      }
     }
   }
 
@@ -484,8 +544,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       backend: this.backend.name,
       process: pendingProcess,
     };
-    this.sessions.set(state.sessionId, state);
-    this.targetIndex.set(state.targetKey, state.sessionId);
+    this.registerLiveSession(state);
 
     const noPendingExit = Symbol('no-pending-exit');
     let pendingExitCode: number | undefined | typeof noPendingExit = noPendingExit;
@@ -512,10 +571,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
         }
       }
     } catch (err) {
-      this.sessions.delete(state.sessionId);
-      if (this.targetIndex.get(state.targetKey) === state.sessionId) {
-        this.targetIndex.delete(state.targetKey);
-      }
+      this.removeLiveSession(state);
       throw err;
     }
 
@@ -545,10 +601,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
       }
     }
 
-    if (this.targetIndex.get(state.targetKey) === state.sessionId) {
-      this.targetIndex.delete(state.targetKey);
-    }
-    this.sessions.delete(state.sessionId);
+    this.removeLiveSession(state);
+
+    this.assertLiveSessionInvariants();
 
     const payload: TerminalExitEvent = {
       sessionId: state.sessionId,

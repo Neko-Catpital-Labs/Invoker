@@ -610,6 +610,85 @@ tasks:
     }
   });
 
+  it('rebuilds missing draft summaries from hidden planner state on restore', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-summary-restore',
+        title: 'Recovered summary',
+        presetKey: 'codex',
+        status: 'draft_ready',
+        messages: [
+          { id: 1, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-07-07T00:00:00.000Z' },
+          { id: 2, role: 'assistant', text: VALID_PLAN, createdAt: '2026-07-07T00:00:01.000Z' },
+        ],
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:01.000Z',
+      };
+      conversationRepo.saveConversation('planning-summary-restore', [
+        { role: 'assistant', content: VALID_PLAN },
+      ], null, false, undefined, undefined, 'plan');
+
+      const sessions = createInAppPlanningChatSessions();
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo,
+        planningSessionStore: adapter,
+      });
+
+      expect(sessions.get('planning-summary-restore')?.draftPlanSummary).toMatchObject({
+        name: 'Mock Plan',
+        taskCount: 2,
+      });
+      expect(adapter.loadInAppPlanningSession('planning-summary-restore')?.draftPlanSummary).toMatchObject({
+        name: 'Mock Plan',
+        taskCount: 2,
+      });
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('clears submitted pending-response state during restore', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-submitted',
+        title: 'Submitted plan',
+        presetKey: 'codex',
+        status: 'submitted',
+        messages: [
+          { id: 1, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-07-07T00:00:00.000Z' },
+        ],
+        submittedWorkflowId: 'wf-123',
+        submittedPlanName: 'Submitted plan',
+        pendingResponse: true,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:01.000Z',
+      };
+
+      const sessions = createInAppPlanningChatSessions();
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo: new ConversationRepository(adapter),
+        planningSessionStore: adapter,
+      });
+
+      expect(sessions.get('planning-submitted')?.messages).toHaveLength(1);
+      expect(adapter.loadInAppPlanningSession('planning-submitted')?.pendingResponse).toBe(false);
+    } finally {
+      adapter.close();
+    }
+  });
+
   it('restores interrupted sessions idle with an interruption system line', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     try {
