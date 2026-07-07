@@ -12,6 +12,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     getUiPerfStats: vi.fn(() => ({ mainDeltaToUi: 7 })),
     resetUiPerfStats: vi.fn(),
     getQueueStatus: vi.fn(() => ({ runningCount: 2 })),
+    listWorkerActionHistory: vi.fn((request) => ({ workerKind: request.workerKind, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
     getWorkerStatus: vi.fn(() => ({ generatedAt: 'now', workers: [] })),
     getWorkflowStatus: vi.fn(() => ({ 'wf-1': 'running' })),
     getTasksSnapshot: vi.fn(({ refresh }) => ({ tasks: [], workflows: [], refreshed: refresh })),
@@ -43,6 +44,9 @@ describe('answerOwnerReadQuery', () => {
     const h = makeHandlers();
     expect(answerOwnerReadQuery({ kind: 'queue' }, h)).toEqual({ runningCount: 2 });
     expect(answerOwnerReadQuery({ kind: 'worker-status' }, h)).toEqual({ workerStatus: { generatedAt: 'now', workers: [] } });
+    expect(answerOwnerReadQuery({ kind: 'worker-action-history', workerKind: 'autofix', limit: 2, offset: 4 }, h)).toEqual({
+      workerActionHistory: { workerKind: 'autofix', actions: [], limit: 2, offset: 4, hasMore: false },
+    });
     expect(answerOwnerReadQuery({ kind: 'workflow-status' }, h)).toEqual({ 'wf-1': 'running' });
     expect(answerOwnerReadQuery({ kind: 'action-graph' }, h)).toEqual({ nodes: [] });
   });
@@ -104,6 +108,7 @@ describe('answerOwnerReadQuery', () => {
     // Non-finite / negative replay offsets must be rejected too.
     expect(() => answerOwnerReadQuery({ kind: 'replay-output', taskId: 't', fromOffset: -1 }, h)).toThrow(/fromOffset/);
     expect(() => answerOwnerReadQuery({ kind: 'replay-output', taskId: 't', fromOffset: Number.NaN }, h)).toThrow(/fromOffset/);
+    expect(() => answerOwnerReadQuery({ kind: 'worker-action-history' }, h)).toThrow(/workerKind/);
     expect(h.replayOutput).not.toHaveBeenCalled();
   });
 });
@@ -129,6 +134,7 @@ describe('buildOwnerReadQueryHandlers', () => {
         getOutputTail: () => ({ t: 1 }),
         replayOutputFrom: (id: string, off: number) => [{ id, off }],
         loadAllCompletedTasks: () => [{ id: 'done' }],
+        listWorkerActions: vi.fn(() => []),
       },
     };
   }
@@ -157,6 +163,13 @@ describe('buildOwnerReadQueryHandlers', () => {
     expect(h.replayOutput('t1', 9)).toEqual([{ id: 't1', off: 9 }]);
     expect(h.getAllCompletedTasks()).toEqual([{ id: 'done' }]);
     expect(h.getWorkerStatus()).toEqual({ generatedAt: 'now', workers: [] });
+    expect(h.listWorkerActionHistory({ workerKind: 'autofix', limit: 1, offset: 2 })).toEqual({
+      workerKind: 'autofix',
+      actions: [],
+      limit: 1,
+      offset: 2,
+      hasMore: false,
+    });
   });
 
   it('loadWorkflowBundle syncs that workflow first, then returns workflow + tasks', () => {

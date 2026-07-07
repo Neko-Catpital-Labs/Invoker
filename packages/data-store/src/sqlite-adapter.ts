@@ -2024,9 +2024,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   listWorkerActions(filters: WorkerActionListFilters = {}): WorkerActionRecord[] {
-    if (filters.limit !== undefined && Math.floor(filters.limit) <= 0) {
+    const limit = filters.limit === undefined ? undefined : Math.floor(filters.limit);
+    if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
       return [];
     }
+    const offset = filters.offset === undefined ? undefined : Math.floor(filters.offset);
     const where: string[] = [];
     const params: unknown[] = [];
     if (filters.workflowId) {
@@ -2045,14 +2047,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
       where.push('status = ?');
       params.push(normalizeWorkerActionStatus(String(filters.status)));
     }
-    let limitSql = '';
-    if (filters.limit !== undefined) {
-      limitSql = ' LIMIT ?';
-      params.push(Math.floor(filters.limit));
+    let pageSql = '';
+    if (limit !== undefined) {
+      pageSql = ' LIMIT ?';
+      params.push(limit);
+    }
+    if (offset !== undefined && Number.isFinite(offset) && offset > 0) {
+      if (limit === undefined) {
+        pageSql = ' LIMIT -1';
+      }
+      pageSql += ' OFFSET ?';
+      params.push(offset);
     }
     const rows = this.queryAll(
       `SELECT * FROM worker_actions ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''} ` +
-        `ORDER BY updated_at DESC, id ASC${limitSql}`,
+        `ORDER BY updated_at DESC, id ASC${pageSql}`,
       params,
     );
     return rows.map((row) => this.rowToWorkerAction(row));
