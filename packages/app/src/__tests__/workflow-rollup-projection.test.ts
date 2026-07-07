@@ -114,7 +114,7 @@ describe('WorkflowRollupProjection', () => {
     ]);
   });
 
-  it('returns a pending patch when the last workflow task is removed', () => {
+  it('marks the patch removed when the last workflow task is removed', () => {
     const projection = new WorkflowRollupProjection();
     projection.replaceAll([makeTask('wf-1/task-a', 'wf-1', 'running')]);
 
@@ -125,8 +125,27 @@ describe('WorkflowRollupProjection', () => {
     });
 
     expect(patches).toHaveLength(1);
-    expect(patches[0]).toMatchObject({ workflowId: 'wf-1', status: 'pending' });
+    expect(patches[0]).toMatchObject({ workflowId: 'wf-1', status: 'pending', removed: true });
     expect(patches[0]?.rollup.countsByStatus.running).toBe(0);
+  });
+
+  it('does not mark the patch removed while other workflow tasks remain', () => {
+    const projection = new WorkflowRollupProjection();
+    projection.replaceAll([
+      makeTask('wf-1/task-a', 'wf-1', 'running'),
+      makeTask('wf-1/task-b', 'wf-1', 'pending'),
+    ]);
+
+    const patches = projection.applyDelta({
+      type: 'removed',
+      taskId: 'wf-1/task-a',
+      previousTaskStateVersion: 1,
+    });
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.removed).toBeUndefined();
+    expect(patches[0]).toMatchObject({ workflowId: 'wf-1', status: 'pending' });
+    expect(patches[0]?.rollup.countsByStatus.pending).toBe(1);
   });
 
   it('does not patch unknown removed tasks', () => {
