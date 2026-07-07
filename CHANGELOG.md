@@ -5,6 +5,7 @@ All notable changes to Invoker will be documented in this file.
 ## Unreleased
 
 - Hold merge PRs that Invoker opens against its own repo to the full review-stack PR body before publication. When no agent can author a compliant body, PR creation fails loudly instead of shipping a fallback body that the PR Body CI check rejects.
+- Remove a deleted workflow from the UI in under half a second: the renderer applies task removal deltas immediately instead of waiting out the 100ms graph event batch window (measured ~43ms end-to-end, down from ~140ms).
 - Remove a deleted workflow from the UI within one second instead of leaving a ghost "pending" node until manual refresh. Task removal deltas now carry an in-stream `removed` rollup patch when a workflow's last task is removed, the renderer drops the workflow entry instead of resurrecting it, and a `workflow_removed_applied` UI perf metric records the propagation for regression tracking.
 - Restore Planning Terminal chats after desktop restart, including visible transcripts and draft-ready state.
 - Persist embedded terminal tabs across desktop app restarts, restoring their recent output and reopening spawn-backed sessions.
