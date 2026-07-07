@@ -22,6 +22,11 @@ if [ ! -f "$ENV_FILE" ]; then
   echo "Missing $ENV_FILE — create it with SLACK_BOT_TOKEN/APP_TOKEN/SIGNING_SECRET/CHANNEL_ID first." >&2
   exit 1
 fi
+if grep -Eq '^[[:space:]]*(INVOKER_REPO_CONFIG_PATH|INVOKER_CONFIG)=' "$ENV_FILE"; then
+  echo "Remove INVOKER_REPO_CONFIG_PATH/INVOKER_CONFIG from ~/.invoker/.slack-owner.env; Slack-managed Invoker reads ~/.invoker/config.json." >&2
+  exit 1
+fi
+
 
 echo "Building @invoker/slack-manager…"
 ( cd "$REPO_ROOT" && pnpm --filter @invoker/slack-manager build )
