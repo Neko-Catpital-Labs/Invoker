@@ -36,6 +36,8 @@ import {
   type PlanDefinition,
   type TaskState,
 } from '@invoker/workflow-core';
+import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC } from './external-dependencies.js';
+import { logCaughtException } from './logging.js';
 import { runMcpServer } from './mcp-server.js';
 import { runDoctor, runSetup } from './onboarding.js';
 
@@ -130,7 +132,7 @@ function usage(): string {
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli doctor [--fix] [--json]',
-    '  invoker-cli setup [slack] [--check|--from-env]',
+    '  invoker-cli setup [planner|slack] [--check|--from-env] [--json]',
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
     '  invoker-cli --help',
@@ -139,11 +141,16 @@ function usage(): string {
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
     '  doctor          Validate tools, config, and your default planning preset.',
-    '  setup [slack]    Validate the environment, then optionally configure Slack.',
+    '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
     '',
     'Options:',
+    '  --planner-url <url>   Planner service URL for `setup planner`.',
+    '  --access-token <tok>  Planner service access token for `setup planner`.',
+    `  --planner-package <spec>  Planner MCP package spec for \`setup planner\`. Defaults to ${DEFAULT_DRAFTER_MCP_PACKAGE_SPEC}.`,
+    '  --target <path>       MCP config path for `setup planner`. Required unless INVOKER_MCP_CONFIG_PATH is set.',
+    '  --uninstall           Remove the experimental planner MCP entry and disable its Invoker flag.',
     '  --live           Require a running Invoker UI owner and submit over IPC.',
     '  --standalone     Skip IPC and run with an isolated CLI database.',
     '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
@@ -233,11 +240,14 @@ async function discoverLiveOwner(bus: MessageBus, timeoutMs = 1_000): Promise<Li
     };
   } catch (err) {
     if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
+      logCaughtException('Live owner discovery has no handler; falling back to standalone mode', err);
       return null;
     }
     if (err instanceof Error && err.message.startsWith('Timed out after ')) {
+      logCaughtException('Live owner discovery timed out; falling back to standalone mode', err);
       return null;
     }
+    logCaughtException('Live owner discovery failed; falling back to standalone mode', err);
     return null;
   }
 }
@@ -406,8 +416,8 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
           if (!options.json) process.stdout.write(data);
           try {
             persistence.appendTaskOutput(taskId, data);
-          } catch {
-            // Output is best effort for standalone CLI summaries.
+          } catch (err) {
+            logCaughtException(`Failed to persist standalone output for ${taskId}`, err);
           }
         },
       },
@@ -474,7 +484,8 @@ function readWorkerConfig(homeRoot: string): {
       autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
       externalWorkers: Array.isArray(parsed.externalWorkers) ? parsed.externalWorkers : undefined,
     };
-  } catch {
+  } catch (err) {
+    logCaughtException(`Failed to read worker config at ${configPath}`, err);
     return {};
   }
 }

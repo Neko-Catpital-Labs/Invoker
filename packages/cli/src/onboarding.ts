@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -12,8 +12,23 @@ import {
   type PlanningPresetSpec,
   type PrerequisiteCheck,
 } from '@invoker/contracts';
+import { formatCaughtException, logCaughtException } from './logging.js';
+import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES } from './external-dependencies.js';
 
 // ── Paths ────────────────────────────────────────────────────
+
+type JsonRecord = Record<string, unknown>;
+
+const EXPERIMENTAL_PLANNER_SERVER_KEY = 'experimental-planner';
+const EXPERIMENTAL_PLANNER_PACKAGE_NAME = DEFAULT_DRAFTER_MCP_PACKAGE_SPEC;
+const EXPERIMENTAL_PLANNER_COMMAND_NAME = EXTERNAL_DEPENDENCIES.drafterMcp.commandName;
+function experimentalPlannerServerSpec(packageSpec: string = EXPERIMENTAL_PLANNER_PACKAGE_NAME): JsonRecord {
+  return {
+    type: 'stdio',
+    command: 'uvx',
+    args: ['--from', packageSpec, EXPERIMENTAL_PLANNER_COMMAND_NAME],
+  };
+}
 
 export function invokerHomeDir(): string {
   return join(homedir(), '.invoker');
@@ -26,6 +41,15 @@ export function envFilePath(): string {
 }
 export function manifestFilePath(): string {
   return join(invokerHomeDir(), 'slack-app-manifest.json');
+}
+export function experimentalPlannerMcpPath(): string | undefined {
+  return process.env.INVOKER_MCP_CONFIG_PATH;
+}
+
+function requireExperimentalPlannerMcpPath(targetPath?: string): string {
+  const resolvedPath = targetPath ?? experimentalPlannerMcpPath();
+  if (resolvedPath) return resolvedPath;
+  throw new Error('Missing MCP config path. Pass --target <path> or set INVOKER_MCP_CONFIG_PATH.');
 }
 
 // ── Tool probing & install ───────────────────────────────────
@@ -81,8 +105,110 @@ export function loadCliConfig(configPath: string = defaultConfigPath()): CliConf
     };
     return { path: configPath, exists: true, presets: cfg.slackHarnessPresets ?? {}, defaultPreset: cfg.defaultSlackHarnessPreset };
   } catch (err) {
+    logCaughtException(`Failed to read Invoker config at ${configPath}`, err);
     return { path: configPath, exists: true, error: err instanceof Error ? err.message : String(err), presets: {} };
   }
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readMutableJson(filePath: string, fallback: JsonRecord): JsonRecord {
+  if (!existsSync(filePath)) return { ...fallback };
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as unknown;
+    if (isJsonRecord(parsed)) return parsed;
+  } catch (err) {
+    logCaughtException(`Failed to parse JSON object at ${filePath}`, err);
+    throw new Error(`Invalid JSON object at ${filePath}: ${formatCaughtException(err)}`);
+  }
+  throw new Error(`Invalid JSON object at ${filePath}`);
+}
+
+function mutableMcpServers(mcpConfig: JsonRecord, targetPath: string): JsonRecord {
+  if (mcpConfig.mcpServers === undefined) return {};
+  if (!isJsonRecord(mcpConfig.mcpServers)) {
+    throw new Error(`Invalid mcpServers object at ${targetPath}`);
+  }
+  return mcpConfig.mcpServers;
+}
+
+function isExperimentalPlannerServer(value: unknown): boolean {
+  if (!isJsonRecord(value)) return false;
+  const args = value.args;
+  return value.type === 'stdio'
+    && value.command === 'uvx'
+    && Array.isArray(args)
+    && args.length === 3
+    && args[0] === '--from'
+    && typeof args[1] === 'string'
+    && args[2] === EXPERIMENTAL_PLANNER_COMMAND_NAME;
+}
+
+export interface ExperimentalPlannerSetupOptions {
+  targetPath?: string;
+  configPath?: string;
+  plannerUrl?: string;
+  accessToken?: string;
+  uninstall?: boolean;
+  plannerPackage?: string;
+}
+
+export interface ExperimentalPlannerSetupState {
+  targetPath: string;
+  configPath: string;
+  installed: boolean;
+  experimentalPlanner: boolean;
+}
+
+export function setExperimentalPlannerFlag(enabled: boolean, configPath: string = defaultConfigPath()): string {
+  const config = readMutableJson(configPath, {});
+  config.experimentalPlanner = enabled;
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  return configPath;
+}
+
+export function readExperimentalPlannerSetup(options: ExperimentalPlannerSetupOptions = {}): ExperimentalPlannerSetupState {
+  const targetPath = requireExperimentalPlannerMcpPath(options.targetPath);
+  const configPath = options.configPath ?? defaultConfigPath();
+  const invokerConfig = existsSync(configPath) ? readMutableJson(configPath, {}) : {};
+  const mcpConfig = existsSync(targetPath) ? readMutableJson(targetPath, {}) : {};
+  const servers = isJsonRecord(mcpConfig.mcpServers) ? mcpConfig.mcpServers : {};
+  return {
+    targetPath,
+    configPath,
+    installed: isExperimentalPlannerServer(servers[EXPERIMENTAL_PLANNER_SERVER_KEY]),
+    experimentalPlanner: Boolean(invokerConfig.experimentalPlanner),
+  };
+}
+
+export function installExperimentalPlannerMcp(options: ExperimentalPlannerSetupOptions = {}): ExperimentalPlannerSetupState {
+  const targetPath = requireExperimentalPlannerMcpPath(options.targetPath);
+  const configPath = options.configPath ?? defaultConfigPath();
+  const mcpConfig = readMutableJson(targetPath, { $schema: 'https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json' });
+  const existingServers = mutableMcpServers(mcpConfig, targetPath);
+  const servers: JsonRecord = { ...existingServers };
+
+  if (options.uninstall) {
+    delete servers[EXPERIMENTAL_PLANNER_SERVER_KEY];
+  } else {
+    const env: JsonRecord = {};
+    if (options.plannerUrl) env.PLANNER_URL = options.plannerUrl;
+    if (options.accessToken) env.PLANNER_ACCESS_TOKEN = options.accessToken;
+    const spec = experimentalPlannerServerSpec(options.plannerPackage);
+    servers[EXPERIMENTAL_PLANNER_SERVER_KEY] = Object.keys(env).length > 0 ? { ...spec, env } : spec;
+  }
+
+  mcpConfig.mcpServers = servers;
+  mkdirSync(dirname(targetPath), { recursive: true });
+  const writesPlannerAccessToken = Boolean(options.accessToken);
+  if (writesPlannerAccessToken && existsSync(targetPath)) chmodSync(targetPath, 0o600);
+  writeFileSync(targetPath, `${JSON.stringify(mcpConfig, null, 2)}\n`, writesPlannerAccessToken ? { mode: 0o600 } : undefined);
+  if (writesPlannerAccessToken) chmodSync(targetPath, 0o600);
+  setExperimentalPlannerFlag(!options.uninstall, configPath);
+  return readExperimentalPlannerSetup({ targetPath, configPath });
 }
 
 export function buildDoctorChecks(cfg: CliConfigState, isInstalled: IsInstalled = commandExists): PrerequisiteCheck[] {
@@ -117,7 +243,7 @@ export function runDoctor(argv: string[]): number {
   const report = buildReport(checks);
   process.stdout.write(`${formatReport(report, { json })}\n`);
   if (!json && !report.ok) {
-    process.stdout.write('\nFix the items above, then re-run `invoker-cli doctor`. For Slack, run `invoker-cli setup slack`.\n');
+    process.stdout.write('\nFix the items above, then re-run `invoker-cli doctor`. For planner MCP, run `invoker-cli setup planner`; for Slack, run `invoker-cli setup slack`.\n');
   }
   return report.ok ? 0 : 1;
 }
@@ -339,22 +465,115 @@ export function loadInvokerEnv(): void {
   loadEnvFile(join(process.cwd(), '.env'));
 }
 
-export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promise<number> {
-  const wantSlack = argv[0] === 'slack';
-  const checkOnly = argv.includes('--check');
-  const json = argv.includes('--json');
-  const fromEnv = argv.includes('--from-env');
-  for (const arg of argv) {
-    if (arg === 'slack' || arg === '--check' || arg === '--json' || arg === '--from-env') continue;
-    throw new Error(`Unknown setup option: ${arg}`);
+type SetupSubcommand = 'slack' | 'planner';
+
+interface ParsedSetupArgs {
+  subcommand?: SetupSubcommand;
+  checkOnly: boolean;
+  json: boolean;
+  uninstall: boolean;
+  targetPath?: string;
+  plannerUrl?: string;
+  accessToken?: string;
+  plannerPackage?: string;
+  fromEnv: boolean;
+}
+
+function parseSetupArgs(argv: string[]): ParsedSetupArgs {
+  const parsed: ParsedSetupArgs = { checkOnly: false, json: false, uninstall: false, fromEnv: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === 'slack' || arg === 'planner') {
+      if (parsed.subcommand) throw new Error(`Unexpected setup argument: ${arg}`);
+      parsed.subcommand = arg;
+    } else if (arg === '--check') {
+      parsed.checkOnly = true;
+    } else if (arg === '--json') {
+      parsed.json = true;
+    } else if (arg === '--from-env') {
+      parsed.fromEnv = true;
+    } else if (arg === '--uninstall') {
+      parsed.uninstall = true;
+    } else if (arg === '--target') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --target');
+      parsed.targetPath = value;
+    } else if (arg === '--planner-url') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --planner-url');
+      parsed.plannerUrl = value;
+    } else if (arg === '--access-token') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --access-token');
+      parsed.accessToken = value;
+    } else if (arg === '--planner-package') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --planner-package');
+      parsed.plannerPackage = value;
+    } else {
+      throw new Error(`Unknown setup option: ${arg}`);
+    }
   }
+  return parsed;
+}
+
+function formatExperimentalPlannerState(state: ExperimentalPlannerSetupState, json: boolean): string {
+  if (json) return JSON.stringify(state);
+  return [
+    `Experimental planner MCP: ${state.installed ? 'installed' : 'missing'}`,
+    `MCP config: ${state.targetPath}`,
+    `experimentalPlanner flag: ${state.experimentalPlanner ? 'on' : 'off'}`,
+    `Invoker config: ${state.configPath}`,
+  ].join('\n');
+}
+
+async function maybeInstallPlanner(parsed: ParsedSetupArgs, io: SetupIO): Promise<number> {
+  if (parsed.checkOnly) {
+    const state = readExperimentalPlannerSetup({ targetPath: parsed.targetPath });
+    io.print(formatExperimentalPlannerState(state, parsed.json));
+    return state.installed && state.experimentalPlanner ? 0 : 1;
+  }
+
+  const state = installExperimentalPlannerMcp({
+    targetPath: parsed.targetPath,
+    plannerUrl: parsed.plannerUrl,
+    accessToken: parsed.accessToken ?? process.env.PLANNER_ACCESS_TOKEN,
+    plannerPackage: parsed.plannerPackage ?? process.env.INVOKER_PLANNER_PACKAGE,
+    uninstall: parsed.uninstall,
+  });
+  if (parsed.json) {
+    io.print(JSON.stringify(state));
+  } else if (parsed.uninstall) {
+    io.print(`Removed experimental planner MCP from ${state.targetPath}.`);
+    io.print(`Disabled experimentalPlanner in ${state.configPath}.`);
+  } else {
+    io.print(`Installed experimental planner MCP into ${state.targetPath}.`);
+    io.print(`Enabled experimentalPlanner in ${state.configPath}.`);
+    io.print('Restart any running planning agent sessions so they reload MCP tools.');
+  }
+  return 0;
+}
+
+async function promptYes(io: SetupIO, question: string): Promise<boolean> {
+  const answer = (await io.prompt(question)).toLowerCase();
+  return answer === 'y' || answer === 'yes';
+}
+
+export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promise<number> {
+  const parsed = parseSetupArgs(argv);
+  const wantSlack = parsed.subcommand === 'slack';
+  const fromEnv = parsed.fromEnv;
   const rl = (io as { rl?: { close: () => void } }).rl;
   try {
-    if (checkOnly) {
+    if (parsed.subcommand === 'planner') {
+      return await maybeInstallPlanner(parsed, io);
+    }
+
+    if (parsed.checkOnly) {
       loadInvokerEnv();
       const checks = await validateSlackCredentials(slackCredsFromEnv());
       const report = buildReport(checks);
-      io.print(formatReport(report, { json }));
+      io.print(formatReport(report, { json: parsed.json }));
       return report.ok ? 0 : 1;
     }
 
@@ -363,13 +582,17 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
     io.print(formatReport(core));
     io.print('');
 
+    if (!wantSlack && !fromEnv && await promptYes(io, 'Set up the experimental planner MCP now? [y/N] ')) {
+      await maybeInstallPlanner(parsed, io);
+      io.print('');
+    }
+
     let doSlack = wantSlack || fromEnv;
     if (!wantSlack && !fromEnv) {
-      const answer = (await io.prompt('Set up the Slack integration now? [Y/n] ')).toLowerCase();
-      doSlack = answer === '' || answer === 'y' || answer === 'yes';
+      doSlack = await promptYes(io, 'Set up the Slack integration now? [y/N] ');
     }
     if (!doSlack) {
-      io.print('\nYou are good to go for CLI and UI workflows. Run `invoker-cli setup slack` later to add Slack.');
+      io.print('\nYou are good to go for CLI and UI workflows. Run `invoker-cli setup planner` later to add the experimental planner. Run `invoker-cli setup slack` later to add Slack.');
       return core.ok ? 0 : 1;
     }
 
@@ -378,7 +601,7 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
       const creds = slackCredsFromEnv();
       const checks = await validateSlackCredentials(creds);
       const report = buildReport(checks);
-      io.print(`\n${formatReport(report, { json })}`);
+      io.print(`\n${formatReport(report, { json: parsed.json })}`);
       if (!creds.botToken || !creds.appToken || !creds.signingSecret || !creds.channelId || !report.ok) {
         io.print('Nothing written. Fix the items above and re-run setup.');
         return 1;
@@ -408,8 +631,8 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
     io.print(`\n${formatReport(report)}`);
 
     if (!report.ok) {
-      const proceed = (await io.prompt('\nSome checks failed. Save these values anyway? [y/N] ')).toLowerCase();
-      if (proceed !== 'y' && proceed !== 'yes') {
+      const proceed = await promptYes(io, '\nSome checks failed. Save these values anyway? [y/N] ');
+      if (!proceed) {
         io.print('Nothing written. Fix the items above and re-run `invoker-cli setup slack`.');
         return 1;
       }
