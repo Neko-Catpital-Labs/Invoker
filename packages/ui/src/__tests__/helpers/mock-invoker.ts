@@ -16,7 +16,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { ActionGraphResponse, RuntimeStatus, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult } from '@invoker/contracts';
+import type { ActionGraphResponse, InAppPlanningSessionSummary, RuntimeStatus, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -43,6 +43,43 @@ export interface MockInvoker {
   cleanup: () => void;
 }
 
+
+export function makePlanningSessionSummary(
+  overrides: Partial<InAppPlanningSessionSummary> = {},
+): InAppPlanningSessionSummary {
+  return {
+    id: 'saved-planning-1',
+    title: 'Saved planning chat',
+    status: 'draft_ready',
+    presetKey: 'codex',
+    messages: [
+      {
+        id: 1,
+        role: 'system',
+        text: 'Ask Invoker what you want to build.',
+        tone: 'muted',
+        createdAt: '2026-07-07T00:00:00.000Z',
+      },
+      {
+        id: 2,
+        role: 'user',
+        text: 'Add README',
+        createdAt: '2026-07-07T00:00:01.000Z',
+      },
+      {
+        id: 3,
+        role: 'assistant',
+        text: 'Draft plan ready.',
+        createdAt: '2026-07-07T00:00:02.000Z',
+      },
+    ],
+    draftPlanAvailable: true,
+    draftPlanSummary: { name: 'Saved plan', taskCount: 1, steps: ['Update README'] },
+    createdAt: '2026-07-07T00:00:00.000Z',
+    updatedAt: '2026-07-07T00:00:02.000Z',
+    ...overrides,
+  };
+}
 export function createMockInvoker(
   initialTasks: TaskState[] = [],
   initialWorkflows: WorkflowMeta[] = [],

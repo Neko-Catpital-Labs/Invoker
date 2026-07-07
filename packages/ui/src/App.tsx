@@ -123,6 +123,20 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
   };
 }
 
+function summaryToPlanningSessionView(summary: InAppPlanningSessionSummary): PlanningSessionView {
+  return {
+    ...summary,
+    messages: summary.messages.map((message) => ({
+      id: message.id,
+      text: message.text,
+      role: message.role,
+      tone: message.tone,
+    })),
+    input: '',
+    busy: false,
+  };
+}
+
 function planningStatusLabel(status: InAppPlanningSessionStatus): string {
   switch (status) {
     case 'waiting_for_answer':
@@ -554,6 +568,11 @@ export function App() {
     () => planningSessions.find((session) => session.id === activePlanningSessionId) ?? planningSessions[0] ?? makeInitialPlanningSession(),
     [activePlanningSessionId, planningSessions],
   );
+
+  useEffect(() => {
+    if (!activePlanningSession.presetKey || activePlanningSession.presetKey === selectedPlanningPresetKey) return;
+    setSelectedPlanningPresetKey(activePlanningSession.presetKey);
+  }, [activePlanningSession.presetKey, selectedPlanningPresetKey]);
   const terminalLines = activePlanningSession.messages;
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
@@ -689,6 +708,29 @@ export function App() {
         setTerminalDrawerState('partial');
       }
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.invoker?.planningChatList?.()
+      .then((result) => {
+        if (cancelled) return;
+        if (!result?.sessions?.length) return;
+        const restoredSessions = result.sessions.map(summaryToPlanningSessionView);
+        setPlanningSessions(restoredSessions);
+        setActivePlanningSessionId(restoredSessions[0]?.id ?? 'local-planning-session-1');
+        const starterSession = makeInitialPlanningSession();
+        const maxLineId = Math.max(
+          0,
+          ...starterSession.messages.map((line) => line.id),
+          ...restoredSessions.flatMap((session) => session.messages.map((line) => line.id)),
+        );
+        nextTerminalLineIdRef.current = maxLineId + 1;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
