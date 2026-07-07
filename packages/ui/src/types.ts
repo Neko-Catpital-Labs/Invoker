@@ -330,10 +330,13 @@ export type {
   WorkerDecisionsRequest,
   WorkerDecisionsResponse,
   WorkerActionStatus,
+  WorkerAvailability,
   WorkerControlAction,
   WorkerLifecycleStatus,
+  WorkerLogEntry,
   WorkerPolicyStatus,
   WorkerRecoverySummary,
+  WorkerSource,
   WorkerStatusEntry,
   WorkerStatusSnapshot,
 } from '@invoker/contracts';

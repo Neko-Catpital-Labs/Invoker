@@ -12,7 +12,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
 import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
 
@@ -35,6 +35,7 @@ import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { WorkerDetailsPanel } from './components/WorkerDetailsPanel.js';
+import { WorkerActivityCard } from './components/WorkerActivityCard.js';
 import { groupWorkflowCoreActivity } from './lib/workflow-core-activity.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
@@ -55,6 +56,7 @@ import {
   formatWorkflowStatus,
 } from './lib/workflow-progress-surfaces.js';
 import { computeSearchResults, type SearchResult } from './lib/search.js';
+import { displayWorkerTaskId, formatWorkerValue, getActiveWorkerAction, getWorkerDisplayCopy } from './lib/worker-display.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
@@ -401,6 +403,32 @@ function getOrderedSidebarNavItems(root: ParentNode): HTMLElement[] {
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest(EDITABLE_SELECTOR));
+}
+
+function normalizedSearchText(value: string | undefined): string {
+  return (value ?? '').toLowerCase();
+}
+
+function workerActionTarget(action: WorkerActionSummary): string {
+  if (action.taskId) return `Task: ${displayWorkerTaskId(action.taskId)}`;
+  return `${formatWorkerValue(action.subjectType)}: ${action.subjectId}`;
+}
+
+function workerLogTarget(log: WorkerLogEntry): string {
+  if (log.taskId) return `Task: ${displayWorkerTaskId(log.taskId)}`;
+  if (log.subjectType && log.subjectId) return `${formatWorkerValue(log.subjectType)}: ${log.subjectId}`;
+  if (log.workflowId) return `Workflow: ${log.workflowId}`;
+  return 'No target';
+}
+
+function workerStateLabel(worker: WorkerStatusEntry): string {
+  const activeAction = getActiveWorkerAction(worker);
+  if (activeAction) return `${formatWorkerValue(worker.lifecycle)} · ${formatWorkerValue(activeAction.status)}`;
+  return formatWorkerValue(worker.lifecycle);
+}
+
+function workerLogTitle(log: WorkerLogEntry): string {
+  return formatWorkerValue(log.eventType ?? log.actionType ?? log.source);
 }
 
 interface WorkflowContextMenuProps {
@@ -2910,7 +2938,7 @@ export function App() {
       return;
     }
     if (nextView === 'queue') {
-      setSidebarSurface('workers');
+      setSidebarSurface('home');
       setInspectorCollapsed(true);
       setInspectorManualOpen(false);
     } else {
@@ -2950,7 +2978,7 @@ export function App() {
       setInspectorCollapsed(true);
       setInspectorManualOpen(false);
       setStatusFilters(new Set<WorkflowStatus>());
-      setViewMode('queue');
+      setViewMode('dag');
       return;
     }
     if (nextSurface === 'home') {
@@ -3571,6 +3599,171 @@ export function App() {
     )
   );
 
+  const renderWorkerActionEntry = (action: WorkerActionSummary): JSX.Element => (
+    <div key={action.id} className="rounded-lg border border-gray-800 bg-gray-850/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-medium text-gray-100">{formatWorkerValue(action.actionType)}</div>
+        <span className="rounded-full border border-gray-700 bg-gray-800 px-2 py-0.5 text-[11px] text-gray-200">
+          {formatWorkerValue(action.status)}
+        </span>
+      </div>
+      <div className="mt-1 text-xs text-gray-500">{workerActionTarget(action)}</div>
+      {action.summary ? <div className="mt-2 text-sm text-gray-300">{action.summary}</div> : null}
+      <div className="mt-2 text-[11px] text-gray-500">Updated {action.updatedAt}</div>
+    </div>
+  );
+
+  const renderWorkerLogEntry = (log: WorkerLogEntry): JSX.Element => (
+    <div key={log.id} className="rounded-lg border border-gray-800 bg-gray-850/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-medium text-gray-100">{workerLogTitle(log)}</div>
+        {log.status ? (
+          <span className="rounded-full border border-gray-700 bg-gray-800 px-2 py-0.5 text-[11px] text-gray-200">
+            {formatWorkerValue(log.status)}
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-1 text-xs text-gray-500">{workerLogTarget(log)}</div>
+      {log.summary ? <div className="mt-2 text-sm text-gray-300">{log.summary}</div> : null}
+      <div className="mt-2 text-[11px] text-gray-500">Logged {log.createdAt}</div>
+    </div>
+  );
+
+  const renderWorkersDetail = (): JSX.Element => {
+    if (!selectedWorker) {
+      return renderBrowserEmptyState('No workers found', 'Invoker has not returned any worker registry rows yet.');
+    }
+
+    const copy = getWorkerDisplayCopy(selectedWorker.kind);
+    const activeAction = getActiveWorkerAction(selectedWorker);
+    const recentLogs = selectedWorker.recentLogs ?? [];
+    const hasResponseHistory = selectedWorker.recentActions.length > 0 || recentLogs.length > 0;
+
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-100">{copy.name}</h2>
+              <p className="mt-1 text-sm text-gray-400">{selectedWorker.note || 'Worker registry entry'}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-gray-700 bg-gray-800 px-2.5 py-1 text-[11px] font-medium text-gray-200">
+                  Kind: {selectedWorker.kind}
+                </span>
+                <span className="rounded-full border border-gray-700 bg-gray-800 px-2.5 py-1 text-[11px] font-medium text-gray-200">
+                  Source: {formatWorkerValue(selectedWorker.source)}
+                </span>
+                <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-medium text-cyan-100">
+                  State: {workerStateLabel(selectedWorker)}
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              aria-label="Return home"
+              data-testid="workers-return-home"
+              onClick={handleDismissBrowserSurface}
+              className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+            >
+              Home
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <section className="rounded-xl border border-gray-800 bg-gray-900/80 p-4">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Registry</h3>
+              <dl className="mt-3 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
+                <dt className="text-gray-500">Kind</dt>
+                <dd className="text-gray-200">{selectedWorker.kind}</dd>
+                <dt className="text-gray-500">Note</dt>
+                <dd className="text-gray-200">{selectedWorker.note || 'No note'}</dd>
+                <dt className="text-gray-500">Source</dt>
+                <dd className="text-gray-200">{formatWorkerValue(selectedWorker.source)}</dd>
+                <dt className="text-gray-500">Availability</dt>
+                <dd className="text-gray-200">{formatWorkerValue(selectedWorker.availability)}</dd>
+                <dt className="text-gray-500">Policy</dt>
+                <dd className="text-gray-200">{formatWorkerValue(selectedWorker.policy)}{selectedWorker.policyReason ? ` · ${selectedWorker.policyReason}` : ''}</dd>
+                <dt className="text-gray-500">Runtime</dt>
+                <dd className="text-gray-200">{selectedWorker.runtimeKind ?? 'Not running'}</dd>
+              </dl>
+            </section>
+            <section className="rounded-xl border border-gray-800 bg-gray-900/80 p-4">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Current state</h3>
+              <div className="mt-3 text-sm text-gray-300">
+                Process is {formatWorkerValue(selectedWorker.lifecycle)}.
+                {activeAction ? ` Current response is ${formatWorkerValue(activeAction.actionType)} (${formatWorkerValue(activeAction.status)}).` : ' No response is running.'}
+              </div>
+              {selectedWorker.lastError ? <div className="mt-3 rounded border border-rose-800 bg-rose-950/40 p-3 text-sm text-rose-100">{selectedWorker.lastError}</div> : null}
+            </section>
+          </div>
+
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            <section className="rounded-xl border border-gray-800 bg-gray-900/80 p-4">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Latest responses</h3>
+              <div className="mt-3 space-y-2">
+                {selectedWorker.recentActions.length > 0
+                  ? selectedWorker.recentActions.slice(0, 5).map(renderWorkerActionEntry)
+                  : <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-3 text-sm text-gray-400">No worker responses have been logged yet.</div>}
+              </div>
+            </section>
+            <section className="rounded-xl border border-gray-800 bg-gray-900/80 p-4">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Latest logs</h3>
+              <div className="mt-3 space-y-2">
+                {recentLogs.length > 0
+                  ? recentLogs.slice(0, 5).map(renderWorkerLogEntry)
+                  : <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-3 text-sm text-gray-400">No worker responses have been logged yet.</div>}
+              </div>
+            </section>
+          </div>
+
+          {!hasResponseHistory ? (
+            <div className="mt-4 rounded-xl border border-gray-800 bg-gray-950/60 p-4 text-sm text-gray-400">
+              No worker responses have been logged yet.
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
+  const workersSubtitle = workerStatus === null
+    ? 'Worker status is not available yet.'
+    : `${workerStatus.workers.length} worker${workerStatus.workers.length === 1 ? '' : 's'} registered.`;
+
+  const renderWorkersSurface = (): JSX.Element => (
+    <div className="flex-1 flex overflow-hidden">
+      <div data-testid="workers-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
+        <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-100">Workers</h2>
+            <p className="mt-1 text-xs text-gray-500">{workersSubtitle}</p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close workers panel"
+            data-testid="workers-rail-dismiss"
+            onClick={handleDismissBrowserSurface}
+            className="rounded-lg border border-gray-700 px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+          >
+            Close
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <WorkerActivityCard
+            snapshot={workerStatus}
+            selectedWorkerKind={selectedWorkerKind}
+            onSelectWorker={setSelectedWorkerKind}
+            showControls={false}
+          />
+        </div>
+      </div>
+      <div className="min-w-0 flex-1 overflow-hidden">
+        {renderWorkersDetail()}
+      </div>
+    </div>
+  );
+
 
   const renderPlanningSessionList = (): JSX.Element => (
     <div data-testid="planning-session-list" className={`${RAIL_SCROLL_BODY_CLASS} py-1`}>
@@ -3889,9 +4082,7 @@ export function App() {
             ) : sidebarSurface === 'planning' ? (
               renderPlanningTerminalSurface()
             ) : sidebarSurface === 'workers' ? (
-              <div className="flex min-h-0 flex-1 overflow-hidden">
-                {renderBrowserDetailWorkspace()}
-              </div>
+              renderWorkersSurface()
             ) : (
               <div className="flex min-h-0 flex-1 overflow-hidden">
                 {renderBrowserRail()}
@@ -3902,7 +4093,7 @@ export function App() {
             {sidebarSurface === 'home' && viewMode === 'dag' && renderGraphTerminalChrome()}
           </main>
 
-          {sidebarSurface !== 'planning' && (
+          {sidebarSurface !== 'planning' && sidebarSurface !== 'workers' && (
             <div
               data-testid="workflow-inspector-shell"
               data-keyboard-region="inspector"

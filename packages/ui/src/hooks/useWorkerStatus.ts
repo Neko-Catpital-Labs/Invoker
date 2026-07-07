@@ -19,7 +19,7 @@ export function useWorkerStatus(
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     try {
-      const status = await window.invoker?.getWorkerStatus();
+      const status = await window.invoker?.getWorkers();
       if (mountedRef.current && status) {
         setSnapshot((previous) =>
           areStructurallyEqual(previous, status) ? previous : status,
