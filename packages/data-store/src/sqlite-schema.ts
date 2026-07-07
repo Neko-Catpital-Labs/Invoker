@@ -343,6 +343,34 @@ export const SCHEMA_DDL = `
 
       CREATE INDEX IF NOT EXISTS idx_output_spool_task_offset
         ON output_spool(task_id, offset);
+
+      CREATE TABLE IF NOT EXISTS terminal_sessions (
+        session_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('running', 'exited')),
+        exit_code INTEGER,
+        cwd TEXT,
+        command TEXT,
+        args_json TEXT CHECK (args_json IS NULL OR json_valid(args_json)),
+        linux_terminal_tail TEXT CHECK (linux_terminal_tail IS NULL OR linux_terminal_tail IN ('exec_bash', 'pause')),
+        mode TEXT NOT NULL CHECK (mode IN ('spawn', 'attached')),
+        attached INTEGER NOT NULL DEFAULT 0 CHECK (attached IN (0, 1)),
+        output_snapshot TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_terminal_sessions_task_updated
+        ON terminal_sessions(task_id, updated_at);
+
+      CREATE INDEX IF NOT EXISTS idx_terminal_sessions_status_updated
+        ON terminal_sessions(status, updated_at);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_terminal_sessions_running_target
+        ON terminal_sessions(target_key)
+        WHERE status = 'running';
     `;
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
