@@ -16,6 +16,16 @@ const OMP_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
   { id: 'openai/gpt-5', label: 'OpenAI GPT-5' },
   { id: 'openai/gpt-5-codex', label: 'OpenAI GPT-5 Codex' },
   { id: 'openai/o3', label: 'OpenAI o3' },
+  { id: 'openrouter/~moonshotai/kimi-latest', label: 'OpenRouter Kimi Latest' },
+  { id: 'vercel-ai-gateway/moonshotai/kimi-k2.5', label: 'Vercel Gateway Kimi K2.5' },
+  { id: 'kimi-k2.7-code', label: 'Kimi K2.7 Code' },
+  { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+  { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+  { id: 'qwen3-coder-480b-a35b-instruct', label: 'Qwen3 Coder 480B A35B' },
+  { id: 'glm-5.2', label: 'GLM 5.2' },
+  { id: 'glm-5.1', label: 'GLM 5.1' },
+  { id: 'ollama/qwen2.5-coder:7b', label: 'Ollama Qwen2.5 Coder 7B' },
+  { id: 'ollama/gpt-oss:20b', label: 'Ollama GPT-OSS 20B' },
 ];
 
 export class OmpExecutionAgent implements ExecutionAgent {
