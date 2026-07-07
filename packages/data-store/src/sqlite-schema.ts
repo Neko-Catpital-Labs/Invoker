@@ -398,7 +398,6 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
   'ALTER TABLE tasks ADD COLUMN runner_kind TEXT',
   'ALTER TABLE tasks ADD COLUMN pool_id TEXT',
-  'ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0',
   'ALTER TABLE tasks ADD COLUMN launch_phase TEXT',
   'ALTER TABLE tasks ADD COLUMN launch_started_at TEXT',
   'ALTER TABLE tasks ADD COLUMN launch_completed_at TEXT',
