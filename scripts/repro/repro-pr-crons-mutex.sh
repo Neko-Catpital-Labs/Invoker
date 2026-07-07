@@ -53,7 +53,7 @@ for worker in cron-coderabbit-address cron-pr-conflict-rebase; do
   out="$(bash "scripts/$worker.sh" 2>&1)"
   code=$?
   set -e
-  echo "$out" | grep -q "another PR maintenance operation in progress" \
+  echo "$out" | grep -q "another PR cron operation in progress" \
     || fail "$worker did not report the lock as held" "$out"
   [ "$code" -eq 0 ] || fail "$worker exited $code (expected 0 clean no-op)" "$out"
 done
