@@ -1,7 +1,7 @@
 /**
  * Headless "query" command family: the read-only `query <sub>` router
  * (workflows · tasks · task · queue · review-gate · action-graph · audit ·
- * session · cost · cost-events · costs · ui-perf · stats), the cost-event
+ * session · worker-actions · cost · cost-events · costs · ui-perf · stats), the cost-event
  * collection/rollup
  * helpers, agent session resolution, and `query-select`.
  *
@@ -22,6 +22,7 @@ import {
   parseQueryFlags,
   restoreWorkflowForTask,
 } from './headless-shared.js';
+import { resolveDefaultExecutionAgent } from './config.js';
 
 /**
  * The read-query family writes its formatted output through {@link writeOut}.
@@ -53,14 +54,14 @@ export type HeadlessQueryDeps = Pick<
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|worker-actions|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
   const {
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
-    formatEventLog, formatQueueStatus, formatWorkflowStats,
-    serializeWorkflow, serializeTask, serializeEvent,
+    formatEventLog, formatQueueStatus, formatWorkflowStats, formatWorkerActions,
+    serializeWorkflow, serializeTask, serializeEvent, serializeWorkerAction,
     formatAsLabel, formatAsJson, formatAsJsonl,
   } = await import('./formatter.js');
 
@@ -244,6 +245,20 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       await headlessSession(taskId, deps);
       break;
     }
+    case 'worker-actions': {
+      const workflowFilter = flags.workflow ?? flags.positional[0];
+      const actions = deps.persistence.listWorkerActions({
+        workflowId: workflowFilter,
+        status: flags.status,
+      });
+      switch (flags.output) {
+        case 'label': writeOut(formatAsLabel(actions) + '\n'); break;
+        case 'json': writeOut(formatAsJson(actions.map(serializeWorkerAction)) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl(actions.map(serializeWorkerAction)) + '\n'); break;
+        default: writeOut(formatWorkerActions(actions) + '\n'); break;
+      }
+      break;
+    }
     case 'ui-perf': {
       if (flags.reset) {
         deps.resetUiPerfStats?.();
@@ -341,7 +356,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, queue, review-gate, action-graph, audit, session, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, queue, review-gate, action-graph, audit, session, worker-actions, cost, cost-events, costs, ui-perf, stats`);
   }
 }
 
@@ -669,14 +684,14 @@ export async function resolveAgentSession(
   };
 }
 
-export async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>): Promise<void> {
+export async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry' | 'invokerConfig'>): Promise<void> {
   if (!taskId) throw new Error('Usage: --headless session <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   const task = deps.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task "${taskId}" not found`);
 
   let sessionId = task.execution.agentSessionId ?? task.execution.lastAgentSessionId;
-  let agentName = task.execution.agentName ?? task.execution.lastAgentName ?? 'claude';
+  let agentName = task.execution.agentName ?? task.execution.lastAgentName ?? resolveDefaultExecutionAgent(deps.invokerConfig);
 
   // Fallback: if current execution dropped agentSessionId, recover the most
   // recent session from task event payloads.

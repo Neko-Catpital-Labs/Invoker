@@ -136,6 +136,14 @@ export function getMenuItems(
       action: 'onRecreateDownstream',
       variant: 'danger',
     });
+
+    items.push({
+      id: 'delete-task',
+      label: 'Delete Task',
+      enabled: true,
+      action: 'onDelete',
+      variant: 'danger',
+    });
   }
 
   return items;

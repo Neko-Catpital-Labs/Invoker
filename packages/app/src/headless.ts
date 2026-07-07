@@ -16,10 +16,12 @@ import {
   AUTO_FIX_WORKER_KIND,
   TaskRunner,
   acquireWorkerLock,
+  createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
+  type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import {
   parseMetadataValue,
@@ -97,6 +99,7 @@ import {
   headlessCancel,
   headlessCancelWorkflow,
   headlessDeleteWorkflow,
+  headlessDeleteTask,
   headlessDetachWorkflow,
   headlessOpenTerminal,
 } from './headless-approve-delete.js';
@@ -330,6 +333,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'cancel-workflow':
       await headlessCancelWorkflow(args[1], deps);
       break;
+    case 'delete-task':
+      await headlessDeleteTask(args[1], deps);
+      break;
     case 'delete':
     case 'delete-workflow':
       await headlessDeleteWorkflow(args[1], deps);
@@ -418,7 +424,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry()),
+    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
   );
 
   if (subCommand === 'list') {
@@ -466,6 +472,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     }
     throw err;
   }
+  const autoFixAttemptLedger = createAutoFixAttemptLedger();
   try {
     const worker = definition.factory({
       store: deps.persistence,
@@ -477,6 +484,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       logger: deps.logger,
       autoFix: {
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+        attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
     });
@@ -594,8 +602,9 @@ ${BOLD}Configure:${RESET}
 ${BOLD}Lifecycle:${RESET}
   cancel <taskId>                                     Cancel task + all downstream
   cancel-workflow <workflowId>                        Cancel all active tasks in a workflow
-  delete <workflowId>                                 Delete a single workflow
-  delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
+  delete-task <taskId>                                 Delete one task and retarget dependents
+  delete <workflowId>                                  Delete a single workflow
+  delete-all                                           Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
   worker [kind|list|status]                           Run/list registry worker kinds (autofix scans failed tasks)

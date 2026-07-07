@@ -22,6 +22,8 @@ export interface ConversationMessage {
   content: string;
 }
 
+export type ConversationMode = 'agent' | 'plan';
+
 export type PlanningCommandBuilder = (opts: {
   tool: string;
   model?: string;
@@ -45,6 +47,8 @@ export interface PlanConversationConfig {
   tool?: string;
   /** Model to use (e.g. 'auto', 'sonnet-4'). Omit to use the CLI default. */
   model?: string;
+  /** Agent prompt mode. `agent` is a normal coding session; `plan` drafts Invoker YAML. */
+  mode?: ConversationMode;
   /** Injected builder that maps {tool, model, prompt} → CLI command + args. */
   planningCommandBuilder?: PlanningCommandBuilder;
   /** Root directory for codebase exploration. */
@@ -62,6 +66,8 @@ export interface PlanConversationConfig {
   /** EXPERIMENTAL_PLANNER: when true, steer the agent to order the plan via the
    * experimental planner MCP tool (`plan`). The redirect server enforces the gate. */
   experimentalPlanner?: boolean;
+  /** Prefer top-level `workflows:` stack plans for multi-slice reviewable work. */
+  preferStackedWorkflows?: boolean;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
 }
@@ -107,17 +113,63 @@ export function isNegation(text: string): boolean {
 
 // ── System Prompt ───────────────────────────────────────────
 
-function buildSystemPrompt(defaultBranch: string, repoUrl?: string): string {
+function buildAgentSystemPrompt(): string {
+  return `You are a normal coding agent running in a git worktree for a Slack thread.
+
+Default behavior:
+- Treat the thread like an ordinary OMP/Codex coding session.
+- Answer questions, run local commands, inspect files, edit code, and run focused verification when useful.
+- Do NOT generate Invoker YAML in this thread. If the user asks for an Invoker plan, tell them to start a new plan thread with \`plan: <request>\` — plan drafts from an agent thread cannot be submitted.
+- Do NOT submit or start an Invoker workflow. Agent threads reject \`submit\`; only a \`plan:\` thread can be submitted.
+- Keep Slack replies short and concrete: changed files, verification, and any remaining risk.`;
+}
+
+function buildStackedWorkflowPrompt(repoUrlLine: string, defaultBranch: string): string {
+  return `For reviewable multi-slice implementation work, prefer a workflow stack over one workflow with many independent implementation tasks:
+\`\`\`yaml
+name: "Stack Name"
+${repoUrlLine}
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: ${defaultBranch}
+workflows:
+  - name: "Stack Name Step 1"
+    featureBranch: plan/stack-name-step-1
+    tasks:
+      - id: implement-step-1
+        description: "Build the first reviewable slice"
+        prompt: "Specific implementation instructions"
+        dependencies: []
+      - id: verify-step-1
+        description: "Verify the first slice"
+        command: "discovered test command"
+        dependencies: [implement-step-1]
+  - name: "Stack Name Step 2"
+    featureBranch: plan/stack-name-step-2
+    tasks:
+      - id: implement-step-2
+        description: "Build the next reviewable slice"
+        prompt: "Specific implementation instructions"
+        dependencies: []
+      - id: verify-step-2
+        description: "Verify the next slice"
+        command: "discovered test command"
+        dependencies: [implement-step-2]
+\`\`\`
+
+When submitted, Invoker creates one workflow per child in listed order. Each downstream workflow is based on the previous workflow's feature branch and waits on the previous merge gate.`;
+}
+
+function buildPlanSystemPrompt(defaultBranch: string, repoUrl?: string, preferStackedWorkflows = false): string {
   const repoUrlLine = repoUrl
     ? `repoUrl: "${repoUrl}"          # git clone URL for the repository`
     : `repoUrl: "git@github.com:user/repo.git"  # git clone URL for the repository`;
-  return `You are an assistant for the Invoker orchestrator. You have two modes:
+  const stackedWorkflowSection = preferStackedWorkflows
+    ? `\n${buildStackedWorkflowPrompt(repoUrlLine, defaultBranch)}\n`
+    : '';
+  return `You are an assistant for the Invoker orchestrator. The user explicitly requested an Invoker plan.
 
-**Direct answer mode** — For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase). Explore the codebase as needed and report the result directly. Do NOT generate a YAML plan for these.
-
-**Plan mode** — For multi-step implementation tasks (adding features, fixing bugs, refactoring code). Generate a YAML task plan as described below.
-
-Use your judgment: if the request can be answered with 1-2 commands or a short explanation, use direct answer mode. If it requires coordinated changes across multiple files, use plan mode.
+Generate a YAML task plan as described below. Answer simple follow-up questions directly only when they are about the plan being drafted.
 
 A plan has this structure:
 \`\`\`yaml
@@ -139,18 +191,18 @@ tasks:
         description: "Approach A"
         prompt: "Try approach A"
     requiresManualApproval: false
-    autoFix: false               # auto-retry with experiments on failure
-\`\`\`
 
+\`\`\`
+${stackedWorkflowSection}
 Rules:
 1. Explore the codebase first (list directories, read key files). Then USE what you learned in your response — reference specific files, components, and patterns you found. Do NOT give generic responses that ignore the code you read.
 2. For ambiguous implementation requests, tiny nits, or broad "make this better" requests, do a brief scoping pass before YAML:
    - State concise assumptions based on the repository evidence you found.
    - Show a short plan preview with the likely review slice(s) and verification commands.
    - Ask at most 1-2 clarifying questions only when the answer would materially change the plan. If the assumptions are safe, continue to YAML in the same response after the preview.
-3. Keep plans focused — 3-8 tasks maximum. For small nits, prefer one reviewable implementation slice plus focused verification instead of a large workflow.
+3. Keep plans focused. ${preferStackedWorkflows ? 'For reviewable multi-slice implementation work, prefer 2-6 stacked child workflows with one local implementation-and-verification slice each, instead of one workflow with many independent implementation tasks. ' : ''}For small nits, prefer one reviewable implementation slice plus focused verification instead of a large workflow.
 4. File-count guidance is a soft heuristic, not a hard validator gate. Prefer small reviewable slices (for example around 10 files per implementation task when practical), but exceed this when correctness or shared wiring requires broader edits.
-5. Each task should have either a \`command\` or a \`prompt\`, not both.
+5. Each task should have either a \`command\` or a \`prompt\`, not both. Do not include legacy \`autoFix\` or \`autoFixRetries\` fields anywhere in the YAML; auto-fix retries are configured only in ~/.invoker/config.json.
 6. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` discovered from the target repo (e.g. that repo's package scripts, build commands, or focused checks such as \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
    Test command rules:
    - Inspect repo manifests and existing docs/scripts before choosing commands.
@@ -163,8 +215,8 @@ Rules:
 7. Use meaningful task IDs (kebab-case).
 8. When ready, output the plan inside a \`\`\`yaml code block.
 9. Always include \`dependencies\` (even if empty array).
-10. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
-11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.
+10. After generating a plan, tell the user they can submit it by replying with \`submit\`.
+11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically after explicit Slack approval.
 12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
 }
 
@@ -202,6 +254,7 @@ export class PlanConversation {
   private cursorCommand: string;
   private tool?: string;
   private model?: string;
+  private mode: ConversationMode;
   private planningCommandBuilder?: PlanningCommandBuilder;
   private messages: ConversationMessage[] = [];
   private _submittedPlanText: string | null = null;
@@ -213,6 +266,7 @@ export class PlanConversation {
   private defaultBranch?: string;
   private repoUrl?: string;
   private experimentalPlanner?: boolean;
+  private preferStackedWorkflows?: boolean;
   private log: LogFn;
   private _initialized = false;
 
@@ -220,6 +274,7 @@ export class PlanConversation {
     this.cursorCommand = config.cursorCommand ?? 'agent';
     this.tool = config.tool;
     this.model = config.model;
+    this.mode = config.mode ?? 'plan';
     this.planningCommandBuilder = config.planningCommandBuilder;
     this.workingDir = config.workingDir;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -228,6 +283,7 @@ export class PlanConversation {
     this.defaultBranch = config.defaultBranch;
     this.repoUrl = config.repoUrl;
     this.experimentalPlanner = config.experimentalPlanner;
+    this.preferStackedWorkflows = config.preferStackedWorkflows;
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -263,6 +319,7 @@ export class PlanConversation {
               .join(''),
       })).filter((m) => m.content.length > 0);
       this._planSubmitted = saved.planSubmitted;
+      this.mode = saved.mode ?? this.mode;
 
       this.log('plan-conversation', 'info', `Restored conversation ${this.threadTs}: ${saved.messages.length} messages`);
     } catch (err) {
@@ -311,6 +368,10 @@ export class PlanConversation {
     return this._planSubmitted;
   }
 
+  get conversationMode(): ConversationMode {
+    return this.mode;
+  }
+
   /** Returns the last complete YAML plan drafted in this conversation, or null. */
   getDraftedPlan(): string | null {
     return this.extractLastPlanFromMessages();
@@ -338,7 +399,9 @@ export class PlanConversation {
    * and the complete conversation history.
    */
   buildCursorPrompt(): string {
-    const systemPrompt = buildSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl);
+    const systemPrompt = this.mode === 'plan'
+      ? buildPlanSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl, this.preferStackedWorkflows)
+      : buildAgentSystemPrompt();
     const parts: string[] = [systemPrompt];
 
     if (this.messages.length > 1) {
@@ -353,7 +416,9 @@ export class PlanConversation {
     const lastMessage = this.messages[this.messages.length - 1];
     if (lastMessage) {
       parts.push(`\nUser's latest message:\n${lastMessage.content}`);
-      parts.push('\nRespond to the latest message. If it requires a plan, explore the codebase and generate one.');
+      parts.push(this.mode === 'plan'
+        ? '\nRespond to the latest message. If it requires a plan, explore the codebase and generate one.'
+        : '\nRespond to the latest message as a normal coding agent in this worktree.');
     }
 
     if (this.experimentalPlanner) {
@@ -449,12 +514,14 @@ export class PlanConversation {
         role: m.role,
         content: m.content,
       }));
-
       this.conversationRepo.saveConversation(
         this.threadTs,
         messages,
         null,
         this._planSubmitted,
+        undefined,
+        undefined,
+        this.mode,
       );
     } catch (err) {
       this.log('plan-conversation', 'error', `Failed to save conversation ${this.threadTs}: ${err}`);
@@ -471,6 +538,40 @@ export function globToRegex(pattern: string): RegExp {
     .replace(/\*/g, '.*')
     .replace(/\?/g, '.');
   return new RegExp(`^${escaped}$`);
+}
+
+function isExtractedPlanRecord(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function validateExtractedPlanTasks(tasks: unknown, ownerLabel: string): boolean {
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    console.warn(`extractYamlPlan: ${ownerLabel} "tasks" missing or empty (got ${typeof tasks})`);
+    return false;
+  }
+
+  for (const task of tasks) {
+    if (!isExtractedPlanRecord(task) || !task.id || !task.description) {
+      console.warn(`extractYamlPlan: ${ownerLabel} task missing id or description: ${JSON.stringify(task).slice(0, 120)}`);
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function stripPlannerOnlyFields(plan: Record<string, any>): void {
+  delete plan.autoFix;
+  delete plan.autoFixRetries;
+  for (const task of Array.isArray(plan.tasks) ? plan.tasks : []) {
+    if (!isExtractedPlanRecord(task)) continue;
+    delete task.autoFix;
+    delete task.autoFixRetries;
+  }
+  for (const workflow of Array.isArray(plan.workflows) ? plan.workflows : []) {
+    if (!isExtractedPlanRecord(workflow)) continue;
+    stripPlannerOnlyFields(workflow);
+  }
 }
 
 // ── YAML Extraction ─────────────────────────────────────────
@@ -507,24 +608,29 @@ export function extractYamlPlan(text: string): string | null {
       return null;
     }
 
-    const plan = raw as Record<string, unknown>;
+    const plan = raw as Record<string, any>;
     if (!plan.name || typeof plan.name !== 'string') {
       console.warn('extractYamlPlan: missing or non-string "name" field');
       return null;
     }
-    if (!Array.isArray(plan.tasks) || plan.tasks.length === 0) {
-      console.warn(`extractYamlPlan: "tasks" missing or empty (got ${typeof plan.tasks})`);
+
+    if (Array.isArray(plan.workflows)) {
+      if (plan.workflows.length === 0) {
+        console.warn('extractYamlPlan: "workflows" is empty');
+        return null;
+      }
+      for (const [index, workflow] of plan.workflows.entries()) {
+        if (!isExtractedPlanRecord(workflow) || !workflow.name || typeof workflow.name !== 'string') {
+          console.warn(`extractYamlPlan: workflow ${index} missing name`);
+          return null;
+        }
+        if (!validateExtractedPlanTasks(workflow.tasks, `workflow ${index}`)) return null;
+      }
+    } else if (!validateExtractedPlanTasks(plan.tasks, 'plan')) {
       return null;
     }
 
-    for (const task of plan.tasks) {
-      if (!task.id || !task.description) {
-        console.warn(`extractYamlPlan: task missing id or description: ${JSON.stringify(task).slice(0, 120)}`);
-        return null;
-      }
-    }
-
-    // Return serialized YAML as provided — no defaulting or repo-specific command rewriting.
+    stripPlannerOnlyFields(plan);
     return stringifyYaml(plan);
   } catch (err) {
     console.warn(`extractYamlPlan: YAML parse error: ${err instanceof Error ? err.message : String(err)}`);

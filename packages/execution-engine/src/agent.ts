@@ -18,8 +18,13 @@ export interface AgentCommandSpec {
 export interface AgentCommandBuildOptions {
   executionModel?: string;
 }
+export interface ExecutionModelOption {
+  id: string;
+  label: string;
+}
 
-export const DEFAULT_EXECUTION_AGENT = 'claude';
+
+export const DEFAULT_EXECUTION_AGENT = 'codex';
 
 export interface ExecutionAgent {
   readonly name: string;
@@ -40,6 +45,8 @@ export interface ExecutionAgent {
    * Each name corresponds to a subdirectory `invoker-{name}` under bundledSkillRoot.
    */
   readonly bundledSkills?: readonly string[];
+  /** Curated built-in model choices for this harness. Values must be CLI-compatible. */
+  readonly supportedModels?: readonly ExecutionModelOption[];
 
   buildCommand(fullPrompt: string, options?: AgentCommandBuildOptions): AgentCommandSpec;
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] };

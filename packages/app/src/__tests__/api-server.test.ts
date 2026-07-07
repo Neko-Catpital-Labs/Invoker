@@ -98,6 +98,7 @@ function createMocks() {
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => [makeTask()]),
       recreateTask: vi.fn(() => [makeTask()]),
+      deleteTask: vi.fn(() => [makeTask()]),
       recreateDownstream: vi.fn(() => [makeTask()]),
       retryWorkflow: vi.fn(() => [makeTask()]),
       recreateWorkflow: vi.fn(() => [makeTask()]),
@@ -163,6 +164,14 @@ function createMocks() {
           return { ok: true, data: mocks.orchestrator.recreateTask(envelope.payload.taskId) };
         } catch (err) {
           return { ok: false, error: { code: 'RECREATE_TASK_FAILED', message: (err as Error).message } };
+        }
+      }),
+      deleteTask: vi.fn(async (envelope: { payload: { taskId: string } }) => {
+        try {
+          return { ok: true, data: mocks.orchestrator.deleteTask(envelope.payload.taskId) };
+        } catch (err) {
+          const code = err instanceof OrchestratorError ? err.code : 'DELETE_TASK_FAILED';
+          return { ok: false, error: { code, message: (err as Error).message } };
         }
       }),
       recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) => {
@@ -1163,6 +1172,30 @@ describe('POST /api/workflows/:id/rebase-recreate', () => {
     const res = await request(port, 'POST', '/api/workflows/wf-missing/rebase-recreate');
     expect(res.status).toBe(404);
     expect(res.body.error).toContain('Could not resolve workflow');
+  });
+});
+
+describe('DELETE /api/tasks/:id', () => {
+  it('deletes task via facade and returns concrete action', async () => {
+    const res = await request(port, 'DELETE', '/api/tasks/task-1');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.taskId).toBe('task-1');
+    expect(res.body.action).toBe('deleted');
+    expect(typeof res.body.tasksStarted).toBe('number');
+    expect(mocks.commandService.deleteTask).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: { taskId: 'task-1' } }),
+    );
+    expect(mocks.orchestrator.deleteTask).toHaveBeenCalledWith('task-1');
+  });
+
+  it('maps task-not-found to HTTP 404', async () => {
+    mocks.orchestrator.deleteTask.mockImplementation(() => {
+      throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, 'Task "missing" not found');
+    });
+    const res = await request(port, 'DELETE', '/api/tasks/missing');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Task "missing" not found');
   });
 });
 

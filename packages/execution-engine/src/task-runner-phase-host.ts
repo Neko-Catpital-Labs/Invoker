@@ -23,6 +23,8 @@ export type TaskRunnerPhaseHost = Pick<
   | 'pendingPoolSelections'
   | 'activeExecutions'
   | 'getExecutionPools'
+  | 'getDefaultExecutionAgent'
+  | 'getDefaultExecutionModel'
   // Prepare-phase helpers
   | 'buildUpstreamContext'
   | 'collectUpstreamBranches'
@@ -30,8 +32,11 @@ export type TaskRunnerPhaseHost = Pick<
   | 'resolveExternalDependencyTask'
   | 'shouldUseFreshWorkspace'
   | 'determineActionType'
+  | 'resolveExecutionAgent'
+  | 'resolveExecutionModel'
   // Dispatch-phase helpers
   | 'selectExecutor'
+  | 'takeResolvedExecutionSelection'
   | 'acquirePoolSelectionLease'
   | 'renewPoolSelectionLease'
   | 'releasePoolSelectionLease'

@@ -8,8 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions } from '../agent.js';
-
+import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions, ExecutionModelOption } from '../agent.js';
 export interface ClaudeExecutionAgentConfig {
   /** Command to invoke the Claude CLI. Default: 'claude'. */
   command?: string;
@@ -23,12 +22,19 @@ export interface ClaudeExecutionAgentConfig {
   apiKey?: string;
 }
 
+const CLAUDE_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
+  { id: 'sonnet', label: 'Claude Sonnet' },
+  { id: 'opus', label: 'Claude Opus' },
+  { id: 'haiku', label: 'Claude Haiku' },
+];
+
 export class ClaudeExecutionAgent implements ExecutionAgent {
   readonly name = 'claude';
   readonly stdinMode = 'ignore' as const;
   readonly linuxTerminalTail = 'exec_bash' as const;
   readonly bundledSkillRoot: string;
   readonly bundledSkills = ['make-pr'] as const;
+  readonly supportedModels = CLAUDE_SUPPORTED_MODELS;
 
   private readonly command: string;
   private readonly fixCommand: string;

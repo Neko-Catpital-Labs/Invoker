@@ -6,6 +6,7 @@ import { _electron as electron, type Page } from '@playwright/test';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { stringify as yamlStringify } from 'yaml';
 
+import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 import {
   E2E_REPO_URL,
   TEST_PLAN,
@@ -157,6 +158,7 @@ test.describe('Headless thundering herd', () => {
     await ensureHeadlessTestConfig(testDir);
     const userDataDir = path.join(testDir, 'owner-electron-user-data');
     await mkdir(userDataDir, { recursive: true });
+    registerTrackedBrowserUserDataDir(userDataDir);
 
     const ownerApp = await electron.launch({
       args: [
@@ -172,6 +174,7 @@ test.describe('Headless thundering herd', () => {
         ...headlessTestEnv(testDir),
         INVOKER_HEADLESS_STANDALONE: '1',
         INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS: '60000',
+        INVOKER_USER_DATA_DIR: userDataDir,
       },
     });
 

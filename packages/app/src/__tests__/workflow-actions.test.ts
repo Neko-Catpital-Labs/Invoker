@@ -97,7 +97,7 @@ describe('fresh-base workflow lifecycle helpers', () => {
     });
 
     expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
@@ -217,7 +217,7 @@ describe('rebaseRecreate', () => {
     });
 
     expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
@@ -577,7 +577,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { autoFixAttempts: 0, error: mergeError },
+        execution: { error: mergeError },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -638,7 +638,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: 'boom', workspacePath: '/tmp/task-a' },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -666,7 +666,7 @@ describe('autoFixOnFailure', () => {
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
@@ -677,7 +677,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: 'boom' },
+        execution: { error: 'boom' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -733,7 +733,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -761,7 +761,7 @@ describe('autoFixOnFailure', () => {
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
@@ -778,7 +778,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -803,7 +803,7 @@ describe('autoFixOnFailure', () => {
       commandService: makeCommandService(),
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
   });
 
@@ -817,7 +817,7 @@ describe('autoFixOnFailure', () => {
         id: 'merge-a',
         status: 'failed',
         config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a' },
+        execution: { workspacePath: '/tmp/merge-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -875,15 +875,15 @@ describe('autoFixOnFailure', () => {
     let phase = 0;
     const phases: Record<string, unknown>[] = [
       // Phase 0: entry check + lineage capture (cycle 1)
-      { status: 'failed', execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 } },
+      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 1: after fix returns, lineage check + finalize + approveTask (cycle 1)
-      { status: 'awaiting_approval', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
+      { status: 'awaiting_approval', execution: { workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 2: post-finalize check — task re-failed after publish
-      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict', selectedAttemptId: 'att-1', generation: 1 } },
+      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 3: inline retry entry + lineage capture (cycle 2)
-      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-3', generation: 3 } },
+      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-3', generation: 3 } },
       // Phase 4: after fix returns, lineage check + finalize + approveTask (cycle 2)
-      { status: 'awaiting_approval', execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-3', generation: 3 } },
+      { status: 'awaiting_approval', execution: { workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-3', generation: 3 } },
     ];
     const getTask = vi.fn(() => {
       const idx = Math.min(phase, phases.length - 1);
@@ -964,7 +964,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1', executionAgent: 'claude' },
-        execution: { autoFixAttempts: 0, workspacePath: '/tmp/task-a' },
+        execution: { workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -1015,7 +1015,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1', executionAgent: 'codex' },
-        execution: { autoFixAttempts: 0, workspacePath: '/tmp/task-a' },
+        execution: { workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -1042,13 +1042,13 @@ describe('autoFixOnFailure', () => {
       getAutoFixAgent: () => '   ',
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
       expect.objectContaining({
         phase: 'auto-fix-agent-selected',
-        selectedAgent: 'claude',
+        selectedAgent: 'codex',
         selectedAgentSource: 'default',
       }),
     );
@@ -1067,7 +1067,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -1094,13 +1094,13 @@ describe('autoFixOnFailure', () => {
       getAutoFixAgent: () => undefined,
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex');
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
       expect.objectContaining({
         phase: 'auto-fix-agent-selected',
-        selectedAgent: 'claude',
+        selectedAgent: 'codex',
         selectedAgentSource: 'default',
       }),
     );
@@ -1225,6 +1225,42 @@ describe('fixWithAgentAction', () => {
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
   });
 
+  it('uses the task runner default agent when manual fix omits agentName', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a' },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      getDefaultExecutionAgent: vi.fn(() => 'custom-agent'),
+      fixWithAgent: vi.fn().mockRejectedValue(new Error('agent failed')),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+    })).rejects.toThrow('agent failed');
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'custom-agent', 'boom');
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      '\n[Fix with custom-agent] Failed: agent failed',
+    );
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-a', 'boom', 'agent failed');
+  });
+
   it('dispatches merge conflicts with a workspace to taskExecutor.resolveConflict', async () => {
     const mergeError = JSON.stringify({
       type: 'merge_conflict',
@@ -1338,7 +1374,7 @@ describe('fixWithAgentAction', () => {
       'task-a',
       expect.stringContaining('Startup merge conflict detected; recreating workflow wf-1 from a fresh base.'),
     );
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
     expect(result).toEqual({
       kind: 'recreateWorkflowFromFreshBase',
@@ -1374,6 +1410,7 @@ describe('fixWithAgentAction', () => {
       getTaskOutput: vi.fn(),
     };
     const taskExecutor = {
+      getDefaultExecutionAgent: vi.fn(() => 'claude'),
       preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
       execGitIn: vi.fn().mockRejectedValue(new Error('fatal: not a git repository')),
       fixWithAgent: vi.fn(),
@@ -1385,8 +1422,6 @@ describe('fixWithAgentAction', () => {
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
       commandService: makeCommandService(),
-    }, {
-      failureOutputLabel: 'Fix with AI',
     })).rejects.toThrow('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository');
 
     expect(taskExecutor.execGitIn).toHaveBeenCalledWith(
@@ -1397,7 +1432,7 @@ describe('fixWithAgentAction', () => {
     expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
       'merge-a',
-      expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+      expect.stringContaining('\n[Fix with claude] Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
     );
     expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
       'merge-a',
@@ -1668,9 +1703,7 @@ describe('buildWorkflowInvalidationDeps', () => {
         if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
         return workflow as any;
       },
-      setWorkflowGeneration: (workflowId, generation) => {
-        persistence.updateWorkflow(workflowId, { generation });
-      },
+      
       killActiveExecution: taskExecutor?.killActiveExecution?.bind(taskExecutor),
       prepareFreshBase: taskExecutor?.preparePoolForRebaseRetry
         ? async (workflowId, workflow) => {
@@ -1719,8 +1752,8 @@ describe('buildWorkflowInvalidationDeps', () => {
 
     await deps.recreateWorkflow('wf-1');
 
-    expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
+    expect(persistence.loadWorkflow).not.toHaveBeenCalled();
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
   });
 
@@ -1740,7 +1773,7 @@ describe('buildWorkflowInvalidationDeps', () => {
 
     const result = await deps.recreateWorkflowFromFreshBase!('wf-1');
 
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',
       'https://example/repo.git',
@@ -2215,7 +2248,6 @@ describe('autoFixOnFailure lineage guard', () => {
             status: 'failed',
             config: { workflowId: 'wf-1' },
             execution: {
-              autoFixAttempts: 0,
               error: 'boom',
               selectedAttemptId: 'att-1',
               generation: 5,
@@ -2270,7 +2302,6 @@ describe('autoFixOnFailure lineage guard', () => {
             status: 'failed',
             config: { workflowId: 'wf-1' },
             execution: {
-              autoFixAttempts: 0,
               error: 'boom',
               selectedAttemptId: 'att-1',
               generation: 5,
@@ -2324,7 +2355,6 @@ describe('autoFixOnFailure lineage guard', () => {
         status: 'failed',
         config: { workflowId: 'wf-1' },
         execution: {
-          autoFixAttempts: 0,
           error: 'boom',
           selectedAttemptId: 'att-1',
           generation: 5,

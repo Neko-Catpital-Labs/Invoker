@@ -342,13 +342,19 @@ export function loadInvokerEnv(): void {
 export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promise<number> {
   const wantSlack = argv[0] === 'slack';
   const checkOnly = argv.includes('--check');
+  const json = argv.includes('--json');
+  const fromEnv = argv.includes('--from-env');
+  for (const arg of argv) {
+    if (arg === 'slack' || arg === '--check' || arg === '--json' || arg === '--from-env') continue;
+    throw new Error(`Unknown setup option: ${arg}`);
+  }
   const rl = (io as { rl?: { close: () => void } }).rl;
   try {
     if (checkOnly) {
       loadInvokerEnv();
       const checks = await validateSlackCredentials(slackCredsFromEnv());
       const report = buildReport(checks);
-      io.print(formatReport(report, { json: argv.includes('--json') }));
+      io.print(formatReport(report, { json }));
       return report.ok ? 0 : 1;
     }
 
@@ -357,14 +363,34 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
     io.print(formatReport(core));
     io.print('');
 
-    let doSlack = wantSlack;
-    if (!wantSlack) {
-      const answer = (await io.prompt('Set up the Slack integration now? [y/N] ')).toLowerCase();
-      doSlack = answer === 'y' || answer === 'yes';
+    let doSlack = wantSlack || fromEnv;
+    if (!wantSlack && !fromEnv) {
+      const answer = (await io.prompt('Set up the Slack integration now? [Y/n] ')).toLowerCase();
+      doSlack = answer === '' || answer === 'y' || answer === 'yes';
     }
     if (!doSlack) {
       io.print('\nYou are good to go for CLI and UI workflows. Run `invoker-cli setup slack` later to add Slack.');
       return core.ok ? 0 : 1;
+    }
+
+    if (fromEnv) {
+      loadInvokerEnv();
+      const creds = slackCredsFromEnv();
+      const checks = await validateSlackCredentials(creds);
+      const report = buildReport(checks);
+      io.print(`\n${formatReport(report, { json })}`);
+      if (!creds.botToken || !creds.appToken || !creds.signingSecret || !creds.channelId || !report.ok) {
+        io.print('Nothing written. Fix the items above and re-run setup.');
+        return 1;
+      }
+      const envPath = writeSlackEnv({
+        botToken: creds.botToken,
+        appToken: creds.appToken,
+        signingSecret: creds.signingSecret,
+        channelId: creds.channelId,
+      });
+      io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
+      return 0;
     }
 
     const manifestPath = manifestFilePath();

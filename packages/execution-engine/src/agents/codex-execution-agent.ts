@@ -12,8 +12,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions } from '../agent.js';
-
+import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions, ExecutionModelOption } from '../agent.js';
 export interface CodexExecutionAgentConfig {
   /** Command to invoke the Codex CLI. Default: 'codex'. */
   command?: string;
@@ -29,12 +28,21 @@ export interface CodexExecutionAgentConfig {
   bypassApprovalsAndSandbox?: boolean;
 }
 
+const CODEX_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
+  { id: 'gpt-5', label: 'GPT-5' },
+  { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
+  { id: 'gpt-5-mini', label: 'GPT-5 Mini' },
+  { id: 'o3', label: 'o3' },
+  { id: 'o4-mini', label: 'o4-mini' },
+];
+
 export class CodexExecutionAgent implements ExecutionAgent {
   readonly name = 'codex';
   readonly stdinMode = 'ignore' as const;
   readonly linuxTerminalTail = 'exec_bash' as const;
   readonly bundledSkillRoot: string;
   readonly bundledSkills = ['make-pr'] as const;
+  readonly supportedModels = CODEX_SUPPORTED_MODELS;
 
   private readonly command: string;
   private readonly fullAuto: boolean;

@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import type { App } from 'electron';
 
 export type GuiOwnerPreference = 'auto' | 'daemon' | 'gui';
@@ -34,6 +35,20 @@ export function formatGuiOwnerBootstrapFallbackMessage(message: string): string 
     'Falling back to local GUI owner mode.',
     'Set INVOKER_GUI_OWNER_MODE=daemon to retry daemon/client mode, or INVOKER_GUI_OWNER_MODE=gui to force local ownership.',
   ].join('\n');
+}
+
+export interface ElectronUserDataEnv {
+  INVOKER_USER_DATA_DIR?: string;
+  INVOKER_DB_DIR?: string;
+  NODE_ENV?: string;
+}
+
+export function resolveElectronUserDataDir(env: ElectronUserDataEnv = process.env): string | null {
+  if (env.INVOKER_USER_DATA_DIR) return env.INVOKER_USER_DATA_DIR;
+  if (env.NODE_ENV === 'test' && env.INVOKER_DB_DIR) {
+    return join(env.INVOKER_DB_DIR, 'electron-user-data');
+  }
+  return null;
 }
 
 export interface EarlyElectronAppOptions {

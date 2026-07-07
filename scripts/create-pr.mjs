@@ -371,6 +371,11 @@ function revList(range) {
   return out ? out.split('\n').filter(Boolean) : [];
 }
 
+function revListStrict(args) {
+  const out = gitText(['rev-list', ...args]);
+  return out ? out.split('\n').filter(Boolean) : [];
+}
+
 function shortOneLine(sha) {
   return gitTextOrEmpty(['show', '--no-patch', '--oneline', '--no-abbrev-commit', sha]) || sha;
 }
@@ -381,6 +386,16 @@ function resolveRev(ref) {
 
 function fetchBranch(remote, branch) {
   runGit(['fetch', '--quiet', remote, branch], { stdio: 'ignore' });
+}
+
+function gitExitStatus(args) {
+  try {
+    execFileSync('git', args, { stdio: 'ignore' });
+    return 0;
+  } catch (error) {
+    if (typeof error.status === 'number') return error.status;
+    throw error;
+  }
 }
 
 export function isUiImpactingPath(filePath) {
@@ -421,6 +436,63 @@ function fullContextDiffSinceBase(baseBranch) {
       `Unable to compute diff atomicity context against ${DEFAULT_BASE_REMOTE}/${baseBranch}. Fetch the base ref and retry.\n${error.message}`,
     );
   }
+}
+
+function commitHasTreeDiffFromFirstParent(sha) {
+  const parentsLine = gitText(['rev-list', '--parents', '-n', '1', sha]);
+  const [, firstParent] = parentsLine.split(/\s+/);
+  const diffArgs = firstParent
+    ? ['diff-tree', '--quiet', '--exit-code', '-r', firstParent, sha, '--']
+    : ['diff-tree', '--quiet', '--exit-code', '--root', '-r', sha, '--'];
+  const status = gitExitStatus(diffArgs);
+
+  if (status === 0) return false;
+  if (status === 1) return true;
+
+  throw new Error(`Unable to inspect tree diff for commit ${sha}.`);
+}
+
+function emptyCommitsSinceBase(baseBranch) {
+  const baseRef = `${DEFAULT_BASE_REMOTE}/${baseBranch}`;
+  const commits = revListStrict(['--reverse', `${baseRef}..HEAD`]);
+  return commits.filter((sha) => !commitHasTreeDiffFromFirstParent(sha));
+}
+
+function assertBranchHasReviewableChanges(baseBranch, changedFiles) {
+  const baseRef = `${DEFAULT_BASE_REMOTE}/${baseBranch}`;
+  const emptyCommits = emptyCommitsSinceBase(baseBranch);
+  const failures = [];
+
+  if (changedFiles.length === 0) {
+    failures.push(`Current branch has no file changes versus ${baseRef}.`);
+  }
+
+  if (emptyCommits.length > 0) {
+    const lines = emptyCommits.slice(0, 12).map((sha) => `  - ${shortOneLine(sha)}`);
+    if (emptyCommits.length > 12) {
+      lines.push(`  ... and ${emptyCommits.length - 12} more`);
+    }
+    failures.push(
+      [
+        'Current branch contains commits with no tree diff from their first parent:',
+        ...lines,
+      ].join('\n'),
+    );
+  }
+
+  if (failures.length === 0) return;
+
+  throw new Error(
+    [
+      'Refusing to create/update PR: branch has no reviewable file changes or contains empty commits.',
+      ...failures,
+      '',
+      'Recovery:',
+      '  Add a real file change before publishing, or do not create a PR for this branch.',
+      `  Drop empty commits with: git rebase -i ${baseRef}`,
+      '  Or squash each empty commit into a neighboring commit that contains real file changes.',
+    ].join('\n'),
+  );
 }
 
 function assertCleanPrBase(baseBranch) {
@@ -677,6 +749,7 @@ async function main() {
 
   const changedFiles = changedFilesSinceBase(args.base);
   const diffText = fullContextDiffSinceBase(args.base);
+  assertBranchHasReviewableChanges(args.base, changedFiles);
   const uiImpactingFiles = getUiImpactingFiles(changedFiles);
   if (uiImpactingFiles.length > 0) {
     console.error(`UI-impacting files changed; requiring visual proof: ${uiImpactingFiles.join(', ')}`);

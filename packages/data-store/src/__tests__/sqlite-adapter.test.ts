@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
-import type { Workflow, Conversation } from '../adapter.js';
+import type { Workflow, Conversation, WorkerActionWrite } from '../adapter.js';
 import { createAttempt } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
@@ -43,6 +43,21 @@ describe('SQLiteAdapter', () => {
   function workflowColumns(db: SQLiteAdapter): string[] {
     const result = (db as any).db.exec('PRAGMA table_info(workflows)') as Array<{ values: unknown[][] }>;
     return (result[0]?.values ?? []).map((row) => String(row[1]));
+  }
+
+  function tableColumns(db: SQLiteAdapter, table: string): string[] {
+    const result = (db as any).db.exec(`PRAGMA table_info(${table})`) as Array<{ values: unknown[][] }>;
+    return (result[0]?.values ?? []).map((row) => String(row[1]));
+  }
+
+  function tableIndexes(db: SQLiteAdapter, table: string): string[] {
+    const result = (db as any).db.exec(`PRAGMA index_list(${table})`) as Array<{ values: unknown[][] }>;
+    return (result[0]?.values ?? []).map((row) => String(row[1]));
+  }
+
+  function tableForeignKeys(db: SQLiteAdapter, table: string): string[] {
+    const result = (db as any).db.exec(`PRAGMA foreign_key_list(${table})`) as Array<{ values: unknown[][] }>;
+    return (result[0]?.values ?? []).map((row) => `${String(row[2])}.${String(row[4])}:${String(row[6])}`);
   }
 
   function sqliteScalar(db: SQLiteAdapter, sql: string): number {
@@ -99,6 +114,21 @@ describe('SQLiteAdapter', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    it('enforces low-risk workflow schema checks on fresh databases', () => {
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO workflows (id, name, generation, created_at, updated_at)
+         VALUES ('wf-negative-generation', 'bad generation', -1, '2026-06-13T00:00:00.000Z', '2026-06-13T00:00:00.000Z')`,
+      )).toThrow();
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO workflows (id, name, external_dependencies, created_at, updated_at)
+         VALUES ('wf-bad-json', 'bad json', 'not-json', '2026-06-13T00:00:00.000Z', '2026-06-13T00:00:00.000Z')`,
+      )).toThrow();
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO workflows (id, name, external_dependency_changes, created_at, updated_at)
+         VALUES ('wf-bad-changes-json', 'bad changes json', 'not-json', '2026-06-13T00:00:00.000Z', '2026-06-13T00:00:00.000Z')`,
+      )).toThrow();
+    });
   });
 
   describe('saveTask + loadTasks', () => {
@@ -130,6 +160,41 @@ describe('SQLiteAdapter', () => {
         runnerKind: 'ssh',
         poolMemberId: 'remote-1',
       });
+    });
+
+    it('deleteTask removes one task and leaves the workflow and sibling tasks', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+      adapter.saveAttempt(createAttempt('t1', { generation: 1 }));
+      adapter.logEvent('t1', 'task.created');
+      (adapter as any).db.run('INSERT INTO task_output (task_id, data) VALUES (?, ?)', ['t1', 'out']);
+      (adapter as any).db.run('INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)', ['t1', 0, 'out']);
+
+      adapter.deleteTask('t1');
+
+      expect(adapter.loadWorkflow('wf-1')).toBeDefined();
+      expect(adapter.loadTask('t1')).toBeUndefined();
+      expect(adapter.loadTask('t2')).toBeDefined();
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM attempts WHERE node_id = 't1'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM events WHERE task_id = 't1'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM task_output WHERE task_id = 't1'")).toBe(0);
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM output_spool WHERE task_id = 't1'")).toBe(0);
+    });
+
+    it('persists executionModel through saveTask, updateTask, and loadTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('model-task', {
+        config: { executionAgent: 'omp', executionModel: 'openai/gpt-5.2' },
+      }));
+
+      expect(adapter.loadTask('model-task')?.config.executionModel).toBe('openai/gpt-5.2');
+
+      adapter.updateTask('model-task', {
+        config: { executionModel: 'anthropic/claude-sonnet-4.5' },
+      });
+
+      expect(adapter.loadTasks('wf-1')[0]?.config.executionModel).toBe('anthropic/claude-sonnet-4.5');
     });
 
     it('loads all workflows and tasks in one startup snapshot', () => {
@@ -175,6 +240,190 @@ describe('SQLiteAdapter', () => {
       const result = (adapter as any).db.exec('PRAGMA index_list(events)') as Array<{ values: unknown[][] }>;
       const indexNames = (result[0]?.values ?? []).map((row) => String(row[1]));
       expect(indexNames).toContain('idx_events_task_id_id');
+    });
+
+    it('creates execution_model and worker_actions schema objects', () => {
+      expect(tableColumns(adapter, 'tasks')).toContain('execution_model');
+      expect(tableColumns(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
+        'id',
+        'worker_kind',
+        'action_type',
+        'workflow_id',
+        'task_id',
+        'subject_type',
+        'subject_id',
+        'external_key',
+        'status',
+        'attempt_count',
+        'intent_id',
+        'agent_name',
+        'execution_model',
+        'session_id',
+        'summary',
+        'payload_json',
+        'created_at',
+        'updated_at',
+        'completed_at',
+      ]));
+      expect(tableIndexes(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
+        'idx_worker_actions_task_updated',
+        'idx_worker_actions_workflow_status',
+      ]));
+      expect(tableForeignKeys(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
+        'workflows.id:CASCADE',
+        'tasks.id:CASCADE',
+      ]));
+    });
+
+    it('does not create auto_fix_attempts on fresh task tables', () => {
+      expect(tableColumns(adapter, 'tasks')).not.toContain('auto_fix_attempts');
+    });
+
+    it('drops legacy auto_fix_attempts columns when reopening writable databases', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-autofix-attempts-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const oldDb = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        (oldDb as any).db.run('ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0');
+        expect(tableColumns(oldDb, 'tasks')).toContain('auto_fix_attempts');
+        oldDb.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(tableColumns(reopened, 'tasks')).not.toContain('auto_fix_attempts');
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('worker action persistence', () => {
+    function makeWorkerAction(overrides: Partial<WorkerActionWrite> = {}): WorkerActionWrite {
+      return {
+        id: 'wa-1',
+        workerKind: 'autofix',
+        actionType: 'fix-task',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/task-1',
+        subjectType: 'task',
+        subjectId: 'wf-1/task-1',
+        externalKey: 'wf-1/task-1:g0:a1',
+        status: 'queued',
+        attemptCount: 1,
+        intentId: '42',
+        agentName: 'codex',
+        executionModel: 'gpt-5.2',
+        sessionId: 'sess-1',
+        summary: 'Queued autofix',
+        payload: { reason: 'failed-tests' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+        ...overrides,
+      };
+    }
+
+    beforeEach(() => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('wf-1/task-1'));
+      adapter.saveTask('wf-1', makeTask('wf-1/task-2'));
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-2' });
+      adapter.saveTask('wf-2', makeTask('wf-2/task-1'));
+    });
+
+    it('upserts and reads worker actions by worker kind and external key', () => {
+      const first = adapter.upsertWorkerAction(makeWorkerAction());
+      expect(first).toMatchObject({
+        id: 'wa-1',
+        workerKind: 'autofix',
+        actionType: 'fix-task',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/task-1',
+        status: 'queued',
+        attemptCount: 1,
+        intentId: '42',
+        agentName: 'codex',
+        executionModel: 'gpt-5.2',
+        sessionId: 'sess-1',
+        summary: 'Queued autofix',
+        payload: { reason: 'failed-tests' },
+      });
+
+      const completed = adapter.upsertWorkerAction(makeWorkerAction({
+        id: 'wa-1',
+        status: 'completed',
+        attemptCount: 2,
+        summary: 'Fixed',
+        completedAt: '2026-01-01T00:05:00.000Z',
+        payload: { intentId: 42, result: 'ok' },
+        updatedAt: '2026-01-01T00:05:00.000Z',
+      }));
+
+      expect(completed.id).toBe('wa-1');
+      expect(completed.status).toBe('completed');
+      expect(completed.attemptCount).toBe(2);
+      expect(completed.completedAt).toBe('2026-01-01T00:05:00.000Z');
+      expect(completed.payload).toEqual({ intentId: 42, result: 'ok' });
+      expect(adapter.getWorkerAction('autofix', 'wf-1/task-1:g0:a1')).toEqual(completed);
+    });
+
+    it('rejects conflicting ids when updating an existing worker action key', () => {
+      adapter.upsertWorkerAction(makeWorkerAction());
+
+      expect(() => adapter.upsertWorkerAction(makeWorkerAction({
+        id: 'wa-replacement-id',
+      }))).toThrow(/already exists with id "wa-1"/);
+    });
+
+    it('normalizes legacy canceled spelling before storing and filtering', () => {
+      const saved = adapter.upsertWorkerAction(makeWorkerAction({
+        id: 'wa-cancelled',
+        externalKey: 'wf-1/task-1:g0:cancelled',
+        status: 'canceled' as any,
+      }));
+
+      expect(saved.status).toBe('cancelled');
+      expect(adapter.listWorkerActions({ status: 'canceled' }).map((action) => action.id)).toEqual(['wa-cancelled']);
+    });
+
+    it('surfaces corrupted durable payload JSON', () => {
+      adapter.upsertWorkerAction(makeWorkerAction());
+      (adapter as any).db.run("UPDATE worker_actions SET payload_json = '{' WHERE id = 'wa-1'");
+
+      expect(() => adapter.getWorkerAction('autofix', 'wf-1/task-1:g0:a1'))
+        .toThrow(/Invalid worker action payload JSON for worker action "wa-1"/);
+    });
+
+    it('lists worker actions with workflow, task, worker, status, and limit filters', () => {
+      adapter.upsertWorkerAction(makeWorkerAction({
+        id: 'wa-1',
+        externalKey: 'a',
+        taskId: 'wf-1/task-1',
+        status: 'completed',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+      }));
+      adapter.upsertWorkerAction(makeWorkerAction({
+        id: 'wa-2',
+        externalKey: 'b',
+        taskId: 'wf-1/task-2',
+        status: 'running',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      }));
+      adapter.upsertWorkerAction(makeWorkerAction({
+        id: 'wa-3',
+        workerKind: 'github',
+        externalKey: 'c',
+        workflowId: 'wf-2',
+        taskId: 'wf-2/task-1',
+        status: 'running',
+        updatedAt: '2026-01-01T00:00:03.000Z',
+      }));
+
+      expect(adapter.listWorkerActions({ workflowId: 'wf-1' }).map((action) => action.id)).toEqual(['wa-2', 'wa-1']);
+      expect(adapter.listWorkerActions({ taskId: 'wf-1/task-1' }).map((action) => action.id)).toEqual(['wa-1']);
+      expect(adapter.listWorkerActions({ workerKind: 'github' }).map((action) => action.id)).toEqual(['wa-3']);
+      expect(adapter.listWorkerActions({ status: 'running', limit: 1 }).map((action) => action.id)).toEqual(['wa-3']);
+      expect(adapter.listWorkerActions({ limit: 0 })).toEqual([]);
     });
   });
 
@@ -878,10 +1127,23 @@ describe('SQLiteAdapter', () => {
         taskId: 'wf-launch/t1',
       })).toBe(true);
 
+      adapter.upsertWorkerAction({
+        id: 'wa-delete-workflow',
+        workerKind: 'autofix',
+        actionType: 'fix-task',
+        workflowId: 'wf-launch',
+        taskId: 'wf-launch/t1',
+        subjectType: 'task',
+        subjectId: 'wf-launch/t1',
+        externalKey: 'wf-launch/t1:g0:a1',
+        status: 'running',
+      });
+
       adapter.deleteWorkflow('wf-launch');
 
       expect(adapter.listLaunchDispatchesByState(['enqueued', 'leased'])).toEqual([]);
       expect(adapter.listExecutionResourceLeases()).toEqual([]);
+      expect(adapter.listWorkerActions({ workflowId: 'wf-launch' })).toEqual([]);
     });
   });
 
@@ -1420,17 +1682,35 @@ describe('SQLiteAdapter', () => {
       expect(loaded!.updatedAt >= before).toBe(true);
     });
 
-    it('clears externalDependencies when the key is present with undefined', () => {
+    it('rejects clearing externalDependencies without removal history', () => {
+      const deps = [
+        { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'completed' as const },
+      ];
       adapter.saveWorkflow({
         ...testWorkflow,
-        externalDependencies: [
-          { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'completed' },
-        ],
+        externalDependencies: deps,
       });
 
-      adapter.updateWorkflow('wf-1', { externalDependencies: undefined });
+      expect(() => adapter.updateWorkflow('wf-1', { externalDependencies: undefined })).toThrow(/without externalDependencyChanges/);
+      expect(adapter.loadWorkflow('wf-1')!.externalDependencies).toEqual(deps);
+    });
 
-      expect(adapter.loadWorkflow('wf-1')!.externalDependencies).toBeUndefined();
+    it('clears externalDependencies when detach-style removal history is present', () => {
+      const dep = { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'completed' as const };
+      const changedAt = '2026-06-13T00:00:00.000Z';
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        externalDependencies: [dep],
+      });
+
+      adapter.updateWorkflow('wf-1', {
+        externalDependencies: undefined,
+        externalDependencyChanges: [{ before: dep, changedAt }],
+      });
+
+      const loaded = adapter.loadWorkflow('wf-1')!;
+      expect(loaded.externalDependencies).toBeUndefined();
+      expect(loaded.externalDependencyChanges).toEqual([{ before: dep, changedAt }]);
     });
 
     it('leaves externalDependencies untouched when the key is absent', () => {
@@ -1717,7 +1997,20 @@ describe('SQLiteAdapter', () => {
       adapter.saveTask('wf-1', makeTask('t1'));
       adapter.saveTask('wf-1', makeTask('t2'));
 
+      adapter.upsertWorkerAction({
+        id: 'wa-delete-tasks',
+        workerKind: 'autofix',
+        actionType: 'fix-task',
+        workflowId: 'wf-1',
+        taskId: 't1',
+        subjectType: 'task',
+        subjectId: 't1',
+        externalKey: 't1:g0:a1',
+        status: 'running',
+      });
+
       adapter.deleteAllTasks('wf-1');
+      expect(adapter.listWorkerActions({ workflowId: 'wf-1' })).toEqual([]);
       const loaded = adapter.loadTasks('wf-1');
       expect(loaded).toHaveLength(0);
     });
@@ -1994,7 +2287,20 @@ describe('SQLiteAdapter', () => {
       adapter.saveTask('wf-2', makeTask('t2'));
       adapter.logEvent('t1', 'started');
 
+      adapter.upsertWorkerAction({
+        id: 'wa-delete-all',
+        workerKind: 'autofix',
+        actionType: 'fix-task',
+        workflowId: 'wf-1',
+        taskId: 't1',
+        subjectType: 'task',
+        subjectId: 't1',
+        externalKey: 't1:g0:a1',
+        status: 'running',
+      });
+
       adapter.deleteAllWorkflows();
+      expect(adapter.listWorkerActions()).toEqual([]);
 
       expect(adapter.listWorkflows()).toEqual([]);
       expect(adapter.loadTasks('wf-1')).toEqual([]);
@@ -2290,6 +2596,57 @@ describe('SQLiteAdapter', () => {
         db.appendOutputChunk('t-both', 'spool line 2\n');
 
         expect(db.getTaskOutput('t-both')).toBe('spool line 1\nspool line 2\n');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('surfaces legacy diagnostic rows alongside spool stream without duplicating old stream rows', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-legacy-diag-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-legacy-diag-tail'));
+
+        db.appendOutputChunk('t-legacy-diag-tail', 'test output before failure\n');
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-legacy-diag-tail', 'duplicate stream row\n'],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          [
+            't-legacy-diag-tail',
+            'Executor startup failed (ssh) on pool member remote-1; retrying another SSH pool member: connection reset\n',
+          ],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          [
+            't-legacy-diag-tail',
+            '\n[Startup Failure Diagnostic]\nmessage=concrete startup stderr\n--- end startup failure diagnostic ---\n',
+          ],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          [
+            't-legacy-diag-tail',
+            '\n[Shutdown Diagnostic]\nforcedStopReason=Application quit\n--- end shutdown diagnostic ---\n',
+          ],
+        );
+
+        const output = db.getTaskOutput('t-legacy-diag-tail');
+        expect(output).toContain('test output before failure');
+        expect(output).toContain('[Startup Failure Diagnostic]');
+        expect(output).toContain('concrete startup stderr');
+        expect(output).toContain('[Shutdown Diagnostic]');
+        expect(output).toContain('Application quit');
+        expect(output).not.toContain('duplicate stream row');
+        expect(output).not.toContain('retrying another SSH pool member');
 
         db.close();
       } finally {
@@ -2828,6 +3185,24 @@ describe('SQLiteAdapter', () => {
       const workflows = adapter.listWorkflows();
       expect(workflows[0].generation).toBe(2);
     });
+
+    it('rejects invalid generation values before writing', () => {
+      expect(() => adapter.saveWorkflow({ ...testWorkflow, generation: -1 })).toThrow(/generation/);
+      adapter.saveWorkflow(testWorkflow);
+
+      expect(() => adapter.updateWorkflow('wf-1', { generation: -1 })).toThrow(/generation/);
+      expect(adapter.loadWorkflow('wf-1')!.generation).toBe(0);
+    });
+
+    it('rejects invalid saved external dependency shapes before writing', () => {
+      expect(() => adapter.saveWorkflow({
+        ...testWorkflow,
+        externalDependencies: [
+          { workflowId: 'wf-upstream', taskId: '__merge__', requiredStatus: 'review_ready' },
+        ],
+      } as unknown as Workflow)).toThrow(/requiredStatus/);
+      expect(adapter.loadWorkflow('wf-1')).toBeUndefined();
+    });
   });
 
   describe('getAllTaskIds', () => {
@@ -3318,19 +3693,19 @@ describe('SQLiteAdapter', () => {
       }
     });
 
-    it('persists file-backed writes before close so restart recovery can read them', async () => {
+    it('persists file-backed writes so restart recovery can read them after close', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-durable-'));
       const dbPath = join(dir, 'invoker.db');
       try {
         const writer = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
         writer.saveWorkflow(testWorkflow);
         writer.saveTask(testWorkflow.id, makeTask('t-durable-before-close'));
+        writer.close();
 
         const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
         const loaded = reader.loadTasks(testWorkflow.id);
         expect(loaded.map((task) => task.id)).toContain('t-durable-before-close');
         reader.close();
-        writer.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

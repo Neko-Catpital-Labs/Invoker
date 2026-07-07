@@ -16,6 +16,7 @@ import type {
   WorkflowDerivedStatus,
   WorkflowRollup,
 } from '@invoker/workflow-graph';
+import type { PrerequisiteCheck, PrerequisiteReport } from './prerequisites.js';
 
 export type { WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-graph';
 import type { ReviewGateQueryResponse } from './types.js';
@@ -143,6 +144,81 @@ export interface QueueStatus {
   running: Array<{ taskId: string; description: string }>;
   queued: Array<{ taskId: string; priority: number; description: string }>;
 }
+export type WorkerLifecycleStatus = 'running' | 'stopped' | 'exited';
+export type WorkerPolicyStatus = 'enabled' | 'disabled' | 'unknown';
+export type WorkerControlAction = 'start' | 'stop';
+export type WorkerActionStatus =
+  | 'queued'
+  | 'pending'
+  | 'running'
+  | 'needs_input'
+  | 'review_ready'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'abandoned'
+  | 'cancelled';
+
+export interface WorkerActionSummary {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface WorkerRecoverySummary {
+  workerId: string;
+  owner: string;
+  lastWakeupAt?: string;
+  lastScanAt?: string;
+  lastSubmitAt?: string;
+  lastSkipAt?: string;
+  lastSkipReason?: string;
+  lastSkipTaskId?: string;
+  wakeups: number;
+  scans: number;
+  submissions: number;
+  skips: number;
+}
+
+export interface WorkerStatusEntry {
+  kind: string;
+  note: string;
+  runtimeKind?: string;
+  instanceId?: string;
+  lifecycle: WorkerLifecycleStatus;
+  policy: WorkerPolicyStatus;
+  policyReason?: string;
+  autoStarts: boolean;
+  startable: boolean;
+  stoppable: boolean;
+  controlDisabledReason?: string;
+  startedAt?: string;
+  stoppedAt?: string;
+  lastError?: string;
+  recentActions: WorkerActionSummary[];
+  recovery?: WorkerRecoverySummary;
+}
+
+export interface WorkerStatusSnapshot {
+  generatedAt: string;
+  workers: WorkerStatusEntry[];
+}
+
 
 export type UIActionGraphNodeType =
   | 'user-action'
@@ -224,6 +300,131 @@ export interface ResumeWorkflowResult {
   taskCount: number;
   startedCount: number;
 }
+export interface InAppPlanRequest {
+  goal: string;
+  presetKey?: string;
+}
+
+export type InAppPlanResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+      workflowIds?: string[];
+      workflowCount?: number;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export interface PlanningPresetOption {
+  key: string;
+  label: string;
+  tool: string;
+  model?: string;
+  isDefault: boolean;
+}
+
+export interface InAppPlanningPlanSummary {
+  name: string;
+  taskCount: number;
+  workflowCount?: number;
+  steps: string[];
+}
+export type InAppPlanningSessionStatus =
+  | 'still_discussing'
+  | 'waiting_for_answer'
+  | 'draft_ready'
+  | 'submitted';
+
+export interface InAppPlanningChatLine {
+  id: number;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  tone?: 'muted' | 'error' | 'success';
+  createdAt: string;
+}
+
+export interface InAppPlanningSessionSummary {
+  id: string;
+  title: string;
+  status: InAppPlanningSessionStatus;
+  presetKey: string;
+  messages: InAppPlanningChatLine[];
+  draftPlanAvailable: boolean;
+  draftPlanSummary?: InAppPlanningPlanSummary;
+  submittedWorkflowId?: string;
+  submittedPlanName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InAppPlanningCreateSessionRequest {
+  presetKey?: string;
+  title?: string;
+}
+
+export type InAppPlanningCreateSessionResponse =
+  | {
+      ok: true;
+      session: InAppPlanningSessionSummary;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export type InAppPlanningListSessionsResponse = {
+  ok: true;
+  sessions: InAppPlanningSessionSummary[];
+};
+
+
+export interface InAppPlanningChatRequest {
+  sessionId?: string;
+  message: string;
+  presetKey?: string;
+}
+
+export type InAppPlanningChatResponse =
+  | {
+      ok: true;
+      sessionId: string;
+      reply: string;
+      draftPlanAvailable: boolean;
+      draftPlanSummary?: InAppPlanningPlanSummary;
+    }
+  | {
+      ok: false;
+      sessionId?: string;
+      error: string;
+    };
+
+export interface InAppPlanningSubmitRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningSubmitResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+      workflowIds?: string[];
+      workflowCount?: number;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export interface InAppPlanningResetRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningResetResponse = { ok: true };
+
+
 
 export interface WorkflowListEntry {
   id: string;
@@ -334,6 +535,31 @@ export interface CliInstallResult {
   error?: string;
   status: CliInstallerStatus;
 }
+export interface InvokerSetupRequest {
+  updateCli: boolean;
+  installHelpers: boolean;
+  fixTools: boolean;
+  slack: false | {
+    botToken: string;
+    appToken: string;
+    signingSecret: string;
+    channelId: string;
+  };
+}
+
+export interface InvokerSetupStepResult {
+  id: 'invoker-cli' | 'helpers' | 'tools' | 'slack';
+  name: string;
+  ok: boolean;
+  output: string;
+  error?: string;
+}
+
+export interface InvokerSetupResult {
+  ok: boolean;
+  steps: InvokerSetupStepResult[];
+}
+
 
 export interface SystemDiagnostics {
   platform: string;
@@ -343,6 +569,7 @@ export interface SystemDiagnostics {
   tools: SystemToolStatus[];
   bundledSkills?: BundledSkillsStatus;
   cliInstaller?: CliInstallerStatus;
+  readiness?: PrerequisiteReport | PrerequisiteCheck[];
 }
 
 export type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only';
@@ -424,6 +651,34 @@ export interface SearchOptions {
 
 export const IpcChannels = {
   // Plan & Workflow Management
+  'invoker:plan-from-goal': {} as {
+    request: [request: InAppPlanRequest];
+    response: InAppPlanResponse;
+  },
+  'invoker:planning-chat-create': {} as {
+    request: [request?: InAppPlanningCreateSessionRequest];
+    response: InAppPlanningCreateSessionResponse;
+  },
+  'invoker:planning-chat-list': {} as {
+    request: [];
+    response: InAppPlanningListSessionsResponse;
+  },
+  'invoker:planning-chat-send': {} as {
+    request: [request: InAppPlanningChatRequest];
+    response: InAppPlanningChatResponse;
+  },
+  'invoker:planning-chat-submit': {} as {
+    request: [request: InAppPlanningSubmitRequest];
+    response: InAppPlanningSubmitResponse;
+  },
+  'invoker:planning-chat-reset': {} as {
+    request: [request: InAppPlanningResetRequest];
+    response: InAppPlanningResetResponse;
+  },
+  'invoker:get-planning-presets': {} as {
+    request: [];
+    response: PlanningPresetOption[];
+  },
   'invoker:load-plan': {} as {
     request: [planText: string];
     response: void;
@@ -534,6 +789,10 @@ export const IpcChannels = {
     response: WorkflowMutationAcceptedResult;
   },
   'invoker:cancel-task': {} as {
+    request: [taskId: string];
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:delete-task': {} as {
     request: [taskId: string];
     response: WorkflowMutationAcceptedResult;
   },
@@ -652,6 +911,18 @@ export const IpcChannels = {
     request: [];
     response: QueueStatus;
   },
+  'invoker:get-worker-status': {} as {
+    request: [];
+    response: WorkerStatusSnapshot;
+  },
+  'invoker:start-worker': {} as {
+    request: [kind: string];
+    response: WorkerStatusEntry;
+  },
+  'invoker:stop-worker': {} as {
+    request: [kind: string];
+    response: WorkerStatusEntry;
+  },
   'invoker:get-action-graph': {} as {
     request: [];
     response: ActionGraphResponse;
@@ -739,6 +1010,10 @@ export const IpcChannels = {
     request: [];
     response: CliInstallResult;
   },
+  'invoker:run-invoker-cli-setup': {} as {
+    request: [request: InvokerSetupRequest];
+    response: InvokerSetupResult;
+  },
 
 } as const;
 
@@ -749,6 +1024,14 @@ export const IpcChannels = {
 export const IpcTestOnlyChannels = {
   'invoker:inject-task-states': {} as {
     request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
+    response: void;
+  },
+  'invoker:set-test-plan-from-goal-response': {} as {
+    request: [response: { planYaml: string; planName: string } | null];
+    response: void;
+  },
+  'invoker:set-test-planning-chat-response': {} as {
+    request: [response: { planYaml: string; planName: string; reply?: string } | null];
     response: void;
   },
 } as const;

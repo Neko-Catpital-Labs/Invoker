@@ -1,5 +1,6 @@
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
+import type { WorkerStatusSnapshot } from '@invoker/contracts';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { isHeadlessReadOnlyCommand } from './headless-command-classification.js';
 import { runReadOnlyHeadlessQueryToString, type HeadlessQueryDeps } from './headless-query-list.js';
@@ -27,6 +28,7 @@ export interface OwnerReadQueryHandlers {
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
   getQueueStatus: () => Record<string, unknown>;
+  getWorkerStatus: () => WorkerStatusSnapshot;
   getWorkflowStatus: (workflowId?: string) => Record<string, unknown>;
   getTasksSnapshot: (opts: { refresh: boolean }) => Record<string, unknown>;
   getActionGraphSnapshot: () => Record<string, unknown>;
@@ -75,6 +77,8 @@ export function answerOwnerReadQuery(
       return { ownerMode: handlers.ownerModeLabel, ...handlers.getUiPerfStats() };
     case 'queue':
       return handlers.getQueueStatus();
+    case 'worker-status':
+      return { workerStatus: handlers.getWorkerStatus() };
     case 'workflow-status':
       return handlers.getWorkflowStatus(body.workflowId);
     case 'tasks':
@@ -156,6 +160,7 @@ export interface OwnerReadQueryDeps {
   getUiPerfStats: () => Record<string, unknown>;
   resetUiPerfStats: () => void;
   getStreamSequence: () => number;
+  getWorkerStatus: () => WorkerStatusSnapshot;
   resolveInvokerHomeRoot: () => string;
   orchestrator: ReadOrchestrator;
   persistence: ReadPersistence;
@@ -172,6 +177,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     getUiPerfStats: deps.getUiPerfStats,
     resetUiPerfStats: deps.resetUiPerfStats,
     getQueueStatus: () => orchestrator.getQueueStatus() as unknown as Record<string, unknown>,
+    getWorkerStatus: deps.getWorkerStatus,
     getWorkflowStatus: (workflowId?: string) => orchestrator.getWorkflowStatus(workflowId) as unknown as Record<string, unknown>,
     getTasksSnapshot: ({ refresh }) => {
       if (refresh) orchestrator.syncAllFromDb();

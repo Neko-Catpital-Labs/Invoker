@@ -413,15 +413,6 @@ export function TaskPanel({
         </span>
       </div>
 
-      {/* Auto-fix retry counter */}
-      {(task.config.autoFixRetries ?? 0) > 0 && (task.execution.autoFixAttempts ?? 0) > 0 && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Auto-fix</span>
-          <span className="text-xs text-gray-200">
-            attempt {task.execution.autoFixAttempts}/{task.config.autoFixRetries}
-          </span>
-        </div>
-      )}
 
       {/* Target branch (merge gates only) */}
       {task.config.isMergeNode && onSetMergeBranch && task.config.workflowId && (

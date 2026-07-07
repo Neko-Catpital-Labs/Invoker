@@ -25,7 +25,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
       listWorkflows: () => [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
     },
     mutations: { approveTask },
-    agentRegistry: { listExecution: () => [] },
+    agentRegistry: { listExecutionHarnesses: () => [] },
     loadConfig: () => ({}),
     getStreamSequence: () => 7,
     refreshTaskGraph: vi.fn(async () => {}),
@@ -50,6 +50,41 @@ describe('buildWebInvokerDispatch', () => {
       tasks: [makeTask('wf-1/task-1')],
       workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
       streamSequence: 7,
+    });
+  });
+
+  it('get-execution-harnesses returns harness metadata', async () => {
+    const harnesses = [
+      { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
+    ];
+    const { dispatch } = makeDispatch({
+      agentRegistry: { listExecutionHarnesses: () => harnesses },
+    });
+    expect(await dispatch('invoker:get-execution-harnesses', [])).toEqual(harnesses);
+  });
+
+  it('get-planning-presets returns configured planning presets', async () => {
+    const { dispatch } = makeDispatch({
+      loadConfig: () => ({
+        defaultSlackHarnessPreset: 'omp+claude',
+        slackHarnessPresets: {
+          custom: { tool: 'codex' },
+        },
+      } as any),
+    });
+    expect(await dispatch('invoker:get-planning-presets', [])).toEqual(expect.arrayContaining([
+      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: true },
+      { key: 'custom', label: 'custom', tool: 'codex', model: undefined, isDefault: false },
+    ]));
+  });
+
+  it('get-execution-defaults returns configured task execution defaults', async () => {
+    const { dispatch } = makeDispatch({
+      loadConfig: () => ({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' } as any),
+    });
+    expect(await dispatch('invoker:get-execution-defaults', [])).toEqual({
+      executionAgent: 'omp',
+      executionModel: 'chatgpt-5.4',
     });
   });
 

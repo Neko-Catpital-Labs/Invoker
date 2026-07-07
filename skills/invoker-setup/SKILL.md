@@ -18,6 +18,9 @@ invoker-cli doctor --json
 ```
 
 Read the JSON `checks`. Each has `status` (`ok` | `warn` | `error`), `detail`, and `remediation`.
+The desktop System Setup panel shows the same config-aware readiness report as `doctor`: the
+canonical tool set (`git`, `pnpm`, `gh`, `docker`, `ssh`, `codex`, `claude`, `cursor`, `omp`),
+the config check, planning tools, and the default preset check.
 
 - `error` blocks "good to go" — surface the `remediation` verbatim.
 - `warn` is advisory (an optional tool / preset not installed) — mention it, don't block.
@@ -82,8 +85,10 @@ Surface each failing check's `remediation`.
 ## 5. Done
 
 Tell the user to restart Invoker (or that the next launch picks up `~/.invoker/.env`). On launch the
-app logs a one-line prerequisites summary; if the default preset's tool is missing it warns but still starts, and
-if Slack env is incomplete it logs exactly which variable is missing and to run `invoker-cli setup slack`.
+app logs a one-line prerequisites summary, and the desktop System Setup panel reports the same
+canonical tools, config, planning-tools, and default-preset readiness as `invoker-cli doctor`; if the
+default preset's tool is missing, the readiness check reports an error while startup still continues,
+and if Slack env is incomplete it logs exactly which variable is missing and to run `invoker-cli setup slack`.
 
 ## Hard rules
 

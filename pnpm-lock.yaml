@@ -59,6 +59,9 @@ importers:
       '@invoker/runtime-service':
         specifier: workspace:*
         version: link:../runtime-service
+      '@invoker/surfaces':
+        specifier: workspace:*
+        version: link:../surfaces
       '@invoker/transport':
         specifier: workspace:*
         version: link:../transport

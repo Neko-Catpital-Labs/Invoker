@@ -134,13 +134,14 @@ describe('extractYamlPlan', () => {
     expect(plan.onFinish).toBeUndefined();
   });
 
-  it('preserves explicit fields from YAML', () => {
+  it('preserves explicit supported fields and strips legacy auto-fix fields from planner YAML', () => {
     const text = `\`\`\`yaml
 name: "Full"
 onFinish: merge
 baseBranch: develop
 featureBranch: feature/test
 mergeMode: automatic
+autoFixRetries: 3
 tasks:
   - id: t1
     description: "test"
@@ -148,6 +149,7 @@ tasks:
     dependencies: []
     pivot: true
     autoFix: true
+    autoFixRetries: 2
     requiresManualApproval: true
 \`\`\``;
     const result = extractYamlPlan(text);
@@ -156,9 +158,50 @@ tasks:
     expect(plan.baseBranch).toBe('develop');
     expect(plan.featureBranch).toBe('feature/test');
     expect(plan.mergeMode).toBe('automatic');
+    expect(plan.autoFixRetries).toBeUndefined();
     expect(plan.tasks[0].pivot).toBe(true);
-    expect(plan.tasks[0].autoFix).toBe(true);
+    expect(plan.tasks[0].autoFix).toBeUndefined();
+    expect(plan.tasks[0].autoFixRetries).toBeUndefined();
     expect(plan.tasks[0].requiresManualApproval).toBe(true);
+  });
+
+  it('accepts stacked workflow YAML and strips legacy fields recursively', () => {
+    const text = `\`\`\`yaml
+name: "Workers Surface"
+repoUrl: git@github.com:test/repo.git
+autoFixRetries: 3
+workflows:
+  - name: "Workers Surface Contracts"
+    autoFixRetries: 2
+    tasks:
+      - id: define-worker-contracts
+        description: "Define worker contracts"
+        prompt: "Update shared contracts for workers"
+        dependencies: []
+        autoFix: true
+      - id: verify-worker-contracts
+        description: "Verify worker contracts"
+        command: "pnpm test packages/contracts"
+        dependencies: [define-worker-contracts]
+  - name: "Workers Surface UI"
+    tasks:
+      - id: build-workers-ui
+        description: "Build workers UI"
+        prompt: "Implement the workers surface"
+        dependencies: []
+\`\`\``;
+    const result = extractYamlPlan(text);
+    expect(result).not.toBeNull();
+    const plan = parsePlanText(result!);
+    expect(plan.name).toBe('Workers Surface');
+    expect(plan.tasks).toBeUndefined();
+    expect(plan.workflows.map((workflow: any) => workflow.name)).toEqual([
+      'Workers Surface Contracts',
+      'Workers Surface UI',
+    ]);
+    expect(plan.autoFixRetries).toBeUndefined();
+    expect(plan.workflows[0].autoFixRetries).toBeUndefined();
+    expect(plan.workflows[0].tasks[0].autoFix).toBeUndefined();
   });
 
   it('preserves discovered repo commands without rewriting them', () => {
@@ -658,6 +701,39 @@ describe('PlanConversation prompt construction', () => {
     // Manual remains the verification-only default; automatic still documented.
     expect(prompt).toContain('"manual" (default)');
     expect(prompt).toContain('"automatic"');
+  });
+
+  it('buildCursorPrompt can prefer stacked workflows', () => {
+    const conv = new PlanConversation({
+      repoUrl: 'git@github.com:test/repo.git',
+      preferStackedWorkflows: true,
+    });
+    (conv as any).messages.push({ role: 'user', content: 'Build the Workers Surface' });
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('prefer a workflow stack');
+    expect(prompt).toContain('workflows:');
+    expect(prompt).toContain('Each downstream workflow is based on the previous workflow');
+    expect(prompt).toContain('Build the Workers Surface');
+  });
+
+  it('agent mode refuses Invoker YAML and redirects to plan:', () => {
+    // Agent threads can never submit a plan — handleLobbySubmit rejects a submit
+    // unless conversationMode === 'plan'. So the agent prompt must not offer to
+    // draft Invoker YAML (which would be an un-submittable dead end); it must
+    // steer the user to a `plan:` thread instead.
+    const conv = new PlanConversation({ mode: 'agent' });
+    (conv as any).messages.push({ role: 'user', content: 'Make me an Invoker plan to add a REST API' });
+    const prompt = conv.buildCursorPrompt();
+
+    // Never the plan-mode system prompt in an agent thread.
+    expect(prompt).not.toContain('Invoker orchestrator');
+    // Agent mode must refuse YAML unconditionally and point at `plan:`.
+    expect(prompt).toContain('Do NOT generate Invoker YAML');
+    expect(prompt).toContain('plan:');
+    // The old loophole permitted YAML "unless the user explicitly asks" — that
+    // produced drafts Slack silently rejects on submit.
+    expect(prompt).not.toContain('unless the user explicitly asks');
   });
 });
 

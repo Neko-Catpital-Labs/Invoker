@@ -7,10 +7,10 @@
  * Output: JSON array of errors (stable keys: errorType, field, taskId, message, value)
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, normalize, resolve } from 'node:path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -76,6 +76,166 @@ function usesPipefailSetCommand(command) {
 
 function isExplicitBashCommand(command) {
   return EXPLICIT_BASH_COMMAND.test(command);
+}
+
+function findRepoRoot(startDir) {
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: startDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return resolve(startDir, '../../..');
+  }
+}
+
+const PATH_BOUNDARY = String.raw`[\s\`"'()[\]{}<>:;,;&|=]`;
+const REPO_ROOT_PATH_PREFIX = String.raw`(?:\.\/|\$PWD\/|\$\{PWD\}\/|\$\(pwd\)\/)?`;
+const REPO_PATH_BODY = String.raw`(?:packages|scripts|skills|docs|plans|\.github)\/[A-Za-z0-9_./@+-]+`;
+const COMMAND_SCRIPT_BODY = String.raw`(?:${REPO_PATH_BODY}|[A-Za-z0-9_./@+-]+)\.sh`;
+const REPO_RELATIVE_PATH_REFERENCE = new RegExp(`(?:^|${PATH_BOUNDARY})${REPO_ROOT_PATH_PREFIX}(${REPO_PATH_BODY})(?=$|${PATH_BOUNDARY})`, 'g');
+const COMMAND_REQUIRED_FILE_REFERENCE = new RegExp(`(?:^|${PATH_BOUNDARY})${REPO_ROOT_PATH_PREFIX}(${COMMAND_SCRIPT_BODY})(?=$|${PATH_BOUNDARY})`, 'g');
+const PARENT_DIRECTORY_PATH_REFERENCE = new RegExp(`(?:^|${PATH_BOUNDARY})((?:${REPO_ROOT_PATH_PREFIX})(?:[A-Za-z0-9_@+.-]+\\/|\\.\\/|\\.\\.\\/)*\\.\\.(?:\\/|$)(?:[A-Za-z0-9_./@+-]+)?)(?=$|${PATH_BOUNDARY})`, 'g');
+
+function stripRepoRootPathPrefix(rawPath) {
+  return rawPath.replace(/^(?:\.\/|\$PWD\/|\$\{PWD\}\/|\$\(pwd\)\/)/, '');
+}
+
+function hasParentDirectorySegment(rawPath) {
+  return stripRepoRootPathPrefix(rawPath).split('/').includes('..');
+}
+
+function isUnsupportedParentDirectoryReference(rawPath) {
+  const repoPath = stripRepoRootPathPrefix(rawPath);
+  const segments = repoPath.split('/').filter(Boolean);
+  return (
+    segments.includes('..')
+    && (
+      segments.some((segment) => ['packages', 'scripts', 'skills', 'docs', 'plans', '.github'].includes(segment))
+      || repoPath.endsWith('.sh')
+    )
+  );
+}
+
+function normalizedRepoPath(rawPath) {
+  const repoPath = stripRepoRootPathPrefix(rawPath);
+  const normalizedPath = normalize(repoPath);
+  if (
+    hasParentDirectorySegment(rawPath)
+    || normalizedPath.startsWith('/')
+    || normalizedPath.endsWith('/')
+  ) {
+    return null;
+  }
+
+  return normalizedPath;
+}
+
+function referencedPathTokens(text, pattern) {
+  pattern.lastIndex = 0;
+  const paths = new Set();
+
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    const rawPath = match[1];
+    if (!rawPath) continue;
+    paths.add(rawPath);
+  }
+
+  return [...paths];
+}
+
+function referencedRepoPaths(text, pattern = REPO_RELATIVE_PATH_REFERENCE) {
+  const paths = new Set();
+
+  for (const rawPath of referencedPathTokens(text, pattern)) {
+    const normalizedPath = normalizedRepoPath(rawPath);
+    if (normalizedPath === null) continue;
+    paths.add(normalizedPath);
+  }
+
+  return [...paths];
+}
+
+function isCommittedInHead(repoRoot, relativePath) {
+  try {
+    execFileSync('git', ['cat-file', '-e', `HEAD:${relativePath}`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pushFileNotInRemoteError(errors, taskId, field, path, value) {
+  errors.push({
+    errorType: 'local_only_file_reference',
+    field,
+    ...(taskId ? { taskId } : {}),
+    message: `${taskId ? `Task "${taskId}"` : 'Plan'} references "${path}", but that file is not checked into the remote branch this plan will run on. Commit and push it before submission, or replace the reference with a checked-in file.`,
+    value,
+  });
+}
+
+function pushUnsupportedRelativePathError(errors, taskId, field, path, value) {
+  errors.push({
+    errorType: 'unsupported_relative_file_reference',
+    field,
+    ...(taskId ? { taskId } : {}),
+    message: `${taskId ? `Task "${taskId}"` : 'Plan'} uses "${path}", but Invoker plans must use repo-relative paths checked into the remote branch. Replace it with a path like "scripts/..." or remove the parent-directory traversal.`,
+    value,
+  });
+}
+
+function validateUnsupportedRelativePathReferences(errors, taskId, field, value) {
+  for (const relativePath of referencedPathTokens(value, PARENT_DIRECTORY_PATH_REFERENCE)) {
+    if (!isUnsupportedParentDirectoryReference(relativePath)) continue;
+    pushUnsupportedRelativePathError(errors, taskId, field, relativePath, value);
+  }
+}
+
+function validateLocalOnlyFileReferences(errors, taskId, field, value, repoRoot) {
+  for (const referencedPath of referencedRepoPaths(value)) {
+    if (!existsSync(join(repoRoot, referencedPath))) continue;
+
+    if (!isCommittedInHead(repoRoot, referencedPath)) {
+      pushFileNotInRemoteError(errors, taskId, field, referencedPath, value);
+    }
+  }
+}
+
+function validatePlanFileReferences(errors, taskId, field, value, repoRoot) {
+  validateUnsupportedRelativePathReferences(errors, taskId, field, value);
+  validateLocalOnlyFileReferences(errors, taskId, field, value, repoRoot);
+}
+
+function validateRequiredCommandFiles(errors, taskId, field, command, repoRoot) {
+  const repoReferences = new Set(referencedRepoPaths(command));
+  for (const scriptPath of referencedRepoPaths(command, COMMAND_REQUIRED_FILE_REFERENCE)) {
+    const absolutePath = join(repoRoot, scriptPath);
+    const existsInWorktree = existsSync(absolutePath);
+    const existsInHead = isCommittedInHead(repoRoot, scriptPath);
+
+    if (existsInWorktree && !existsInHead) {
+      if (!repoReferences.has(scriptPath)) {
+        pushFileNotInRemoteError(errors, taskId, field, scriptPath, command);
+      }
+      continue;
+    }
+
+    if (!existsInWorktree && !existsInHead) {
+      errors.push({
+        errorType: 'missing_file_reference',
+        field,
+        taskId,
+        message: `Task "${taskId}" references "${scriptPath}", but that file is not checked into the remote branch this plan will run on. Commit and push it before submission, or replace the reference with a checked-in file.`,
+        value: command,
+      });
+    }
+  }
 }
 
 function extractNestedShellCommand(command, startIndex) {
@@ -324,7 +484,7 @@ function validateReviewGate(reviewGate, errors) {
   });
 }
 
-function validatePlan(yamlContent) {
+function validatePlan(yamlContent, repoRoot) {
   const errors = [];
 
   // Parse YAML
@@ -435,6 +595,10 @@ function validatePlan(yamlContent) {
     validateReviewGate(raw.reviewGate, errors);
   }
 
+  if (typeof raw.description === 'string') {
+    validatePlanFileReferences(errors, undefined, 'description', raw.description, repoRoot);
+  }
+
   // Collect all externalDependencies (plan-level + task-level) for cross-checks
   const allExtDeps = [];
   if (Array.isArray(raw.externalDependencies)) {
@@ -499,6 +663,19 @@ function validatePlan(yamlContent) {
         message: `Task "${taskId}" must have a non-empty "description" field`,
         value: task.description,
       });
+    }
+
+    if (typeof task.description === 'string') {
+      validatePlanFileReferences(errors, taskId, 'description', task.description, repoRoot);
+    }
+
+    if (typeof task.prompt === 'string') {
+      validatePlanFileReferences(errors, taskId, 'prompt', task.prompt, repoRoot);
+    }
+
+    if (typeof task.command === 'string') {
+      validatePlanFileReferences(errors, taskId, 'command', task.command, repoRoot);
+      validateRequiredCommandFiles(errors, taskId, 'command', task.command, repoRoot);
     }
 
     // Validate command/prompt exclusivity
@@ -601,6 +778,19 @@ function validatePlan(yamlContent) {
             });
           }
 
+          if (typeof variant.description === 'string') {
+            validatePlanFileReferences(errors, taskId, `experimentVariants[${varIndex}].description`, variant.description, repoRoot);
+          }
+
+          if (typeof variant.prompt === 'string') {
+            validatePlanFileReferences(errors, taskId, `experimentVariants[${varIndex}].prompt`, variant.prompt, repoRoot);
+          }
+
+          if (typeof variant.command === 'string') {
+            validatePlanFileReferences(errors, taskId, `experimentVariants[${varIndex}].command`, variant.command, repoRoot);
+            validateRequiredCommandFiles(errors, taskId, `experimentVariants[${varIndex}].command`, variant.command, repoRoot);
+          }
+
           if (typeof variant.command === 'string' && hasUnsafeNestedShellVariableExpansion(variant.command)) {
             pushUnsafeCommandError(errors, taskId, `experimentVariants[${varIndex}].command`, variant.command);
           }
@@ -657,7 +847,7 @@ function main() {
     process.exit(1);
   }
 
-  const errors = validatePlan(content);
+  const errors = validatePlan(content, findRepoRoot(process.cwd()));
 
   if (errors.length > 0) {
     console.error(JSON.stringify(errors, null, 2));

@@ -10,6 +10,7 @@ import {
   TaskRunner,
   WorktreeExecutor,
   acquireWorkerLock,
+  createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
   registerExternalWorkers,
@@ -20,6 +21,7 @@ import {
   type WorkerDefinition,
   type WorkerRegistry,
   type WorkerRuntime,
+  type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import {
   IpcBus,
@@ -104,6 +106,10 @@ type CliRuntimeConfig = {
     poolId: string;
     strategy?: 'enforce' | 'route';
   }>;
+  autoFixRetries?: number;
+  autoFixAgent?: string;
+  autoFixExecutionModel?: string;
+  autoApproveAIFixes?: boolean;
   externalWorkers?: ExternalWorkerConfig[];
 };
 
@@ -124,7 +130,7 @@ function usage(): string {
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli doctor [--fix] [--json]',
-    '  invoker-cli setup [slack] [--check]',
+    '  invoker-cli setup [slack] [--check|--from-env]',
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
     '  invoker-cli --help',
@@ -143,6 +149,7 @@ function usage(): string {
     '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
     '  --config <path>  Optional config path reserved for CLI runtime configuration.',
     '  --json           Emit only a machine-readable result summary on stdout.',
+    '  --from-env       Run Slack setup from SLACK_* environment values without prompts.',
     '  --fix            Best-effort install of missing doctor tools.',
     '  --help           Show this help text.',
     '  --version        Show the CLI version.',
@@ -476,7 +483,7 @@ function workerDisplayName(kind: string): string {
   return kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : kind;
 }
 
-function printWorkerKinds(registry: WorkerRegistry): void {
+function printWorkerKinds<TDeps>(registry: WorkerRegistry<TDeps>): void {
   process.stdout.write('Worker kinds\n');
   for (const worker of registry.list()) {
     process.stdout.write(`  ${worker.kind} — available (${worker.note})\n`);
@@ -494,8 +501,7 @@ function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorke
  * poll loop, so the two doors can never run competing scans. The CLI owns the
  * foreground lifetime — owner discovery, connect message, the SIGINT/SIGTERM
  * block, and a deterministic stop.
- */
-async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise<number> {
+async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
   const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
@@ -521,6 +527,7 @@ async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise
   // Open the try before constructing/starting the worker so persistence is
   // always closed even if construction or start throws (otherwise the SQLite
   // handle leaks when control unwinds to main()'s catch).
+  const autoFixAttemptLedger = createAutoFixAttemptLedger();
   try {
     const worker = definition.factory({
       logger: silentLogger,
@@ -532,6 +539,7 @@ async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise
       },
       autoFix: {
         defaultAutoFixRetries: autoFixRetries,
+        attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => autoFixAgent,
       },
     });
@@ -577,7 +585,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
       const registry = registerExternalWorkers(
-        registerAutoFixWorker(createWorkerRegistry()),
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
         readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
       );
       if (subcommand === 'list') {

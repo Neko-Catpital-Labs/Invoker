@@ -11,7 +11,7 @@ import {
   type ExecutorRegistry,
 } from '@invoker/execution-engine';
 import type { Logger } from '@invoker/contracts';
-import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from '../config.js';
+import { loadConfig, resolveDefaultTaskExecutionSettings, resolveSecretsFilePath, type InvokerConfig } from '../config.js';
 import { publishReviewGateCiFailedLifecycleEvent } from '../lifecycle-event-bridge.js';
 
 export type TaskHandleMap = Map<string, { handle: ExecutorHandle; executor: Executor }>;
@@ -90,6 +90,7 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
     },
     remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     executionPoolsProvider: () => loadConfig().executionPools ?? {},
+    executionDefaultsProvider: () => resolveDefaultTaskExecutionSettings(loadConfig()),
     reviewGateCiFailurePublisher: {
       publish: (trigger) => {
         publishReviewGateCiFailedLifecycleEvent(trigger, {

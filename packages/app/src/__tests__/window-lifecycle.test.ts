@@ -118,6 +118,40 @@ describe('window-lifecycle', () => {
     expect(electronMock.fakeWindow.loadURL).toHaveBeenCalledWith(expect.stringContaining('The UI failed to load'));
   });
 
+  it('keeps e2e compositor windows hidden when they become interactive', () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
+    const recordStartupMark = vi.fn();
+    const setUiInteractive = vi.fn();
+    const startDeferredStartupWork = vi.fn();
+
+    createMainWindow({
+      appRootDir: '/tmp/app',
+      invokerConfig: {},
+      logger,
+      hideE2eWindow: true,
+      enableTestCompositor: true,
+      recordStartupMark,
+      setUiInteractive,
+      startDeferredStartupWork,
+      setMainWindow: vi.fn(),
+    });
+
+    const options = electronMock.BrowserWindow.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(options.show).toBe(false);
+    expect(options.skipTaskbar).toBe(true);
+
+    const readyHandler = electronMock.fakeWindow.once.mock.calls.find(([eventName]) => eventName === 'ready-to-show')?.[1];
+    expect(readyHandler).toBeDefined();
+    readyHandler?.();
+
+    expect(electronMock.fakeWindow.show).not.toHaveBeenCalled();
+    expect(electronMock.fakeWindow.showInactive).not.toHaveBeenCalled();
+    expect(electronMock.fakeWindow.focus).not.toHaveBeenCalled();
+    expect(setUiInteractive).toHaveBeenCalledWith(true);
+    expect(startDeferredStartupWork).toHaveBeenCalledTimes(1);
+    expect(recordStartupMark).toHaveBeenCalledWith('window.hidden-ready');
+  });
+
   it('recreates the main window on activate only when no BrowserWindow exists', () => {
     const handlers = new Map<string, (...args: unknown[]) => void>();
     const createWindow = vi.fn();

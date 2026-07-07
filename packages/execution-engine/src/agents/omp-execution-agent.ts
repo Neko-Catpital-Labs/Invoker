@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { AgentCommandBuildOptions, AgentCommandSpec, ExecutionAgent } from '../agent.js';
+import type { AgentCommandBuildOptions, AgentCommandSpec, ExecutionAgent, ExecutionModelOption } from '../agent.js';
 
 export interface OmpExecutionAgentConfig {
   command?: string;
@@ -9,12 +9,22 @@ export interface OmpExecutionAgentConfig {
   containerHomePath?: string;
 }
 
+const OMP_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
+  { id: 'chatgpt-5.4', label: 'ChatGPT 5.4' },
+  { id: 'anthropic/claude-sonnet-4', label: 'Anthropic Claude Sonnet 4' },
+  { id: 'anthropic/claude-opus-4', label: 'Anthropic Claude Opus 4' },
+  { id: 'openai/gpt-5', label: 'OpenAI GPT-5' },
+  { id: 'openai/gpt-5-codex', label: 'OpenAI GPT-5 Codex' },
+  { id: 'openai/o3', label: 'OpenAI o3' },
+];
+
 export class OmpExecutionAgent implements ExecutionAgent {
   readonly name = 'omp';
   readonly stdinMode = 'ignore' as const;
   readonly linuxTerminalTail = 'exec_bash' as const;
   readonly bundledSkillRoot: string;
   readonly bundledSkills = ['make-pr'] as const;
+  readonly supportedModels = OMP_SUPPORTED_MODELS;
 
   private readonly command: string;
   private readonly configDir: string;
