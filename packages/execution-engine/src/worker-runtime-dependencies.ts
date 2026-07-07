@@ -8,6 +8,7 @@ import type {
 } from './auto-fix-recovery.js';
 import type { CiFailureWorkerStore, CiFailureWorkerSubmitter } from './workers/ci-failure-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
+import type { PrMaintenanceWorkersConfig } from './workers/pr-maintenance-workers.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
@@ -23,4 +24,6 @@ export interface WorkerRuntimeDependencies {
   reviewGate?: PrStatusReviewGate;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
+  /** PR maintenance worker tuning. */
+  prMaintenance?: PrMaintenanceWorkersConfig;
 }

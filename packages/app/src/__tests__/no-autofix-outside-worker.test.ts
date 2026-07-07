@@ -64,7 +64,6 @@ const TRIGGER_SIGNALS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
  *  (A) the shared auto-fix worker engine in `@invoker/execution-engine`, and
  *  (B) the shared fix action / operator-facing `fix ... --auto-fix` command
  *      route in `@invoker/app` (including the thin re-export shim).
- *
  * Adding an entry here is a deliberate act: it declares a new sanctioned
  * auto-fix site. Anything not listed here that trips a signal fails the build.
  */

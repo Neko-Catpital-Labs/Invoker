@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
+  MERGIFY_REQUEUE_WORKER_KIND,
+  PR_CONFLICT_REBASE_WORKER_KIND,
   createWorkerRegistry,
   PR_STATUS_WORKER_KIND,
   type WorkerRuntime,
@@ -9,8 +12,8 @@ import {
 } from '@invoker/execution-engine';
 
 import {
-  AUTO_STARTED_OWNER_WORKER_KINDS,
   createWorkerRuntimeController,
+  getAutoStartedOwnerWorkerKinds,
 } from '../worker-control.js';
 
 interface TestWorkerRuntime extends WorkerRuntime {
@@ -64,7 +67,7 @@ function deps(): WorkerRuntimeDependencies {
   } as WorkerRuntimeDependencies;
 }
 
-function controller() {
+function controller(options: { autoFixRetries?: number; autoStartKinds?: readonly string[] } = {}) {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
   const runtimes = new Map<string, TestWorkerRuntime[]>();
   const register = (kind: string, note: string, runtimeKind = kind) => {
@@ -83,6 +86,9 @@ function controller() {
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
   register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
+  register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit reviews.');
+  register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicting PRs.');
+  register(MERGIFY_REQUEUE_WORKER_KIND, 'Requeues Mergify PRs.');
   register('external-preview', 'External preview worker.');
 
   return {
@@ -90,36 +96,62 @@ function controller() {
     controller: createWorkerRuntimeController({
       registry,
       deps: deps(),
-      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      autoStartKinds: options.autoStartKinds ?? getAutoStartedOwnerWorkerKinds({}),
       persistence: persistence() as never,
       canControl: () => true,
     }),
   };
 }
 
+describe('getAutoStartedOwnerWorkerKinds', () => {
+  it('does not auto-start PR maintenance workers by default', () => {
+    expect(getAutoStartedOwnerWorkerKinds({})).toEqual([
+      AUTO_FIX_WORKER_KIND,
+      PR_STATUS_WORKER_KIND,
+      CI_FAILURE_WORKER_KIND,
+    ]);
+  });
+
+  it('adds matching PR maintenance workers when enabled', () => {
+    expect(getAutoStartedOwnerWorkerKinds({
+      prMaintenance: {
+        coderabbitAddress: { enabled: true },
+        prConflictRebase: { enabled: true },
+        mergifyRequeue: { enabled: true },
+      },
+    })).toEqual([
+      AUTO_FIX_WORKER_KIND,
+      PR_STATUS_WORKER_KIND,
+      CI_FAILURE_WORKER_KIND,
+      CODERABBIT_ADDRESS_WORKER_KIND,
+      PR_CONFLICT_REBASE_WORKER_KIND,
+      MERGIFY_REQUEUE_WORKER_KIND,
+    ]);
+  });
+});
+
 describe('createWorkerRuntimeController', () => {
-  it('auto-start starts only pr-status and ci-failure', () => {
-    const setup = controller();
+  it('auto-start starts autofix, pr-status, and ci-failure', () => {
+    const setup = controller({ autoFixRetries: 3 });
 
     setup.controller.startAutoStartedWorkers();
     const snapshot = setup.controller.snapshot();
 
+    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
-    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
   });
 
-  it('autofix remains stopped until explicitly started', () => {
-    const setup = controller();
+  it('autofix duplicate start is idempotent after autostart', () => {
+    const setup = controller({ autoFixRetries: 3 });
 
     setup.controller.startAutoStartedWorkers();
-    expect(setup.runtimes.get(AUTO_FIX_WORKER_KIND)).toBeUndefined();
-
     const row = setup.controller.start(AUTO_FIX_WORKER_KIND);
 
     expect(row.lifecycle).toBe('running');
     expect(row.runtimeKind).toBe('recovery');
+    expect(setup.runtimes.get(AUTO_FIX_WORKER_KIND)).toHaveLength(1);
   });
 
   it('duplicate start is idempotent', () => {
@@ -162,6 +194,12 @@ describe('createWorkerRuntimeController', () => {
       policy: 'enabled',
       startable: false,
     });
+    for (const kind of [CODERABBIT_ADDRESS_WORKER_KIND, PR_CONFLICT_REBASE_WORKER_KIND, MERGIFY_REQUEUE_WORKER_KIND]) {
+      expect(() => setup.controller.start(kind)).not.toThrow();
+      expect(setup.controller.snapshot().workers.find((worker) => worker.kind === kind)).toMatchObject({
+        policy: 'enabled',
+      });
+    }
   });
 
   it('an exited external worker row reports exited', () => {
