@@ -17,8 +17,14 @@ import type {
   InAppPlanningSubmitResponse,
   PlanningPresetOption,
 } from '@invoker/contracts';
+import type {
+  ConversationMessageEntry,
+  ConversationRepository,
+  InAppPlanningSessionPatch,
+  InAppPlanningSessionRecord,
+} from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
-import type { HarnessPreset, PlanConversation, PlanningCommandBuilder } from '@invoker/surfaces';
+import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
 export interface LoadedGeneratedPlan {
@@ -28,11 +34,19 @@ export interface LoadedGeneratedPlan {
   workflowCount?: number;
 }
 
+export interface InAppPlanningSessionStore {
+  upsertInAppPlanningSession(record: InAppPlanningSessionRecord): void;
+  updateInAppPlanningSession(sessionId: string, patch: InAppPlanningSessionPatch): void;
+  deleteInAppPlanningSession(sessionId: string): void;
+}
+
 export interface InAppPlannerDeps {
   config: InvokerConfig;
   loadGeneratedPlan: (planText: string) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
   workingDir?: string;
   planningCommandBuilder?: PlanningCommandBuilder;
+  conversationRepo?: ConversationRepository;
+  plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
 }
 
 export interface InAppPlanningChatSession {
@@ -43,6 +57,7 @@ export interface InAppPlanningChatSession {
   messages: InAppPlanningChatLine[];
   conversation: PlanConversation;
   draftPlanSummary?: InAppPlanningPlanSummary;
+  draftPlanText?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   createdAt: string;
@@ -68,13 +83,17 @@ function isModuleResolutionError(error: unknown): boolean {
   );
 }
 
-async function loadPlannerSurfaces(): Promise<{
+type PlanConversationConstructor = new (config: PlanConversationConfig) => PlanConversation;
+
+interface PlannerSurfacesModule {
   BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset>;
   DEFAULT_HARNESS_PRESET: string;
-  PlanConversation: new (...args: any[]) => PlanConversation;
+  PlanConversation: PlanConversationConstructor;
   extractYamlPlan: (output: string) => string | null;
   summarizePlanText: (planText: string) => InAppPlanningPlanSummary | null;
-}> {
+}
+
+async function loadPlannerSurfaces(): Promise<PlannerSurfacesModule> {
   try {
     // Static import cannot work in required-fast CI because that job boots the built app
     // before the workspace @invoker/surfaces package has produced dist/index.js.
@@ -85,6 +104,7 @@ async function loadPlannerSurfaces(): Promise<{
     }
     const builtSurfacesModulePath = '../../surfaces/dist/index.js';
     try {
+      // Runtime fallback: built Electron tests may run before workspace package exports resolve.
       return await import(builtSurfacesModulePath);
     } catch (distError) {
       if (!isModuleResolutionError(distError)) {
@@ -94,6 +114,7 @@ async function loadPlannerSurfaces(): Promise<{
         throw new Error('Unable to load @invoker/surfaces. Build packages/surfaces first so dist/index.js exists.');
       }
       const sourceSurfacesModulePath = '../../surfaces/src/index.ts';
+      // Runtime fallback: Vitest can execute TypeScript sources before package dist exists.
       return await import(sourceSurfacesModulePath);
     }
   }
@@ -155,11 +176,113 @@ function appendSessionMessage(
   session.updatedAt = createdAt;
 }
 
+function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boolean): InAppPlanningSessionRecord {
+  return {
+    id: session.id,
+    title: session.title,
+    presetKey: session.presetKey,
+    status: session.status,
+    messages: session.messages,
+    draftPlanSummary: session.draftPlanSummary,
+    submittedWorkflowId: session.submittedWorkflowId,
+    submittedPlanName: session.submittedPlanName,
+    pendingResponse,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+}
+
+function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessionSummary {
+  return {
+    id: session.id,
+    title: session.title,
+    status: session.status,
+    presetKey: session.presetKey,
+    messages: session.messages,
+    draftPlanAvailable: Boolean(session.draftPlanSummary),
+    draftPlanSummary: session.draftPlanSummary,
+    submittedWorkflowId: session.submittedWorkflowId,
+    submittedPlanName: session.submittedPlanName,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+}
+
+function persistPlanningSession(
+  session: InAppPlanningChatSession,
+  store: InAppPlanningSessionStore | undefined,
+  pendingResponse: boolean,
+): void {
+  if (!store) return;
+  store.upsertInAppPlanningSession(sessionToRecord(session, pendingResponse));
+}
+
+function saveOverrideConversation(
+  repo: ConversationRepository | undefined,
+  sessionId: string,
+  formattedMessage: string,
+  reply: string,
+): void {
+  if (!repo) return;
+  const existing = repo.loadConversation(sessionId);
+  const priorMessages: ConversationMessageEntry[] = existing?.messages.map((message) => ({
+    role: message.role,
+    content: message.content,
+  })) ?? [];
+  repo.saveConversation(
+    sessionId,
+    [
+      ...priorMessages,
+      { role: 'user', content: formattedMessage },
+      { role: 'assistant', content: reply },
+    ],
+    null,
+    false,
+    undefined,
+    undefined,
+    'plan',
+  );
+}
+
+function formatConversationalPlanningMessage(message: string): string {
+  return [
+    message,
+    '',
+    'In-app planning chat rule:',
+    '- Treat this as a conversation before a plan.',
+    '- Talk through edge cases, corner cases, architecture, and ambiguity with the human.',
+    '- Resolve those points before producing a YAML plan.',
+    '- If anything important is unclear, ask concise questions instead of drafting.',
+    '- Draft YAML only after the human asks you to draft/proceed, or after the conversation has already resolved the important choices.',
+  ].join('\n');
+}
+
+function planConversationConfig(
+  preset: HarnessPreset,
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo'>,
+  threadTs: string,
+): PlanConversationConfig {
+  return {
+    threadTs,
+    conversationRepo: deps.conversationRepo,
+    tool: preset.tool,
+    model: preset.model,
+    workingDir: deps.workingDir,
+    timeoutMs: (deps.config.planningTimeoutSeconds ?? 7200) * 1000,
+    defaultBranch: deps.config.defaultBranch,
+    repoUrl: deps.config.defaultRepoUrl,
+    experimentalPlanner: deps.config.experimentalPlanner,
+    preferStackedWorkflows: true,
+    planningCommandBuilder: deps.planningCommandBuilder,
+  };
+}
+
 async function createSession(
   request: Partial<InAppPlanningCreateSessionRequest> | null | undefined,
   deps: InAppPlannerDeps & {
     sessions: InAppPlanningChatSessions;
     planningCommandBuilder: PlanningCommandBuilder;
+    planningSessionStore?: InAppPlanningSessionStore;
   },
 ): Promise<InAppPlanningChatSession | { error: string }> {
   const presets = await resolveHarnessPresets(deps.config);
@@ -174,8 +297,9 @@ async function createSession(
 
   const { PlanConversation } = await loadPlannerSurfaces();
   const createdAt = new Date().toISOString();
+  const id = randomUUID();
   const session: InAppPlanningChatSession = {
-    id: randomUUID(),
+    id,
     title: typeof request?.title === 'string' && request.title.trim() ? request.title.trim() : 'Untitled plan',
     presetKey,
     status: 'still_discussing',
@@ -186,22 +310,13 @@ async function createSession(
       tone: 'muted',
       createdAt,
     }],
-    conversation: new PlanConversation({
-      tool: preset.tool,
-      model: preset.model,
-      workingDir: deps.workingDir,
-      timeoutMs: (deps.config.planningTimeoutSeconds ?? 7200) * 1000,
-      defaultBranch: deps.config.defaultBranch,
-      repoUrl: deps.config.defaultRepoUrl,
-      experimentalPlanner: deps.config.experimentalPlanner,
-      preferStackedWorkflows: true,
-      planningCommandBuilder: deps.planningCommandBuilder,
-    }),
+    conversation: new PlanConversation(planConversationConfig(preset, deps, id)),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 2,
   };
   deps.sessions.set(session.id, session);
+  persistPlanningSession(session, deps.planningSessionStore, false);
   return session;
 }
 
@@ -242,17 +357,7 @@ export async function planFromGoal(
 
   try {
     const { PlanConversation, extractYamlPlan } = await loadPlannerSurfaces();
-    const conversation = new PlanConversation({
-      tool: preset.tool,
-      model: preset.model,
-      workingDir: deps.workingDir,
-      timeoutMs: (deps.config.planningTimeoutSeconds ?? 7200) * 1000,
-      defaultBranch: deps.config.defaultBranch,
-      repoUrl: deps.config.defaultRepoUrl,
-      experimentalPlanner: deps.config.experimentalPlanner,
-      preferStackedWorkflows: true,
-      planningCommandBuilder: deps.planningCommandBuilder,
-    });
+    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID()));
     const plannerOutput = await conversation.sendMessage(goal);
     const planText = extractYamlPlan(plannerOutput);
     if (!planText) {
@@ -275,25 +380,12 @@ export async function planFromGoal(
   }
 }
 
-
-function formatConversationalPlanningMessage(message: string): string {
-  return [
-    message,
-    '',
-    'In-app planning chat rule:',
-    '- Treat this as a conversation before a plan.',
-    '- Talk through edge cases, corner cases, architecture, and ambiguity with the human.',
-    '- Resolve those points before producing a YAML plan.',
-    '- If anything important is unclear, ask concise questions instead of drafting.',
-    '- Draft YAML only after the human asks you to draft/proceed, or after the conversation has already resolved the important choices.',
-  ].join('\n');
-}
-
 export async function createPlanningChatSession(
   request: InAppPlanningCreateSessionRequest | undefined,
   deps: InAppPlannerDeps & {
     sessions: InAppPlanningChatSessions;
     planningCommandBuilder: PlanningCommandBuilder;
+    planningSessionStore?: InAppPlanningSessionStore;
   },
 ): Promise<InAppPlanningCreateSessionResponse> {
   try {
@@ -301,20 +393,7 @@ export async function createPlanningChatSession(
     if ('error' in session) {
       return { ok: false, error: session.error };
     }
-    const summary: InAppPlanningSessionSummary = {
-      id: session.id,
-      title: session.title,
-      status: session.status,
-      presetKey: session.presetKey,
-      messages: session.messages,
-      draftPlanAvailable: Boolean(session.draftPlanSummary),
-      draftPlanSummary: session.draftPlanSummary,
-      submittedWorkflowId: session.submittedWorkflowId,
-      submittedPlanName: session.submittedPlanName,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-    };
-    return { ok: true, session: summary };
+    return { ok: true, session: sessionToSummary(session) };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -325,19 +404,7 @@ export function listPlanningChatSessions(
 ): InAppPlanningListSessionsResponse {
   const sessions = [...deps.sessions.values()]
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-    .map((session): InAppPlanningSessionSummary => ({
-      id: session.id,
-      title: session.title,
-      status: session.status,
-      presetKey: session.presetKey,
-      messages: session.messages,
-      draftPlanAvailable: Boolean(session.draftPlanSummary),
-      draftPlanSummary: session.draftPlanSummary,
-      submittedWorkflowId: session.submittedWorkflowId,
-      submittedPlanName: session.submittedPlanName,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-    }));
+    .map(sessionToSummary);
   return { ok: true, sessions };
 }
 
@@ -346,6 +413,7 @@ export async function sendPlanningChatMessage(
   deps: InAppPlannerDeps & {
     sessions: InAppPlanningChatSessions;
     planningCommandBuilder: PlanningCommandBuilder;
+    planningSessionStore?: InAppPlanningSessionStore;
   },
 ): Promise<InAppPlanningChatResponse> {
   const rawRequest = request as Partial<InAppPlanningChatRequest> | null | undefined;
@@ -379,40 +447,62 @@ export async function sendPlanningChatMessage(
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);
       }
+      persistPlanningSession(activeSession, deps.planningSessionStore, true);
 
-      const reply = await activeSession.conversation.sendMessage(formatConversationalPlanningMessage(message));
-      const planText = activeSession.conversation.getDraftedPlan();
-      if (!planText) {
-        activeSession.draftPlanSummary = undefined;
-        activeSession.status = reply.includes('?') ? 'waiting_for_answer' : 'still_discussing';
+      try {
+        const { extractYamlPlan, summarizePlanText } = await loadPlannerSurfaces();
+        const formattedMessage = formatConversationalPlanningMessage(message);
+        const reply = deps.plannerReplyOverride
+          ? await deps.plannerReplyOverride(formattedMessage)
+          : await activeSession.conversation.sendMessage(formattedMessage);
+        if (deps.plannerReplyOverride) {
+          saveOverrideConversation(deps.conversationRepo, activeSession.id, formattedMessage, reply);
+        }
+        const planText = activeSession.conversation.getDraftedPlan() ?? extractYamlPlan(reply);
+        if (!planText) {
+          activeSession.draftPlanSummary = undefined;
+          activeSession.draftPlanText = undefined;
+          activeSession.status = reply.includes('?') ? 'waiting_for_answer' : 'still_discussing';
+          appendSessionMessage(activeSession, 'assistant', reply);
+          persistPlanningSession(activeSession, deps.planningSessionStore, false);
+          return { ok: true, sessionId: activeSession.id, reply, draftPlanAvailable: false };
+        }
+
+        const summary = summarizePlanText(planText);
+        if (!summary) {
+          const fallbackReply = 'I drafted a plan, but I could not turn it into simple steps. Ask me to regenerate it before submitting.';
+          activeSession.draftPlanSummary = undefined;
+          activeSession.draftPlanText = undefined;
+          activeSession.status = 'still_discussing';
+          appendSessionMessage(activeSession, 'assistant', fallbackReply);
+          persistPlanningSession(activeSession, deps.planningSessionStore, false);
+          return {
+            ok: true,
+            sessionId: activeSession.id,
+            reply: fallbackReply,
+            draftPlanAvailable: false,
+          };
+        }
+        activeSession.draftPlanSummary = summary;
+        activeSession.draftPlanText = planText;
+        activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
-        return { ok: true, sessionId: activeSession.id, reply, draftPlanAvailable: false };
-      }
-
-      const { summarizePlanText } = await loadPlannerSurfaces();
-      const summary = summarizePlanText(planText);
-      if (!summary) {
-        const fallbackReply = 'I drafted a plan, but I could not turn it into simple steps. Ask me to regenerate it before submitting.';
-        activeSession.draftPlanSummary = undefined;
-        activeSession.status = 'still_discussing';
-        appendSessionMessage(activeSession, 'assistant', fallbackReply);
+        persistPlanningSession(activeSession, deps.planningSessionStore, false);
         return {
           ok: true,
           sessionId: activeSession.id,
-          reply: fallbackReply,
-          draftPlanAvailable: false,
+          reply,
+          draftPlanAvailable: true,
+          draftPlanSummary: summary,
+        };
+      } catch (error) {
+        persistPlanningSession(activeSession, deps.planningSessionStore, false);
+        return {
+          ok: false,
+          sessionId: activeSession.id,
+          error: error instanceof Error ? error.message : String(error),
         };
       }
-      activeSession.draftPlanSummary = summary;
-      activeSession.status = 'draft_ready';
-      appendSessionMessage(activeSession, 'assistant', reply);
-      return {
-        ok: true,
-        sessionId: activeSession.id,
-        reply,
-        draftPlanAvailable: true,
-        draftPlanSummary: summary,
-      };
     });
     activeSession.pendingSend = turn.then(() => undefined, () => undefined);
     return await turn;
@@ -430,6 +520,7 @@ export async function submitPlanningChatDraft(
   deps: {
     sessions: InAppPlanningChatSessions;
     loadGeneratedPlan: (planText: string) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
+    planningSessionStore?: InAppPlanningSessionStore;
   },
 ): Promise<InAppPlanningSubmitResponse> {
   const rawRequest = request as Partial<InAppPlanningSubmitRequest> | null | undefined;
@@ -445,7 +536,7 @@ export async function submitPlanningChatDraft(
     return session.pendingSubmit;
   }
 
-  const planText = session.conversation.getDraftedPlan();
+  const planText = session.conversation.getDraftedPlan() ?? session.draftPlanText;
   if (!planText) {
     return { ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' };
   }
@@ -470,6 +561,7 @@ export async function submitPlanningChatDraft(
           : `Plan "${loaded.planName}" submitted to Invoker. Review it, then Run.`,
         'success',
       );
+      persistPlanningSession(session, deps.planningSessionStore, false);
       return {
         ok: true,
         planName: loaded.planName,
@@ -489,8 +581,76 @@ export async function submitPlanningChatDraft(
 
 export function resetPlanningChat(
   request: InAppPlanningResetRequest,
-  deps: { sessions: InAppPlanningChatSessions },
+  deps: { sessions: InAppPlanningChatSessions; planningSessionStore?: InAppPlanningSessionStore },
 ): InAppPlanningResetResponse {
   deps.sessions.delete(request.sessionId);
+  deps.planningSessionStore?.deleteInAppPlanningSession(request.sessionId);
   return { ok: true };
+}
+
+export async function restorePlanningChatSessions(
+  records: InAppPlanningSessionRecord[],
+  deps: InAppPlannerDeps & {
+    sessions: InAppPlanningChatSessions;
+    planningCommandBuilder: PlanningCommandBuilder;
+    planningSessionStore?: InAppPlanningSessionStore;
+  },
+): Promise<void> {
+  const presets = await resolveHarnessPresets(deps.config);
+  const { PlanConversation } = await loadPlannerSurfaces();
+
+  for (const record of records) {
+    const preset = presets[record.presetKey];
+    if (!preset) continue;
+
+    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id));
+    await conversation.init();
+
+    const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;
+    const session: InAppPlanningChatSession = {
+      id: record.id,
+      title: record.title,
+      presetKey: record.presetKey,
+      status: record.status,
+      messages: [...record.messages],
+      conversation,
+      draftPlanSummary: record.draftPlanSummary,
+      submittedWorkflowId: record.submittedWorkflowId,
+      submittedPlanName: record.submittedPlanName,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      nextMessageId,
+    };
+
+    let shouldPersist = false;
+    if (record.pendingResponse && record.status !== 'submitted') {
+      appendSessionMessage(
+        session,
+        'system',
+        'Planner was interrupted before it could answer. Send another message to continue.',
+        'error',
+      );
+      shouldPersist = true;
+    }
+
+    const draftedPlan = conversation.getDraftedPlan();
+    if (session.status === 'draft_ready' && !draftedPlan) {
+      session.status = 'still_discussing';
+      session.draftPlanSummary = undefined;
+      appendSessionMessage(
+        session,
+        'system',
+        'The saved draft could not be restored. Ask the planner to draft it again.',
+        'error',
+      );
+      shouldPersist = true;
+    } else if (draftedPlan) {
+      session.draftPlanText = draftedPlan;
+    }
+
+    deps.sessions.set(session.id, session);
+    if (shouldPersist) {
+      persistPlanningSession(session, deps.planningSessionStore, false);
+    }
+  }
 }
