@@ -92,7 +92,7 @@ import type {
   WorkResponse,
   TerminalSessionDescriptor,
 } from '@invoker/contracts';
-import { SqliteTaskRepository } from '@invoker/data-store';
+import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import {
@@ -279,6 +279,7 @@ import {
   listPlanningChatSessions,
   planFromGoal as planFromGoalInApp,
   resetPlanningChat,
+  restorePlanningChatSessions,
   sendPlanningChatMessage,
   submitPlanningChatDraft,
 } from './in-app-planner.js';
@@ -1094,6 +1095,21 @@ function startHeadlessMode(): void {
         };
       };
 
+      const planningConversationRepo = new ConversationRepository(persistence, {
+        info: (message) => logger.info(message, { module: 'planning-chat' }),
+        warn: (message) => logger.warn(message, { module: 'planning-chat' }),
+        error: (message) => logger.error(message, { module: 'planning-chat' }),
+      });
+      await restorePlanningChatSessions(persistence.listInAppPlanningSessions(), {
+        config: invokerConfig,
+        workingDir: repoRoot,
+        sessions: planningChatSessions,
+        planningCommandBuilder,
+        loadGeneratedPlan,
+        conversationRepo: planningConversationRepo,
+        planningSessionStore: readOnlyMode ? undefined : persistence,
+      });
+
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
         switch (payload.channel) {
           case 'invoker:clear': {
@@ -1123,6 +1139,7 @@ function startHeadlessMode(): void {
               workingDir: repoRoot,
               loadGeneratedPlan,
               planningCommandBuilder,
+              conversationRepo: planningConversationRepo,
             });
           }
           case 'invoker:planning-chat-create': {
@@ -1132,6 +1149,8 @@ function startHeadlessMode(): void {
               sessions: planningChatSessions,
               planningCommandBuilder,
               loadGeneratedPlan,
+              conversationRepo: planningConversationRepo,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
             });
           }
           case 'invoker:planning-chat-list': {
@@ -1144,16 +1163,22 @@ function startHeadlessMode(): void {
               sessions: planningChatSessions,
               planningCommandBuilder,
               loadGeneratedPlan,
+              conversationRepo: planningConversationRepo,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
             });
           }
           case 'invoker:planning-chat-submit': {
             return submitPlanningChatDraft(payload.args[0] as InAppPlanningSubmitRequest, {
               sessions: planningChatSessions,
               loadGeneratedPlan,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
             });
           }
           case 'invoker:planning-chat-reset': {
-            return resetPlanningChat(payload.args[0] as InAppPlanningResetRequest, { sessions: planningChatSessions });
+            return resetPlanningChat(payload.args[0] as InAppPlanningResetRequest, {
+              sessions: planningChatSessions,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
+            });
           }
           case 'invoker:load-plan': {
             const planText = String(payload.args[0] ?? '');
@@ -3735,6 +3760,21 @@ function createEmbeddedTerminalBackendFromConfig(
         workflowCount: loadedWorkflowIds.length,
       };
     }
+
+    const planningConversationRepo = new ConversationRepository(persistence, {
+      info: (message) => logger.info(message, { module: 'planning-chat' }),
+      warn: (message) => logger.warn(message, { module: 'planning-chat' }),
+      error: (message) => logger.error(message, { module: 'planning-chat' }),
+    });
+    await restorePlanningChatSessions(persistence.listInAppPlanningSessions(), {
+      config: invokerConfig,
+      workingDir: repoRoot,
+      sessions: planningChatSessions,
+      planningCommandBuilder,
+      loadGeneratedPlan: loadGeneratedPlanPreview,
+      conversationRepo: planningConversationRepo,
+      planningSessionStore: ownerMode ? persistence : undefined,
+    });
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     let testPlanningChatResponse: { planYaml: string; planName: string; reply?: string } | null = null;
 
@@ -3749,6 +3789,7 @@ function createEmbeddedTerminalBackendFromConfig(
         workingDir: repoRoot,
         loadGeneratedPlan: loadGeneratedPlanPreview,
         planningCommandBuilder,
+        conversationRepo: planningConversationRepo,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-create', async (request: unknown) => {
@@ -3758,49 +3799,44 @@ function createEmbeddedTerminalBackendFromConfig(
         sessions: planningChatSessions,
         planningCommandBuilder,
         loadGeneratedPlan: loadGeneratedPlanPreview,
+        conversationRepo: planningConversationRepo,
+        planningSessionStore: ownerMode ? persistence : undefined,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-list', async () => {
       return listPlanningChatSessions({ sessions: planningChatSessions });
     });
     registerGuiMutationHandler('invoker:planning-chat-send', async (request: unknown) => {
-      if (process.env.NODE_ENV === 'test' && testPlanningChatResponse) {
-        const { summarizePlanText } = await import('@invoker/surfaces');
-        const draftPlanSummary = summarizePlanText(testPlanningChatResponse.planYaml) ?? undefined;
-        return {
-          ok: true,
-          sessionId: 'test-session',
-          reply: testPlanningChatResponse.reply ?? 'Draft plan ready.',
-          draftPlanAvailable: true,
-          draftPlanSummary,
-        };
-      }
+      const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;
+      const plannerReplyOverride = planningChatResponseOverride
+        ? async (): Promise<string> => `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``
+        : undefined;
       return sendPlanningChatMessage(request as InAppPlanningChatRequest, {
         config: invokerConfig,
         workingDir: repoRoot,
         sessions: planningChatSessions,
         planningCommandBuilder,
         loadGeneratedPlan: loadGeneratedPlanPreview,
+        conversationRepo: planningConversationRepo,
+        planningSessionStore: ownerMode ? persistence : undefined,
+        plannerReplyOverride,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
-      if (process.env.NODE_ENV === 'test' && testPlanningChatResponse) {
-        const loaded = await loadGeneratedPlanPreview(testPlanningChatResponse.planYaml, {
-          preserveTaskHandles: true,
-          logLabel: 'planning-chat-submit',
-        });
-        return { ok: true, planName: testPlanningChatResponse.planName, workflowId: loaded.workflowId, workflowIds: loaded.workflowIds, workflowCount: loaded.workflowCount };
-      }
       return submitPlanningChatDraft(request as InAppPlanningSubmitRequest, {
         sessions: planningChatSessions,
         loadGeneratedPlan: (planText) => loadGeneratedPlanPreview(planText, {
           preserveTaskHandles: true,
           logLabel: 'planning-chat-submit',
         }),
+        planningSessionStore: ownerMode ? persistence : undefined,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-reset', async (request: unknown) => {
-      return resetPlanningChat(request as InAppPlanningResetRequest, { sessions: planningChatSessions });
+      return resetPlanningChat(request as InAppPlanningResetRequest, {
+        sessions: planningChatSessions,
+        planningSessionStore: ownerMode ? persistence : undefined,
+      });
     });
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
