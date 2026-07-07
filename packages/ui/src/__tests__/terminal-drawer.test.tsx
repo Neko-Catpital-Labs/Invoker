@@ -145,6 +145,21 @@ describe('Terminal drawer (component)', () => {
     expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
   });
 
+  it('restores persisted terminal sessions from startup terminalList', async () => {
+    const restored = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'restored before restart\n',
+    });
+    vi.mocked(mock.api.terminalList).mockResolvedValue([restored]);
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
+      expect(xtermMock.writeLog).toContain('restored before restart\n');
+    });
+  });
+
   it('opens the drawer in the partial state (not maximized) when opening a terminal via double-click', async () => {
     render(<App />);
     act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
