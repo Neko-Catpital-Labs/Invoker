@@ -10,6 +10,7 @@ import {
   DEFAULT_TOOL_REQUIREMENTS,
   EXTERNAL_DEPENDENCIES,
   formatReport,
+  resolveInvokerConfigPath,
   type IsInstalled,
   type PlanningPresetSpec,
   type PrerequisiteCheck,
@@ -35,7 +36,7 @@ export function invokerHomeDir(): string {
   return join(homedir(), '.invoker');
 }
 export function defaultConfigPath(): string {
-  return process.env.INVOKER_REPO_CONFIG_PATH ?? join(invokerHomeDir(), 'config.json');
+  return resolveInvokerConfigPath(process.env, homedir());
 }
 export function envFilePath(): string {
   return join(invokerHomeDir(), '.env');
