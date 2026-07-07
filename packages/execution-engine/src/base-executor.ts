@@ -858,19 +858,33 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         ? this.entries.get(executionId)?.request.inputs.branchRepoUrl
         : undefined);
       const branchRepoUrl = requestBranchRepoUrl?.trim();
+      const remoteName = branchRepoUrl ? BaseExecutor.BRANCH_REMOTE_NAME : 'origin';
       if (branchRepoUrl) {
         await ensureRemoteUrl({
           cwd,
-          remote: BaseExecutor.BRANCH_REMOTE_NAME,
+          remote: remoteName,
           url: branchRepoUrl,
           context: { caller: `${this.type}.pushBranchToRemote`, detail: branch },
         });
+      }
+      const branchRef = `${branch}:refs/heads/${branch}`;
+      try {
         await this.execGitSimpleWithNetworkTimeout(
-          ['push', '--force-with-lease', BaseExecutor.BRANCH_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
+          ['push', '--force-with-lease', remoteName, branchRef],
           cwd,
         );
-      } else {
-        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', 'origin', `${branch}:refs/heads/${branch}`], cwd);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const missingLocalRef = message.includes('src refspec ')
+          && message.includes(' does not match any');
+        const currentBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
+        if (!missingLocalRef || currentBranch.length > 0) {
+          throw err;
+        }
+        await this.execGitSimpleWithNetworkTimeout(
+          ['push', '--force-with-lease', remoteName, `HEAD:refs/heads/${branch}`],
+          cwd,
+        );
       }
       return undefined;
     } catch (err) {
@@ -883,6 +897,10 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
 
   protected isTransientGitTransportError(error: string): boolean {
     return TRANSIENT_GIT_TRANSPORT_ERROR_PATTERNS.some((pattern) => pattern.test(error));
+  }
+
+  protected isNoRefspecPushError(error: string): boolean {
+    return /src refspec .* does not match any/i.test(error);
   }
 
   // ── Shared command building ─────────────────────────────
@@ -993,6 +1011,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         this.emitOutput(
           executionId,
           `[${this.type}] Branch push failed due to transient git transport error; preserving successful command result.\n`,
+        );
+      } else if (this.isNoRefspecPushError(pushError)) {
+        this.emitOutput(
+          executionId,
+          `[${this.type}] Branch push had no local ref to publish; preserving successful command result.\n`,
         );
       } else {
         status = 'failed';

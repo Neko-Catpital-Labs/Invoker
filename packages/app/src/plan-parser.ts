@@ -109,6 +109,16 @@ export interface RawPlan {
   tasks?: RawPlanTask[];
 }
 
+export interface RawPlanBundle extends RawPlan {
+  workflows?: RawPlan[];
+}
+
+export interface PlanSubmissionBundle {
+  name: string;
+  plans: PlanDefinition[];
+  isStack: boolean;
+}
+
 /**
  * Auto-detect the repo's default branch via git.
  * Tries origin/HEAD first, then checks if 'main' exists locally, falls back to 'master'.
@@ -243,19 +253,17 @@ function assertNoLegacyRoutingKeys(ownerLabel: string, value: object): void {
  * Parse a YAML string into a validated PlanDefinition.
  * Throws PlanParseError if validation fails.
  */
-export function parsePlan(yamlContent: string): PlanDefinition {
-  const raw = parseYaml(yamlContent) as RawPlan;
-
+function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
   if (!raw || typeof raw !== 'object') {
-    throw new PlanParseError('Plan must be a YAML object');
+    throw new PlanParseError(`${ownerLabel} must be a YAML object`);
   }
 
   if (!raw.name || typeof raw.name !== 'string') {
-    throw new PlanParseError('Plan must have a "name" field');
+    throw new PlanParseError(`${ownerLabel} must have a "name" field`);
   }
 
   if (!raw.tasks || !Array.isArray(raw.tasks) || raw.tasks.length === 0) {
-    throw new PlanParseError('Plan must have a non-empty "tasks" array');
+    throw new PlanParseError(`${ownerLabel} must have a non-empty "tasks" array`);
   }
 
   const hasOwn = (obj: object, key: string): boolean =>
@@ -263,17 +271,16 @@ export function parsePlan(yamlContent: string): PlanDefinition {
 
   if (hasOwn(raw as object, 'autoFix')) {
     throw new PlanParseError(
-      'Plan-level "autoFix" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
+      `${ownerLabel}-level "autoFix" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`,
     );
   }
   if (hasOwn(raw as object, 'autoFixRetries')) {
     throw new PlanParseError(
-      'Plan-level "autoFixRetries" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
+      `${ownerLabel}-level "autoFixRetries" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`,
     );
   }
-  assertNoLegacyRoutingKeys('Plan', raw as object);
+  assertNoLegacyRoutingKeys(ownerLabel, raw as object);
 
-  // Validate onFinish
   const validOnFinishValues = ['none', 'merge', 'pull_request'] as const;
   if (raw.onFinish !== undefined && !validOnFinishValues.includes(raw.onFinish as any)) {
     throw new PlanParseError(
@@ -282,7 +289,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   }
   const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? 'pull_request';
 
-  // Validate mergeMode against canonical values only.
   const validMergeModes = ['manual', 'automatic', 'external_review'] as const;
   if (raw.mergeMode !== undefined && !validMergeModes.includes(raw.mergeMode as any)) {
     throw new PlanParseError(
@@ -294,32 +300,29 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     ? normalizeMergeModeForPersistence(rawMergeMode)
     : undefined;
 
-  // Default reviewProvider to 'github' for external-review workflows.
   const reviewProvider = raw.reviewProvider
     ?? (rawMergeMode === 'external_review' ? 'github' : undefined);
 
-  // Auto-generate featureBranch from plan name when not explicitly specified
   if (!raw.featureBranch) {
-    const slug = (raw.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const slug = raw.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     raw.featureBranch = `plan/${slug}`;
   }
 
-  // Require plan-level repoUrl
   if (!raw.repoUrl || typeof raw.repoUrl !== 'string') {
     throw new PlanParseError(
-      'Plan must have a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git).',
+      `${ownerLabel} must have a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git).`,
     );
   }
   if (raw.intermediateRepoUrl !== undefined) {
     if (typeof raw.intermediateRepoUrl !== 'string' || raw.intermediateRepoUrl.trim() === '') {
       throw new PlanParseError(
-        'Plan "intermediateRepoUrl" must be a non-empty string when provided.',
+        `${ownerLabel} "intermediateRepoUrl" must be a non-empty string when provided.`,
       );
     }
     raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
   }
 
-  const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
+  const topLevelExternalDependencies = parseExternalDependencies(ownerLabel, raw.externalDependencies);
 
   const seenTaskIds = new Set<string>();
   const tasks = raw.tasks.map((task, index) => {
@@ -366,7 +369,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       );
     }
 
-    // Parse experiment variants if present
     const experimentVariants = task.experimentVariants?.map((v) => ({
       id: v.id ?? '',
       description: v.description ?? '',
@@ -409,6 +411,92 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     externalDependencies: topLevelExternalDependencies,
     tasks,
   });
+}
+
+function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): RawPlan {
+  const stackExternalDependencies = stack.externalDependencies === undefined
+    ? []
+    : Array.isArray(stack.externalDependencies)
+      ? stack.externalDependencies
+      : (() => {
+          throw new PlanParseError('Plan stack "externalDependencies" must be an array when provided.');
+        })();
+  const workflowExternalDependencies = workflow.externalDependencies === undefined
+    ? []
+    : Array.isArray(workflow.externalDependencies)
+      ? workflow.externalDependencies
+      : (() => {
+          throw new PlanParseError(`Workflow "${workflow.name ?? '<unnamed>'}" "externalDependencies" must be an array when provided.`);
+        })();
+  const externalDependencies = [
+    ...stackExternalDependencies,
+    ...workflowExternalDependencies,
+  ];
+
+  return {
+    ...workflow,
+    repoUrl: workflow.repoUrl ?? stack.repoUrl,
+    intermediateRepoUrl: workflow.intermediateRepoUrl ?? stack.intermediateRepoUrl,
+    onFinish: workflow.onFinish ?? stack.onFinish,
+    baseBranch: workflow.baseBranch ?? stack.baseBranch,
+    mergeMode: workflow.mergeMode ?? stack.mergeMode,
+    reviewProvider: workflow.reviewProvider ?? stack.reviewProvider,
+    visualProof: workflow.visualProof ?? stack.visualProof,
+    externalDependencies: externalDependencies.length > 0 ? externalDependencies : workflow.externalDependencies,
+  };
+}
+
+export function parsePlanSubmissionBundle(yamlContent: string): PlanSubmissionBundle {
+  const raw = parseYaml(yamlContent) as RawPlanBundle;
+
+  if (!raw || typeof raw !== 'object') {
+    throw new PlanParseError('Plan must be a YAML object');
+  }
+
+  if (raw.workflows === undefined) {
+    const plan = parseRawPlan(raw, 'Plan');
+    return { name: plan.name, plans: [plan], isStack: false };
+  }
+
+  if (!raw.name || typeof raw.name !== 'string') {
+    throw new PlanParseError('Plan stack must have a "name" field');
+  }
+  if (!Array.isArray(raw.workflows) || raw.workflows.length === 0) {
+    throw new PlanParseError('Plan stack must have a non-empty "workflows" array');
+  }
+  if (raw.tasks !== undefined) {
+    throw new PlanParseError('Plan stack must put tasks inside each workflow, not at the top level.');
+  }
+  const stackHasOwn = (key: string): boolean =>
+    Object.prototype.hasOwnProperty.call(raw as object, key);
+  if (stackHasOwn('autoFix')) {
+    throw new PlanParseError(
+      'Plan stack-level "autoFix" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
+    );
+  }
+  if (stackHasOwn('autoFixRetries')) {
+    throw new PlanParseError(
+      'Plan stack-level "autoFixRetries" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
+    );
+  }
+  assertNoLegacyRoutingKeys('Plan stack', raw as object);
+
+  const plans = raw.workflows.map((workflow, index) => {
+    if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) {
+      throw new PlanParseError(`Workflow at index ${index} must be an object with a "name" field`);
+    }
+    return parseRawPlan(inheritStackWorkflowDefaults(raw, workflow), `Workflow ${index + 1}`);
+  });
+
+  return { name: raw.name, plans, isStack: true };
+}
+
+export function parsePlan(yamlContent: string): PlanDefinition {
+  const submission = parsePlanSubmissionBundle(yamlContent);
+  if (submission.isStack) {
+    throw new PlanParseError('Stacked workflow YAML must be loaded with parsePlanSubmissionBundle().');
+  }
+  return submission.plans[0];
 }
 
 /**

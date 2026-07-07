@@ -34,19 +34,63 @@ tasks:
     expect(summary!.taskCount).toBe(2);
   });
 
-  it('truncates a description longer than 8 words to 8 words + ellipsis', () => {
+  it('summarizes a Workers Surface workflow stack by workflow order', () => {
+    const yaml = `
+name: Workers Surface
+workflows:
+  - name: Workers Surface Contracts
+    tasks:
+      - id: verify-contracts
+        description: Verify contracts
+        dependencies: [define-contracts]
+      - id: define-contracts
+        description: Define contracts
+  - name: Workers Surface UI
+    tasks:
+      - id: build-ui
+        description: Build UI
+      - id: verify-ui
+        description: Verify UI
+        dependencies: [build-ui]
+`;
+    const summary = summarizePlanText(yaml);
+    expect(summary).not.toBeNull();
+    expect(summary!.name).toBe('Workers Surface');
+    expect(summary!.workflowCount).toBe(2);
+    expect(summary!.taskCount).toBe(4);
+    expect(summary!.steps).toEqual(['Workers Surface Contracts', 'Workers Surface UI']);
+  });
+
+  it('keeps long descriptions intact after normalizing whitespace', () => {
     const words = Array.from({ length: 40 }, (_, i) => `word${i + 1}`);
     const yaml = `
 name: Long plan
 tasks:
-  - id: a
-    description: ${words.join(' ')}
+  - id: long
+    description: "${words.join('  ')}"
 `;
     const summary = summarizePlanText(yaml);
     expect(summary).not.toBeNull();
-    const expected = words.slice(0, 8).join(' ') + ' …';
-    expect(summary!.steps[0]).toBe(expected);
-    expect(summary!.steps[0].split(' ')).toHaveLength(9); // 8 words + the ellipsis token
+    expect(summary!.steps[0]).toBe(words.join(' '));
+    expect(summary!.steps[0]).not.toContain('…');
+    expect(summary!.steps[0].split(' ')).toHaveLength(40);
+  });
+
+  it('keeps long workflow names intact after normalizing whitespace', () => {
+    const words = Array.from({ length: 24 }, (_, i) => `workflow${i + 1}`);
+    const yaml = `
+name: Long workflow stack
+workflows:
+  - name: "${words.join('  ')}"
+    tasks:
+      - id: task
+        description: Run task
+`;
+    const summary = summarizePlanText(yaml);
+    expect(summary).not.toBeNull();
+    expect(summary!.steps[0]).toBe(words.join(' '));
+    expect(summary!.steps[0]).not.toContain('…');
+    expect(summary!.steps[0].split(' ')).toHaveLength(24);
   });
 
   it('collapses whitespace and newlines in descriptions', () => {
@@ -85,6 +129,15 @@ tasks:
   - id: a
     description: Fine
   - id: b
+`;
+    expect(summarizePlanText(yaml)).toBeNull();
+  });
+
+  it('returns null when a stacked child workflow has no tasks', () => {
+    const yaml = `
+name: Bad Workers Surface
+workflows:
+  - name: Missing Tasks
 `;
     expect(summarizePlanText(yaml)).toBeNull();
   });

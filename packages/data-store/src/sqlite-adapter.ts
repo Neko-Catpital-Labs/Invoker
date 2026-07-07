@@ -405,6 +405,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
+  private normalizeConversationMode(value: unknown): Conversation['mode'] {
+    return value === 'agent' ? 'agent' : 'plan';
+  }
+
   /**
    * Open a private non-file-backed SQLite database.
    *
@@ -451,6 +455,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (isFile) {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
+
 
     try {
       const { DatabaseSync } = await loadNativeSqlite();
@@ -840,6 +845,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       }
     }
     this.migrateWorkflowStatusColumn();
+    this.dropTaskAutoFixAttemptsColumn();
 
     // Replace old attempt_number index with created_at index, etc.
     for (const sql of POST_MIGRATION_STATEMENTS) {
@@ -871,6 +877,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (foreignKeysEnabled) {
       this.db.run('PRAGMA foreign_keys = ON');
     }
+    this.dirty = true;
+  }
+
+  private dropTaskAutoFixAttemptsColumn(): void {
+    if (this.readOnly) return;
+    const columns = this.queryAll('PRAGMA table_info(tasks)') as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === 'auto_fix_attempts')) return;
+    this.db.run('ALTER TABLE tasks DROP COLUMN auto_fix_attempts');
     this.dirty = true;
   }
 
@@ -1561,7 +1575,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedAttemptId: 'selected_attempt_id',
         agentName: 'agent_name',
         lastAgentName: 'last_agent_name',
-        autoFixAttempts: 'auto_fix_attempts',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -2145,12 +2158,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveConversation(conversation: Conversation): void {
     this.execRun(`
-      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, extracted_plan, plan_submitted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, mode, extracted_plan, plan_submitted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.threadTs,
       conversation.channelId,
       conversation.userId,
+      conversation.mode ?? 'plan',
       conversation.extractedPlan,
       conversation.planSubmitted ? 1 : 0,
       conversation.createdAt,
@@ -2165,6 +2179,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       threadTs: row.thread_ts as string,
       channelId: row.channel_id as string,
       userId: row.user_id as string,
+      mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
@@ -2172,10 +2187,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     };
   }
 
-  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void {
+  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'mode' | 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
+    if ('mode' in changes) {
+      setClauses.push('mode = ?');
+      values.push(changes.mode ?? 'plan');
+    }
     if ('extractedPlan' in changes) {
       setClauses.push('extracted_plan = ?');
       values.push(changes.extractedPlan ?? null);
@@ -2207,6 +2226,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       threadTs: row.thread_ts as string,
       channelId: row.channel_id as string,
       userId: row.user_id as string,
+      mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
@@ -2335,13 +2355,31 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const diagnosticFile = this.readTaskOutputFile(taskId);
     const spoolChunks = this.getOutputChunks(taskId);
     if (spoolChunks.length > 0) {
-      return spoolChunks.map((chunk) => chunk.data).join('') + diagnosticFile;
+      return spoolChunks.map((chunk) => chunk.data).join('')
+        + this.readLegacyDiagnosticTaskOutputRows(taskId)
+        + diagnosticFile;
     }
     const rows = this.queryAll(
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
       [taskId],
     ) as Array<{ data: string }>;
     return rows.map((r) => r.data).join('') + diagnosticFile;
+  }
+
+  private readLegacyDiagnosticTaskOutputRows(taskId: string): string {
+    const rows = this.queryAll(
+      'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
+      [taskId],
+    ) as Array<{ data: string }>;
+    return rows
+      .map((r) => r.data)
+      .filter((data) => this.isDiagnosticTaskOutput(data))
+      .join('');
+  }
+
+  private isDiagnosticTaskOutput(data: string): boolean {
+    return data.includes('[Shutdown Diagnostic]')
+      || data.includes('[Startup Failure Diagnostic]');
   }
 
   /**

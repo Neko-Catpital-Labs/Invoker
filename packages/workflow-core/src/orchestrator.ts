@@ -562,7 +562,7 @@ export interface OrchestratorConfig {
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
   maxConcurrency?: number;
-  /** Default auto-fix retry budget for older tasks missing persisted per-task config. */
+  /** Maximum auto-fix attempts per failed task. Positive finite values are caps; zero disables auto-fix. */
   defaultAutoFixRetries?: number;
   /**
    * Rules that validate task execution environment against command patterns.
@@ -663,7 +663,7 @@ export class Orchestrator {
     ];
     this.availablePoolIds = new Set(config.availablePoolIds ?? []);
     this.defaultPoolId = config.defaultPoolId;
-    this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
+    this.defaultAutoFixRetries = Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0));
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
     this.resolveRepoDefaultBranch = config.resolveRepoDefaultBranch ?? requireDefaultBranchRemote;
 
@@ -3873,6 +3873,7 @@ export class Orchestrator {
     return this.defaultAutoFixRetries;
   }
 
+
   private isRuntimeAutoFixEligibleTask(task: TaskState): boolean {
     if (task.config.isReconciliation) return false;
     if (task.config.parentTask) return false;
@@ -3884,9 +3885,7 @@ export class Orchestrator {
     if (!task) return false;
     if (task.status !== 'failed') return false;
     if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
-    const max = this.getAutoFixRetryBudget(taskId);
-    if (max <= 0) return false;
-    return (task.execution.autoFixAttempts ?? 0) < max;
+    return this.getAutoFixRetryBudget(taskId) > 0;
   }
 
   getAllTasks(): TaskState[] {
@@ -4078,7 +4077,15 @@ export class Orchestrator {
    * Defer a running task back to pending when a resource limit is hit.
    * The task is re-enqueued when another task completes and frees a slot.
    */
-  deferTask(taskId: string): void {
+  deferTask(
+    taskId: string,
+    reason?: {
+      reason?: string;
+      message?: string;
+      attemptId?: string;
+      phase?: string;
+    },
+  ): void {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) return;
@@ -4091,7 +4098,14 @@ export class Orchestrator {
     const changes: TaskStateChanges = buildTaskResetChanges('defer');
     const deferUpdated = this.writeResetAndSync(task, 'defer', changes);
     const delta: TaskDelta = this.buildUpdateDelta(task, deferUpdated, changes);
-    this.persistence.logEvent?.(id, 'task.deferred', changes);
+    this.persistence.logEvent?.(id, 'task.deferred', {
+      ...changes,
+      deferredAt: new Date(),
+      reason: reason?.reason,
+      message: reason?.message,
+      attemptId: reason?.attemptId,
+      phase: reason?.phase,
+    });
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     // Remove any queued re-dispatch for this task; persisted attempt state now

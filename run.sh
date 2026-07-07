@@ -16,6 +16,10 @@ has_bootstrap_artifacts() {
     && [ -x "$REPO_ROOT/packages/app/node_modules/.bin/electron" ]
 }
 
+bootstrap_tools_are_healthy() {
+  "$REPO_ROOT/node_modules/.bin/tsup" --version >/dev/null 2>&1
+}
+
 # An existing install goes stale when the lockfile changes (e.g. a git pull
 # adds a dependency) but node_modules is left untouched. The artifacts check
 # above only proves *some* install exists, so without this check run.sh would
@@ -27,7 +31,7 @@ workspace_install_is_stale() {
 }
 
 ensure_workspace_bootstrapped() {
-  if has_bootstrap_artifacts && ! workspace_install_is_stale && [ "${INVOKER_FORCE_BOOTSTRAP:-0}" != "1" ]; then
+  if has_bootstrap_artifacts && bootstrap_tools_are_healthy && ! workspace_install_is_stale && [ "${INVOKER_FORCE_BOOTSTRAP:-0}" != "1" ]; then
     return 0
   fi
 
@@ -126,8 +130,12 @@ if [ "$1" = "--headless" ]; then
   exec node ./packages/app/dist/headless-client.js "$@"
 fi
 
-# Kill any stale Electron/tsup processes from previous runs so we
-# always start from a clean state.
+# Kill any orphaned Puppeteer/automation Chrome left behind by crashed browser
+# sessions, then clear stale Electron/tsup processes so we always start from a
+# clean state.
+if ! node ./scripts/cleanup-orphaned-automation-chrome.mjs; then
+  echo "WARN: orphaned automation Chrome cleanup failed; continuing launch" >&2
+fi
 pkill -f "electron.*packages/app/dist/main.js" 2>/dev/null || true
 pkill -f "tsup.*packages/app" 2>/dev/null || true
 sleep 0.2

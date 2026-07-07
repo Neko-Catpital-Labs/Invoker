@@ -665,6 +665,43 @@ describe('LaunchDispatcher', () => {
       expect(adapter.loadLaunchDispatchById(1)?.lastError).toBeUndefined();
     });
 
+    it('tops up ready tasks before polling launch dispatch rows', () => {
+      const orchestrator = new Orchestrator({
+        persistence: adapter as any,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 1,
+        deferRunningUntilLaunch: true,
+      });
+      orchestrator.loadPlan({
+        name: 'poll-topup',
+        tasks: [
+          {
+            id: 'alpha',
+            description: 'alpha',
+            command: 'echo alpha',
+          },
+        ],
+      });
+      expect(adapter.listLaunchDispatchesByState(['enqueued', 'leased'])).toEqual([]);
+
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator,
+        taskRunnerProvider: () => ({ executeTask }),
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).toHaveBeenCalledTimes(1);
+      const task = executeTask.mock.calls[0]?.[0];
+      expect(task?.id).toBe(orchestrator.getAllTasks().find((candidate) => !candidate.config.isMergeNode)?.id);
+      const dispatch = adapter.listLaunchDispatchesByState(['leased'])[0];
+      expect(dispatch?.state).toBe('leased');
+      expect(dispatch?.taskId).toBe(task?.id);
+    });
+
     it('abandons a dispatch row when the selected attempt changed after lease', () => {
       const task = seedWorkflowAndTask('wf-a/t-stale', 'wf-a', {
         selectedAttemptId: 'attempt-old',

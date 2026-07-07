@@ -7,6 +7,7 @@
  */
 
 import type { TaskStateChanges } from '@invoker/workflow-core';
+import type { InvokerConfig } from '../../src/config.js';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
@@ -15,12 +16,14 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
+import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
   guiOwnerMode: string;
   /** When true, the app's embedded terminal backend throws on spawn (fault injection). */
   breakTerminalSpawn: boolean;
+  repoConfig: Partial<InvokerConfig>;
   page: Page;
   testDir: string;
 };
@@ -48,6 +51,7 @@ async function removeTestDir(dir: string): Promise<void> {
 export const test = base.extend<ElectronFixtures>({
   guiOwnerMode: [process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui', { option: true }],
   breakTerminalSpawn: [false, { option: true }],
+  repoConfig: [{ autoFixRetries: 0 }, { option: true }],
 
   testDir: async ({}, use) => {
     const dir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
@@ -57,7 +61,7 @@ export const test = base.extend<ElectronFixtures>({
     }
   },
 
-  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, testDir }, use) => {
+  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, repoConfig, testDir }, use) => {
     // Dummy `claude` on PATH + fix command — same as scripts/e2e-dry-run (no real CLI).
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
     const stubDir = path.join(testDir, 'claude-stub');
@@ -68,7 +72,8 @@ export const test = base.extend<ElectronFixtures>({
     await fs.mkdir(stubDir, { recursive: true });
     await fs.mkdir(markerRoot, { recursive: true });
     await fs.mkdir(electronUserDataDir, { recursive: true });
-    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
+    registerTrackedBrowserUserDataDir(electronUserDataDir);
+    writeFileSync(configPath, JSON.stringify(repoConfig), 'utf8');
     try {
       await fs.symlink(claudeMarker, path.join(stubDir, 'claude'));
     } catch {

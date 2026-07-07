@@ -135,7 +135,6 @@ export interface TaskExecution {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
-  readonly autoFixAttempts?: number;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -315,9 +314,23 @@ export interface TaskReplacementDef {
 // InvokerAPI is derived from the IPC channel registry in @invoker/contracts.
 
 export type { ReviewGateArtifact, ReviewGateState } from '@invoker/workflow-graph';
-export type { InvokerAPI, ClaudeMessage, AgentSessionData, ReviewGateQueryResponse } from '@invoker/contracts';
+export type {
+  InvokerAPI,
+  ClaudeMessage,
+  AgentSessionData,
+  QueueStatus,
+  ReviewGateQueryResponse,
+  WorkerActionSummary,
+  WorkerActionStatus,
+  WorkerControlAction,
+  WorkerLifecycleStatus,
+  WorkerPolicyStatus,
+  WorkerRecoverySummary,
+  WorkerStatusEntry,
+  WorkerStatusSnapshot,
+} from '@invoker/contracts';
 
-import type { InvokerAPI, TerminalOutputEvent } from '@invoker/contracts';
+import type { InvokerAPI, RuntimeStatus, TerminalOutputEvent } from '@invoker/contracts';
 // ── Augment global Window ───────────────────────────────────
 
 declare global {
@@ -327,6 +340,7 @@ declare global {
       tasks?: TaskState[];
       workflows?: WorkflowMeta[];
       initialWorkflowId?: string | null;
+      runtimeStatus?: RuntimeStatus | null;
       appStartedAtEpochMs?: number;
       streamSequence?: number;
     };

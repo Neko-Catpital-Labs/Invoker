@@ -22,7 +22,7 @@ import {
   parseMergeConflictError,
 } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { TaskRunner, ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
+import { DEFAULT_EXECUTION_AGENT, type TaskRunner, type ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
   isReviewGateCiContextStale,
@@ -102,12 +102,29 @@ export function assertLineageCurrent(
   }
 }
 
+function currentReviewGateLineage(task: TaskState, reviewId: string): ReviewGateLineageFields {
+  const gate = task.execution.reviewGate;
+  const artifact = gate?.artifacts.find((candidate) =>
+    candidate.generation === gate.activeGeneration
+    && candidate.status !== 'discarded'
+    && !candidate.discardedAt
+    && candidate.providerId === reviewId,
+  );
+  return {
+    reviewId: artifact?.providerId ?? task.execution.reviewId,
+    generation: task.execution.generation ?? 0,
+    selectedAttemptId: task.execution.selectedAttemptId,
+    branch: task.execution.branch,
+    headSha: artifact?.headSha,
+  };
+}
+
 function assertReviewGateCiContextCurrent(
   taskId: string,
   context: ReviewGateCiContext,
-  current: ReviewGateLineageFields,
+  task: TaskState,
 ): void {
-  if (!isReviewGateCiContextStale(context, current)) return;
+  if (!isReviewGateCiContextStale(context, currentReviewGateLineage(task, context.reviewId))) return;
   throw new StaleLineageError(
     `Review-gate CI auto-fix for ${taskId} is stale (review=${context.reviewId})`,
   );
@@ -824,6 +841,13 @@ export type FixWithAgentActionResult =
   | { kind: 'fixWithAgent' | 'resolveConflict'; autoApproved: boolean; started: TaskState[] }
   | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string; started: TaskState[] };
 
+function resolveTaskRunnerDefaultExecutionAgent(taskExecutor: TaskRunner): string {
+  const configured = (taskExecutor as { getDefaultExecutionAgent?: () => string | undefined })
+    .getDefaultExecutionAgent?.()?.trim();
+  return configured && configured.length > 0 ? configured : DEFAULT_EXECUTION_AGENT;
+}
+
+
 export async function fixWithAgentAction(
   taskId: string,
   deps: Pick<CommandActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'autoApproveAIFixes' | 'commandService' | 'mutationTiming'> & { taskExecutor: TaskRunner },
@@ -841,19 +865,26 @@ export async function fixWithAgentAction(
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
   if (options.reviewGateContext) {
-    assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task.execution);
+    assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task);
   }
 
+  const effectiveAgentName = options.agentName ?? resolveTaskRunnerDefaultExecutionAgent(taskExecutor);
   const savedError = task.execution.error ?? '';
   const recoveryRoute = await selectFailureRecoveryRouteForAction(task, savedError, taskExecutor, options.recoveryRoute);
   if (recoveryRoute.kind === 'invalidMergeWorkspace') {
     const msg = invalidMergeWorkspaceMessage(recoveryRoute);
-    const errorLabel = options.failureOutputLabel ?? `Fix with ${options.agentName ?? 'Claude'}`;
+    const errorLabel = options.failureOutputLabel ?? `Fix with ${effectiveAgentName}`;
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] ${msg}`);
     orchestrator.revertConflictResolution(taskId, savedError, msg);
     throw new Error(msg);
   }
   if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
+    persistence.logEvent?.(taskId, 'task.workflow_recreated', {
+      level: 'warn',
+      workflowId: recoveryRoute.workflowId,
+      reason: 'missing-workspace-startup-merge-conflict',
+      message: `Workspace was missing, so Invoker recreated workflow ${recoveryRoute.workflowId} from a fresh base instead of fixing this task in-place.`,
+    });
     if (options.recreateOutputLabel) {
       persistence.appendTaskOutput(
         taskId,
@@ -875,14 +906,14 @@ export async function fixWithAgentAction(
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
     if (recoveryRoute.kind === 'resolveConflict') {
-      await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
+      await taskExecutor.resolveConflict(taskId, persistedSavedError, effectiveAgentName);
     } else {
       const output = persistence.getTaskOutput(taskId);
       const fixContext = options.reviewGateContext?.fixContext;
       if (fixContext !== undefined) {
-        await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError, fixContext);
+        await taskExecutor.fixWithAgent(taskId, output, effectiveAgentName, persistedSavedError, fixContext);
       } else {
-        await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+        await taskExecutor.fixWithAgent(taskId, output, effectiveAgentName, persistedSavedError);
       }
     }
     assertLineageCurrent(lineage, orchestrator, options.signal);
@@ -896,7 +927,7 @@ export async function fixWithAgentAction(
     if (err instanceof StaleLineageError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     const errorLabel = options.failureOutputLabel
-      ?? (recoveryRoute.kind === 'resolveConflict' ? 'Resolve Conflict' : `Fix with ${options.agentName ?? 'Claude'}`);
+      ?? (recoveryRoute.kind === 'resolveConflict' ? 'Resolve Conflict' : `Fix with ${effectiveAgentName}`);
     assertLineageCurrent(lineage, orchestrator, options.signal);
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
     assertLineageCurrent(lineage, orchestrator, options.signal);
@@ -1047,7 +1078,7 @@ function resolveAutoFixAgent(
     };
   }
   return {
-    selectedAgent: 'claude',
+    selectedAgent: DEFAULT_EXECUTION_AGENT,
     selectedAgentSource: 'default',
     configuredAutoFixAgent: undefined,
     fallbackChain: 'config(empty)->default',
@@ -1110,7 +1141,7 @@ async function recordFixedIntegrationAnchor(
 
 /**
  * Automatically fix a failed task with an AI agent and restart it.
- * Increments autoFixAttempts; respects the max budget from shouldAutoFix().
+ * Worker retry limits are enforced before this action is queued.
  */
 export async function autoFixOnFailure(
   taskId: string,
@@ -1128,30 +1159,21 @@ export async function autoFixOnFailure(
   inlineRetryDepth = 0,
 ): Promise<void> {
   const { orchestrator, persistence, taskExecutor } = deps;
-  if (!orchestrator.shouldAutoFix(taskId)) return;
 
   const task = orchestrator.getTask(taskId);
   if (!task || task.status !== 'failed') return;
 
   const entryLineage = captureTaskLineage(taskId, orchestrator);
   assertLineageCurrent(entryLineage, orchestrator, deps.signal);
-  const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
-  const max = orchestrator.getAutoFixRetryBudget(taskId);
   const savedError = task.execution.error ?? '';
   const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
-  console.log(`[auto-fix] "${taskId}" attempt ${attempts}/${max}`);
+  console.log(`[auto-fix] "${taskId}" starting`);
   persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'auto-fix-start',
     status: task.status,
-    attemptsBefore: task.execution.autoFixAttempts ?? 0,
-    attemptsAfter: attempts,
-    maxRetries: max,
     hasExecutionError: Boolean(task.execution.error),
     hasMergeConflict: Boolean(task.execution.mergeConflict),
   });
-
-  // Increment counter FIRST (before any delta can re-trigger)
-  persistence.updateTask(taskId, { execution: { autoFixAttempts: attempts } });
 
   const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
   let persistedSavedError: string | undefined;
@@ -1216,8 +1238,6 @@ export async function autoFixOnFailure(
       persistence.logEvent?.(taskId, 'debug.auto-fix', {
         phase: 'auto-fix-skip-no-workspace',
         route: recoveryRoute.kind,
-        attempts,
-        maxRetries: max,
       });
       persistence.appendTaskOutput(taskId, `\n[Auto-fix] ${skipReason}`);
       return;
@@ -1263,7 +1283,7 @@ export async function autoFixOnFailure(
         startedStatuses: finalizeResult.started.map((t) => t.status),
       });
       const latestTask = orchestrator.getTask(taskId);
-      if (latestTask?.status === 'failed' && orchestrator.shouldAutoFix(taskId) && inlineRetryDepth < 1) {
+      if (latestTask?.status === 'failed' && inlineRetryDepth < 1) {
         persistence.logEvent?.(taskId, 'debug.auto-fix', {
           phase: 'auto-fix-post-route-inline-retry',
           reason: 'post-fix-publish-failed',
@@ -1314,7 +1334,7 @@ export async function autoFixOnFailure(
     if (diagnostics) {
       persistence.appendTaskOutput(taskId, `\n[Auto-fix Diagnostics]\n${diagnostics}`);
     }
-    persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`);
+    persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed: ${msg}`);
     const detailedMsg = diagnostics ? `${msg}\n\n${diagnostics}` : msg;
     if (persistedSavedError !== undefined) {
       if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);

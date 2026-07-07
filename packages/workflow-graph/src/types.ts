@@ -149,6 +149,8 @@ export interface ReviewGateArtifact {
   readonly provider?: string;
   readonly branch?: string;
   readonly baseBranch?: string;
+  readonly headSha?: string;
+  readonly headRef?: string;
   readonly required: boolean;
   readonly status: ReviewGateArtifactStatus;
   readonly rawStatus?: string;
@@ -213,7 +215,6 @@ export interface TaskExecution {
     readonly conflictFiles: readonly string[];
   };
   readonly selectedAttemptId?: string;
-  readonly autoFixAttempts?: number;
 }
 
 // ── Task State ──────────────────────────────────────────────

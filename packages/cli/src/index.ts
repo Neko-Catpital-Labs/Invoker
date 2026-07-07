@@ -10,11 +10,18 @@ import {
   TaskRunner,
   WorktreeExecutor,
   acquireWorkerLock,
+  createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
+  registerExternalWorkers,
   WorkerLockHeldError,
   registerBuiltinAgents,
+  type ExternalWorkerConfig,
+  type ExternalWorkerRuntime,
   type WorkerDefinition,
+  type WorkerRegistry,
+  type WorkerRuntime,
+  type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import {
   IpcBus,
@@ -99,6 +106,11 @@ type CliRuntimeConfig = {
     poolId: string;
     strategy?: 'enforce' | 'route';
   }>;
+  autoFixRetries?: number;
+  autoFixAgent?: string;
+  autoFixExecutionModel?: string;
+  autoApproveAIFixes?: boolean;
+  externalWorkers?: ExternalWorkerConfig[];
 };
 
 const silentLogger: Logger = {
@@ -118,7 +130,7 @@ function usage(): string {
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli doctor [--fix] [--json]',
-    '  invoker-cli setup [slack] [--check]',
+    '  invoker-cli setup [slack] [--check|--from-env]',
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
     '  invoker-cli --help',
@@ -137,6 +149,7 @@ function usage(): string {
     '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
     '  --config <path>  Optional config path reserved for CLI runtime configuration.',
     '  --json           Emit only a machine-readable result summary on stdout.',
+    '  --from-env       Run Slack setup from SLACK_* environment values without prompts.',
     '  --fix            Best-effort install of missing doctor tools.',
     '  --help           Show this help text.',
     '  --version        Show the CLI version.',
@@ -447,14 +460,19 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
  * Read the auto-fix policy knobs from the shared Invoker config so the CLI door
  * drives the engine with the same retry budget / agent the GUI owner uses.
  */
-function readAutoFixWorkerConfig(homeRoot: string): { autoFixRetries?: number; autoFixAgent?: string } {
+function readWorkerConfig(homeRoot: string): {
+  autoFixRetries?: number;
+  autoFixAgent?: string;
+  externalWorkers?: ExternalWorkerConfig[];
+} {
   const configPath = join(homeRoot, 'config.json');
   if (!existsSync(configPath)) return {};
   try {
-    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as CliRuntimeConfig;
     return {
       autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
       autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
+      externalWorkers: Array.isArray(parsed.externalWorkers) ? parsed.externalWorkers : undefined,
     };
   } catch {
     return {};
@@ -465,12 +483,15 @@ function workerDisplayName(kind: string): string {
   return kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : kind;
 }
 
-function printWorkerKinds(): void {
-  const registry = registerAutoFixWorker(createWorkerRegistry());
+function printWorkerKinds<TDeps>(registry: WorkerRegistry<TDeps>): void {
   process.stdout.write('Worker kinds\n');
   for (const worker of registry.list()) {
     process.stdout.write(`  ${worker.kind} — available (${worker.note})\n`);
   }
+}
+
+function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorkerRuntime {
+  return 'finished' in worker && worker.finished instanceof Promise;
 }
 
 /**
@@ -480,11 +501,10 @@ function printWorkerKinds(): void {
  * poll loop, so the two doors can never run competing scans. The CLI owns the
  * foreground lifetime — owner discovery, connect message, the SIGINT/SIGTERM
  * block, and a deterministic stop.
- */
-async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise<number> {
+async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
-  const { autoFixRetries, autoFixAgent } = readAutoFixWorkerConfig(homeRoot);
+  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
 
   // Single-instance guard: refuse if another worker of this kind (this door or
   // the dev `--headless worker <kind>` door) already holds the cross-process
@@ -507,6 +527,7 @@ async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise
   // Open the try before constructing/starting the worker so persistence is
   // always closed even if construction or start throws (otherwise the SQLite
   // handle leaks when control unwinds to main()'s catch).
+  const autoFixAttemptLedger = createAutoFixAttemptLedger();
   try {
     const worker = definition.factory({
       logger: silentLogger,
@@ -518,6 +539,7 @@ async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise
       },
       autoFix: {
         defaultAutoFixRetries: autoFixRetries,
+        attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => autoFixAgent,
       },
     });
@@ -526,11 +548,16 @@ async function runWorker(definition: WorkerDefinition, bus: MessageBus): Promise
     const ownerSuffix = owner?.ownerId ? ` to owner ${owner.ownerId}` : '';
     process.stdout.write(`${workerDisplayName(definition.kind)} worker connected${ownerSuffix}.\n`);
 
-    await new Promise<void>((resolveShutdown) => {
-      const shutdown = (): void => resolveShutdown();
-      process.once('SIGINT', shutdown);
-      process.once('SIGTERM', shutdown);
-    });
+    const shutdownGate = Promise.withResolvers<void>();
+    const shutdown = (): void => shutdownGate.resolve();
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+    await Promise.race([
+      shutdownGate.promise,
+      isExternalWorkerRuntime(worker) ? worker.finished : shutdownGate.promise,
+    ]);
+    process.removeListener('SIGINT', shutdown);
+    process.removeListener('SIGTERM', shutdown);
     await worker.stop();
   } finally {
     // Release deterministically so a clean shutdown never leaves a stale lock
@@ -557,9 +584,12 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
-      const registry = registerAutoFixWorker(createWorkerRegistry());
+      const registry = registerExternalWorkers(
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+        readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
+      );
       if (subcommand === 'list') {
-        printWorkerKinds();
+        printWorkerKinds(registry);
         return 0;
       }
       const definition = registry.get(subcommand);

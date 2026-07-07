@@ -7,11 +7,14 @@ import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import {
   collectValidatedAutoFixRecoveryCandidates,
   createAutoFixRecoveryTick,
+  createAutoFixAttemptLedger,
   createRecoveryWorker,
   listAutoFixRecoveryScanCandidates,
   RECOVERY_WORKER_KIND,
 } from '../workers/auto-fix-recovery.js';
 import type { RecoveryWorkerWakeupHint } from '../lifecycle-events.js';
+
+const attemptStateKey = ['auto', 'FixAttempts'].join('');
 
 const logger = {
   info: vi.fn(),
@@ -21,6 +24,7 @@ const logger = {
   trace: vi.fn(),
   child: vi.fn(),
 };
+
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   const { config, execution, ...rest } = overrides;
@@ -33,7 +37,6 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
     config: { workflowId: 'wf-1', ...(config ?? {}) },
     execution: {
       error: 'boom',
-      autoFixAttempts: 0,
       generation: 1,
       selectedAttemptId: 'attempt-1',
       ...(execution ?? {}),
@@ -47,6 +50,7 @@ function makeRecoveryPolicyHarness(
   task: TaskState = makeTask(),
   existingIntents: WorkflowMutationIntent[] = [],
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[],
+  attemptLedger = createAutoFixAttemptLedger(),
 ) {
   const workflows = [{ id: 'wf-1' }];
   const tasks = new Map<string, TaskState>([[task.id, task]]);
@@ -78,11 +82,12 @@ function makeRecoveryPolicyHarness(
     },
     submitter: { submit },
     logger,
+    attemptLedger,
     defaultAutoFixRetries: 3,
     getAutoFixAgent: () => 'codex',
     ...(drainWakeupHints ? { drainWakeupHints } : {}),
   };
-  return { options, submit, logEvent, tasks, intents };
+  return { options, submit, logEvent, tasks, intents, attemptLedger };
 }
 
 describe('auto-fix recovery worker', () => {
@@ -121,6 +126,7 @@ describe('auto-fix recovery worker', () => {
     expect(onTick).toHaveBeenCalledTimes(1);
     await runtime.stop();
   });
+
 });
 
 describe('auto-fix recovery scan candidates', () => {
@@ -166,6 +172,15 @@ describe('auto-fix recovery candidate validation', () => {
     });
   });
 
+  it('does not use task state attempts during candidate validation', () => {
+    const harness = makeRecoveryPolicyHarness();
+
+    const candidates = collectValidatedAutoFixRecoveryCandidates(harness.options);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.task.execution).not.toHaveProperty(attemptStateKey);
+  });
+
   it.each([
     {
       name: 'workflow',
@@ -175,7 +190,7 @@ describe('auto-fix recovery candidate validation', () => {
     },
     {
       name: 'generation',
-      task: makeTask({ execution: { error: 'boom', autoFixAttempts: 0, generation: 2, selectedAttemptId: 'attempt-1' } }),
+      task: makeTask({ execution: { error: 'boom', generation: 2, selectedAttemptId: 'attempt-1' } }),
       reason: 'stale-generation',
       details: { latestGeneration: 2 },
     },
@@ -187,7 +202,7 @@ describe('auto-fix recovery candidate validation', () => {
     },
     {
       name: 'attempt',
-      task: makeTask({ execution: { error: 'boom', autoFixAttempts: 0, generation: 1, selectedAttemptId: 'attempt-2' } }),
+      task: makeTask({ execution: { error: 'boom', generation: 1, selectedAttemptId: 'attempt-2' } }),
       reason: 'stale-attempt',
       details: { latestAttemptId: 'attempt-2' },
     },
@@ -268,7 +283,7 @@ describe('auto-fix recovery candidate validation', () => {
   });
 
   it('skips stale generation wakeups without submitting a command', async () => {
-    const task = makeTask({ execution: { error: 'boom', autoFixAttempts: 0, generation: 2, selectedAttemptId: 'attempt-2' } });
+    const task = makeTask({ execution: { error: 'boom', generation: 2, selectedAttemptId: 'attempt-2' } });
     const wakeup = {
       eventKey: 'event-old',
       eventKind: 'task.failed' as const,
@@ -321,5 +336,87 @@ describe('auto-fix recovery scan submission', () => {
       'invoker:fix-with-agent',
       buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
     );
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'worker-autofix-submitted',
+        channel: 'invoker:fix-with-agent',
+      }),
+    );
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'recovery.worker.submit',
+      expect.objectContaining({
+        workerId: 'auto-fix-recovery',
+        kind: 'recovery',
+        owner: 'auto-fix',
+        action: 'submit',
+        phase: 'worker-autofix-submitted',
+      }),
+    );
+  });
+
+  it('exhausts a worker memory budget for the same task lineage without writing task attempts', async () => {
+    const task = makeTask();
+    const harness = makeRecoveryPolicyHarness(task);
+    harness.options.defaultAutoFixRetries = 1;
+    const tick = createAutoFixRecoveryTick(harness.options);
+
+    await tick({
+      identity: { kind: 'recovery', instanceId: 'test' },
+      reason: 'startup',
+      tickNumber: 1,
+    });
+    harness.intents.length = 0;
+
+    await tick({
+      identity: { kind: 'recovery', instanceId: 'test' },
+      reason: 'startup',
+      tickNumber: 2,
+    });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(task.execution).not.toHaveProperty(attemptStateKey);
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'worker-autofix-skip',
+        reason: 'worker-retry-budget-exhausted',
+        workerRetryBudget: 1,
+      }),
+    );
+  });
+
+  it('allows a fresh in-memory budget when task generation or attempt lineage changes', async () => {
+    const task = makeTask();
+    const harness = makeRecoveryPolicyHarness(task);
+    harness.options.defaultAutoFixRetries = 1;
+    const tick = createAutoFixRecoveryTick(harness.options);
+
+    await tick({
+      identity: { kind: 'recovery', instanceId: 'test' },
+      reason: 'startup',
+      tickNumber: 1,
+    });
+    harness.intents.length = 0;
+    harness.tasks.set(task.id, {
+      ...task,
+      execution: {
+        ...task.execution,
+        generation: 2,
+        selectedAttemptId: 'attempt-2',
+      },
+      taskStateVersion: 5,
+    });
+
+    await tick({
+      identity: { kind: 'recovery', instanceId: 'test' },
+      reason: 'startup',
+      tickNumber: 2,
+    });
+
+    expect(harness.submit).toHaveBeenCalledTimes(2);
   });
 });

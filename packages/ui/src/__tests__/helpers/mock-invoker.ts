@@ -16,7 +16,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { ActionGraphResponse, RuntimeStatus, TerminalOutputEvent, WorkflowMutationAcceptedResult } from '@invoker/contracts';
+import type { ActionGraphResponse, RuntimeStatus, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -35,6 +35,8 @@ export interface MockInvoker {
   setActionGraph: (response: ActionGraphResponse) => void;
   /** Replace the runtime status returned by getRuntimeStatus. */
   setRuntimeStatus: (status: RuntimeStatus) => void;
+  /** Replace the worker status snapshot returned by getWorkerStatus. */
+  setWorkerStatus: (status: WorkerStatusSnapshot) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -60,6 +62,10 @@ export function createMockInvoker(
     ownerMode: true,
     readOnly: false,
     mode: 'local-owner',
+  };
+  let workerStatus: WorkerStatusSnapshot = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    workers: [],
   };
 
   const accepted = (channel: string, workflowId = 'wf-1'): WorkflowMutationAcceptedResult => ({
@@ -111,6 +117,42 @@ export function createMockInvoker(
     onTaskOutput: vi.fn(() => () => {}),
     onActivityLog: vi.fn(() => () => {}),
     loadPlan: vi.fn(async () => {}),
+    planFromGoal: vi.fn(async () => ({
+      ok: true,
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    })),
+    planningChatCreate: vi.fn(async () => ({
+      ok: true,
+      session: {
+        id: 'session-1',
+        title: 'Untitled plan',
+        status: 'still_discussing',
+        presetKey: 'codex',
+        messages: [{ id: 1, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-01-01T00:00:00.000Z' }],
+        draftPlanAvailable: false,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    })),
+    planningChatList: vi.fn(async () => ({ ok: true, sessions: [] })),
+    planningChatSend: vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'I can help draft that.',
+      draftPlanAvailable: false,
+    })),
+    planningChatSubmit: vi.fn(async () => ({
+      ok: true,
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    })),
+    planningChatReset: vi.fn(async () => ({ ok: true })),
+    getPlanningPresets: vi.fn(async () => [
+      { key: 'codex', label: 'Codex', tool: 'codex', isDefault: true },
+      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: false },
+      { key: 'omp', label: 'OMP', tool: 'omp', isDefault: false },
+    ]),
     start: vi.fn(async () => taskSnapshot),
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
@@ -134,7 +176,7 @@ export function createMockInvoker(
       arch: 'x64',
       appVersion: '0.0.1',
       isPackaged: false,
-      tools: [],
+      tools: [{ id: 'codex', name: 'Codex', required: false, installed: true, installHint: 'Installed' }],
       bundledSkills: {
         available: false,
         promptRecommended: false,
@@ -175,6 +217,7 @@ export function createMockInvoker(
       commandTargets: [],
       mcpTargets: [],
     })),
+    runInvokerCliSetup: vi.fn(async () => ({ ok: true, steps: [{ id: 'tools', name: 'Run setup', ok: true, output: 'setup ok' }] })),
     replaceTask: vi.fn(async () => accepted('invoker:replace-task')),
     getActivityLogs: vi.fn(async () => []),
     getEvents: vi.fn(async () => []),
@@ -228,6 +271,15 @@ export function createMockInvoker(
       running: [],
       queued: [],
     })),
+    getWorkerStatus: vi.fn(async () => workerStatus),
+    startWorker: vi.fn(async (kind: string) => {
+      const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
+      return row;
+    }),
+    stopWorker: vi.fn(async (kind: string) => {
+      const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
+      return row;
+    }),
     getActionGraph: vi.fn(async () => actionGraphSnapshot),
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
@@ -257,6 +309,9 @@ export function createMockInvoker(
   function setRuntimeStatus(status: RuntimeStatus) {
     runtimeStatus = status;
   }
+  function setWorkerStatus(status: WorkerStatusSnapshot) {
+    workerStatus = status;
+  }
 
 
   function fireDelta(delta: TaskDelta) {
@@ -280,9 +335,10 @@ export function createMockInvoker(
 
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
-    (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[] } }).__INVOKER_BOOTSTRAP__ = {
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[]; runtimeStatus?: RuntimeStatus } }).__INVOKER_BOOTSTRAP__ = {
       tasks: taskSnapshot,
       workflows: workflowSnapshot,
+      runtimeStatus,
     };
   }
 
@@ -297,12 +353,26 @@ export function createMockInvoker(
     setTasks,
     setActionGraph,
     setRuntimeStatus,
+    setWorkerStatus,
     fireDelta,
     fireGraphEvent,
     fireWorkflowsChanged,
     fireTerminalOutput,
     install,
     cleanup,
+  };
+}
+
+function makeMockWorkerStatusEntry(kind: string): WorkerStatusEntry {
+  return {
+    kind,
+    note: '',
+    lifecycle: 'stopped',
+    policy: 'unknown',
+    autoStarts: false,
+    startable: false,
+    stoppable: false,
+    recentActions: [],
   };
 }
 

@@ -2118,6 +2118,19 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     const remoteBranches = execSync('git branch', { cwd: intermediateDir }).toString();
     expect(remoteBranches).toContain('invoker/task-intermediate');
   });
+  it('pushes HEAD when the branch ref is missing locally', async () => {
+    execSync('git checkout -b invoker/task-detached', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'detached.txt'), 'task result');
+    execSync('git add -A && git commit -m "task commit detached"', { cwd: cloneDir });
+    execSync('git checkout --detach HEAD', { cwd: cloneDir });
+    execSync('git branch -D invoker/task-detached', { cwd: cloneDir });
+
+    const pushErr = await executor.testPushBranchToRemote(cloneDir, 'invoker/task-detached');
+    expect(pushErr).toBeUndefined();
+
+    const remoteBranches = execSync('git branch', { cwd: originDir }).toString();
+    expect(remoteBranches).toContain('invoker/task-detached');
+  });
 });
 
 describe('BaseExecutor.handleProcessExit push semantics', () => {
@@ -2183,6 +2196,26 @@ describe('BaseExecutor.handleProcessExit push semantics', () => {
     expect(response?.outputs.exitCode).toBe(0);
     expect(response?.outputs.error).toBeUndefined();
     expect(entry.outputBuffer.join('')).toContain('transient git transport error');
+  });
+
+  it('keeps task completed when exit 0 produces no commit and branch push has no local ref', async () => {
+    execSync('git checkout -b invoker/noop-push', { cwd: cloneDir });
+
+    const req = makeRequest('task-noop-push', { description: 'x' });
+    const entry = executor.registerTestEntry('e-noop-push', req);
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    vi.spyOn(BaseExecutor.prototype as any, 'pushBranchToRemote').mockResolvedValue(
+      'git push --force-with-lease origin invoker/noop-push:refs/heads/invoker/noop-push failed (code 1): error: src refspec invoker/noop-push does not match any',
+    );
+
+    await executor.testHandleProcessExit('e-noop-push', req, cloneDir, 0, { branch: 'invoker/noop-push' });
+
+    expect(response?.status).toBe('completed');
+    expect(response?.outputs.exitCode).toBe(0);
+    expect(response?.outputs.error).toBeUndefined();
+    expect(entry.outputBuffer.join('')).toContain('no local ref to publish');
   });
 
   it('marks codex ai_task as failed when semantic sandbox denial appears in output despite exit 0', async () => {

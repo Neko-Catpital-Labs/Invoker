@@ -274,6 +274,28 @@ describe('SQLiteAdapter', () => {
         'tasks.id:CASCADE',
       ]));
     });
+
+    it('does not create auto_fix_attempts on fresh task tables', () => {
+      expect(tableColumns(adapter, 'tasks')).not.toContain('auto_fix_attempts');
+    });
+
+    it('drops legacy auto_fix_attempts columns when reopening writable databases', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-autofix-attempts-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const oldDb = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        (oldDb as any).db.run('ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0');
+        expect(tableColumns(oldDb, 'tasks')).toContain('auto_fix_attempts');
+        oldDb.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(tableColumns(reopened, 'tasks')).not.toContain('auto_fix_attempts');
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('worker action persistence', () => {
@@ -2581,6 +2603,57 @@ describe('SQLiteAdapter', () => {
       }
     });
 
+    it('surfaces legacy diagnostic rows alongside spool stream without duplicating old stream rows', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-legacy-diag-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-legacy-diag-tail'));
+
+        db.appendOutputChunk('t-legacy-diag-tail', 'test output before failure\n');
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          ['t-legacy-diag-tail', 'duplicate stream row\n'],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          [
+            't-legacy-diag-tail',
+            'Executor startup failed (ssh) on pool member remote-1; retrying another SSH pool member: connection reset\n',
+          ],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          [
+            't-legacy-diag-tail',
+            '\n[Startup Failure Diagnostic]\nmessage=concrete startup stderr\n--- end startup failure diagnostic ---\n',
+          ],
+        );
+        (db as any).db.run(
+          'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+          [
+            't-legacy-diag-tail',
+            '\n[Shutdown Diagnostic]\nforcedStopReason=Application quit\n--- end shutdown diagnostic ---\n',
+          ],
+        );
+
+        const output = db.getTaskOutput('t-legacy-diag-tail');
+        expect(output).toContain('test output before failure');
+        expect(output).toContain('[Startup Failure Diagnostic]');
+        expect(output).toContain('concrete startup stderr');
+        expect(output).toContain('[Shutdown Diagnostic]');
+        expect(output).toContain('Application quit');
+        expect(output).not.toContain('duplicate stream row');
+        expect(output).not.toContain('retrying another SSH pool member');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('falls back to task_output when no output_spool chunks exist', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-output-fallback-'));
       const dbPath = join(dir, 'invoker.db');
@@ -3620,19 +3693,19 @@ describe('SQLiteAdapter', () => {
       }
     });
 
-    it('persists file-backed writes before close so restart recovery can read them', async () => {
+    it('persists file-backed writes so restart recovery can read them after close', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-durable-'));
       const dbPath = join(dir, 'invoker.db');
       try {
         const writer = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
         writer.saveWorkflow(testWorkflow);
         writer.saveTask(testWorkflow.id, makeTask('t-durable-before-close'));
+        writer.close();
 
         const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
         const loaded = reader.loadTasks(testWorkflow.id);
         expect(loaded.map((task) => task.id)).toContain('t-durable-before-close');
         reader.close();
-        writer.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

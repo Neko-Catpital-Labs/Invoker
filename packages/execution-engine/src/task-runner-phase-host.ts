@@ -32,8 +32,11 @@ export type TaskRunnerPhaseHost = Pick<
   | 'resolveExternalDependencyTask'
   | 'shouldUseFreshWorkspace'
   | 'determineActionType'
+  | 'resolveExecutionAgent'
+  | 'resolveExecutionModel'
   // Dispatch-phase helpers
   | 'selectExecutor'
+  | 'takeResolvedExecutionSelection'
   | 'acquirePoolSelectionLease'
   | 'renewPoolSelectionLease'
   | 'releasePoolSelectionLease'

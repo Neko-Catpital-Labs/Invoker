@@ -91,7 +91,6 @@ function isExecutableFile(candidate: string): boolean {
 function versionArgsForTool(id: string): string[] {
   return id === 'ssh' ? ['-V'] : ['--version'];
 }
-
 export function collectSystemDiagnostics(args: {
   appVersion: string;
   isPackaged: boolean;
@@ -118,7 +117,6 @@ export function collectSystemDiagnostics(args: {
     presets: args.presets,
     defaultPreset: args.defaultPreset,
   });
-
   return {
     platform: args.platform,
     arch: args.arch,

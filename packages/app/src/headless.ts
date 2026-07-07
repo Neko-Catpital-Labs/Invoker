@@ -16,10 +16,12 @@ import {
   AUTO_FIX_WORKER_KIND,
   TaskRunner,
   acquireWorkerLock,
+  createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
+  type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import {
   parseMetadataValue,
@@ -40,6 +42,7 @@ import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
 } from './recovery-worker-observability.js';
+import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -419,7 +422,10 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
-  const registry = registerAutoFixWorker(createWorkerRegistry());
+  const registry = registerExternalWorkersFromConfig(
+    deps.invokerConfig?.externalWorkers,
+    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+  );
 
   if (subCommand === 'list') {
     process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
@@ -466,6 +472,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     }
     throw err;
   }
+  const autoFixAttemptLedger = createAutoFixAttemptLedger();
   try {
     const worker = definition.factory({
       store: deps.persistence,
@@ -477,6 +484,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       logger: deps.logger,
       autoFix: {
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+        attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
     });

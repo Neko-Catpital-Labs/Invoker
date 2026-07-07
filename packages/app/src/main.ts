@@ -78,7 +78,19 @@ import {
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
 } from '@invoker/contracts';
-import type { ActionGraphResponse, BundledSkillsInstallMode, Logger, WorkflowMeta, WorkflowMutationAcceptedResult, WorkResponse } from '@invoker/contracts';
+import type {
+  ActionGraphResponse,
+  BundledSkillsInstallMode,
+  InAppPlanRequest,
+  InAppPlanningCreateSessionRequest,
+  InAppPlanningChatRequest,
+  InAppPlanningResetRequest,
+  InAppPlanningSubmitRequest,
+  Logger,
+  WorkflowMeta,
+  WorkflowMutationAcceptedResult,
+  WorkResponse,
+} from '@invoker/contracts';
 import { SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
@@ -94,12 +106,19 @@ import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry, TaskRunner,
   WorktreeExecutor,
+  CI_FAILURE_WORKER_KIND,
   initializeShellEnvironment,
+  createAutoFixAttemptLedger,
+  createWorkerRegistry,
+  PR_STATUS_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   DEFAULT_EXECUTION_AGENT,
   registerBuiltinAgents,
+  registerBuiltinWorkers,
   type AgentRegistry,
+  type WorkerRegistry,
+  type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
@@ -181,6 +200,7 @@ import {
   updateInvokerCli,
   type CliInstallerContext,
 } from './cli-installer.js';
+import { runInvokerCliSetup } from './invoker-cli-setup.js';
 import { resolveBundledCliPath } from './cli-helper.js';
 import { buildAppMenuTemplate } from './app-menu.js';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
@@ -208,12 +228,20 @@ import {
   buildHeadlessFixArgs,
   listOpenFixIntentsForTask,
   parseFixWithAgentMutationArgs,
+  type ReviewGateCiContext,
 } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
+import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import {
+  AUTO_STARTED_OWNER_WORKER_KINDS,
+  createLocalWorkerStatusSnapshot,
+  createWorkerRuntimeController,
+  type WorkerRuntimeController,
+} from './worker-control.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
@@ -228,7 +256,6 @@ import {
 } from './ipc/ipc-registration.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
-import { startReviewGateStatusWorker, type ReviewGateStatusWorker } from './review-gate-status-worker.js';
 import {
   buildRecoveryWorkerAuditPayload,
   classifyAutoFixRecoveryPhase,
@@ -243,6 +270,17 @@ import {
   spawnDetachedStandaloneOwner,
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
+import {
+  createInAppPlanningChatSessions,
+  createPlanningChatSession,
+  createPlanningCommandBuilderFromRegistry,
+  listInAppPlanningPresets,
+  listPlanningChatSessions,
+  planFromGoal as planFromGoalInApp,
+  resetPlanningChat,
+  sendPlanningChatMessage,
+  submitPlanningChatDraft,
+} from './in-app-planner.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
 import {
   killRunningTaskExecution,
@@ -257,6 +295,55 @@ import {
 } from './window/window-lifecycle.js';
 import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
 import { logProcessError } from './process-error-handling.js';
+
+
+function submitRegisteredOwnerWorkerMutation(
+  workflowId: string,
+  priority: WorkflowMutationPriority,
+  channel: string,
+  mutationArgs: unknown[],
+  options?: { deferDrain?: boolean },
+): number {
+  if (!workflowMutationCoordinator) {
+    throw new Error('Workflow mutation coordinator is unavailable');
+  }
+  if (!workflowMutationDispatcher.has(channel)) {
+    throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
+  }
+  return workflowMutationCoordinator.submit(workflowId, priority, channel, mutationArgs, options);
+}
+const autoFixAttemptLedger = createAutoFixAttemptLedger();
+
+
+function buildRegisteredOwnerWorkerDeps(
+  store: WorkerRuntimeDependencies['store'],
+  checkMergeGateStatuses: NonNullable<WorkerRuntimeDependencies['reviewGate']>['checkMergeGateStatuses'],
+): WorkerRuntimeDependencies {
+  return {
+    store,
+    submitter: {
+      submit: submitRegisteredOwnerWorkerMutation,
+    },
+    logger,
+    messageBus,
+    reviewGate: {
+      checkMergeGateStatuses,
+    },
+    autoFix: {
+      defaultAutoFixRetries: invokerConfig.autoFixRetries,
+      attemptLedger: autoFixAttemptLedger,
+      getAutoFixAgent: () => invokerConfig.autoFixAgent,
+      getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
+    },
+  };
+}
+function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
+  return registerExternalWorkersFromConfig(
+    invokerConfig.externalWorkers,
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+  );
+}
+
 
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
@@ -641,6 +728,14 @@ function buildCliInstallerContext(): CliInstallerContext {
   };
 }
 
+function resolveSetupCliPath(): string {
+  return resolveBundledCliPath({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appDir: path.join(__dirname, '..'),
+  });
+}
+
 function updateInvokerCliFromMenu(): void {
   const result = updateInvokerCli(buildCliInstallerContext());
   const detail = result.ok
@@ -798,48 +893,13 @@ const YELLOW = '\x1b[33m';
 function startHeadlessMode(): void {
   const runHeadlessMain = async (): Promise<void> => {
     const agentRegistry = registerBuiltinAgents();
+    const planningChatSessions = createInAppPlanningChatSessions();
+    const planningCommandBuilder = createPlanningCommandBuilderFromRegistry(agentRegistry);
     const command = cliArgs[0];
     const readOnlyMode = isHeadlessReadOnlyCommand(cliArgs);
     const mutatingMode = isHeadlessMutatingCommand(cliArgs);
     const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1' || command === 'owner-serve';
     const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && command === 'owner-serve';
-    const queueQueryMode = command === 'queue' || (command === 'query' && cliArgs[1] === 'queue');
-
-    const delegatedQueueOutputFormat = (): 'json' | 'jsonl' | 'label' | 'text' => {
-      const outputIndex = cliArgs.indexOf('--output');
-      const value = outputIndex >= 0 ? cliArgs[outputIndex + 1] : undefined;
-      if (value === 'json' || value === 'jsonl' || value === 'label') return value;
-      return 'text';
-    };
-
-    const writeDelegatedQueueStatus = (status: Record<string, unknown>): void => {
-      const format = delegatedQueueOutputFormat();
-      const running = Array.isArray(status.running) ? status.running as Array<Record<string, unknown>> : [];
-      const queued = Array.isArray(status.queued) ? status.queued as Array<Record<string, unknown>> : [];
-      if (format === 'json') {
-        process.stdout.write(JSON.stringify(status) + '\n');
-        return;
-      }
-      if (format === 'jsonl') {
-        for (const task of running) {
-          process.stdout.write(JSON.stringify({ ...task, state: 'running' }) + '\n');
-        }
-        for (const task of queued) {
-          process.stdout.write(JSON.stringify({ ...task, state: 'queued' }) + '\n');
-        }
-        return;
-      }
-      if (format === 'label') {
-        const ids = [...running, ...queued]
-          .map((task) => String(task.taskId ?? ''))
-          .filter(Boolean);
-        process.stdout.write(ids.join('\n') + '\n');
-        return;
-      }
-      const runningCount = Number(status.runningCount ?? running.length);
-      const maxConcurrency = Number(status.maxConcurrency ?? 0);
-      process.stdout.write(`running=${runningCount}/${maxConcurrency} queued=${queued.length}\n`);
-    };
 
     // Try delegation for mutating commands first (owner mode).
     // In standalone mode we skip delegation and run locally.
@@ -893,14 +953,14 @@ function startHeadlessMode(): void {
       }
     }
 
-    if (readOnlyMode && queueQueryMode && !standaloneMode) {
+    if (readOnlyMode && command !== 'owner-serve') {
       const delegationBus = new IpcBus(undefined, { allowServe: false });
       try {
         await delegationBus.ready();
-        const delegated = await tryDelegateQuery(delegationBus, { kind: 'queue' }, 5_000);
+        const delegated = await tryDelegateQuery(delegationBus, { kind: 'cli-query', args: cliArgs }, 5_000);
         delegationBus.disconnect();
-        if (delegated) {
-          writeDelegatedQueueStatus(delegated);
+        if (delegated && typeof delegated.output === 'string') {
+          process.stdout.write(delegated.output);
           process.exit(0);
           return;
         }
@@ -913,7 +973,7 @@ function startHeadlessMode(): void {
     }
 
     let exitCode = 0;
-    let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
+    let workerRuntimeController: WorkerRuntimeController | null = null;
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
     try {
@@ -983,6 +1043,56 @@ function startHeadlessMode(): void {
         return { workflowId, tasks };
       };
 
+      const loadGeneratedPlan = async (
+        planText: string,
+      ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => {
+        const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
+        const submission = parsePlanSubmissionBundle(planText);
+        const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
+        const loadedWorkflowIds: string[] = [];
+        let upstream: { workflowId: string; featureBranch: string } | undefined;
+
+        for (const parsedPlan of submission.plans) {
+          let plan = applyConfiguredPlanDefaults(parsedPlan);
+          if (upstream) {
+            plan = {
+              ...plan,
+              baseBranch: upstream.featureBranch,
+              externalDependencies: [
+                ...(plan.externalDependencies ?? []),
+                {
+                  workflowId: upstream.workflowId,
+                  taskId: '__merge__',
+                  requiredStatus: 'completed',
+                  gatePolicy: 'completed',
+                } as const,
+              ],
+            };
+          }
+          backupPlan(plan, undefined, logger);
+          orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+          const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+          if (!workflow) {
+            throw new Error('Loaded plan did not create a workflow.');
+          }
+          existingWorkflowIds.add(workflow.id);
+          loadedWorkflowIds.push(workflow.id);
+          upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
+        }
+
+        const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
+        if (!workflowId) {
+          throw new Error('Loaded plan did not create a workflow.');
+        }
+
+        return {
+          planName: submission.name,
+          workflowId,
+          workflowIds: loadedWorkflowIds,
+          workflowCount: loadedWorkflowIds.length,
+        };
+      };
+
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
         switch (payload.channel) {
           case 'invoker:clear': {
@@ -1006,16 +1116,49 @@ function startHeadlessMode(): void {
             );
             return undefined;
           }
+          case 'invoker:plan-from-goal': {
+            return planFromGoalInApp(payload.args[0] as InAppPlanRequest, {
+              config: invokerConfig,
+              workingDir: repoRoot,
+              loadGeneratedPlan,
+              planningCommandBuilder,
+            });
+          }
+          case 'invoker:planning-chat-create': {
+            return createPlanningChatSession(payload.args[0] as InAppPlanningCreateSessionRequest | undefined, {
+              config: invokerConfig,
+              workingDir: repoRoot,
+              sessions: planningChatSessions,
+              planningCommandBuilder,
+              loadGeneratedPlan,
+            });
+          }
+          case 'invoker:planning-chat-list': {
+            return listPlanningChatSessions({ sessions: planningChatSessions });
+          }
+          case 'invoker:planning-chat-send': {
+            return sendPlanningChatMessage(payload.args[0] as InAppPlanningChatRequest, {
+              config: invokerConfig,
+              workingDir: repoRoot,
+              sessions: planningChatSessions,
+              planningCommandBuilder,
+              loadGeneratedPlan,
+            });
+          }
+          case 'invoker:planning-chat-submit': {
+            return submitPlanningChatDraft(payload.args[0] as InAppPlanningSubmitRequest, {
+              sessions: planningChatSessions,
+              loadGeneratedPlan,
+            });
+          }
+          case 'invoker:planning-chat-reset': {
+            return resetPlanningChat(payload.args[0] as InAppPlanningResetRequest, { sessions: planningChatSessions });
+          }
           case 'invoker:load-plan': {
             const planText = String(payload.args[0] ?? '');
-            const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
-            const plan = applyConfiguredPlanDefaults(parsePlan(planText));
-            backupPlan(plan, undefined, logger);
-            orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+            await loadGeneratedPlan(planText);
             return undefined;
           }
-          case 'invoker:start':
-            return orchestrator.startExecution();
           case 'invoker:stop': {
             logger.info('stop — destroying all daemon executors', { module: 'ipc-delegate' });
             const failInFlightTasks = (): void => {
@@ -1039,6 +1182,18 @@ function startHeadlessMode(): void {
             await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
             failInFlightTasks();
             return undefined;
+          }
+          case 'invoker:start-worker': {
+            if (!workerRuntimeController) {
+              throw new Error('Worker runtime controller is unavailable');
+            }
+            return workerRuntimeController.start(String(payload.args[0]));
+          }
+          case 'invoker:stop-worker': {
+            if (!workerRuntimeController) {
+              throw new Error('Worker runtime controller is unavailable');
+            }
+            return workerRuntimeController.stop(String(payload.args[0]));
           }
           case 'invoker:inject-task-states': {
             if (process.env.NODE_ENV !== 'test') {
@@ -1323,7 +1478,6 @@ function startHeadlessMode(): void {
           const payload = {
             phase,
             status: task?.status ?? 'missing',
-            autoFixAttempts: task?.execution.autoFixAttempts ?? null,
             ...buildStandaloneAutoFixQueueSnapshot(taskId),
             ...details,
           };
@@ -1514,6 +1668,7 @@ function startHeadlessMode(): void {
             getUiPerfStats: () => headlessDeps.getUiPerfStats?.() ?? {},
             resetUiPerfStats: () => headlessDeps.resetUiPerfStats?.(),
             getStreamSequence: () => 0,
+            getWorkerStatus: () => workerRuntimeController?.snapshot() ?? { generatedAt: new Date().toISOString(), workers: [] },
             resolveInvokerHomeRoot,
             orchestrator,
             persistence,
@@ -1588,11 +1743,20 @@ function startHeadlessMode(): void {
           logWarn: (message) => logger.warn(message, { module: 'surface-relay' }),
         });
 
-        reviewGateStatusWorker = startReviewGateStatusWorker({
-          ownerMode: true,
-          getTaskExecutor: createStandaloneTaskExecutor,
-          logger,
+        workerRuntimeController = createWorkerRuntimeController({
+          registry: createRegisteredWorkerRegistry(),
+          deps: buildRegisteredOwnerWorkerDeps(
+            persistence,
+            async () => {
+              await createStandaloneTaskExecutor().checkMergeGateStatuses();
+            },
+          ),
+          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          persistence,
+          autoFixRetries: invokerConfig.autoFixRetries,
+          canControl: () => !readOnlyMode,
         });
+        workerRuntimeController.startAutoStartedWorkers();
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
@@ -1612,7 +1776,7 @@ function startHeadlessMode(): void {
     } finally {
       standaloneLaunchDispatcherController?.stop();
       lifecycleEventBridge?.stop();
-      reviewGateStatusWorker?.stop();
+      await workerRuntimeController?.stopAll();
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
       }
@@ -1697,9 +1861,11 @@ function createEmbeddedTerminalBackendFromConfig(
 
   function setupGuiMode(): void {
   const agentRegistry = registerBuiltinAgents();
+  const planningChatSessions = createInAppPlanningChatSessions();
+  const planningCommandBuilder = createPlanningCommandBuilderFromRegistry(agentRegistry);
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
-  let reviewGateStatusWorker: ReviewGateStatusWorker | null = null;
+  let workerRuntimeController: WorkerRuntimeController | null = null;
   let apiServer: ApiServer | null = null;
   let webBridge: WebBridge | null = null;
   let ownerMode = true;
@@ -1989,7 +2155,6 @@ function createEmbeddedTerminalBackendFromConfig(
     const payload = {
       phase,
       status: task?.status ?? 'missing',
-      autoFixAttempts: task?.execution.autoFixAttempts ?? null,
       ...buildAutoFixQueueSnapshot(taskId),
       ...details,
     };
@@ -2012,6 +2177,7 @@ function createEmbeddedTerminalBackendFromConfig(
     taskId: string,
     agentName?: string,
     source: 'ipc' | 'auto-fix' = 'ipc',
+    reviewGateContext?: ReviewGateCiContext,
   ): Promise<TaskState[]> => {
     const task = orchestrator.getTask(taskId);
     if (!task) {
@@ -2024,16 +2190,6 @@ function createEmbeddedTerminalBackendFromConfig(
       { module: 'ipc' },
     );
 
-    if (source === 'auto-fix') {
-      const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
-      const attemptsAfter = attemptsBefore + 1;
-      persistence.updateTask(taskId, {
-        execution: {
-          autoFixAttempts: attemptsAfter,
-        },
-      });
-      logAutoFixDebug(taskId, 'dispatch-attempt-bumped', { attemptsBefore, attemptsAfter });
-    }
     const result = await fixWithAgentAction(
       taskId,
       {
@@ -2050,6 +2206,7 @@ function createEmbeddedTerminalBackendFromConfig(
         recoveryRoute,
         recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
         failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Codex'}`,
+        reviewGateContext,
         signal: activeMutationContext?.signal,
       },
     );
@@ -2501,6 +2658,13 @@ function createEmbeddedTerminalBackendFromConfig(
     | null {
     const [arg0, arg1, arg2] = payload.args;
     switch (payload.channel) {
+      case 'invoker:planning-chat-create':
+      case 'invoker:planning-chat-list':
+      case 'invoker:plan-from-goal':
+      case 'invoker:planning-chat-send':
+      case 'invoker:planning-chat-submit':
+      case 'invoker:planning-chat-reset':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:load-plan':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:start':
@@ -2508,6 +2672,10 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'invoker:stop':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:clear':
+        return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:start-worker':
+        return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:stop-worker':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resume-workflow': {
         const workflows = detachedViewerWorkflows ?? persistence.listWorkflows();
@@ -3246,6 +3414,7 @@ function createEmbeddedTerminalBackendFromConfig(
           ownerModeLabel: 'gui',
           getUiPerfStats: () => getUiPerfStats(),
           resetUiPerfStats: () => resetUiPerfStats(),
+          getWorkerStatus: () => workerRuntimeController?.snapshot() ?? { generatedAt: new Date().toISOString(), workers: [] },
           getStreamSequence: () => getTaskDeltaStreamSequence(),
           resolveInvokerHomeRoot,
           orchestrator,
@@ -3347,11 +3516,22 @@ function createEmbeddedTerminalBackendFromConfig(
       });
     }
 
-    reviewGateStatusWorker = startReviewGateStatusWorker({
-      ownerMode,
-      getTaskExecutor: requireTaskExecutor,
-      logger,
-    });
+    if (ownerMode) {
+      workerRuntimeController = createWorkerRuntimeController({
+        registry: createRegisteredWorkerRegistry(),
+        deps: buildRegisteredOwnerWorkerDeps(
+          persistence,
+          async () => {
+            await requireTaskExecutor().checkMergeGateStatuses();
+          },
+        ),
+        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        persistence,
+        autoFixRetries: invokerConfig.autoFixRetries,
+        canControl: () => ownerMode,
+      });
+      workerRuntimeController.startAutoStartedWorkers();
+    }
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (!ownerMode) {
@@ -3393,6 +3573,7 @@ function createEmbeddedTerminalBackendFromConfig(
       };
       try {
         persistence.writeActivityLog('ui-perf-main', 'info', JSON.stringify(snapshot));
+
       } catch {
         // DB might be locked
       }
@@ -3405,6 +3586,16 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     // Register IPC handlers
+    const computeRuntimeStatus = () => (
+      process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_READ_ONLY_STATUS === '1'
+        ? { ownerMode: false, readOnly: true, mode: 'read-only' as const }
+        : {
+            ownerMode,
+            readOnly: !ownerMode && !guiUsingDaemonOwner,
+            mode: ownerMode ? 'local-owner' as const : guiUsingDaemonOwner ? 'daemon-owner' as const : 'read-only' as const,
+          }
+    );
+
     registerBootstrapStateIpc({
       ipcMain,
       getTasks: () => (ownerMode ? orchestrator.getAllTasks() : detachedViewerTasks()),
@@ -3414,14 +3605,132 @@ function createEmbeddedTerminalBackendFromConfig(
       getTaskDeltaStreamSequence,
       recordStartupDuration,
     });
+    async function loadGeneratedPlanPreview(
+      planText: string,
+      options?: { preserveTaskHandles?: boolean; logLabel?: string },
+    ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> {
+      const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
+      const submission = parsePlanSubmissionBundle(planText);
+      const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
+      const loadedWorkflowIds: string[] = [];
+      let upstream: { workflowId: string; featureBranch: string } | undefined;
+      logger.info(
+        `${options?.logLabel ?? 'plan-from-goal'}: loading "${submission.name}" (${submission.plans.length} workflow${submission.plans.length === 1 ? '' : 's'})`,
+        { module: 'ipc' },
+      );
+      if (!options?.preserveTaskHandles) {
+        taskHandles.clear();
+      }
+
+      for (const parsedPlan of submission.plans) {
+        let plan = applyConfiguredPlanDefaults(parsedPlan);
+        if (upstream) {
+          plan = {
+            ...plan,
+            baseBranch: upstream.featureBranch,
+            externalDependencies: [
+              ...(plan.externalDependencies ?? []),
+              {
+                workflowId: upstream.workflowId,
+                taskId: '__merge__',
+                requiredStatus: 'completed',
+                gatePolicy: 'completed',
+              } as const,
+            ],
+          };
+        }
+        backupPlan(plan, undefined, logger);
+        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+        const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+        if (!workflow) {
+          throw new Error('Loaded plan did not create a workflow.');
+        }
+        existingWorkflowIds.add(workflow.id);
+        loadedWorkflowIds.push(workflow.id);
+        upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
+      }
+
+      const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
+      if (!workflowId) {
+        throw new Error('Loaded plan did not create a workflow.');
+      }
+      return {
+        planName: submission.name,
+        workflowId,
+        workflowIds: loadedWorkflowIds,
+        workflowCount: loadedWorkflowIds.length,
+      };
+    }
+    let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
+    let testPlanningChatResponse: { planYaml: string; planName: string; reply?: string } | null = null;
+
+
+    registerGuiMutationHandler('invoker:plan-from-goal', async (...args: unknown[]) => {
+      if (process.env.NODE_ENV === 'test' && testPlanFromGoalResponse) {
+        const loaded = await loadGeneratedPlanPreview(testPlanFromGoalResponse.planYaml);
+        return { ok: true, planName: testPlanFromGoalResponse.planName, workflowId: loaded.workflowId, workflowIds: loaded.workflowIds, workflowCount: loaded.workflowCount };
+      }
+      return planFromGoalInApp(args[0] as InAppPlanRequest, {
+        config: invokerConfig,
+        workingDir: repoRoot,
+        loadGeneratedPlan: loadGeneratedPlanPreview,
+        planningCommandBuilder,
+      });
+    });
+    registerGuiMutationHandler('invoker:planning-chat-create', async (request: unknown) => {
+      return createPlanningChatSession(request as InAppPlanningCreateSessionRequest | undefined, {
+        config: invokerConfig,
+        workingDir: repoRoot,
+        sessions: planningChatSessions,
+        planningCommandBuilder,
+        loadGeneratedPlan: loadGeneratedPlanPreview,
+      });
+    });
+    registerGuiMutationHandler('invoker:planning-chat-list', async () => {
+      return listPlanningChatSessions({ sessions: planningChatSessions });
+    });
+    registerGuiMutationHandler('invoker:planning-chat-send', async (request: unknown) => {
+      if (process.env.NODE_ENV === 'test' && testPlanningChatResponse) {
+        const { summarizePlanText } = await import('@invoker/surfaces');
+        const draftPlanSummary = summarizePlanText(testPlanningChatResponse.planYaml) ?? undefined;
+        return {
+          ok: true,
+          sessionId: 'test-session',
+          reply: testPlanningChatResponse.reply ?? 'Draft plan ready.',
+          draftPlanAvailable: true,
+          draftPlanSummary,
+        };
+      }
+      return sendPlanningChatMessage(request as InAppPlanningChatRequest, {
+        config: invokerConfig,
+        workingDir: repoRoot,
+        sessions: planningChatSessions,
+        planningCommandBuilder,
+        loadGeneratedPlan: loadGeneratedPlanPreview,
+      });
+    });
+    registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
+      if (process.env.NODE_ENV === 'test' && testPlanningChatResponse) {
+        const loaded = await loadGeneratedPlanPreview(testPlanningChatResponse.planYaml, {
+          preserveTaskHandles: true,
+          logLabel: 'planning-chat-submit',
+        });
+        return { ok: true, planName: testPlanningChatResponse.planName, workflowId: loaded.workflowId, workflowIds: loaded.workflowIds, workflowCount: loaded.workflowCount };
+      }
+      return submitPlanningChatDraft(request as InAppPlanningSubmitRequest, {
+        sessions: planningChatSessions,
+        loadGeneratedPlan: (planText) => loadGeneratedPlanPreview(planText, {
+          preserveTaskHandles: true,
+          logLabel: 'planning-chat-submit',
+        }),
+      });
+    });
+    registerGuiMutationHandler('invoker:planning-chat-reset', async (request: unknown) => {
+      return resetPlanningChat(request as InAppPlanningResetRequest, { sessions: planningChatSessions });
+    });
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
-      const { applyConfiguredPlanDefaults, parsePlan } = await import('./plan-parser.js');
-      const plan = applyConfiguredPlanDefaults(parsePlan(planText));
-      logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
-      taskHandles.clear();
-      backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      await loadGeneratedPlanPreview(planText, { logLabel: 'load-plan' });
     });
 
     if (process.env.NODE_ENV === 'test') {
@@ -3458,6 +3767,18 @@ function createEmbeddedTerminalBackendFromConfig(
             return;
           }
           await injectTaskStates(updates);
+        },
+      );
+      ipcMain.handle(
+        'invoker:set-test-plan-from-goal-response',
+        async (_event, response: { planYaml: string; planName: string } | null) => {
+          testPlanFromGoalResponse = response;
+        },
+      );
+      ipcMain.handle(
+        'invoker:set-test-planning-chat-response',
+        async (_event, response: { planYaml: string; planName: string; reply?: string } | null) => {
+          testPlanningChatResponse = response;
         },
       );
     }
@@ -3839,9 +4160,54 @@ function createEmbeddedTerminalBackendFromConfig(
       },
     );
 
+    registerGuiMutationHandler('invoker:start-worker', async (kindArg: unknown) => {
+      if (!workerRuntimeController) {
+        throw new Error('Worker runtime controller is unavailable');
+      }
+      return workerRuntimeController.start(String(kindArg));
+    });
+
+    registerGuiMutationHandler('invoker:stop-worker', async (kindArg: unknown) => {
+      if (!workerRuntimeController) {
+        throw new Error('Worker runtime controller is unavailable');
+      }
+      return workerRuntimeController.stop(String(kindArg));
+    });
+
     ipcMain.handle('invoker:get-queue-status', () => {
       return orchestrator.getQueueStatus();
     });
+    ipcMain.handle('invoker:get-worker-status', async () => {
+      if (!ownerMode) {
+        try {
+          const delegated = await messageBus.request<{ kind: string }, { workerStatus?: unknown }>(
+            'headless.query',
+            { kind: 'worker-status' },
+          );
+          if (delegated && typeof delegated === 'object' && 'workerStatus' in delegated) {
+            return delegated.workerStatus;
+          }
+        } catch (err) {
+          logger.warn(
+            `get-worker-status owner delegation failed; falling back to local read-only snapshot: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { module: 'ipc' },
+          );
+        }
+        return createLocalWorkerStatusSnapshot({
+          registry: createRegisteredWorkerRegistry(),
+          persistence,
+          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        });
+      }
+      return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+        registry: createRegisteredWorkerRegistry(),
+        persistence,
+        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      });
+    });
+
 
     ipcMain.handle('invoker:get-action-graph', async () => {
       if (!ownerMode) {
@@ -4326,16 +4692,21 @@ function createEmbeddedTerminalBackendFromConfig(
       'invoker:fix-with-agent',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
-      const taskId = String(taskIdArg);
-      const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
+      async (...fixArgs: unknown[]) => {
+      const { taskId, agentName, context } = parseFixWithAgentMutationArgs(fixArgs);
+      const source = context.autoFix ? 'auto-fix' : 'ipc';
       try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
+        const started = await executeFixWithAgentMutation(
+          taskId,
+          agentName,
+          source,
+          context.reviewGateContext,
+        );
         await finalizeMutationWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
           logger,
-          context: 'ipc.fix-with-agent',
+          context: source === 'auto-fix' ? 'ipc.fix-with-agent.auto-fix' : 'ipc.fix-with-agent',
           started,
           mutationTiming: activeMutationContext?.mutationTiming,
           scopedTaskIds: [taskId],
@@ -4550,25 +4921,13 @@ function createEmbeddedTerminalBackendFromConfig(
       return agentRegistry.listExecutionHarnesses();
     });
 
+    ipcMain.handle('invoker:get-planning-presets', () => listInAppPlanningPresets(loadConfig()));
+
     ipcMain.handle('invoker:get-execution-defaults', () => {
       return resolveDefaultTaskExecutionSettings(loadConfig());
     });
 
-    ipcMain.handle('invoker:get-runtime-status', () => {
-      if (process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_READ_ONLY_STATUS === '1') {
-        return {
-          ownerMode: false,
-          readOnly: true,
-          mode: 'read-only',
-        };
-      }
-      const readOnly = !ownerMode && !guiUsingDaemonOwner;
-      return {
-        ownerMode,
-        readOnly,
-        mode: ownerMode ? 'local-owner' : guiUsingDaemonOwner ? 'daemon-owner' : 'read-only',
-      };
-    });
+    ipcMain.handle('invoker:get-runtime-status', () => computeRuntimeStatus());
 
     ipcMain.handle('invoker:get-system-diagnostics', () => {
       return collectSystemDiagnostics({
@@ -4595,6 +4954,14 @@ function createEmbeddedTerminalBackendFromConfig(
     ipcMain.handle('invoker:update-invoker-cli', () => {
       return updateInvokerCli(buildCliInstallerContext());
     });
+    ipcMain.handle('invoker:run-invoker-cli-setup', (_event, request) => {
+      return runInvokerCliSetup(request, {
+        cliPath: resolveSetupCliPath(),
+        updateCli: () => updateInvokerCli(buildCliInstallerContext()),
+        installBundledSkills: installPackagedSkills,
+      });
+    });
+
 
     registerTaskScopedGuiMutationHandler(
       'invoker:replace-task',
@@ -4756,8 +5123,7 @@ function createEmbeddedTerminalBackendFromConfig(
       try {
         if (apiServer) await apiServer.close().catch(() => {});
         if (webBridge) await webBridge.close().catch(() => {});
-        reviewGateStatusWorker?.stop();
-        reviewGateStatusWorker = null;
+        await workerRuntimeController?.stopAll();
         if (dbPollInterval) clearInterval(dbPollInterval);
         if (activityPollInterval) clearInterval(activityPollInterval);
         if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);

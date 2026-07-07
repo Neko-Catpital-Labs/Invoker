@@ -2,6 +2,8 @@
   "comment": "Example Invoker configuration file",
   "description": "Default location: ~/.invoker/config.json. For repo-specific configs, set INVOKER_REPO_CONFIG_PATH when launching Invoker.",
   "maxConcurrency": 6,
+  "defaultExecutionAgent": "codex",
+
 
   "executors": {
     "worktree": {

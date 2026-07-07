@@ -39,6 +39,7 @@ export interface LaunchDispatcherOrchestrator {
   syncFromDb?(workflowId: string): void;
   getTask?(taskId: string): TaskState | undefined;
   getTaskLaunchReadiness?(taskId: string): TaskLaunchReadiness;
+  startExecution?(): TaskState[];
 }
 
 /**
@@ -103,12 +104,34 @@ export class LaunchDispatcher {
    *
    *   1. Reap any leased rows whose dispatch lease expired.
    *   2. Abandon expired rows that exhausted their retry budget.
-   *   3. Lease and dispatch enqueued rows.
+   *   3. Top up ready tasks into the durable launch outbox.
+   *   4. Lease and dispatch enqueued rows.
    */
   poll(): void {
     this.reapExpiredLeases();
     this.abandonStuckLeases();
+    this.topUpReadyLaunches();
     this.dispatchActive();
+  }
+
+  private topUpReadyLaunches(): void {
+    try {
+      const started = this.orchestrator?.startExecution?.() ?? [];
+      if (started.length > 0) {
+        this.logger?.info?.('[launch-dispatcher] topped up ready launches', {
+          ownerId: this.ownerId,
+          started: started.length,
+          taskIds: started.map((task) => task.id),
+          module: 'launch-dispatcher',
+        });
+      }
+    } catch (err) {
+      this.logger?.warn?.('[launch-dispatcher] ready launch top-up failed', {
+        ownerId: this.ownerId,
+        error: err instanceof Error ? err.message : String(err),
+        module: 'launch-dispatcher',
+      });
+    }
   }
 
   /**
