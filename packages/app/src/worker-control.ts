@@ -19,9 +19,11 @@ import {
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
 
 export function getAutoStartedOwnerWorkerKinds(config: { autoApproveAIFixes?: boolean }): string[] {
-  return config.autoApproveAIFixes === true
-    ? [AUTO_FIX_WORKER_KIND, AUTO_APPROVE_WORKER_KIND, PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND]
-    : [AUTO_FIX_WORKER_KIND, PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND];
+  const kinds = [AUTO_FIX_WORKER_KIND, PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND];
+  if (config.autoApproveAIFixes === true) {
+    kinds.splice(1, 0, AUTO_APPROVE_WORKER_KIND);
+  }
+  return kinds;
 }
 
 export interface WorkerRuntimeController {
