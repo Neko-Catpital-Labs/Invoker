@@ -95,6 +95,14 @@ describe('invoker-cli', () => {
     expect(result.stdout).toContain('Emit only a machine-readable result summary on stdout.');
   });
 
+  it('--help lists the planner setup command', async () => {
+    const result = await runCli(['--help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('invoker-cli setup [planner|slack]');
+    expect(result.stdout).toContain('--planner-url <url>');
+    expect(result.stdout).toContain('Required unless INVOKER_MCP_CONFIG_PATH is set');
+  });
+
   it('lists worker kinds from the registry', async () => {
     const output = captureProcessOutput();
 
@@ -250,6 +258,7 @@ tasks:
 
     expect(code).toBe(0);
     expect(output.stdout).toContain('hello-from-invoker-cli');
+    expect(output.stderr).toContain('Live owner discovery has no handler; falling back to standalone mode');
     output.restore();
   }, 60_000);
 
