@@ -1,7 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { QwenExecutionAgent } from '../agents/qwen-execution-agent.js';
 
 describe('QwenExecutionAgent', () => {
+  const previousAuthType = process.env.INVOKER_QWEN_AUTH_TYPE;
+
+  beforeEach(() => {
+    delete process.env.INVOKER_QWEN_AUTH_TYPE;
+  });
+
+  afterAll(() => {
+    if (previousAuthType === undefined) delete process.env.INVOKER_QWEN_AUTH_TYPE;
+    else process.env.INVOKER_QWEN_AUTH_TYPE = previousAuthType;
+  });
   it('builds prompt command with approval mode and model selector', () => {
     const agent = new QwenExecutionAgent({ command: 'qwen-test' });
     const spec = agent.buildCommand('prompt text', { executionModel: 'qwen3-coder-plus' });
