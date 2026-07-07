@@ -68,6 +68,8 @@ export interface WorkflowRollupPatch {
   workflowId: string;
   status: WorkflowDerivedStatus;
   rollup: WorkflowRollup;
+  /** True when the workflow no longer has any tasks (e.g. it was deleted); consumers must drop the workflow instead of patching it. */
+  removed?: boolean;
 }
 
 export type TaskGraphEvent =
