@@ -4,9 +4,7 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
-- Hold merge PRs that Invoker opens against its own repo to the full review-stack PR body before publication. When no agent can author a compliant body, PR creation fails loudly instead of shipping a fallback body that the PR Body CI check rejects.
-- Restore Planning Terminal chats after desktop restart, including visible transcripts and draft-ready state.
-- Persist embedded terminal tabs across desktop app restarts, restoring their recent output and reopening spawn-backed sessions.
+- Replace the failed-only fix entry guard with an explicit fix-session mechanism: `beginFixSession` accepts the resting states `failed`, `review_ready`, and `awaiting_approval`, records the entry status on the task, and `revertFixSession` restores exactly that status on every exit — agent failure, reject, or invalid workspace. Review-gate CI auto-fixes now actually execute instead of dying on dispatch, a failing or rejected gate fix returns the gate to review polling instead of marking an open gate failed, and starting a second fix while one is parked awaiting approval is refused. The ci-failure worker also folds terminal fix-intent outcomes back into its dedupe action, so a failed intent no longer leaves a repair showing "queued" forever and the worker retries within its attempt budget.
 - Move auto-fix attempt counts out of SQLite task state and into in-memory worker runtime policy.
 - Add a local master-head full-test repair cron that runs the destructive suite, asks OMP/Codex to fix confirmed failures, reruns the suite, and opens one validated PR per broken upstream SHA.
 - Make the browser UI load heavy Action Graph data only when that tab opens, trim huge diagnostic strings, gzip large `/invoke` JSON responses, and stop checking PR statuses on initial page load.
