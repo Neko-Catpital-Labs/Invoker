@@ -1,12 +1,8 @@
-import { spawn } from 'node:child_process';
-import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
+import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import type { Logger } from '@invoker/contracts';
 
@@ -16,126 +12,185 @@ import {
   PR_CONFLICT_REBASE_WORKER_KIND,
   createCoderabbitAddressWorker,
   createPrConflictRebaseWorker,
-  type PrMaintenanceLockProbeOptions,
+  type PrMaintenanceCommandResult,
+  type PrMaintenanceCommandRun,
+  type PrMaintenanceCommandRunner,
+  type PrMaintenanceWorkerStore,
+  type PrMaintenanceWorkerSubmitter,
 } from '../workers/pr-maintenance-workers.js';
 
-type SpawnCall = {
-  command: string;
-  args: string[];
-  options: SpawnOptions;
-};
+interface LoggerSpy extends Logger {
+  info: Mock;
+  warn: Mock;
+  error: Mock;
+  debug: Mock;
+  child: Mock;
+}
 
-function makeLogger(): Logger & {
-  info: ReturnType<typeof vi.fn>;
-  warn: ReturnType<typeof vi.fn>;
-  error: ReturnType<typeof vi.fn>;
-  debug: ReturnType<typeof vi.fn>;
-} {
+interface CommandRunnerHarness {
+  calls: PrMaintenanceCommandRun[];
+  run: Mock;
+  runner: PrMaintenanceCommandRunner;
+}
+
+interface StoreHarness {
+  store: PrMaintenanceWorkerStore;
+  findReviewGateByPr: Mock;
+  loadTasks: Mock;
+  loadWorkflow: Mock;
+}
+
+function makeLogger(): LoggerSpy {
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
     child: vi.fn(),
-  };
+  } as unknown as LoggerSpy;
   logger.child.mockReturnValue(logger);
   return logger;
 }
 
-function makeSpawnHarness(options: {
-  exitCode?: number;
-  stdout?: string;
-  stderr?: string;
-} = {}): { calls: SpawnCall[]; spawnProcess: typeof spawn } {
-  const calls: SpawnCall[] = [];
-  const spawnProcess = vi.fn((command: string, args: string[], spawnOptions: SpawnOptions) => {
-    calls.push({ command, args, options: spawnOptions });
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const child = Object.assign(new EventEmitter(), {
-      stdout,
-      stderr,
-      stdin: null,
-      killed: false,
-      pid: 12345,
-      kill: vi.fn(),
-    }) as unknown as ChildProcess;
-
-    queueMicrotask(() => {
-      stdout.end(options.stdout ?? '');
-      stderr.end(options.stderr ?? '');
-      child.emit('close', options.exitCode ?? 0, null);
-    });
-
-    return child;
+function makeCommandRunner(
+  handler: (call: PrMaintenanceCommandRun) => Promise<PrMaintenanceCommandResult> | PrMaintenanceCommandResult,
+): CommandRunnerHarness {
+  const calls: PrMaintenanceCommandRun[] = [];
+  const run = vi.fn(async (call: PrMaintenanceCommandRun) => {
+    calls.push(call);
+    return handler(call);
   });
+  return {
+    calls,
+    run,
+    runner: { run },
+  };
+}
 
-  return { calls, spawnProcess: spawnProcess as unknown as typeof spawn };
+function makeStoreHarness(): StoreHarness {
+  const findReviewGateByPr = vi.fn();
+  const loadTasks = vi.fn(() => []);
+  const loadWorkflow = vi.fn();
+  return {
+    findReviewGateByPr,
+    loadTasks,
+    loadWorkflow,
+    store: {
+      findReviewGateByPr,
+      loadTasks,
+      loadWorkflow,
+    },
+  };
+}
+
+function makeSubmitter(): { submitter: PrMaintenanceWorkerSubmitter; submit: Mock } {
+  const submit = vi.fn(() => 101);
+  return {
+    submitter: { submit },
+    submit,
+  };
 }
 
 describe('PR maintenance workers', () => {
-  let tmpRoot: string | undefined;
+  const tmpRoots: string[] = [];
 
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
-    if (tmpRoot) {
-      rmSync(tmpRoot, { recursive: true, force: true });
-      tmpRoot = undefined;
+    while (tmpRoots.length > 0) {
+      const root = tmpRoots.pop();
+      if (root) rmSync(root, { recursive: true, force: true });
     }
   });
 
   function makeRepoRoot(): string {
-    tmpRoot = mkdtempSync(join(tmpdir(), 'invoker-pr-maintenance-test-'));
-    return tmpRoot;
+    const root = mkdtempSync(join(tmpdir(), 'invoker-pr-maintenance-test-'));
+    tmpRoots.push(root);
+    return root;
   }
 
-  it('spawns the CodeRabbit shell entrypoint with the configured cwd and env', async () => {
+  it('runs the CodeRabbit backend directly and logs OMP output', async () => {
     const repoRoot = makeRepoRoot();
     const lockPath = join(repoRoot, 'locks', 'pr-crons.lock');
+    const stateFile = join(repoRoot, 'state', 'coderabbit.tsv');
+    const workdir = join(repoRoot, 'workdir');
     const logger = makeLogger();
-    const spawnHarness = makeSpawnHarness({ stdout: 'addressed one PR\n', stderr: 'diagnostic line\n' });
-    const lockProbe = vi.fn((_options: PrMaintenanceLockProbeOptions) => ({ held: false }));
+    const storeHarness = makeStoreHarness();
+    storeHarness.findReviewGateByPr.mockReturnValue({
+      workflowId: 'wf-1',
+      mergeTaskId: '__merge__wf-1',
+      workflowStatus: 'running',
+      workflowGeneration: 2,
+      mergeTaskStatus: 'review_ready',
+    });
+    storeHarness.loadTasks.mockReturnValue([{ id: 'wf-1/task-a', status: 'completed' }]);
+    const commandRunner = makeCommandRunner(async (call) => {
+      if (call.command === 'gh' && call.args[0] === 'pr' && call.args[1] === 'list') {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{ number: 7, title: 'Fix bug', headRefName: 'stack/head', baseRefName: 'main' }]),
+          stderr: '',
+        };
+      }
+      if (call.command === 'gh' && call.args[0] === 'api' && call.args[1] === 'repos/owner/repo/pulls/7/comments?per_page=100') {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{ user: { login: 'coderabbitai[bot]' }, body: 'real issue', updated_at: '2026-07-07T12:00:00Z', path: 'src/a.ts', html_url: 'https://example.test/comment' }]),
+          stderr: '',
+        };
+      }
+      if (call.command === 'gh' && call.args[0] === 'api' && call.args[1] === 'repos/owner/repo/issues/7/comments?per_page=100') {
+        return { code: 0, stdout: '[]', stderr: '' };
+      }
+      if (call.command === 'gh' && call.args[0] === 'pr' && call.args[1] === 'view') {
+        return {
+          code: 0,
+          stdout: JSON.stringify({ title: 'Fix bug', body: 'PR body', headRefName: 'stack/head', baseRefName: 'main' }),
+          stderr: '',
+        };
+      }
+      if (call.command === 'gh' && call.args[0] === 'repo' && call.args[1] === 'clone') {
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (call.command === 'gh' && call.args[0] === 'pr' && call.args[1] === 'checkout') {
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (call.command === 'git' && call.args.join(' ') === 'fetch --quiet --all') {
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (call.command === 'git' && call.args.join(' ') === 'reset --hard') {
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (call.command === 'git' && call.args.join(' ') === 'clean -fd') {
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (call.command === 'omp') {
+        return { code: 0, stdout: 'addressed one PR\n', stderr: 'diagnostic line\n' };
+      }
+      throw new Error(`Unexpected command: ${call.command} ${call.args.join(' ')}`);
+    });
+
     const worker = createCoderabbitAddressWorker({
       logger,
       repoRoot,
+      lockPath,
+      store: storeHarness.store,
+      commandRunner: commandRunner.runner,
       env: {
         INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
         INVOKER_PR_CRON_AUTHOR: 'octocat',
+        INVOKER_PR_CODERABBIT_STATE_FILE: stateFile,
+        INVOKER_PR_CRON_WORKDIR: workdir,
       },
-      lockPath,
-      spawnProcess: spawnHarness.spawnProcess,
-      lockProbe,
       installSignalHandlers: false,
     });
 
     await worker.tick();
 
-    expect(lockProbe).toHaveBeenCalledWith(expect.objectContaining({
-      lockPath,
-      env: expect.objectContaining({
-        INVOKER_REPO_ROOT: repoRoot,
-        INVOKER_PR_CRON_LOCK: lockPath,
-        INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
-        INVOKER_PR_CRON_AUTHOR: 'octocat',
-      }),
-    }));
-    expect(spawnHarness.calls).toEqual([
-      expect.objectContaining({
-        command: 'bash',
-        args: [resolve(repoRoot, 'scripts/cron-coderabbit-address.sh')],
-        options: expect.objectContaining({
-          cwd: repoRoot,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          env: expect.objectContaining({
-            INVOKER_REPO_ROOT: repoRoot,
-            INVOKER_PR_CRON_LOCK: lockPath,
-            INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
-            INVOKER_PR_CRON_AUTHOR: 'octocat',
-          }),
-        }),
-      }),
-    ]);
+    expect(commandRunner.calls.some((call) => call.command === 'bash')).toBe(false);
+    expect(commandRunner.calls.map((call) => `${call.command} ${call.args.slice(0, 2).join(' ')}`)).toContain('omp --no-title --auto-approve');
+    expect(storeHarness.findReviewGateByPr).toHaveBeenCalledWith('7');
+    expect(storeHarness.loadTasks).toHaveBeenCalledWith('wf-1');
     expect(logger.info).toHaveBeenCalledWith(
       `[worker:${CODERABBIT_ADDRESS_WORKER_KIND}] addressed one PR`,
       expect.objectContaining({ stream: 'stdout' }),
@@ -146,42 +201,84 @@ describe('PR maintenance workers', () => {
     );
   });
 
-  it('spawns the PR conflict rebase shell entrypoint', async () => {
+  it('queues rebase-recreate through the direct conflict backend', async () => {
     const repoRoot = makeRepoRoot();
+    const lockPath = join(repoRoot, 'locks', 'pr-crons.lock');
+    const stateFile = join(repoRoot, 'state', 'conflicts.tsv');
     const logger = makeLogger();
-    const spawnHarness = makeSpawnHarness();
+    const storeHarness = makeStoreHarness();
+    let generation = 2;
+    storeHarness.findReviewGateByPr.mockReturnValue({
+      workflowId: 'wf-1',
+      mergeTaskId: '__merge__wf-1',
+      workflowStatus: 'running',
+      workflowGeneration: generation,
+      mergeTaskStatus: 'blocked',
+    });
+    storeHarness.loadWorkflow.mockImplementation(() => ({ id: 'wf-1', generation }));
+    const submitterHarness = makeSubmitter();
+    submitterHarness.submit.mockImplementation(() => {
+      generation = 3;
+      return 101;
+    });
+    const commandRunner = makeCommandRunner(async (call) => {
+      if (call.command === 'gh' && call.args[0] === 'pr' && call.args[1] === 'list') {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{ number: 11, mergeStateStatus: 'DIRTY' }]),
+          stderr: '',
+        };
+      }
+      throw new Error(`Unexpected command: ${call.command} ${call.args.join(' ')}`);
+    });
+
     const worker = createPrConflictRebaseWorker({
       logger,
       repoRoot,
-      spawnProcess: spawnHarness.spawnProcess,
-      lockProbe: () => ({ held: false }),
+      lockPath,
+      store: storeHarness.store,
+      submitter: submitterHarness.submitter,
+      commandRunner: commandRunner.runner,
+      env: {
+        INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
+        INVOKER_PR_CRON_AUTHOR: 'octocat',
+        INVOKER_PR_CONFLICT_STATE_FILE: stateFile,
+      },
       installSignalHandlers: false,
     });
 
     await worker.tick();
 
-    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
-      command: 'bash',
-      args: [resolve(repoRoot, 'scripts/cron-pr-conflict-rebase.sh')],
-      options: expect.objectContaining({ cwd: repoRoot }),
-    }));
+    expect(commandRunner.calls.some((call) => call.command === 'bash')).toBe(false);
+    expect(submitterHarness.submit).toHaveBeenCalledWith(
+      'wf-1',
+      'high',
+      'headless.exec',
+      [{ args: ['rebase-recreate', 'wf-1'], noTrack: true }],
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      `[worker:${PR_CONFLICT_REBASE_WORKER_KIND}] PR #11: rebase-recreate confirmed (generation 2 -> 3)`,
+      expect.objectContaining({ workflowId: 'wf-1', newGeneration: 3 }),
+    );
   });
 
   it('skips cleanly when the shared PR-maintenance lock is already held', async () => {
     const repoRoot = makeRepoRoot();
+    const lockPath = join(repoRoot, 'locks', 'pr-crons.lock');
     const logger = makeLogger();
-    const spawnHarness = makeSpawnHarness();
+    const commandRunner = makeCommandRunner(async () => ({ code: 0, stdout: '[]', stderr: '' }));
     const worker = createPrConflictRebaseWorker({
       logger,
       repoRoot,
-      spawnProcess: spawnHarness.spawnProcess,
+      lockPath,
+      commandRunner: commandRunner.runner,
       lockProbe: () => ({ held: true, reason: 'test-lock-held' }),
       installSignalHandlers: false,
     });
 
     await worker.tick();
 
-    expect(spawnHarness.calls).toEqual([]);
+    expect(commandRunner.calls).toEqual([]);
     expect(logger.info).toHaveBeenCalledWith(
       `[worker:${PR_CONFLICT_REBASE_WORKER_KIND}] shared PR maintenance lock held; skipping tick`,
       expect.objectContaining({
@@ -194,24 +291,36 @@ describe('PR maintenance workers', () => {
   it('polls on the five-minute default interval without ticking on start', async () => {
     vi.useFakeTimers();
     const repoRoot = makeRepoRoot();
+    const lockPath = join(repoRoot, 'locks', 'pr-crons.lock');
     const logger = makeLogger();
-    const spawnHarness = makeSpawnHarness();
+    const commandRunner = makeCommandRunner(async (call) => {
+      if (call.command === 'gh' && call.args[0] === 'pr' && call.args[1] === 'list') {
+        return { code: 0, stdout: '[]', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${call.command} ${call.args.join(' ')}`);
+    });
     const worker = createCoderabbitAddressWorker({
       logger,
       repoRoot,
-      spawnProcess: spawnHarness.spawnProcess,
-      lockProbe: () => ({ held: false }),
+      lockPath,
+      commandRunner: commandRunner.runner,
+      env: {
+        INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
+        INVOKER_PR_CRON_AUTHOR: 'octocat',
+        INVOKER_PR_CODERABBIT_STATE_FILE: join(repoRoot, 'state', 'coderabbit.tsv'),
+        INVOKER_PR_CRON_WORKDIR: join(repoRoot, 'workdir'),
+      },
       installSignalHandlers: false,
     });
 
     worker.start();
-    expect(spawnHarness.calls).toEqual([]);
+    expect(commandRunner.calls).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS - 1);
-    expect(spawnHarness.calls).toEqual([]);
+    expect(commandRunner.calls).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(spawnHarness.calls).toHaveLength(1);
+    expect(commandRunner.calls).toHaveLength(1);
     await worker.stop();
   });
 });
