@@ -398,6 +398,11 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       }
 
       graphEventPipelineRef.current?.push(event);
+      if (delta.type === 'removed') {
+        // Removals are rare, user-initiated, and destructive: flush the batch
+        // window so the graph reflects them immediately instead of ~100ms later.
+        graphEventPipelineRef.current?.flushNow();
+      }
     };
 
     const unsub = window.invoker.onTaskGraphEvent(handleTaskGraphEvent);
