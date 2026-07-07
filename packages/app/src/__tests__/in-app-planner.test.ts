@@ -6,10 +6,12 @@ import {
   listInAppPlanningPresets,
   planFromGoal,
   resetPlanningChat,
+  restorePlanningChatSessions,
   sendPlanningChatMessage,
   submitPlanningChatDraft,
   type LoadedGeneratedPlan,
 } from '../in-app-planner.js';
+import { ConversationRepository, SQLiteAdapter, type InAppPlanningSessionRecord } from '@invoker/data-store';
 
 const VALID_PLAN = `Here is the plan.
 
@@ -525,6 +527,129 @@ tasks:
     })).resolves.toEqual({ ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' });
   });
 
+
+  it('persists visible planning sessions and hidden planner context while sending', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('What should the README include?');
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const sessions = createInAppPlanningChatSessions();
+
+      const result = await sendPlanningChatMessage({
+        message: 'Add README',
+        presetKey: 'codex',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo,
+        planningSessionStore: adapter,
+      });
+
+      if (!result.ok) throw new Error(result.error);
+      expect(adapter.loadInAppPlanningSession(result.sessionId)).toMatchObject({
+        id: result.sessionId,
+        title: 'Add README',
+        presetKey: 'codex',
+        pendingResponse: false,
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: 'user', text: 'Add README' }),
+          expect.objectContaining({ role: 'assistant', text: 'What should the README include?' }),
+        ]),
+      });
+      expect(conversationRepo.loadConversation(result.sessionId)?.threadTs).toBe(result.sessionId);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('restores draft-ready sessions and submits from hidden planner context', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-restored',
+        title: 'Restored plan',
+        presetKey: 'codex',
+        status: 'draft_ready',
+        messages: [
+          { id: 1, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-07-07T00:00:00.000Z' },
+          { id: 2, role: 'user', text: 'Draft it', createdAt: '2026-07-07T00:00:01.000Z' },
+          { id: 3, role: 'assistant', text: VALID_PLAN, createdAt: '2026-07-07T00:00:02.000Z' },
+        ],
+        draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:02.000Z',
+      };
+      conversationRepo.saveConversation('planning-restored', [
+        { role: 'user', content: 'Draft it' },
+        { role: 'assistant', content: VALID_PLAN },
+      ], null, false, undefined, undefined, 'plan');
+
+      const sessions = createInAppPlanningChatSessions();
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo,
+        planningSessionStore: adapter,
+      });
+      const loadGeneratedPlan = vi.fn().mockResolvedValue({ planName: 'Mock Plan', workflowId: 'wf-1' });
+
+      await expect(submitPlanningChatDraft({ sessionId: 'planning-restored' }, {
+        sessions,
+        loadGeneratedPlan,
+        planningSessionStore: adapter,
+      })).resolves.toMatchObject({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
+      expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('restores interrupted sessions idle with an interruption system line', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-interrupted',
+        title: 'Interrupted plan',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        messages: [
+          { id: 1, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-07-07T00:00:00.000Z' },
+          { id: 2, role: 'user', text: 'Continue', createdAt: '2026-07-07T00:00:01.000Z' },
+        ],
+        pendingResponse: true,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:01.000Z',
+      };
+      adapter.upsertInAppPlanningSession(record);
+      const sessions = createInAppPlanningChatSessions();
+
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo: new ConversationRepository(adapter),
+        planningSessionStore: adapter,
+      });
+
+      const restored = sessions.get('planning-interrupted');
+      expect(restored?.pendingSend).toBeUndefined();
+      expect(restored?.messages.at(-1)).toMatchObject({
+        role: 'system',
+        text: 'Planner was interrupted before it could answer. Send another message to continue.',
+        tone: 'error',
+      });
+      expect(adapter.loadInAppPlanningSession('planning-interrupted')?.pendingResponse).toBe(false);
+    } finally {
+      adapter.close();
+    }
+  });
   it('resets a planning chat session', () => {
     const sessions = createInAppPlanningChatSessions();
     sessions.set('session-1', {

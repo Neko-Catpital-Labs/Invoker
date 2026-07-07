@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
-import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord } from '../adapter.js';
+import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord, InAppPlanningSessionRecord } from '../adapter.js';
 import { createAttempt } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
@@ -59,6 +59,51 @@ describe('SQLiteAdapter', () => {
       outputSnapshot: 'terminal output\n',
       createdAt: '2026-07-07T00:00:00.000Z',
       updatedAt: '2026-07-07T00:00:01.000Z',
+      ...overrides,
+    };
+  }
+
+  function makePlanningSession(
+    id: string,
+    overrides: Partial<InAppPlanningSessionRecord> = {},
+  ): InAppPlanningSessionRecord {
+    return {
+      id,
+      title: `Planning ${id}`,
+      presetKey: 'codex',
+      status: 'draft_ready',
+      messages: [
+        {
+          id: 1,
+          role: 'system',
+          text: 'Ask Invoker what you want to build.',
+          tone: 'muted',
+          createdAt: '2026-07-07T00:00:00.000Z',
+        },
+        {
+          id: 2,
+          role: 'user',
+          text: 'Add README',
+          createdAt: '2026-07-07T00:00:01.000Z',
+        },
+        {
+          id: 3,
+          role: 'assistant',
+          text: 'Draft plan ready.',
+          createdAt: '2026-07-07T00:00:02.000Z',
+        },
+      ],
+      draftPlanSummary: {
+        name: 'README plan',
+        taskCount: 1,
+        workflowCount: 1,
+        steps: ['Update README'],
+      },
+      submittedWorkflowId: 'wf-planning',
+      submittedPlanName: 'README plan',
+      pendingResponse: true,
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:03.000Z',
       ...overrides,
     };
   }
@@ -308,6 +353,91 @@ describe('SQLiteAdapter', () => {
       adapter.deleteAllWorkflows();
 
       expect(adapter.listTerminalSessions()).toEqual([]);
+    });
+  });
+
+  describe('in_app_planning_sessions', () => {
+    it('creates the planning session schema with visible message storage', () => {
+      expect(tableColumns(adapter, 'in_app_planning_sessions')).toEqual([
+        'session_id',
+        'title',
+        'preset_key',
+        'status',
+        'draft_plan_summary_json',
+        'submitted_workflow_id',
+        'submitted_plan_name',
+        'pending_response',
+        'created_at',
+        'updated_at',
+      ]);
+      expect(tableColumns(adapter, 'in_app_planning_messages')).toEqual([
+        'session_id',
+        'message_id',
+        'role',
+        'text',
+        'tone',
+        'created_at',
+      ]);
+      expect(tableIndexes(adapter, 'in_app_planning_sessions')).toContain('idx_in_app_planning_sessions_updated');
+      expect(tableIndexes(adapter, 'in_app_planning_messages')).toContain('idx_in_app_planning_messages_session');
+      expect(tableForeignKeys(adapter, 'in_app_planning_messages')).toContain('in_app_planning_sessions.session_id:NO ACTION');
+    });
+
+    it('round-trips planning sessions across adapter reopen', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-sessions-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.upsertInAppPlanningSession(makePlanningSession('planning-1'));
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.loadInAppPlanningSession('planning-1')).toEqual(makePlanningSession('planning-1'));
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('updates planning sessions and replaces visible messages', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
+      adapter.updateInAppPlanningSession('planning-1', {
+        status: 'still_discussing',
+        messages: [{
+          id: 7,
+          role: 'system',
+          text: 'Planner was interrupted before it could answer. Send another message to continue.',
+          tone: 'error',
+          createdAt: '2026-07-07T00:00:04.000Z',
+        }],
+        draftPlanSummary: undefined,
+        pendingResponse: false,
+        updatedAt: '2026-07-07T00:00:05.000Z',
+      });
+
+      const loaded = adapter.loadInAppPlanningSession('planning-1');
+      expect(loaded).toMatchObject({
+        status: 'still_discussing',
+        messages: [{
+          id: 7,
+          role: 'system',
+          text: 'Planner was interrupted before it could answer. Send another message to continue.',
+          tone: 'error',
+          createdAt: '2026-07-07T00:00:04.000Z',
+        }],
+        pendingResponse: false,
+        updatedAt: '2026-07-07T00:00:05.000Z',
+      });
+      expect(loaded?.draftPlanSummary).toBeUndefined();
+    });
+
+    it('deletes planning sessions and their visible messages', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
+
+      adapter.deleteInAppPlanningSession('planning-1');
+
+      expect(adapter.loadInAppPlanningSession('planning-1')).toBeUndefined();
+      expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM in_app_planning_messages WHERE session_id = 'planning-1'")).toBe(0);
     });
   });
 
