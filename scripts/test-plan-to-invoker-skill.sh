@@ -8,6 +8,7 @@ SKILL_DIR="$REPO_ROOT/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
+EXAMPLES="$SKILL_DIR/references/examples.md"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
 POSITIVE_FIXTURE_DIR="$SKILL_DIR/fixtures/positive"
@@ -100,6 +101,7 @@ must_contain "$TUTORIAL" "Invoker MCP tool" "Tutorial must document the MCP hand
 
 [[ -f "$PLAYBOOK" ]] || fail "expected $PLAYBOOK"
 [[ -f "$TASK_PATTERNS" ]] || fail "expected $TASK_PATTERNS"
+[[ -f "$EXAMPLES" ]] || fail "expected $EXAMPLES"
 [[ -f "$CLAUDE_MD" ]] || fail "expected $CLAUDE_MD"
 
 # Installed agent skills use managed invoker-* copies, not legacy unprefixed symlinks.
@@ -128,6 +130,12 @@ must_contain "$SKILL_MD" "Review claim:" "SKILL must require review claim metada
 must_contain "$SKILL_MD" "Review lane:" "SKILL must require review lane metadata"
 must_contain "$SKILL_MD" "Non-goals:" "SKILL must require non-goals metadata"
 must_contain "$SKILL_MD" "Safety invariant:" "SKILL must require safety invariant metadata"
+must_contain "$SKILL_MD" "Dependency-first atomic-feature decomposition" "SKILL must document atomic-feature decomposition"
+must_contain "$SKILL_MD" "every implementation task must include \`Feature:\` and \`Feature state:\` headings" "SKILL must require Feature metadata headings"
+must_contain "$SKILL_MD" "one atomic feature: a coherent user-visible" "SKILL must define the Feature axis as one atomic feature"
+must_contain "$SKILL_MD" "thin sub-slices within a feature are optional" "SKILL must keep thin feature sub-slices optional"
+must_contain "$SKILL_MD" "Feature step dependency direction" "SKILL must keep the lightweight feature-step dependency check"
+must_contain "$SKILL_MD" "Slicing an implemented diff into reviewable PRs is owned by \`skills/make-pr/SKILL.md\` driven by \`skills/review-compression/SKILL.md\`" "SKILL must name make-pr as the PR-splitting owner"
 must_contain "$SKILL_MD" "For benchmark/direct-output prompts with" "SKILL frontmatter must expose benchmark mode before body loading"
 must_contain "$SKILL_MD" "\"invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the installed handoff command"
 must_contain "$SKILL_MD" "\"/invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the slash handoff command"
@@ -204,6 +212,18 @@ must_contain "$PLAYBOOK" "assume no prior context" "Playbook must require zero-c
 must_contain "$TASK_PATTERNS" "Assume zero context" "Task patterns must define zero-context prompt requirement"
 must_contain "$TASK_PATTERNS" "deterministic pass/fail expectations" "Task patterns must require deterministic prompt outcomes"
 must_contain "$TASK_PATTERNS" "Review compression contract" "Task patterns must define review compression metadata"
+must_contain "$TASK_PATTERNS" "Atomic-feature decomposition contract" "Task patterns must document atomic-feature decomposition"
+must_contain "$TASK_PATTERNS" "**\`Feature:\`** one atomic feature" "Task patterns must require Feature as the atomic feature heading"
+must_contain "$TASK_PATTERNS" "Thin sub-slices within the same feature are optional" "Task patterns must keep thin feature sub-slices optional"
+must_contain "$TASK_PATTERNS" "This is a lightweight feature-level dependency-direction check." "Task patterns must retain the lightweight feature-level dependency check"
+must_contain "$TASK_PATTERNS" "Slicing an implemented diff into reviewable PRs is owned by" "Task patterns must name downstream PR-splitting ownership"
+must_contain "$TASK_PATTERNS" "\`skills/make-pr/SKILL.md\` driven by \`skills/review-compression/SKILL.md\`" "Task patterns must point PR splitting at make-pr and review-compression"
+must_contain "$EXAMPLES" "Dependency-first atomic-feature decomposition with dormant support" "Examples must document atomic-feature decomposition"
+must_contain "$EXAMPLES" "include task-level \`Feature:\` and \`Feature state:\` metadata" "Examples must require Feature metadata headings"
+must_contain "$EXAMPLES" "Name one coherent atomic feature with \`Feature:\` for every implementation task." "Examples must define the Feature axis as one coherent atomic feature"
+must_contain "$EXAMPLES" "Use optional \`Feature step:\` integers only for thin sub-slices within the same feature." "Examples must keep thin feature sub-slices optional"
+must_contain "$EXAMPLES" "Use a lightweight feature-level dependency-direction check" "Examples must retain the lightweight feature-level dependency check"
+must_contain "$EXAMPLES" "Slicing an implemented diff into reviewable PRs is owned by \`skills/make-pr/SKILL.md\` driven by \`skills/review-compression/SKILL.md\`" "Examples must name make-pr as the PR-splitting owner"
 
 # Focused-proof policy guard: positive/canonical artifacts must not normalize the
 # obsolete `pnpm run test:all` default terminal gate. Negative fixtures, anti-pattern

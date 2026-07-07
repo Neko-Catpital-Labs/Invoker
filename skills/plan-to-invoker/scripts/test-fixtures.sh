@@ -119,8 +119,9 @@ test_doctor_negative_fixture() {
   local fixture_path="$1"
   local fixture_name="$(basename "$fixture_path")"
   local expected_failed_step="lint-task-atomicity"
+  local requires_review_unit_failure=false
   if [[ "$fixture_name" == "anti-pattern-n-broad-autofix-policy-review-unit.yaml" || "$fixture_name" == "anti-pattern-o-all-in-one-autofix-review-unit.yaml" ]]; then
-    expected_failed_step="lint-review-units"
+    requires_review_unit_failure=true
   fi
   local output
   local stderr_file
@@ -139,7 +140,23 @@ test_doctor_negative_fixture() {
     return 1
   fi
 
-  if ! echo "$output" | jq -e --arg expected "$expected_failed_step" '.allPassed == false and .firstFailedStep == $expected' &>/dev/null; then
+  if [[ "$requires_review_unit_failure" == true ]]; then
+    if ! echo "$output" | jq -e '.allPassed == false and (.firstFailedStep == "lint-task-atomicity" or .firstFailedStep == "lint-review-units")' &>/dev/null; then
+      echo "Expected firstFailedStep=lint-task-atomicity or lint-review-units for $fixture_name" >&2
+      echo "Output: $output" >&2
+      echo "Errors: $(cat "$stderr_file")" >&2
+      rm -f "$stderr_file"
+      return 1
+    fi
+
+    if ! echo "$output" | jq -e '.checks[] | select(.stepId == "lint-review-units" and .status == "failed")' &>/dev/null; then
+      echo "Expected lint-review-units failure for $fixture_name" >&2
+      echo "Output: $output" >&2
+      echo "Errors: $(cat "$stderr_file")" >&2
+      rm -f "$stderr_file"
+      return 1
+    fi
+  elif ! echo "$output" | jq -e --arg expected "$expected_failed_step" '.allPassed == false and .firstFailedStep == $expected' &>/dev/null; then
     echo "Expected firstFailedStep=$expected_failed_step for $fixture_name" >&2
     echo "Output: $output" >&2
     echo "Errors: $(cat "$stderr_file")" >&2
