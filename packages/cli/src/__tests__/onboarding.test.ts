@@ -1,16 +1,6 @@
-<<<<<<< HEAD
-import { describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-||||||| parent of 104536738 (Move approval and config behavior to entrypoints)
-import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-=======
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
->>>>>>> 104536738 (Move approval and config behavior to entrypoints)
 import { join } from 'node:path';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
 
