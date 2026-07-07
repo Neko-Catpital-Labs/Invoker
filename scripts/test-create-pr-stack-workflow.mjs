@@ -189,10 +189,34 @@ if [ "$1" = "api" ]; then
 
   case "$route" in
     *"/pulls?"*)
-      if [ -n "$GH_API_PULLS_JSON" ]; then
+      if printf '%s' "$route" | grep -q 'head='; then
+        if [ -n "$GH_API_PULLS_JSON" ]; then
+          printf '%s' "$GH_API_PULLS_JSON"
+        else
+          printf '%s' '[]'
+        fi
+      elif [ -n "$GH_API_OPEN_PULLS_JSON" ]; then
+        printf '%s' "$GH_API_OPEN_PULLS_JSON"
+      elif [ -n "$GH_API_PULLS_JSON" ]; then
         printf '%s' "$GH_API_PULLS_JSON"
       else
         printf '%s' '[]'
+      fi
+      exit 0
+      ;;
+    */issues/[0-9]*/comments?*)
+      if [ -n "$GH_API_ISSUE_COMMENTS_JSON" ]; then
+        printf '%s' "$GH_API_ISSUE_COMMENTS_JSON"
+      else
+        printf '%s' '[]'
+      fi
+      exit 0
+      ;;
+    */issues/comments/[0-9]*|*/issues/[0-9]*/comments)
+      if [ -n "$GH_COMMENT_RESPONSE" ]; then
+        printf '%s' "$GH_COMMENT_RESPONSE"
+      else
+        printf '%s' '{"id":123}'
       fi
       exit 0
       ;;
@@ -437,7 +461,30 @@ function testMergifyManagedUpdateSkipsPush() {
           head: { ref: branch, repo: { full_name: 'owner/repo' } },
         },
       ]),
-      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/42' }),
+      GH_API_OPEN_PULLS_JSON: JSON.stringify([
+        {
+          number: 41,
+          title: '[Graph Blanking](1) Base slice',
+          html_url: 'https://example.com/pull/41',
+          base: { ref: 'master' },
+          head: { ref: 'stack/TestOwner/stack/example/base/root--aaaa', repo: { full_name: 'owner/repo' } },
+        },
+        {
+          number: 42,
+          title: '[Graph Blanking](2) Middle slice',
+          html_url: 'https://example.com/pull/42',
+          base: { ref: 'stack/example/base' },
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+        {
+          number: 43,
+          title: '[Graph Blanking](3) Top slice',
+          html_url: 'https://example.com/pull/43',
+          base: { ref: branch },
+          head: { ref: 'stack/TestOwner/stack/example/top/top--bbbb', repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/42', number: 42 }),
     });
 
     const ghLog = existsSync(harness.ghLog) ? readFileSync(harness.ghLog, 'utf-8') : '';
@@ -457,6 +504,10 @@ function testMergifyManagedUpdateSkipsPush() {
     assert(Boolean(patchCall), 'managed update should patch the existing PR');
     assert(patchCall.stdin.includes('"title":"[Graph Blanking](1) Preserve graph blanking"'), 'managed update patch should include title');
     assert(patchCall.stdin.includes('## Summary'), 'managed update patch should include PR body');
+    const commentPosts = ghCalls.filter((call) => /\/issues\/(41|42|43)\/comments$/.test(call.route));
+    assert(commentPosts.length === 3, `managed update should upsert stack comments across the full stack\n${JSON.stringify(ghCalls, null, 2)}`);
+    assert(commentPosts.some((call) => call.stdin.includes('Full stack for this PR series (bottom → top):')), 'stack comments should include the full stack header');
+    assert(commentPosts.some((call) => call.stdin.includes('#42 — [Graph Blanking](2) Middle slice ← this PR')), 'stack comments should mark each target PR');
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
