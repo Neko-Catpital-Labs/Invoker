@@ -591,5 +591,150 @@ describe('GitHubMergeGateProvider', () => {
         ],
       });
     });
+
+    it('ignores stale failed check runs when a newer run for the same check passed', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/5',
+            statusCheckRollup: [
+              {
+                __typename: 'CheckRun',
+                name: 'PR Body',
+                workflowName: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                startedAt: '2026-07-07T01:34:31Z',
+                completedAt: '2026-07-07T01:34:50Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/1',
+              },
+              {
+                __typename: 'CheckRun',
+                name: 'PR Body',
+                workflowName: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                startedAt: '2026-07-07T01:35:05Z',
+                completedAt: '2026-07-07T01:35:36Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/2',
+              },
+              {
+                __typename: 'StatusContext',
+                context: 'CodeRabbit',
+                state: 'SUCCESS',
+              },
+            ],
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '5', cwd: '/tmp/repo' });
+
+      expect(result.checks).toEqual({ state: 'success', failed: [] });
+    });
+
+    it('ignores stale cancelled check runs when a newer run for the same check passed', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/7',
+            statusCheckRollup: [
+              {
+                __typename: 'CheckRun',
+                name: 'PR Body',
+                workflowName: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'CANCELLED',
+                startedAt: '2026-07-07T01:34:52Z',
+                completedAt: '2026-07-07T01:35:18Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/28835212616/job/85517432174',
+              },
+              {
+                __typename: 'CheckRun',
+                name: 'PR Body',
+                workflowName: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                startedAt: '2026-07-07T01:35:21Z',
+                completedAt: '2026-07-07T01:35:54Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/28835273831/job/85517627979',
+              },
+            ],
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '7', cwd: '/tmp/repo' });
+
+      expect(result.checks).toEqual({ state: 'success', failed: [] });
+    });
+
+    it('keeps duplicate check jobs from the current workflow run', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/6',
+            statusCheckRollup: [
+              {
+                __typename: 'CheckRun',
+                name: 'required-fast / ${{ matrix.name }}',
+                workflowName: 'CI',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                startedAt: '2026-07-07T01:33:35Z',
+                completedAt: '2026-07-07T01:34:05Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/3/job/1',
+                summary: 'Unit shard failed',
+              },
+              {
+                __typename: 'CheckRun',
+                name: 'required-fast / ${{ matrix.name }}',
+                workflowName: 'CI',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                startedAt: '2026-07-07T01:33:36Z',
+                completedAt: '2026-07-07T01:34:06Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/3/job/2',
+              },
+            ],
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '6', cwd: '/tmp/repo' });
+
+      expect(result.checks).toEqual({
+        state: 'failure',
+        failed: [
+          {
+            name: 'required-fast / ${{ matrix.name }}',
+            conclusion: 'FAILURE',
+            detailsUrl: 'https://github.com/owner/repo/actions/runs/3/job/1',
+            summary: 'Unit shard failed',
+          },
+        ],
+      });
+    });
   });
 });

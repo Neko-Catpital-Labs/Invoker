@@ -2423,7 +2423,12 @@ describe('TaskRunner', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => undefined } as any,
         persistence: {} as any,
-        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executorRegistry: {
+          getDefault: () => ({ type: 'worktree' }),
+          get: () => null,
+          getAll: () => [],
+          register: vi.fn(),
+        } as any,
         cwd: '/tmp',
         remoteTargetsProvider: provider,
       });
@@ -2433,11 +2438,11 @@ describe('TaskRunner', () => {
         config: { runnerKind: 'ssh', poolMemberId: 'do-droplet' },
       });
 
-      const executor1 = executor.selectExecutor(task);
+      const executor1 = executor.selectExecutor(task).executor;
       expect(executor1.type).toBe('ssh');
       expect((executor1 as any).sshKeyPath).toBe('/old/key');
 
-      const executor2 = executor.selectExecutor(task);
+      const executor2 = executor.selectExecutor(task).executor;
       expect((executor2 as any).sshKeyPath).toBe('/new/key');
 
       expect(provider).toHaveBeenCalledTimes(2);
@@ -2866,7 +2871,12 @@ describe('TaskRunner', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
-        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executorRegistry: {
+          getDefault: () => ({ type: 'worktree' }),
+          get: () => null,
+          getAll: () => [],
+          register: vi.fn(),
+        } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => remoteTargets,
       });
@@ -2884,9 +2894,9 @@ describe('TaskRunner', () => {
         config: { runnerKind: 'ssh', poolMemberId: 'remote-b' },
       });
 
-      const executor1 = executor.selectExecutor(task1);
-      const executor2 = executor.selectExecutor(task2);
-      const executor3 = executor.selectExecutor(task3);
+      const executor1 = executor.selectExecutor(task1).executor;
+      const executor2 = executor.selectExecutor(task2).executor;
+      const executor3 = executor.selectExecutor(task3).executor;
 
       // task1 and task2 share the same poolMemberId → same executor instance
       expect(executor1).toBe(executor2);
@@ -2917,8 +2927,8 @@ describe('TaskRunner', () => {
         config: { runnerKind: 'worktree' },
       });
 
-      const executor1 = executor.selectExecutor(task1);
-      const executor2 = executor.selectExecutor(task2);
+      const executor1 = executor.selectExecutor(task1).executor;
+      const executor2 = executor.selectExecutor(task2).executor;
 
       // Worktree executors are created fresh each time (lazy registration creates new instances)
       // Both should be worktree type but may be different instances
@@ -2939,7 +2949,12 @@ describe('TaskRunner', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
-        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executorRegistry: {
+          getDefault: () => ({ type: 'worktree' }),
+          get: () => null,
+          getAll: () => [],
+          register: vi.fn(),
+        } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => remoteTargets,
       });
@@ -2953,9 +2968,9 @@ describe('TaskRunner', () => {
         config: { runnerKind: 'ssh', poolMemberId: 'remote-a' },
       });
 
-      const executor1 = executor.selectExecutor(task1);
+      const executor1 = executor.selectExecutor(task1).executor;
       await executor.clearSshExecutorCache();
-      const executor2 = executor.selectExecutor(task2);
+      const executor2 = executor.selectExecutor(task2).executor;
 
       // After clearing cache, a new executor instance should be created
       expect(executor1).not.toBe(executor2);
@@ -3089,7 +3104,7 @@ describe('TaskRunner', () => {
       expect(JSON.stringify(selectedPayload)).not.toContain('sshKeyPath');
       expect(JSON.stringify(selectedPayload)).not.toContain('/secret/key');
       expect(updateTask).toHaveBeenCalledWith('task-1', {
-        config: { runnerKind: 'ssh', poolMemberId: 'remote-a' },
+        config: expect.objectContaining({ runnerKind: 'ssh', poolMemberId: 'remote-a' }),
         execution: expect.objectContaining({
           workspacePath: '/remote/worktrees/task-1',
           branch: 'experiment/task-1',
@@ -3165,7 +3180,7 @@ describe('TaskRunner', () => {
         remoteHost: 'b.example.com',
       }));
       expect(updateTask).toHaveBeenCalledWith('task-retry', {
-        config: { runnerKind: 'ssh', poolMemberId: 'remote-b' },
+        config: expect.objectContaining({ runnerKind: 'ssh', poolMemberId: 'remote-b' }),
         execution: expect.objectContaining({
           workspacePath: '/remote/worktrees/task-retry',
           branch: 'experiment/task-retry',
@@ -3392,15 +3407,15 @@ describe('TaskRunner', () => {
 
       // Check that metadata was persisted immediately after start
       expect(updateSpy).toHaveBeenCalledWith('ssh-task-1', {
-        config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
-        execution: {
+        config: expect.objectContaining({ runnerKind: 'ssh', poolMemberId: 'remote-1' }),
+        execution: expect.objectContaining({
           workspacePath: '~/.invoker/worktrees/abc123/experiment-ssh-task-1-def456',
           branch: 'experiment/ssh-task-1-def456',
           agentSessionId: 'session-123',
           lastAgentSessionId: 'session-123',
           lastAgentName: undefined,
           containerId: undefined,
-        },
+        }),
       });
     });
 
@@ -3644,15 +3659,15 @@ describe('TaskRunner', () => {
 
       // Check that metadata was persisted with workspacePath and branch=undefined
       expect(updateSpy).toHaveBeenCalledWith('byo-task-1', {
-        config: { runnerKind: 'ssh' },
-        execution: {
+        config: expect.objectContaining({ runnerKind: 'ssh' }),
+        execution: expect.objectContaining({
           workspacePath: '/remote/user-provided/workspace',
           branch: undefined,
           agentSessionId: undefined,
           lastAgentSessionId: undefined,
           lastAgentName: undefined,
           containerId: undefined,
-        },
+        }),
       });
     });
   });

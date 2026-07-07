@@ -321,12 +321,113 @@ function stringProp(value: Record<string, unknown>, ...keys: string[]): string |
   return undefined;
 }
 
+function timestampProp(value: Record<string, unknown>, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate !== 'string' || !candidate.trim()) continue;
+    const timestamp = Date.parse(candidate);
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return undefined;
+}
+
+function checkIdentity(value: Record<string, unknown>): string | undefined {
+  const context = stringProp(value, 'context');
+  if (context) return `status:${context}`;
+
+  const name = stringProp(value, 'name');
+  const workflowName = stringProp(value, 'workflowName');
+  if (name || workflowName) return `check:${workflowName ?? ''}:${name ?? ''}`;
+  return undefined;
+}
+
+function githubActionsRunKey(value: Record<string, unknown>): string | undefined {
+  const url = stringProp(value, 'detailsUrl', 'targetUrl');
+  if (!url) return undefined;
+  const match = /\/actions\/runs\/([^/?#]+)/.exec(url);
+  return match ? `github-actions:${match[1]}` : undefined;
+}
+
+type RollupItemGroup = { index: number; items: unknown[] };
+type LatestRollupItem = { index: number; item: unknown; timestamp: number };
+type ActionRunRollupGroup = { index: number; items: unknown[]; timestamp: number };
+
+function latestStatusCheckRollupItems(items: unknown[]): unknown[] {
+  const groups: RollupItemGroup[] = [];
+  const latestStatusByIdentity = new Map<string, LatestRollupItem>();
+  const actionRunsByIdentity = new Map<string, Map<string, ActionRunRollupGroup>>();
+
+  for (const [index, item] of items.entries()) {
+    if (!item || typeof item !== 'object') {
+      groups.push({ index, items: [item] });
+      continue;
+    }
+
+    const check = item as Record<string, unknown>;
+    const identity = checkIdentity(check);
+    const timestamp = timestampProp(check, 'startedAt', 'completedAt');
+    if (!identity || timestamp === undefined) {
+      groups.push({ index, items: [item] });
+      continue;
+    }
+
+    if (identity.startsWith('status:')) {
+      const existing = latestStatusByIdentity.get(identity);
+      if (!existing || timestamp >= existing.timestamp) {
+        latestStatusByIdentity.set(identity, { index, item, timestamp });
+      }
+      continue;
+    }
+
+    const runKey = githubActionsRunKey(check);
+    if (!runKey) {
+      groups.push({ index, items: [item] });
+      continue;
+    }
+
+    let runs = actionRunsByIdentity.get(identity);
+    if (!runs) {
+      runs = new Map();
+      actionRunsByIdentity.set(identity, runs);
+    }
+
+    const run = runs.get(runKey);
+    if (run) {
+      run.items.push(item);
+      run.timestamp = Math.max(run.timestamp, timestamp);
+      continue;
+    }
+    runs.set(runKey, { index, items: [item], timestamp });
+  }
+
+  for (const entry of latestStatusByIdentity.values()) {
+    groups.push({ index: entry.index, items: [entry.item] });
+  }
+  for (const runs of actionRunsByIdentity.values()) {
+    let latest: ActionRunRollupGroup | undefined;
+    for (const run of runs.values()) {
+      if (
+        !latest ||
+        run.timestamp > latest.timestamp ||
+        (run.timestamp === latest.timestamp && run.index > latest.index)
+      ) {
+        latest = run;
+      }
+    }
+    if (latest) groups.push({ index: latest.index, items: latest.items });
+  }
+
+  return groups
+    .sort((a, b) => a.index - b.index)
+    .flatMap((group) => group.items);
+}
+
 function summarizeStatusChecks(items: unknown[] | undefined): MergeGateApprovalStatus['checks'] {
   if (!Array.isArray(items) || items.length === 0) return undefined;
 
   let hasPending = false;
   const failed: MergeGateFailedCheck[] = [];
-  for (const item of items) {
+  for (const item of latestStatusCheckRollupItems(items)) {
     if (!item || typeof item !== 'object') continue;
     const check = item as Record<string, unknown>;
     const name = stringProp(check, 'name', 'workflowName', 'context') ?? 'unknown check';
