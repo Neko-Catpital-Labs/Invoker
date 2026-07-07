@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { LocalBus, type MessageBus } from '@invoker/transport';
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
@@ -6,6 +7,7 @@ import {
   PR_STATUS_WORKER_KIND,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
+  type WorkerSubscriptionFactory,
 } from '@invoker/execution-engine';
 
 import {
@@ -51,7 +53,7 @@ function persistence() {
   };
 }
 
-function deps(): WorkerRuntimeDependencies {
+function deps(messageBus?: MessageBus): WorkerRuntimeDependencies {
   return {
     store: {} as WorkerRuntimeDependencies['store'],
     submitter: { submit: vi.fn(() => 1) },
@@ -61,13 +63,19 @@ function deps(): WorkerRuntimeDependencies {
       error: vi.fn(),
       debug: vi.fn(),
     },
+    messageBus,
   } as WorkerRuntimeDependencies;
 }
 
-function controller() {
+function controller(messageBus?: MessageBus) {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
   const runtimes = new Map<string, TestWorkerRuntime[]>();
-  const register = (kind: string, note: string, runtimeKind = kind) => {
+  const register = (
+    kind: string,
+    note: string,
+    runtimeKind = kind,
+    subscriptions?: WorkerSubscriptionFactory<WorkerRuntimeDependencies>,
+  ) => {
     registry.register({
       kind,
       note,
@@ -78,6 +86,7 @@ function controller() {
         runtimes.set(kind, list);
         return created;
       },
+      ...(subscriptions ? { subscriptions } : {}),
     });
   };
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
@@ -86,10 +95,11 @@ function controller() {
   register('external-preview', 'External preview worker.');
 
   return {
+    registry,
     runtimes,
     controller: createWorkerRuntimeController({
       registry,
-      deps: deps(),
+      deps: deps(messageBus),
       autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
       persistence: persistence() as never,
       canControl: () => true,
@@ -174,5 +184,62 @@ describe('createWorkerRuntimeController', () => {
       lifecycle: 'exited',
       policy: 'unknown',
     });
+  });
+  it('wakes subscribed workers on matching bus messages', () => {
+    const bus = new LocalBus();
+    const setup = controller(bus);
+    setup.registry.register({
+      kind: 'subscribed-worker',
+      note: 'Wakes on matching test messages.',
+      factory: () => {
+        const created = runtime('subscribed-worker');
+        const list = setup.runtimes.get('subscribed-worker') ?? [];
+        list.push(created);
+        setup.runtimes.set('subscribed-worker', list);
+        return created;
+      },
+      subscriptions: () => [{
+        channel: 'test.channel',
+        shouldWake: (message: { kind?: string }) => message.kind === 'wake-me',
+      }],
+    });
+
+    setup.controller.start('subscribed-worker');
+    const created = setup.runtimes.get('subscribed-worker')?.[0];
+    expect(created).toBeDefined();
+
+    bus.publish('test.channel', { kind: 'ignore-me' });
+    bus.publish('test.channel', { kind: 'wake-me' });
+
+    expect(created?.wake).toHaveBeenCalledTimes(1);
+  });
+
+  it('unsubscribes worker wake handlers on stop', async () => {
+    const bus = new LocalBus();
+    const setup = controller(bus);
+    setup.registry.register({
+      kind: 'stoppable-worker',
+      note: 'Stops listening after stop.',
+      factory: () => {
+        const created = runtime('stoppable-worker');
+        const list = setup.runtimes.get('stoppable-worker') ?? [];
+        list.push(created);
+        setup.runtimes.set('stoppable-worker', list);
+        return created;
+      },
+      subscriptions: () => [{
+        channel: 'test.channel',
+        shouldWake: (message: { wake?: boolean }) => message.wake === true,
+      }],
+    });
+
+    setup.controller.start('stoppable-worker');
+    const created = setup.runtimes.get('stoppable-worker')?.[0];
+    expect(created).toBeDefined();
+
+    await setup.controller.stop('stoppable-worker');
+    bus.publish('test.channel', { wake: true });
+
+    expect(created?.wake).not.toHaveBeenCalled();
   });
 });
