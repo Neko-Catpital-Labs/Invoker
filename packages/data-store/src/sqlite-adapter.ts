@@ -405,6 +405,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
+  private normalizeConversationMode(value: unknown): Conversation['mode'] {
+    return value === 'agent' ? 'agent' : 'plan';
+  }
+
   /**
    * Open a private non-file-backed SQLite database.
    *
@@ -2145,12 +2149,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveConversation(conversation: Conversation): void {
     this.execRun(`
-      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, extracted_plan, plan_submitted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, mode, extracted_plan, plan_submitted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.threadTs,
       conversation.channelId,
       conversation.userId,
+      conversation.mode ?? 'plan',
       conversation.extractedPlan,
       conversation.planSubmitted ? 1 : 0,
       conversation.createdAt,
@@ -2165,6 +2170,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       threadTs: row.thread_ts as string,
       channelId: row.channel_id as string,
       userId: row.user_id as string,
+      mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
@@ -2172,10 +2178,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     };
   }
 
-  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void {
+  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'mode' | 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
+    if ('mode' in changes) {
+      setClauses.push('mode = ?');
+      values.push(changes.mode ?? 'plan');
+    }
     if ('extractedPlan' in changes) {
       setClauses.push('extracted_plan = ?');
       values.push(changes.extractedPlan ?? null);
@@ -2207,6 +2217,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       threadTs: row.thread_ts as string,
       channelId: row.channel_id as string,
       userId: row.user_id as string,
+      mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,

@@ -14,11 +14,15 @@ export interface WorkflowContext {
 
 // ── Q&A prompt ───────────────────────────────────────────────
 
+export const SLACK_DIRECT_ANSWER_GUIDANCE =
+  'Answer in simple ELI5 Slack prose. By default, keep the answer to 40 words or fewer. If the question is clearly technical, include the necessary technical detail even if that exceeds 40 words.';
+
 export function buildAssistantPrompt(question: string, ctx: WorkflowContext): string {
   const lines: string[] = [
     `You are answering questions about Invoker workflow \`${ctx.workflowId}\`.`,
     "Answer ONLY from this workflow's planning conversation and task transcripts below.",
     'If the answer is not present in this context, say you do not know — never guess or use outside knowledge.',
+    SLACK_DIRECT_ANSWER_GUIDANCE,
     '',
     '=== Planning conversation ===',
   ];
