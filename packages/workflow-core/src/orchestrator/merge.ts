@@ -15,6 +15,7 @@
  */
 
 import type { TaskState, TaskDelta, TaskStateChanges, TaskStatus, Attempt } from '@invoker/workflow-graph';
+import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import type { Logger } from '@invoker/contracts';
 import { parseMergeConflictError } from '../merge-conflict-error.js';
 import type { TaskStateMachine } from '../state-machine.js';
@@ -212,6 +213,7 @@ function startFixSession(
     status: 'running',
     startedAt,
     lastHeartbeatAt: startedAt,
+    leaseExpiresAt: new Date(startedAt.getTime() + ATTEMPT_LEASE_MS),
     branch: task.execution.branch,
     commit: task.execution.commit,
     workspacePath: task.execution.workspacePath,
@@ -308,6 +310,45 @@ export function revertFixSessionImpl(
     fixError: opts.fixError ?? null,
   });
   publishTaskDelta(host.messageBus, delta);
+}
+
+/**
+ * Reclaim a fix session (`status: 'fixing_with_ai'`) whose owner process died
+ * mid-fix: its attempt lease has expired and no live executor is driving it.
+ *
+ * Reverts the session to its recorded entry status (via `revertFixSessionImpl`,
+ * so a `failed` task returns to `failed` and a `review_ready` merge gate returns
+ * to review polling). `expectedLineage` guards against reclaiming a newer,
+ * live session a concurrent restart re-dispatched between observation and
+ * revert.
+ *
+ * Returns `'reverted'` when it reclaimed the session, or `'noop'` when the task
+ * is no longer a stalled fix session or the lineage no longer matches.
+ */
+export function reclaimStalledFixSessionImpl(
+  host: MergeHost,
+  taskId: string,
+  opts: { reason: string; expectedLineage?: TaskLineageExpectation },
+): 'reverted' | 'noop' {
+  host.refreshFromDb();
+  const task = host.stateGetTask(taskId);
+  if (!task || task.status !== 'fixing_with_ai') return 'noop';
+  if (!host.taskMatchesLineageExpectation(task, opts.expectedLineage)) return 'noop';
+
+  revertFixSessionImpl(host, taskId, {
+    savedError: task.execution.error ?? task.execution.pendingFixError ?? '',
+    fixError: opts.reason,
+    expectedLineage: opts.expectedLineage,
+  });
+
+  const reverted = host.stateGetTask(taskId);
+  if (!reverted || reverted.status === 'fixing_with_ai') return 'noop';
+
+  host.persistence.logEvent?.(taskId, 'task.fix_session_reclaimed', {
+    reason: opts.reason,
+    restoreStatus: reverted.status,
+  });
+  return 'reverted';
 }
 
 function restoreFailedEntry(
