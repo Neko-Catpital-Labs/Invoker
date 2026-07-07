@@ -225,6 +225,16 @@ import {
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
 import {
+  resolveDiskCheckIntervalMs,
+  resolveDiskHeadroomThresholds,
+} from './disk-headroom.js';
+import {
+  startDiskHeadroomMonitor,
+  type DiskHeadroomMonitorHandle,
+  type RemoteDiskTarget,
+} from './disk-headroom-monitor.js';
+
+import {
   buildFixWithAgentMutationArgs,
   buildHeadlessFixArgs,
   listOpenFixIntentsForTask,
@@ -471,6 +481,8 @@ const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promi
  */
 let activeMutationContext: WorkflowMutationContext | undefined;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
+let diskHeadroomMonitor: DiskHeadroomMonitorHandle | null = null;
+
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
 const appProcessStartedAt = Date.now();
@@ -806,6 +818,34 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       logger.info(`hourly snapshots enabled (interval=${hourlyMs}ms)`, { module: 'backup' });
     }
   }
+  if (!readOnly && !diskHeadroomMonitor) {
+    const thresholds = resolveDiskHeadroomThresholds();
+    const intervalMs = resolveDiskCheckIntervalMs();
+    const remoteTargets: RemoteDiskTarget[] = Object.entries(invokerConfig.remoteTargets ?? {}).map(
+      ([name, target]) => ({
+        name,
+        connection: {
+          host: target.host,
+          user: target.user,
+          port: target.port,
+          sshKeyPath: target.sshKeyPath,
+        },
+        remotePath: '~/.invoker',
+      }),
+    );
+
+    diskHeadroomMonitor = startDiskHeadroomMonitor(
+      {
+        logger,
+        thresholds,
+        localPath: invokerHomeRoot,
+        remoteTargets,
+        writeActivityLog: (source, level, message) => persistence.writeActivityLog(source, level, message),
+      },
+      intervalMs,
+    );
+  }
+
   // Compose runtime services from persistence-backed adapters.
   // Headless startup routes through composeHeadlessStartup so the
   // headless path has an explicit composition entry point.
@@ -5251,6 +5291,11 @@ function createEmbeddedTerminalBackendFromConfig(
           clearInterval(hourlyBackupInterval);
           hourlyBackupInterval = null;
         }
+        if (diskHeadroomMonitor) {
+          diskHeadroomMonitor.stop();
+          diskHeadroomMonitor = null;
+        }
+
         embeddedTerminalManager.closeAll();
         if (executorRegistry) {
           await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
