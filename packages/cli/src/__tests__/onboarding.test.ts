@@ -3,6 +3,8 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES } from '@invoker/contracts';
+
 import {
   buildDoctorChecks,
   generateSlackManifest,
@@ -16,7 +18,6 @@ import {
   validateSlackCredentials,
   type CliConfigState,
 } from '../onboarding.js';
-import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES } from '../external-dependencies.js';
 
 describe('generateSlackManifest', () => {
   it('requests the required bot scopes, socket mode, and app_mention events', () => {

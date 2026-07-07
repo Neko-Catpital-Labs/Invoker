@@ -6,14 +6,15 @@ import { createInterface } from 'node:readline/promises';
 import {
   assembleReadinessChecks,
   buildReport,
-  formatReport,
+  DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
   DEFAULT_TOOL_REQUIREMENTS,
+  EXTERNAL_DEPENDENCIES,
+  formatReport,
   type IsInstalled,
   type PlanningPresetSpec,
   type PrerequisiteCheck,
 } from '@invoker/contracts';
 import { formatCaughtException, logCaughtException } from './logging.js';
-import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES } from './external-dependencies.js';
 
 // ── Paths ────────────────────────────────────────────────────
 
