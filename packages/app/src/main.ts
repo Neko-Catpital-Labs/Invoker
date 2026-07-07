@@ -224,15 +224,7 @@ import {
 } from './global-topup.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
-import {
-  resolveDiskCheckIntervalMs,
-  resolveDiskHeadroomThresholds,
-} from './disk-headroom.js';
-import {
-  startDiskHeadroomMonitor,
-  type DiskHeadroomMonitorHandle,
-  type RemoteDiskTarget,
-} from './disk-headroom-monitor.js';
+
 
 import {
   buildFixWithAgentMutationArgs,
@@ -331,6 +323,17 @@ function buildRegisteredOwnerWorkerDeps(
   store: WorkerRuntimeDependencies['store'],
   checkMergeGateStatuses: NonNullable<WorkerRuntimeDependencies['reviewGate']>['checkMergeGateStatuses'],
 ): WorkerRuntimeDependencies {
+  const remoteTargets = Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+    name,
+    connection: {
+      host: target.host,
+      user: target.user,
+      sshKeyPath: target.sshKeyPath,
+      port: target.port,
+    },
+    remotePath: '~/.invoker',
+  }));
+
   return {
     store,
     submitter: {
@@ -347,13 +350,15 @@ function buildRegisteredOwnerWorkerDeps(
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
     },
+    diskHeadroom: {
+      localPath: resolveInvokerHomeRoot(),
+      remoteTargets,
+    },
   };
 }
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
-  return registerExternalWorkersFromConfig(
-    invokerConfig.externalWorkers,
-    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
-  );
+  const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
+  return registerExternalWorkersFromConfig(invokerConfig.externalWorkers, registry);
 }
 
 
@@ -481,8 +486,6 @@ const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promi
  */
 let activeMutationContext: WorkflowMutationContext | undefined;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
-let diskHeadroomMonitor: DiskHeadroomMonitorHandle | null = null;
-
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
 const appProcessStartedAt = Date.now();
@@ -817,33 +820,6 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       hourlyBackupInterval.unref?.();
       logger.info(`hourly snapshots enabled (interval=${hourlyMs}ms)`, { module: 'backup' });
     }
-  }
-  if (!readOnly && !diskHeadroomMonitor) {
-    const thresholds = resolveDiskHeadroomThresholds();
-    const intervalMs = resolveDiskCheckIntervalMs();
-    const remoteTargets: RemoteDiskTarget[] = Object.entries(invokerConfig.remoteTargets ?? {}).map(
-      ([name, target]) => ({
-        name,
-        connection: {
-          host: target.host,
-          user: target.user,
-          port: target.port,
-          sshKeyPath: target.sshKeyPath,
-        },
-        remotePath: '~/.invoker',
-      }),
-    );
-
-    diskHeadroomMonitor = startDiskHeadroomMonitor(
-      {
-        logger,
-        thresholds,
-        localPath: invokerHomeRoot,
-        remoteTargets,
-        writeActivityLog: (source, level, message) => persistence.writeActivityLog(source, level, message),
-      },
-      intervalMs,
-    );
   }
 
   // Compose runtime services from persistence-backed adapters.
@@ -5290,10 +5266,6 @@ function createEmbeddedTerminalBackendFromConfig(
         if (hourlyBackupInterval) {
           clearInterval(hourlyBackupInterval);
           hourlyBackupInterval = null;
-        }
-        if (diskHeadroomMonitor) {
-          diskHeadroomMonitor.stop();
-          diskHeadroomMonitor = null;
         }
 
         embeddedTerminalManager.closeAll();

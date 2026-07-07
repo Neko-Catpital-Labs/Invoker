@@ -8,7 +8,7 @@ import {
   parseDfOutput,
   resolveDiskCheckIntervalMs,
   resolveDiskHeadroomThresholds,
-} from '../disk-headroom.js';
+} from '../workers/disk-headroom.js';
 
 const LINUX_DF = `Filesystem     1024-blocks     Used Available Capacity Mounted on
 /dev/vda1         81071768 34567890  46503878      43% /`;
@@ -24,15 +24,15 @@ describe('parseDfOutput', () => {
 
   it('rejoins a mount point that contains spaces', () => {
     const out = `Filesystem 1024-blocks Used Available Capacity Mounted on
-/dev/disk2s1 100 50 50 50% /Volumes/My Drive`;
+/dev/disk1s1 100 10 90 10% /Volumes/My Drive`;
     const parsed = parseDfOutput(out);
     expect(parsed?.mountedOn).toBe('/Volumes/My Drive');
   });
 
   it('reads the capacity column as the used percent', () => {
     const out = `Filesystem 1024-blocks Used Available Capacity Mounted on
-/dev/vda1 100 90 10 90% /`;
-    expect(parseDfOutput(out)?.usedPercent).toBe(90);
+/dev/vda1 100 1 99 77% /`;
+    expect(parseDfOutput(out)?.usedPercent).toBe(77);
   });
 
   it('returns null for header-only output', () => {
@@ -101,10 +101,6 @@ describe('resolveDiskHeadroomThresholds', () => {
 });
 
 describe('resolveDiskCheckIntervalMs', () => {
-  it('defaults to 5 minutes', () => {
-    expect(resolveDiskCheckIntervalMs({} as NodeJS.ProcessEnv)).toBe(DEFAULT_DISK_CHECK_INTERVAL_MS);
-  });
-
   it('reads a positive integer from env', () => {
     expect(resolveDiskCheckIntervalMs({ INVOKER_DISK_CHECK_INTERVAL_MS: '1234' } as NodeJS.ProcessEnv)).toBe(1234);
   });

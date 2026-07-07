@@ -1,22 +1,14 @@
 /**
  * Disk-headroom monitor: the I/O + logging shell around the pure evaluation in
- * `disk-headroom.ts`.
- *
- * This module never blocks scheduling or fails tasks. It exists to surface
- * early warnings (e.g. 85% used) before a box reaches 100% and everything
- * wedges.
+ * ./disk-headroom.ts.
  */
 
 import { execFile } from 'node:child_process';
 
 import type { Logger } from '@invoker/contracts';
-import {
-  bashNormalizeTildePath,
-  buildSshConnectionArgs,
-  execRemoteCapture,
-  shellPosixSingleQuote,
-  type SshTargetConnection,
-} from '@invoker/execution-engine';
+
+import { buildSshConnectionArgs, type SshTargetConnection } from '../ssh-transport-options.js';
+import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from '../ssh-git-exec.js';
 
 import {
   evaluateDiskHeadroom,
@@ -46,7 +38,7 @@ export interface DiskHeadroomMonitorDeps {
   runLocalDf?: (path: string) => Promise<string>;
   runRemoteDf?: (target: RemoteDiskTarget) => Promise<string>;
 
-  writeActivityLog?: (source: string, level: ActivityLogLevel, message: string) => void;
+  writeActivityLog?: (level: ActivityLogLevel, message: string) => void;
 }
 
 function defaultRunLocalDf(path: string): Promise<string> {
@@ -54,12 +46,11 @@ function defaultRunLocalDf(path: string): Promise<string> {
 
   execFile('df', [...DF_ARGS, path], { timeout: LOCAL_DF_TIMEOUT_MS }, (err, stdout, stderr) => {
     if (err) {
-      const suffix = stderr?.trim() ? `; stderr=${stderr.trim()}` : '';
-      reject(new Error(`df failed for ${path}: ${err.message}${suffix}`));
+      const msg = stderr ? `${err.message}: ${stderr}` : err.message;
+      reject(new Error(msg));
       return;
     }
-
-    resolve(stdout);
+    resolve(String(stdout));
   });
 
   return promise;
@@ -70,20 +61,21 @@ function defaultRunLocalDf(path: string): Promise<string> {
  * (config paths like `~/.invoker`) before df'ing the single-quoted path.
  */
 export function buildRemoteDfScript(path: string): string {
-  const quoted = shellPosixSingleQuote(path);
-
-  return [
-    'set -euo pipefail',
-    `WT=${quoted}`,
-    bashNormalizeTildePath('WT'),
-    'df -P -k "$WT"',
-  ].join('\n');
+  const wtQ = shellPosixSingleQuote(path);
+  return `set -euo pipefail
+WT=${wtQ}
+${bashNormalizeTildePath('WT')}
+df -P -k "$WT"
+`;
 }
 
 function defaultRunRemoteDf(target: RemoteDiskTarget): Promise<string> {
   const sshArgs = buildSshConnectionArgs(target.connection, { batchMode: true });
-  const script = buildRemoteDfScript(target.remotePath);
-  return execRemoteCapture({ sshArgs, script, phase: `disk-headroom:${target.name}` });
+  return execRemoteCapture({
+    sshArgs,
+    script: buildRemoteDfScript(target.remotePath),
+    phase: `disk-headroom:${target.name}`,
+  });
 }
 
 function auditLog(
@@ -92,13 +84,14 @@ function auditLog(
   message: string,
 ): void {
   if (!deps.writeActivityLog) return;
-
   try {
-    deps.writeActivityLog(MODULE, level, message);
+    deps.writeActivityLog(level, message);
   } catch (err) {
-    deps.logger.debug('Disk headroom: audit sink failed', {
+    const reason = err instanceof Error ? err.message : String(err);
+    deps.logger.debug?.('[disk-headroom] activity log write failed', {
       module: MODULE,
-      error: String(err),
+      level,
+      reason,
     });
   }
 }
@@ -114,19 +107,20 @@ function emit(deps: DiskHeadroomMonitorDeps, result: DiskHeadroomEvaluation): vo
     criticalPercent: result.thresholds.criticalPercent,
   };
 
-  if (result.level === 'critical') {
-    deps.logger.error(result.message, fields);
-    auditLog(deps, 'error', result.message);
+  if (result.level === 'ok') {
+    deps.logger.debug?.('[disk-headroom] ok', fields);
     return;
   }
 
+  const msg = `[disk-headroom] ${result.level}: ${result.label} (${result.usage.usedPercent}% used)`;
   if (result.level === 'warn') {
-    deps.logger.warn(result.message, fields);
-    auditLog(deps, 'warn', result.message);
+    deps.logger.warn(msg, fields);
+    auditLog(deps, 'warn', msg);
     return;
   }
 
-  deps.logger.debug(result.message, fields);
+  deps.logger.error(msg, fields);
+  auditLog(deps, 'error', msg);
 }
 
 async function checkOne(
@@ -134,26 +128,18 @@ async function checkOne(
   label: string,
   runDf: () => Promise<string>,
 ): Promise<DiskHeadroomEvaluation | null> {
-  let output: string;
-
+  let stdout = '';
   try {
-    output = await runDf();
+    stdout = await runDf();
   } catch (err) {
-    deps.logger.error('Disk headroom: df failed', {
-      module: MODULE,
-      label,
-      error: String(err),
-    });
+    const reason = err instanceof Error ? err.message : String(err);
+    deps.logger.error(`[disk-headroom] df failed for ${label}: ${reason}`, { module: MODULE, label });
     return null;
   }
 
-  const usage = parseDfOutput(output);
+  const usage = parseDfOutput(stdout);
   if (!usage) {
-    deps.logger.error('Disk headroom: failed to parse df output', {
-      module: MODULE,
-      label,
-      output,
-    });
+    deps.logger.error(`[disk-headroom] unparseable df output for ${label}`, { module: MODULE, label });
     return null;
   }
 
@@ -173,17 +159,23 @@ export async function runDiskHeadroomCheck(
   const runLocal = deps.runLocalDf ?? defaultRunLocalDf;
   const runRemote = deps.runRemoteDf ?? defaultRunRemoteDf;
 
+  const results: DiskHeadroomEvaluation[] = [];
+
   const localLabel = `local ${deps.localPath}`;
   const local = await checkOne(deps, localLabel, () => runLocal(deps.localPath));
+  if (local) results.push(local);
 
-  const remote = await Promise.all(
-    deps.remoteTargets.map((t) => {
-      const label = `remote ${t.name} ${t.remotePath}`;
-      return checkOne(deps, label, () => runRemote(t));
+  const remotes = await Promise.all(
+    deps.remoteTargets.map(async (target) => {
+      const label = `ssh:${target.name} ${target.remotePath}`;
+      return checkOne(deps, label, () => runRemote(target));
     }),
   );
+  for (const r of remotes) {
+    if (r) results.push(r);
+  }
 
-  return [local, ...remote].filter((x): x is DiskHeadroomEvaluation => Boolean(x));
+  return results;
 }
 
 export interface DiskHeadroomMonitorHandle {
@@ -199,15 +191,21 @@ export function startDiskHeadroomMonitor(
   deps: DiskHeadroomMonitorDeps,
   intervalMs: number,
 ): DiskHeadroomMonitorHandle {
-  void runDiskHeadroomCheck(deps);
+  let stopped = false;
 
-  const timer = setInterval(() => {
-    void runDiskHeadroomCheck(deps);
-  }, intervalMs);
+  const tick = async () => {
+    if (stopped) return;
+    await runDiskHeadroomCheck(deps);
+  };
 
-  timer.unref?.();
+  void tick();
+  const handle = setInterval(() => void tick(), intervalMs);
+  handle.unref?.();
 
   return {
-    stop: () => clearInterval(timer),
+    stop: () => {
+      stopped = true;
+      clearInterval(handle);
+    },
   };
 }

@@ -5,7 +5,7 @@ import {
   runDiskHeadroomCheck,
   type DiskHeadroomMonitorDeps,
   type RemoteDiskTarget,
-} from '../disk-headroom-monitor.js';
+} from '../workers/disk-headroom-monitor.js';
 
 function makeLogger() {
   const logger = {
@@ -28,7 +28,7 @@ const THRESHOLDS = { warnPercent: 85, criticalPercent: 95 };
 
 function baseDeps(overrides: Partial<DiskHeadroomMonitorDeps>): DiskHeadroomMonitorDeps {
   return {
-    logger: makeLogger() as unknown as DiskHeadroomMonitorDeps['logger'],
+    logger: makeLogger() as any,
     thresholds: THRESHOLDS,
     localPath: '/tmp',
     remoteTargets: [],
@@ -77,7 +77,7 @@ describe('runDiskHeadroomCheck — local disk', () => {
   it('logs and swallows a df failure without throwing', async () => {
     const deps = baseDeps({
       runLocalDf: async () => {
-        throw new Error('no df');
+        throw new Error('df down');
       },
     });
 
@@ -87,7 +87,7 @@ describe('runDiskHeadroomCheck — local disk', () => {
 
   it('logs unparseable df output', async () => {
     const deps = baseDeps({
-      runLocalDf: async () => 'not df',
+      runLocalDf: async () => 'garbage',
     });
 
     await expect(runDiskHeadroomCheck(deps)).resolves.toEqual([]);

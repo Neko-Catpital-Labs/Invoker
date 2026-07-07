@@ -8,6 +8,7 @@ import type {
 } from './auto-fix-recovery.js';
 import type { CiFailureWorkerStore, CiFailureWorkerSubmitter } from './workers/ci-failure-worker.js';
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
+import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
@@ -26,4 +27,6 @@ export interface WorkerRuntimeDependencies {
   autoFix?: AutoFixWorkerConfig;
   /** PR-maintenance shell worker launch configuration. */
   prMaintenance?: PrMaintenanceWorkerConfig;
+  /** Disk-headroom worker configuration (local/remote paths and thresholds). */
+  diskHeadroom?: DiskHeadroomWorkerConfig;
 }
