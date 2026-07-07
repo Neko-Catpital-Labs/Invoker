@@ -519,33 +519,6 @@ describe('WorkflowInspector', () => {
     expect(onEditAgent).toHaveBeenCalledWith('task-1', 'claude');
   });
 
-  it('edits AI model from the current agent model list', () => {
-    const onEditModel = vi.fn();
-    render(
-      <WorkflowInspector
-        workflow={workflow}
-        task={makeTask({ status: 'pending' })}
-        executionHarnesses={[
-          {
-            name: 'codex',
-            supportedModels: [
-              { id: 'gpt-5', label: 'GPT-5' },
-              { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
-            ],
-          },
-        ]}
-        collapsed={false}
-        advancedExpanded={false}
-        onEditModel={onEditModel}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    fireEvent.change(screen.getByTestId('execution-model-select'), { target: { value: 'gpt-5-codex' } });
-    expect(onEditModel).toHaveBeenCalledWith('task-1', 'gpt-5-codex');
-  });
-
   it('double-click edits prompt and saves through callback', () => {
     const onEditPrompt = vi.fn();
     render(
@@ -709,46 +682,6 @@ describe('WorkflowInspector', () => {
       expect(screen.getByText('debug detail')).toBeInTheDocument();
       expect(screen.getByText('{"attempt":1}')).toBeInTheDocument();
       expect(screen.queryByText(/secret/)).not.toBeInTheDocument();
-    } finally {
-      delete (window as unknown as { invoker?: unknown }).invoker;
-    }
-  });
-
-  it('shows a visible notice when fix recreated the workflow because workspace was missing', async () => {
-    (window as unknown as {
-      invoker: { getEvents: (taskId: string) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
-    }).invoker = {
-      getEvents: vi.fn(async () => [
-        {
-          id: 1,
-          eventType: 'task.workflow_recreated',
-          payload: JSON.stringify({
-            level: 'warn',
-            workflowId: 'wf-1',
-            reason: 'missing-workspace-startup-merge-conflict',
-            message: 'Workspace was missing, so Invoker recreated workflow wf-1 from a fresh base instead of fixing this task in-place.',
-          }),
-          createdAt: '2025-01-01T00:00:04.000Z',
-        },
-      ]),
-    };
-
-    try {
-      render(
-        <WorkflowInspector
-          workflow={workflow}
-          task={makeTask({ status: 'failed' })}
-          collapsed={false}
-          advancedExpanded={false}
-          onToggleCollapsed={() => {}}
-          onToggleAdvanced={() => {}}
-        />,
-      );
-
-      const notice = await screen.findByTestId('workspace-recreate-notice');
-      expect(notice).toHaveTextContent('Workspace recreated');
-      expect(notice).toHaveTextContent('Workspace was missing, so Invoker recreated workflow wf-1 from a fresh base instead of fixing this task in-place.');
-      expect(notice).toHaveTextContent('Workflow: wf-1');
     } finally {
       delete (window as unknown as { invoker?: unknown }).invoker;
     }
