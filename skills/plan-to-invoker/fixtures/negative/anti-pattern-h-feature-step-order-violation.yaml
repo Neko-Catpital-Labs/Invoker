@@ -1,0 +1,134 @@
+# Anti-Pattern H: Invalid same-feature step dependency direction
+# Expected outcome: skill-doctor fails lint-task-atomicity with a feature step ordering violation.
+
+name: "Anti-pattern: earlier feature step depends on later feature step"
+description: |
+  Demonstrates a dependency direction violation where one atomic-feature sub-slice
+  depends on a later feature step without an explicit exception.
+  Standalone workflow waiver:
+  - This fixture intentionally keeps two prompt tasks together so the feature step
+    dependency-direction lint can be exercised in isolation.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/EdbertChan/Invoker
+baseBranch: master
+featureBranch: plan/anti-pattern-feature-step-order-violation
+
+tasks:
+  - id: prompt-edit-bridge-step
+    description: |
+      Review claim:
+      - Add prompt-edit bridge plumbing after the contract is supposed to exist.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Existing command-edit routing remains unchanged.
+      Slice rationale:
+      - This later sub-slice exists only to model feature step ordering.
+      Architectural effect:
+      - App bridge code gains the prompt-edit route for the shared feature.
+      Goal:
+      - Add prompt-edit bridge plumbing after the contract is supposed to exist.
+      Motivation:
+      - Keep the later app bridge step separate from the earlier contract step.
+      Alternative considerations:
+      - Option A (chosen): split the feature into ordered bridge and contract steps.
+      - Option B: merge the steps and lose dependency-direction coverage.
+      Implementation details:
+      - Modify packages/app/src/main.ts to model a later prompt-edit bridge slice.
+      Non-goals:
+      - Do not add UI activation or regression proof in this fixture.
+      Feature: prompt_edit_bridge
+      Feature step: 2
+      Feature state: active
+      Files:
+      - packages/app/src/main.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - Ensure the bridge step remains a later same-feature sub-slice.
+    prompt: |
+      Review claim:
+      - Add prompt-edit bridge plumbing after the contract is supposed to exist.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Existing command-edit routing remains unchanged.
+      Slice rationale:
+      - This later sub-slice exists only to model feature step ordering.
+      Architectural effect:
+      - App bridge code gains the prompt-edit route for the shared feature.
+      Goal:
+      - Add prompt-edit bridge plumbing after the contract is supposed to exist.
+      Motivation:
+      - Keep the later app bridge step separate from the earlier contract step.
+      Alternative considerations:
+      - Option A (chosen): split the feature into ordered bridge and contract steps.
+      - Option B: merge the steps and lose dependency-direction coverage.
+      Implementation details:
+      - Assume no prior context.
+      Modify packages/app/src/main.ts to model a later prompt-edit bridge slice.
+      Non-goals:
+      - Do not add UI activation or regression proof in this fixture.
+      Acceptance criteria:
+      - Pass condition: packages/app/src/main.ts would contain the later bridge step and the fixture remains deterministic with exit code 0 expectations.
+    dependencies: []
+
+  - id: prompt-edit-contract-step
+    description: |
+      Review claim:
+      - Add the prompt-edit contract but incorrectly depend on the later bridge step.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Existing renderer command-edit contracts remain unchanged.
+      Slice rationale:
+      - This earlier sub-slice intentionally has the wrong dependency direction.
+      Architectural effect:
+      - Renderer contract code gains the prompt-edit surface for the shared feature.
+      Goal:
+      - Add the prompt-edit contract but incorrectly depend on the later bridge step.
+      Motivation:
+      - Exercise the same-feature dependency-direction lint.
+      Alternative considerations:
+      - Option A (chosen): make step 1 depend on step 2 to trigger the lint.
+      - Option B: omit the Feature heading and test a different failure.
+      Implementation details:
+      - Modify packages/app/src/preload.ts to model the earlier contract slice.
+      Non-goals:
+      - Do not add a Feature step exception in this fixture.
+      Feature: prompt_edit_bridge
+      Feature step: 1
+      Feature state: active
+      Files:
+      - packages/app/src/preload.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - Ensure this earlier feature step depends on the later same-feature step without an exception.
+    prompt: |
+      Review claim:
+      - Add the prompt-edit contract but incorrectly depend on the later bridge step.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Existing renderer command-edit contracts remain unchanged.
+      Slice rationale:
+      - This earlier sub-slice intentionally has the wrong dependency direction.
+      Architectural effect:
+      - Renderer contract code gains the prompt-edit surface for the shared feature.
+      Goal:
+      - Add the prompt-edit contract but incorrectly depend on the later bridge step.
+      Motivation:
+      - Exercise the same-feature dependency-direction lint.
+      Alternative considerations:
+      - Option A (chosen): make step 1 depend on step 2 to trigger the lint.
+      - Option B: omit the Feature heading and test a different failure.
+      Implementation details:
+      - Assume no prior context.
+      Modify packages/app/src/preload.ts to model the earlier contract slice.
+      Non-goals:
+      - Do not add a Feature step exception in this fixture.
+      Acceptance criteria:
+      - Pass condition: packages/app/src/preload.ts would contain the earlier contract step and this fixture keeps deterministic exit code 0 expectations before lint rejection.
+    dependencies: [prompt-edit-bridge-step]

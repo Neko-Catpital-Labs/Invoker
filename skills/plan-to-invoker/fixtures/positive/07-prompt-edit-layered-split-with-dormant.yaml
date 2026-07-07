@@ -6,6 +6,9 @@ name: "Prompt edit layered split with dormant activation"
 description: |
   Demonstrates review-oriented decomposition for a large prompt-edit change by
   enforcing dependency-first layering and explicit dormant feature scaffolding.
+  Standalone workflow waiver:
+  - This fixture intentionally keeps the split prompt-edit stack in one plan so
+    positive fixture coverage can validate the atomic-feature metadata shape.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: https://github.com/EdbertChan/Invoker
@@ -17,6 +20,8 @@ tasks:
     description: |
       Review claim:
       - Add the prompt-edit renderer contract without activating behavior.
+      Review lane:
+      - behavior
       Safety invariant:
       - Existing command-edit contracts remain intact and no UI path calls the new prompt-edit surface yet.
       Slice rationale:
@@ -33,7 +38,9 @@ tasks:
       - Option B: bundle contract, app bridge, and UI activation together.
       Implementation details:
       - Mirror existing command-edit contract shapes for prompt editing.
-      Layer: contact_surface
+      Non-goals:
+      - Do not add app bridge routing, UI activation, or regression proof in this slice.
+      Feature: contact_surface
       Feature state: active
       Files:
       - packages/app/src/preload.ts
@@ -45,6 +52,8 @@ tasks:
     prompt: |
       Goal:
       - Define the renderer contact surface for prompt editing without activating UI behavior.
+      Review lane:
+      - behavior
       Motivation:
       - Keep the contract reviewable before any app bridge or UI behavior changes.
       Alternative considerations:
@@ -59,6 +68,8 @@ tasks:
       signature carries workflowId, taskId, and prompt text safely. The result
       must keep existing command-edit contracts intact and avoid enabling UI
       activation behavior yet; this task is contract-only.
+      Non-goals:
+      - Do not add app bridge routing, UI activation, or regression proof in this slice.
       Acceptance criteria:
       - Pass condition: renderer types expose a typed editTaskPrompt callback and existing command-edit contracts remain intact.
     dependencies: []
@@ -67,6 +78,8 @@ tasks:
     description: |
       Review claim:
       - Route prompt-edit requests through the app bridge and owner delegation.
+      Review lane:
+      - behavior
       Safety invariant:
       - The renderer contract already exists and TaskPanel behavior remains inactive.
       Slice rationale:
@@ -83,7 +96,9 @@ tasks:
       - Option B: activate UI editing while adding app bridge plumbing.
       Implementation details:
       - Route prompt edits through existing command-service and owner-delegation paths.
-      Layer: app_bridge
+      Non-goals:
+      - Do not activate TaskPanel prompt editing or add regression proof in this slice.
+      Feature: app_bridge
       Feature state: active
       Files:
       - packages/app/src/main.ts
@@ -95,6 +110,8 @@ tasks:
     prompt: |
       Goal:
       - Add app-layer IPC bridge and owner delegation routing for prompt edits.
+      Review lane:
+      - behavior
       Motivation:
       - Keep app plumbing separate from UI activation.
       Alternative considerations:
@@ -109,6 +126,8 @@ tasks:
       existing mutation routes and ensure the bridge can execute when GUI owner
       mode is active. Keep this task scoped to bridge and delegation plumbing;
       do not activate TaskPanel inline editing behavior yet.
+      Non-goals:
+      - Do not activate TaskPanel prompt editing or add regression proof in this slice.
       Acceptance criteria:
       - Pass condition: GUI-origin prompt edits route through owner-aware app handlers without activating TaskPanel editing.
     dependencies: [prompt-edit-contact-surface]
@@ -117,6 +136,8 @@ tasks:
     description: |
       Review claim:
       - Prepare dormant TaskPanel prompt editing behind the existing UI pattern.
+      Review lane:
+      - behavior
       Safety invariant:
       - The path is wired but not default-enabled, so existing command editing remains unchanged.
       Slice rationale:
@@ -133,7 +154,9 @@ tasks:
       - Option B: enable UI behavior by default in the same slice.
       Implementation details:
       - Reuse command-edit primitives while keeping prompt editing gated.
-      Layer: ui_activation
+      Non-goals:
+      - Do not default-enable prompt editing or add regression proof in this slice.
+      Feature: ui_activation
       Feature state: dormant
       Files:
       - packages/ui/src/components/TaskPanel.tsx
@@ -144,6 +167,8 @@ tasks:
     prompt: |
       Goal:
       - Prepare TaskPanel prompt editing activation behind a dormant rollout marker.
+      Review lane:
+      - behavior
       Motivation:
       - Keep UI activation reviewable and dormant after the app bridge exists.
       Alternative considerations:
@@ -157,6 +182,8 @@ tasks:
       remains consistent, but keep activation gated so this workflow only lands
       dormant scaffolding. Ensure save handlers call the prompt-edit bridge path
       when activated later and preserve existing command task editing interactions.
+      Non-goals:
+      - Do not default-enable prompt editing or add regression proof in this slice.
       Acceptance criteria:
       - Pass condition: dormant prompt-edit activation path is wired but not default-enabled.
     dependencies: [app-bridge-and-owner-delegation]
@@ -165,6 +192,8 @@ tasks:
     description: |
       Review claim:
       - Add focused app and E2E regressions for the prompt-edit path.
+      Review lane:
+      - proof
       Safety invariant:
       - The task is test-only and depends on the implementation layers it proves.
       Slice rationale:
@@ -181,7 +210,9 @@ tasks:
       - Option B: rely only on the terminal full-suite gate.
       Implementation details:
       - Cover IPC routing and TaskPanel prompt-edit flow deterministically.
-      Layer: e2e_regression
+      Non-goals:
+      - Do not modify production prompt-edit behavior in this proof slice.
+      Feature: e2e_regression
       Feature state: active
       Files:
       - packages/app/src/__tests__/main.prompt-edit.test.ts
@@ -194,6 +225,8 @@ tasks:
     prompt: |
       Goal:
       - Add app-level and Playwright regressions proving prompt edit flow is stable.
+      Review lane:
+      - proof
       Motivation:
       - Verify the layered prompt-edit flow after contract, bridge, and dormant UI slices exist.
       Alternative considerations:
@@ -208,6 +241,8 @@ tasks:
       TaskPanel flow. The regression suite must validate recreate semantics and
       confirm no command-edit regressions. Ensure test naming and setup are
       deterministic so this workflow can be reviewed as the final proof layer.
+      Non-goals:
+      - Do not modify production prompt-edit behavior in this proof slice.
       Acceptance criteria:
       - Pass condition: app-level and end-to-end prompt-edit regressions pass in CI-style runs.
     dependencies: [ui-prompt-editing-activation]
@@ -216,6 +251,8 @@ tasks:
     description: |
       Review claim:
       - Run focused app-package regression proof for the layered prompt-edit stack.
+      Review lane:
+      - proof
       Safety invariant:
       - The command changes no production code and depends on every earlier task.
       Slice rationale:
@@ -232,7 +269,9 @@ tasks:
       - Option B: terminal full-suite gate (`pnpm run test:all`).
       Implementation details:
       - Execute `cd packages/app && pnpm test 2>&1` after every earlier task completes.
-      Layer: e2e_regression
+      Non-goals:
+      - Do not run a full-suite gate or modify files in this verification task.
+      Feature: e2e_regression
       Feature state: active
       Files:
       - none
