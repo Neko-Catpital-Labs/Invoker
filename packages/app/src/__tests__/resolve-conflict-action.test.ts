@@ -13,9 +13,9 @@ import { resolveConflictAction } from '../workflow-actions.js';
 describe('resolveConflictAction', () => {
   let orchestrator: {
     getTask: ReturnType<typeof vi.fn>;
-    beginConflictResolution: ReturnType<typeof vi.fn>;
+    beginFixSession: ReturnType<typeof vi.fn>;
     setFixAwaitingApproval: ReturnType<typeof vi.fn>;
-    revertConflictResolution: ReturnType<typeof vi.fn>;
+    revertFixSession: ReturnType<typeof vi.fn>;
     approve?: ReturnType<typeof vi.fn>;
   };
   let persistence: { appendTaskOutput: ReturnType<typeof vi.fn> };
@@ -32,9 +32,9 @@ describe('resolveConflictAction', () => {
         status: 'fixing_with_ai',
         execution: { selectedAttemptId: 'att-1', generation: 1 },
       })),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'saved-err' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'saved-err' })),
       setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     persistence = { appendTaskOutput: vi.fn() };
     taskExecutor = {
@@ -42,17 +42,17 @@ describe('resolveConflictAction', () => {
     };
   });
 
-  it('runs beginConflictResolution → resolveConflict → setFixAwaitingApproval', async () => {
+  it('runs beginFixSession → resolveConflict → setFixAwaitingApproval', async () => {
     await resolveConflictAction('task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.beginFixSession).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', 'saved-err', undefined);
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
   });
 
@@ -98,11 +98,7 @@ describe('resolveConflictAction', () => {
       'task-a',
       expect.stringContaining('[Resolve Conflict] Failed:'),
     );
-    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
-      'task-a',
-      'saved-err',
-      'claude failed',
-    );
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', { savedError: 'saved-err', fixError: 'claude failed' });
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
   });
 });

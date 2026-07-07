@@ -192,7 +192,12 @@ export async function approveTask(
         kind: 'invalidMergeWorkspace',
         workspacePath: task.execution.workspacePath?.trim() || undefined,
       });
-      deps.orchestrator.revertConflictResolution(taskId, task.execution.pendingFixError ?? '', msg);
+      // Restore the session's recorded entry status: a review-gate fix whose
+      // workspace vanished must return to review polling, not flip to failed.
+      deps.orchestrator.revertFixSession(taskId, {
+        savedError: task.execution.pendingFixError ?? '',
+        fixError: msg,
+      });
       return { approvedTask: task, started: [], fixedTask };
     }
   }
@@ -218,9 +223,11 @@ export async function approveTask(
 }
 
 /**
- * Reject a task. Handles pendingFixError (from fix-with-claude) consistently
- * across all surfaces: if the task has a pending fix error, revert the
- * conflict resolution instead of rejecting outright.
+ * Reject a task. Handles pendingFixError (from fix-with-agent) consistently
+ * across all surfaces: if the task has a pending fix error, revert the fix
+ * session to its recorded entry status — a rejected review-gate fix returns
+ * the gate to `review_ready`, a rejected plain fix returns the task to
+ * `failed` — instead of rejecting outright.
  */
 export function rejectTask(
   taskId: string,
@@ -229,7 +236,7 @@ export function rejectTask(
 ): void {
   const task = deps.orchestrator.getTask(taskId);
   if (task?.execution.pendingFixError !== undefined) {
-    deps.orchestrator.revertConflictResolution(taskId, task.execution.pendingFixError);
+    deps.orchestrator.revertFixSession(taskId, { savedError: task.execution.pendingFixError });
   } else {
     deps.orchestrator.reject(taskId, reason);
   }
@@ -819,7 +826,7 @@ export async function resolveConflictAction(
   const { orchestrator, persistence, taskExecutor } = deps;
   const entryLineage = captureTaskLineage(taskId, orchestrator);
   assertLineageCurrent(entryLineage, orchestrator, signal);
-  const { savedError } = orchestrator.beginConflictResolution(taskId);
+  const { savedError } = orchestrator.beginFixSession(taskId);
   const lineage = captureTaskLineage(taskId, orchestrator);
   try {
     assertLineageCurrent(lineage, orchestrator, signal);
@@ -832,7 +839,7 @@ export async function resolveConflictAction(
     assertLineageCurrent(lineage, orchestrator, signal);
     persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);
     assertLineageCurrent(lineage, orchestrator, signal);
-    orchestrator.revertConflictResolution(taskId, savedError, msg);
+    orchestrator.revertFixSession(taskId, { savedError, fixError: msg });
     throw err;
   }
 }
@@ -864,6 +871,12 @@ export async function fixWithAgentAction(
   const task = orchestrator.getTask(taskId);
   if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
+  // Review-gate CI fixes target a merge gate that is still in an open review
+  // state (`review_ready` / `awaiting_approval`) — the gate task itself never
+  // failed, only a CI check on its review PR did. `beginFixSession` accepts
+  // those entry states and records them, so `revertFixSession` returns the
+  // gate to the review-polling loop instead of flipping an open gate to
+  // `failed`.
   if (options.reviewGateContext) {
     assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task);
   }
@@ -875,7 +888,9 @@ export async function fixWithAgentAction(
     const msg = invalidMergeWorkspaceMessage(recoveryRoute);
     const errorLabel = options.failureOutputLabel ?? `Fix with ${effectiveAgentName}`;
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] ${msg}`);
-    orchestrator.revertConflictResolution(taskId, savedError, msg);
+    // No session has begun; on a task with no fix-session evidence this is a
+    // no-op, on a failed task it rewrites the error to the workspace message.
+    orchestrator.revertFixSession(taskId, { savedError, fixError: msg });
     throw new Error(msg);
   }
   if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
@@ -901,7 +916,7 @@ export async function fixWithAgentAction(
 
   const entryLineage = captureTaskLineage(taskId, orchestrator);
   assertLineageCurrent(entryLineage, orchestrator, options.signal);
-  const { savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId);
+  const { savedError: persistedSavedError } = orchestrator.beginFixSession(taskId);
   const lineage = captureTaskLineage(taskId, orchestrator);
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
@@ -931,7 +946,7 @@ export async function fixWithAgentAction(
     assertLineageCurrent(lineage, orchestrator, options.signal);
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
     assertLineageCurrent(lineage, orchestrator, options.signal);
-    orchestrator.revertConflictResolution(taskId, persistedSavedError, msg);
+    orchestrator.revertFixSession(taskId, { savedError: persistedSavedError, fixError: msg });
     throw err;
   }
 }
@@ -1243,7 +1258,7 @@ export async function autoFixOnFailure(
       return;
     }
 
-    ({ savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId));
+    ({ savedError: persistedSavedError } = orchestrator.beginFixSession(taskId));
     lineage = captureTaskLineage(taskId, orchestrator);
     assertLineageCurrent(lineage, orchestrator, deps.signal);
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
@@ -1338,7 +1353,7 @@ export async function autoFixOnFailure(
     const detailedMsg = diagnostics ? `${msg}\n\n${diagnostics}` : msg;
     if (persistedSavedError !== undefined) {
       if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
-      orchestrator.revertConflictResolution(taskId, persistedSavedError, detailedMsg);
+      orchestrator.revertFixSession(taskId, { savedError: persistedSavedError, fixError: detailedMsg });
     }
   }
 }

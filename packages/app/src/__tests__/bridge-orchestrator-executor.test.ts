@@ -131,11 +131,11 @@ describe('global top-up dispatch', () => {
     });
     (h.orchestrator as any).refreshFromDb();
 
-    const { savedError } = h.orchestrator.beginConflictResolution(taskA.id);
+    const { savedError } = h.orchestrator.beginFixSession(taskA.id);
     expect(h.getTask('A')!.status).toBe('fixing_with_ai');
     expect(h.getTask('B')!.status).toBe('pending');
 
-    h.orchestrator.revertConflictResolution(taskA.id, savedError, 'Remote agent fix timed out after 600000ms');
+    h.orchestrator.revertFixSession(taskA.id, { savedError: savedError, fixError: 'Remote agent fix timed out after 600000ms' });
 
     expect(h.getTask('A')!.status).toBe('failed');
     expect(h.getTask('B')!.status).toBe('pending');
