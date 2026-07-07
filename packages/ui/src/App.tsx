@@ -106,6 +106,7 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
   busy: boolean;
+  conversationKey: string;
 };
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
@@ -120,6 +121,7 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     busy: false,
     createdAt: now,
     updatedAt: now,
+    conversationKey: 'local-planning-session-1',
   };
 }
 
@@ -544,6 +546,7 @@ export function App() {
     () => planningSessions.find((session) => session.id === activePlanningSessionId) ?? planningSessions[0] ?? makeInitialPlanningSession(),
     [activePlanningSessionId, planningSessions],
   );
+  const activePlanningConversationKey = activePlanningSession.conversationKey;
   const terminalLines = activePlanningSession.messages;
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
@@ -2030,9 +2033,11 @@ export function App() {
     const index = nextPlanningSessionLocalIdRef.current;
     nextPlanningSessionLocalIdRef.current += 1;
     const now = new Date().toISOString();
+    const localId = `local-planning-session-${index}`;
     const session: PlanningSessionView = {
       ...makeInitialPlanningSession(now),
-      id: `local-planning-session-${index}`,
+      id: localId,
+      conversationKey: localId,
       presetKey: selectedPlanningPresetKey,
     };
     nextTerminalLineIdRef.current += 1;
@@ -2866,6 +2871,7 @@ export function App() {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto bg-gray-900 p-4">
           <InvokerTerminal
+            activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
             value={planningInput}
@@ -3112,6 +3118,7 @@ export function App() {
           className="fixed inset-0 z-50 flex flex-col bg-gray-950"
         >
           <InvokerTerminal
+            activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
             value={planningInput}
