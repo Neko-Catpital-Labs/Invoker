@@ -167,7 +167,7 @@ describe('Orchestrator + SQLite worker response persistence', () => {
     expect(row.execution.error).toContain('attempt failed first');
   });
 
-  it('beginConflictResolution persists fixing_with_ai and clears error/exit/completed', () => {
+  it('beginFixSession persists fixing_with_ai and clears error/exit/completed', () => {
     adapter.saveTask(wf.id, baseTask('task-fix'));
     orchestrator.syncFromDb(wf.id);
 
@@ -181,7 +181,7 @@ describe('Orchestrator + SQLite worker response persistence', () => {
     });
     orchestrator.syncFromDb(wf.id);
 
-    orchestrator.beginConflictResolution('task-fix');
+    orchestrator.beginFixSession('task-fix');
 
     const row = adapter.loadTasks(wf.id).find((t) => t.id === 'task-fix')!;
     expect(row.status).toBe('fixing_with_ai');

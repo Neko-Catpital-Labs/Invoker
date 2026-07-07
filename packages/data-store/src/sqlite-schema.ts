@@ -421,6 +421,8 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
   'ALTER TABLE tasks ADD COLUMN utilization INTEGER',
   'ALTER TABLE tasks ADD COLUMN pending_fix_error TEXT',
+  // fix_session_entry_status: resting status recorded while a fix session is open
+  'ALTER TABLE tasks ADD COLUMN fix_session_entry_status TEXT',
   'ALTER TABLE workflows ADD COLUMN merge_mode TEXT',
   'ALTER TABLE tasks ADD COLUMN review_url TEXT',
   'ALTER TABLE tasks ADD COLUMN review_id TEXT',

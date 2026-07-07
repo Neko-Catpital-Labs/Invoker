@@ -114,6 +114,7 @@ export function mapRowToTask(row: any): TaskState {
       selectedExperiments: row.selected_experiments ? JSON.parse(row.selected_experiments) : undefined,
       experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
       pendingFixError: row.pending_fix_error ?? undefined,
+      fixSessionEntryStatus: row.fix_session_entry_status ?? undefined,
       reviewUrl: row.review_url ?? undefined,
       reviewId: row.review_id ?? undefined,
       reviewStatus: row.review_status ?? undefined,

@@ -80,6 +80,7 @@ export const TASK_EXECUTION_RESET_RULES = {
   selectedExperiments: preserve,
   experimentResults: preserve,
   pendingFixError: clearFor(['detach', 'retryTask', 'retryWorkflow', 'newAttempt']),
+  fixSessionEntryStatus: clearFor(['detach', 'retryTask', 'retryWorkflow', 'newAttempt']),
   isFixingWithAI: falseFor(['detach', 'retryTask', 'retryWorkflow', 'newAttempt']),
   reviewUrl: clearFor(['recreate', 'detach']),
   reviewId: clearFor(['recreate', 'detach']),
