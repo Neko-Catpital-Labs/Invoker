@@ -12,6 +12,7 @@ import {
   AUTO_STARTED_OWNER_WORKER_KINDS,
   createWorkerRuntimeController,
   listWorkerActionHistory,
+  createLocalWorkerStatusSnapshot,
 } from '../worker-control.js';
 
 interface TestWorkerRuntime extends WorkerRuntime {
@@ -99,28 +100,24 @@ function controller() {
 }
 
 describe('createWorkerRuntimeController', () => {
-  it('auto-start starts only pr-status and ci-failure', () => {
+  it('auto-start starts every built-in owner worker', () => {
     const setup = controller();
 
     setup.controller.startAutoStartedWorkers();
     const snapshot = setup.controller.snapshot();
 
+    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)).toMatchObject({
+      lifecycle: 'running',
+      source: 'built-in',
+      availability: 'available',
+      running: true,
+    });
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
-    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
-    expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
-  });
-
-  it('autofix remains stopped until explicitly started', () => {
-    const setup = controller();
-
-    setup.controller.startAutoStartedWorkers();
-    expect(setup.runtimes.get(AUTO_FIX_WORKER_KIND)).toBeUndefined();
-
-    const row = setup.controller.start(AUTO_FIX_WORKER_KIND);
-
-    expect(row.lifecycle).toBe('running');
-    expect(row.runtimeKind).toBe('recovery');
+    expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')).toMatchObject({
+      lifecycle: 'stopped',
+      source: 'external',
+    });
   });
 
   it('duplicate start is idempotent', () => {
@@ -233,5 +230,59 @@ describe('createWorkerRuntimeController', () => {
       nextOffset: 6,
     });
     expect(listWorkerActions).toHaveBeenCalledWith({ workerKind: 'history', limit: 3, offset: 4 });
+  });
+  it('combines worker action rows and auto-fix task events in recent logs', () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registry.register({
+      kind: AUTO_FIX_WORKER_KIND,
+      note: 'Auto-fixes failed tasks.',
+      source: 'built-in',
+      factory: () => runtime('recovery'),
+    });
+
+    const snapshot = createLocalWorkerStatusSnapshot({
+      registry,
+      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      persistence: {
+        listWorkerActions: vi.fn(() => [{
+          id: 'action-1',
+          workerKind: AUTO_FIX_WORKER_KIND,
+          actionType: 'fix-with-agent',
+          workflowId: 'wf-1',
+          taskId: 'wf-1/task-1',
+          subjectType: 'task',
+          subjectId: 'wf-1/task-1',
+          externalKey: 'wf-1/task-1',
+          status: 'queued',
+          attemptCount: 1,
+          payload: { reason: 'failed' },
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:01.000Z',
+        }]),
+        listTaskEvents: vi.fn(() => [{
+          id: 7,
+          taskId: 'wf-1/task-1',
+          eventType: 'debug.auto-fix',
+          payload: '{"phase":"worker-autofix-skip","reason":"not-eligible"}',
+          createdAt: '2026-01-01T00:00:02.000Z',
+        }]),
+        listWorkflows: vi.fn(() => []),
+        loadTasks: vi.fn(() => []),
+        getEvents: vi.fn(() => []),
+      } as never,
+    });
+
+    expect(snapshot.workers[0]?.recentLogs).toEqual([
+      expect.objectContaining({
+        source: 'task_events',
+        eventType: 'debug.auto-fix',
+        payload: expect.objectContaining({ phase: 'worker-autofix-skip' }),
+      }),
+      expect.objectContaining({
+        source: 'worker_actions',
+        actionType: 'fix-with-agent',
+        status: 'queued',
+      }),
+    ]);
   });
 });

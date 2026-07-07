@@ -14,6 +14,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     getQueueStatus: vi.fn(() => ({ runningCount: 2 })),
     listWorkerActionHistory: vi.fn((request) => ({ workerKind: request.workerKind, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
     getWorkerStatus: vi.fn(() => ({ generatedAt: 'now', workers: [] })),
+    getWorkers: vi.fn(() => ({ generatedAt: 'workers-now', workers: [] })),
     getWorkflowStatus: vi.fn(() => ({ 'wf-1': 'running' })),
     getTasksSnapshot: vi.fn(({ refresh }) => ({ tasks: [], workflows: [], refreshed: refresh })),
     getActionGraphSnapshot: vi.fn(() => ({ nodes: [] })),
@@ -47,6 +48,7 @@ describe('answerOwnerReadQuery', () => {
     expect(answerOwnerReadQuery({ kind: 'worker-action-history', workerKind: 'autofix', limit: 2, offset: 4 }, h)).toEqual({
       workerActionHistory: { workerKind: 'autofix', actions: [], limit: 2, offset: 4, hasMore: false },
     });
+    expect(answerOwnerReadQuery({ kind: 'workers' }, h)).toEqual({ generatedAt: 'workers-now', workers: [] });
     expect(answerOwnerReadQuery({ kind: 'workflow-status' }, h)).toEqual({ 'wf-1': 'running' });
     expect(answerOwnerReadQuery({ kind: 'action-graph' }, h)).toEqual({ nodes: [] });
   });
@@ -146,6 +148,7 @@ describe('buildOwnerReadQueryHandlers', () => {
       resetUiPerfStats: () => {},
       getStreamSequence: () => 5,
       getWorkerStatus: () => ({ generatedAt: 'now', workers: [] }),
+      getWorkers: () => ({ generatedAt: 'workers-now', workers: [] }),
       resolveInvokerHomeRoot: () => '/home',
       orchestrator: { ...f.orchestrator, ...orch } as never,
       persistence: { ...f.persistence, ...persist } as never,
@@ -170,6 +173,7 @@ describe('buildOwnerReadQueryHandlers', () => {
       offset: 2,
       hasMore: false,
     });
+    expect(h.getWorkers()).toEqual({ generatedAt: 'workers-now', workers: [] });
   });
 
   it('loadWorkflowBundle syncs that workflow first, then returns workflow + tasks', () => {
