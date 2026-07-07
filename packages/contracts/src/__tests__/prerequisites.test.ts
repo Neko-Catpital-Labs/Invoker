@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
   DEFAULT_TOOL_REQUIREMENTS,
   EXTERNAL_DEPENDENCIES,
 } from '../index.js';
@@ -49,15 +48,8 @@ describe('external dependency manifest', () => {
     expect(EXTERNAL_DEPENDENCIES.pnpm.version).toBe('10.31.0');
   });
 
-  it('pins the Drafter MCP as an independently versioned package', () => {
-    expect(EXTERNAL_DEPENDENCIES.drafterMcp).toMatchObject({
-      packageName: 'drafter-mcp',
-      version: '0.1.0',
-      commandName: 'drafter-mcp',
-      runner: 'uvx',
-      configEnvVar: 'INVOKER_MCP_CONFIG_PATH',
-    });
-    expect(DEFAULT_DRAFTER_MCP_PACKAGE_SPEC).toBe('drafter-mcp==0.1.0');
+  it('does not list the bundled Drafter MCP as an external package', () => {
+    expect('drafterMcp' in EXTERNAL_DEPENDENCIES).toBe(false);
   });
 });
 

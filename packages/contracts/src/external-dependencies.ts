@@ -29,14 +29,6 @@ interface ToolDependency extends ExternalDependencyBase {
   command: string;
 }
 
-interface PythonMcpDependency extends ExternalDependencyBase {
-  kind: 'python-mcp';
-  packageName: string;
-  version: string;
-  commandName: string;
-  runner: 'uvx';
-  configEnvVar: string;
-}
 
 const RUNTIME_DEPENDENCIES = {
   node: {
@@ -129,25 +121,10 @@ const TOOL_DEPENDENCIES = {
   },
 } as const satisfies Record<string, ToolDependency>;
 
-const MCP_DEPENDENCIES = {
-  drafterMcp: {
-    id: 'drafter-mcp',
-    name: 'Drafter MCP',
-    kind: 'python-mcp',
-    packageName: 'drafter-mcp',
-    version: '0.1.0',
-    commandName: 'drafter-mcp',
-    runner: 'uvx',
-    configEnvVar: 'INVOKER_MCP_CONFIG_PATH',
-    requiredFor: 'conversation-to-plan splitting through the planner MCP',
-    installHint: 'uvx --from drafter-mcp==0.1.0 drafter-mcp',
-  },
-} as const satisfies Record<string, PythonMcpDependency>;
 
 export const EXTERNAL_DEPENDENCIES = {
   ...RUNTIME_DEPENDENCIES,
   ...TOOL_DEPENDENCIES,
-  ...MCP_DEPENDENCIES,
 } as const;
 
 export const DEFAULT_TOOL_REQUIREMENTS: ToolRequirement[] = Object.values(TOOL_DEPENDENCIES).map((dependency) => ({
@@ -158,5 +135,3 @@ export const DEFAULT_TOOL_REQUIREMENTS: ToolRequirement[] = Object.values(TOOL_D
   required: 'required' in dependency ? dependency.required : undefined,
   installHint: dependency.installHint,
 }));
-
-export const DEFAULT_DRAFTER_MCP_PACKAGE_SPEC = `${EXTERNAL_DEPENDENCIES.drafterMcp.packageName}==${EXTERNAL_DEPENDENCIES.drafterMcp.version}`;
