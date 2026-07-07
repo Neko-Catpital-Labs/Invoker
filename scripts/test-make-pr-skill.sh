@@ -51,6 +51,10 @@ must_contain "$SKILL_MD" "open every screenshot or video and verify the user-vis
 must_contain "$SKILL_MD" "For conditional or event-driven UI, drive the exact condition that triggers the new state" "make-pr visual proof must cover conditional UI states"
 must_contain "$SKILL_MD" "A generic task panel, unchanged sidebar, unrelated graph, or stale screenshot is not proof" "make-pr visual proof must reject generic task-panel screenshots"
 must_contain "$SKILL_MD" "caption each visual proof item with the concrete thing the reviewer should see" "make-pr visual proof captions must name the visible target"
+must_contain "$SKILL_MD" "Before/after visual proof images must use distinct local filenames" "make-pr visual proof must prevent before/after basename upload collisions"
+must_contain "$SKILL_MD" 'The uploader keys media by basename inside one upload prefix' "make-pr visual proof must explain why duplicate basenames are unsafe"
+must_contain "$SKILL_MD" "cursor, pointer, hover-only affordance" "make-pr visual proof must call out states static screenshots cannot show"
+must_contain "$SKILL_MD" "do not present an unchanged screenshot as proof of the behavior" "make-pr visual proof must reject unchanged screenshots for cursor-like behavior"
 
 # The publication checklist must stop empty PR slices before create/update/stack publish.
 must_contain "$SKILL_MD" "has no file changes against its selected base" "make-pr skill must reject branches with no reviewable file diff"

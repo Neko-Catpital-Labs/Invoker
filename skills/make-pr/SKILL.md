@@ -112,6 +112,10 @@ Visual proof must show the changed behavior itself, not just the changed screen 
 
 In the PR body, caption each visual proof item with the concrete thing the reviewer should see, for example "amber Workspace recreated notice in the task inspector." If the reviewer cannot tell what changed from the image and caption, recapture proof before publishing.
 
+Before/after visual proof images must use distinct local filenames before `node scripts/create-pr.mjs` uploads them. The uploader keys media by basename inside one upload prefix, so `before/foo.png` and `after/foo.png` can collapse to one final URL. Copy or rename the files first, for example `/tmp/proof/foo-before.png` and `/tmp/proof/foo-after.png`, then put those unique paths in the PR body.
+
+If the changed behavior is a cursor, pointer, hover-only affordance, or other state that a static screenshot cannot show, do not present an unchanged screenshot as proof of the behavior. Add a short video, an inspectable state proof, or a focused test reference, and say plainly why the screenshot alone cannot show it.
+
 When a PR changes skill instructions under `skills/**/SKILL.md`, add or update a focused skill contract test for the exact issue being fixed. The test must fail if the instruction that prevents the regression is removed.
 
 Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Review Claim / ## Review Lane / ## Safety Invariant / ## Slice Rationale / ## Non-goals / ## Test Plan / ## Revert Plan` as the floor, add `## Visual Proof` for UI-impacting diffs, and add `## Architecture` when the change affects component interactions or data/control flow.
