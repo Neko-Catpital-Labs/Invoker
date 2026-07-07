@@ -40,14 +40,24 @@ Stack publishing stays separate from unrelated cleanup.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 
 const ROUTING_BODY = `## Summary
@@ -80,14 +90,24 @@ Keep app exposure separate from core runtime behavior.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 
 function assert(condition, message) {
