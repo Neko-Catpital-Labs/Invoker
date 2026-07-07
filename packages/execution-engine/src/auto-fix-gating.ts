@@ -8,8 +8,6 @@ export function normalizeAutoFixRetryBudget(raw: unknown): number {
   const budget = Math.floor(raw);
   return budget > 0 ? budget : 0;
 }
-
-
 export function shouldSkipAutoFixForError(errorText: unknown): boolean {
   if (typeof errorText !== 'string') {
     return false;

@@ -55,6 +55,7 @@ base.describe('Launch stall watchdog', () => {
         env: {
           ...process.env,
           NODE_ENV: 'test',
+          INVOKER_USER_DATA_DIR: electronUserDataDir,
           INVOKER_GUI_OWNER_MODE: 'gui',
           INVOKER_DB_DIR: testDir,
           INVOKER_IPC_SOCKET: ipcSocketPath,
@@ -164,6 +165,7 @@ base.describe('Launch stall watchdog', () => {
         env: {
           ...process.env,
           NODE_ENV: 'test',
+          INVOKER_USER_DATA_DIR: electronUserDataDir,
           INVOKER_GUI_OWNER_MODE: 'gui',
           INVOKER_DB_DIR: testDir,
           INVOKER_IPC_SOCKET: ipcSocketPath,

@@ -53,6 +53,27 @@ export interface DefaultExecutionConfig {
   executionModel?: string;
 }
 
+export interface PrProcessWorkerConfig {
+  enabled?: boolean;
+  repoRoot?: string;
+  pollIntervalMs?: number;
+  env?: Record<string, string>;
+}
+
+export interface MergifyRequeueConfig extends PrProcessWorkerConfig {
+  pythonExecutable?: string;
+  repo?: string;
+  author?: string;
+  stateFile?: string;
+  extraArgs?: string[];
+}
+
+export interface PrMaintenanceConfig {
+  coderabbitAddress?: PrProcessWorkerConfig;
+  prConflictRebase?: PrProcessWorkerConfig;
+  mergifyRequeue?: MergifyRequeueConfig;
+}
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -292,6 +313,8 @@ export interface InvokerConfig {
     /** Routing strategy. Defaults to "enforce". */
     strategy?: 'enforce' | 'route';
   }>;
+  /** Config-gated built-in PR maintenance worker tuning. */
+  prMaintenance?: PrMaintenanceConfig;
   /**
    * Operator-declared external worker list, with each worker identified by registry kind.
    * The loader consumes this later; absent means no external workers.
