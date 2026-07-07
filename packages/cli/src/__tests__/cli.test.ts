@@ -106,7 +106,9 @@ describe('invoker-cli', () => {
 
     expect(code).toBe(0);
     expect(output.stdout).toContain('Worker kinds');
-    expect(output.stdout).toContain('autofix');
+    for (const kind of ['autofix', 'pr-status', 'ci-failure', 'coderabbit-address', 'pr-conflict-rebase', 'mergify-requeue']) {
+      expect(output.stdout).toContain(kind);
+    }
     output.restore();
   });
 
@@ -117,6 +119,9 @@ describe('invoker-cli', () => {
 
     expect(code).toBe(1);
     expect(output.stderr).toContain('Unknown worker kind: "missing-kind"');
+    for (const kind of ['autofix', 'pr-status', 'ci-failure', 'coderabbit-address', 'pr-conflict-rebase', 'mergify-requeue']) {
+      expect(output.stderr).toContain(kind);
+    }
     output.restore();
   });
 

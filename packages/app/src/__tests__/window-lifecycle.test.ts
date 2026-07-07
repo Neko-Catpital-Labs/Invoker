@@ -139,6 +139,7 @@ describe('window-lifecycle', () => {
     const options = electronMock.BrowserWindow.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(options.show).toBe(false);
     expect(options.skipTaskbar).toBe(true);
+    expect(options.paintWhenInitiallyHidden).toBe(true);
 
     const readyHandler = electronMock.fakeWindow.once.mock.calls.find(([eventName]) => eventName === 'ready-to-show')?.[1];
     expect(readyHandler).toBeDefined();
@@ -151,7 +152,6 @@ describe('window-lifecycle', () => {
     expect(startDeferredStartupWork).toHaveBeenCalledTimes(1);
     expect(recordStartupMark).toHaveBeenCalledWith('window.hidden-ready');
   });
-
   it('recreates the main window on activate only when no BrowserWindow exists', () => {
     const handlers = new Map<string, (...args: unknown[]) => void>();
     const createWindow = vi.fn();

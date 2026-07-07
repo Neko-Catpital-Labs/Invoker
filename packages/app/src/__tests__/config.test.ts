@@ -210,6 +210,29 @@ describe('loadConfig', () => {
     expect(config.externalWorkers).toEqual(externalWorkers);
   });
 
+  it('reads prMaintenance worker config from user config', () => {
+    const prMaintenance = {
+      coderabbitAddress: { enabled: false },
+      prConflictRebase: { enabled: false },
+      mergifyRequeue: {
+        enabled: true,
+        repoRoot: '/Users/edbertchan/Documents/Github/Invoker',
+        pythonExecutable: '/usr/bin/python3',
+        repo: 'Neko-Catpital-Labs/Invoker',
+        author: 'EdbertChan',
+        stateFile: '/Users/edbertchan/.invoker/mergify-admin-requeue-state.jsonl',
+        pollIntervalMs: 300000,
+        extraArgs: ['--dry-run'],
+      },
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ prMaintenance }),
+    );
+    const config = loadConfig();
+    expect(config.prMaintenance).toEqual(prMaintenance);
+  });
+
   it('reads imageStorage from user config', () => {
     const imageStorage = {
       provider: 'r2',

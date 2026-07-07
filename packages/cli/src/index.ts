@@ -6,18 +6,23 @@ import { resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
 import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
   ExecutorRegistry,
+  MERGIFY_REQUEUE_WORKER_KIND,
+  PR_CONFLICT_REBASE_WORKER_KIND,
   TaskRunner,
   WorktreeExecutor,
   acquireWorkerLock,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
-  registerAutoFixWorker,
+  createAutoFixAttemptLedger,
+  registerBuiltinWorkers,
   registerExternalWorkers,
   WorkerLockHeldError,
   registerBuiltinAgents,
   type ExternalWorkerConfig,
   type ExternalWorkerRuntime,
+  type PrMaintenanceWorkersConfig,
   type WorkerDefinition,
   type WorkerRegistry,
   type WorkerRuntime,
@@ -111,6 +116,7 @@ type CliRuntimeConfig = {
   autoFixExecutionModel?: string;
   autoApproveAIFixes?: boolean;
   externalWorkers?: ExternalWorkerConfig[];
+  prMaintenance?: unknown;
 };
 
 const silentLogger: Logger = {
@@ -464,6 +470,7 @@ function readWorkerConfig(homeRoot: string): {
   autoFixRetries?: number;
   autoFixAgent?: string;
   externalWorkers?: ExternalWorkerConfig[];
+  prMaintenance?: PrMaintenanceWorkersConfig;
 } {
   const configPath = join(homeRoot, 'config.json');
   if (!existsSync(configPath)) return {};
@@ -473,14 +480,69 @@ function readWorkerConfig(homeRoot: string): {
       autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
       autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
       externalWorkers: Array.isArray(parsed.externalWorkers) ? parsed.externalWorkers : undefined,
+      prMaintenance: readPrMaintenanceWorkerConfig(parsed.prMaintenance),
     };
   } catch {
     return {};
   }
 }
 
+function readStringRecord(value: unknown): Record<string, string> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value);
+  if (!entries.every(([, entry]) => typeof entry === 'string')) return undefined;
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string') ? value : undefined;
+}
+
+function readPrScriptWorkerConfig(value: unknown): PrMaintenanceWorkersConfig['coderabbitAddress'] | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const env = readStringRecord(record.env);
+  return {
+    ...(typeof record.repoRoot === 'string' ? { repoRoot: record.repoRoot } : {}),
+    ...(typeof record.pollIntervalMs === 'number' ? { intervalMs: record.pollIntervalMs } : {}),
+    ...(env ? { env } : {}),
+  };
+}
+
+function readMergifyRequeueWorkerConfig(value: unknown): PrMaintenanceWorkersConfig['mergifyRequeue'] | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const base = readPrScriptWorkerConfig(value);
+  const extraArgs = readStringArray(record.extraArgs);
+  return {
+    ...(base ?? {}),
+    ...(typeof record.pythonExecutable === 'string' ? { pythonExecutable: record.pythonExecutable } : {}),
+    ...(typeof record.repo === 'string' ? { repo: record.repo } : {}),
+    ...(typeof record.author === 'string' ? { author: record.author } : {}),
+    ...(typeof record.stateFile === 'string' ? { stateFile: record.stateFile } : {}),
+    ...(extraArgs ? { extraArgs } : {}),
+  };
+}
+
+function readPrMaintenanceWorkerConfig(value: unknown): PrMaintenanceWorkersConfig | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const coderabbitAddress = readPrScriptWorkerConfig(record.coderabbitAddress);
+  const prConflictRebase = readPrScriptWorkerConfig(record.prConflictRebase);
+  const mergifyRequeue = readMergifyRequeueWorkerConfig(record.mergifyRequeue);
+  return {
+    ...(coderabbitAddress ? { coderabbitAddress } : {}),
+    ...(prConflictRebase ? { prConflictRebase } : {}),
+    ...(mergifyRequeue ? { mergifyRequeue } : {}),
+  };
+}
+
 function workerDisplayName(kind: string): string {
-  return kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : kind;
+  if (kind === AUTO_FIX_WORKER_KIND) return 'Auto-fix';
+  if (kind === CODERABBIT_ADDRESS_WORKER_KIND) return 'CodeRabbit address';
+  if (kind === PR_CONFLICT_REBASE_WORKER_KIND) return 'PR conflict rebase';
+  if (kind === MERGIFY_REQUEUE_WORKER_KIND) return 'Mergify requeue';
+  return kind;
 }
 
 function printWorkerKinds<TDeps>(registry: WorkerRegistry<TDeps>): void {
@@ -501,10 +563,11 @@ function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorke
  * poll loop, so the two doors can never run competing scans. The CLI owns the
  * foreground lifetime — owner discovery, connect message, the SIGINT/SIGTERM
  * block, and a deterministic stop.
+ */
 async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
-  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
+  const { autoFixRetries, autoFixAgent, prMaintenance } = readWorkerConfig(homeRoot);
 
   // Single-instance guard: refuse if another worker of this kind (this door or
   // the dev `--headless worker <kind>` door) already holds the cross-process
@@ -542,6 +605,7 @@ async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>
         attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => autoFixAgent,
       },
+      prMaintenance,
     });
 
     worker.start();
@@ -584,9 +648,10 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
+      const workerConfig = readWorkerConfig(resolveInvokerHomeRoot());
       const registry = registerExternalWorkers(
-        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
-        readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
+        registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+        workerConfig.externalWorkers,
       );
       if (subcommand === 'list') {
         printWorkerKinds(registry);

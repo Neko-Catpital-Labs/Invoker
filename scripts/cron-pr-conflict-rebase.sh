@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Job 2 — PR merge-conflict rebase cron.
+# PR maintenance worker tick script — PR merge-conflict rebase/recreate.
 #
 # Every 5 min: find open PRs by $PR_AUTHOR whose GitHub merge state is
 # conflicting (mergeStateStatus == DIRTY or mergeable == CONFLICTING), map each
@@ -7,7 +7,7 @@
 # (workflow, generation), capped at $MAX_REBASE_ATTEMPTS per workflow.
 #
 # Anti-loop guards (no separate in-flight query needed):
-#   1. shared flock/mkdir lock + synchronous dispatch — one cron op at a time.
+#   1. shared flock/mkdir lock + synchronous dispatch — one worker op at a time.
 #   2. Invoker's per-workflow CommandService mutex — serializes owner-side.
 #   3. per-(workflow, generation) ledger dedup — a successful rebase-recreate
 #      bumps generation, so the next real conflict appears under a new
@@ -37,7 +37,7 @@ flag_exhausted() {
   # flag_exhausted <prNumber> <workflowId>
   local num="$1" wf="$2"
   ledger_marker_seen rebase-recreate-flagged "$wf" exhausted && return 0
-  local body="Invoker conflict-rebase cron gave up after ${MAX_REBASE_ATTEMPTS} rebase-recreate attempts; this PR still conflicts and needs manual attention."
+  local body="Invoker conflict-rebase worker gave up after ${MAX_REBASE_ATTEMPTS} rebase-recreate attempts; this PR still conflicts and needs manual attention."
   if [ "$DRY_RUN" = "1" ]; then
     log_line "PR #$num: would post 'exhausted' comment and flag workflow $wf"
     return 0
