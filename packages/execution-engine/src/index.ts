@@ -15,6 +15,13 @@ export * from './docker-executor.js';
 export * from './worktree-executor.js';
 export * from './merge-gate-executor.js';
 export * from './ssh-executor.js';
+export {
+  buildSshConnectionArgs,
+  buildSshTransportOptions,
+  type SshTargetConnection,
+} from './ssh-transport-options.js';
+export { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from './ssh-git-exec.js';
+
 export * from './repo-pool.js';
 export * from './registry.js';
 export * from './task-runner.js';
@@ -42,6 +49,9 @@ export * from './builtin-workers.js';
 export * from './auto-fix-recovery.js';
 export * from './workers/pr-status-worker.js';
 export * from './workers/ci-failure-worker.js';
+export * from './workers/disk-headroom-worker.js';
+export * from './workers/disk-headroom-monitor.js';
+export * from './workers/disk-headroom.js';
 export * from './workers/pr-maintenance-workers.js';
 export * from './auto-fix-gating.js';
 export * from './auto-fix-attempt-ledger.js';
