@@ -221,6 +221,21 @@ export interface WorkerStatusSnapshot {
   workers: WorkerStatusEntry[];
 }
 
+export interface WorkerActionHistoryRequest {
+  workerKind: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface WorkerActionHistoryResponse {
+  workerKind: string;
+  actions: WorkerActionSummary[];
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  nextOffset?: number;
+}
+
 
 export type UIActionGraphNodeType =
   | 'user-action'
@@ -916,6 +931,10 @@ export const IpcChannels = {
   'invoker:get-worker-status': {} as {
     request: [];
     response: WorkerStatusSnapshot;
+  },
+  'invoker:get-worker-action-history': {} as {
+    request: [request: WorkerActionHistoryRequest];
+    response: WorkerActionHistoryResponse;
   },
   'invoker:start-worker': {} as {
     request: [kind: string];
