@@ -358,6 +358,8 @@ export function buildMakePrStackPublishPrompt(args: {
       + '`node scripts/validate-pr-body.mjs`. Required visible sections: ## Summary, '
       + '## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, '
       + '## Slice Rationale, ## Non-goals, ## Test Plan, and ## Revert Plan. '
+      + '## Test Plan and ## Revert Plan content must sit inside collapsed '
+      + '<details><summary>Test Plan</summary> / <summary>Revert Plan</summary> blocks. '
       + 'Never hide review metadata inside a <details> block.',
     '- Do NOT let Mergify default the PR body to the commit message; author the body explicitly.',
     '',
@@ -482,8 +484,11 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
-  // ## Test Plan
+  // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
+  lines.push('');
+  lines.push('<details>');
+  lines.push('<summary>Test Plan</summary>');
   lines.push('');
   const ctx = args.structuredContext;
   const commandTasks = ctx?.tasks.filter((t) => t.command && t.status === 'completed') ?? [];
@@ -495,14 +500,21 @@ export function buildCanonicalPrBody(args: {
     lines.push('- [ ] Manual verification required');
   }
   lines.push('');
+  lines.push('</details>');
+  lines.push('');
 
-  // ## Revert Plan
+  // ## Revert Plan — content collapsed per the canonical schema.
   lines.push('## Revert Plan');
+  lines.push('');
+  lines.push('<details>');
+  lines.push('<summary>Revert Plan</summary>');
   lines.push('');
   lines.push('- Safe to revert? Yes');
   lines.push('- Revert command: `git revert <sha>`');
   lines.push('- Post-revert steps: None');
   lines.push('- Data migration? No');
+  lines.push('');
+  lines.push('</details>');
   lines.push('');
 
   // Visual proof (preserve verbatim if present)
@@ -535,6 +547,7 @@ export function buildMakePrPrompt(args: {
     '- Use the repo-local PR conventions and tooling referenced by the skill.',
     '- Only include `## Architecture` when the change modifies component interactions, control flow, state flow, or data flow.',
     '- If the change is small and has no architectural impact, omit `## Architecture`.',
+    '- Wrap the ## Test Plan and ## Revert Plan content in a collapsed <details> block with <summary>Test Plan</summary> / <summary>Revert Plan</summary>; keep the ## headings visible.',
     '- Ensure the final body satisfies the canonical schema required by this repo.',
   ];
 
