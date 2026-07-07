@@ -19,6 +19,7 @@ export * from './ssh-executor.js';
 export * from './repo-pool.js';
 export * from './registry.js';
 export * from './task-runner.js';
+export * from './harness-capabilities.js';
 export * from './merge-runner.js';
 export * from './conflict-resolver.js';
 export * from './merge-gate-provider.js';
