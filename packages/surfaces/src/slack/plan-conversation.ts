@@ -248,6 +248,18 @@ export function isDangerousCommand(cmd: string): boolean {
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
+function createAbortError(): Error {
+  const err = new Error('Slack planner turn was aborted');
+  err.name = 'AbortError';
+  return err;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
 // ── PlanConversation ────────────────────────────────────────
 
 export class PlanConversation {
@@ -332,12 +344,14 @@ export class PlanConversation {
    * drafting a plan never auto-submits it — submission is an explicit step
    * driven by the surface (the `submit` verb), so a stray "yes" can't ship a plan.
    */
-  async sendMessage(userMessage: string): Promise<string> {
+  async sendMessage(userMessage: string, signal?: AbortSignal): Promise<string> {
     const t0 = Date.now();
     const turn = this.messages.filter(m => m.role === 'user').length + 1;
     this.log('plan-conversation', 'info', `[TRACE] sendMessage() start (threadTs=${this.threadTs}, initialized=${this._initialized}, msgCount=${this.messages.length}, turn=${turn})`);
 
+    throwIfAborted(signal);
     if (!this._initialized) await this.init();
+    throwIfAborted(signal);
     const tInit = Date.now();
 
     this.messages.push({ role: 'user', content: userMessage });
@@ -346,7 +360,7 @@ export class PlanConversation {
     const tPrompt = Date.now();
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: promptLen=${prompt.length}, historyMsgs=${this.messages.length - 1}, promptPreview="${prompt.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
-    const response = await this.spawnPlanner(prompt);
+    const response = await this.spawnPlanner(prompt, signal);
     const tCursor = Date.now();
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, responsePreview="${response.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
@@ -434,7 +448,9 @@ export class PlanConversation {
 
   // ── Planner CLI Subprocess ─────────────────────────────
 
-  spawnPlanner(prompt: string): Promise<string> {
+  spawnPlanner(prompt: string, signal?: AbortSignal): Promise<string> {
+    throwIfAborted(signal);
+
     const spawnStart = Date.now();
     const { command, args } = this.planningCommandBuilder
       ? this.planningCommandBuilder({ tool: this.tool ?? 'cursor', model: this.model, prompt })
@@ -447,10 +463,39 @@ export class PlanConversation {
         env: { ...process.env },
       });
 
+      let settled = false;
       let stdout = '';
       let stderr = '';
       let stdoutChunks = 0;
       let stderrChunks = 0;
+      let timer: NodeJS.Timeout | undefined;
+
+      const onAbort = () => {
+        this.log('plan-conversation', 'info', `[PERF] cursor_abort: pid=${child.pid ?? 'none'}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms`);
+        try { child.kill('SIGTERM'); } catch { /* already dead */ }
+        settle(reject, createAbortError());
+      };
+
+      function cleanup() {
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        signal?.removeEventListener('abort', onAbort);
+      }
+
+      function settle<T>(fn: (value: T) => void, value: T) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn(value);
+      }
+
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
 
       this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, cmd="${command} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}`);
 
@@ -468,26 +513,24 @@ export class PlanConversation {
         this.log('plan-conversation', 'info', `[PERF] cursor_stderr chunk #${stderrChunks}: +${chunkStr.length} bytes (total=${stderr.length}, elapsed=${Date.now() - spawnStart}ms), preview="${chunkStr.slice(0, 200).replace(/\n/g, '\\n')}"`);
       });
 
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         this.log('plan-conversation', 'error', `[PERF] cursor_timeout: pid=${child.pid ?? 'none'}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, stderrTail="${stderr.slice(-500).replace(/\n/g, '\\n')}"`);
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
-        reject(new Error(`${plannerLabel} timed out after ${this.timeoutMs}ms`));
+        settle(reject, new Error(`${plannerLabel} timed out after ${this.timeoutMs}ms`));
       }, this.timeoutMs);
 
       child.on('close', (code) => {
-        clearTimeout(timer);
         this.log('plan-conversation', 'info', `[PERF] cursor_exit: code=${code}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms`);
         if (code === 0) {
-          resolve(stdout.trim() || '(no output)');
+          settle(resolve, stdout.trim() || '(no output)');
         } else {
           const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';
-          reject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`));
+          settle(reject, new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`));
         }
       });
 
       child.on('error', (err) => {
-        clearTimeout(timer);
-        reject(new Error(`Failed to spawn ${plannerLabel}: ${err.message}`));
+        settle(reject, new Error(`Failed to spawn ${plannerLabel}: ${err.message}`));
       });
     });
   }
