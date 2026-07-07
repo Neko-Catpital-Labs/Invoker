@@ -323,14 +323,11 @@ describe('WorkflowMutationFacade', () => {
         execution: { pendingFixError: 'merge conflict' },
       });
       (deps.orchestrator.getTask as ReturnType<typeof vi.fn>).mockReturnValue(task);
-      (deps.orchestrator as any).revertConflictResolution = vi.fn();
+      (deps.orchestrator as any).revertFixSession = vi.fn();
 
       facade.rejectTask('task-a');
 
-      expect((deps.orchestrator as any).revertConflictResolution).toHaveBeenCalledWith(
-        'task-a',
-        'merge conflict',
-      );
+      expect((deps.orchestrator as any).revertFixSession).toHaveBeenCalledWith('task-a', { savedError: 'merge conflict' });
     });
   });
 
