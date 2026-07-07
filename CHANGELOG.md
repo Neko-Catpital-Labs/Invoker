@@ -4,6 +4,7 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+- Restore Planning Terminal chats after desktop restart, including visible transcripts and draft-ready state.
 - Persist embedded terminal tabs across desktop app restarts, restoring their recent output and reopening spawn-backed sessions.
 - Move auto-fix attempt counts out of SQLite task state and into in-memory worker runtime policy.
 - Add a local master-head full-test repair cron that runs the destructive suite, asks OMP/Codex to fix confirmed failures, reruns the suite, and opens one validated PR per broken upstream SHA.
