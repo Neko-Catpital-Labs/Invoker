@@ -101,6 +101,7 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] input',
   '[role="dialog"] textarea',
 ].join(',');
+const RAIL_LIST_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto p-3';
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
@@ -2754,7 +2755,7 @@ export function App() {
 
   const renderWorkflowsList = (): JSX.Element => (
     workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
-      <div className="overflow-y-auto p-3">
+      <div data-testid="workflow-rail-list" className={RAIL_LIST_BODY_CLASS}>
         <div className="space-y-1">
           {workflowEntries.map((entry) => {
             const selected = selectedWorkflow?.id === entry.workflow.id;
@@ -2778,7 +2779,7 @@ export function App() {
 
   const renderTaskList = (entries: typeof attentionEntries, emptyTitle: string, emptyCopy: string, tone: 'attention' | 'running'): JSX.Element => (
     entries.length === 0 ? renderBrowserEmptyState(emptyTitle, emptyCopy) : (
-      <div className="overflow-y-auto p-3">
+      <div data-testid={`${tone}-task-rail-list`} className={RAIL_LIST_BODY_CLASS}>
         <div className="space-y-1">
           {entries.map((entry) => {
             const selected = selectedTask?.id === entry.task.id;
@@ -2805,7 +2806,7 @@ export function App() {
 
 
   const renderPlanningSessionList = (): JSX.Element => (
-    <div className="overflow-y-auto p-3">
+    <div data-testid="planning-session-rail-list" className={RAIL_LIST_BODY_CLASS}>
       <div className="space-y-1">
         {planningSessions.map((session) => {
           const selected = session.id === activePlanningSession.id;
@@ -2852,7 +2853,7 @@ export function App() {
             New chat
           </button>
         </div>
-        <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
+        <div className="min-h-0 flex-1 flex flex-col">{renderPlanningSessionList()}</div>
       </div>
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
@@ -2912,7 +2913,7 @@ export function App() {
           Close
         </button>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 flex flex-col">
         {sidebarSurface === 'workflows'
           ? renderWorkflowsList()
           : sidebarSurface === 'attention'
