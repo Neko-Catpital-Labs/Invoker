@@ -706,6 +706,9 @@ describe('DockerExecutor', () => {
         'OPENROUTER_API_KEY=sk-or-multi-secret',
         'BAILIAN_CODING_PLAN_API_KEY=sk-qwen-multi-secret',
         'MOONSHOT_API_KEY=sk-kimi-multi-secret',
+        'QWEN_API_KEY=sk-qwen-direct-secret',
+        'DASHSCOPE_API_KEY=sk-dashscope-secret',
+        'KIMI_API_KEY=sk-kimi-direct-secret',
         'GITHUB_TOKEN=ghp_multi_github_token_value',
         'AWS_SECRET_ACCESS_KEY=aws-multi-secret-access',
       ]);
@@ -726,6 +729,9 @@ describe('DockerExecutor', () => {
       expect(allLogs).not.toContain('sk-or-multi-secret');
       expect(allLogs).not.toContain('sk-qwen-multi-secret');
       expect(allLogs).not.toContain('sk-kimi-multi-secret');
+      expect(allLogs).not.toContain('sk-qwen-direct-secret');
+      expect(allLogs).not.toContain('sk-dashscope-secret');
+      expect(allLogs).not.toContain('sk-kimi-direct-secret');
       expect(allLogs).not.toContain('ghp_multi_github_token_value');
       expect(allLogs).not.toContain('aws-multi-secret-access');
 
@@ -736,6 +742,9 @@ describe('DockerExecutor', () => {
       expect(allLogs).toContain('OPENROUTER_API_KEY=***REDACTED***');
       expect(allLogs).toContain('BAILIAN_CODING_PLAN_API_KEY=***REDACTED***');
       expect(allLogs).toContain('MOONSHOT_API_KEY=***REDACTED***');
+      expect(allLogs).toContain('QWEN_API_KEY=***REDACTED***');
+      expect(allLogs).toContain('DASHSCOPE_API_KEY=***REDACTED***');
+      expect(allLogs).toContain('KIMI_API_KEY=***REDACTED***');
       expect(allLogs).toContain('GITHUB_TOKEN=***REDACTED***');
       expect(allLogs).toContain('AWS_SECRET_ACCESS_KEY=***REDACTED***');
     });

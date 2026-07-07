@@ -28,6 +28,22 @@ describe('QwenExecutionAgent', () => {
     expect(spec.sessionId).toBeDefined();
     expect(spec.fullPrompt).toBe('prompt text');
   });
+  it('builds fix command without full prompt echo', () => {
+    const agent = new QwenExecutionAgent({ command: 'qwen-test' });
+    const spec = agent.buildFixCommand('fix prompt', { executionModel: 'qwen3-coder-plus' });
+
+    expect(spec.cmd).toBe('qwen-test');
+    expect(spec.args).toEqual([
+      '--approval-mode',
+      'yolo',
+      '--model',
+      'qwen3-coder-plus',
+      '--prompt',
+      'fix prompt',
+    ]);
+    expect(spec.sessionId).toBeDefined();
+    expect(spec).not.toHaveProperty('fullPrompt');
+  });
 
   it('supports safer approval modes', () => {
     const agent = new QwenExecutionAgent({ command: 'qwen-test', approvalMode: 'auto-edit' });
@@ -53,9 +69,9 @@ describe('QwenExecutionAgent', () => {
     ]);
   });
 
-  it('uses Qwen continue for resume', () => {
+  it('uses Qwen session id for resume', () => {
     const agent = new QwenExecutionAgent({ command: 'qwen-test' });
-    expect(agent.buildResumeArgs('ignored-session')).toEqual({ cmd: 'qwen-test', args: ['--continue'] });
+    expect(agent.buildResumeArgs('session-123')).toEqual({ cmd: 'qwen-test', args: ['--resume', 'session-123'] });
   });
 
   it('mounts host Qwen config into containers', () => {

@@ -83,6 +83,9 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
         'MOONSHOT_API_KEY=kimi-key',
         'BAILIAN_CODING_PLAN_API_KEY=qwen-key',
         'OPENROUTER_API_KEY=openrouter-key',
+        'QWEN_API_KEY=qwen-direct-key',
+        'DASHSCOPE_API_KEY=dashscope-key',
+        'KIMI_API_KEY=kimi-direct-key',
         'IGNORED_TOKEN=nope',
         '',
       ].join('\n'),
@@ -111,6 +114,9 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
       expect(script).toContain("export MOONSHOT_API_KEY='kimi-key'");
       expect(script).toContain("export BAILIAN_CODING_PLAN_API_KEY='qwen-key'");
       expect(script).toContain("export OPENROUTER_API_KEY='openrouter-key'");
+      expect(script).toContain("export QWEN_API_KEY='qwen-direct-key'");
+      expect(script).toContain("export DASHSCOPE_API_KEY='dashscope-key'");
+      expect(script).toContain("export KIMI_API_KEY='kimi-direct-key'");
       expect(script).not.toContain('IGNORED_TOKEN');
     } finally {
       rmSync(dir, { recursive: true, force: true });

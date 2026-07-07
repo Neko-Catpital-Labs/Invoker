@@ -60,8 +60,8 @@ export class QwenExecutionAgent implements ExecutionAgent {
     };
   }
 
-  buildResumeArgs(_sessionId: string): { cmd: string; args: string[] } {
-    return { cmd: this.command, args: ['--continue'] };
+  buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {
+    return { cmd: this.command, args: ['--resume', sessionId] };
   }
 
   getContainerRequirements(): {

@@ -17,6 +17,21 @@ describe('KimiExecutionAgent', () => {
     expect(spec.sessionId).toBeDefined();
     expect(spec.fullPrompt).toBe('prompt text');
   });
+  it('builds fix command without full prompt echo', () => {
+    const agent = new KimiExecutionAgent({ command: 'kimi-test' });
+    const spec = agent.buildFixCommand('fix prompt', { executionModel: 'kimi-k2.6' });
+
+    expect(spec.cmd).toBe('kimi-test');
+    expect(spec.args).toEqual([
+      '--yolo',
+      '--model',
+      'kimi-k2.6',
+      '-p',
+      'fix prompt',
+    ]);
+    expect(spec.sessionId).toBeDefined();
+    expect(spec).not.toHaveProperty('fullPrompt');
+  });
 
   it('can disable yolo for stricter local runs', () => {
     const agent = new KimiExecutionAgent({ command: 'kimi-test', yolo: false });
@@ -26,9 +41,9 @@ describe('KimiExecutionAgent', () => {
     ]);
   });
 
-  it('uses Kimi continue for resume', () => {
+  it('uses Kimi session id for resume', () => {
     const agent = new KimiExecutionAgent({ command: 'kimi-test' });
-    expect(agent.buildResumeArgs('ignored-session')).toEqual({ cmd: 'kimi-test', args: ['--continue'] });
+    expect(agent.buildResumeArgs('session-123')).toEqual({ cmd: 'kimi-test', args: ['--session', 'session-123'] });
   });
 
   it('mounts host Kimi config into containers', () => {

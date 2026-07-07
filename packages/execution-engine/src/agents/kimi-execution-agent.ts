@@ -56,8 +56,8 @@ export class KimiExecutionAgent implements ExecutionAgent {
     };
   }
 
-  buildResumeArgs(_sessionId: string): { cmd: string; args: string[] } {
-    return { cmd: this.command, args: ['--continue'] };
+  buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {
+    return { cmd: this.command, args: ['--session', sessionId] };
   }
 
   getContainerRequirements(): {
