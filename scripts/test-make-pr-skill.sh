@@ -96,4 +96,9 @@ must_contain "$SKILL_MD" "diff atomicity blockers are hard failures" "make-pr sk
 must_contain "$SKILL_MD" "Re-audit every rebuilt slice in the resulting stack" "make-pr skill must re-audit the full rebuilt stack after a split"
 must_contain "$SKILL_MD" "conflict-only, import-only, or other no-new-claim fixup slice" "make-pr skill must auto-fold no-claim fixup slices"
 
+# Published Mergify stacks must keep a synced full-stack comment on every PR.
+must_contain "$SKILL_MD" "machine-managed stack comment on every PR in the stack" "make-pr skill must require one stack comment per published PR"
+must_contain "$SKILL_MD" "full stack bottom-to-top" "make-pr skill stack comment must list the entire stack in order"
+must_contain "$SKILL_MD" "must be refreshed whenever the stack changes" "make-pr skill must refresh stack comments when the stack changes"
+must_contain "$SKILL_MD" "marks the target PR with" "make-pr skill must explain how the synced stack comment identifies the current PR"
 echo "OK: make-pr skill contract checks passed"
