@@ -40,14 +40,24 @@ Stack publishing stays separate from unrelated cleanup.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 
 const ROUTING_BODY = `## Summary
@@ -80,14 +90,24 @@ Keep app exposure separate from core runtime behavior.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 
 function assert(condition, message) {
@@ -586,9 +606,10 @@ function testCurrentBranchPrLookupFailure() {
     createTrackedBranch(work, 'stack/example/3-routing');
     setManagedBranchConfig(work, 'stack/example/3-routing');
     writeFileSync(join(work, 'pr-body-routing.md'), ROUTING_BODY);
-    commitFile(work, 'packages/workflow-core/src/orchestrator.ts', 'export const orchestrator = true;\n', 'routing core');
-    commitFile(work, 'packages/execution-engine/src/task-runner.ts', 'export const runner = true;\n', 'routing engine');
+    commitFile(work, 'packages/app/src/worker-control.ts', 'export const routing = true;\n', 'routing app helper');
+    commitFile(work, 'packages/app/src/main.ts', 'export const mainRouting = true;\n', 'routing app main');
     commitFile(work, 'packages/app/src/workflow-mutation-facade.ts', 'export const facade = true;\n', 'activation surface');
+    gitQuiet(work, 'push', '-u', 'origin', 'stack/example/3-routing');
 
     const result = runCreatePr(work, harness, [
       '--title', '[Example](3) Routing slice',
@@ -606,12 +627,178 @@ function testCurrentBranchPrLookupFailure() {
       ]),
     });
 
-    assert(result.status === 1, 'managed stack update should reject mixed routing and activation-surface slice');
-    assert(result.stderr.includes('Review Unit "routing" cannot ship with activation-surface files'), 'stack update should explain mixed review units');
+    assert(
+      result.stderr.includes('Review Unit "routing" cannot ship with activation-surface files'),
+      `stack update should explain mixed review units\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
 }
+
+{
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'stack/example/4-entrypoints');
+    setManagedBranchConfig(work, 'stack/example/4-entrypoints');
+    writeFileSync(join(work, 'pr-body-entrypoints.md'), `## Summary
+
+This branch only changes app entrypoint behavior.
+
+## Review Claim
+
+Keep entrypoint activation behavior local.
+
+## Review Lane
+
+- behavior
+
+## Review Unit
+
+- activation-surface
+
+## Safety Invariant
+
+Only entrypoint behavior changes.
+
+## Slice Rationale
+
+Keep entrypoint behavior separate from routing internals.
+
+## Non-goals
+
+- Do not add docs or proof changes in this slice.
+
+## Test Plan
+
+<details>
+<summary>Test Plan</summary>
+
+- [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
+
+</details>
+
+## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
+
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+
+</details>
+`);
+    commitFile(work, 'packages/app/src/headless.ts', 'export const app = true;\n', 'app entrypoint');
+    commitFile(work, 'packages/cli/src/index.ts', 'export const cli = true;\n', 'cli entrypoint');
+    commitFile(work, 'packages/slack-manager/src/invoker-launcher.ts', 'export const slack = true;\n', 'slack entrypoint');
+    gitQuiet(work, 'push', '-u', 'origin', 'stack/example/4-entrypoints');
+
+    const result = runCreatePr(work, harness, [
+      '--title', '[Example](4) Entrypoint slice',
+      '--base', 'master',
+      '--body-file', 'pr-body-entrypoints.md',
+      '--update-existing',
+    ], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 43,
+          title: '[Example](4) Entrypoint slice',
+          headRefName: 'stack/example/4-entrypoints',
+          baseRefName: 'stack/example/3-previous',
+        },
+      ]),
+    });
+
+    assert(result.status === 1, 'managed stack update should reject unrelated top-level areas even when the PR body stays on one review unit');
+    assert(result.stderr.includes('Stack PR atomicity validation failed'), `stack atomicity blockers should fail publication\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('unrelated-areas'), 'stack atomicity blockers should name the unrelated-areas finding');
+    expectNoPush(harness, 'stack unrelated-areas rejection');
+    const ghCalls = readGhCalls(harness.ghLog);
+    assert(
+      !ghCalls.some((call) => /\/pulls(?:\/[0-9]+)?$/.test(call.route)),
+      'stack unrelated-areas rejection should fail before any GitHub PR mutation',
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testNonStackedUnrelatedAreasStayWarnings() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/unrelated-areas-warning');
+    writeFileSync(join(work, 'pr-body-entrypoints.md'), `## Summary
+
+This branch only changes app entrypoint behavior.
+
+## Review Claim
+
+Keep entrypoint activation behavior local.
+
+## Review Lane
+
+- behavior
+
+## Review Unit
+
+- activation-surface
+
+## Safety Invariant
+
+Only entrypoint behavior changes.
+
+## Slice Rationale
+
+Keep entrypoint behavior separate from routing internals.
+
+## Non-goals
+
+- Do not add docs or proof changes in this slice.
+
+## Test Plan
+
+<details>
+<summary>Test Plan</summary>
+
+- [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
+
+</details>
+
+## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
+
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+
+</details>
+`);
+    commitFile(work, 'packages/app/src/headless.ts', 'export const app = true;\n', 'app entrypoint');
+    commitFile(work, 'packages/cli/src/index.ts', 'export const cli = true;\n', 'cli entrypoint');
+    commitFile(work, 'packages/slack-manager/src/invoker-launcher.ts', 'export const slack = true;\n', 'slack entrypoint');
+
+    const result = runCreatePr(work, harness, ['--title', 'test title', '--base', 'master', '--body-file', 'pr-body-entrypoints.md']);
+
+    assert(result.status === 0, `non-stacked unrelated areas should stay warnings\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('Diff atomicity warning'), 'non-stacked publication should still print the warning');
+    const ghCalls = readGhCalls(harness.ghLog);
+    assert(
+      ghCalls.some((call) => call.route.endsWith('/pulls')),
+      'non-stacked unrelated areas warning should still allow PR creation',
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+
 
 function testStackedDiffTitleRequiredForNonTrunkBase() {
   const harness = createHarness();
@@ -707,6 +894,7 @@ const tests = [
   testMergifyManagedUpdateRejectsNestedTitle,
   testUnpublishedStackCommitsBlockUpdate,
   testCurrentBranchPrLookupFailure,
+  testNonStackedUnrelatedAreasStayWarnings,
   testStackedDiffTitleRequiredForNonTrunkBase,
   testDiffAtomicityBlocksMixedDiff,
   testDiffComputationFailureBlocksPrCreation,

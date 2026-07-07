@@ -86,4 +86,9 @@ must_contain "$SKILL_MD" "aligned stack title prefix" "make-pr skill must requir
 must_contain "$SKILL_MD" "remote-only head branch name" "make-pr skill must document the Mergify branch-name mismatch case"
 must_contain "$SKILL_MD" "gh pr edit --title ... --body-file ..." "make-pr skill must allow immediate metadata repair when create-pr cannot map the published branch"
 
+# Broad stack repair must re-audit the full rebuilt stack and fold no-claim fixups.
+must_contain "$SKILL_MD" "diff atomicity blockers are hard failures" "make-pr skill must make stacked diff-atomicity blockers fatal"
+must_contain "$SKILL_MD" "Re-audit every rebuilt slice in the resulting stack" "make-pr skill must re-audit the full rebuilt stack after a split"
+must_contain "$SKILL_MD" "conflict-only, import-only, or other no-new-claim fixup slice" "make-pr skill must auto-fold no-claim fixup slices"
+
 echo "OK: make-pr skill contract checks passed"
