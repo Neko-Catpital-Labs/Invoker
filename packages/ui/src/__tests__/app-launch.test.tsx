@@ -105,21 +105,48 @@ describe('App launch (component)', () => {
     expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(screen.getByText('Alpha · running')).toBeInTheDocument();
   });
-  it('auto-collapses the app sidebar for browser views on narrow windows', async () => {
-    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
-
+  it('keeps sidebar width under explicit toggle control while surfaces change', async () => {
     render(<App />);
     await screen.findByTestId('sidebar-workflows');
-    act(() => window.dispatchEvent(new Event('resize')));
+
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-60');
 
     fireEvent.click(screen.getByTestId('sidebar-workflows'));
     expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
-    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
-    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-60');
 
-    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-collapse-toggle'));
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expect(await screen.findByTestId('planning-session-rail')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Planning Terminal' })).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Needs Attention' })).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    expect(screen.getByRole('heading', { name: 'Running' })).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-workers'));
+    expect(await screen.findByTestId('action-queue-section')).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-collapse-toggle'));
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-60');
   });
   it('keeps the manual app sidebar width while switching left rail surfaces', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
