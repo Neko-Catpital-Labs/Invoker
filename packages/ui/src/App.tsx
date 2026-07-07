@@ -685,6 +685,8 @@ export function App() {
     window.invoker?.terminalList?.().then((list) => {
       if (Array.isArray(list) && list.length > 0) {
         setTerminalSessions(list);
+        setActiveTerminalSessionId(list[list.length - 1]?.sessionId ?? null);
+        setTerminalDrawerState('partial');
       }
     }).catch(() => {});
   }, []);
