@@ -53,14 +53,24 @@ Proof and cleanup stay separate.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 
 const validArchitecture = `## Summary
@@ -109,14 +119,24 @@ graph TD
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 
 const unquotedMermaidFixture = readFileSync(resolve(scriptDir, 'fixtures/pr-body-mermaid-reviewgate-unquoted.md'), 'utf8');
@@ -194,18 +214,62 @@ Small slice.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `);
 assert(
   hiddenMetadataErrors.some((error) => error.includes('Do not hide review metadata in <details>')),
   'details-wrapped review metadata should fail',
+);
+
+const flatTestPlanErrors = await validatePrBody(
+  validMinimal.replace('<details>\n<summary>Test Plan</summary>\n\n- [ ] `pnpm test`\n\n</details>', '- [ ] `pnpm test`'),
+);
+assert(
+  flatTestPlanErrors.some((error) => error.includes('## Test Plan must wrap its content in a collapsed <details> block')),
+  'un-collapsed test plan content should fail',
+);
+
+const flatRevertPlanErrors = await validatePrBody(
+  validMinimal
+    .replace('<details>\n<summary>Revert Plan</summary>\n\n- Safe to revert? Yes', '- Safe to revert? Yes')
+    .replace('- Data migration? No\n\n</details>', '- Data migration? No'),
+);
+assert(
+  flatRevertPlanErrors.some((error) => error.includes('## Revert Plan must wrap its content in a collapsed <details> block')),
+  'un-collapsed revert plan content should fail',
+);
+
+const openTestPlanErrors = await validatePrBody(
+  validMinimal.replace('<details>\n<summary>Test Plan</summary>', '<details open>\n<summary>Test Plan</summary>'),
+);
+assert(
+  openTestPlanErrors.some((error) => error.includes('Test Plan details must be collapsed by default')),
+  'test plan details should stay collapsed by default',
+);
+
+const openRevertPlanErrors = await validatePrBody(
+  validMinimal.replace('<details>\n<summary>Revert Plan</summary>', '<details open>\n<summary>Revert Plan</summary>'),
+);
+assert(
+  openRevertPlanErrors.some((error) => error.includes('Revert Plan details must be collapsed by default')),
+  'revert plan details should stay collapsed by default',
 );
 
 const restartStillProofErrors = await validatePrBody(`${validMinimal}
@@ -272,10 +336,15 @@ Small slice.
 
 ## Revert Plan
 
+<details>
+<summary>Revert Plan</summary>
+
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `);
 assert(missingTestPlanErrors.some((error) => error.includes('Missing required section: ## Test Plan')), 'missing test plan should fail');
 
@@ -318,14 +387,24 @@ graph TD
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `);
 assert(malformedArchitectureErrors.some((error) => error.includes('Architecture section is missing required subsection: ### After')), 'missing architecture after section should fail');
 
@@ -355,14 +434,24 @@ Small slice.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `);
 assert(missingReviewLaneErrors.some((error) => error.includes('Missing required section: ## Review Lane')), 'missing review lane should fail');
 
@@ -401,14 +490,24 @@ Durable-state scan behavior is reviewable separately from lifecycle wakeup routi
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 const broad1574Errors = await validatePrBody(broad1574Body);
 assert(
@@ -448,14 +547,24 @@ The complete auto-fix recovery path lands together for one rollout.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 const originalAllInOneErrors = await validatePrBody(originalAllInOneBody);
 assert(
@@ -493,14 +602,24 @@ Small slice.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 
 const longSummaryWarnings = getPrBodyWarnings(longSummary);
@@ -623,14 +742,24 @@ Field additions land in a later behavior PR.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 assert(
   (await validatePrBody(refactorBody, { changedFiles: ['packages/app/src/main.ts', 'packages/app/src/refresh-task-graph.ts'] })).length === 0,
@@ -687,14 +816,24 @@ Publication and polling landed together around the same review gate contract.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 const old1756BoundaryErrors = await validatePrBody(old1756MixedRuntimeBody, {
   changedFiles: [
@@ -736,14 +875,24 @@ Validation policy stays separate from command submission.
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] \`pnpm test\`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: \`git revert <sha>\`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
 `;
 assert((await validatePrBody(validationPolicyBody)).length === 0, 'validation policy non-goal mentioning submit should pass');
 

@@ -30,7 +30,8 @@
  *   Enforces the canonical PR schema:
  *   ## Summary, ## Review Claim, ## Review Lane, ## Review Unit,
  *   ## Safety Invariant, ## Slice Rationale, ## Non-goals,
- *   ## Test Plan, ## Revert Plan, plus optional ## Architecture
+ *   ## Test Plan, ## Revert Plan (each plan section with content in a
+ *   collapsed <details> block), plus optional ## Architecture
  *   and required ## Visual Proof for UI changes.
  */
 
@@ -154,6 +155,7 @@ Stack flow:
 
 PR body schema:
   Required: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
+  Test Plan and Revert Plan content must sit inside collapsed <details><summary>Test Plan</summary> / <summary>Revert Plan</summary> blocks.
   Optional: ## Architecture (must include ### Before and ### After when present)
   UI-impacting diffs require ## Visual Proof with screenshot or video proof.
   Animated proof is required for restarts and multi-state transitions.

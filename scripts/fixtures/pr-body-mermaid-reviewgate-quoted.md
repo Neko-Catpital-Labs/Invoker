@@ -44,11 +44,21 @@ graph TD
 
 ## Test Plan
 
+<details>
+<summary>Test Plan</summary>
+
 - [ ] `node scripts/validate-pr-body.mjs --body-file scripts/fixtures/pr-body-mermaid-reviewgate-quoted.md`
 
+</details>
+
 ## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
 
 - Safe to revert? Yes
 - Revert command: `git revert <sha>`
 - Post-revert steps: None
 - Data migration? No
+
+</details>
