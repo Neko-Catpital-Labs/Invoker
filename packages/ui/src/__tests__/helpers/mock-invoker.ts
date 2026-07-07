@@ -309,6 +309,7 @@ export function createMockInvoker(
       queued: [],
     })),
     getWorkerStatus: vi.fn(async () => workerStatus),
+    getWorkers: vi.fn(async () => workerStatus),
     startWorker: vi.fn(async (kind: string) => {
       const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
       return row;
@@ -404,12 +405,15 @@ function makeMockWorkerStatusEntry(kind: string): WorkerStatusEntry {
   return {
     kind,
     note: '',
+    source: 'built-in',
+    availability: 'available',
     lifecycle: 'stopped',
     policy: 'unknown',
     autoStarts: false,
     startable: false,
     stoppable: false,
     recentActions: [],
+    recentLogs: [],
   };
 }
 
