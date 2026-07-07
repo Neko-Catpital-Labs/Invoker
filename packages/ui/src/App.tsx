@@ -115,7 +115,7 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     title: 'Untitled plan',
     status: 'still_discussing',
     presetKey: '',
-    messages: [{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' }],
+    messages: [],
     input: '',
     draftPlanAvailable: false,
     busy: false,
@@ -2869,7 +2869,7 @@ export function App() {
             </button>
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto bg-gray-900 p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-gray-950/95">
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
