@@ -14,30 +14,25 @@ const VALID_BODY = `## Summary
 
 This branch updates the PR workflow.
 
-<details>
-<summary>Review metadata</summary>
-
-Review Claim:
+## Review Claim
 
 Keep stack publication on the supported path.
 
-Review Lane:
+## Review Lane
 
 - policy
 
-Review Unit:
+## Review Unit
 
 - tooling-policy
 
-Safety Invariant:
+## Safety Invariant
 
 Only PR workflow tooling changes.
 
-Slice Rationale:
+## Slice Rationale
 
 Stack publishing stays separate from unrelated cleanup.
-
-</details>
 
 ## Non-goals
 
@@ -59,30 +54,25 @@ const ROUTING_BODY = `## Summary
 
 This branch only changes invalidation routing.
 
-<details>
-<summary>Review metadata</summary>
-
-Review Claim:
+## Review Claim
 
 Keep invalidation routing local.
 
-Review Lane:
+## Review Lane
 
 - behavior
 
-Review Unit:
+## Review Unit
 
 - routing
 
-Safety Invariant:
+## Safety Invariant
 
 Only invalidation routing changes.
 
-Slice Rationale:
+## Slice Rationale
 
 Keep app exposure separate from core runtime behavior.
-
-</details>
 
 ## Non-goals
 

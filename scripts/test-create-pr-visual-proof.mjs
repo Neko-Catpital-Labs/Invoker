@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { getUiImpactingFiles, isUiImpactingPath } from './create-pr.mjs';
+import { buildGitHubRawMediaUrl, getUiImpactingFiles, isUiImpactingPath } from './create-pr.mjs';
 
 function assert(condition, message) {
   if (!condition) {
@@ -25,4 +25,10 @@ assert(uiFiles.length === 2, 'only UI-impacting files should be returned');
 assert(uiFiles.includes('packages/ui/src/components/TaskPanel.tsx'), 'UI component file should be returned');
 assert(uiFiles.includes('packages/app/src/window/window-lifecycle.ts'), 'window file should be returned');
 
+
+assert(
+  buildGitHubRawMediaUrl('owner/repo', 'stack/example/proof', 'packages/app/e2e/visual-proof/after/demo.gif')
+    === 'https://github.com/owner/repo/blob/stack/example/proof/packages/app/e2e/visual-proof/after/demo.gif?raw=1',
+  'tracked proof assets should fall back to GitHub raw URLs when R2 upload is unavailable',
+);
 console.log('OK: create-pr visual proof checks passed');

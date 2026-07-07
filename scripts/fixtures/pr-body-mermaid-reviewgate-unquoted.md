@@ -2,30 +2,25 @@
 
 Tighten Mermaid validation.
 
-<details>
-<summary>Review metadata</summary>
-
-Review Claim:
+## Review Claim
 
 Bad Mermaid labels now fail local PR-body validation.
 
-Review Lane:
+## Review Lane
 
 - policy
 
-Review Unit:
+## Review Unit
 
 - tooling-policy
 
-Safety Invariant:
+## Safety Invariant
 
 Only the local PR-body guardrail changes.
 
-Slice Rationale:
+## Slice Rationale
 
 The validator hardening lands separately from other PR workflow edits.
-
-</details>
 
 ## Non-goals
 
