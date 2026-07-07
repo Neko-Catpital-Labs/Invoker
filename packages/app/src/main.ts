@@ -224,6 +224,8 @@ import {
 } from './global-topup.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
+
+
 import {
   buildFixWithAgentMutationArgs,
   buildHeadlessFixArgs,
@@ -321,6 +323,17 @@ function buildRegisteredOwnerWorkerDeps(
   store: WorkerRuntimeDependencies['store'],
   checkMergeGateStatuses: NonNullable<WorkerRuntimeDependencies['reviewGate']>['checkMergeGateStatuses'],
 ): WorkerRuntimeDependencies {
+  const remoteTargets = Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+    name,
+    connection: {
+      host: target.host,
+      user: target.user,
+      sshKeyPath: target.sshKeyPath,
+      port: target.port,
+    },
+    remotePath: '~/.invoker',
+  }));
+
   return {
     store,
     submitter: {
@@ -337,13 +350,15 @@ function buildRegisteredOwnerWorkerDeps(
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
     },
+    diskHeadroom: {
+      localPath: resolveInvokerHomeRoot(),
+      remoteTargets,
+    },
   };
 }
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
-  return registerExternalWorkersFromConfig(
-    invokerConfig.externalWorkers,
-    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
-  );
+  const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
+  return registerExternalWorkersFromConfig(invokerConfig.externalWorkers, registry);
 }
 
 
@@ -806,6 +821,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       logger.info(`hourly snapshots enabled (interval=${hourlyMs}ms)`, { module: 'backup' });
     }
   }
+
   // Compose runtime services from persistence-backed adapters.
   // Headless startup routes through composeHeadlessStartup so the
   // headless path has an explicit composition entry point.
@@ -5251,6 +5267,7 @@ function createEmbeddedTerminalBackendFromConfig(
           clearInterval(hourlyBackupInterval);
           hourlyBackupInterval = null;
         }
+
         embeddedTerminalManager.closeAll();
         if (executorRegistry) {
           await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
