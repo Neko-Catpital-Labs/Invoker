@@ -4,6 +4,10 @@ import type { WorkerActionRecord, WorkerActionWrite, WorkflowMutationPriority } 
 import type { TaskState } from '@invoker/workflow-core';
 
 import { parseFixWithAgentMutationArgs } from '../auto-fix-intents.js';
+import {
+  autoFixAttemptLedgerKeyFromLifecycleEvent,
+  createAutoFixAttemptLedger,
+} from '../auto-fix-attempt-ledger.js';
 import type { ReviewGateCiFailedLifecycleEvent } from '../lifecycle-events.js';
 import {
   CI_FAILURE_WORKER_KIND,
@@ -127,7 +131,8 @@ function makeHarness(task = makeTask()) {
     }),
     logEvent: vi.fn(),
   };
-  return { actions, store, submit };
+  const attemptLedger = createAutoFixAttemptLedger();
+  return { actions, store, submit, attemptLedger };
 }
 
 describe('PR status and CI failure workers', () => {
@@ -168,6 +173,7 @@ describe('PR status and CI failure workers', () => {
       store: harness.store,
       submitter: { submit: harness.submit },
       logger,
+      attemptLedger: harness.attemptLedger,
       defaultAutoFixRetries: 2,
       getAutoFixAgent: () => 'codex',
       getAutoFixExecutionModel: () => 'openai/gpt-5.2',
@@ -203,17 +209,32 @@ describe('PR status and CI failure workers', () => {
     });
   });
 
-  it('skips CI repair after the worker retry budget is exhausted', async () => {
+  it('queues CI repair while the in-memory retry budget allows it', async () => {
     const event = makeEvent();
-    const harness = makeHarness(makeTask({
-      execution: {
-        autoFixAttempts: 1,
-      },
-    }));
+    const harness = makeHarness();
     const tick = createCiFailureTick({
       store: harness.store,
       submitter: { submit: harness.submit },
       logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [event],
+    });
+
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1 });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips CI repair once the in-memory retry budget is exhausted', async () => {
+    const event = makeEvent();
+    const harness = makeHarness();
+    harness.attemptLedger.consume(autoFixAttemptLedgerKeyFromLifecycleEvent(event), 1);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
       defaultAutoFixRetries: 1,
       drainEvents: () => [event],
     });
@@ -223,11 +244,9 @@ describe('PR status and CI failure workers', () => {
     expect(harness.submit).not.toHaveBeenCalled();
     expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
       status: 'skipped',
-      summary: expect.stringContaining('worker retry budget is exhausted'),
       payload: expect.objectContaining({
         reason: 'worker-retry-budget-exhausted',
         workerRetryBudget: 1,
-        autoFixAttempts: 1,
       }),
     });
   });
@@ -256,6 +275,7 @@ describe('PR status and CI failure workers', () => {
       submitter: { submit: harness.submit },
       logger,
       defaultAutoFixRetries: 2,
+      attemptLedger: harness.attemptLedger,
       drainEvents: () => [event],
     });
 

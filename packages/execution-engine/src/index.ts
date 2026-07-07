@@ -8,7 +8,6 @@ export {
   shouldResolveViaOriginTracking,
   isInvokerManagedPoolBranch,
 } from './plan-base-remote.js';
-export * from './harness-capabilities.js';
 export * from './executor.js';
 export * from './base-executor.js';
 export * from './process-utils.js';
@@ -44,6 +43,7 @@ export * from './auto-fix-recovery.js';
 export * from './workers/pr-status-worker.js';
 export * from './workers/ci-failure-worker.js';
 export * from './auto-fix-gating.js';
+export * from './auto-fix-attempt-ledger.js';
 export * from './auto-fix-intents.js';
 export * from './lifecycle-events.js';
 export * from './external-worker.js';
