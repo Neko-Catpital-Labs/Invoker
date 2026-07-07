@@ -574,6 +574,17 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'empty-state');
   });
 
+  test('workflow delete propagation', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, TEST_PLAN);
+    await expect(workflowNode(page, workflowId)).toBeVisible();
+    await captureScreenshot(page, 'workflow-delete-before');
+
+    await page.evaluate((id) => window.invoker.deleteWorkflow(id), workflowId);
+
+    await page.waitForTimeout(3000);
+    await captureScreenshot(page, 'workflow-delete-after-3s');
+  });
+
   test('terminal planning loads graph', async ({ page }) => {
     const plannedYaml = yamlStringify(TERMINAL_PLANNED_PLAN);
     // Mirror the real planner reply shape: prose followed by the full fenced
