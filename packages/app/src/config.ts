@@ -2,12 +2,13 @@
  * Configuration loader for Invoker.
  *
  * Reads from ~/.invoker/config.json (user-level config).
- * Override with INVOKER_REPO_CONFIG_PATH env var (for tests).
+ * INVOKER_REPO_CONFIG_PATH is a test/CLI override only.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveInvokerConfigPath } from '@invoker/contracts';
 import { validateInvokerConfig } from './config-validation.js';
 
 export type HarnessModelPolicy =
@@ -329,8 +330,7 @@ function readJsonSafe(path: string): InvokerConfig {
 }
 
 export function resolveConfigFilePath(): string {
-  const override = process.env.INVOKER_REPO_CONFIG_PATH?.trim();
-  return override || join(homedir(), '.invoker', 'config.json');
+  return resolveInvokerConfigPath(process.env, homedir());
 }
 
 export function resolveConfigFileState(): { path: string; exists: boolean } {
