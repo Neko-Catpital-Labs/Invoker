@@ -106,6 +106,7 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
   busy: boolean;
+  conversationKey: string;
 };
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
@@ -120,20 +121,7 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     busy: false,
     createdAt: now,
     updatedAt: now,
-  };
-}
-
-function summaryToPlanningSessionView(summary: InAppPlanningSessionSummary): PlanningSessionView {
-  return {
-    ...summary,
-    messages: summary.messages.map((message) => ({
-      id: message.id,
-      text: message.text,
-      role: message.role,
-      tone: message.tone,
-    })),
-    input: '',
-    busy: false,
+    conversationKey: 'local-planning-session-1',
   };
 }
 
@@ -520,22 +508,12 @@ export function App() {
   const queueStatus = useQueueStatus();
   const [workerStatus, refreshWorkerStatus] = useWorkerStatus();
   const handleStartWorker = useCallback(async (kind: string) => {
-    if (!invoker) return;
-    try {
-      await invoker.startWorker(kind);
-      await refreshWorkerStatus();
-    } catch (err) {
-      console.error('Failed to start worker:', err);
-    }
+    await invoker.startWorker(kind);
+    await refreshWorkerStatus();
   }, [invoker, refreshWorkerStatus]);
   const handleStopWorker = useCallback(async (kind: string) => {
-    if (!invoker) return;
-    try {
-      await invoker.stopWorker(kind);
-      await refreshWorkerStatus();
-    } catch (err) {
-      console.error('Failed to stop worker:', err);
-    }
+    await invoker.stopWorker(kind);
+    await refreshWorkerStatus();
   }, [invoker, refreshWorkerStatus]);
   const runningTaskIds = useMemo(
     () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
@@ -545,7 +523,7 @@ export function App() {
   const graphActionsMenuRef = useRef<HTMLDivElement>(null);
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkerKind, setSelectedWorkerKind] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
@@ -560,7 +538,6 @@ export function App() {
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(2);
-  const planningSessionRestoreBlockedRef = useRef(false);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
@@ -569,11 +546,7 @@ export function App() {
     () => planningSessions.find((session) => session.id === activePlanningSessionId) ?? planningSessions[0] ?? makeInitialPlanningSession(),
     [activePlanningSessionId, planningSessions],
   );
-
-  useEffect(() => {
-    if (!activePlanningSession.presetKey || activePlanningSession.presetKey === selectedPlanningPresetKey) return;
-    setSelectedPlanningPresetKey(activePlanningSession.presetKey);
-  }, [activePlanningSession.presetKey, selectedPlanningPresetKey]);
+  const activePlanningConversationKey = activePlanningSession.conversationKey;
   const terminalLines = activePlanningSession.messages;
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
@@ -705,34 +678,8 @@ export function App() {
     window.invoker?.terminalList?.().then((list) => {
       if (Array.isArray(list) && list.length > 0) {
         setTerminalSessions(list);
-        setActiveTerminalSessionId(list[list.length - 1]?.sessionId ?? null);
-        setTerminalDrawerState('partial');
       }
     }).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    window.invoker?.planningChatList?.()
-      .then((result) => {
-        if (cancelled) return;
-        if (planningSessionRestoreBlockedRef.current) return;
-        if (!result?.sessions?.length) return;
-        const restoredSessions = result.sessions.map(summaryToPlanningSessionView);
-        setPlanningSessions(restoredSessions);
-        setActivePlanningSessionId(restoredSessions[0]?.id ?? 'local-planning-session-1');
-        const starterSession = makeInitialPlanningSession();
-        const maxLineId = Math.max(
-          0,
-          ...starterSession.messages.map((line) => line.id),
-          ...restoredSessions.flatMap((session) => session.messages.map((line) => line.id)),
-        );
-        nextTerminalLineIdRef.current = maxLineId + 1;
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
   }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1900,7 +1847,6 @@ export function App() {
   }, [activePlanningSessionId, updatePlanningSessionById]);
 
   const setPlanningInput = useCallback((value: string) => {
-    if (value.length > 0) planningSessionRestoreBlockedRef.current = true;
     updateActivePlanningSession((session) => ({ ...session, input: value }));
   }, [updateActivePlanningSession]);
 
@@ -2084,13 +2030,14 @@ export function App() {
   ]);
 
   const handleCreatePlanningSession = useCallback(() => {
-    planningSessionRestoreBlockedRef.current = true;
     const index = nextPlanningSessionLocalIdRef.current;
     nextPlanningSessionLocalIdRef.current += 1;
     const now = new Date().toISOString();
+    const localId = `local-planning-session-${index}`;
     const session: PlanningSessionView = {
       ...makeInitialPlanningSession(now),
-      id: `local-planning-session-${index}`,
+      id: localId,
+      conversationKey: localId,
       presetKey: selectedPlanningPresetKey,
     };
     nextTerminalLineIdRef.current += 1;
@@ -2118,7 +2065,7 @@ export function App() {
       setHasStarted(false);
       setPlanName(null);
       setSidebarSurface('home');
-      setSidebarCollapsed(null);
+      setSidebarCollapsed(false);
       setViewMode('dag');
       setGraphActionsMenuOpen(false);
       setSelectedTaskId(null);
@@ -2143,7 +2090,7 @@ export function App() {
       setHasStarted(false);
       setPlanName(null);
       setSidebarSurface('home');
-      setSidebarCollapsed(null);
+      setSidebarCollapsed(false);
       setViewMode('dag');
       setGraphActionsMenuOpen(false);
       setSelectedTaskId(null);
@@ -2167,8 +2114,6 @@ export function App() {
   const showStart = hasLoadedPlan && !hasStarted;
   const showStop = hasStarted && !allSettled;
   const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
-  const autoCollapseSidebar = sidebarSurface !== 'home' && sidebarSurface !== 'planning' && viewportWidth < 1440;
-  const effectiveSidebarCollapsed = sidebarCollapsed ?? autoCollapseSidebar;
   const autoCollapseInspector = sidebarSurface !== 'home' && viewportWidth < 1440;
   const effectiveInspectorCollapsed = inspectorCollapsed || (autoCollapseInspector && !inspectorManualOpen);
   const showWorkerDetailsPanel = viewMode === 'queue' && sidebarSurface === 'workers';
@@ -2238,6 +2183,7 @@ export function App() {
     setGraphActionsMenuOpen(false);
     if (nextSurface === 'workers') {
       setSidebarSurface('workers');
+      setSidebarCollapsed(true);
       setInspectorCollapsed(true);
       setInspectorManualOpen(false);
       setStatusFilters(new Set<WorkflowStatus>());
@@ -2247,10 +2193,12 @@ export function App() {
     setViewMode('dag');
     if (nextSurface === 'home') {
       setSidebarSurface('home');
+      setSidebarCollapsed(false);
       setInspectorManualOpen(false);
       return;
     }
     setSidebarSurface(nextSurface);
+    setSidebarCollapsed(true);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
   }, []);
@@ -2258,7 +2206,9 @@ export function App() {
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
     setSidebarSurface('home');
+    setSidebarCollapsed(false);
     setInspectorManualOpen(false);
+    setViewMode('dag');
   }, []);
 
   // ── Task actions ──────────────────────────────────────────
@@ -2921,6 +2871,7 @@ export function App() {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto bg-gray-900 p-4">
           <InvokerTerminal
+            activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
             value={planningInput}
@@ -3087,9 +3038,9 @@ export function App() {
           workerStatus={workerStatus}
           planningSessionCount={planningSessions.length}
           selectedSurface={sidebarSurface}
-          collapsed={effectiveSidebarCollapsed}
+          collapsed={sidebarCollapsed}
           onSelectSurface={handleSelectSidebarSurface}
-          onToggleCollapsed={() => setSidebarCollapsed(!effectiveSidebarCollapsed)}
+          onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
           onOpenSettings={() => {
             cancelPendingSystemSetupAutoOpen();
             setShowSystemSetup(true);
@@ -3167,6 +3118,7 @@ export function App() {
           className="fixed inset-0 z-50 flex flex-col bg-gray-950"
         >
           <InvokerTerminal
+            activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
             value={planningInput}
