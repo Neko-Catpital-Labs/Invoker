@@ -6,11 +6,15 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SKILL_MD="$REPO_ROOT/skills/make-pr/SKILL.md"
 REVIEW_COMPRESSION_MD="$REPO_ROOT/skills/review-compression/SKILL.md"
 
+# Tiny shell helpers only. This test does not parse GitHub payloads.
+# It locks specific policy lines in the skill docs so the regression fails
+# if someone removes the instruction text later.
 fail() {
   echo "FAIL: $*" >&2
   exit 1
 }
 
+# Require one exact literal string in the target markdown file.
 must_contain() {
   local file="$1"
   local needle="$2"
@@ -59,6 +63,7 @@ must_contain "$SKILL_MD" "do not present an unchanged screenshot as proof of the
 # The publication checklist must stop empty PR slices before create/update/stack publish.
 must_contain "$SKILL_MD" "has no file changes against its selected base" "make-pr skill must reject branches with no reviewable file diff"
 must_contain "$SKILL_MD" "contains an empty commit slice" "make-pr skill must reject empty commit slices"
+must_contain "$SKILL_MD" "No custom payload parsing is required here" "make-pr skill must explain that the post-push audit checks rendered PR metadata, not ad hoc payload parsing"
 must_contain "$SKILL_MD" 'node scripts/create-pr.mjs`' "make-pr skill must apply the empty-slice rule to normal PR creation"
 must_contain "$SKILL_MD" "node scripts/create-pr.mjs --update-existing" "make-pr skill must apply the empty-slice rule to PR updates"
 must_contain "$SKILL_MD" "mergify stack push" "make-pr skill must apply the empty-slice rule to Mergify stack publication"

@@ -157,6 +157,7 @@ For Mergify-managed stack PRs, this update path is REQUIRED after `mergify stack
 After `mergify stack push`, you MUST audit the live PRs immediately. Default Mergify-created titles/bodies like an empty description or a bare `Depends-On:` line are a publication failure, not a follow-up chore.
 
 Required post-push audit:
+No custom payload parsing is required here. The check is simple: verify the rendered title/body and the base/head branch names on each live PR.
 
 1. Read each live PR (`gh pr view` or `pr://`) for title, body, base, and head.
 2. If any PR is missing the preferred body sections or the aligned stack title prefix, repair it before yielding.
