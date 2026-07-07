@@ -311,9 +311,9 @@ describe('Parity: API endpoints wire to facade methods', () => {
         getTask: vi.fn(() => makeTask()),
         approve: vi.fn().mockResolvedValue([]),
         reject: vi.fn(),
-        revertConflictResolution: vi.fn(),
+        revertFixSession: vi.fn(),
         provideInput: vi.fn(),
-        beginConflictResolution: vi.fn(() => ({ savedError: 'saved-error' })),
+        beginFixSession: vi.fn(() => ({ savedError: 'saved-error' })),
         setFixAwaitingApproval: vi.fn(),
         retryTask: vi.fn(() => [makeTask()]),
         recreateTask: vi.fn(() => [makeTask()]),
@@ -520,7 +520,7 @@ describe('Parity: CommandService routes to correct orchestrator primitives', () 
       approve: vi.fn(async () => [makeTask()]),
       resumeTaskAfterFixApproval: vi.fn(async () => []),
       reject: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
       provideInput: vi.fn(),
       retryTask: vi.fn(() => [makeTask()]),
       recreateTask: vi.fn(() => [makeTask()]),
@@ -595,17 +595,17 @@ describe('Parity: CommandService routes to correct orchestrator primitives', () 
 
     expect(result.ok).toBe(true);
     expect(orchestrator.reject).toHaveBeenCalledWith('task-1', 'bad');
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
   });
 
-  it('reject routes to revertConflictResolution when pendingFixError exists', async () => {
+  it('reject routes to revertFixSession when pendingFixError exists', async () => {
     orchestrator.getTask.mockReturnValue(
       makeTask({ execution: { pendingFixError: 'merge conflict' } }),
     );
     const result = await commandService.reject(envelope({ taskId: 'task-1' }));
 
     expect(result.ok).toBe(true);
-    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-1', 'merge conflict');
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-1', { savedError: 'merge conflict' });
     expect(orchestrator.reject).not.toHaveBeenCalled();
   });
 

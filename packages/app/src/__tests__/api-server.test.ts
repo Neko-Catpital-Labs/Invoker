@@ -92,9 +92,9 @@ function createMocks() {
       getTask: vi.fn((id: string) => (id === 'task-1' ? makeTask() : undefined)),
       approve: vi.fn().mockResolvedValue([]),
       reject: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
       provideInput: vi.fn(),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'saved-error' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'saved-error' })),
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => [makeTask()]),
       recreateTask: vi.fn(() => [makeTask()]),
@@ -287,7 +287,7 @@ beforeEach(() => {
   mocks.orchestrator.retryTask.mockReturnValue([makeTask()]);
   mocks.orchestrator.recreateTask.mockReturnValue([makeTask()]);
   mocks.orchestrator.recreateDownstream.mockReturnValue([makeTask()]);
-  mocks.orchestrator.beginConflictResolution.mockReturnValue({ savedError: 'saved-error' });
+  mocks.orchestrator.beginFixSession.mockReturnValue({ savedError: 'saved-error' });
   mocks.orchestrator.editTaskCommand.mockReturnValue([makeTask()]);
   mocks.orchestrator.editTaskPrompt.mockReturnValue([makeTask()]);
   mocks.orchestrator.setTaskExternalGatePolicies.mockReturnValue([makeTask()]);
@@ -796,7 +796,7 @@ describe('POST /api/tasks/:id/reject', () => {
     );
     const res = await request(port, 'POST', '/api/tasks/task-1/reject');
     expect(res.status).toBe(200);
-    expect(mocks.orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-1', 'merge conflict');
+    expect(mocks.orchestrator.revertFixSession).toHaveBeenCalledWith('task-1', { savedError: 'merge conflict' });
     expect(mocks.orchestrator.reject).not.toHaveBeenCalled();
   });
 
@@ -830,10 +830,7 @@ describe('POST /api/tasks/:id/reject', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.action).toBe('rejected');
-    expect(mocks.orchestrator.revertConflictResolution).toHaveBeenCalledWith(
-      'task-1',
-      'merge conflict',
-    );
+    expect(mocks.orchestrator.revertFixSession).toHaveBeenCalledWith('task-1', { savedError: 'merge conflict' });
     expect(mocks.orchestrator.reject).not.toHaveBeenCalled();
     expect(mocks.orchestrator.retryTask).not.toHaveBeenCalled();
     expect(mocks.orchestrator.recreateTask).not.toHaveBeenCalled();
