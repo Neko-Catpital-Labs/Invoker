@@ -48,4 +48,5 @@ export * from './auto-fix-intents.js';
 export * from './lifecycle-events.js';
 export * from './pr-maintenance-events.js';
 export * from './workers/github-pr-events-worker.js';
+export * from './workers/pr-maintenance-workers.js';
 export * from './external-worker.js';

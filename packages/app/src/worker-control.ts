@@ -9,13 +9,31 @@ import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
+  GITHUB_PR_EVENTS_WORKER_KIND,
+  MERGIFY_REQUEUE_WORKER_KIND,
+  PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   type WorkerRegistry,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 
+import type { InvokerConfig } from './config.js';
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
+
+export function getAutoStartedOwnerWorkerKinds(config: Pick<InvokerConfig, 'prMaintenance'>): string[] {
+  const kinds: string[] = [...AUTO_STARTED_OWNER_WORKER_KINDS];
+  const wantsSubscriptionPublisher = config.prMaintenance?.coderabbitAddress?.enabled === true
+    || config.prMaintenance?.prConflictRebase?.enabled === true
+    || config.prMaintenance?.mergifyRequeue?.enabled === true
+    || config.prMaintenance?.githubPrEvents?.enabled === true;
+  if (wantsSubscriptionPublisher) kinds.push(GITHUB_PR_EVENTS_WORKER_KIND);
+  if (config.prMaintenance?.coderabbitAddress?.enabled === true) kinds.push(CODERABBIT_ADDRESS_WORKER_KIND);
+  if (config.prMaintenance?.prConflictRebase?.enabled === true) kinds.push(PR_CONFLICT_REBASE_WORKER_KIND);
+  if (config.prMaintenance?.mergifyRequeue?.enabled === true) kinds.push(MERGIFY_REQUEUE_WORKER_KIND);
+  return kinds;
+}
 
 export const AUTO_STARTED_OWNER_WORKER_KINDS = [PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND] as const;
 
@@ -40,6 +58,10 @@ const BUILT_IN_WORKER_KINDS = new Set<string>([
   AUTO_FIX_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  GITHUB_PR_EVENTS_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
+  PR_CONFLICT_REBASE_WORKER_KIND,
+  MERGIFY_REQUEUE_WORKER_KIND,
 ]);
 
 export function createWorkerRuntimeController(options: {

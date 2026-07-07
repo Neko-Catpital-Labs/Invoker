@@ -209,6 +209,49 @@ describe('loadConfig', () => {
     const config = loadConfig();
     expect(config.externalWorkers).toEqual(externalWorkers);
   });
+  it('reads PR maintenance config from user config', () => {
+    const prMaintenance = {
+      githubPrEvents: {
+        enabled: true,
+        repo: 'owner/repo',
+        author: 'octocat',
+        coderabbitLogin: 'coderabbitai[bot]',
+        mergifyLogin: 'mergify[bot]',
+        pollIntervalMs: 60000,
+      },
+      coderabbitAddress: {
+        enabled: true,
+        repoRoot: '/repo',
+        repo: 'owner/repo',
+        author: 'octocat',
+        coderabbitLogin: 'coderabbitai[bot]',
+        trigger: 'subscription',
+      },
+      prConflictRebase: {
+        enabled: true,
+        repoRoot: '/repo',
+        repo: 'owner/repo',
+        author: 'octocat',
+        trigger: 'subscription',
+      },
+      mergifyRequeue: {
+        enabled: true,
+        repoRoot: '/repo',
+        repo: 'owner/repo',
+        author: 'octocat',
+        trigger: 'subscription',
+        pythonExecutable: '/usr/bin/python3',
+        stateFile: '/tmp/mergify-state.jsonl',
+        extraArgs: ['--dry-run'],
+      },
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ prMaintenance }),
+    );
+    const config = loadConfig();
+    expect(config.prMaintenance).toEqual(prMaintenance);
+  });
 
   it('reads imageStorage from user config', () => {
     const imageStorage = {

@@ -237,9 +237,9 @@ import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
-  AUTO_STARTED_OWNER_WORKER_KINDS,
   createLocalWorkerStatusSnapshot,
   createWorkerRuntimeController,
+  getAutoStartedOwnerWorkerKinds,
   type WorkerRuntimeController,
 } from './worker-control.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
@@ -335,8 +335,52 @@ function buildRegisteredOwnerWorkerDeps(
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
     },
+    prMaintenance: buildPrMaintenanceWorkerDepsConfig(invokerConfig),
   };
 }
+function buildPrMaintenanceWorkerDepsConfig(
+  config: InvokerConfig,
+  fallbackRepoRoot?: string,
+): WorkerRuntimeDependencies['prMaintenance'] {
+  const prMaintenance = config.prMaintenance;
+  if (!prMaintenance) return undefined;
+  return {
+    githubPrEvents: prMaintenance.githubPrEvents
+      ? {
+        ...prMaintenance.githubPrEvents,
+        intervalMs: prMaintenance.githubPrEvents.pollIntervalMs,
+      }
+      : undefined,
+    coderabbitAddress: prMaintenance.coderabbitAddress
+      ? {
+        ...prMaintenance.coderabbitAddress,
+        ...(fallbackRepoRoot ? { repoRoot: prMaintenance.coderabbitAddress.repoRoot ?? fallbackRepoRoot } : {}),
+        ...(typeof prMaintenance.coderabbitAddress.pollIntervalMs === 'number'
+          ? { intervalMs: prMaintenance.coderabbitAddress.pollIntervalMs }
+          : {}),
+      }
+      : undefined,
+    prConflictRebase: prMaintenance.prConflictRebase
+      ? {
+        ...prMaintenance.prConflictRebase,
+        ...(fallbackRepoRoot ? { repoRoot: prMaintenance.prConflictRebase.repoRoot ?? fallbackRepoRoot } : {}),
+        ...(typeof prMaintenance.prConflictRebase.pollIntervalMs === 'number'
+          ? { intervalMs: prMaintenance.prConflictRebase.pollIntervalMs }
+          : {}),
+      }
+      : undefined,
+    mergifyRequeue: prMaintenance.mergifyRequeue
+      ? {
+        ...prMaintenance.mergifyRequeue,
+        ...(fallbackRepoRoot ? { repoRoot: prMaintenance.mergifyRequeue.repoRoot ?? fallbackRepoRoot } : {}),
+        ...(typeof prMaintenance.mergifyRequeue.pollIntervalMs === 'number'
+          ? { intervalMs: prMaintenance.mergifyRequeue.pollIntervalMs }
+          : {}),
+      }
+      : undefined,
+  };
+}
+
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
   return registerExternalWorkersFromConfig(
     invokerConfig.externalWorkers,
@@ -1751,7 +1795,7 @@ function startHeadlessMode(): void {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
           ),
-          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
           persistence,
           autoFixRetries: invokerConfig.autoFixRetries,
           canControl: () => !readOnlyMode,
@@ -3525,7 +3569,7 @@ function createEmbeddedTerminalBackendFromConfig(
             await requireTaskExecutor().checkMergeGateStatuses();
           },
         ),
-        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
         persistence,
         autoFixRetries: invokerConfig.autoFixRetries,
         canControl: () => ownerMode,
@@ -4198,13 +4242,13 @@ function createEmbeddedTerminalBackendFromConfig(
         return createLocalWorkerStatusSnapshot({
           registry: createRegisteredWorkerRegistry(),
           persistence,
-          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
         });
       }
       return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
-        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
       });
     });
 

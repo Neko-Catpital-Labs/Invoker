@@ -7,12 +7,14 @@ import type {
   AutoFixWorkerConfig,
 } from './auto-fix-recovery.js';
 import type { CiFailureWorkerStore, CiFailureWorkerSubmitter } from './workers/ci-failure-worker.js';
+import type { GitHubPrEventsStore } from './workers/github-pr-events-worker.js';
+import type { PrMaintenanceWorkersConfig } from './workers/pr-maintenance-workers.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore & CiFailureWorkerStore;
+  store: AutoFixRecoveryStore & CiFailureWorkerStore & GitHubPrEventsStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter;
   /** Operator logger. */
@@ -23,4 +25,6 @@ export interface WorkerRuntimeDependencies {
   reviewGate?: PrStatusReviewGate;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
+  /** Optional PR maintenance worker and event-source config. */
+  prMaintenance?: PrMaintenanceWorkersConfig;
 }

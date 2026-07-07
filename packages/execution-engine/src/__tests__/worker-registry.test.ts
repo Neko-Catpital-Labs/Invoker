@@ -11,6 +11,12 @@ import { registerBuiltinWorkers } from '../builtin-workers.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import { createWorkerRegistry } from '../worker-registry.js';
 import { CI_FAILURE_WORKER_KIND } from '../workers/ci-failure-worker.js';
+import { GITHUB_PR_EVENTS_WORKER_KIND } from '../workers/github-pr-events-worker.js';
+import {
+  CODERABBIT_ADDRESS_WORKER_KIND,
+  MERGIFY_REQUEUE_WORKER_KIND,
+  PR_CONFLICT_REBASE_WORKER_KIND,
+} from '../workers/pr-maintenance-workers.js';
 import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
 
 const silentLogger = {
@@ -25,6 +31,20 @@ const emptyStore: AutoFixRecoveryStore = {
   listWorkflows: () => [],
   loadTasks: () => [],
   listWorkflowMutationIntents: () => [],
+  getWorkerAction: () => undefined,
+  upsertWorkerAction: (action) => ({
+    id: action.id,
+    workerKind: action.workerKind,
+    actionType: action.actionType,
+    subjectType: action.subjectType,
+    subjectId: action.subjectId,
+    externalKey: action.externalKey,
+    status: action.status,
+    attemptCount: action.attemptCount ?? 0,
+    createdAt: action.createdAt ?? '',
+    updatedAt: action.updatedAt ?? '',
+  }),
+  listWorkerActions: () => [],
 };
 
 const noopSubmitter: AutoFixRecoverySubmitter = {
@@ -87,10 +107,18 @@ describe('worker registry', () => {
       AUTO_FIX_WORKER_KIND,
       PR_STATUS_WORKER_KIND,
       CI_FAILURE_WORKER_KIND,
+      GITHUB_PR_EVENTS_WORKER_KIND,
+      CODERABBIT_ADDRESS_WORKER_KIND,
+      PR_CONFLICT_REBASE_WORKER_KIND,
+      MERGIFY_REQUEUE_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
     expect(registry.get(CI_FAILURE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(GITHUB_PR_EVENTS_WORKER_KIND)).toBeDefined();
+    expect(registry.get(CODERABBIT_ADDRESS_WORKER_KIND)).toBeDefined();
+    expect(registry.get(PR_CONFLICT_REBASE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(MERGIFY_REQUEUE_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>());
