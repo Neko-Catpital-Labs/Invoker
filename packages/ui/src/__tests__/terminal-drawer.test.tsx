@@ -357,6 +357,71 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('reports terminal attach, seed, and live output burst perf through the bridge', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'early line\n',
+    });
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      opened: true,
+      session,
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+    (mock.api.reportUiPerf as ReturnType<typeof vi.fn>).mockClear();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_attach',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          hasOutputSnapshot: true,
+        }),
+      );
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_seed_output_snapshot',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          charCount: 'early line\n'.length,
+        }),
+      );
+    });
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        mock.fireTerminalOutput({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          data: 'live line\n',
+        });
+      });
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_output_burst',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          eventCount: 1,
+          charCount: 'live line\n'.length,
+          maxChunkChars: 'live line\n'.length,
+        }),
+      );
+    });
+  });
+
   it('does not duplicate the replay snapshot when the same session re-renders', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',
