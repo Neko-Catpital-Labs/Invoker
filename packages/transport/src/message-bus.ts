@@ -45,6 +45,8 @@ export const Channels = {
   WORKFLOW_LOADED: 'workflow.loaded',
   EXPERIMENT_SPAWNED: 'experiment.spawned',
   EXPERIMENT_SELECTED: 'experiment.selected',
+  /** Shared GitHub PR maintenance events published by the owner. */
+  GITHUB_PR_EVENT: 'github.pr_event',
   /** Orchestrator → surface events (workflow progress cards, etc.) for out-of-process surfaces. */
   SURFACE_EVENT: 'surface.event',
 } as const;
