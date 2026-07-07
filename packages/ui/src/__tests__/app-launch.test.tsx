@@ -39,7 +39,7 @@ describe('App launch (component)', () => {
   it('shows the reskinned empty shell when no plan is loaded', async () => {
     render(<App />);
     expect(await screen.findByText('Plan graph')).toBeInTheDocument();
-    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-input')).not.toBeInTheDocument();
     expect(screen.getByText('What to expect')).toBeInTheDocument();
     expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
     expect(screen.getByTestId('sidebar-home')).toBeInTheDocument();
@@ -115,7 +115,7 @@ describe('App launch (component)', () => {
     fireEvent.click(screen.getByTestId('sidebar-workflows'));
     expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
     expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
-    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-input')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
 

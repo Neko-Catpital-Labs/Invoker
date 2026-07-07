@@ -50,6 +50,22 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
   });
 
+  it('starts a new planning chat empty inside the flat pane', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    // Outer planning frame header + status chip stay in place (the chip lives
+    // beside the label, distinct from the session-rail status text).
+    const outerHeader = screen.getByText('Planning chat window').closest('div')!;
+    expect(within(outerHeader).getByText('Still discussing')).toBeInTheDocument();
+
+    // Inner chat is a flush pane: no nested-card heading/subtitle, empty transcript.
+    expect(screen.queryByRole('heading', { name: 'What do you want to build?' })).not.toBeInTheDocument();
+    const transcript = screen.getByTestId('invoker-terminal-transcript');
+    expect(transcript).toBeEmptyDOMElement();
+    expect(transcript).not.toHaveTextContent('Ask Invoker what you want to build.');
+  });
+
   it('sends plain language when Enter is pressed', async () => {
     render(<App />);
     await openPlanningTerminal();
