@@ -153,7 +153,19 @@ Update an existing PR with:
 node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md --update <pr-number>
 ```
 
-For Mergify-managed stack PRs, this update path is REQUIRED after `mergify stack push`. Do not use `gh pr edit` for stack PR body/title updates, because it bypasses the changed-file scope checks in `create-pr.mjs`.
+For Mergify-managed stack PRs, this update path is REQUIRED after `mergify stack push`. Do not leave the Mergify-generated placeholder title/body live.
+After `mergify stack push`, you MUST audit the live PRs immediately. Default Mergify-created titles/bodies like an empty description or a bare `Depends-On:` line are a publication failure, not a follow-up chore.
+
+Required post-push audit:
+No custom payload parsing is required here. The check is simple: verify the rendered title/body and the base/head branch names on each live PR.
+
+1. Read each live PR (`gh pr view` or `pr://`) for title, body, base, and head.
+2. If any PR is missing the preferred body sections or the aligned stack title prefix, repair it before yielding.
+3. Prefer `node scripts/create-pr.mjs --update-existing ...` when the current local branch matches the published PR branch.
+4. If Mergify generated a remote-only head branch name that `create-pr` cannot map from the local branch, use `gh pr edit --title ... --body-file ...` immediately rather than leaving placeholder metadata live.
+
+Do not stop after `mergify stack push` until the GitHub-side metadata matches the intended titles and bodies.
+
 
 This script handles local image path upload/injection when configured. It also rejects UI-impacting diffs unless the body includes visual proof media.
 
@@ -195,7 +207,8 @@ If review says one published stack slice is still too broad:
 5. Get the real base branch with `gh pr view --json baseRefName --jq .baseRefName`.
 6. Update each PR with `node scripts/create-pr.mjs --title "..." --base <actual-base-branch> --body-file <file> --update-existing`.
 
-Manual `gh pr edit` is a last-resort escape hatch only when `create-pr` itself is broken. The normal path is `create-pr --update-existing`.
+7. Audit the live PR metadata on GitHub. If any replacement PR still shows an empty description or only `Depends-On:`, repair it immediately.
+Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` cannot map the local branch to the published Mergify branch. Use it to repair live metadata immediately, not as the default path.
 
 
 ## Validation
