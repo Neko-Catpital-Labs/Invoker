@@ -302,6 +302,56 @@ describe('EmbeddedTerminalManager', () => {
     expect(snapshot).toBe(`${'a'.repeat(maxSnapshotChars - 'tail'.length)}tail`);
   });
 
+  it('emits session-updated on open, output, and natural exit', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+    const updates: Array<{
+      sessionId: string;
+      status: 'running' | 'exited';
+      outputSnapshot: string;
+      targetKey: string;
+      exitCode?: number;
+    }> = [];
+    mgr.on('session-updated', (record) => {
+      updates.push({
+        sessionId: record.sessionId,
+        status: record.status,
+        outputSnapshot: record.outputSnapshot,
+        targetKey: record.targetKey,
+        exitCode: record.exitCode,
+      });
+    });
+
+    const session = mgr.openOrReuse({ taskId: 'task-updates', spec: {}, cwd: '/tmp/wt' });
+    child.stdout.emit('data', Buffer.from('hello'));
+    child.emit('exit', 4);
+
+    expect(updates).toEqual([
+      expect.objectContaining({
+        sessionId: session.sessionId,
+        status: 'running',
+        outputSnapshot: '',
+        targetKey: expect.any(String),
+      }),
+      expect.objectContaining({
+        sessionId: session.sessionId,
+        status: 'running',
+        outputSnapshot: 'hello',
+        targetKey: expect.any(String),
+      }),
+      expect.objectContaining({
+        sessionId: session.sessionId,
+        status: 'exited',
+        outputSnapshot: 'hello',
+        targetKey: expect.any(String),
+        exitCode: 4,
+      }),
+    ]);
+  });
+
   it('write() forwards data to bash stdin in spawn mode', () => {
     const child = createFakeChild();
     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
@@ -314,6 +364,45 @@ describe('EmbeddedTerminalManager', () => {
 
     expect(res.ok).toBe(true);
     expect(child.__written).toEqual(['ls\n']);
+  });
+
+  it('restoreSpawnSession preserves identity, snapshot, and live input', () => {
+    const spawned = {
+      written: [] as string[],
+      write(data: string) {
+        this.written.push(data);
+      },
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => spawned),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.restoreSpawnSession({
+      sessionId: 'restored-session',
+      taskId: 'task-restored',
+      targetKey: 'target-restored',
+      spec: { command: 'bash', args: ['-l'] },
+      cwd: '/tmp/restored',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      outputSnapshot: 'before restart\n',
+    });
+    const writeResult = mgr.write('restored-session', 'echo after\n');
+
+    expect(session).toMatchObject({
+      sessionId: 'restored-session',
+      taskId: 'task-restored',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      outputSnapshot: 'before restart\n',
+      status: 'running',
+      mode: 'spawn',
+    });
+    expect(backend.spawn).toHaveBeenCalledTimes(1);
+    expect(writeResult.ok).toBe(true);
+    expect(spawned.written).toEqual(['echo after\n']);
   });
 
   it('resize() is accepted by the bash backend as a no-op', () => {
@@ -429,6 +518,35 @@ describe('EmbeddedTerminalManager', () => {
     expect(res.ok).toBe(true);
     expect(child.killed).toBe(true);
     expect(exits).toEqual([{ sessionId: session.sessionId }]);
+  });
+
+  it('closeAll preserveForRestart closes without exit or exited persistence updates', () => {
+    let emitExit: ((exitCode?: number) => void) | undefined;
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(() => emitExit?.(0)),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: vi.fn((opts) => {
+        emitExit = opts.emitExit;
+        return spawned;
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const exits: unknown[] = [];
+    const updates: Array<{ status: 'running' | 'exited' }> = [];
+    mgr.on('exit', (event) => exits.push(event));
+    mgr.on('session-updated', (record) => updates.push({ status: record.status }));
+
+    mgr.openOrReuse({ taskId: 'task-preserve', spec: {}, cwd: '/tmp' });
+    mgr.closeAll({ preserveForRestart: true });
+
+    expect(spawned.close).toHaveBeenCalledTimes(1);
+    expect(exits).toEqual([]);
+    expect(updates).toEqual([{ status: 'running' }]);
+    expect(mgr.list()).toEqual([]);
   });
 
   it('attached mode forwards executor output and routes sendInput', () => {

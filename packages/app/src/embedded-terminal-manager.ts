@@ -19,6 +19,7 @@ import type {
   TerminalOutputEvent,
   TerminalExitEvent,
 } from '@invoker/contracts';
+import type { TerminalSessionRecord } from '@invoker/data-store';
 import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
 
 export type EmbeddedTerminalBackendName = 'bash' | 'pty';
@@ -88,6 +89,10 @@ export interface AttachContext {
   executor: Executor;
 }
 
+
+export interface TerminalSessionPersistenceRecord extends TerminalSessionRecord {
+  spec: TerminalSpec;
+}
 export interface OpenSessionOptions {
   taskId: string;
   spec: TerminalSpec;
@@ -95,7 +100,6 @@ export interface OpenSessionOptions {
   /** When provided, the session attaches to the running executor rather than spawning a child. */
   attach?: AttachContext;
 }
-
 interface BaseSessionState {
   sessionId: string;
   taskId: string;
@@ -103,6 +107,7 @@ interface BaseSessionState {
   spec: TerminalSpec;
   cwd: string;
   createdAt: string;
+  updatedAt: string;
   status: 'running' | 'exited';
   exitCode?: number;
   outputSnapshot: string;
@@ -129,6 +134,26 @@ export interface EmbeddedTerminalManagerOptions {
   defaultShell?: string;
 }
 
+
+function describePersistenceRecord(state: SessionState): TerminalSessionPersistenceRecord {
+  return {
+    sessionId: state.sessionId,
+    taskId: state.taskId,
+    targetKey: state.targetKey,
+    status: state.status,
+    exitCode: state.exitCode,
+    cwd: state.cwd,
+    command: state.spec.command,
+    args: state.spec.args,
+    linuxTerminalTail: state.spec.linuxTerminalTail,
+    mode: state.mode,
+    attached: state.mode === 'attached',
+    outputSnapshot: state.outputSnapshot,
+    createdAt: state.createdAt,
+    updatedAt: state.updatedAt,
+    spec: state.spec,
+  };
+}
 function describeSession(state: SessionState): TerminalSessionDescriptor {
   return {
     sessionId: state.sessionId,
@@ -248,6 +273,7 @@ export function createPtyTerminalBackend(
 export class EmbeddedTerminalManager extends EventEmitter {
   private readonly sessions = new Map<string, SessionState>();
   private readonly targetIndex = new Map<string, string>();
+  private readonly preserveForRestartSessionIds = new Set<string>();
   private readonly backend: EmbeddedTerminalBackend;
   private readonly defaultShell: string;
 
@@ -265,15 +291,8 @@ export class EmbeddedTerminalManager extends EventEmitter {
    */
   openOrReuse(opts: OpenSessionOptions): TerminalSessionDescriptor {
     const targetKey = buildTargetKey(opts);
-    const existingId = this.targetIndex.get(targetKey);
-    if (existingId) {
-      const existing = this.sessions.get(existingId);
-      if (existing && existing.status === 'running') {
-        return describeSession(existing);
-      }
-      this.targetIndex.delete(targetKey);
-      if (existing) this.sessions.delete(existingId);
-    }
+    const existing = this.getRunningDescriptorForTarget(targetKey);
+    if (existing) return existing;
 
     const sessionId = randomUUID();
     const createdAt = new Date().toISOString();
@@ -284,6 +303,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       spec: opts.spec,
       cwd: opts.cwd,
       createdAt,
+      updatedAt: createdAt,
       status: 'running' as const,
       outputSnapshot: '',
     };
@@ -318,66 +338,38 @@ export class EmbeddedTerminalManager extends EventEmitter {
           /* unsubscribe is best-effort */
         }
       }
+      this.emitSessionUpdated(state);
       return describeSession(state);
     }
 
-    const pendingProcess: SpawnedTerminalProcess = {
-      write() {
-        throw new Error(`Session "${sessionId}" process is not ready.`);
-      },
-      resize() {
-        // Resize before the backend returns a process handle is ignored.
-      },
-      close() {
-        // There is no process handle to close yet.
-      },
-    };
-    const state: SpawnSessionState = {
-      ...base,
-      mode: 'spawn',
-      backend: this.backend.name,
-      process: pendingProcess,
-    };
-    this.sessions.set(sessionId, state);
-    this.targetIndex.set(targetKey, sessionId);
+    return this.registerSpawnSession(base);
+  }
 
-    const noPendingExit = Symbol('no-pending-exit');
-    let pendingExitCode: number | undefined | typeof noPendingExit = noPendingExit;
-    try {
-      const process = this.backend.spawn({
-        spec: opts.spec,
-        cwd: opts.cwd,
-        defaultShell: this.defaultShell,
-        emitOutput: (data) => this.emitOutput(state, data),
-        emitExit: (exitCode) => {
-          if (state.process === pendingProcess) {
-            pendingExitCode = exitCode;
-            return;
-          }
-          this.finalizeSession(state, exitCode);
-        },
-      });
-      state.process = process;
-      if (state.status === 'exited') {
-        try {
-          process.close();
-        } catch {
-          /* process cleanup is best-effort */
-        }
-      }
-    } catch (err) {
-      this.sessions.delete(sessionId);
-      if (this.targetIndex.get(targetKey) === sessionId) {
-        this.targetIndex.delete(targetKey);
-      }
-      throw err;
-    }
+  restoreSpawnSession(seed: {
+    sessionId: string;
+    taskId: string;
+    targetKey: string;
+    spec: TerminalSpec;
+    cwd: string;
+    createdAt: string;
+    outputSnapshot: string;
+  }): TerminalSessionDescriptor {
+    const existingSession = this.sessions.get(seed.sessionId);
+    if (existingSession) return describeSession(existingSession);
+    const existingTarget = this.getRunningDescriptorForTarget(seed.targetKey);
+    if (existingTarget) return existingTarget;
 
-    if (pendingExitCode !== noPendingExit) {
-      this.finalizeSession(state, pendingExitCode);
-    }
-
-    return describeSession(state);
+    return this.registerSpawnSession({
+      sessionId: seed.sessionId,
+      taskId: seed.taskId,
+      targetKey: seed.targetKey,
+      spec: seed.spec,
+      cwd: seed.cwd,
+      createdAt: seed.createdAt,
+      updatedAt: new Date().toISOString(),
+      status: 'running' as const,
+      outputSnapshot: seed.outputSnapshot,
+    });
   }
 
   list(): TerminalSessionDescriptor[] {
@@ -387,6 +379,11 @@ export class EmbeddedTerminalManager extends EventEmitter {
   get(sessionId: string): TerminalSessionDescriptor | undefined {
     const state = this.sessions.get(sessionId);
     return state ? describeSession(state) : undefined;
+  }
+
+  getPersistenceRecord(sessionId: string): TerminalSessionPersistenceRecord | undefined {
+    const state = this.sessions.get(sessionId);
+    return state ? describePersistenceRecord(state) : undefined;
   }
 
   write(sessionId: string, data: string): { ok: boolean; reason?: string } {
@@ -433,16 +430,110 @@ export class EmbeddedTerminalManager extends EventEmitter {
     return { ok: true };
   }
 
-  closeAll(): void {
+  closeAll(options?: { preserveForRestart?: boolean }): void {
+    if (options?.preserveForRestart) {
+      for (const state of Array.from(this.sessions.values())) {
+        this.preserveForRestartSessionIds.add(state.sessionId);
+        if (state.mode === 'spawn') {
+          state.process.close();
+        } else {
+          try {
+            state.unsubscribeOutput();
+          } catch {
+            /* unsubscribe is best-effort */
+          }
+        }
+      }
+      this.sessions.clear();
+      this.targetIndex.clear();
+      return;
+    }
+
     for (const state of Array.from(this.sessions.values())) {
       this.finalizeSession(state, undefined);
     }
   }
 
+  private getRunningDescriptorForTarget(targetKey: string): TerminalSessionDescriptor | undefined {
+    const existingId = this.targetIndex.get(targetKey);
+    if (!existingId) return undefined;
+    const existing = this.sessions.get(existingId);
+    if (existing && existing.status === 'running') return describeSession(existing);
+    this.targetIndex.delete(targetKey);
+    if (existing) this.sessions.delete(existingId);
+    return undefined;
+  }
+
+  private registerSpawnSession(
+    base: Omit<SpawnSessionState, 'backend' | 'process' | 'mode'>,
+  ): TerminalSessionDescriptor {
+    const pendingProcess: SpawnedTerminalProcess = {
+      write() {
+        throw new Error(`Session "${base.sessionId}" process is not ready.`);
+      },
+      resize() {
+        // Resize before the backend returns a process handle is ignored.
+      },
+      close() {
+        // There is no process handle to close yet.
+      },
+    };
+    const state: SpawnSessionState = {
+      ...base,
+      mode: 'spawn',
+      backend: this.backend.name,
+      process: pendingProcess,
+    };
+    this.sessions.set(state.sessionId, state);
+    this.targetIndex.set(state.targetKey, state.sessionId);
+
+    const noPendingExit = Symbol('no-pending-exit');
+    let pendingExitCode: number | undefined | typeof noPendingExit = noPendingExit;
+    try {
+      const process = this.backend.spawn({
+        spec: state.spec,
+        cwd: state.cwd,
+        defaultShell: this.defaultShell,
+        emitOutput: (data) => this.emitOutput(state, data),
+        emitExit: (exitCode) => {
+          if (state.process === pendingProcess) {
+            pendingExitCode = exitCode;
+            return;
+          }
+          this.finalizeSession(state, exitCode);
+        },
+      });
+      state.process = process;
+      if (state.status === 'exited') {
+        try {
+          process.close();
+        } catch {
+          /* process cleanup is best-effort */
+        }
+      }
+    } catch (err) {
+      this.sessions.delete(state.sessionId);
+      if (this.targetIndex.get(state.targetKey) === state.sessionId) {
+        this.targetIndex.delete(state.targetKey);
+      }
+      throw err;
+    }
+
+    if (pendingExitCode !== noPendingExit) {
+      this.finalizeSession(state, pendingExitCode);
+    } else if (state.status === 'running') {
+      this.emitSessionUpdated(state);
+    }
+
+    return describeSession(state);
+  }
+
   private finalizeSession(state: SessionState, exitCode: number | undefined): void {
-    if (state.status === 'exited') return;
+    if (state.status === 'exited' || this.preserveForRestartSessionIds.has(state.sessionId)) return;
     state.status = 'exited';
     state.exitCode = exitCode;
+    state.updatedAt = new Date().toISOString();
+    this.emitSessionUpdated(state);
 
     if (state.mode === 'spawn') {
       state.process.close();
@@ -469,12 +560,18 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
   private emitOutput(state: SessionState, data: string): void {
     state.outputSnapshot = trimOutputSnapshot(state.outputSnapshot + data);
+    state.updatedAt = new Date().toISOString();
     const payload: TerminalOutputEvent = {
       sessionId: state.sessionId,
       taskId: state.taskId,
       data,
     };
     this.emit('output', payload);
+    this.emitSessionUpdated(state);
+  }
+
+  private emitSessionUpdated(state: SessionState): void {
+    this.emit('session-updated', describePersistenceRecord(state));
   }
 }
 
