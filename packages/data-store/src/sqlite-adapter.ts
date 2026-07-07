@@ -33,7 +33,7 @@ import type {
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
-import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, SearchResultItem, SearchOptions } from '@invoker/contracts';
 import {
   assertTaskConsistent,
   assertWorkflowConsistent,
@@ -60,6 +60,8 @@ import type {
   WorkerActionWrite,
   TerminalSessionPatch,
   TerminalSessionRecord,
+  InAppPlanningSessionPatch,
+  InAppPlanningSessionRecord,
 } from './adapter.js';
 import {
   SCHEMA_DDL,
@@ -391,6 +393,28 @@ type TerminalSessionRow = {
   updated_at?: unknown;
 };
 
+type InAppPlanningSessionRow = {
+  session_id?: unknown;
+  title?: unknown;
+  preset_key?: unknown;
+  status?: unknown;
+  draft_plan_summary_json?: unknown;
+  submitted_workflow_id?: unknown;
+  submitted_plan_name?: unknown;
+  pending_response?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
+};
+
+type InAppPlanningMessageRow = {
+  session_id?: unknown;
+  message_id?: unknown;
+  role?: unknown;
+  text?: unknown;
+  tone?: unknown;
+  created_at?: unknown;
+};
+
 function parseTerminalArgsJson(value: unknown): string[] {
   if (typeof value !== 'string' || value.length === 0) return [];
   try {
@@ -399,6 +423,53 @@ function parseTerminalArgsJson(value: unknown): string[] {
   } catch {
     return [];
   }
+}
+
+function isInAppPlanningSessionStatus(value: unknown): value is InAppPlanningSessionStatus {
+  return value === 'still_discussing'
+    || value === 'waiting_for_answer'
+    || value === 'draft_ready'
+    || value === 'submitted';
+}
+
+function isInAppPlanningMessageRole(value: unknown): value is InAppPlanningChatLine['role'] {
+  return value === 'user' || value === 'assistant' || value === 'system';
+}
+
+function isInAppPlanningMessageTone(value: unknown): value is InAppPlanningChatLine['tone'] {
+  return value === undefined
+    || value === null
+    || value === 'muted'
+    || value === 'error'
+    || value === 'success';
+}
+
+function parseInAppPlanningPlanSummary(value: unknown): InAppPlanningPlanSummary | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('planning summary must be an object');
+  }
+  const candidate = parsed as Partial<InAppPlanningPlanSummary>;
+  if (
+    typeof candidate.name !== 'string'
+    || typeof candidate.taskCount !== 'number'
+    || !Array.isArray(candidate.steps)
+    || !candidate.steps.every((step) => typeof step === 'string')
+    || (
+      candidate.workflowCount !== undefined
+      && typeof candidate.workflowCount !== 'number'
+    )
+  ) {
+    throw new Error('planning summary has invalid shape');
+  }
+  return {
+    name: candidate.name,
+    taskCount: candidate.taskCount,
+    ...(candidate.workflowCount === undefined ? {} : { workflowCount: candidate.workflowCount }),
+    steps: candidate.steps,
+  };
 }
 
 export class SQLiteAdapter implements PersistenceAdapter {
@@ -1821,6 +1892,124 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.dirty = true;
   }
 
+  upsertInAppPlanningSession(record: InAppPlanningSessionRecord): void {
+    this.runTransaction(() => {
+      this.db.run(
+        `INSERT INTO in_app_planning_sessions (
+          session_id,
+          title,
+          preset_key,
+          status,
+          draft_plan_summary_json,
+          submitted_workflow_id,
+          submitted_plan_name,
+          pending_response,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET
+          title = excluded.title,
+          preset_key = excluded.preset_key,
+          status = excluded.status,
+          draft_plan_summary_json = excluded.draft_plan_summary_json,
+          submitted_workflow_id = excluded.submitted_workflow_id,
+          submitted_plan_name = excluded.submitted_plan_name,
+          pending_response = excluded.pending_response,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at`,
+        [
+          record.id,
+          record.title,
+          record.presetKey,
+          record.status,
+          record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
+          record.submittedWorkflowId ?? null,
+          record.submittedPlanName ?? null,
+          record.pendingResponse ? 1 : 0,
+          record.createdAt,
+          record.updatedAt,
+        ],
+      );
+      this.replaceInAppPlanningMessages(record.id, record.messages, record.updatedAt);
+    });
+  }
+
+  listInAppPlanningSessions(): InAppPlanningSessionRecord[] {
+    const rows = this.queryAll(
+      'SELECT * FROM in_app_planning_sessions ORDER BY updated_at DESC, created_at DESC',
+    ) as InAppPlanningSessionRow[];
+    const records: InAppPlanningSessionRecord[] = [];
+    for (const row of rows) {
+      const record = this.mapInAppPlanningSessionRow(row);
+      if (record) records.push(record);
+    }
+    return records;
+  }
+
+  loadInAppPlanningSession(sessionId: string): InAppPlanningSessionRecord | undefined {
+    const row = this.queryOne('SELECT * FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
+    return row ? this.mapInAppPlanningSessionRow(row as InAppPlanningSessionRow) : undefined;
+  }
+
+  updateInAppPlanningSession(sessionId: string, patch: InAppPlanningSessionPatch): void {
+    this.ensureWritable();
+    const updateSession = (): void => {
+      const setClauses: string[] = [];
+      const values: unknown[] = [];
+      if (Object.hasOwn(patch, 'title')) {
+        setClauses.push('title = ?');
+        values.push(patch.title ?? null);
+      }
+      if (Object.hasOwn(patch, 'status')) {
+        setClauses.push('status = ?');
+        values.push(patch.status ?? null);
+      }
+      if (Object.hasOwn(patch, 'draftPlanSummary')) {
+        setClauses.push('draft_plan_summary_json = ?');
+        values.push(patch.draftPlanSummary ? JSON.stringify(patch.draftPlanSummary) : null);
+      }
+      if (Object.hasOwn(patch, 'submittedWorkflowId')) {
+        setClauses.push('submitted_workflow_id = ?');
+        values.push(patch.submittedWorkflowId ?? null);
+      }
+      if (Object.hasOwn(patch, 'submittedPlanName')) {
+        setClauses.push('submitted_plan_name = ?');
+        values.push(patch.submittedPlanName ?? null);
+      }
+      if (Object.hasOwn(patch, 'pendingResponse')) {
+        setClauses.push('pending_response = ?');
+        values.push(patch.pendingResponse ? 1 : 0);
+      }
+      if (Object.hasOwn(patch, 'updatedAt')) {
+        setClauses.push('updated_at = ?');
+        values.push(patch.updatedAt ?? null);
+      }
+      if (setClauses.length > 0) {
+        values.push(sessionId);
+        this.db.run(`UPDATE in_app_planning_sessions SET ${setClauses.join(', ')} WHERE session_id = ?`, values);
+      }
+      if (patch.messages) {
+        const updatedAt = patch.updatedAt ?? new Date().toISOString();
+        this.replaceInAppPlanningMessages(sessionId, patch.messages, updatedAt);
+      }
+    };
+
+    if (patch.messages) {
+      this.runTransaction(updateSession);
+      return;
+    }
+
+    updateSession();
+    this.dirty = true;
+  }
+
+  deleteInAppPlanningSession(sessionId: string): void {
+    this.runTransaction(() => {
+      this.db.run('DELETE FROM in_app_planning_messages WHERE session_id = ?', [sessionId]);
+      this.db.run('DELETE FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
+    });
+  }
+
   private getTaskIdsForWorkflow(workflowId: string): string[] {
     const rows = this.queryAll(
       'SELECT id FROM tasks WHERE workflow_id = ?',
@@ -3060,6 +3249,88 @@ export class SQLiteAdapter implements PersistenceAdapter {
       createdAt,
       updatedAt,
     };
+  }
+
+  private replaceInAppPlanningMessages(
+    sessionId: string,
+    messages: InAppPlanningChatLine[],
+    fallbackCreatedAt: string,
+  ): void {
+    this.db.run('DELETE FROM in_app_planning_messages WHERE session_id = ?', [sessionId]);
+    for (const message of messages) {
+      this.db.run(
+        `INSERT INTO in_app_planning_messages (
+          session_id,
+          message_id,
+          role,
+          text,
+          tone,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          sessionId,
+          message.id,
+          message.role,
+          message.text,
+          message.tone ?? null,
+          message.createdAt ?? fallbackCreatedAt,
+        ],
+      );
+    }
+  }
+
+  private mapInAppPlanningSessionRow(row: InAppPlanningSessionRow): InAppPlanningSessionRecord | undefined {
+    try {
+      const id = typeof row.session_id === 'string' ? row.session_id : '';
+      const title = typeof row.title === 'string' ? row.title : '';
+      const presetKey = typeof row.preset_key === 'string' ? row.preset_key : '';
+      const createdAt = typeof row.created_at === 'string' ? row.created_at : '';
+      const updatedAt = typeof row.updated_at === 'string' ? row.updated_at : '';
+      if (!id || !title || !presetKey || !createdAt || !updatedAt || !isInAppPlanningSessionStatus(row.status)) {
+        return undefined;
+      }
+
+      const messageRows = this.queryAll(
+        'SELECT * FROM in_app_planning_messages WHERE session_id = ? ORDER BY message_id ASC',
+        [id],
+      ) as InAppPlanningMessageRow[];
+      const draftPlanSummary = parseInAppPlanningPlanSummary(row.draft_plan_summary_json);
+      const messages: InAppPlanningChatLine[] = [];
+      for (const messageRow of messageRows) {
+        if (
+          typeof messageRow.message_id !== 'number'
+          || !isInAppPlanningMessageRole(messageRow.role)
+          || typeof messageRow.text !== 'string'
+          || typeof messageRow.created_at !== 'string'
+          || !isInAppPlanningMessageTone(messageRow.tone)
+        ) {
+          return undefined;
+        }
+        messages.push({
+          id: messageRow.message_id,
+          role: messageRow.role,
+          text: messageRow.text,
+          ...(messageRow.tone ? { tone: messageRow.tone } : {}),
+          createdAt: messageRow.created_at,
+        });
+      }
+
+      return {
+        id,
+        title,
+        presetKey,
+        status: row.status,
+        messages,
+        ...(draftPlanSummary ? { draftPlanSummary } : {}),
+        ...(typeof row.submitted_workflow_id === 'string' ? { submittedWorkflowId: row.submitted_workflow_id } : {}),
+        ...(typeof row.submitted_plan_name === 'string' ? { submittedPlanName: row.submitted_plan_name } : {}),
+        pendingResponse: row.pending_response === 1,
+        createdAt,
+        updatedAt,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   private rowToAttempt(row: any): Attempt {
