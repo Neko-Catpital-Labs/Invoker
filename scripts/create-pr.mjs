@@ -20,7 +20,7 @@
  *   1. Publish stack branches with `mergify stack push`
  *   2. Switch to the created stack branch if needed
  *   3. Run `node scripts/create-pr.mjs --title "..." --base <branch> --body-file <file> --update-existing`
- *
+ *   4. `create-pr` refreshes the machine-managed full-stack comment across every PR in the connected stack
  * Image injection:
  *   Scans the body for markdown image/link patterns where the URL is a local
  *   file path. Uploads those files to Cloudflare R2 and replaces the paths
@@ -41,6 +41,7 @@ import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import aws4 from 'aws4';
+import { syncStackCommentsForPr } from './sync-stack-comments.mjs';
 import { getPrAtomicityBlockers, getPrBodyWarnings, validatePrBody } from './validate-pr-body.mjs';
 
 const DEFAULT_BASE_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'origin';
@@ -152,7 +153,7 @@ Stack flow:
   1. Publish stack branches with \`mergify stack push\`
   2. Switch to the created stack branch if needed
   3. Run \`node scripts/create-pr.mjs --title "[Graph Blanking](3a) <slice title>" --base <branch> --body-file <file> --update-existing\`
-
+  4. \`create-pr\` refreshes the machine-managed full-stack comment across every PR in the connected stack
 PR body schema:
   Required: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan
   Test Plan and Revert Plan content must sit inside collapsed <details><summary>Test Plan</summary> / <summary>Revert Plan</summary> blocks.
@@ -357,6 +358,7 @@ function runGit(args, options = {}) {
 function runGh(args, options = {}) {
   return execFileSync('gh', args, {
     encoding: 'utf-8',
+    maxBuffer: 20 * 1024 * 1024,
     ...options,
   });
 }
@@ -750,7 +752,7 @@ async function createPr(nwo, title, base, body, dryRun) {
   if (dryRun) {
     console.error(`[dry-run] Would create PR: "${title}" (${head} → ${base})`);
     console.error(`[dry-run] Body length: ${body.length} chars`);
-    return 'https://DRY-RUN/pull/0';
+    return { url: 'https://DRY-RUN/pull/0', number: 0 };
   }
 
   const payload = JSON.stringify({ title, body, head, base });
@@ -758,14 +760,14 @@ async function createPr(nwo, title, base, body, dryRun) {
     input: payload,
   });
   const pr = JSON.parse(result);
-  return pr.html_url;
+  return { url: String(pr.html_url), number: Number(pr.number) };
 }
 
 async function updatePr(nwo, prNum, title, body, dryRun) {
   if (dryRun) {
     console.error(`[dry-run] Would update PR #${prNum}: "${title}"`);
     console.error(`[dry-run] Body length: ${body.length} chars`);
-    return `https://DRY-RUN/pull/${prNum}`;
+    return { url: `https://DRY-RUN/pull/${prNum}`, number: Number(prNum) };
   }
 
   const payload = JSON.stringify({ title, body });
@@ -773,7 +775,7 @@ async function updatePr(nwo, prNum, title, body, dryRun) {
     input: payload,
   });
   const pr = JSON.parse(result);
-  return pr.html_url;
+  return { url: String(pr.html_url), number: Number(pr.number ?? prNum) };
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -835,11 +837,14 @@ async function main() {
     gitPush(args.dryRun);
   }
 
-  const prUrl = updatePrNumber
+  const pr = updatePrNumber
     ? await updatePr(nwo, updatePrNumber, args.title, body, args.dryRun)
     : await createPr(nwo, args.title, args.base, body, args.dryRun);
+  if (isStackedPrContext(args.base, mergifyState)) {
+    syncStackCommentsForPr(nwo, pr.number, { dryRun: args.dryRun });
+  }
 
-  console.log(prUrl);
+  console.log(pr.url);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
