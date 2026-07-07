@@ -122,8 +122,8 @@ export async function buildWorkRequest(
   };
 
   const actionType = host.determineActionType(task);
-  const executionAgent = task.config.executionAgent?.trim() || host.getDefaultExecutionAgent();
-  const executionModel = task.config.executionModel?.trim() || host.getDefaultExecutionModel();
+  const executionAgent = host.resolveExecutionAgent(task);
+  const executionModel = host.resolveExecutionModel(task);
   const request: WorkRequest = {
     requestId: randomUUID(),
     actionId: task.id,

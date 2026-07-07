@@ -743,7 +743,7 @@ describe('Orchestrator', () => {
       expect(persistence.listWorkflows().find((workflow) => workflow.id === workflowId)?.status).toBe('running');
     });
 
-    it('keeps auto-fix eligible after prior attempts and resets attempts when a workflow is recreated', () => {
+    it('keeps auto-fix eligibility after a workflow is recreated', () => {
       orchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
@@ -765,13 +765,11 @@ describe('Orchestrator', () => {
         (task) => task.config.workflowId === workflowId && task.id.endsWith('/t1'),
       )!.id;
 
-      persistence.updateTask(taskId, { status: 'failed', execution: { autoFixAttempts: 3 } });
+      persistence.updateTask(taskId, { status: 'failed' });
       orchestrator.syncAllFromDb();
       expect(orchestrator.shouldAutoFix(taskId)).toBe(true);
 
       orchestrator.recreateWorkflow(workflowId);
-
-      expect(orchestrator.getTask(taskId)?.execution.autoFixAttempts).toBe(0);
       persistence.updateTask(taskId, { status: 'failed' });
       orchestrator.syncAllFromDb();
       expect(orchestrator.shouldAutoFix(taskId)).toBe(true);
@@ -1119,7 +1117,6 @@ describe('Orchestrator', () => {
       );
 
       expect(repro.getTask(lateId)?.status).toBe('pending');
-      expect(repro.getTask(lateId)?.execution.autoFixAttempts).toBe(0);
       expect(repro.getAllTasks().some((task) => task.id.includes('late-exp-fix-'))).toBe(false);
     });
 
@@ -3475,7 +3472,7 @@ describe('Orchestrator', () => {
   // ── Auto-Fix ────────────────────────────────────────────
 
   describe('auto-fix via synthetic spawn_experiments', () => {
-    it('uses positive default auto-fix config as an uncapped enable switch for older failed tasks', () => {
+    it('shouldAutoFix only depends on failed eligible tasks and positive retry config', () => {
       const hydratePersistence = new InMemoryPersistence();
       const hydrateBus = new InMemoryBus();
 
@@ -3489,25 +3486,24 @@ describe('Orchestrator', () => {
         execution: {
           exitCode: 1,
           error: 'boom',
-          autoFixAttempts: 2,
         },
       });
 
-      const hydratedOrchestrator = new Orchestrator({
+      const disabledOrchestrator = new Orchestrator({
         persistence: hydratePersistence,
         messageBus: hydrateBus,
-        defaultAutoFixRetries: 1,
+        defaultAutoFixRetries: 0,
       });
+      disabledOrchestrator.syncFromDb('wf-hydrated');
+      expect(disabledOrchestrator.shouldAutoFix('t1')).toBe(false);
 
-      hydratedOrchestrator.syncFromDb('wf-hydrated');
-
-      expect(hydratedOrchestrator.getAutoFixRetryBudget('t1')).toBe(Number.POSITIVE_INFINITY);
-      expect(hydratedOrchestrator.shouldAutoFix('t1')).toBe(true);
-
-      hydratePersistence.updateTask('t1', { execution: { autoFixAttempts: 100 } });
-      hydratedOrchestrator.syncFromDb('wf-hydrated');
-
-      expect(hydratedOrchestrator.shouldAutoFix('t1')).toBe(true);
+      const enabledOrchestrator = new Orchestrator({
+        persistence: hydratePersistence,
+        messageBus: hydrateBus,
+        defaultAutoFixRetries: 3,
+      });
+      enabledOrchestrator.syncFromDb('wf-hydrated');
+      expect(enabledOrchestrator.shouldAutoFix('t1')).toBe(true);
     });
 
     it('plain failed tasks stay failed in workflow-core', () => {

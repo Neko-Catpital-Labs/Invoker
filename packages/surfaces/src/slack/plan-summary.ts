@@ -23,8 +23,6 @@ interface PlanTask {
   dependencies: string[];
 }
 
-const MAX_STEP_WORDS = 8;
-
 // ── Public API ──────────────────────────────────────────────
 
 export function summarizePlanText(planText: string): PlanSummary | null {
@@ -140,8 +138,5 @@ function topoSort(tasks: PlanTask[]): PlanTask[] {
 }
 
 function summarizeDescription(description: string): string {
-  const normalized = description.replace(/\s+/g, ' ').trim();
-  const words = normalized.split(' ').filter(Boolean);
-  if (words.length <= MAX_STEP_WORDS) return normalized;
-  return `${words.slice(0, MAX_STEP_WORDS).join(' ')} …`;
+  return description.replace(/\s+/g, ' ').trim();
 }

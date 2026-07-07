@@ -274,6 +274,28 @@ describe('SQLiteAdapter', () => {
         'tasks.id:CASCADE',
       ]));
     });
+
+    it('does not create auto_fix_attempts on fresh task tables', () => {
+      expect(tableColumns(adapter, 'tasks')).not.toContain('auto_fix_attempts');
+    });
+
+    it('drops legacy auto_fix_attempts columns when reopening writable databases', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-autofix-attempts-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const oldDb = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        (oldDb as any).db.run('ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0');
+        expect(tableColumns(oldDb, 'tasks')).toContain('auto_fix_attempts');
+        oldDb.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(tableColumns(reopened, 'tasks')).not.toContain('auto_fix_attempts');
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('worker action persistence', () => {

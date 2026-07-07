@@ -19,6 +19,12 @@ import {
   type ReviewGateCiContext,
   type ReviewGateLineageFields,
 } from '../auto-fix-intents.js';
+import {
+  autoFixAttemptLedgerKeyFromLifecycleEvent,
+  createAutoFixAttemptLedger,
+  type AutoFixAttemptLedger,
+} from '../auto-fix-attempt-ledger.js';
+import { normalizeAutoFixRetryBudget } from '../auto-fix-gating.js';
 import type {
   ReviewGateCiFailedLifecycleEvent,
   ReviewGateFailedCheck,
@@ -63,9 +69,11 @@ export interface CiFailureWorkerPolicyOptions {
   store: CiFailureWorkerStore;
   submitter: CiFailureWorkerSubmitter;
   logger: Logger;
+  /** Maximum auto-fix attempts per failed task. Positive finite values are caps; zero disables CI auto-fix. */
   defaultAutoFixRetries?: number;
   getAutoFixAgent?: () => string | undefined;
   getAutoFixExecutionModel?: () => string | undefined;
+  attemptLedger: AutoFixAttemptLedger;
   getRetryBudget?: (task: TaskState) => number;
   drainEvents?: () => ReviewGateCiFailedLifecycleEvent[];
 }
@@ -75,9 +83,9 @@ export interface CiFailureWorkerOptions {
   instanceId?: string;
   intervalMs?: number;
   installSignalHandlers?: boolean;
+  ciFailure?: Omit<CiFailureWorkerPolicyOptions, 'logger' | 'drainEvents' | 'attemptLedger'> & { readonly attemptLedger?: AutoFixAttemptLedger };
   tickOnStart?: boolean;
   messageBus?: MessageBus;
-  ciFailure?: Omit<CiFailureWorkerPolicyOptions, 'logger' | 'drainEvents'>;
   onTick?: WorkerTick;
 }
 /** Register the built-in CI-failure repair worker. */
@@ -96,6 +104,7 @@ export function registerCiFailureWorker(
           submitter: deps.submitter,
           defaultAutoFixRetries: deps.autoFix?.defaultAutoFixRetries,
           getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
+          attemptLedger: deps.autoFix?.attemptLedger,
           getAutoFixExecutionModel: deps.autoFix?.getAutoFixExecutionModel,
         },
       }),
@@ -135,11 +144,9 @@ export function ciFailureActionKey(event: Pick<
 }
 
 function retryBudgetForTask(task: TaskState, options: CiFailureWorkerPolicyOptions): number {
-  const raw = options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0;
-  if (raw === Number.POSITIVE_INFINITY) return Number.POSITIVE_INFINITY;
-  if (!Number.isFinite(raw)) return 0;
-  return Math.floor(raw) > 0 ? Number.POSITIVE_INFINITY : 0;
+  return normalizeAutoFixRetryBudget(options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0);
 }
+
 
 function retryBudgetLabel(budget: number): number | 'unlimited' {
   return budget === Number.POSITIVE_INFINITY ? 'unlimited' : budget;
@@ -391,18 +398,7 @@ async function handleCiFailureEvent(
     return;
   }
 
-  const maxAttempts = retryBudgetForTask(task, options);
-  if (maxAttempts <= 0) {
-    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because retry budget is disabled', {
-      reason: 'retry-budget-disabled',
-      maxAttempts,
-    });
-    logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
-      reason: 'retry-budget-disabled',
-      maxAttempts,
-    });
-    return;
-  }
+  const workerRetryBudget = retryBudgetForTask(task, options);
 
   if (shouldSkipExistingAction(options, event)) return;
 
@@ -433,8 +429,37 @@ async function handleCiFailureEvent(
     return;
   }
 
+  const attemptDecision = options.attemptLedger.consume(
+    autoFixAttemptLedgerKeyFromLifecycleEvent(event),
+    workerRetryBudget,
+  );
+  if (!attemptDecision.allowed) {
+    const summary = attemptDecision.reason === 'worker-retry-budget-disabled'
+      ? 'Skipped CI repair because retry budget is disabled'
+      : 'Skipped CI repair because retry budget is exhausted';
+    recordCiFailureAction(options, event, 'skipped', summary, {
+      reason: attemptDecision.reason,
+      workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+    });
+    logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
+      reason: attemptDecision.reason,
+      workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+    });
+    return;
+  }
+
   const configuredAgent = options.getAutoFixAgent?.()?.trim();
   const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+  options.logger.debug?.(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-attempt-consumed`, {
+    module: 'ci-failure-worker',
+    taskId: event.taskId,
+    workflowId: event.workflowId,
+    generation: event.generation,
+    attemptId: event.attemptId ?? null,
+    attemptsBefore: attemptDecision.attemptsBefore,
+    attemptsAfter: attemptDecision.attemptsAfter,
+    workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+  });
   const configuredExecutionModel = options.getAutoFixExecutionModel?.()?.trim();
   const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
     ? configuredExecutionModel
@@ -452,8 +477,7 @@ async function handleCiFailureEvent(
     'Queued CI repair with agent',
     {
       channel: FIX_WITH_AGENT_CHANNEL,
-      autoFixAttempts: task.execution.autoFixAttempts ?? 0,
-      maxAttempts: retryBudgetLabel(maxAttempts),
+      workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
     },
     intentId,
     selectedAgent,
@@ -464,8 +488,7 @@ async function handleCiFailureEvent(
     channel: FIX_WITH_AGENT_CHANNEL,
     agent: selectedAgent ?? null,
     executionModel: executionModel ?? null,
-    autoFixAttempts: task.execution.autoFixAttempts ?? 0,
-    maxAttempts: retryBudgetLabel(maxAttempts),
+    workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
   });
 }
 
@@ -489,10 +512,14 @@ function isReviewGateCiFailedEvent(event: WorkflowLifecycleEvent): event is Revi
 export function createCiFailureWorker(options: CiFailureWorkerOptions): WorkerRuntime {
   const pendingEvents: ReviewGateCiFailedLifecycleEvent[] = [];
   let lifecycleUnsubscribe: Unsubscribe | undefined;
+  const fallbackAttemptLedger = options.ciFailure && !options.ciFailure.attemptLedger
+    ? createAutoFixAttemptLedger()
+    : undefined;
   const onTick = options.onTick ?? (
     options.ciFailure
       ? createCiFailureTick({
         ...options.ciFailure,
+        attemptLedger: options.ciFailure.attemptLedger ?? fallbackAttemptLedger!,
         logger: options.logger,
         drainEvents: () => pendingEvents.splice(0),
       })

@@ -122,6 +122,9 @@ export function WorkerActivityCard({
                     className="shrink-0 rounded border border-gray-600 px-2 py-1 text-xs text-gray-200 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-gray-700"
                     title={disabledTitle}
                     disabled={isControlDisabled}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
+                    }}
                     onClick={(event) => {
                       event.stopPropagation();
                       if (showStart) void onStartWorker(worker.kind);

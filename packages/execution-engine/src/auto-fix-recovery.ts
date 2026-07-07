@@ -11,7 +11,15 @@ import {
   buildFixWithAgentMutationArgs,
   listOpenFixIntentsForTask,
 } from './auto-fix-intents.js';
-import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
+import {
+  autoFixAttemptLedgerKeyFromTask,
+  createAutoFixAttemptLedger,
+  type AutoFixAttemptLedger,
+} from './auto-fix-attempt-ledger.js';
+import {
+  normalizeAutoFixRetryBudget,
+  shouldSkipAutoFixForError,
+} from './auto-fix-gating.js';
 import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from './lifecycle-events.js';
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
 import type { WorkerRegistry } from './worker-registry.js';
@@ -24,6 +32,11 @@ export const RECOVERY_WORKER_KIND = 'recovery';
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
 const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
+
+const AUTO_FIX_WORKER_AUDIT_EVENTS: Record<string, { eventType: string; action: 'submit' | 'skip' }> = {
+  'worker-autofix-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
+  'worker-autofix-skip': { eventType: 'recovery.worker.skip', action: 'skip' },
+};
 
 export interface AutoFixRecoveryStore {
   listWorkflows(): ReadonlyArray<{ id: string }>;
@@ -46,8 +59,10 @@ export interface AutoFixRecoverySubmitter {
   ): number;
 }
 export interface AutoFixWorkerConfig {
-  /** Positive config enables auto-fix; attempts are not capped. */
+  /** Maximum auto-fix attempts per failed task. Positive finite values are caps; zero disables auto-fix. */
   defaultAutoFixRetries?: number;
+  /** Runtime-local ledger for consumed auto-fix attempts. */
+  attemptLedger?: AutoFixAttemptLedger;
   /** Resolves the agent that performs each auto-fix, when one is configured. */
   getAutoFixAgent?: () => string | undefined;
   /** Resolves the execution model used by worker-submitted auto-fixes. */
@@ -59,6 +74,7 @@ export interface AutoFixRecoveryPolicyOptions {
   store: AutoFixRecoveryStore;
   submitter: AutoFixRecoverySubmitter;
   logger: Logger;
+  attemptLedger: AutoFixAttemptLedger;
   defaultAutoFixRetries?: number;
   getAutoFixAgent?: () => string | undefined;
   getRetryBudget?: (task: TaskState) => number;
@@ -80,6 +96,7 @@ export function registerAutoFixWorker(
           submitter: deps.submitter,
           defaultAutoFixRetries: deps.autoFix?.defaultAutoFixRetries,
           getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
+          attemptLedger: deps.autoFix?.attemptLedger,
         },
       }),
   });
@@ -156,11 +173,9 @@ export function listAutoFixRecoveryScanCandidates(
 }
 
 function retryBudgetForTask(task: TaskState, options: AutoFixRecoveryPolicyOptions): number {
-  const raw = options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0;
-  if (raw === Number.POSITIVE_INFINITY) return Number.POSITIVE_INFINITY;
-  if (!Number.isFinite(raw)) return 0;
-  return Math.floor(raw) > 0 ? Number.POSITIVE_INFINITY : 0;
+  return normalizeAutoFixRetryBudget(options.getRetryBudget?.(task) ?? options.defaultAutoFixRetries ?? 0);
 }
+
 
 function retryBudgetLabel(budget: number): number | 'unlimited' {
   return budget === Number.POSITIVE_INFINITY ? 'unlimited' : budget;
@@ -217,6 +232,22 @@ function logAutoFixWorkerEvent(
 ): void {
   const payload = { phase, worker: RECOVERY_WORKER_KIND, ...details };
   options.store.logEvent?.(taskId, 'debug.auto-fix', payload);
+
+  const auditEvent = AUTO_FIX_WORKER_AUDIT_EVENTS[phase];
+  if (auditEvent) {
+    options.store.logEvent?.(taskId, auditEvent.eventType, {
+      workerId: 'auto-fix-recovery',
+      kind: RECOVERY_WORKER_KIND,
+      owner: 'auto-fix',
+      action: auditEvent.action,
+      phase,
+      ...(typeof details.reason === 'string' ? { reason: details.reason } : {}),
+      ...(typeof details.status === 'string' ? { status: details.status } : {}),
+      ...(typeof details.workflowId === 'string' || details.workflowId === null ? { workflowId: details.workflowId } : {}),
+      details: { worker: RECOVERY_WORKER_KIND, ...details },
+    });
+  }
+
   options.logger.debug?.(`[worker:${RECOVERY_WORKER_KIND}] ${phase}`, {
     module: 'auto-fix-recovery',
     taskId,
@@ -299,11 +330,14 @@ function validateAutoFixCandidate(
   }
   const latestRef = snapshotComparison.ref;
 
+  const latestRetryBudget = retryBudgetForTask(latest, options);
   if (!isRuntimeAutoFixEligibleTask(latest, options)) {
-    skipAutoFixCandidate(options, candidate, 'not-eligible', {
+    const reason = latestRetryBudget <= 0
+      ? 'retry-budget-disabled'
+      : 'not-eligible';
+    skipAutoFixCandidate(options, candidate, reason, {
       status: latest.status,
-      autoFixAttempts: latest.execution.autoFixAttempts ?? 0,
-      maxRetries: retryBudgetLabel(retryBudgetForTask(latest, options)),
+      workerRetryBudget: retryBudgetLabel(latestRetryBudget),
       isReconciliation: Boolean(latest.config.isReconciliation),
       hasParentTask: Boolean(latest.config.parentTask),
       skippedForError: shouldSkipAutoFixForError(latest.execution.error),
@@ -348,8 +382,30 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         skipAutoFixCandidate(options, candidate, 'duplicate-candidate');
         continue;
       }
+      const retryBudget = retryBudgetForTask(candidate.task, options);
+      const attemptDecision = options.attemptLedger.consume(
+        autoFixAttemptLedgerKeyFromTask(candidate.task),
+        retryBudget,
+      );
+      if (!attemptDecision.allowed) {
+        skipAutoFixCandidate(options, candidate, attemptDecision.reason, {
+          status: candidate.task.status,
+          workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+        });
+        continue;
+      }
       const configuredAgent = options.getAutoFixAgent?.()?.trim();
       const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
+      options.logger.debug?.(`[worker:${RECOVERY_WORKER_KIND}] worker-autofix-attempt-consumed`, {
+        module: 'auto-fix-recovery',
+        taskId: candidate.taskId,
+        workflowId: candidate.workflowId,
+        generation: candidate.generation,
+        attemptId: candidate.attemptId ?? null,
+        attemptsBefore: attemptDecision.attemptsBefore,
+        attemptsAfter: attemptDecision.attemptsAfter,
+        workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+      });
       const args = buildFixWithAgentMutationArgs(candidate.task.id, selectedAgent, { autoFix: true });
       const intentId = options.submitter.submit(candidate.workflowId, 'normal', AUTO_FIX_COMMAND_CHANNEL, args);
       submittedThisTick.add(candidate.taskId);
@@ -361,8 +417,7 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         taskStateVersion: candidate.taskStateVersion,
         attemptId: candidate.attemptId ?? null,
         agent: selectedAgent ?? null,
-        autoFixAttempts: candidate.task.execution.autoFixAttempts ?? 0,
-        maxRetries: retryBudgetLabel(retryBudgetForTask(candidate.task, options)),
+        workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
       });
     }
   };
@@ -375,7 +430,7 @@ export interface RecoveryWorkerOptions {
   installSignalHandlers?: boolean;
   tickOnStart?: boolean;
   messageBus?: MessageBus;
-  autoFix?: Omit<AutoFixRecoveryPolicyOptions, 'logger' | 'drainWakeupHints'>;
+  autoFix?: Omit<AutoFixRecoveryPolicyOptions, 'logger' | 'drainWakeupHints' | 'attemptLedger'> & { readonly attemptLedger?: AutoFixAttemptLedger };
   /** Test hook or alternate worker policy. Takes precedence over `autoFix`. */
   onTick?: WorkerTick;
 }
@@ -387,10 +442,14 @@ export interface RecoveryWorkerOptions {
 export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRuntime {
   const pendingWakeups: RecoveryWorkerWakeupHint[] = [];
   let lifecycleUnsubscribe: Unsubscribe | undefined;
+  const fallbackAttemptLedger = options.autoFix && !options.autoFix.attemptLedger
+    ? createAutoFixAttemptLedger()
+    : undefined;
   const onTick = options.onTick ?? (
     options.autoFix
       ? createAutoFixRecoveryTick({
         ...options.autoFix,
+        attemptLedger: options.autoFix.attemptLedger ?? fallbackAttemptLedger!,
         logger: options.logger,
         drainWakeupHints: () => pendingWakeups.splice(0),
       })

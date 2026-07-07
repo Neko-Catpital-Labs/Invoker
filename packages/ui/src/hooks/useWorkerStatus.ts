@@ -1,13 +1,18 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkerStatusSnapshot } from '../types.js';
 
 export function useWorkerStatus(pollMs = 2000): readonly [snapshot: WorkerStatusSnapshot | null, refresh: () => Promise<void>] {
   const [snapshot, setSnapshot] = useState<WorkerStatusSnapshot | null>(null);
+  const mountedRef = useRef(true);
 
-  const refresh = useCallback(async () => {
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
+  const fetchStatus = useCallback(async () => {
     try {
       const status = await window.invoker?.getWorkerStatus();
-      if (status) {
+      if (mountedRef.current && status) {
         setSnapshot(status);
       }
     } catch {
@@ -16,28 +21,12 @@ export function useWorkerStatus(pollMs = 2000): readonly [snapshot: WorkerStatus
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        const status = await window.invoker?.getWorkerStatus();
-        if (!cancelled && status) {
-          setSnapshot(status);
-        }
-      } catch {
-        // ignore polling errors
-      }
-    };
-
-    void poll();
+    void fetchStatus();
     const interval = window.setInterval(() => {
-      void poll();
+      void fetchStatus();
     }, pollMs);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [pollMs]);
+    return () => window.clearInterval(interval);
+  }, [fetchStatus, pollMs]);
 
-  return [snapshot, refresh] as const;
+  return [snapshot, fetchStatus] as const;
 }

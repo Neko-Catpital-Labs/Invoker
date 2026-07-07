@@ -19,7 +19,6 @@ export interface RecoveryWorkerAuditPayload {
   readonly trigger?: string;
   readonly status?: string;
   readonly workflowId?: string | null;
-  readonly autoFixAttempts?: number | null;
   readonly details?: Record<string, unknown>;
 }
 
@@ -73,7 +72,7 @@ export function classifyAutoFixRecoveryPhase(
 ): RecoveryWorkerAuditAction | undefined {
   if (phase === 'delta-failed') return 'wakeup';
   if (phase === 'poll-failed' || phase === 'schedule-enter') return 'scan';
-  if (phase === 'schedule-enqueued') return 'submit';
+  if (phase === 'schedule-enqueued' || phase === 'worker-autofix-submitted') return 'submit';
   if (phase === 'schedule-skip' || phase.endsWith('-skip')) return 'skip';
   if (details.reason && (phase.includes('skip') || phase.includes('error'))) return 'skip';
   return undefined;
@@ -94,9 +93,6 @@ export function buildRecoveryWorkerAuditPayload(
     ? details.workflowId
     : undefined;
   const status = typeof details.status === 'string' ? details.status : undefined;
-  const autoFixAttempts = typeof details.autoFixAttempts === 'number' || details.autoFixAttempts === null
-    ? details.autoFixAttempts
-    : undefined;
 
   return {
     workerId: RECOVERY_WORKER_ID,
@@ -108,7 +104,6 @@ export function buildRecoveryWorkerAuditPayload(
     ...(trigger !== undefined ? { trigger } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(workflowId !== undefined ? { workflowId } : {}),
-    ...(autoFixAttempts !== undefined ? { autoFixAttempts } : {}),
     details,
   };
 }
