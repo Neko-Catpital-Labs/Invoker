@@ -141,8 +141,6 @@ export interface ActionDeps {
   /** When set, fresh-base actions refresh the pool mirror and remove managed branches before retry/recreate. */
   taskExecutor?: TaskRunner;
   mutationTiming?: WorkflowMutationTiming;
-  /** When true, successful AI-applied fixes are approved immediately. */
-  autoApproveAIFixes?: boolean;
 }
 
 export interface CommandActionDeps extends ActionDeps {
@@ -812,7 +810,7 @@ export async function setTaskFixContext(
 
 export async function resolveConflictAction(
   taskId: string,
-  deps: Pick<ActionDeps, 'orchestrator' | 'persistence' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
+  deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskRunner },
   agentName?: string,
   signal?: AbortSignal,
 ): Promise<{ autoApproved: boolean; started: TaskState[] }> {
@@ -850,7 +848,7 @@ function resolveTaskRunnerDefaultExecutionAgent(taskExecutor: TaskRunner): strin
 
 export async function fixWithAgentAction(
   taskId: string,
-  deps: Pick<CommandActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'autoApproveAIFixes' | 'commandService' | 'mutationTiming'> & { taskExecutor: TaskRunner },
+  deps: Pick<CommandActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'commandService' | 'mutationTiming'> & { taskExecutor: TaskRunner },
   options: {
     agentName?: string;
     recoveryRoute?: FailureRecoveryRoute;
@@ -939,7 +937,7 @@ export async function fixWithAgentAction(
 export async function finalizeAppliedFix(
   taskId: string,
   savedError: string,
-  deps: Pick<ActionDeps, 'orchestrator' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
+  deps: Pick<ActionDeps, 'orchestrator'>,
   signal?: AbortSignal,
   lineage?: TaskLineageSnapshot,
 ): Promise<{ autoApproved: boolean; started: TaskState[] }> {
@@ -950,13 +948,7 @@ export async function finalizeAppliedFix(
   }
   if (lineage) assertLineageCurrent(lineage, deps.orchestrator, signal);
   deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
-  if (!deps.autoApproveAIFixes) {
-    return { autoApproved: false, started: [] };
-  }
-
-  if (lineage) assertLineageCurrent(lineage, deps.orchestrator, signal);
-  const { started } = await approveTask(taskId, deps);
-  return { autoApproved: true, started };
+  return { autoApproved: false, started: [] };
 }
 
 // ── Auto-fix helpers ─────────────────────────────────────────
@@ -1273,8 +1265,6 @@ export async function autoFixOnFailure(
       assertLineageCurrent(lineage, orchestrator, deps.signal);
       const finalizeResult = await finalizeAppliedFix(taskId, persistedSavedError, {
         orchestrator,
-        taskExecutor,
-        autoApproveAIFixes: deps.getAutoApproveAIFixes?.() ?? true,
       }, deps.signal, lineage);
       persistence.logEvent?.(taskId, 'debug.auto-fix', {
         phase: 'auto-fix-post-route-finalize',

@@ -470,95 +470,19 @@ describe('provideInput', () => {
 });
 
 describe('finalizeAppliedFix', () => {
-  it('leaves task awaiting approval when autoApproveAIFixes is disabled', async () => {
+  it('sets the task awaiting approval and does not approve inline', async () => {
     const orchestrator = {
       setFixAwaitingApproval: vi.fn(),
       approve: vi.fn(),
     };
-    const taskExecutor = {
-      commitApprovedFix: vi.fn(),
-      publishAfterFix: vi.fn(),
-      executeTasks: vi.fn(),
-    };
 
     const result = await finalizeAppliedFix('task-a', 'saved-error', {
       orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-      autoApproveAIFixes: false,
     });
 
     expect(result).toEqual({ autoApproved: false, started: [] });
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-error');
     expect(orchestrator.approve).not.toHaveBeenCalled();
-  });
-
-  it('auto-approves and returns runnable tasks when enabled', async () => {
-    const started = [
-      makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } }),
-    ];
-    const orchestrator = {
-      setFixAwaitingApproval: vi.fn(),
-      approve: vi.fn().mockResolvedValue(started),
-      getTask: vi.fn().mockReturnValue(makeTask({
-        id: 'task-a',
-        status: 'awaiting_approval',
-        config: { workflowId: 'wf-1' },
-        execution: { pendingFixError: 'saved-error', workspacePath: '/tmp/task-a', branch: 'task-a' },
-      })),
-    };
-    const taskExecutor = {
-      commitApprovedFix: vi.fn(),
-      publishAfterFix: vi.fn(),
-      executeTasks: vi.fn(),
-    };
-
-    const result = await finalizeAppliedFix('task-a', 'saved-error', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-      autoApproveAIFixes: true,
-    });
-
-    expect(result).toEqual({ autoApproved: true, started });
-    expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'task-a' }),
-    );
-    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
-    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
-  });
-
-  it('auto-approves and publishes post-fix merge gates when enabled', async () => {
-    const started = [
-      makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
-    ];
-    const orchestrator = {
-      setFixAwaitingApproval: vi.fn(),
-      approve: vi.fn().mockResolvedValue(started),
-      getTask: vi.fn().mockReturnValue(makeTask({
-        id: 'merge-a',
-        status: 'awaiting_approval',
-        config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { pendingFixError: 'saved-error', workspacePath: '/tmp/merge-a' },
-      })),
-      resumeTaskAfterFixApproval: vi.fn().mockResolvedValue(started),
-    };
-    const taskExecutor = {
-      commitApprovedFix: vi.fn(),
-      publishAfterFix: vi.fn(),
-      executeTasks: vi.fn(),
-    };
-
-    await finalizeAppliedFix('merge-a', 'saved-error', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-      autoApproveAIFixes: true,
-    });
-
-    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'merge-a' }),
-    );
-    expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
-    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
 
@@ -807,10 +731,7 @@ describe('autoFixOnFailure', () => {
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
   });
 
-  it('records fixed integration anchor and routes merge gates to finalize/publish flow', async () => {
-    const started = [
-      makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
-    ];
+  it('records fixed integration anchor and leaves merge-gate approval to the worker', async () => {
     const orchestrator = {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
@@ -823,7 +744,7 @@ describe('autoFixOnFailure', () => {
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => []),
       setFixAwaitingApproval: vi.fn(),
-      approve: vi.fn().mockResolvedValue(started),
+      approve: vi.fn(),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -858,62 +779,30 @@ describe('autoFixOnFailure', () => {
         }),
       }),
     );
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('merge-a', 'boom');
     expect(orchestrator.retryTask).not.toHaveBeenCalled();
-    expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
+    expect(orchestrator.approve).not.toHaveBeenCalled();
+    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
   });
 
-  it('retries inline when merge post-fix publish fails during auto-fix dispatch', async () => {
-    const started = [
-      makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
-    ];
-    // The getTask mock is driven by a state machine that tracks which
-    // phase the auto-fix flow is in.  Each phase may call getTask
-    // multiple times (entry check, lineage capture, lineage assert,
-    // approveTask, post-finalize).  We use a phase counter that
-    // advances at known transition points (beginConflictResolution
-    // and setFixAwaitingApproval) to keep return values consistent.
+  it('does not retry inline after a merge fix is queued for approval', async () => {
     let phase = 0;
-    const phases: Record<string, unknown>[] = [
-      // Phase 0: entry check + lineage capture (cycle 1)
-      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 } },
-      // Phase 1: after fix returns, lineage check + finalize + approveTask (cycle 1)
-      { status: 'awaiting_approval', execution: { workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
-      // Phase 2: post-finalize check — task re-failed after publish
-      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict', selectedAttemptId: 'att-1', generation: 1 } },
-      // Phase 3: inline retry entry + lineage capture (cycle 2)
-      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-3', generation: 3 } },
-      // Phase 4: after fix returns, lineage check + finalize + approveTask (cycle 2)
-      { status: 'awaiting_approval', execution: { workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-3', generation: 3 } },
-    ];
-    const getTask = vi.fn(() => {
-      const idx = Math.min(phase, phases.length - 1);
-      return makeTask({
-        id: 'merge-a',
-        config: { workflowId: 'wf-1', isMergeNode: true },
-        ...phases[idx],
-      });
-    });
-    // Advance phase at key transition points
-    const origBeginConflictResolution = vi.fn(() => {
-      phase++;
-      return { savedError: 'boom' };
-    });
-    const origSetFixAwaitingApproval = vi.fn(() => { phase++; });
-    const shouldAutoFix = vi
-      .fn()
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(true)
-      .mockReturnValue(false);
     const orchestrator = {
-      shouldAutoFix,
-      getTask,
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        id: 'merge-a',
+        status: phase === 0 ? 'failed' : 'awaiting_approval',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: phase === 0
+          ? { workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 }
+          : { workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 },
+      })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: origBeginConflictResolution,
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => []),
-      setFixAwaitingApproval: origSetFixAwaitingApproval,
-      approve: vi.fn().mockResolvedValue(started),
-      resumeTaskAfterFixApproval: vi.fn().mockResolvedValue(started),
+      setFixAwaitingApproval: vi.fn(() => { phase = 1; }),
+      approve: vi.fn(),
+      resumeTaskAfterFixApproval: vi.fn(),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -925,13 +814,10 @@ describe('autoFixOnFailure', () => {
     const taskExecutor = {
       fixWithAgent: vi.fn().mockResolvedValue(undefined),
       resolveConflict: vi.fn(),
-      commitApprovedFix: vi.fn().mockResolvedValue(undefined),
+      commitApprovedFix: vi.fn(),
       execGitIn: vi.fn().mockResolvedValue('abc123'),
-      publishAfterFix: vi
-        .fn()
-        .mockImplementationOnce(async () => undefined)
-        .mockImplementationOnce(async () => undefined),
-      executeTasks: vi.fn().mockResolvedValue(undefined),
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
     };
 
     await autoFixOnFailure('merge-a', {
@@ -942,16 +828,9 @@ describe('autoFixOnFailure', () => {
       getAutoApproveAIFixes: () => true,
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledTimes(2);
-    expect(taskExecutor.execGitIn).toHaveBeenCalledTimes(2);
-    expect(taskExecutor.publishAfterFix).toHaveBeenCalledTimes(2);
-    expect(persistence.logEvent).toHaveBeenCalledWith(
-      'merge-a',
-      'debug.auto-fix',
-      expect.objectContaining({
-        phase: 'auto-fix-post-route-inline-retry',
-      }),
-    );
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledTimes(1);
+    expect(taskExecutor.execGitIn).toHaveBeenCalledTimes(1);
+    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).not.toHaveBeenCalled();
   });
 
@@ -2415,7 +2294,6 @@ describe('finalizeAppliedFix lineage guard', () => {
 
     await expect(finalizeAppliedFix('task-a', 'saved-error', {
       orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: {} as TaskRunner,
     }, ac.signal)).rejects.toThrow(StaleLineageError);
 
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
@@ -2429,7 +2307,6 @@ describe('finalizeAppliedFix lineage guard', () => {
 
     const result = await finalizeAppliedFix('task-a', 'saved-error', {
       orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: {} as TaskRunner,
     }, ac.signal);
 
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-error');

@@ -37,6 +37,10 @@ describe('headless-command-classification', () => {
     expect(isHeadlessReadOnlyCommand(['list'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['session'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['open-terminal'])).toBe(true);
+    expect(isHeadlessReadOnlyCommand(['worker'])).toBe(true);
+    expect(isHeadlessReadOnlyCommand(['worker', 'list'])).toBe(true);
+    expect(isHeadlessReadOnlyCommand(['worker', 'status'])).toBe(true);
+    expect(isHeadlessReadOnlyCommand(['worker', 'autoapprove'])).toBe(false);
     expect(isHeadlessReadOnlyCommand(['run'])).toBe(false);
   });
 
@@ -45,7 +49,9 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['query'])).toBe(false);
     expect(isHeadlessMutatingCommand(['open-terminal'])).toBe(false);
     expect(isHeadlessMutatingCommand(['slack'])).toBe(false);
-
+    expect(isHeadlessMutatingCommand(['worker', 'autoapprove'])).toBe(true);
+    expect(isHeadlessMutatingCommand(['worker'])).toBe(false);
+    expect(isHeadlessMutatingCommand(['worker', 'status'])).toBe(false);
     expect(isHeadlessMutatingCommand(['run'])).toBe(true);
     expect(isHeadlessMutatingCommand(['migrate-compat'])).toBe(true);
     expect(isHeadlessMutatingCommand(['cancel-workflow'])).toBe(true);

@@ -86,6 +86,52 @@ describe('headless worker autofix', () => {
     );
   });
 
+  it('runs a one-shot autoapprove scan and enqueues the normal approval command intent', async () => {
+    const task = makeTask({
+      status: 'awaiting_approval',
+      execution: { pendingFixError: 'boom', generation: 1, selectedAttemptId: 'attempt-1' },
+    });
+    const enqueueWorkflowMutationIntent = vi.fn((
+      _workflowId: string,
+      _channel: string,
+      _args: unknown[],
+      _priority: WorkflowMutationPriority,
+    ) => 2);
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const homeRoot = mkdtempSync(join(tmpdir(), 'invoker-headless-autoapprove-'));
+    const previousDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = homeRoot;
+
+    try {
+      await runHeadless(['worker', 'autoapprove'], {
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn() },
+        persistence: {
+          listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+          loadTasks: vi.fn(() => [task]),
+          loadTask: vi.fn(() => task),
+          listWorkflowMutationIntents: vi.fn(() => []),
+          getWorkerAction: vi.fn(() => undefined),
+          upsertWorkerAction: vi.fn(),
+          logEvent: vi.fn(),
+          enqueueWorkflowMutationIntent,
+        },
+        invokerConfig: { autoApproveAIFixes: true },
+      } as any);
+    } finally {
+      write.mockRestore();
+      if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = previousDbDir;
+      rmSync(homeRoot, { recursive: true, force: true });
+    }
+
+    expect(enqueueWorkflowMutationIntent).toHaveBeenCalledWith(
+      'wf-1',
+      'invoker:approve',
+      ['wf-1/task-1'],
+      'normal',
+    );
+  });
+
   it('lists worker kinds from the registry', async () => {
     let stdout = '';
     const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: any) => {
@@ -101,6 +147,7 @@ describe('headless worker autofix', () => {
 
     expect(stdout).toContain('Worker kinds');
     expect(stdout).toContain('autofix');
+    expect(stdout).toContain('autoapprove');
   });
 
   it('rejects unknown worker kinds with a clear error', async () => {

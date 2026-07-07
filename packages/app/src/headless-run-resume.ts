@@ -309,7 +309,6 @@ export async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promis
       commandService: deps.commandService,
       taskExecutor: te,
       mutationTiming: deps.mutationTiming,
-      autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     }, {
       agentName: agent,
       recreateOutputLabel: 'Fix with AI',
@@ -335,8 +334,8 @@ export async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promis
       return;
     }
     process.stdout.write(
-      result.autoApproved
-        ? `Fix applied and auto-approved for task: ${taskId} (${agent}).\n`
+      deps.invokerConfig.autoApproveAIFixes
+        ? `Fix applied and queued for auto-approval for task: ${taskId} (${agent}).\n`
         : `Fix applied for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.\n`,
     );
   } catch (err) {
@@ -362,9 +361,9 @@ export async function headlessResolveConflict(taskId: string, deps: HeadlessDeps
   const agent = (agentArg ?? resolveDefaultExecutionAgent(deps.invokerConfig)).toLowerCase();
   try {
     const result = await resolveConflictAction(taskId, {
-      ...deps,
+      orchestrator: deps.orchestrator,
+      persistence: deps.persistence,
       taskExecutor: te,
-      autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     }, agent, deps.signal);
     await finalizeMutationWithGlobalTopup({
       orchestrator: deps.orchestrator,
@@ -377,7 +376,7 @@ export async function headlessResolveConflict(taskId: string, deps: HeadlessDeps
     });
     process.stdout.write(
       deps.invokerConfig.autoApproveAIFixes
-        ? `Conflict resolved and auto-approved for task: ${taskId} (${agent}).\n`
+        ? `Conflict resolved and queued for auto-approval for task: ${taskId} (${agent}).\n`
         : `Conflict resolved for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.\n`,
     );
   } catch (err) {

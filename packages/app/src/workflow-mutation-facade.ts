@@ -109,7 +109,6 @@ export interface WorkflowMutationFacadeDeps {
   commandService: CommandService;
   taskExecutor: TaskRunner;
   dispatchMode?: 'await' | 'fire-and-forget';
-  autoApproveAIFixes?: boolean;
   /** Optional pre-kill hook for active task executions. */
   killRunningTask?: (taskId: string) => Promise<void>;
 }
@@ -422,7 +421,6 @@ export class WorkflowMutationFacade {
         orchestrator: this.deps.orchestrator,
         persistence: this.deps.persistence,
         taskExecutor: this.deps.taskExecutor,
-        autoApproveAIFixes: this.deps.autoApproveAIFixes,
       },
       agentName,
     );
@@ -456,7 +454,6 @@ export class WorkflowMutationFacade {
         persistence: this.deps.persistence,
         commandService: this.deps.commandService,
         taskExecutor: this.deps.taskExecutor,
-        autoApproveAIFixes: this.deps.autoApproveAIFixes,
       },
       options,
     );
@@ -483,7 +480,6 @@ export class WorkflowMutationFacade {
       persistence: this.deps.persistence,
       commandService: this.deps.commandService,
       taskExecutor: this.deps.taskExecutor,
-      autoApproveAIFixes: this.deps.autoApproveAIFixes,
     };
   }
 
