@@ -257,6 +257,29 @@ describe('auto-fix recovery candidate validation', () => {
     );
   });
 
+  it('skips failed tasks classified as a liveness stall (the requeue worker owns them)', () => {
+    const harness = makeRecoveryPolicyHarness(makeTask({
+      execution: {
+        error: 'Execution stalled: ... (attempt lease expired).',
+        failureClass: 'liveness_stall',
+        generation: 1,
+        selectedAttemptId: 'attempt-1',
+      },
+    }));
+
+    const candidates = collectValidatedAutoFixRecoveryCandidates(harness.options);
+
+    expect(candidates).toHaveLength(0);
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'worker-autofix-skip',
+        reason: 'not-eligible',
+      }),
+    );
+  });
+
   it('deduplicates repeated wakeups for the same failed task', async () => {
     const wakeup = {
       eventKey: 'event-1',

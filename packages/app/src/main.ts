@@ -3314,6 +3314,7 @@ function createEmbeddedTerminalBackendFromConfig(
                       outputs: {
                         exitCode: 1,
                         error: executingError,
+                        failureClass: 'liveness_stall',
                       },
                     };
                     logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
