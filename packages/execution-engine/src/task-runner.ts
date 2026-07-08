@@ -1280,7 +1280,10 @@ export class TaskRunner {
   }
 
   async publishAfterFix(task: TaskState): Promise<void> {
-    return publishAfterFixImpl(this, task);
+    // Pump the attempt heartbeat/lease while the make-pr publisher runs, exactly
+    // as executeMergeNode does. A slow publish (large stack, loaded machine) must
+    // not be misread as a liveness stall by the executing-stall watchdog.
+    return this.withAttemptHeartbeat(task.id, () => publishAfterFixImpl(this, task));
   }
 
   async commitApprovedFix(task: TaskState): Promise<void> {
