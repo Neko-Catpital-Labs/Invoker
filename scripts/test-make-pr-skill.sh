@@ -101,4 +101,28 @@ must_contain "$SKILL_MD" "machine-managed stack comment on every PR in the stack
 must_contain "$SKILL_MD" "full stack bottom-to-top" "make-pr skill stack comment must list the entire stack in order"
 must_contain "$SKILL_MD" "must be refreshed whenever the stack changes" "make-pr skill must refresh stack comments when the stack changes"
 must_contain "$SKILL_MD" "marks the target PR with" "make-pr skill must explain how the synced stack comment identifies the current PR"
+
+# Generated-branch push footgun: the skill must forbid `mergify stack push` from a
+# generated stack branch and point at the guard. Locks the incident fix.
+must_contain "$SKILL_MD" "### Run \`mergify stack push\` only from the working branch" "make-pr skill must document the working-branch-only push rule"
+must_contain "$SKILL_MD" "Never run \`mergify stack push\`" "make-pr skill must forbid pushing from a generated stack branch"
+must_contain "$SKILL_MD" "The real push does not fail safe" "make-pr skill must explain the real push does not fail safe on a generated branch"
+must_contain "$SKILL_MD" "auto-switch to a stale leftover branch and publish an unrelated stack" "make-pr skill must describe the wrong-stack failure mode"
+must_contain "$SKILL_MD" "\`--dry-run\` refuses on a generated branch; the real push does not" "make-pr skill must require dry-run as the safety check"
+must_contain "$SKILL_MD" "git push --force-with-lease origin HEAD" "make-pr skill must offer the deterministic single-branch update path"
+must_contain "$SKILL_MD" "node scripts/safe-stack-push.mjs" "make-pr skill must route pushes through the safe-stack-push guard"
+
+# The guard itself must exist and classify branches correctly (refuse generated, allow working).
+GUARD="$REPO_ROOT/scripts/safe-stack-push.mjs"
+[[ -f "$GUARD" ]] || fail "expected guard script $GUARD"
+node --input-type=module -e "
+import { isGeneratedStackBranch, evaluatePush } from '$GUARD';
+const gen = 'stack/EdbertChan/pr/app-tsconfig-noemit/stop-tsc-clobbering-tsup-built-dist--c0651a20';
+const work = 'pr/app-tsconfig-noemit';
+if (!isGeneratedStackBranch(gen)) process.exit(1);
+if (isGeneratedStackBranch(work)) process.exit(1);
+if (evaluatePush({ branch: gen, mergifyRefusesAsGenerated: false }).allowed) process.exit(1);
+if (!evaluatePush({ branch: work, mergifyRefusesAsGenerated: false }).allowed) process.exit(1);
+if (evaluatePush({ branch: work, mergifyRefusesAsGenerated: true }).allowed) process.exit(1);
+" || fail "safe-stack-push guard must refuse generated branches and allow working branches"
 echo "OK: make-pr skill contract checks passed"
