@@ -232,6 +232,7 @@ import {
   type ReviewGateCiContext,
 } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
+import { resolveTaskForForcedStop } from './forced-stop.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
@@ -344,14 +345,6 @@ function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependenc
     invokerConfig.externalWorkers,
     registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
   );
-}
-
-
-
-function isTaskInFlightForForcedStop(task: TaskState): boolean {
-  return task.status === 'running'
-    || task.status === 'fixing_with_ai'
-    || (task.status === 'pending' && task.execution.phase === 'launching');
 }
 
 function isTaskRecoverableOnExplicitResume(task: TaskState): boolean {
@@ -1190,14 +1183,15 @@ function startHeadlessMode(): void {
             const failInFlightTasks = (): void => {
               const allTasks = orchestrator.getAllTasks();
               for (const task of allTasks) {
-                if (isTaskInFlightForForcedStop(task)) {
-                  logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc-delegate' });
-                  persistShutdownDiagnostic(task, persistence, { forcedStopReason: 'Stopped by user' });
+                const taskToStop = resolveTaskForForcedStop(task, persistence);
+                if (taskToStop) {
+                  logger.info(`stop — failing in-flight task "${taskToStop.id}" (${taskToStop.status})`, { module: 'ipc-delegate' });
+                  persistShutdownDiagnostic(taskToStop, persistence, { forcedStopReason: 'Stopped by user' });
                   orchestrator.handleWorkerResponse({
-                    requestId: `stop-${task.id}`,
-                    actionId: task.id,
-                    attemptId: task.execution.selectedAttemptId,
-                    executionGeneration: task.execution.generation ?? 0,
+                    requestId: `stop-${taskToStop.id}`,
+                    actionId: taskToStop.id,
+                    attemptId: taskToStop.execution.selectedAttemptId,
+                    executionGeneration: taskToStop.execution.generation ?? 0,
                     status: 'failed',
                     outputs: { exitCode: 1, error: 'Stopped by user' },
                   });
@@ -1808,15 +1802,16 @@ function startHeadlessMode(): void {
       }
       if (ownsHeadlessShutdown && orchestrator) {
         for (const task of orchestrator.getAllTasks()) {
-          if (isTaskInFlightForForcedStop(task)) {
+          const taskToStop = resolveTaskForForcedStop(task, persistence);
+          if (taskToStop) {
             if (persistence) {
-              persistShutdownDiagnostic(task, persistence, { forcedStopReason: 'Application quit' });
+              persistShutdownDiagnostic(taskToStop, persistence, { forcedStopReason: 'Application quit' });
             }
             orchestrator.handleWorkerResponse({
-              requestId: `quit-${task.id}`,
-              actionId: task.id,
-              attemptId: task.execution.selectedAttemptId,
-              executionGeneration: task.execution.generation ?? 0,
+              requestId: `quit-${taskToStop.id}`,
+              actionId: taskToStop.id,
+              attemptId: taskToStop.execution.selectedAttemptId,
+              executionGeneration: taskToStop.execution.generation ?? 0,
               status: 'failed',
               outputs: { exitCode: 1, error: 'Application quit' },
             });
@@ -3941,17 +3936,18 @@ function createEmbeddedTerminalBackendFromConfig(
       const failInFlightTasks = (): void => {
         const allTasks = orchestrator.getAllTasks();
         for (const task of allTasks) {
-          if (isTaskInFlightForForcedStop(task)) {
-            logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc' });
-            persistShutdownDiagnostic(task, persistence, {
+          const taskToStop = resolveTaskForForcedStop(task, persistence);
+          if (taskToStop) {
+            logger.info(`stop — failing in-flight task "${taskToStop.id}" (${taskToStop.status})`, { module: 'ipc' });
+            persistShutdownDiagnostic(taskToStop, persistence, {
               flushPendingOutput: flushTaskOutput,
               forcedStopReason: 'Stopped by user',
             });
             orchestrator.handleWorkerResponse({
-              requestId: `stop-${task.id}`,
-              actionId: task.id,
-              attemptId: task.execution.selectedAttemptId,
-              executionGeneration: task.execution.generation ?? 0,
+              requestId: `stop-${taskToStop.id}`,
+              actionId: taskToStop.id,
+              attemptId: taskToStop.execution.selectedAttemptId,
+              executionGeneration: taskToStop.execution.generation ?? 0,
               status: 'failed',
               outputs: { exitCode: 1, error: 'Stopped by user' },
             });
@@ -5257,17 +5253,19 @@ function createEmbeddedTerminalBackendFromConfig(
         }
         if (orchestrator) {
           for (const task of orchestrator.getAllTasks()) {
-            if (task.status === 'running' || task.status === 'fixing_with_ai') {
+            const taskToStop = resolveTaskForForcedStop(task, persistence);
+            if (taskToStop) {
               if (persistence) {
-                persistShutdownDiagnostic(task, persistence, {
+                persistShutdownDiagnostic(taskToStop, persistence, {
                   flushPendingOutput: flushTaskOutput,
                   forcedStopReason: 'Application quit',
                 });
               }
               orchestrator.handleWorkerResponse({
-                requestId: `quit-${task.id}`,
-                actionId: task.id,
-                executionGeneration: task.execution.generation ?? 0,
+                requestId: `quit-${taskToStop.id}`,
+                actionId: taskToStop.id,
+                attemptId: taskToStop.execution.selectedAttemptId,
+                executionGeneration: taskToStop.execution.generation ?? 0,
                 status: 'failed',
                 outputs: { exitCode: 1, error: 'Application quit' },
               });
