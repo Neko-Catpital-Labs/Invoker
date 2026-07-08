@@ -19,6 +19,7 @@ import {
 import {
   normalizeAutoFixRetryBudget,
   shouldSkipAutoFixForError,
+  isLivenessFailureTask,
 } from './auto-fix-gating.js';
 import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from './lifecycle-events.js';
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
@@ -186,6 +187,9 @@ function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryP
   if (task.config.isReconciliation) return false;
   if (task.config.parentTask) return false;
   if (shouldSkipAutoFixForError(task.execution.error)) return false;
+  // Liveness stalls (executor stopped heartbeating) are re-run by the requeue
+  // worker, not "fixed" by the AI — auto-fix would loop on a non-defect.
+  if (isLivenessFailureTask(task)) return false;
   const max = retryBudgetForTask(task, options);
   if (max <= 0) return false;
   return true;
