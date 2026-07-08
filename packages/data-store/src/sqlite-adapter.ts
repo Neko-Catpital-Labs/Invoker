@@ -117,6 +117,14 @@ function loadNativeSqlite(): Promise<NativeSqlite> {
   nativeSqlite ??= import(nativeSqliteSpecifier) as Promise<NativeSqlite>;
   return nativeSqlite;
 }
+
+let cachedDatabaseSyncCtor: NativeSqlite['DatabaseSync'] | undefined;
+
+async function loadDatabaseSyncCtor(): Promise<NativeSqlite['DatabaseSync']> {
+  const { DatabaseSync } = await loadNativeSqlite();
+  cachedDatabaseSyncCtor = DatabaseSync;
+  return DatabaseSync;
+}
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
 // activity_log is capped to its most recent rows so the DB file stays bounded; 0 disables.
@@ -215,6 +223,17 @@ export function isDatabaseCorruptionError(err: unknown): boolean {
   // Fallback for runtimes that do not surface a numeric errcode.
   const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
   return message.includes('malformed') || message.includes('not a database');
+}
+
+const SQLITE_IOERR = 10;
+
+export function isTransientIoError(err: unknown): boolean {
+  const errcode = (err as { errcode?: unknown } | null)?.errcode;
+  if (typeof errcode === 'number') {
+    return (errcode & SQLITE_PRIMARY_RESULT_CODE_MASK) === SQLITE_IOERR;
+  }
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return message.includes('i/o error');
 }
 
 class NativeStatementCompat {
@@ -541,7 +560,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
 
     try {
-      const { DatabaseSync } = await loadNativeSqlite();
+      const DatabaseSync = await loadDatabaseSyncCtor();
       const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
       return new SQLiteAdapter(db, isFile ? dbPath : null, options);
     } catch (err) {
@@ -558,7 +577,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         const sidecar = `${dbPath}${suffix}`;
         if (existsSync(sidecar)) renameSync(sidecar, `${backupPath}${suffix}`);
       }
-      const { DatabaseSync } = await loadNativeSqlite();
+      const DatabaseSync = await loadDatabaseSyncCtor();
       const db = new DatabaseSync(dbPath);
       return new SQLiteAdapter(db, dbPath, options);
     }
@@ -590,22 +609,63 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   /** Run a single-row SELECT, returning the row as an object or undefined. */
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
-    const stmt = this.db.prepare(sql);
-    try {
-      return stmt.get(...(paramsToArgs(params) as any[])) as Record<string, unknown> | undefined;
-    } finally {
-      stmt.free();
-    }
+    return this.runRead(() => {
+      const stmt = this.db.prepare(sql);
+      try {
+        return stmt.get(...(paramsToArgs(params) as any[])) as Record<string, unknown> | undefined;
+      } finally {
+        stmt.free();
+      }
+    });
   }
 
   /** Run a multi-row SELECT, returning an array of row objects. */
   private queryAll(sql: string, params: unknown[] = []): Record<string, unknown>[] {
-    const stmt = this.db.prepare(sql);
+    return this.runRead(() => {
+      const stmt = this.db.prepare(sql);
+      try {
+        return stmt.all(...(paramsToArgs(params) as any[])) as Record<string, unknown>[];
+      } finally {
+        stmt.free();
+      }
+    });
+  }
+
+  private runRead<T>(run: () => T): T {
     try {
-      return stmt.all(...(paramsToArgs(params) as any[])) as Record<string, unknown>[];
-    } finally {
-      stmt.free();
+      return run();
+    } catch (err) {
+      if (this.dbPath === null || this.writeTransactionDepth > 0 || !isTransientIoError(err)) {
+        throw err;
+      }
+      console.error(
+        `[SQLiteAdapter] Transient I/O error reading ${this.dbPath} ` +
+          `(${err instanceof Error ? err.message : String(err)}); reopening connection and retrying once.`,
+      );
+      this.reopenConnection();
+      return run();
     }
+  }
+
+  private reopenConnection(): void {
+    if (this.dbPath === null) {
+      throw new Error('SQLiteAdapter: cannot reopen a non-file-backed database');
+    }
+    if (cachedDatabaseSyncCtor === undefined) {
+      throw new Error('SQLiteAdapter: native SQLite constructor unavailable for reopen');
+    }
+    try {
+      this.nativeDb.close();
+    } catch (closeErr) {
+      console.error(
+        `[SQLiteAdapter] Failed to close stale connection before reopen ` +
+          `(${closeErr instanceof Error ? closeErr.message : String(closeErr)}).`,
+      );
+    }
+    const db = new cachedDatabaseSyncCtor(this.dbPath, { readOnly: this.readOnly });
+    this.nativeDb = db;
+    this.db = new NativeDatabaseCompat(db);
+    this.configureConnection(true);
   }
 
   private ensureWritable(): void {
