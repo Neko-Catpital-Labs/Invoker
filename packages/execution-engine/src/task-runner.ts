@@ -2177,6 +2177,12 @@ export class TaskRunner {
     const artifacts = this.getCurrentRequiredReviewArtifacts(task);
     if (artifacts.length === 0) return;
 
+    // Safety invariant: this is the only place a review-gate task's
+    // lastHeartbeatAt advances after MergeGateExecutor.emitComplete kills
+    // its 30s executor timer. Removing this call re-freezes the heartbeat
+    // for the entire external review wait.
+    this.orchestrator.recordTaskHeartbeat?.(task.id, { at: new Date(), source: 'executor' });
+
     let latestGate = task.execution.reviewGate;
     let approvedGate = false;
     for (const artifact of artifacts) {

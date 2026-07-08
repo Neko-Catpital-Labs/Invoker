@@ -5292,6 +5292,96 @@ console.log(JSON.stringify(out));
           cwd: '/runner-base-cwd',
         });
       });
+
+      it('records a task heartbeat when polling an awaiting_approval review-gate task', async () => {
+        const allTasks = [
+          makeTask({
+            id: 'merge-heartbeat',
+            status: 'awaiting_approval',
+            config: { isMergeNode: true },
+            execution: {
+              reviewId: 'owner/repo#301',
+              workspacePath: '/workspace/heartbeat-gate',
+            },
+          }),
+        ];
+
+        const orchestrator = {
+          getTask: (id: string) => allTasks.find((t) => t.id === id),
+          getAllTasks: () => allTasks,
+          approve: vi.fn(),
+          recordTaskHeartbeat: vi.fn(),
+        };
+        const persistence = { updateTask: vi.fn() };
+        const mergeGateProvider = {
+          checkApproval: vi.fn().mockResolvedValue({
+            lifecycle: 'open',
+            rejected: false,
+            statusText: 'Pending',
+          }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+
+        await executor.checkMergeGateStatuses();
+
+        expect(mergeGateProvider.checkApproval).toHaveBeenCalledTimes(1);
+        expect(orchestrator.recordTaskHeartbeat).toHaveBeenCalledTimes(1);
+        expect(orchestrator.recordTaskHeartbeat).toHaveBeenCalledWith(
+          'merge-heartbeat',
+          expect.objectContaining({ source: 'executor', at: expect.any(Date) }),
+        );
+      });
+
+      it('records a task heartbeat when checkPrApprovalNow polls a review-gate task manually', async () => {
+        const task = makeTask({
+          id: 'manual-heartbeat',
+          status: 'awaiting_approval',
+          config: { isMergeNode: true },
+          execution: {
+            reviewId: 'owner/repo#302',
+            workspacePath: '/workspace/manual-heartbeat-gate',
+          },
+        });
+
+        const orchestrator = {
+          getTask: (id: string) => (id === task.id ? task : undefined),
+          getAllTasks: () => [task],
+          approve: vi.fn(),
+          recordTaskHeartbeat: vi.fn(),
+        };
+        const persistence = { updateTask: vi.fn() };
+        const mergeGateProvider = {
+          checkApproval: vi.fn().mockResolvedValue({
+            lifecycle: 'open',
+            rejected: false,
+            statusText: 'Pending review',
+          }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+        });
+
+        await executor.checkPrApprovalNow('manual-heartbeat');
+
+        expect(orchestrator.recordTaskHeartbeat).toHaveBeenCalledTimes(1);
+        expect(orchestrator.recordTaskHeartbeat).toHaveBeenCalledWith(
+          'manual-heartbeat',
+          expect.objectContaining({ source: 'executor' }),
+        );
+      });
+
       it('polls all current reviewGate artifacts and approves only after every required artifact is approved', async () => {
         const downstream = makeTask({ id: 'downstream-after-stack', status: 'running' });
         const reviewGate = {
