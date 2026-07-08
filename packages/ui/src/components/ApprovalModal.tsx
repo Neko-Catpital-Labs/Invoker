@@ -179,9 +179,11 @@ export function ApprovalModal({
   const approveButtonLabel = isFixApproval
     ? 'Approve Fix'
     : isMergeNode
-      ? onFinish === 'pull_request'
-        ? 'Confirm Create PR'
-        : 'Approve Merge'
+      ? onFinish === 'merge'
+        ? 'Confirm Merge'
+        : onFinish === 'pull_request'
+          ? 'Confirm Create PR'
+          : 'Approve Merge'
       : 'Approve';
 
   const mergeRejectLabel = onFinish === 'pull_request' ? 'Reject PR' : 'Reject Merge';
