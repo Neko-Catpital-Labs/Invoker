@@ -1,13 +1,3 @@
-/**
- * Integration proof: pollMergeGateTask writes `execution.lastHeartbeatAt`
- * to SQLite when the review-gate status worker (or a manual PR check)
- * touches an awaiting_approval / review_ready review-gate task.
- *
- * Unlike the mocked task-runner tests, this one wires up a real
- * SQLiteAdapter + Orchestrator + SqliteTaskRepository and reads the
- * task row back from the DB after the poll to confirm the write.
- */
-
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
 import type { Workflow } from '@invoker/data-store';
@@ -41,8 +31,6 @@ function reviewGateTask(id: string, reviewId: string, status: TaskState['status'
       selectedAttemptId: 'attempt-1',
       reviewId,
       workspacePath: '/workspace/heartbeat-gate',
-      // Old heartbeat: pretend the MergeGateExecutor's 30s timer last
-      // fired 20 minutes ago before it emitComplete'd.
       lastHeartbeatAt: new Date('2026-07-08T06:59:05.000Z'),
       heartbeatSource: 'executor',
     },
@@ -88,11 +76,9 @@ describe('pollMergeGateTask → SQLite heartbeat persistence', () => {
     adapter.saveTask(WORKFLOW.id, task);
     orchestrator.syncFromDb(WORKFLOW.id);
 
-    // Sanity check: the DB row starts with the stale heartbeat, and the
-    // review-gate polling path has never written a fresh one.
-    const stale = adapter.loadTasks(WORKFLOW.id).find((t) => t.id === task.id)!;
-    expect(stale.status).toBe('awaiting_approval');
-    expect(stale.execution.lastHeartbeatAt?.toISOString()).toBe(before.toISOString());
+    const seeded = adapter.loadTasks(WORKFLOW.id).find((t) => t.id === task.id)!;
+    expect(seeded.status).toBe('awaiting_approval');
+    expect(seeded.execution.lastHeartbeatAt?.toISOString()).toBe(before.toISOString());
 
     const runner = new TaskRunner({
       orchestrator,
@@ -108,7 +94,7 @@ describe('pollMergeGateTask → SQLite heartbeat persistence', () => {
 
     const persisted = adapter.loadTasks(WORKFLOW.id).find((t) => t.id === task.id)!;
     const heartbeat = persisted.execution.lastHeartbeatAt;
-    expect(heartbeat, 'lastHeartbeatAt should have been written to SQLite by pollMergeGateTask').toBeInstanceOf(Date);
+    expect(heartbeat).toBeInstanceOf(Date);
     const heartbeatMs = (heartbeat as Date).getTime();
     expect(heartbeatMs).toBeGreaterThanOrEqual(beforePoll);
     expect(heartbeatMs).toBeLessThanOrEqual(afterPoll);
