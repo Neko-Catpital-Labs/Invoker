@@ -91,6 +91,17 @@ export function ApprovalModal({
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  useEffect(() => {
     if (task.execution.agentSessionId || task.execution.lastAgentSessionId || fallbackSessionId) return;
     let cancelled = false;
     window.invoker
