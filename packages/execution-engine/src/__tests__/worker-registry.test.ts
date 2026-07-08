@@ -11,6 +11,7 @@ import { registerBuiltinWorkers } from '../builtin-workers.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import { createWorkerRegistry } from '../worker-registry.js';
 import { CI_FAILURE_WORKER_KIND } from '../workers/ci-failure-worker.js';
+import { AUTO_APPROVE_WORKER_KIND } from '../workers/auto-approve-worker.js';
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
@@ -69,6 +70,7 @@ describe('worker registry', () => {
       PR_STATUS_WORKER_KIND,
       CI_FAILURE_WORKER_KIND,
       DISK_HEADROOM_WORKER_KIND,
+      AUTO_APPROVE_WORKER_KIND,
       CODERABBIT_ADDRESS_WORKER_KIND,
       PR_CONFLICT_REBASE_WORKER_KIND,
     ]);
@@ -77,6 +79,7 @@ describe('worker registry', () => {
     expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
     expect(registry.get(CI_FAILURE_WORKER_KIND)).toBeDefined();
     expect(registry.get(DISK_HEADROOM_WORKER_KIND)).toBeDefined();
+    expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
     expect(registry.get(CODERABBIT_ADDRESS_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_CONFLICT_REBASE_WORKER_KIND)).toBeDefined();
   });
