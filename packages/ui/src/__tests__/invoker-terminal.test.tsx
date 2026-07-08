@@ -393,4 +393,22 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
+
+  it('emits a chat render-churn marker while typing in the planning input', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'chat_input_render',
+        expect.objectContaining({
+          latencyMs: expect.any(Number),
+          valueLength: 5,
+          lineCount: expect.any(Number),
+        }),
+      );
+    });
+  });
 });

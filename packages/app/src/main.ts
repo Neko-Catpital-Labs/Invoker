@@ -2059,6 +2059,15 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataCoalescedRequests: 0,
     largeTaskDeltaBatches: 0,
     maxTaskDeltaBatchSize: 0,
+    // Chat + embedded-terminal hot-path markers (renderer → reportUiPerf).
+    maxChatInputRenderMs: 0,
+    chatInputRenderReports: 0,
+    maxTerminalAttachMs: 0,
+    terminalAttachReports: 0,
+    maxTerminalOutputWriteMs: 0,
+    maxTerminalOutputBurstBytes: 0,
+    maxTerminalOutputBurstChunks: 0,
+    terminalOutputBurstReports: 0,
   };
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
@@ -2121,6 +2130,14 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
     uiPerfStats.largeTaskDeltaBatches = 0;
     uiPerfStats.maxTaskDeltaBatchSize = 0;
+    uiPerfStats.maxChatInputRenderMs = 0;
+    uiPerfStats.chatInputRenderReports = 0;
+    uiPerfStats.maxTerminalAttachMs = 0;
+    uiPerfStats.terminalAttachReports = 0;
+    uiPerfStats.maxTerminalOutputWriteMs = 0;
+    uiPerfStats.maxTerminalOutputBurstBytes = 0;
+    uiPerfStats.maxTerminalOutputBurstChunks = 0;
+    uiPerfStats.terminalOutputBurstReports = 0;
   };
 
   const getUiPerfStats = (): Record<string, unknown> => ({
@@ -4383,6 +4400,26 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
+      }
+      if (metric === 'chat_input_render' && typeof data?.latencyMs === 'number') {
+        uiPerfStats.maxChatInputRenderMs = Math.max(uiPerfStats.maxChatInputRenderMs, data.latencyMs);
+        uiPerfStats.chatInputRenderReports += 1;
+      }
+      if (metric === 'terminal_attach' && typeof data?.attachMs === 'number') {
+        uiPerfStats.maxTerminalAttachMs = Math.max(uiPerfStats.maxTerminalAttachMs, data.attachMs);
+        uiPerfStats.terminalAttachReports += 1;
+      }
+      if (metric === 'terminal_output_burst') {
+        if (typeof data?.maxWriteMs === 'number') {
+          uiPerfStats.maxTerminalOutputWriteMs = Math.max(uiPerfStats.maxTerminalOutputWriteMs, data.maxWriteMs);
+        }
+        if (typeof data?.bytes === 'number') {
+          uiPerfStats.maxTerminalOutputBurstBytes = Math.max(uiPerfStats.maxTerminalOutputBurstBytes, data.bytes);
+        }
+        if (typeof data?.chunks === 'number') {
+          uiPerfStats.maxTerminalOutputBurstChunks = Math.max(uiPerfStats.maxTerminalOutputBurstChunks, data.chunks);
+        }
+        uiPerfStats.terminalOutputBurstReports += 1;
       }
       uiPerfStats.rendererReports += 1;
       try {

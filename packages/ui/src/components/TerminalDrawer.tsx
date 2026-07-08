@@ -15,6 +15,14 @@ import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
 
+// Terminal output-burst pressure: xterm streams task output as many small
+// chunks. Rather than log every chunk, accumulate a rolling window and flush a
+// single marker once the window fills by count (a tight burst) or by time (a
+// slower trickle). Keeps the ui-perf log bounded while still exposing the
+// worst per-window write cost that stalls the renderer.
+const TERMINAL_OUTPUT_BURST_WINDOW_MS = 1000;
+const TERMINAL_OUTPUT_BURST_FLUSH_CHUNKS = 64;
+
 /**
  * The drawer has one explicit state model:
  *   - `minimized`: only the header/tab strip; no terminal body.
@@ -87,15 +95,71 @@ function seedTerminalOutputSnapshot(
   }
 }
 
+type TerminalOutputBurstState = {
+  windowStartedAt: number;
+  chunks: number;
+  bytes: number;
+  writeTotalMs: number;
+  maxWriteMs: number;
+};
+
+/**
+ * Fold one output chunk into the rolling burst window and flush a
+ * `terminal_output_burst` marker when the window fills by chunk count or
+ * elapsed time, then reset the window. `writeMs` is the cost of the xterm
+ * write that produced this chunk.
+ */
+function recordTerminalOutputBurst(
+  ref: { current: TerminalOutputBurstState },
+  sessionId: string,
+  bytes: number,
+  writeMs: number,
+): void {
+  const state = ref.current;
+  const now = performance.now();
+  if (state.windowStartedAt === 0) state.windowStartedAt = now;
+  state.chunks += 1;
+  state.bytes += bytes;
+  state.writeTotalMs += writeMs;
+  if (writeMs > state.maxWriteMs) state.maxWriteMs = writeMs;
+  const windowMs = now - state.windowStartedAt;
+  if (state.chunks < TERMINAL_OUTPUT_BURST_FLUSH_CHUNKS && windowMs < TERMINAL_OUTPUT_BURST_WINDOW_MS) {
+    return;
+  }
+  // Defensive: window.invoker is undefined in vitest/jsdom environments.
+  void window.invoker?.reportUiPerf?.('terminal_output_burst', {
+    sessionId,
+    windowMs: Math.round(windowMs),
+    chunks: state.chunks,
+    bytes: state.bytes,
+    writeTotalMs: Math.round(state.writeTotalMs),
+    maxWriteMs: Math.round(state.maxWriteMs),
+  });
+  state.windowStartedAt = 0;
+  state.chunks = 0;
+  state.bytes = 0;
+  state.writeTotalMs = 0;
+  state.maxWriteMs = 0;
+}
+
 function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const outputBurstRef = useRef<TerminalOutputBurstState>({
+    windowStartedAt: 0,
+    chunks: 0,
+    bytes: 0,
+    writeTotalMs: 0,
+    maxWriteMs: 0,
+  });
 
   useEffect(() => {
     const host = containerRef.current;
     if (!host) return;
+
+    const attachStartedAt = performance.now();
 
     let term: XTermTerminal;
     let fit: FitAddon;
@@ -117,6 +181,16 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     termRef.current = term;
     fitRef.current = fit;
 
+    // Embedded xterm attach cost: construction + open into the DOM host, the
+    // synchronous work a task-terminal tab pays before it can stream output.
+    // Defensive: window.invoker is undefined in vitest/jsdom environments.
+    void window.invoker?.reportUiPerf?.('terminal_attach', {
+      attachMs: Math.round(performance.now() - attachStartedAt),
+      sessionId: session.sessionId,
+      hasSnapshot: Boolean(session.outputSnapshot),
+      snapshotBytes: session.outputSnapshot?.length ?? 0,
+    });
+
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
 
     const inputDisposable = term.onData((data) => {
@@ -126,11 +200,13 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
+      const writeStartedAt = performance.now();
       try {
         term.write(event.data);
       } catch {
         /* terminal disposed */
       }
+      recordTerminalOutputBurst(outputBurstRef, session.sessionId, event.data.length, performance.now() - writeStartedAt);
     });
 
     const tryFit = () => {
