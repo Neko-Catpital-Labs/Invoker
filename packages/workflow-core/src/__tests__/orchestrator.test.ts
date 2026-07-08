@@ -3566,7 +3566,6 @@ describe('Orchestrator', () => {
       o.escalateStalledToNeedsInput('t1', 'nope');
       expect(o.getTask('t1')!.status).toBe('failed');
     });
-
     it('plain failed tasks stay failed in workflow-core', () => {
       orchestrator = new Orchestrator({
         persistence,
