@@ -129,6 +129,7 @@ import {
   resolveConfigFileState,
   resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
+  resolvePrMaintenanceWorkerConfig,
   type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
 } from './config.js';
@@ -350,6 +351,7 @@ function buildRegisteredOwnerWorkerDeps(
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
     },
+    prMaintenance: resolvePrMaintenanceWorkerConfig(invokerConfig),
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,
