@@ -115,7 +115,7 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     title: 'Untitled plan',
     status: 'still_discussing',
     presetKey: '',
-    messages: [{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' }],
+    messages: [],
     input: '',
     draftPlanAvailable: false,
     busy: false,
@@ -677,7 +677,18 @@ export function App() {
   useEffect(() => {
     window.invoker?.terminalList?.().then((list) => {
       if (Array.isArray(list) && list.length > 0) {
-        setTerminalSessions(list);
+        setTerminalSessions((prev) => {
+          if (prev.length === 0) return list;
+          const next = list.slice();
+          for (const session of prev) {
+            if (!next.some((restored) => restored.sessionId === session.sessionId)) {
+              next.push(session);
+            }
+          }
+          return next;
+        });
+        setActiveTerminalSessionId((prev) => prev ?? list[0]?.sessionId ?? null);
+        setTerminalDrawerState((prev) => (prev === 'minimized' ? 'partial' : prev));
       }
     }).catch(() => {});
   }, []);
@@ -2181,9 +2192,12 @@ export function App() {
 
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
+    const shouldAutoCollapseSidebar = nextSurface !== 'home' && viewportWidth < 1440;
     if (nextSurface === 'workers') {
       setSidebarSurface('workers');
-      setSidebarCollapsed(true);
+      if (shouldAutoCollapseSidebar) {
+        setSidebarCollapsed(true);
+      }
       setInspectorCollapsed(true);
       setInspectorManualOpen(false);
       setStatusFilters(new Set<WorkflowStatus>());
@@ -2193,20 +2207,20 @@ export function App() {
     setViewMode('dag');
     if (nextSurface === 'home') {
       setSidebarSurface('home');
-      setSidebarCollapsed(false);
       setInspectorManualOpen(false);
       return;
     }
     setSidebarSurface(nextSurface);
-    setSidebarCollapsed(true);
+    if (shouldAutoCollapseSidebar) {
+      setSidebarCollapsed(true);
+    }
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, []);
+  }, [viewportWidth]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
     setSidebarSurface('home');
-    setSidebarCollapsed(false);
     setInspectorManualOpen(false);
     setViewMode('dag');
   }, []);
@@ -2869,7 +2883,7 @@ export function App() {
             </button>
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto bg-gray-900 p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-gray-950/95">
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
@@ -3347,4 +3361,3 @@ export function App() {
     </div>
   );
 }
-
