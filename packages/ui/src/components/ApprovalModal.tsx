@@ -88,6 +88,7 @@ export function ApprovalModal({
   const [sessionReason, setSessionReason] = useState<string | undefined>(undefined);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (task.execution.agentSessionId || task.execution.lastAgentSessionId || fallbackSessionId) return;
@@ -148,6 +149,8 @@ export function ApprovalModal({
   }, [sessionId, effectiveAgentName]);
 
   const handleApprove = () => {
+    if (submitting) return;
+    setSubmitting(true);
     onApprove(task.id);
     onClose();
   };
@@ -157,6 +160,8 @@ export function ApprovalModal({
       setShowRejectInput(true);
       return;
     }
+    if (submitting) return;
+    setSubmitting(true);
     onReject(task.id, reason || undefined);
     onClose();
   };
@@ -271,14 +276,16 @@ export function ApprovalModal({
             </button>
             <button
               onClick={handleReject}
-              className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded text-sm font-medium transition-colors"
+              disabled={submitting}
+              className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
             >
               {rejectButtonLabel}
             </button>
             {!showRejectInput && (
               <button
                 onClick={handleApprove}
-                className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors"
+                disabled={submitting}
+                className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
               >
                 {approveButtonLabel}
               </button>
