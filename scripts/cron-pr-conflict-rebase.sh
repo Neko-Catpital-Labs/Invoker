@@ -1,26 +1,4 @@
 #!/usr/bin/env bash
-# Job 2 — PR merge-conflict rebase cron.
-#
-# Every 5 min: find open PRs by $PR_AUTHOR whose GitHub merge state is
-# conflicting (mergeStateStatus == DIRTY or mergeable == CONFLICTING), map each
-# back to its Invoker workflow, and `rebase-recreate` it — but only ONCE per
-# (workflow, generation), capped at $MAX_REBASE_ATTEMPTS per workflow.
-#
-# Anti-loop guards (no separate in-flight query needed):
-#   1. shared flock/mkdir lock + synchronous dispatch — one cron op at a time.
-#   2. Invoker's per-workflow CommandService mutex — serializes owner-side.
-#   3. per-(workflow, generation) ledger dedup — a successful rebase-recreate
-#      bumps generation, so the next real conflict appears under a new
-#      generation and is allowed exactly once.
-#
-# At most ONE rebase-recreate runs per tick (bounds the lock hold); remaining
-# conflicting PRs are handled on later ticks.
-#
-# Env: INVOKER_GITHUB_TARGET_REPO, INVOKER_PR_CRON_AUTHOR,
-#      INVOKER_PR_REBASE_MAX_ATTEMPTS (default 3),
-#      INVOKER_PR_REBASE_CONFIRM_TIMEOUT (default 120s),
-#      INVOKER_PR_CONFLICT_STATE_FILE (ledger path),
-#      INVOKER_PR_CRON_DRY_RUN=1 (print intended actions only).
 set -euo pipefail
 
 # shellcheck source=scripts/cron-pr-lib.sh
