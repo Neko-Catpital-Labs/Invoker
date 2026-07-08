@@ -171,6 +171,12 @@ export interface ReviewGateState {
   readonly artifacts: readonly ReviewGateArtifact[];
 }
 
+export type FailureClass = 'liveness_stall';
+
+export function isLivenessFailureClass(failureClass: FailureClass | undefined): boolean {
+  return failureClass === 'liveness_stall';
+}
+
 export interface TaskExecution {
   readonly generation?: number;
   readonly blockedBy?: string;
