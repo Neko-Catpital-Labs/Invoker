@@ -3506,6 +3506,7 @@ describe('TaskRunner', () => {
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
@@ -3646,6 +3647,7 @@ describe('TaskRunner', () => {
         if (args[0] === 'branch' && args[1] === '--show-current') {
           return currentBranchByDir.get(dir) ?? '';
         }
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
         return '';
       };
       (executor as any).createMergeWorktree = vi.fn()
@@ -3791,6 +3793,7 @@ console.log(JSON.stringify(out));
         // pushed tip. Model that so the post-push retrievability check passes.
         if (args[0] === 'ls-remote') return `feature-sha\trefs/heads/${args[args.length - 1]}`;
         if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
         return '';
       };
       (executor as any).execGitReadonly = async (args: string[]) => {
@@ -3950,6 +3953,7 @@ console.log(JSON.stringify(out));
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
@@ -4121,6 +4125,7 @@ console.log(JSON.stringify(out));
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
@@ -4299,6 +4304,7 @@ console.log(JSON.stringify(out));
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
@@ -4370,6 +4376,7 @@ console.log(JSON.stringify(out));
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
@@ -4588,6 +4595,7 @@ console.log(JSON.stringify(out));
       };
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
