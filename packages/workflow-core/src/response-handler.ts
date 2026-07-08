@@ -8,7 +8,7 @@
 
 import type { WorkResponse } from '@invoker/contracts';
 import { validateWorkResponse } from '@invoker/contracts';
-import type { ReviewGateState } from '@invoker/workflow-graph';
+import type { FailureClass, ReviewGateState } from '@invoker/workflow-graph';
 
 /** Plan-local id segment for experiment id prefixing (strip `${workflowId}/` when present). */
 function planLocalFromActionId(actionId: string): string {
@@ -60,6 +60,7 @@ export type ParsedResponse =
       exitCode: number;
       error?: string;
       agentName?: string;
+      failureClass?: FailureClass;
     }
   | {
       type: 'needs_input';
@@ -129,6 +130,7 @@ export class ResponseHandler {
           exitCode: outputs.exitCode ?? 1,
           error: outputs.error,
           agentName: outputs.agentName,
+          failureClass: outputs.failureClass,
         };
 
       case 'needs_input':

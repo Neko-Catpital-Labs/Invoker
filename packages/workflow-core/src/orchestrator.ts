@@ -21,7 +21,7 @@ import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
-import { createTaskState, createAttempt, hasFailedDependencyPath } from '@invoker/workflow-graph';
+import { createTaskState, createAttempt, hasFailedDependencyPath, isLivenessFailureClass } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
@@ -3912,6 +3912,8 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) return false;
     if (task.status !== 'failed') return false;
+    // Liveness stalls are requeued by the requeue worker, never AI-auto-fixed.
+    if (isLivenessFailureClass(task.execution.failureClass)) return false;
     if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
     return this.getAutoFixRetryBudget(taskId) > 0;
   }

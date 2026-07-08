@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
+import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { useTasks } from './hooks/useTasks.js';
@@ -46,6 +46,7 @@ import {
   formatTaskStatus,
   formatWorkflowStatus,
 } from './lib/workflow-progress-surfaces.js';
+import { computeSearchResults, type SearchResult } from './lib/search.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
@@ -74,10 +75,6 @@ type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'
 type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
-type SearchResult =
-  | { kind: 'workflow'; id: string; title: string; subtitle: string }
-  | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
-
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
 const STATUS_KEY_ORDER: readonly WorkflowStatus[] = [
@@ -188,10 +185,6 @@ function getOrderedSidebarNavItems(root: ParentNode): HTMLElement[] {
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest(EDITABLE_SELECTOR));
-}
-
-function normalizedSearchText(value: string | undefined): string {
-  return (value ?? '').toLowerCase();
 }
 
 interface WorkflowContextMenuProps {
@@ -571,6 +564,7 @@ export function App() {
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
+  const [mutationFailure, setMutationFailure] = useState<WorkflowMutationFailedEvent | null>(null);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
   const [updateCliPending, setUpdateCliPending] = useState(false);
@@ -705,6 +699,13 @@ export function App() {
             : session,
         ),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
+      setMutationFailure(event);
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -856,6 +857,7 @@ export function App() {
   }, [miniDagTasks, selectedTask, selectedWorkflow, selectedWorkflowId, tasks.size, workflowSelectionDismissed]);
   const isSelectedWorkflowGraphRefreshing = displayedSelectedWorkflowGraph !== null
     && !(selectedWorkflow && miniDagTasks.size > 0);
+  const selectedWorkflowGraphAvailable = displayedSelectedWorkflowGraph !== null;
   const selectedTaskDagWorkflows = useMemo(() => {
     const workflowForDag = displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow;
     if (!workflowForDag || workflows.has(workflowForDag.id)) {
@@ -952,54 +954,10 @@ export function App() {
   const attentionEntries = useMemo(() => getAttentionTaskEntries(tasks, workflows), [tasks, workflows]);
   const runningEntries = useMemo(() => getRunningTaskEntries(tasks, workflows, queueStatus), [tasks, workflows, queueStatus]);
 
-  const searchResults = useMemo<SearchResult[]>(() => {
-    const query = normalizedSearchText(searchQuery.trim());
-    if (!query) return [];
-    const results: SearchResult[] = [];
-    for (const workflow of workflows.values()) {
-      const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflow.id);
-      const reviewUrl = workflowTasks.find((task) => task.execution.reviewUrl)?.execution.reviewUrl;
-      const haystack = [
-        workflow.id,
-        workflow.name,
-        workflow.status,
-        workflow.repoUrl,
-        workflow.intermediateRepoUrl,
-        reviewUrl,
-      ].map(normalizedSearchText).join(' ');
-      if (haystack.includes(query)) {
-        results.push({
-          kind: 'workflow',
-          id: workflow.id,
-          title: workflow.name || workflow.id,
-          subtitle: `Workflow · ${workflow.status}`,
-        });
-      }
-    }
-    for (const task of tasks.values()) {
-      const workflow = task.config.workflowId ? workflows.get(task.config.workflowId) : null;
-      const haystack = [
-        task.id,
-        task.description,
-        task.status,
-        task.config.summary,
-        task.config.prompt,
-        task.config.command,
-        task.execution.reviewUrl,
-        workflow?.name,
-      ].map(normalizedSearchText).join(' ');
-      if (haystack.includes(query)) {
-        results.push({
-          kind: 'task',
-          id: task.id,
-          workflowId: task.config.workflowId ?? null,
-          title: task.description || task.id,
-          subtitle: `Task · ${workflow?.name ?? task.config.workflowId ?? 'unknown workflow'}`,
-        });
-      }
-    }
-    return results.slice(0, 12);
-  }, [searchQuery, tasks, workflows]);
+  const searchResults = useMemo<SearchResult[]>(
+    () => computeSearchResults(searchQuery, tasks, workflows),
+    [searchQuery, tasks, workflows],
+  );
 
   useEffect(() => {
     setSearchActiveIndex(0);
@@ -1516,7 +1474,7 @@ export function App() {
     setSelectedWorkerKind(workerStatus?.workers[0]?.kind ?? null);
   }, [selectedWorkerKind, sidebarSurface, workerStatus]);
   useEffect(() => {
-    if (viewMode !== 'dag' || sidebarSurface === 'home' || displayedSelectedWorkflowGraph === null) {
+    if (viewMode !== 'dag' || sidebarSurface === 'home' || !selectedWorkflowGraphAvailable) {
       return;
     }
 
@@ -1540,9 +1498,9 @@ export function App() {
       cancelAnimationFrame(fitFrame);
     };
   }, [
-    displayedSelectedWorkflowGraph,
     issueCameraCommand,
     selectedTaskId,
+    selectedWorkflowGraphAvailable,
     sidebarSurface,
     viewMode,
   ]);
@@ -3025,6 +2983,55 @@ export function App() {
         >
           <span className="font-semibold text-blue-50">Read-only mode.</span>{' '}
           This window can browse workflows, but it cannot make changes until the write owner is available.
+        </div>
+      )}
+      {mutationFailure && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          data-testid="workflow-mutation-failed-banner"
+          className="px-4 py-3 border-b border-amber-700 bg-amber-950/60 flex items-start justify-between gap-4"
+        >
+          <div className="text-sm text-amber-100 min-w-0">
+            <div className="font-semibold text-amber-50">
+              {mutationFailure.channel === 'invoker:approve'
+                ? 'Approve failed'
+                : mutationFailure.channel === 'invoker:reject'
+                  ? 'Reject failed'
+                  : `Mutation failed (${mutationFailure.channel})`}
+            </div>
+            <div
+              data-testid="workflow-mutation-failed-message"
+              className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100/90"
+            >
+              {mutationFailure.message}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {mutationFailure.taskId && tasks.get(mutationFailure.taskId) && (
+              <button
+                type="button"
+                onClick={() => {
+                  const targetTaskId = mutationFailure.taskId;
+                  if (!targetTaskId) return;
+                  selectTaskById(targetTaskId);
+                  setMutationFailure(null);
+                }}
+                data-testid="workflow-mutation-failed-open-task"
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium transition-colors"
+              >
+                Open task
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setMutationFailure(null)}
+              data-testid="workflow-mutation-failed-dismiss"
+              className="px-2 py-1 text-amber-200 hover:text-white text-xs"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
