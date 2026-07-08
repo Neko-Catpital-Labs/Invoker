@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -10,7 +11,7 @@ vi.mock('@xyflow/react', async () => {
 });
 
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
-const { App } = await import('../App.js');
+const { App, RailScrollList } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
 
 describe('Invoker terminal (component)', () => {
@@ -392,5 +393,48 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+  const expectScrollableRailList = (rail: HTMLElement) => {
+    const list = within(rail).getByTestId('rail-scroll-list');
+    // The list body owns the vertical overflow instead of growing the rail.
+    expect(list.className).toContain('overflow-y-auto');
+    // ...and is a flex child that can shrink below its content height.
+    expect(list.className).toContain('min-h-0');
+    expect(list.className).toContain('flex-1');
+
+    // The rail shell hosts the list body inside a flex column so the flex-child
+    // sizing (shrink + scroll) takes effect instead of the list growing the shell.
+    const railBody = list.parentElement!;
+    expect(railBody.className).toContain('flex');
+    expect(railBody.className).toContain('flex-col');
+    expect(railBody.className).toContain('min-h-0');
+    expect(railBody.className).toContain('flex-1');
+  };
+
+  it('gives the shared rail list body the scroll-container contract', () => {
+    // RailScrollList is the single scroll owner reused by every left rail list body:
+    // renderWorkflowsList, renderTaskList (attention + running) and renderPlanningSessionList.
+    render(<RailScrollList><button type="button">item</button></RailScrollList>);
+    const list = screen.getByTestId('rail-scroll-list');
+    expect(list.className).toContain('overflow-y-auto');
+    expect(list.className).toContain('min-h-0');
+    expect(list.className).toContain('flex-1');
+    expect(list).toHaveTextContent('item');
+  });
+
+  it('mounts the browser rail list as a scroll container inside a flex-column shell', async () => {
+    // renderBrowserRail is the shared shell for the workflows, attention and running
+    // rails; this proves it hosts RailScrollList as a shrinkable scroll child.
+    const workflows: WorkflowMeta[] = [{ id: 'wf-scroll', name: 'Scrollable', status: 'running' }];
+    render(<App />);
+    act(() => mock.setTasks([], workflows));
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    expectScrollableRailList(await screen.findByTestId('browser-rail'));
+  });
+
+  it('mounts the planning session list as a scroll container inside a flex-column shell', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+    expectScrollableRailList(screen.getByTestId('planning-session-rail'));
   });
 });

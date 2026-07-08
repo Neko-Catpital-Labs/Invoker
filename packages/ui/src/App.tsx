@@ -9,7 +9,7 @@
  * - Modals overlay when needed
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type ReactNode, type RefObject } from 'react';
 import yaml from 'js-yaml';
 import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
@@ -458,6 +458,14 @@ function EmptyInspectorPlaceholder(): JSX.Element {
         <p className="mt-2 text-xs text-gray-500">Status, logs, and actions will appear here.</p>
       </div>
     </aside>
+  );
+}
+
+export function RailScrollList({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <div data-testid="rail-scroll-list" className="min-h-0 flex-1 overflow-y-auto p-3">
+      {children}
+    </div>
   );
 }
 
@@ -2749,7 +2757,7 @@ export function App() {
 
   const renderWorkflowsList = (): JSX.Element => (
     workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
-      <div className="overflow-y-auto p-3">
+      <RailScrollList>
         <div className="space-y-1">
           {workflowEntries.map((entry) => {
             const selected = selectedWorkflow?.id === entry.workflow.id;
@@ -2767,13 +2775,13 @@ export function App() {
             );
           })}
         </div>
-      </div>
+      </RailScrollList>
     )
   );
 
   const renderTaskList = (entries: typeof attentionEntries, emptyTitle: string, emptyCopy: string, tone: 'attention' | 'running'): JSX.Element => (
     entries.length === 0 ? renderBrowserEmptyState(emptyTitle, emptyCopy) : (
-      <div className="overflow-y-auto p-3">
+      <RailScrollList>
         <div className="space-y-1">
           {entries.map((entry) => {
             const selected = selectedTask?.id === entry.task.id;
@@ -2794,13 +2802,13 @@ export function App() {
             );
           })}
         </div>
-      </div>
+      </RailScrollList>
     )
   );
 
 
   const renderPlanningSessionList = (): JSX.Element => (
-    <div className="overflow-y-auto p-3">
+    <RailScrollList>
       <div className="space-y-1">
         {planningSessions.map((session) => {
           const selected = session.id === activePlanningSession.id;
@@ -2823,7 +2831,7 @@ export function App() {
           );
         })}
       </div>
-    </div>
+    </RailScrollList>
   );
 
   const planningReadyCount = planningSessions.filter((session) => session.status === 'draft_ready').length;
@@ -2847,7 +2855,7 @@ export function App() {
             New chat
           </button>
         </div>
-        <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
+        <div className="flex min-h-0 flex-1 flex-col">{renderPlanningSessionList()}</div>
       </div>
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
@@ -2908,7 +2916,7 @@ export function App() {
           Close
         </button>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col">
         {sidebarSurface === 'workflows'
           ? renderWorkflowsList()
           : sidebarSurface === 'attention'
