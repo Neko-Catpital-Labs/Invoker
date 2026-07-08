@@ -209,6 +209,16 @@ function sqlStringLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
+function hasWalFrames(dbPath: string): boolean {
+  try {
+    return statSync(`${dbPath}-wal`).size > 0;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return false;
+    return existsSync(`${dbPath}-wal`);
+  }
+}
+
 /**
  * SQLite result codes that mean the database file itself is unreadable and a
  * fresh start is the only recovery: SQLITE_CORRUPT (11) and SQLITE_NOTADB (26).
@@ -556,6 +566,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
 
+    if (isFile && options?.readOnly === true && hasWalFrames(dbPath)) {
+      throw new Error(
+        'Read-only file open refused while WAL sidecars exist. ' +
+        'Use the owner boundary or retry after the writer closes.',
+      );
+    }
 
     try {
       const { DatabaseSync } = await loadNativeSqlite();

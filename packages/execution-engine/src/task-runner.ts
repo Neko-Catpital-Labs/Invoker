@@ -107,7 +107,7 @@ type ResolvedExecutionSelection = {
 };
 
 
-type SelectedExecutor = {
+type SelectedExecutor = Executor & {
   executor: Executor;
   resolvedExecution: ResolvedExecutionSelection;
   selectedPoolMemberId?: string;
@@ -1140,6 +1140,33 @@ export class TaskRunner {
     return resolvedExecution;
   }
 
+  private selectedExecutor(
+    executor: Executor,
+    resolvedExecution: ResolvedExecutionSelection,
+    selectedPoolMemberId?: string,
+  ): SelectedExecutor {
+    Object.defineProperties(executor, {
+      executor: {
+        value: executor,
+        enumerable: false,
+        configurable: true,
+      },
+      resolvedExecution: {
+        value: resolvedExecution,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      },
+      selectedPoolMemberId: {
+        value: selectedPoolMemberId,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      },
+    });
+    return executor as SelectedExecutor;
+  }
+
   selectExecutor(task: TaskState, excludedPoolMemberKeys: Set<string> = new Set()): SelectedExecutor {
     let effectiveType = task.config.runnerKind ?? (task.config.isMergeNode ? 'merge' : undefined);
     let selectedPoolMemberId: string | undefined;
@@ -1217,7 +1244,7 @@ export class TaskRunner {
       const registered = this.executorRegistry.get(effectiveType);
       if (registered && (effectiveType !== 'merge' || registered.type === 'merge')) {
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
-        return { executor: registered, resolvedExecution, selectedPoolMemberId };
+        return this.selectedExecutor(registered, resolvedExecution, selectedPoolMemberId);
       }
 
       if (effectiveType === 'docker') {
@@ -1226,9 +1253,9 @@ export class TaskRunner {
           secretsFile: this.dockerConfig.secretsFile,
           agentRegistry: this.executionAgentRegistry,
         });
-        this.executorRegistry.register(`docker:${task.id}`, docker);
+        this.executorRegistry.register?.(`docker:${task.id}`, docker);
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=docker → docker (per-task)`);
-        return { executor: docker, resolvedExecution, selectedPoolMemberId };
+        return this.selectedExecutor(docker, resolvedExecution, selectedPoolMemberId);
       }
 
       if (effectiveType === 'worktree') {
@@ -1239,16 +1266,16 @@ export class TaskRunner {
           maxWorktrees: this.maxWorktreesPerRepo,
           agentRegistry: this.executionAgentRegistry,
         });
-        this.executorRegistry.register('worktree', worktree);
+        this.executorRegistry.register?.('worktree', worktree);
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
-        return { executor: worktree, resolvedExecution, selectedPoolMemberId };
+        return this.selectedExecutor(worktree, resolvedExecution, selectedPoolMemberId);
       }
 
       if (effectiveType === 'merge') {
         const merge = new MergeGateExecutor(this);
         this.executorRegistry.register?.('merge', merge);
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=merge → merge (lazy registered)`);
-        return { executor: merge, resolvedExecution, selectedPoolMemberId };
+        return this.selectedExecutor(merge, resolvedExecution, selectedPoolMemberId);
       }
 
       if (effectiveType === 'ssh') {
@@ -1293,7 +1320,7 @@ export class TaskRunner {
         const cached = this.sshExecutorCache.get(cacheKey);
         if (cached) {
           traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
-          return { executor: cached, resolvedExecution, selectedPoolMemberId: targetId };
+          return this.selectedExecutor(cached, resolvedExecution, targetId);
         }
 
         for (const key of this.sshExecutorCache.keys()) {
@@ -1314,16 +1341,16 @@ export class TaskRunner {
           secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
           remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
         });
-        this.executorRegistry.register(`ssh:${targetId}`, ssh);
+        this.executorRegistry.register?.(`ssh:${targetId}`, ssh);
         this.sshExecutorCache.set(cacheKey, ssh);
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (lazy registered)`);
-        return { executor: ssh, resolvedExecution, selectedPoolMemberId: targetId };
+        return this.selectedExecutor(ssh, resolvedExecution, targetId);
       }
     }
 
     const executor = this.executorRegistry.getDefault();
     traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=(default) → ${executor.type}`);
-    return { executor, resolvedExecution, selectedPoolMemberId };
+    return this.selectedExecutor(executor, resolvedExecution, selectedPoolMemberId);
   }
 
   /**

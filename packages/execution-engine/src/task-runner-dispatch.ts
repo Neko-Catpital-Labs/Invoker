@@ -14,6 +14,7 @@ import type { TaskState, RunnerKind } from '@invoker/workflow-core';
 import type { WorkRequest } from '@invoker/contracts';
 
 import type { Executor, ExecutorHandle } from './executor.js';
+import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import {
   PRE_START_HEARTBEAT_INTERVAL_MS,
@@ -286,22 +287,43 @@ export async function dispatchExecutor(
     const selectedSshTargetId = executor.type === 'ssh'
       ? host.selectedRemoteTargetId(task, poolSelection)
       : undefined;
+    const configChanges: {
+      runnerKind: RunnerKind;
+      poolMemberId?: string;
+      executionAgent?: string;
+      executionModel?: string;
+    } = {
+      runnerKind: executor.type as RunnerKind,
+      ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
+    };
+    if (task.config.executionAgent?.trim() || resolvedExecution.executionAgent !== DEFAULT_EXECUTION_AGENT) {
+      configChanges.executionAgent = resolvedExecution.executionAgent;
+    }
+    if (task.config.executionModel?.trim() || resolvedExecution.executionModel) {
+      configChanges.executionModel = resolvedExecution.executionModel;
+    }
+    const executionChanges: {
+      workspacePath: string;
+      branch?: string;
+      agentSessionId?: string;
+      lastAgentSessionId?: string;
+      agentName?: string;
+      lastAgentName?: string;
+      containerId?: string;
+    } = {
+      workspacePath: handle.workspacePath,
+      branch: handle.branch ?? undefined,
+      agentSessionId: handle.agentSessionId ?? undefined,
+      lastAgentSessionId: handle.agentSessionId ?? undefined,
+      lastAgentName: actionType === 'ai_task' ? resolvedExecution.executionAgent : undefined,
+      containerId: handle.containerId ?? undefined,
+    };
+    if (actionType === 'ai_task') {
+      executionChanges.agentName = resolvedExecution.executionAgent;
+    }
     const changes = {
-      config: {
-        runnerKind: executor.type as RunnerKind,
-        executionAgent: resolvedExecution.executionAgent,
-        executionModel: resolvedExecution.executionModel,
-        ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
-      },
-      execution: {
-        workspacePath: handle.workspacePath,
-        branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
-        agentSessionId: handle.agentSessionId ?? undefined,
-        lastAgentSessionId: handle.agentSessionId ?? undefined,
-        agentName: actionType === 'ai_task' ? resolvedExecution.executionAgent : undefined,
-        lastAgentName: actionType === 'ai_task' ? resolvedExecution.executionAgent : undefined,
-        containerId: handle.containerId ?? undefined,
-      },
+      config: configChanges,
+      execution: executionChanges,
     };
     host.persistence.updateTask(task.id, changes);
     // Mirror branch + workspacePath onto the attempt row so reconciliation

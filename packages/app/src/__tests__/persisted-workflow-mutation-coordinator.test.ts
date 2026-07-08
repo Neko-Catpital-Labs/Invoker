@@ -107,6 +107,44 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(adapter.listWorkflowMutationLeases()).toHaveLength(0);
   });
 
+  it('waits for submitted fire-and-forget workflow mutations to drain', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
+
+    const gate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const payload = args[0] as { args?: string[] } | undefined;
+        order.push(payload?.args?.join(' ') ?? 'unknown');
+        await gate.promise;
+      },
+    );
+
+    const intentId = coordinator.submit(
+      'wf-1',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate', 'wf-1'] }],
+      { deferDrain: true },
+    );
+    const idle = coordinator.waitForWorkflowIdle('wf-1');
+
+    await waitFor(() => order.length === 1);
+    expect(adapter.loadWorkflowMutationIntent(intentId)?.status).toBe('running');
+
+    gate.resolve();
+    await idle;
+
+    expect(order).toEqual(['recreate wf-1']);
+    expect(adapter.loadWorkflowMutationIntent(intentId)?.status).toBe('completed');
+  });
+
   it('evicts older queued workflow intents when a delegated recreate fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
@@ -154,6 +192,45 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(invalidatedIntent?.error).toContain('Superseded by recreate intent #3');
     expect(evictedIntent?.status).toBe('failed');
     expect(evictedIntent?.error).toContain('queue fence');
+    gate.resolve();
+  });
+
+  it('treats task-target rebase-recreate as a workflow queue fence', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
+
+    const gate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const payload = args[0] as { args?: string[] } | undefined;
+        const command = payload?.args?.join(' ') ?? 'unknown';
+        order.push(command);
+        if (command.includes('hold-work')) {
+          await gate.promise;
+        }
+      },
+    );
+
+    const running = coordinator.enqueue<void>('wf-1', 'normal', 'headless.exec', [{ args: ['set', 'command', 'wf-1/task-0', 'hold-work'] }]);
+    void running.catch(() => {});
+    const olderQueued = coordinator.enqueue<void>('wf-1', 'normal', 'headless.exec', [{ args: ['set', 'agent', 'wf-1/task-1', 'codex'] }]);
+    void olderQueued.catch(() => {});
+    const rebaseFence = coordinator.enqueue<void>('wf-1', 'high', 'headless.exec', [{ args: ['rebase-recreate', 'wf-1/task-0'] }]);
+
+    await rebaseFence;
+    await expect(running).rejects.toThrow(/superseded by recreate intent/i);
+    await expect(olderQueued).rejects.toThrow(/evicted/i);
+
+    expect(order).toEqual([
+      'set command wf-1/task-0 hold-work',
+      'rebase-recreate wf-1/task-0',
+    ]);
     gate.resolve();
   });
 

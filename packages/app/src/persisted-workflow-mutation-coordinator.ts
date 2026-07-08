@@ -127,6 +127,10 @@ export class PersistedWorkflowMutationCoordinator {
     return intentId;
   }
 
+  async waitForWorkflowIdle(workflowId: string): Promise<void> {
+    await this.drainWorkflowWhenScheduled(workflowId);
+  }
+
   private findOpenCoalescibleRetryIntent(
     workflowId: string,
     channel: string,
@@ -485,16 +489,11 @@ export class PersistedWorkflowMutationCoordinator {
     const payload = intent.args[0] as { args?: unknown[] } | undefined;
     const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
     const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
-    const target = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
     if (command === 'recreate-task') {
       return true;
     }
     if (command === 'delete' || command === 'delete-workflow' || command === 'delete-task' || command === 'delete-all') {
       return true;
-    }
-    const isWorkflowId = /^wf-[^/]+$/.test(target);
-    if (!isWorkflowId) {
-      return false;
     }
     return command === 'recreate' || command === 'rebase-retry' || command === 'rebase-recreate' || command === 'retry';
   }

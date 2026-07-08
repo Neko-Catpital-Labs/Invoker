@@ -511,12 +511,12 @@ function logHeadlessExecReceived(payload: HeadlessExecMutationPayload, mode: Hea
   );
 }
 
-function acknowledgeNoTrackHeadlessExec(
+async function acknowledgeNoTrackHeadlessExec(
   payload: HeadlessExecMutationPayload,
   workflowId: string | undefined,
   priority: WorkflowMutationPriority,
   mode: HeadlessOwnerMode,
-): WorkflowMutationAcceptedResult | undefined {
+): Promise<WorkflowMutationAcceptedResult | undefined> {
   logger.info(
     `headless.exec decision ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId ?? '<none>'}"`, priority })}`,
     { module: 'ipc-delegate' },
@@ -529,8 +529,11 @@ function acknowledgeNoTrackHeadlessExec(
       coordinator: workflowMutationCoordinator,
       workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
       logger,
-      deferDrain: true,
+      deferDrain: false,
     });
+    if (result.intentId !== 0) {
+      await workflowMutationCoordinator.waitForWorkflowIdle(workflowId);
+    }
     logger.info(
       `headless.exec accepted ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId}"`, intent: result.intentId, priority })}`,
       { module: 'ipc-delegate' },
@@ -1737,7 +1740,7 @@ function startHeadlessMode(): void {
           };
           logHeadlessExecReceived(payload, 'standalone');
           const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
-          const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'standalone');
+          const acknowledgement = await acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'standalone');
           if (acknowledgement) return acknowledgement;
           await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
             await runHeadless(args, {
@@ -3570,7 +3573,7 @@ function createEmbeddedTerminalBackendFromConfig(
         };
         logHeadlessExecReceived(payload, 'gui');
         const { workflowId, priority } = classifyHeadlessExecMutation(payload);
-        const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'gui');
+        const acknowledgement = await acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'gui');
         if (acknowledgement) return acknowledgement;
         return runWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => executeHeadlessExec(payload));
       });

@@ -678,6 +678,8 @@ export function App() {
     window.invoker?.terminalList?.().then((list) => {
       if (Array.isArray(list) && list.length > 0) {
         setTerminalSessions(list);
+        setActiveTerminalSessionId((current) => current ?? list[0]?.sessionId ?? null);
+        setTerminalDrawerState('partial');
       }
     }).catch(() => {});
   }, []);
@@ -2181,9 +2183,10 @@ export function App() {
 
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
+    const shouldAutoCollapseSidebar = viewportWidth < 1440;
     if (nextSurface === 'workers') {
       setSidebarSurface('workers');
-      setSidebarCollapsed(true);
+      if (shouldAutoCollapseSidebar) setSidebarCollapsed(true);
       setInspectorCollapsed(true);
       setInspectorManualOpen(false);
       setStatusFilters(new Set<WorkflowStatus>());
@@ -2193,15 +2196,14 @@ export function App() {
     setViewMode('dag');
     if (nextSurface === 'home') {
       setSidebarSurface('home');
-      setSidebarCollapsed(false);
       setInspectorManualOpen(false);
       return;
     }
     setSidebarSurface(nextSurface);
-    setSidebarCollapsed(true);
+    if (shouldAutoCollapseSidebar) setSidebarCollapsed(true);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, []);
+  }, [viewportWidth]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
@@ -3347,4 +3349,3 @@ export function App() {
     </div>
   );
 }
-

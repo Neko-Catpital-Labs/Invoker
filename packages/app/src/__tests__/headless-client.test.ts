@@ -1,10 +1,22 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
-import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
+import { OWNER_BOOTSTRAP_LOCK_DIR } from '../headless-owner-bootstrap.js';
+import {
+  SharedMutationOwnerTimeoutError,
+  electronCommandArgs,
+  ensureStandaloneOwnerViaBootstrap,
+  runHeadlessClientCommand,
+} from '../headless-client.js';
 
 describe('headless-client', () => {
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+  const savedInvokerDbDir = process.env.INVOKER_DB_DIR;
+  const savedBootstrapTimeout = process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS;
   beforeEach(() => {
     delete process.env.INVOKER_HEADLESS_STANDALONE;
   });
@@ -13,6 +25,16 @@ describe('headless-client', () => {
       delete process.env.INVOKER_HEADLESS_STANDALONE;
     } else {
       process.env.INVOKER_HEADLESS_STANDALONE = savedStandalone;
+    }
+    if (savedInvokerDbDir === undefined) {
+      delete process.env.INVOKER_DB_DIR;
+    } else {
+      process.env.INVOKER_DB_DIR = savedInvokerDbDir;
+    }
+    if (savedBootstrapTimeout === undefined) {
+      delete process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS;
+    } else {
+      process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS = savedBootstrapTimeout;
     }
   });
 
@@ -60,6 +82,27 @@ describe('headless-client', () => {
     expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     expect(refreshMessageBus).toHaveBeenCalled();
     expect(runElectronHeadless).not.toHaveBeenCalled();
+  });
+
+  it('falls back directly for standalone generic read queries when no owner is reachable', async () => {
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const refreshMessageBus = vi.fn().mockResolvedValue(secondBus);
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'task', 'wf-1/root', '--output', 'json'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner,
+      refreshMessageBus,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(refreshMessageBus).toHaveBeenCalledTimes(1);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(runElectronHeadless).toHaveBeenCalledWith(['query', 'task', 'wf-1/root', '--output', 'json']);
   });
 
   it('delegates mutating commands to a standalone-capable owner endpoint', async () => {
@@ -191,6 +234,25 @@ describe('headless-client', () => {
     expect(exitCode).toBe(0);
     expect(runHandler).toHaveBeenCalledTimes(1);
     expect(runHandler).toHaveBeenCalledWith(expect.objectContaining({ planPath: expect.stringContaining('plan.yaml') }));
+  });
+
+  it('delegates standalone no-track headless.run instead of launching locally', async () => {
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+    const bus = new LocalBus();
+    const runHandler = vi.fn(async () => ({ workflowId: 'wf-standalone', tasks: [] }));
+    const runElectronHeadless = vi.fn(async () => 0);
+    bus.onRequest('headless.run', runHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-standalone', mode: 'standalone' }));
+
+    const exitCode = await runHeadlessClientCommand(['run', '/tmp/plan.yaml', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runHandler).toHaveBeenCalledTimes(1);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
   });
 
   // --- Regression: standalone-owner scope for headless.resume ---
@@ -334,6 +396,32 @@ describe('headless-client', () => {
     expect(exitCode).toBe(0);
     expect(ensureStandaloneOwner).toHaveBeenCalledTimes(2);
     expect(ownerHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the bootstrap wait bus while another process holds the bootstrap lock', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'invoker-bootstrap-refresh-'));
+    try {
+      process.env.INVOKER_DB_DIR = tempDir;
+      process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS = '2000';
+      const lockDir = join(tempDir, OWNER_BOOTSTRAP_LOCK_DIR);
+      mkdirSync(lockDir, { recursive: true });
+      writeFileSync(join(lockDir, 'pid'), String(process.pid), 'utf8');
+
+      const firstBus = new LocalBus();
+      const secondBus = new LocalBus();
+      secondBus.onRequest('headless.owner-ping', async () => ({
+        ok: true,
+        ownerId: 'owner-after-refresh',
+        mode: 'standalone',
+      }));
+      const refreshMessageBus = vi.fn().mockResolvedValue(secondBus);
+
+      await ensureStandaloneOwnerViaBootstrap(firstBus, refreshMessageBus);
+
+      expect(refreshMessageBus).toHaveBeenCalled();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('retries post-bootstrap delegation until a restarted owner is reachable', async () => {

@@ -410,15 +410,81 @@ print(matches[-1] if matches else '')
 PY
 }
 
-# Query a single task's status via headless CLI (no sqlite3 dependency).
-# Pipes through tail -1 to strip Electron [init] noise from stdout.
-# Usage: ST=$(invoker_e2e_task_status <taskId>)
-invoker_e2e_task_status() {
+invoker_e2e_extract_task_status_json() {
+  python3 - <<'PY'
+import json
+import sys
+
+valid = {
+    "pending",
+    "running",
+    "completed",
+    "failed",
+    "awaiting_approval",
+    "review_ready",
+    "fixing_with_ai",
+    "closed",
+    "skipped",
+}
+
+raw = sys.stdin.read()
+decoder = json.JSONDecoder()
+for idx, ch in enumerate(raw):
+    if ch not in "[{":
+        continue
+    try:
+        parsed, _ = decoder.raw_decode(raw[idx:])
+    except json.JSONDecodeError:
+        continue
+    rows = parsed if isinstance(parsed, list) else [parsed]
+    for row in rows:
+        if isinstance(row, dict):
+            status = row.get("status")
+            if status in valid:
+                print(status)
+                raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
+invoker_e2e_task_status_once() {
   local task_id="$1"
+  local out st
+
+  out="$(invoker_e2e_run_headless query task "$task_id" --output json 2>/dev/null || true)"
+  st="$(printf '%s' "$out" | invoker_e2e_extract_task_status_json 2>/dev/null || true)"
+  if [ -n "$st" ]; then
+    printf '%s\n' "$st"
+    return 0
+  fi
+
   invoker_e2e_run_headless task-status "$task_id" 2>/dev/null \
     | sed 's/\x1b\[[0-9;]*m//g' \
     | grep -E '^(pending|running|completed|failed|awaiting_approval|review_ready|fixing_with_ai|closed|skipped)$' \
     | tail -1
+}
+
+# Query a single task's status via headless CLI (no sqlite3 dependency).
+# Retry briefly to tolerate owner/DB handoff immediately after tracked runs.
+# Usage: ST=$(invoker_e2e_task_status <taskId>)
+invoker_e2e_task_status() {
+  local task_id="$1"
+  local max_attempts="${INVOKER_E2E_STATUS_ATTEMPTS:-5}"
+  local attempt=1
+  local st=""
+  while [ "$attempt" -le "$max_attempts" ]; do
+    st="$(invoker_e2e_task_status_once "$task_id" 2>/dev/null || true)"
+    if [ -n "$st" ]; then
+      printf '%s\n' "$st"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    if [ "$attempt" -le "$max_attempts" ]; then
+      sleep 1
+    fi
+  done
+  return 1
 }
 
 # Poll until task status equals expected (1s interval). Use after cancel/restart

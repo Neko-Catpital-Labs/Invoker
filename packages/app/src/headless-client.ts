@@ -14,7 +14,6 @@ import {
   tryDelegateQueryUiPerf,
   tryDelegateResume,
   tryDelegateRun,
-  tryPingHeadlessOwner,
   type DelegationOutcome,
 } from './headless-delegation.js';
 import {
@@ -24,6 +23,7 @@ import {
 import { loadConfig } from './config.js';
 import {
   discoverOwner,
+  isOwnerReachable,
   isStandaloneCapable,
 } from './owner-endpoint.js';
 import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
@@ -175,22 +175,14 @@ async function delegateGenericReadQuery(
 ): Promise<boolean> {
   if (!isGenericDelegatableReadCommand(args)) return false;
 
-  if (!refreshMessageBus) {
-    const owner = await tryPingHeadlessOwner(bus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
-    if (!owner) return false;
+  let messageBus = bus;
+  let owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
+  if (!isOwnerReachable(owner) && refreshMessageBus) {
+    messageBus = await refreshMessageBus();
+    owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
   }
+  if (!isOwnerReachable(owner)) return false;
 
-  const resolver = refreshMessageBus
-    ? createOwnerResolver(
-      { messageBus: bus, refreshMessageBus, ensureStandaloneOwner: async () => {} },
-      { discoveryTimeoutMs: GENERIC_READ_OWNER_PING_TIMEOUT_MS },
-    )
-    : null;
-  const ownerResult = resolver
-    ? await resolver.waitForAny(READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS)
-    : { resolved: true as const, bus };
-  if (!ownerResult.resolved) return false;
-  let messageBus = ownerResult.bus;
   const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const response = await tryDelegateQuery(
@@ -219,7 +211,7 @@ function shouldBootstrapStandaloneReadQuery(
   const isSpecialRead =
     (args[0] === 'query' && (args[1] === 'queue' || args[1] === 'ui-perf' || args[1] === 'action-graph'))
     || args[0] === 'queue';
-  return isSpecialRead || isGenericDelegatableReadCommand(args);
+  return isSpecialRead;
 }
 
 async function delegateReadOnlyQuery(
@@ -321,10 +313,14 @@ export interface HeadlessClientDeps {
   runElectronHeadless: (args: string[]) => Promise<number>;
 }
 
-async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void> {
+export async function ensureStandaloneOwnerViaBootstrap(
+  bus: MessageBus,
+  refreshMessageBus?: () => Promise<MessageBus>,
+): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
   const bootstrapLock = tryAcquireOwnerBootstrapLock(invokerHomeRoot);
   const startedAt = Date.now();
+  let messageBus = bus;
   delegationClientLog(`bootstrap begin lockAcquired=${bootstrapLock ? 'true' : 'false'} home=${invokerHomeRoot}`);
   try {
     if (bootstrapLock) {
@@ -335,12 +331,15 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
     let attempts = 0;
     while (Date.now() < deadline) {
       attempts += 1;
-      const owner = await discoverOwner(bus, 500);
+      const owner = await discoverOwner(messageBus, 500);
       if (isStandaloneCapable(owner)) {
         delegationClientLog(
           `bootstrap owner ready attempts=${attempts} elapsedMs=${Date.now() - startedAt} ownerId=${owner.ownerId}`,
         );
         return;
+      }
+      if (refreshMessageBus) {
+        messageBus = await refreshMessageBus();
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
@@ -368,8 +367,14 @@ function parseArgs(argv: string[]): { args: string[]; waitForApproval?: boolean;
   return { args, waitForApproval, noTrack };
 }
 
-function shouldUseSharedMutationOwner(args: string[], standaloneMode: boolean, internalOwnerServe: boolean): boolean {
-  return isHeadlessMutatingCommand(args) && !standaloneMode && !internalOwnerServe;
+function shouldUseSharedMutationOwner(
+  args: string[],
+  standaloneMode: boolean,
+  internalOwnerServe: boolean,
+  noTrack?: boolean,
+): boolean {
+  if (!isHeadlessMutatingCommand(args) || internalOwnerServe) return false;
+  return !standaloneMode || Boolean(noTrack);
 }
 
 /**
@@ -480,7 +485,7 @@ export async function runHeadlessClientCommand(
     }
   }
 
-  if (!shouldUseSharedMutationOwner(args, standaloneMode, internalOwnerServe)) {
+  if (!shouldUseSharedMutationOwner(args, standaloneMode, internalOwnerServe, noTrack)) {
     return deps.runElectronHeadless(argv);
   }
 
@@ -507,7 +512,7 @@ export async function runHeadlessClient(argv: string[]): Promise<number> {
     await bus.ready();
     return await runHeadlessClientCommand(argv, {
       messageBus: bus,
-      ensureStandaloneOwner: (currentBus) => ensureStandaloneOwnerViaBootstrap(currentBus ?? bus),
+      ensureStandaloneOwner: (currentBus) => ensureStandaloneOwnerViaBootstrap(currentBus ?? bus, refreshMessageBus),
       refreshMessageBus,
       runElectronHeadless,
     });

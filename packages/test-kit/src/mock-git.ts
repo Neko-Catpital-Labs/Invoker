@@ -21,6 +21,8 @@ export class MockGit {
   private scripts: ScriptedResponse[] = [];
   private defaultBranch = 'master';
   private hasStagedChanges = false;
+  private readonly defaultSha = 'abc123';
+  private readonly remoteRefs = new Map<string, string>();
 
   /** Script a response for calls matching a predicate. */
   on(match: (args: string[]) => boolean, response: string | Error, once = false): this {
@@ -105,6 +107,7 @@ export class MockGit {
       if (script.match(args)) {
         script.used = true;
         if (script.response instanceof Error) throw script.response;
+        if (args[0] === 'push') this.recordPush(args);
         return script.response;
       }
     }
@@ -131,8 +134,16 @@ export class MockGit {
     }
     if (args[0] === 'branch') return '';
     if (args[0] === 'symbolic-ref') return `refs/remotes/origin/${this.defaultBranch}`;
-    if (args[0] === 'rev-parse') return 'abc123';
-    if (args[0] === 'push') return '';
+    if (args[0] === 'rev-parse') return this.defaultSha;
+    if (args[0] === 'push') {
+      this.recordPush(args);
+      return '';
+    }
+    if (args[0] === 'ls-remote' && args.includes('--heads') && args.includes('origin')) {
+      const branch = args[args.length - 1];
+      const sha = branch ? this.remoteRefs.get(branch) : undefined;
+      return branch && sha ? `${sha}\trefs/heads/${branch}\n` : '';
+    }
     // diff --cached --quiet exits non-zero when there are staged changes
     if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) {
       if (this.hasStagedChanges) {
@@ -141,5 +152,19 @@ export class MockGit {
       return '';
     }
     return '';
+  }
+
+  private recordPush(args: string[]): void {
+    const originIndex = args.indexOf('origin');
+    if (originIndex < 0) return;
+
+    for (const refspec of args.slice(originIndex + 1)) {
+      if (!refspec || refspec.startsWith('-')) continue;
+      const [, dest = refspec] = refspec.split(':');
+      const branch = dest.startsWith('refs/heads/')
+        ? dest.slice('refs/heads/'.length)
+        : dest;
+      if (branch) this.remoteRefs.set(branch, this.defaultSha);
+    }
   }
 }
