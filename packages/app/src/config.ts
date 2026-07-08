@@ -40,6 +40,38 @@ export interface ExternalWorkerConfig {
   /** Process invocation used by the loader to start the external worker. */
   launch: ExternalWorkerLaunchConfig;
 }
+export interface PrProcessWorkerConfig {
+  enabled?: boolean;
+  repoRoot?: string;
+  repo?: string;
+  author?: string;
+  coderabbitLogin?: string;
+  pollIntervalMs?: number;
+  trigger?: 'subscription' | 'poll';
+  env?: Record<string, string>;
+}
+
+export interface MergifyRequeueConfig extends PrProcessWorkerConfig {
+  pythonExecutable?: string;
+  stateFile?: string;
+  extraArgs?: string[];
+}
+
+export interface PrMaintenanceEventSourceConfig {
+  enabled?: boolean;
+  repo: string;
+  author: string;
+  coderabbitLogin?: string;
+  mergifyLogin?: string;
+  pollIntervalMs?: number;
+}
+
+export interface PrMaintenanceConfig {
+  githubPrEvents?: PrMaintenanceEventSourceConfig;
+  coderabbitAddress?: PrProcessWorkerConfig;
+  prConflictRebase?: PrProcessWorkerConfig;
+  mergifyRequeue?: MergifyRequeueConfig;
+}
 export interface DefaultExecutionConfig {
   /**
    * Default task execution harness when a task omits executionAgent.
@@ -292,6 +324,8 @@ export interface InvokerConfig {
     /** Routing strategy. Defaults to "enforce". */
     strategy?: 'enforce' | 'route';
   }>;
+  /** Optional PR maintenance worker and GitHub event-source config. */
+  prMaintenance?: PrMaintenanceConfig;
   /**
    * Operator-declared external worker list, with each worker identified by registry kind.
    * The loader consumes this later; absent means no external workers.
