@@ -823,7 +823,7 @@ describe('ApprovalModal', () => {
     expect(screen.getByRole('heading', { name: 'Confirm Merge' })).toBeInTheDocument();
   });
 
-  it('renders "Confirm Pull Request" heading for merge node with onFinish="pull_request"', () => {
+  it('renders "Confirm Create PR" heading for merge node with onFinish="pull_request"', () => {
     render(
       <ApprovalModal
         task={makeTask({ config: { isMergeNode: true } })}
@@ -833,7 +833,7 @@ describe('ApprovalModal', () => {
         onFinish="pull_request"
       />,
     );
-    expect(screen.getByRole('heading', { name: 'Confirm Pull Request' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Confirm Create PR' })).toBeInTheDocument();
   });
 
   it('shows a "Confirm Merge" *button* matching the heading for onFinish="merge"', () => {
@@ -859,7 +859,21 @@ describe('ApprovalModal', () => {
         onFinish="pull_request"
       />,
     );
-    expect(screen.getByText('Confirm Create PR')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm Create PR' })).toBeInTheDocument();
+  });
+
+  it('shows a "Confirm Create PR" heading and button that match for onFinish="pull_request"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    expect(screen.getByRole('heading', { name: 'Confirm Create PR' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm Create PR' })).toBeInTheDocument();
   });
 
   it('reject button says "Reject PR" (not "Reject Merge") for onFinish="pull_request"', () => {
