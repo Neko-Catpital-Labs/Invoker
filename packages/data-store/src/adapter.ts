@@ -193,6 +193,7 @@ export interface WorkerActionListFilters {
   workerKind?: string;
   status?: WorkerActionStatus | string;
   limit?: number;
+  offset?: number;
 }
 
 export interface TerminalSessionRecord {
