@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Cross-job mutual exclusion proof: while the shared lock is held, EACH PR cron
-# worker must print "another PR cron operation in progress" and exit 0 (clean
-# no-op), so only one operation (Job 1 or Job 2) ever runs at a time.
+# Cross-job mutual exclusion proof: while the shared lock is held, EACH PR
+# maintenance worker tick script must print "another PR maintenance operation in
+# progress" and exit 0 (clean no-op), so only one operation ever runs at a time.
 #
 # Holds the lock the same way the lib acquires it (flock if available, else the
 # atomic mkdir fallback), then runs each worker. Fully offline; cron_lock is the
@@ -53,7 +53,7 @@ for worker in cron-coderabbit-address cron-pr-conflict-rebase; do
   out="$(bash "scripts/$worker.sh" 2>&1)"
   code=$?
   set -e
-  echo "$out" | grep -q "another PR cron operation in progress" \
+  echo "$out" | grep -q "another PR maintenance operation in progress" \
     || fail "$worker did not report the lock as held" "$out"
   [ "$code" -eq 0 ] || fail "$worker exited $code (expected 0 clean no-op)" "$out"
 done
