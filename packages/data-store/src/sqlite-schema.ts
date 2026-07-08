@@ -423,6 +423,8 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE tasks ADD COLUMN pending_fix_error TEXT',
   // fix_session_entry_status: resting status recorded while a fix session is open
   'ALTER TABLE tasks ADD COLUMN fix_session_entry_status TEXT',
+  // failure_class: structured recovery routing class (e.g. 'liveness_stall').
+  'ALTER TABLE tasks ADD COLUMN failure_class TEXT',
   'ALTER TABLE workflows ADD COLUMN merge_mode TEXT',
   'ALTER TABLE tasks ADD COLUMN review_url TEXT',
   'ALTER TABLE tasks ADD COLUMN review_id TEXT',

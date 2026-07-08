@@ -15,6 +15,7 @@ const expectedExecutionFields = [
   'inputPrompt',
   'exitCode',
   'error',
+  'failureClass',
   'protocolErrorCode',
   'protocolErrorMessage',
   'startedAt',
