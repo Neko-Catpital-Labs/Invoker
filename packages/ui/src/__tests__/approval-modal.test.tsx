@@ -836,7 +836,7 @@ describe('ApprovalModal', () => {
     expect(screen.getByRole('heading', { name: 'Confirm Pull Request' })).toBeInTheDocument();
   });
 
-  it('shows "Confirm Merge" button label for merge node with onFinish="merge"', () => {
+  it('shows a "Confirm Merge" *button* matching the heading for onFinish="merge"', () => {
     render(
       <ApprovalModal
         task={makeTask({ config: { isMergeNode: true } })}
@@ -846,29 +846,8 @@ describe('ApprovalModal', () => {
         onFinish="merge"
       />,
     );
-    expect(screen.getByText('Confirm Merge')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm Merge' })).toBeInTheDocument();
   });
-
-  // Repro: the modal heading says "Confirm Merge" but the primary button on
-  // master still says "Approve Merge". The two labels drift, which is
-  // misleading because clicking the button triggers an immediate destructive
-  // merge (matching the heading, not the button). Marked `.fails` so CI stays
-  // green until the fix slice flips it.
-  it.fails(
-    'shows a "Confirm Merge" *button* matching the heading for onFinish="merge"',
-    () => {
-      render(
-        <ApprovalModal
-          task={makeTask({ config: { isMergeNode: true } })}
-          onApprove={vi.fn()}
-          onReject={vi.fn()}
-          onClose={vi.fn()}
-          onFinish="merge"
-        />,
-      );
-      expect(screen.getByRole('button', { name: 'Confirm Merge' })).toBeInTheDocument();
-    },
-  );
 
   it('shows "Confirm Create PR" button label for merge node with onFinish="pull_request"', () => {
     render(
