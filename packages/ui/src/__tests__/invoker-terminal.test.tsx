@@ -37,6 +37,18 @@ describe('Invoker terminal (component)', () => {
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
 
+  it('renders a flat planning pane with an empty initial transcript', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    // Outer planning frame stays; the inner nested-card heading/subtitle are gone.
+    expect(screen.getByText('Planning chat window')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'What do you want to build?' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Talk it through, then submit the plan to Invoker.')).not.toBeInTheDocument();
+    // New planning chats open with no seeded starter message.
+    expect(screen.getByTestId('invoker-terminal-transcript')).toBeEmptyDOMElement();
+  });
+
   it('generates a planning reply from plain language', async () => {
     render(<App />);
     await openPlanningTerminal();

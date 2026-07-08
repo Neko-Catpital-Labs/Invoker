@@ -599,6 +599,9 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
     await expect(page.getByTestId('planning-session-rail')).toHaveClass(/w-64/);
     await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await expect(page.getByText('Planning chat window')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'What do you want to build?' })).toHaveCount(0);
+    await expect(page.getByTestId('invoker-terminal-transcript')).toBeEmpty();
     await page.getByTestId('invoker-terminal-input').fill('Add README');
     await page.getByRole('button', { name: 'Send' }).click();
 
@@ -660,7 +663,8 @@ test.describe('Visual proof capture', () => {
       await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'I drafted the stacked plan.' });
     }, { planYaml: plannedYaml, planName: 'Workers Surface' });
 
-    await expect(page.getByRole('heading', { name: 'What do you want to build?' })).toBeVisible();
+    await page.getByTestId('sidebar-planning').click();
+    await expect(page.getByText('Planning chat window')).toBeVisible();
     await expect(page.getByTestId('invoker-terminal-input')).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Build the Workers Surface');
     await page.getByRole('button', { name: 'Send' }).click();
