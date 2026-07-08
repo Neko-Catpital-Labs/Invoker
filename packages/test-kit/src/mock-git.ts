@@ -19,6 +19,7 @@ interface ScriptedResponse {
 export class MockGit {
   calls: string[][] = [];
   private scripts: ScriptedResponse[] = [];
+  private remoteRefs = new Map<string, string>();
   private defaultBranch = 'master';
   private hasStagedChanges = false;
 
@@ -105,6 +106,7 @@ export class MockGit {
       if (script.match(args)) {
         script.used = true;
         if (script.response instanceof Error) throw script.response;
+        if (args[0] === 'push') this.recordPush(args);
         return script.response;
       }
     }
@@ -132,7 +134,11 @@ export class MockGit {
     if (args[0] === 'branch') return '';
     if (args[0] === 'symbolic-ref') return `refs/remotes/origin/${this.defaultBranch}`;
     if (args[0] === 'rev-parse') return 'abc123';
-    if (args[0] === 'push') return '';
+    if (args[0] === 'push') {
+      this.recordPush(args);
+      return '';
+    }
+    if (args[0] === 'ls-remote') return this.lsRemote(args);
     // diff --cached --quiet exits non-zero when there are staged changes
     if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) {
       if (this.hasStagedChanges) {
@@ -141,5 +147,32 @@ export class MockGit {
       return '';
     }
     return '';
+  }
+
+  private recordPush(args: string[]): void {
+    const refspec = args.find((arg) => arg.includes(':refs/heads/'));
+    if (!refspec) return;
+
+    const [source, destination] = refspec.split(':', 2);
+    const branch = destination?.replace(/^refs\/heads\//, '');
+    if (!branch) return;
+
+    if (!source) {
+      this.remoteRefs.delete(branch);
+      return;
+    }
+    this.remoteRefs.set(branch, 'abc123');
+  }
+
+  private lsRemote(args: string[]): string {
+    const query = args[args.length - 1];
+    if (!query || query === 'origin' || query === '--') {
+      return Array.from(this.remoteRefs.entries())
+        .map(([branch, sha]) => `${sha}\trefs/heads/${branch}`)
+        .join('\n');
+    }
+
+    const sha = this.remoteRefs.get(query);
+    return sha ? `${sha}\trefs/heads/${query}` : '';
   }
 }
