@@ -102,6 +102,7 @@ describe('bundled-skills', () => {
         join(codexHome, '.codex', 'skills'),
         join(codexHome, '.claude', 'skills'),
         join(codexHome, '.cursor', 'skills-cursor'),
+        join(codexHome, '.omp', 'agent', 'skills'),
       ];
 
       for (const targetRoot of expectedTargets) {
@@ -127,7 +128,7 @@ describe('bundled-skills', () => {
       expect(mcpConfig.$schema).toBe('https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json');
       expect(mcpConfig.mcpServers.invoker).toEqual({ type: 'stdio', command: 'invoker-cli', args: ['mcp'] });
 
-      expect(installed.targets).toHaveLength(3);
+      expect(installed.targets).toHaveLength(4);
       expect(installed.commandTargets).toHaveLength(4);
       expect(installed.mcpTargets).toHaveLength(1);
       expect(installed.targets.every((target) => target.installed)).toBe(true);
@@ -148,6 +149,45 @@ describe('bundled-skills', () => {
       expect(status.commandTargets.every((target) => target.upToDate)).toBe(true);
       expect(status.mcpTargets.every((target) => target.upToDate)).toBe(true);
       expect(status.promptRecommended).toBe(false);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
+  it('installs skills into the OMP agent skill root so omp resolves make-pr', () => {
+    const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const ompHome = makeTempRoot('invoker-omp-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = ompHome;
+
+    try {
+      writeSkill(resourcesRoot, 'make-pr');
+      writePlanToInvokerCommands(resourcesRoot);
+
+      const installed = installBundledSkills({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+      });
+
+      // omp's bundledSkillRoot is ~/.omp/agent/skills; resolveSkillPathViaAgent
+      // checks <root>/invoker-make-pr/SKILL.md. Without this target omp fails PR
+      // publishing with `skill "invoker-make-pr" not installed` — the exact bug
+      // this target prevents. omp is the default execution + PR-authoring agent.
+      const ompSkillMd = join(ompHome, '.omp', 'agent', 'skills', 'invoker-make-pr', 'SKILL.md');
+      expect(existsSync(ompSkillMd)).toBe(true);
+
+      const ompTarget = installed.targets.find((target) => target.id === 'omp');
+      expect(ompTarget?.path).toBe(join(ompHome, '.omp', 'agent', 'skills'));
+      expect(ompTarget?.installed).toBe(true);
+      expect(ompTarget?.upToDate).toBe(true);
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
