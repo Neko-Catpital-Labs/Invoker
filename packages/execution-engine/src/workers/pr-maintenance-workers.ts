@@ -4,6 +4,9 @@ import { resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 
 import { resolveRepoRoot, type Logger } from '@invoker/contracts';
+import type { WorkerActionStatus } from '@invoker/data-store';
+
+import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
 
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
@@ -48,6 +51,7 @@ export interface PrMaintenanceWorkerConfig {
   lockPath?: string;
   /** Shell executable used to run the existing entrypoint. Defaults to `bash`. */
   shell?: string;
+  store?: WorkerDecisionStore;
 }
 
 export interface PrMaintenanceLockProbeOptions {
@@ -101,6 +105,7 @@ export function registerCoderabbitAddressWorker(
       createCoderabbitAddressWorker({
         logger: deps.logger,
         ...deps.prMaintenance,
+        store: deps.store,
       }),
   });
   return registry;
@@ -116,6 +121,7 @@ export function registerPrConflictRebaseWorker(
       createPrConflictRebaseWorker({
         logger: deps.logger,
         ...deps.prMaintenance,
+        store: deps.store,
       }),
   });
   return registry;
@@ -184,12 +190,15 @@ function createPrMaintenanceWorker(
       shell: options.shell,
       spawnProcess: options.spawnProcess,
       lockProbe: options.lockProbe,
+      store: options.store,
     }),
   });
 }
 
 async function runPrMaintenanceEntrypoint(options: PrMaintenanceTickOptions): Promise<void> {
   const repoRoot = resolvePrMaintenanceRepoRoot(options.repoRoot);
+  const startedAt = new Date().toISOString();
+  const runExternalKey = `${options.entrypoint.kind}:${repoRoot}:${startedAt}`;
   const env = buildPrMaintenanceEnv(repoRoot, options.env);
   const lockPath = options.lockPath ?? env.INVOKER_PR_CRON_LOCK ?? defaultPrCronLockPath(env);
   env.INVOKER_PR_CRON_LOCK = lockPath;
@@ -235,11 +244,16 @@ async function runPrMaintenanceEntrypoint(options: PrMaintenanceTickOptions): Pr
       worker: options.entrypoint.kind,
       err,
     });
+    recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'failed', `Spawn failed for ${options.entrypoint.scriptRelativePath}`, {
+      reason: 'spawn-failed',
+      error: String(err),
+    });
     throw err;
   }
 
   attachChildStreamLogger(options, child.stdout, 'stdout');
   attachChildStreamLogger(options, child.stderr, 'stderr');
+  recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'running', `Started ${options.entrypoint.scriptRelativePath}`);
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
     let settled = false;
@@ -256,6 +270,10 @@ async function runPrMaintenanceEntrypoint(options: PrMaintenanceTickOptions): Pr
           worker: options.entrypoint.kind,
           err,
         });
+        recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'failed', 'PR maintenance process error', {
+          reason: 'process-error',
+          error: String(err),
+        });
         rejectPromise(err);
       });
     });
@@ -270,15 +288,43 @@ async function runPrMaintenanceEntrypoint(options: PrMaintenanceTickOptions): Pr
         };
         if (code === 0) {
           options.logger.info(`[worker:${options.entrypoint.kind}] shell entrypoint completed`, fields);
+          recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'completed', 'PR maintenance run completed');
           resolvePromise();
           return;
         }
         const message = `PR maintenance worker ${options.entrypoint.kind} exited with code ${code ?? 'null'}`
           + (signal ? ` signal ${signal}` : '');
         options.logger.error(`[worker:${options.entrypoint.kind}] shell entrypoint failed`, fields);
+        recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'failed', message, {
+          reason: 'nonzero-exit',
+          code,
+          signal,
+        });
         rejectPromise(new Error(message));
       });
     });
+  });
+}
+
+function recordPrMaintenanceRun(
+  options: PrMaintenanceTickOptions,
+  externalKey: string,
+  repoRoot: string,
+  status: WorkerActionStatus,
+  summary: string,
+  payload?: Record<string, unknown>,
+): void {
+  if (!options.store) return;
+  recordWorkerDecisionRow(options.store, {
+    workerKind: options.entrypoint.kind,
+    actionType: 'pr-maintenance-run',
+    externalKey,
+    subjectType: 'repo',
+    subjectId: repoRoot,
+    status,
+    summary,
+    incrementAttempt: status === 'running',
+    ...(payload ? { payload } : {}),
   });
 }
 

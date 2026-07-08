@@ -118,6 +118,8 @@ import {
   DEFAULT_EXECUTION_AGENT,
   registerBuiltinAgents,
   registerBuiltinWorkers,
+  parseRequeueMutationArgs,
+  parseRequeueEscalateMutationArgs,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -130,6 +132,7 @@ import {
   resolveConfigFileState,
   resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
+  resolvePrMaintenanceWorkerConfig,
   type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
 } from './config.js';
@@ -351,9 +354,17 @@ function buildRegisteredOwnerWorkerDeps(
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
     },
+    requeue: {
+      stallRequeueRetries: invokerConfig.stallRequeueRetries,
+      stallRequeueBackoffMs: invokerConfig.stallRequeueBackoffMs,
+    },
+    prMaintenance: resolvePrMaintenanceWorkerConfig(invokerConfig),
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,
+    },
+    autoApprove: {
+      enabled: invokerConfig.autoApproveAIFixes === true,
     },
   };
 }
@@ -803,20 +814,23 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   if (!readOnly && !hourlyBackupInterval) {
     const hourlyMs = Number(process.env.INVOKER_HOURLY_BACKUP_MS ?? 60 * 60 * 1000);
     if (Number.isFinite(hourlyMs) && hourlyMs > 0) {
+      const backupViaOwner = (dest: string) => persistence.backupTo(dest);
       hourlyBackupInterval = setInterval(() => {
-        try {
-          const snapshot = createHourlySnapshot(invokerHomeRoot);
-          if (snapshot) {
-            logger.info(`hourly snapshot: ${snapshot}`, { module: 'backup' });
-          } else {
-            logger.info('hourly snapshot skipped: DB file does not exist yet', { module: 'backup' });
+        void (async () => {
+          try {
+            const snapshot = await createHourlySnapshot(invokerHomeRoot, backupViaOwner);
+            if (snapshot) {
+              logger.info(`hourly snapshot: ${snapshot}`, { module: 'backup' });
+            } else {
+              logger.info('hourly snapshot skipped: DB file does not exist yet', { module: 'backup' });
+            }
+          } catch (err) {
+            logger.error(
+              `hourly snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
+              { module: 'backup' },
+            );
           }
-        } catch (err) {
-          logger.error(
-            `hourly snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
-            { module: 'backup' },
-          );
-        }
+        })();
       }, hourlyMs);
       hourlyBackupInterval.unref?.();
       logger.info(`hourly snapshots enabled (interval=${hourlyMs}ms)`, { module: 'backup' });
@@ -1450,6 +1464,28 @@ function startHeadlessMode(): void {
               signal: activeMutationContext?.signal,
               mutationTiming: activeMutationContext?.mutationTiming,
             });
+            return { ok: true };
+          });
+        }
+        if (!workflowMutationDispatcher.has('invoker:requeue')) {
+          workflowMutationDispatcher.set('invoker:requeue', async (...requeueArgs: unknown[]) => {
+            const { taskId } = parseRequeueMutationArgs(requeueArgs);
+            await runHeadless(['retry-task', taskId], {
+              ...headlessDeps,
+              waitForApproval: false,
+              noTrack: true,
+              signal: activeMutationContext?.signal,
+              mutationTiming: activeMutationContext?.mutationTiming,
+            });
+            return { ok: true };
+          });
+        }
+        if (!workflowMutationDispatcher.has('invoker:requeue-escalate')) {
+          workflowMutationDispatcher.set('invoker:requeue-escalate', async (...escalateArgs: unknown[]) => {
+            const { taskId, prompt } = parseRequeueEscalateMutationArgs(escalateArgs);
+            const envelope = makeEnvelope('escalate-stalled', 'headless', 'task', { taskId, prompt });
+            const result = await commandService.escalateStalledToNeedsInput(envelope);
+            if (!result.ok) throw new Error(result.error.message);
             return { ok: true };
           });
         }

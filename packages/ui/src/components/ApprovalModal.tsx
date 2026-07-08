@@ -88,6 +88,7 @@ export function ApprovalModal({
   const [sessionReason, setSessionReason] = useState<string | undefined>(undefined);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -159,6 +160,8 @@ export function ApprovalModal({
   }, [sessionId, effectiveAgentName]);
 
   const handleApprove = () => {
+    if (submitting) return;
+    setSubmitting(true);
     onApprove(task.id);
     onClose();
   };
@@ -168,6 +171,8 @@ export function ApprovalModal({
       setShowRejectInput(true);
       return;
     }
+    if (submitting) return;
+    setSubmitting(true);
     onReject(task.id, reason || undefined);
     onClose();
   };
@@ -192,9 +197,12 @@ export function ApprovalModal({
           : 'Approve Merge'
       : 'Approve';
 
+  const mergeRejectLabel = onFinish === 'pull_request' ? 'Reject PR' : 'Reject Merge';
+  const mergeConfirmRejectLabel =
+    onFinish === 'pull_request' ? 'Confirm Reject PR' : 'Confirm Reject Merge';
   const rejectButtonLabel = showRejectInput
-    ? (isFixApproval ? 'Confirm Reject Fix' : isMergeNode ? 'Confirm Reject Merge' : 'Confirm Reject')
-    : (isFixApproval ? 'Reject Fix' : isMergeNode ? 'Reject Merge' : 'Reject');
+    ? (isFixApproval ? 'Confirm Reject Fix' : isMergeNode ? mergeConfirmRejectLabel : 'Confirm Reject')
+    : (isFixApproval ? 'Reject Fix' : isMergeNode ? mergeRejectLabel : 'Reject');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -284,14 +292,16 @@ export function ApprovalModal({
             </button>
             <button
               onClick={handleReject}
-              className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded text-sm font-medium transition-colors"
+              disabled={submitting}
+              className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
             >
               {rejectButtonLabel}
             </button>
             {!showRejectInput && (
               <button
                 onClick={handleApprove}
-                className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors"
+                disabled={submitting}
+                className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
               >
                 {approveButtonLabel}
               </button>

@@ -111,6 +111,17 @@ describe('WorkerDetailsPanel', () => {
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('No persisted PR status actions. This worker updates review gates directly.')).toBeInTheDocument();
   });
+  it('shows coderabbit-address as a built-in worker when no actions are persisted', () => {
+    renderPanel(makeWorker({
+      kind: 'coderabbit-address',
+      note: 'Runs the CodeRabbit review-address cron entrypoint under worker scheduling.',
+      recentActions: [],
+    }));
+
+    expect(screen.getByTestId('worker-details-title')).toHaveTextContent('Coderabbit Address');
+    expect(screen.getByText('Idle. Waiting for worker-owned work.')).toBeInTheDocument();
+    expect(screen.getByText('No worker actions recorded yet.')).toBeInTheDocument();
+  });
 
   it('uses the same collapsed show control as the inspector', () => {
     renderPanel(makeWorker(), new Map(), true);

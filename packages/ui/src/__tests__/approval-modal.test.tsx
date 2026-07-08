@@ -861,4 +861,31 @@ describe('ApprovalModal', () => {
     );
     expect(screen.getByText('Confirm Create PR')).toBeInTheDocument();
   });
+
+  it('reject button says "Reject PR" (not "Reject Merge") for onFinish="pull_request"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Reject PR' })).toBeInTheDocument();
+  });
+
+  it('confirm-reject button says "Confirm Reject PR" for onFinish="pull_request"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /reject/i }));
+    expect(screen.getByRole('button', { name: 'Confirm Reject PR' })).toBeInTheDocument();
+  });
 });

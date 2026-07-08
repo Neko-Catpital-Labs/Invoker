@@ -1989,6 +1989,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       where.push('status = ?');
       params.push(normalizeWorkerActionStatus(String(filters.status)));
     }
+    if (filters.decision === 'skip') {
+      where.push("status = 'skipped'");
+    } else if (filters.decision === 'act') {
+      where.push("status != 'skipped'");
+    }
     let pageSql = '';
     if (limit !== undefined) {
       pageSql = ' LIMIT ?';

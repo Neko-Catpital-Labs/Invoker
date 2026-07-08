@@ -2,16 +2,21 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
   createWorkerRegistry,
+  PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 
+import type { WorkerActionRecord } from '@invoker/data-store';
 import {
   AUTO_STARTED_OWNER_WORKER_KINDS,
   createWorkerRuntimeController,
   listWorkerActionHistory,
+  listWorkerDecisions,
+  toWorkerActionSummary,
 } from '../worker-control.js';
 
 interface TestWorkerRuntime extends WorkerRuntime {
@@ -84,6 +89,8 @@ function controller() {
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
   register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
+  register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
+  register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
   register('external-preview', 'External preview worker.');
 
   return {
@@ -99,7 +106,7 @@ function controller() {
 }
 
 describe('createWorkerRuntimeController', () => {
-  it('auto-start starts only pr-status and ci-failure', () => {
+  it('auto-start starts every built-in owner worker except autofix', () => {
     const setup = controller();
 
     setup.controller.startAutoStartedWorkers();
@@ -107,6 +114,8 @@ describe('createWorkerRuntimeController', () => {
 
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
   });
@@ -147,22 +156,22 @@ describe('createWorkerRuntimeController', () => {
     expect(setup.runtimes.get(PR_STATUS_WORKER_KIND)?.[0]?.stops).toBe(1);
   });
 
-  it('retry budget policy does not disable worker starts', () => {
+  it('built-in worker policy stays enabled for maintenance workers', () => {
     const setup = controller();
 
-    const autoFix = setup.controller.start(AUTO_FIX_WORKER_KIND);
-    const ciFailure = setup.controller.start(CI_FAILURE_WORKER_KIND);
-
-    expect(autoFix).toMatchObject({
-      lifecycle: 'running',
-      policy: 'enabled',
-      startable: false,
-    });
-    expect(ciFailure).toMatchObject({
-      lifecycle: 'running',
-      policy: 'enabled',
-      startable: false,
-    });
+    for (const kind of [
+      AUTO_FIX_WORKER_KIND,
+      CI_FAILURE_WORKER_KIND,
+      CODERABBIT_ADDRESS_WORKER_KIND,
+      PR_CONFLICT_REBASE_WORKER_KIND,
+    ] as const) {
+      expect(setup.controller.start(kind)).toMatchObject({
+        kind,
+        lifecycle: 'running',
+        policy: 'enabled',
+        startable: false,
+      });
+    }
   });
 
   it('an exited external worker row reports exited', () => {
@@ -233,5 +242,60 @@ describe('createWorkerRuntimeController', () => {
       nextOffset: 6,
     });
     expect(listWorkerActions).toHaveBeenCalledWith({ workerKind: 'history', limit: 3, offset: 4 });
+  });
+});
+
+function decisionRow(overrides: Partial<WorkerActionRecord> = {}): WorkerActionRecord {
+  return {
+    id: 'wa',
+    workerKind: 'autofix',
+    actionType: 'auto-fix',
+    subjectType: 'task',
+    subjectId: 'wf-1/t',
+    externalKey: 'autofix:wf-1/t:0:a1',
+    status: 'queued',
+    attemptCount: 1,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('toWorkerActionSummary', () => {
+  it('derives decision from status and lifts reason from payload', () => {
+    const skip = toWorkerActionSummary(decisionRow({ id: 's', status: 'skipped', payload: { reason: 'not-eligible' } }));
+    expect(skip).toMatchObject({ decision: 'skip', reason: 'not-eligible' });
+    const act = toWorkerActionSummary(decisionRow({ id: 'a', status: 'queued', payload: {} }));
+    expect(act.decision).toBe('act');
+    expect(act.reason).toBeUndefined();
+  });
+});
+
+describe('listWorkerDecisions', () => {
+  it('scopes to a run and surfaces reason + decision on each summary', () => {
+    const listWorkerActions = vi.fn(() => [
+      decisionRow({ id: 'a1', status: 'queued', payload: {} }),
+      decisionRow({ id: 'a2', status: 'skipped', payload: { reason: 'worker-retry-budget-exhausted' } }),
+    ]);
+    const res = listWorkerDecisions({ listWorkerActions } as never, { workflowId: 'wf-1' });
+    expect(listWorkerActions).toHaveBeenCalledWith(expect.objectContaining({ workflowId: 'wf-1' }));
+    expect(res.workflowId).toBe('wf-1');
+    expect(res.actions.map((action) => action.decision)).toEqual(['act', 'skip']);
+    expect(res.actions[1]?.reason).toBe('worker-retry-budget-exhausted');
+  });
+
+  it('passes the decision filter through to the query', () => {
+    const listWorkerActions = vi.fn(() => []);
+    listWorkerDecisions({ listWorkerActions } as never, { decision: 'skip', workerKind: 'autofix' });
+    expect(listWorkerActions).toHaveBeenCalledWith(expect.objectContaining({ decision: 'skip', workerKind: 'autofix' }));
+  });
+
+  it('post-filters by reason substring, case-insensitively', () => {
+    const listWorkerActions = vi.fn(() => [
+      decisionRow({ id: 'a1', status: 'skipped', payload: { reason: 'not-eligible' } }),
+      decisionRow({ id: 'a2', status: 'skipped', payload: { reason: 'worker-retry-budget-exhausted' } }),
+    ]);
+    const res = listWorkerDecisions({ listWorkerActions } as never, { reason: 'BUDGET' });
+    expect(res.actions.map((action) => action.id)).toEqual(['a2']);
   });
 });

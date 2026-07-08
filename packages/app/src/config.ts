@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
 import { validateInvokerConfig } from './config-validation.js';
+import type { PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
 
 export type HarnessModelPolicy =
   | { kind: 'implicit' }
@@ -52,6 +53,32 @@ export interface DefaultExecutionConfig {
    * Only applied when the resolved task executionAgent matches this default agent.
    */
   executionModel?: string;
+}
+
+/**
+ * Owner-side PR-maintenance worker config.
+ *
+ * Disabled by default: the coderabbit-address and pr-conflict-rebase workers
+ * only receive launch dependencies when `enabled` is true. The remaining fields
+ * tune the shell entrypoint launch and fall back to the worker defaults when
+ * omitted.
+ */
+export interface PrMaintenanceConfig {
+  /**
+   * Gate for building PR-maintenance worker dependencies at owner startup.
+   * Default: false (workers get no launch config).
+   */
+  enabled?: boolean;
+  /** Repository root that owns the PR-maintenance shell scripts. Defaults to the Invoker repo root. */
+  repoRoot?: string;
+  /** Environment overrides forwarded to the shell entrypoint. `undefined` removes a variable. */
+  env?: Record<string, string | undefined>;
+  /** Poll cadence for both PR-maintenance workers in milliseconds. Defaults to five minutes. */
+  intervalMs?: number;
+  /** Shared cron lock path. Defaults to the shell script's INVOKER_PR_CRON_LOCK behavior. */
+  lockPath?: string;
+  /** Shell executable used to run the entrypoint. Defaults to bash. */
+  shell?: string;
 }
 
 export interface InvokerConfig {
@@ -300,6 +327,12 @@ export interface InvokerConfig {
    * The loader consumes this later; absent means no external workers.
    */
   externalWorkers?: ExternalWorkerConfig[];
+  /**
+   * Owner-side PR-maintenance worker config. Disabled by default; when
+   * `enabled` is true the owner builds coderabbit-address and pr-conflict-rebase
+   * worker launch dependencies from this block.
+   */
+  prMaintenance?: PrMaintenanceConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
@@ -396,4 +429,29 @@ export function resolveSecretsFilePath(config: InvokerConfig): string | undefine
   const fallback = join(homedir(), '.config', 'invoker', 'secrets.env');
   if (existsSync(fallback)) return fallback;
   return undefined;
+}
+
+/**
+ * Build PR-maintenance worker launch dependencies from config.
+ *
+ * Returns `undefined` when the block is absent or `enabled` is not true, so the
+ * owner keeps PR-maintenance workers disabled by default. When enabled, returns
+ * only the launch fields (the `enabled` gate is dropped) for injection as the
+ * worker runtime `prMaintenance` dependency; omitted fields fall back to the
+ * worker defaults.
+ */
+export function resolvePrMaintenanceWorkerConfig(
+  config: InvokerConfig,
+): PrMaintenanceWorkerConfig | undefined {
+  const prMaintenance = config.prMaintenance;
+  if (!prMaintenance?.enabled) {
+    return undefined;
+  }
+  const launch: PrMaintenanceWorkerConfig = {};
+  if (prMaintenance.repoRoot !== undefined) launch.repoRoot = prMaintenance.repoRoot;
+  if (prMaintenance.env !== undefined) launch.env = prMaintenance.env;
+  if (prMaintenance.intervalMs !== undefined) launch.intervalMs = prMaintenance.intervalMs;
+  if (prMaintenance.lockPath !== undefined) launch.lockPath = prMaintenance.lockPath;
+  if (prMaintenance.shell !== undefined) launch.shell = prMaintenance.shell;
+  return launch;
 }

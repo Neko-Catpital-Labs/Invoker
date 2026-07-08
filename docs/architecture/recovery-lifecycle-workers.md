@@ -92,6 +92,47 @@ The engine should only act when persisted state shows that:
 
 When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition. A sweep-and-assert guard test fails the build if any auto-fix is triggered outside this shared worker engine.
 
+## Requeue Worker (liveness stalls)
+
+Not every failure is a defect the AI should fix. The executing-stall watchdog
+force-fails a task whose executor stopped heartbeating with `Execution stalled:
+... (attempt lease expired)`. That is a liveness/infrastructure timeout — the
+task's work was never proven broken — so handing it to the auto-fix worker just
+re-runs the same step, re-stalls, and loops.
+
+Such failures are tagged with a structured `execution.failureClass` of
+`liveness_stall` when the stall guard records them. Two rules follow:
+
+- **Auto-fix skips liveness failures.** Both `orchestrator.shouldAutoFix` and the
+  auto-fix worker's eligibility check return false for a `liveness_stall`, the
+  same way they already skip user-cancelled failures.
+- **The requeue worker owns them.** A dedicated subscriber worker wakes on
+  lifecycle events, scans persisted state for `failed` + `liveness_stall` tasks,
+  and submits the normal `retry-task` command (a requeue — re-run the same work,
+  not an AI fix).
+
+The requeue worker is bounded, so it cannot become a different infinite loop:
+
+1. A runtime-local ledger keyed by task **lineage** (`taskId` + `generation`,
+   which `retryTask` preserves) caps requeues at `stallRequeueRetries`
+   (default 3).
+2. A backoff of `stallRequeueBackoffMs` (default 2 minutes) spaces requeues so a
+   task is not instantly re-run into the same stall while the machine is still
+   overloaded.
+3. Once the budget is exhausted the worker submits an escalation command that
+   parks the task in `needs_input` with an operator-facing reason, exactly once.
+
+`failureClass` is cleared on every retry/recreate reset, so a requeued run that
+later fails for a real reason is classified fresh and routed to auto-fix
+normally. As with auto-fix, a sweep-and-assert guard fails the build if the
+requeue channel is referenced outside the requeue worker engine and its
+dispatcher registration.
+
+Complementary hardening: the merge-gate publish paths (`executeMergeNode` and
+`publishAfterFix`) pump the attempt heartbeat/lease while the make-pr publisher
+runs, so a slow-but-alive publish is not misclassified as a stall in the first
+place.
+
 ## Operator Status
 
 Operators can inspect recovery ownership and recent decisions with:
@@ -102,6 +143,45 @@ Operators can inspect recovery ownership and recent decisions with:
 ```
 
 The status view is audit-backed and read-only. It reports the recovery worker id, owner, last wakeup, last scan, last submitted recovery command, and the latest skip reason. Status reporting must not change recovery eligibility or command submission ordering.
+
+## Worker Decision Ledger
+
+Every worker that owns act/skip decisions records them into the durable
+`worker_actions` table through the shared `recordWorkerDecisionRow` helper in
+`@invoker/execution-engine`. This gives operators one queryable, cross-worker
+history of what each worker decided — which tasks the auto-fix worker submitted
+for fixing, and which it deliberately skipped and why — instead of
+reconstructing it from scattered per-task debug events.
+
+Recording policy:
+
+- **Act** decisions (submit / complete / fail) are always recorded.
+- **Meaningful skips** (retry budget exhausted or disabled, not eligible, run
+  failure) are recorded with `status: 'skipped'` and a `reason`.
+- **Routine scan noise** (stale snapshots, dedupe hits, lock contention,
+  vanished tasks) is logged as a per-task debug event only and never creates a
+  durable row. `isMeaningfulSkipReason` classifies the reason.
+
+Rows are latest-state-per-lineage: repeated decisions on the same task lineage
+(`autofix:<taskId>:<generation>:<attemptId>` for auto-fix) update a single row,
+with `attemptCount` and timestamps carrying the history.
+
+Query decisions read-only:
+
+```bash
+./run.sh --headless query worker-decisions --workflow <id> --output json
+./run.sh --headless query worker-decisions --decision skip --reason budget
+```
+
+The desktop Workers tab surfaces the same feed: selecting a worker shows a
+`Decisions` list (act vs skip, with reasons) backed by the
+`invoker:get-worker-decisions` IPC channel.
+
+Only the auto-fix and CI-failure workers own per-task decisions. The
+PR-maintenance crons record coarse run-level rows (running → completed/failed);
+the pr-status worker delegates its decisions to the review gate, and the
+disk-headroom and external-process workers have no task/workflow decision to
+record.
 
 ## External Recovery Worker
 

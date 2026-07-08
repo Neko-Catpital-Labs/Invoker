@@ -323,6 +323,8 @@ export type {
   QueueStatus,
   ReviewGateQueryResponse,
   WorkerActionSummary,
+  WorkerDecisionsRequest,
+  WorkerDecisionsResponse,
   WorkerActionStatus,
   WorkerControlAction,
   WorkerLifecycleStatus,

@@ -192,6 +192,7 @@ export interface WorkerActionListFilters {
   taskId?: string;
   workerKind?: string;
   status?: WorkerActionStatus | string;
+  decision?: 'act' | 'skip';
   limit?: number;
   offset?: number;
 }

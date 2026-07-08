@@ -19,6 +19,7 @@ import {
   createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
+  registerPrMaintenanceWorkers,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
@@ -33,6 +34,7 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
+import { resolvePrMaintenanceWorkerConfig } from './config.js';
 import {
   isDispatchableLaunch,
 } from './global-topup.js';
@@ -424,7 +426,9 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerPrMaintenanceWorkers(
+      registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    ),
   );
 
   if (subCommand === 'list') {
@@ -487,6 +491,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
+      prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
     });
     await worker.tick('manual');
     await worker.stop();
@@ -559,6 +564,10 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query action-graph [--output F]                     Print action graph source-of-truth snapshot
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
+  query worker-actions [--workflow <id>] [--status S] [--decision act|skip]
+                                                      List durable worker action rows (all workers)
+  query worker-decisions [--workflow <id>] [--decision act|skip] [--reason <substr>]
+                                                      Show what each worker decided: submitted vs skipped, and why
   query ui-perf [--output F] [--reset]               Print live UI perf stats
   query stats [--output F]                           Aggregate stats across all workflows
 

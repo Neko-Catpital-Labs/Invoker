@@ -316,6 +316,41 @@ describe('replaceTask', () => {
     expect(mergeNode!.dependencies).toContain(s('fix'));
   });
 
+  it('a leaf blocked behind a cancelled task is not "live", even under an unsatisfied external dependency', () => {
+    // Upstream workflow (index 0) stays pending, so the downstream external
+    // gate never opens.
+    orchestrator.loadPlan({
+      name: 'upstream',
+      tasks: [{ id: 'up', description: 'Up', command: 'echo up' }],
+    });
+    const upstreamWfId = sid(orchestrator, 0, 'up').split('/')[0];
+
+    // Downstream workflow (index 1) is gated on the upstream, with a root → leaf chain.
+    orchestrator.loadPlan({
+      name: 'downstream',
+      externalDependencies: [{ workflowId: upstreamWfId, requiredStatus: 'completed' }],
+      tasks: [
+        { id: 'root', description: 'Root', command: 'echo root' },
+        { id: 'leaf', description: 'Leaf', command: 'echo leaf', dependencies: ['root'] },
+      ],
+    });
+    const s = (l: string) => sid(orchestrator, 1, l);
+
+    // Cancelling the never-started root leaves root failed and leaf blocked
+    // behind it. The workflow is dead — nothing can progress.
+    orchestrator.cancelTask(s('root'));
+    expect(orchestrator.getTask(s('root'))!.status).toBe('failed');
+    expect(orchestrator.getTask(s('leaf'))!.status).toBe('blocked');
+
+    // replaceTask must mutate in place (leaf → stale), not fork. The old
+    // workflow-scoped heuristic saw the unsatisfied external gate and wrongly
+    // judged the blocked leaf "live", forking and leaving the original leaf blocked.
+    orchestrator.replaceTask(s('root'), [
+      { id: 'fix', description: 'Fix', command: 'echo fix' },
+    ]);
+    expect(orchestrator.getTask(s('leaf'))!.status).toBe('stale');
+  });
+
   it('rejects replacing a running task', () => {
     orchestrator.loadPlan({
       name: 'test',

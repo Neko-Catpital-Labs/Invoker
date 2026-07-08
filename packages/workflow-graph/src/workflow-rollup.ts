@@ -97,7 +97,7 @@ export function computeWorkflowStatusFromCounts(
   return 'running';
 }
 
-function hasFailedDependencyPath(
+export function hasFailedDependencyPath(
   task: WorkflowRollupTaskSummary,
   tasksById: ReadonlyMap<string, WorkflowRollupTaskSummary>,
   seen: Set<string> = new Set(),
