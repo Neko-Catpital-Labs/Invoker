@@ -8,10 +8,13 @@ import {
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 
+import type { WorkerActionRecord } from '@invoker/data-store';
 import {
   AUTO_STARTED_OWNER_WORKER_KINDS,
   createWorkerRuntimeController,
   listWorkerActionHistory,
+  listWorkerDecisions,
+  toWorkerActionSummary,
 } from '../worker-control.js';
 
 interface TestWorkerRuntime extends WorkerRuntime {
@@ -233,5 +236,60 @@ describe('createWorkerRuntimeController', () => {
       nextOffset: 6,
     });
     expect(listWorkerActions).toHaveBeenCalledWith({ workerKind: 'history', limit: 3, offset: 4 });
+  });
+});
+
+function decisionRow(overrides: Partial<WorkerActionRecord> = {}): WorkerActionRecord {
+  return {
+    id: 'wa',
+    workerKind: 'autofix',
+    actionType: 'auto-fix',
+    subjectType: 'task',
+    subjectId: 'wf-1/t',
+    externalKey: 'autofix:wf-1/t:0:a1',
+    status: 'queued',
+    attemptCount: 1,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('toWorkerActionSummary', () => {
+  it('derives decision from status and lifts reason from payload', () => {
+    const skip = toWorkerActionSummary(decisionRow({ id: 's', status: 'skipped', payload: { reason: 'not-eligible' } }));
+    expect(skip).toMatchObject({ decision: 'skip', reason: 'not-eligible' });
+    const act = toWorkerActionSummary(decisionRow({ id: 'a', status: 'queued', payload: {} }));
+    expect(act.decision).toBe('act');
+    expect(act.reason).toBeUndefined();
+  });
+});
+
+describe('listWorkerDecisions', () => {
+  it('scopes to a run and surfaces reason + decision on each summary', () => {
+    const listWorkerActions = vi.fn(() => [
+      decisionRow({ id: 'a1', status: 'queued', payload: {} }),
+      decisionRow({ id: 'a2', status: 'skipped', payload: { reason: 'worker-retry-budget-exhausted' } }),
+    ]);
+    const res = listWorkerDecisions({ listWorkerActions } as never, { workflowId: 'wf-1' });
+    expect(listWorkerActions).toHaveBeenCalledWith(expect.objectContaining({ workflowId: 'wf-1' }));
+    expect(res.workflowId).toBe('wf-1');
+    expect(res.actions.map((action) => action.decision)).toEqual(['act', 'skip']);
+    expect(res.actions[1]?.reason).toBe('worker-retry-budget-exhausted');
+  });
+
+  it('passes the decision filter through to the query', () => {
+    const listWorkerActions = vi.fn(() => []);
+    listWorkerDecisions({ listWorkerActions } as never, { decision: 'skip', workerKind: 'autofix' });
+    expect(listWorkerActions).toHaveBeenCalledWith(expect.objectContaining({ decision: 'skip', workerKind: 'autofix' }));
+  });
+
+  it('post-filters by reason substring, case-insensitively', () => {
+    const listWorkerActions = vi.fn(() => [
+      decisionRow({ id: 'a1', status: 'skipped', payload: { reason: 'not-eligible' } }),
+      decisionRow({ id: 'a2', status: 'skipped', payload: { reason: 'worker-retry-budget-exhausted' } }),
+    ]);
+    const res = listWorkerDecisions({ listWorkerActions } as never, { reason: 'BUDGET' });
+    expect(res.actions.map((action) => action.id)).toEqual(['a2']);
   });
 });
