@@ -184,9 +184,12 @@ export function ApprovalModal({
         : 'Approve Merge'
       : 'Approve';
 
+  const mergeRejectLabel = onFinish === 'pull_request' ? 'Reject PR' : 'Reject Merge';
+  const mergeConfirmRejectLabel =
+    onFinish === 'pull_request' ? 'Confirm Reject PR' : 'Confirm Reject Merge';
   const rejectButtonLabel = showRejectInput
-    ? (isFixApproval ? 'Confirm Reject Fix' : isMergeNode ? 'Confirm Reject Merge' : 'Confirm Reject')
-    : (isFixApproval ? 'Reject Fix' : isMergeNode ? 'Reject Merge' : 'Reject');
+    ? (isFixApproval ? 'Confirm Reject Fix' : isMergeNode ? mergeConfirmRejectLabel : 'Confirm Reject')
+    : (isFixApproval ? 'Reject Fix' : isMergeNode ? mergeRejectLabel : 'Reject');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
