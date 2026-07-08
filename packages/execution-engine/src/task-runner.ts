@@ -2177,6 +2177,8 @@ export class TaskRunner {
     const artifacts = this.getCurrentRequiredReviewArtifacts(task);
     if (artifacts.length === 0) return;
 
+    this.orchestrator.recordTaskHeartbeat?.(task.id, { at: new Date(), source: 'executor' });
+
     let latestGate = task.execution.reviewGate;
     let approvedGate = false;
     for (const artifact of artifacts) {
