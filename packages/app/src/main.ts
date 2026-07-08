@@ -111,8 +111,10 @@ import {
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
+  GitHubMergeGateProvider,
   PR_STATUS_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
+  ReviewProviderRegistry,
   remoteFetchForPool,
   DEFAULT_EXECUTION_AGENT,
   registerBuiltinAgents,
@@ -318,6 +320,11 @@ function submitRegisteredOwnerWorkerMutation(
 }
 const autoFixAttemptLedger = createAutoFixAttemptLedger();
 
+function createReviewProviderRegistry(): ReviewProviderRegistry {
+  const registry = new ReviewProviderRegistry();
+  registry.register(new GitHubMergeGateProvider());
+  return registry;
+}
 
 function buildRegisteredOwnerWorkerDeps(
   store: WorkerRuntimeDependencies['store'],
@@ -344,6 +351,7 @@ function buildRegisteredOwnerWorkerDeps(
     reviewGate: {
       checkMergeGateStatuses,
     },
+    reviewProviders: createReviewProviderRegistry(),
     autoFix: {
       defaultAutoFixRetries: invokerConfig.autoFixRetries,
       attemptLedger: autoFixAttemptLedger,
@@ -353,6 +361,9 @@ function buildRegisteredOwnerWorkerDeps(
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,
+    },
+    prSummaryRefresh: {
+      cwd: repoRoot,
     },
   };
 }

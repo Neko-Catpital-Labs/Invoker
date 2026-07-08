@@ -110,6 +110,42 @@ describe('buildCanonicalPrBody', () => {
     expect(body).toContain(visualProof);
   });
 
+  it('renders worker actions in chronological Pipeline rows', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Pipeline summary',
+      workflowSummary: 'Updated PR visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'wa-late',
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'queued',
+            taskId: 'wf-1/task-b',
+            summary: 'Queued CI repair',
+            createdAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            id: 'wa-early',
+            workerKind: 'pr-summary-refresh',
+            actionType: 'refresh-pr-summary',
+            status: 'completed',
+            subjectId: '42',
+            summary: 'PR summary refresh checked',
+            createdAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body).toContain('| Time | Worker | Action | Target | Status | Summary |');
+    expect(body.indexOf('pr-summary-refresh')).toBeLessThan(body.indexOf('ci-failure'));
+    expect(body).toContain('| 2026-01-01T00:01:00.000Z | pr-summary-refresh | refresh-pr-summary | 42 | completed | PR summary refresh checked |');
+    expect(body).toContain('| 2026-01-01T00:02:00.000Z | ci-failure | fix-ci-failure | wf-1/task-b | queued | Queued CI repair |');
+  });
+
   it('canonical body passes validation', () => {
     const body = buildCanonicalPrBody({
       title: 'Anything',
