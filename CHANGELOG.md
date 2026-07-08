@@ -35,6 +35,7 @@ All notable changes to Invoker will be documented in this file.
 - Emit first-class recovery.worker submit/skip audit events from the auto-fix worker and add a mocked browser E2E proving worker-triggered fixes reach the Approve Fix UI.
 - Add task deletion across the desktop app, HTTP API, and headless commands. Deleting a task now kills it first when needed, rewires direct dependents to the deleted task's upstream dependencies, and blocks deleting the last task in a workflow so users delete the whole workflow instead.
 - Keep the launch dispatcher topping up ready work before each poll, so queued tasks do not sit idle after launch rows expire or are abandoned.
+- Stop auto-fix from looping on infrastructure stalls. When the executing-stall watchdog force-fails a task whose executor stopped heartbeating (`Execution stalled … attempt lease expired`), it now tags the failure as a liveness stall. Auto-fix skips those — re-running the AI on a non-defect just re-stalled forever — and a new bounded requeue worker re-runs the task up to `stallRequeueRetries` times (default 3) with a `stallRequeueBackoffMs` backoff (default 2 minutes) before parking it in `needs_input` for a human. The merge-gate publish-after-fix path now also pumps its attempt heartbeat/lease while running, so a slow-but-alive publish is not misread as a stall.
 
 ## 0.0.6
 
