@@ -1,0 +1,190 @@
+name: Daily e2e status
+
+# Public per-suite pass/fail surface for the FULL extended e2e battery. Runs once
+# a day (after ci.yml's 09:17 UTC scheduled run), publishes a per-suite table to
+# the run's step summary AND a single durable tracking issue, and goes red when
+# any suite fails. This is the reporting half; the private owner-host worker
+# (scripts/cron-daily-e2e-fix.sh) is what actually opens fix PRs.
+on:
+  schedule:
+    - cron: '0 10 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  NODE_VERSION: '26'
+
+jobs:
+  extended-battery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      INVOKER_TEST_ALL_EXTENDED: '1'
+      INVOKER_TEST_ALL_STATE_FILE: ${{ github.workspace }}/e2e-extended-state.tsv
+      SUMMARY_FILE: ${{ github.workspace }}/e2e-summary.md
+      TMPDIR: /tmp/invoker-tmp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install test system packages
+        run: sudo apt-get update && sudo apt-get install -y xvfb jq
+
+      - name: Build UI and app
+        run: |
+          pnpm --filter @invoker/ui build
+          pnpm --filter @invoker/app build
+
+      - name: Run extended battery
+        run: |
+          mkdir -p "$TMPDIR"
+          chmod 1777 "$TMPDIR"
+          # Capture status but never abort before we surface the per-suite table.
+          status=0
+          bash scripts/run-all-tests.sh || status=$?
+          echo "BATTERY_EXIT=$status" >> "$GITHUB_ENV"
+          echo "extended battery exit: $status"
+
+      - name: Build per-suite summary
+        run: |
+          state="$INVOKER_TEST_ALL_STATE_FILE"
+          table="$SUMMARY_FILE"
+          {
+            echo "| Status | Suite |"
+            echo "| --- | --- |"
+          } > "$table"
+
+          emit() {
+            # emit <status> <icon>
+            awk -F '\t' -v want="$1" '$1=="extended" && $3==want {print $2}' "$state" 2>/dev/null \
+              | LC_ALL=C sort | while IFS= read -r suite; do
+                  [ -n "$suite" ] || continue
+                  rel="${suite##*/scripts/test-suites/}"
+                  printf '| %s %s | %s |\n' "$2" "$1" "$rel" >> "$table"
+                done
+          }
+          emit failed '🔴'
+          emit skipped-unavailable '⚪'
+          emit passed '🟢'
+
+          total="$(awk -F '\t' '$1=="extended"{c++} END{print c+0}' "$state" 2>/dev/null || echo 0)"
+          fail_count="$(awk -F '\t' '$1=="extended" && $3=="failed"{c++} END{print c+0}' "$state" 2>/dev/null || echo 0)"
+          echo "TOTAL_COUNT=$total" >> "$GITHUB_ENV"
+          echo "FAIL_COUNT=$fail_count" >> "$GITHUB_ENV"
+
+          {
+            echo "## Daily e2e status (extended battery)"
+            echo ""
+            if [ "$total" -eq 0 ]; then
+              echo "**No suite results were recorded** — the battery did not produce a state file (exit ${BATTERY_EXIT:-unknown}). Treating this run as failed."
+              echo ""
+            fi
+            cat "$table"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upsert tracking issue
+        uses: actions/github-script@v7
+        env:
+          FAIL_COUNT: ${{ env.FAIL_COUNT }}
+          TOTAL_COUNT: ${{ env.TOTAL_COUNT }}
+          BATTERY_EXIT: ${{ env.BATTERY_EXIT }}
+        with:
+          script: |
+            const fs = require('fs');
+            const LABEL = 'daily-e2e-status';
+            const { owner, repo } = context.repo;
+            const failCount = parseInt(process.env.FAIL_COUNT || '0', 10);
+            const totalCount = parseInt(process.env.TOTAL_COUNT || '0', 10);
+            // A zero-total run means the battery never produced results — red.
+            const red = failCount > 0 || totalCount === 0;
+            const prefix = red ? '🔴' : '🟢';
+            const title = `${prefix} Daily e2e status`;
+
+            let table = '';
+            try {
+              table = fs.readFileSync(process.env.SUMMARY_FILE, 'utf8');
+            } catch (err) {
+              console.error(`Could not read summary table: ${err.message}`);
+            }
+
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const stamp = new Date().toISOString();
+            const headline = totalCount === 0
+              ? `**No suite results recorded** (battery exit ${process.env.BATTERY_EXIT || 'unknown'}).`
+              : `**${failCount}** failing suite(s) of **${totalCount}** in the extended battery.`;
+            const body = [
+              headline,
+              '',
+              table,
+              '',
+              `Run: ${runUrl}`,
+              `Updated: ${stamp}`,
+            ].join('\n');
+
+            try {
+              // Ensure the dedupe label exists (create on first run).
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: LABEL });
+              } catch (err) {
+                if (err.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner, repo, name: LABEL, color: 'b60205',
+                    description: 'Durable per-suite status of the daily extended e2e battery',
+                  });
+                } else {
+                  throw err;
+                }
+              }
+
+              // One durable issue per repo: reuse the open labeled issue, else create.
+              const existing = await github.rest.issues.listForRepo({
+                owner, repo, labels: LABEL, state: 'open', per_page: 1,
+              });
+              if (existing.data.length > 0) {
+                const number = existing.data[0].number;
+                await github.rest.issues.update({ owner, repo, issue_number: number, title, body });
+                console.log(`Updated tracking issue #${number}`);
+              } else {
+                const created = await github.rest.issues.create({
+                  owner, repo, title, body, labels: [LABEL],
+                });
+                console.log(`Created tracking issue #${created.data.number}`);
+              }
+            } catch (err) {
+              // Never swallow: fail the step with context so the surface stays trustworthy.
+              core.setFailed(`Failed to upsert tracking issue: ${err.message}`);
+            }
+
+      - name: Fail run if any suite failed
+        run: |
+          if [ "${TOTAL_COUNT:-0}" -eq 0 ]; then
+            echo "extended battery produced no suite results (exit ${BATTERY_EXIT:-unknown})"
+            exit 1
+          fi
+          if [ "${FAIL_COUNT:-0}" -ne 0 ]; then
+            echo "extended battery failures: ${FAIL_COUNT}"
+            exit 1
+          fi
+          echo "all ${TOTAL_COUNT} extended suites passed or self-skipped"
