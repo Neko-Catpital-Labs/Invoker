@@ -27,6 +27,7 @@ interface InvokerTerminalProps {
   draftPlanAvailable: boolean;
   draftPlanSummary?: { name: string; taskCount: number; workflowCount?: number };
   submitError?: SubmitErrorView | null;
+  transientStreamText?: string;
   readOnly?: boolean;
   expanded?: boolean;
   onValueChange: (value: string) => void;
@@ -53,6 +54,7 @@ export function InvokerTerminal({
   draftPlanAvailable,
   draftPlanSummary,
   submitError,
+  transientStreamText,
   readOnly = false,
   expanded = false,
   onValueChange,
@@ -170,6 +172,20 @@ export function InvokerTerminal({
           );
         })}
       </div>
+
+      {transientStreamText ? (
+        <div
+          data-testid="invoker-terminal-stream"
+          className="mx-4 mb-3 rounded-2xl border border-sky-500/30 bg-sky-950/40 px-4 py-3 shadow-lg"
+        >
+          <div className="text-xs font-medium uppercase tracking-wide text-sky-300/80">
+            {busy ? 'Planner output (streaming)' : 'Planner output'}
+          </div>
+          <div className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-sky-100/90">
+            {transientStreamText}
+          </div>
+        </div>
+      ) : null}
 
       {draftPlanAvailable && !readOnly && (
         <div

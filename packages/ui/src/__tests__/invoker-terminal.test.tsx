@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -392,5 +392,103 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+
+  it('renders the live planner panel distinctly from transcript lines', () => {
+    const props = {
+      activeConversationKey: 'chat-1',
+      lines: [{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system' as const, tone: 'muted' as const }],
+      busy: true,
+      value: '',
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+    const { rerender } = render(<InvokerTerminal {...props} transientStreamText="raw model tokens" />);
+
+    const stream = screen.getByTestId('invoker-terminal-stream');
+    expect(stream).toHaveTextContent('raw model tokens');
+    // The live panel lives outside the transcript so it never mixes into saved lines.
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toContainElement(stream);
+
+    rerender(<InvokerTerminal {...props} transientStreamText={undefined} />);
+    expect(screen.queryByTestId('invoker-terminal-stream')).not.toBeInTheDocument();
+  });
+
+  it('shows live planner output while busy and removes it once the reply lands', async () => {
+    let resolveSend: ((value: any) => void) | null = null;
+    mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => { resolveSend = resolve; })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+
+    // The planner streams under its freshly-minted server id while the UI session is still local.
+    act(() => {
+      mock.firePlannerStream({ sessionId: 'session-1', chunk: 'Thinking ', text: 'Thinking ' });
+      mock.firePlannerStream({ sessionId: 'session-1', chunk: 'hard', text: 'Thinking hard' });
+    });
+    expect(screen.getByTestId('invoker-terminal-stream')).toHaveTextContent('Thinking hard');
+
+    resolveSend?.({ ok: true, sessionId: 'session-1', reply: 'Here is the plan.', draftPlanAvailable: false });
+
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Here is the plan.'));
+    expect(screen.queryByTestId('invoker-terminal-stream')).not.toBeInTheDocument();
+  });
+
+  it('keeps the live planner panel after a failed send until the next send starts', async () => {
+    let resolveSend: ((value: any) => void) | null = null;
+    mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => { resolveSend = resolve; })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      mock.firePlannerStream({ sessionId: 'session-1', chunk: 'partial ', text: 'partial ' });
+      mock.firePlannerStream({ sessionId: 'session-1', chunk: 'output', text: 'partial output' });
+    });
+    expect(screen.getByTestId('invoker-terminal-stream')).toHaveTextContent('partial output');
+
+    resolveSend?.({ ok: false, sessionId: 'session-1', error: 'planner exploded' });
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('planner exploded'));
+    // Failure leaves the raw output on screen so the user can read what happened.
+    expect(screen.getByTestId('invoker-terminal-stream')).toHaveTextContent('partial output');
+
+    submitPlanningText('try again');
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(screen.queryByTestId('invoker-terminal-stream')).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps live planner output isolated per planning chat', async () => {
+    let resolveSend: ((value: any) => void) | null = null;
+    mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => { resolveSend = resolve; })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('session A request');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    act(() => mock.firePlannerStream({ sessionId: 'session-1', chunk: 'A output', text: 'A output' }));
+    expect(screen.getByTestId('invoker-terminal-stream')).toHaveTextContent('A output');
+
+    // A brand-new chat shows none of the first chat's live output.
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    expect(screen.queryByTestId('invoker-terminal-stream')).not.toBeInTheDocument();
+
+    // Switching back to the first chat restores its own live output.
+    fireEvent.click(screen.getByText('session A request'));
+    expect(screen.getByTestId('invoker-terminal-stream')).toHaveTextContent('A output');
   });
 });

@@ -16,7 +16,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { ActionGraphResponse, InAppPlanningSessionSummary, RuntimeStatus, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult } from '@invoker/contracts';
+import type { ActionGraphResponse, InAppPlanningSessionSummary, PlannerStreamEvent, RuntimeStatus, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -31,6 +31,8 @@ export interface MockInvoker {
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
   /** Fire an embedded terminal output event to subscribers. */
   fireTerminalOutput: (event: TerminalOutputEvent) => void;
+  /** Fire a planner raw-output stream event to subscribers. */
+  firePlannerStream: (event: PlannerStreamEvent) => void;
   /** Replace the action graph snapshot returned by getActionGraph. */
   setActionGraph: (response: ActionGraphResponse) => void;
   /** Replace the runtime status returned by getRuntimeStatus. */
@@ -89,6 +91,7 @@ export function createMockInvoker(
   let graphEventCallback: ((event: TaskGraphEvent) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
+  let plannerStreamCallback: ((event: PlannerStreamEvent) => void) | undefined;
   let actionGraphSnapshot: ActionGraphResponse = {
     generatedAt: '2026-01-01T00:00:00.000Z',
     stallThresholdMs: 60_000,
@@ -153,6 +156,10 @@ export function createMockInvoker(
     }),
     onTaskOutput: vi.fn(() => () => {}),
     onActivityLog: vi.fn(() => () => {}),
+    onPlannerStream: vi.fn((cb: (event: PlannerStreamEvent) => void) => {
+      plannerStreamCallback = cb;
+      return () => { plannerStreamCallback = undefined; };
+    }),
     loadPlan: vi.fn(async () => {}),
     planFromGoal: vi.fn(async () => ({
       ok: true,
@@ -370,6 +377,10 @@ export function createMockInvoker(
     }
   }
 
+  function firePlannerStream(event: PlannerStreamEvent) {
+    plannerStreamCallback?.(event);
+  }
+
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[]; runtimeStatus?: RuntimeStatus } }).__INVOKER_BOOTSTRAP__ = {
@@ -395,6 +406,7 @@ export function createMockInvoker(
     fireGraphEvent,
     fireWorkflowsChanged,
     fireTerminalOutput,
+    firePlannerStream,
     install,
     cleanup,
   };

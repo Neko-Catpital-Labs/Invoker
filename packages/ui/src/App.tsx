@@ -554,6 +554,7 @@ export function App() {
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
+  const activePlanningTransientStreamText = activePlanningSession.transientStreamText;
   const [graphMaximized, setGraphMaximized] = useState(false);
   const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
   const selectedActionNode = useMemo(
@@ -703,6 +704,23 @@ export function App() {
             : session,
         ),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onPlannerStream?.((event) => {
+      setPlanningSessions((prev) => {
+        const exactMatch = prev.findIndex((session) => session.id === event.sessionId);
+        const firstSendFallback = prev.findIndex((session) => session.busy && session.id.startsWith('local-'));
+        const index = exactMatch === -1 ? firstSendFallback : exactMatch;
+        if (index === -1) return prev;
+        const target = prev[index];
+        if (target.transientStreamText === event.text) return prev;
+        const next = prev.slice();
+        next[index] = { ...target, transientStreamText: event.text };
+        return next;
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -1969,7 +1987,7 @@ export function App() {
     }
 
     const previousSessionId = activePlanningSessionId;
-    updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
+    updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true, transientStreamText: undefined }));
     try {
       const request = {
         message: input,
@@ -1986,6 +2004,7 @@ export function App() {
           return {
             ...session,
             busy: false,
+            transientStreamText: undefined,
             id: result.sessionId,
             title: session.title === 'Untitled plan'
               ? (input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input)
@@ -2886,6 +2905,7 @@ export function App() {
             onSubmitDraft={() => void handlePlanningSubmitDraft()}
             onPresetChange={setSelectedPlanningPresetKey}
             onExpand={() => setPlanningTerminalExpanded(true)}
+            transientStreamText={activePlanningTransientStreamText}
           />
         </div>
       </div>
@@ -3134,6 +3154,7 @@ export function App() {
             onSubmitDraft={() => void handlePlanningSubmitDraft()}
             onPresetChange={setSelectedPlanningPresetKey}
             onExpand={() => setPlanningTerminalExpanded(true)}
+            transientStreamText={activePlanningTransientStreamText}
             onCloseExpanded={() => setPlanningTerminalExpanded(false)}
           />
         </div>
