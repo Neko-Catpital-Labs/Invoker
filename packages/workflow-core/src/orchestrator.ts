@@ -1674,6 +1674,26 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
+  escalateStalledToNeedsInput(taskId: string, prompt: string): void {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task || task.status !== 'failed') return;
+    if (!isLivenessFailureClass(task.execution.failureClass)) return;
+    const id = task.id;
+
+    const changes: TaskStateChanges = {
+      status: 'needs_input',
+      execution: { inputPrompt: prompt, failureClass: undefined },
+    };
+    const updated = this.writeAndSync(id, changes);
+    if (task.execution.selectedAttemptId) {
+      this.taskRepository.updateAttempt(task.execution.selectedAttemptId, { status: 'needs_input' });
+    }
+    const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
+    this.persistence.logEvent?.(id, 'task.needs_input', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+  }
+
   private setTaskApprovalStatus(
     taskId: string,
     status: 'awaiting_approval' | 'review_ready',

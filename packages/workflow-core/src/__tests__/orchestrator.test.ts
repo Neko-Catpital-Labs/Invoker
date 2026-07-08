@@ -3523,6 +3523,49 @@ describe('Orchestrator', () => {
       expect(o.shouldAutoFix('t1')).toBe(false);
     });
 
+    it('escalateStalledToNeedsInput parks a failed liveness task and is idempotent/scoped', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      p.saveTask('wf-stall', {
+        id: 't1',
+        description: 'stalled task',
+        status: 'failed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: { exitCode: 1, error: 'Execution stalled: ...', failureClass: 'liveness_stall' },
+      });
+      const o = new Orchestrator({ persistence: p, messageBus: b, defaultAutoFixRetries: 3 });
+      o.syncFromDb('wf-stall');
+
+      o.escalateStalledToNeedsInput('t1', 'stalled too many times');
+      const parked = o.getTask('t1')!;
+      expect(parked.status).toBe('needs_input');
+      expect(parked.execution.inputPrompt).toBe('stalled too many times');
+      expect(parked.execution.failureClass).toBeUndefined();
+
+      // Idempotent: already needs_input, so a repeat escalation is a no-op.
+      o.escalateStalledToNeedsInput('t1', 'again');
+      expect(o.getTask('t1')!.execution.inputPrompt).toBe('stalled too many times');
+    });
+
+    it('escalateStalledToNeedsInput ignores a non-liveness failure', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      p.saveTask('wf-bug', {
+        id: 't1',
+        description: 'real bug',
+        status: 'failed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: { exitCode: 1, error: 'assertion failed' },
+      });
+      const o = new Orchestrator({ persistence: p, messageBus: b, defaultAutoFixRetries: 3 });
+      o.syncFromDb('wf-bug');
+      o.escalateStalledToNeedsInput('t1', 'nope');
+      expect(o.getTask('t1')!.status).toBe('failed');
+    });
     it('plain failed tasks stay failed in workflow-core', () => {
       orchestrator = new Orchestrator({
         persistence,

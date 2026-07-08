@@ -131,6 +131,16 @@ export class CommandService {
     );
   }
 
+  async escalateStalledToNeedsInput(
+    envelope: CommandEnvelope<{ taskId: string; prompt: string }>,
+  ): Promise<CommandResult<void>> {
+    return this.executeCommand<void>(
+      'ESCALATE_STALLED_FAILED',
+      () => this.orchestrator.escalateStalledToNeedsInput(envelope.payload.taskId, envelope.payload.prompt),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   /**
    * Retry a task — **retry-class** invalidation per Step 13's
    * canonical `{retry, recreate} × {task, workflow}` matrix
