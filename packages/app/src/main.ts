@@ -3527,7 +3527,13 @@ function createEmbeddedTerminalBackendFromConfig(
             activeMutationContext = undefined;
           }
         },
-        { logger },
+        {
+          logger,
+          onIntentFailed: (event) => {
+            if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) return;
+            mainWindow.webContents.send('invoker:workflow-mutation-failed', event);
+          },
+        },
       );
       launchDispatcher = new LaunchDispatcher({
         persistence,
