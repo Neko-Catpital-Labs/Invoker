@@ -38,7 +38,7 @@ afterEach(() => {
  * approvals against the same task id.
  */
 describe('Modal double-click guard (regression)', () => {
-  it.fails('ApprovalModal approve button fires onApprove once on rapid double-click', () => {
+  it('ApprovalModal approve button fires onApprove once on rapid double-click', () => {
     const onApprove = vi.fn();
     render(
       <ApprovalModal
@@ -54,7 +54,7 @@ describe('Modal double-click guard (regression)', () => {
     expect(onApprove).toHaveBeenCalledTimes(1);
   });
 
-  it.fails('InputModal submit button fires onSubmit once on rapid double-click', () => {
+  it('InputModal submit button fires onSubmit once on rapid double-click', () => {
     const onSubmit = vi.fn();
     render(
       <InputModal
