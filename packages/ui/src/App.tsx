@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
+import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningChatStreamEvent, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { useTasks } from './hooks/useTasks.js';
@@ -38,7 +38,7 @@ import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
 import { LeftStatusColumn } from './components/LeftStatusColumn.js';
-import { InvokerTerminal, type InvokerTerminalLine } from './components/InvokerTerminal.js';
+import { InvokerTerminal, type InvokerTerminalLine, type PlannerStreamView } from './components/InvokerTerminal.js';
 import {
   getAttentionTaskEntries,
   getRunningTaskEntries,
@@ -542,6 +542,7 @@ export function App() {
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
   const [planningTerminalExpanded, setPlanningTerminalExpanded] = useState(false);
+  const [plannerStreams, setPlannerStreams] = useState<Record<string, PlannerStreamView>>({});
   const activePlanningSession = useMemo(
     () => planningSessions.find((session) => session.id === activePlanningSessionId) ?? planningSessions[0] ?? makeInitialPlanningSession(),
     [activePlanningSessionId, planningSessions],
@@ -554,6 +555,7 @@ export function App() {
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
+  const activePlannerStream = plannerStreams[activePlanningSession.id] ?? null;
   const [graphMaximized, setGraphMaximized] = useState(false);
   const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
   const selectedActionNode = useMemo(
@@ -703,6 +705,22 @@ export function App() {
             : session,
         ),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onPlanningChatStream?.((event: PlanningChatStreamEvent) => {
+      setPlannerStreams((prev) => {
+        const existing = prev[event.sessionId];
+        return {
+          ...prev,
+          [event.sessionId]: {
+            text: (existing?.text ?? '') + event.chunk,
+            failed: false,
+          },
+        };
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -1970,10 +1988,12 @@ export function App() {
 
     const previousSessionId = activePlanningSessionId;
     updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
+    setPlannerStreams((prev) => ({ ...prev, [previousSessionId]: { text: '', failed: false } }));
     try {
       const request = {
         message: input,
         presetKey: selectedPlanningPresetKey || undefined,
+        streamId: previousSessionId,
         ...(planningSessionId ? { sessionId: planningSessionId } : {}),
       };
       const result = await invoker.planningChatSend(request);
@@ -2001,16 +2021,33 @@ export function App() {
           currentSessionId === previousSessionId ? result.sessionId : currentSessionId
         ));
         setHasLoadedPlan(false);
+        setPlannerStreams((prev) => {
+          if (!(previousSessionId in prev) && !(result.sessionId in prev)) return prev;
+          const next = { ...prev };
+          delete next[previousSessionId];
+          delete next[result.sessionId];
+          return next;
+        });
       } else {
         updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
         appendTerminalLine(result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
+        setPlannerStreams((prev) => {
+          const existing = prev[previousSessionId];
+          if (!existing) return prev;
+          return { ...prev, [previousSessionId]: { ...existing, failed: true } };
+        });
       }
     } catch (err) {
       updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
       const message = err instanceof Error ? err.message : 'Failed to reach the planner.';
       setPlanningSubmitError({ title: 'Planner could not respond', message });
       appendTerminalLine(message, 'system', 'error');
+      setPlannerStreams((prev) => {
+        const existing = prev[previousSessionId];
+        if (!existing) return prev;
+        return { ...prev, [previousSessionId]: { ...existing, failed: true } };
+      });
     }
   }, [
     activePlanningSessionBusy,
@@ -2880,6 +2917,7 @@ export function App() {
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
             submitError={planningSubmitError}
+            plannerStream={activePlannerStream}
             readOnly={activePlanningSessionSubmitted}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
@@ -3127,6 +3165,7 @@ export function App() {
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
             submitError={planningSubmitError}
+            plannerStream={activePlannerStream}
             expanded
             onValueChange={setPlanningInput}
             readOnly={activePlanningSessionSubmitted}

@@ -402,6 +402,7 @@ export interface InAppPlanningChatRequest {
   sessionId?: string;
   message: string;
   presetKey?: string;
+  streamId?: string;
 }
 
 export type InAppPlanningChatResponse =
@@ -440,6 +441,11 @@ export interface InAppPlanningResetRequest {
 }
 
 export type InAppPlanningResetResponse = { ok: true };
+
+export interface PlanningChatStreamEvent {
+  sessionId: string;
+  chunk: string;
+}
 
 
 
@@ -1078,6 +1084,9 @@ export const IpcEventChannels = {
   },
   'invoker:terminal-exit': {} as {
     payload: TerminalExitEvent;
+  },
+  'invoker:planning-chat-stream': {} as {
+    payload: PlanningChatStreamEvent;
   },
 } as const;
 

@@ -7,6 +7,11 @@ export interface InvokerTerminalLine {
   tone?: 'muted' | 'error' | 'success';
 }
 
+export interface PlannerStreamView {
+  text: string;
+  failed: boolean;
+}
+
 interface PlanningPresetOptionView {
   key: string;
   label: string;
@@ -27,6 +32,7 @@ interface InvokerTerminalProps {
   draftPlanAvailable: boolean;
   draftPlanSummary?: { name: string; taskCount: number; workflowCount?: number };
   submitError?: SubmitErrorView | null;
+  plannerStream?: PlannerStreamView | null;
   readOnly?: boolean;
   expanded?: boolean;
   onValueChange: (value: string) => void;
@@ -53,6 +59,7 @@ export function InvokerTerminal({
   draftPlanAvailable,
   draftPlanSummary,
   submitError,
+  plannerStream,
   readOnly = false,
   expanded = false,
   onValueChange,
@@ -170,6 +177,28 @@ export function InvokerTerminal({
           );
         })}
       </div>
+
+      {plannerStream && (
+        <div
+          data-testid="invoker-terminal-planner-stream"
+          className={`mx-4 mb-3 space-y-2 rounded-2xl border px-4 py-3 shadow-lg ${
+            plannerStream.failed
+              ? 'border-red-500/40 bg-red-950/60'
+              : 'border-blue-500/30 bg-blue-950/50'
+          }`}
+        >
+          <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-blue-200">
+            <span>{plannerStream.failed ? 'Planner output · last attempt failed' : 'Planner output'}</span>
+            {!plannerStream.failed && busy && <span className="text-blue-300/70">streaming…</span>}
+          </div>
+          <pre
+            data-testid="invoker-terminal-planner-stream-text"
+            className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-blue-100"
+          >
+            {plannerStream.text}
+          </pre>
+        </div>
+      )}
 
       {draftPlanAvailable && !readOnly && (
         <div

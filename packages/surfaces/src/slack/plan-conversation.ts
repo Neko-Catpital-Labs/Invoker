@@ -294,6 +294,10 @@ export class PlanConversation {
     });
   }
 
+  setRawPlannerOutputHandler(handler: RawPlannerOutputHandler | undefined): void {
+    this.onRawPlannerOutput = handler;
+  }
+
   /**
    * Load existing conversation state from the database.
    * Call once after construction. Safe to call multiple times (no-ops after first).

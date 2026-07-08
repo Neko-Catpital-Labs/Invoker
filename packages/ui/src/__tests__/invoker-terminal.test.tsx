@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -44,7 +44,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('hello');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex' });
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', streamId: 'local-planning-session-1' });
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
     });
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
@@ -59,7 +59,7 @@ describe('Invoker terminal (component)', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex' });
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', streamId: 'local-planning-session-1' });
     });
   });
 
@@ -79,6 +79,7 @@ describe('Invoker terminal (component)', () => {
         sessionId: 'session-1',
         message: 'make the plan more detailed',
         presetKey: 'codex',
+        streamId: 'session-1',
       });
     });
   });
@@ -91,7 +92,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('draft a plan');
 
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'draft a plan', presetKey: 'omp+claude' });
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'draft a plan', presetKey: 'omp+claude', streamId: 'local-planning-session-1' });
     });
   });
 
@@ -392,5 +393,88 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+
+  it('streams live planner output while busy and drops it once the reply lands', async () => {
+    let resolveSend: ((value: unknown) => void) | null = null;
+    mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => { resolveSend = resolve; })) as any;
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('build a thing');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalled());
+
+    // A raw chunk for the in-flight send (local id, since the server id is not
+    // known until the reply) shows up in the transient panel, not the transcript.
+    act(() => { mock.firePlannerStream('local-planning-session-1', 'exploring the repo…'); });
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-planner-stream-text')).toHaveTextContent('exploring the repo…');
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('exploring the repo…');
+
+    // A successful reply removes the panel and keeps only the transcript reply.
+    await act(async () => {
+      resolveSend?.({ ok: true, sessionId: 'session-1', reply: 'Here is the plan.', draftPlanAvailable: false });
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Here is the plan.');
+    });
+  });
+
+  it('keeps the planner stream panel after a failed send until the next send starts', async () => {
+    let resolveSend: ((value: unknown) => void) | null = null;
+    mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => { resolveSend = resolve; })) as any;
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('build a thing');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalled());
+    act(() => { mock.firePlannerStream('local-planning-session-1', 'partial output before the crash'); });
+
+    await act(async () => {
+      resolveSend?.({ ok: false, sessionId: 'local-planning-session-1', error: 'planner exploded' });
+    });
+
+    // Failure keeps the panel visible with its last raw output.
+    await waitFor(() => {
+      const panel = screen.getByTestId('invoker-terminal-planner-stream');
+      expect(panel).toHaveTextContent('partial output before the crash');
+      expect(within(panel).getByText(/last attempt failed/i)).toBeInTheDocument();
+    });
+
+    // The next send clears the stale failed output.
+    mock.api.planningChatSend = vi.fn(() => new Promise(() => {})) as any;
+    submitPlanningText('try again');
+    await waitFor(() => {
+      const panel = screen.getByTestId('invoker-terminal-planner-stream');
+      expect(panel).not.toHaveTextContent('partial output before the crash');
+      expect(within(panel).queryByText(/last attempt failed/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows each planning chat its own live planner output', async () => {
+    mock.api.planningChatSend = vi.fn(() => new Promise(() => {})) as any;
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('session A goal');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalled());
+    act(() => { mock.firePlannerStream('local-planning-session-1', 'chat A raw output'); });
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-planner-stream-text')).toHaveTextContent('chat A raw output');
+    });
+
+    // A brand-new chat has no transient output of its own.
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+    });
+
+    // Switching back to chat A restores its own live output.
+    fireEvent.click(screen.getByText('session A goal'));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-planner-stream-text')).toHaveTextContent('chat A raw output');
+    });
   });
 });

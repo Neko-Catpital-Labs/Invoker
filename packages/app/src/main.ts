@@ -3878,6 +3878,13 @@ function createEmbeddedTerminalBackendFromConfig(
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
         plannerReplyOverride,
+        onPlannerStream: (sessionId, chunk) => {
+          const payload = { sessionId, chunk };
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('invoker:planning-chat-stream', payload);
+          }
+          webBridge?.broadcast('invoker:planning-chat-stream', payload);
+        },
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {

@@ -47,6 +47,7 @@ export interface InAppPlannerDeps {
   planningCommandBuilder?: PlanningCommandBuilder;
   conversationRepo?: ConversationRepository;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  onPlannerStream?: (streamId: string, chunk: string) => void;
 }
 
 export interface InAppPlanningChatSession {
@@ -470,9 +471,21 @@ export async function sendPlanningChatMessage(
       try {
         const { extractYamlPlan, summarizePlanText } = await loadPlannerSurfaces();
         const formattedMessage = formatConversationalPlanningMessage(message);
-        const reply = deps.plannerReplyOverride
-          ? await deps.plannerReplyOverride(formattedMessage)
-          : await activeSession.conversation.sendMessage(formattedMessage);
+        const streamKey = rawRequest?.streamId ?? activeSession.id;
+        const streamSink = deps.onPlannerStream;
+        let reply: string;
+        if (deps.plannerReplyOverride) {
+          reply = await deps.plannerReplyOverride(formattedMessage);
+        } else if (streamSink) {
+          activeSession.conversation.setRawPlannerOutputHandler((chunk) => streamSink(streamKey, chunk));
+          try {
+            reply = await activeSession.conversation.sendMessage(formattedMessage);
+          } finally {
+            activeSession.conversation.setRawPlannerOutputHandler(undefined);
+          }
+        } else {
+          reply = await activeSession.conversation.sendMessage(formattedMessage);
+        }
         if (deps.plannerReplyOverride) {
           saveOverrideConversation(deps.conversationRepo, activeSession.id, formattedMessage, reply);
         }
