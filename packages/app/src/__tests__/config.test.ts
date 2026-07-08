@@ -213,6 +213,32 @@ describe('loadConfig', () => {
     expect(config.externalWorkers).toEqual(externalWorkers);
   });
 
+  it('defaults prMaintenance to undefined when absent', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ defaultBranch: 'main' }),
+    );
+    const config = loadConfig();
+    expect(config.prMaintenance).toBeUndefined();
+  });
+
+  it('reads prMaintenance config from user config', () => {
+    const prMaintenance = {
+      enabled: true,
+      repoRoot: '/srv/invoker',
+      env: { INVOKER_PR_CRON_LOCK: '/tmp/pr.lock' },
+      intervalMs: 120000,
+      lockPath: '/tmp/pr.lock',
+      shell: '/bin/bash',
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ prMaintenance }),
+    );
+    const config = loadConfig();
+    expect(config.prMaintenance).toEqual(prMaintenance);
+  });
+
   it('reads imageStorage from user config', () => {
     const imageStorage = {
       provider: 'r2',
