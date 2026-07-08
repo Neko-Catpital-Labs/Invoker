@@ -9,6 +9,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Logger } from '@invoker/contracts';
+import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
 
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
@@ -189,6 +190,68 @@ describe('PR maintenance workers', () => {
         reason: 'test-lock-held',
       }),
     );
+  });
+
+  it('records running and completed decision rows for a successful run', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness({ exitCode: 0 });
+    const actions = new Map<string, WorkerActionRecord>();
+    const store = {
+      getWorkerAction: vi.fn((kind: string, key: string) => actions.get(`${kind}:${key}`)),
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => {
+        const mapKey = `${write.workerKind}:${write.externalKey}`;
+        const existing = actions.get(mapKey);
+        const saved = {
+          ...write,
+          attemptCount: write.attemptCount ?? 0,
+          id: existing?.id ?? write.id,
+          createdAt: existing?.createdAt ?? 'now',
+          updatedAt: 'now',
+        } as WorkerActionRecord;
+        actions.set(mapKey, saved);
+        return saved;
+      }),
+    };
+    const worker = createCoderabbitAddressWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+      store,
+    });
+
+    await worker.tick();
+
+    const statuses = store.upsertWorkerAction.mock.calls.map((call) => call[0].status);
+    expect(statuses).toEqual(['running', 'completed']);
+    expect(store.upsertWorkerAction.mock.calls[0]?.[0]).toMatchObject({
+      workerKind: CODERABBIT_ADDRESS_WORKER_KIND,
+      actionType: 'pr-maintenance-run',
+      subjectType: 'repo',
+      subjectId: repoRoot,
+    });
+  });
+
+  it('does not record a decision row when the lock is held', async () => {
+    const repoRoot = makeRepoRoot();
+    const store = {
+      getWorkerAction: vi.fn(() => undefined),
+      upsertWorkerAction: vi.fn(),
+    };
+    const worker = createPrConflictRebaseWorker({
+      logger: makeLogger(),
+      repoRoot,
+      spawnProcess: makeSpawnHarness().spawnProcess,
+      lockProbe: () => ({ held: true, reason: 'lock-held' }),
+      installSignalHandlers: false,
+      store,
+    });
+
+    await worker.tick();
+
+    expect(store.upsertWorkerAction).not.toHaveBeenCalled();
   });
 
   it('polls on the five-minute default interval without ticking on start', async () => {

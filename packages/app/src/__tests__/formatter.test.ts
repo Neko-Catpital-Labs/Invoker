@@ -4,6 +4,7 @@ import {
   formatWorkflowStatus,
   formatEventLog,
   formatWorkerActions,
+  formatWorkerDecisions,
   serializeWorkflow,
   serializeTask,
   serializeEvent,
@@ -14,6 +15,7 @@ import {
 } from '../formatter.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
+import type { WorkerActionSummary } from '@invoker/contracts';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -215,6 +217,58 @@ describe('formatWorkerActions', () => {
     expect(output).toContain('auto\\nfix/fix\\ttask');
     expect(output).toContain('task=wf-1/task\\r1');
     expect(output).toContain('Retry\\nnext');
+  });
+});
+
+// ── formatWorkerDecisions ────────────────────────────────────
+
+describe('formatWorkerDecisions', () => {
+  const decisions: WorkerActionSummary[] = [
+    {
+      id: 'wd-act',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'queued',
+      attemptCount: 1,
+      agentName: 'codex',
+      decision: 'act',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+    },
+    {
+      id: 'wd-skip',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      workflowId: 'wf-1',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-2',
+      externalKey: 'wf-1/task-2:g0:a1',
+      status: 'skipped',
+      attemptCount: 3,
+      reason: 'worker-retry-budget-exhausted',
+      decision: 'skip',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:02:00.000Z',
+    },
+  ];
+
+  it('handles empty worker decisions', () => {
+    expect(formatWorkerDecisions([])).toContain('No worker decisions found.');
+  });
+
+  it('renders decision class, agent, task, and skip reason', () => {
+    const output = formatWorkerDecisions(decisions);
+    expect(output).toContain('Worker decisions (2)');
+    expect(output).toContain('ACT');
+    expect(output).toContain('SKIP');
+    expect(output).toContain('agent=codex');
+    expect(output).toContain('task=wf-1/task-1');
+    expect(output).toContain('reason=worker-retry-budget-exhausted');
   });
 });
 
