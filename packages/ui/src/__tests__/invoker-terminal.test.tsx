@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -35,6 +36,13 @@ describe('Invoker terminal (component)', () => {
   function submitPlanningText(text: string) {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+  }
+
+  function expectRailListScrolls(listBody: HTMLElement) {
+    // The list body owns the vertical overflow and shrinks as a flex child, and its parent
+    // is the bounded flex-column rail body — so long lists scroll instead of growing the rail.
+    expect(listBody).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+    expect(listBody.parentElement).toHaveClass('flex', 'flex-col', 'min-h-0', 'flex-1');
   }
 
   it('generates a planning reply from plain language', async () => {
@@ -392,5 +400,32 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+
+  it('renders the workflows and planning rail lists as scroll containers inside the rail frame', async () => {
+    const workflows: WorkflowMeta[] = [{ id: 'wf-1', name: 'Alpha', status: 'running' }];
+    render(<App />);
+    act(() => mock.setTasks([], workflows));
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    expectRailListScrolls(await screen.findByTestId('workflows-rail-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expectRailListScrolls(await screen.findByTestId('planning-rail-list'));
+  });
+
+  it('renders the attention and running rail lists as scroll containers inside the rail frame', async () => {
+    // No workflow is seeded: the attention/running rails only need tasks by status, and an
+    // empty workspace graph keeps this focused on the shared rail list layout contract.
+    const attentionTask = makeUITask({ id: 'task-attention', description: 'Needs a decision', status: 'failed' });
+    const runningTask = makeUITask({ id: 'task-running', description: 'Running now', status: 'running' });
+    render(<App />);
+    act(() => mock.setTasks([attentionTask, runningTask]));
+
+    fireEvent.click(await screen.findByTestId('sidebar-attention'));
+    expectRailListScrolls(await screen.findByTestId('attention-rail-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    expectRailListScrolls(await screen.findByTestId('running-rail-list'));
   });
 });
