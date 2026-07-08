@@ -40,6 +40,34 @@ export interface ExternalWorkerConfig {
   /** Process invocation used by the loader to start the external worker. */
   launch: ExternalWorkerLaunchConfig;
 }
+
+export interface PrMaintenanceConfig {
+  /** GitHub owner/repo scanned by PR maintenance workers. */
+  targetRepo?: string;
+  /** GitHub login whose open PRs are eligible for maintenance. */
+  author?: string;
+  /** CodeRabbit feedback update worker overrides. */
+  coderabbit?: {
+    targetRepo?: string;
+    author?: string;
+    login?: string;
+    maxAttempts?: number;
+    workDir?: string;
+    executionAgent?: string;
+    executionModel?: string;
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+  };
+  /** Merge-conflict rebase-recreate worker overrides. */
+  mergeConflictRebase?: {
+    targetRepo?: string;
+    author?: string;
+    maxAttempts?: number;
+    pollIntervalMs?: number;
+    confirmTimeoutMs?: number;
+    confirmPollIntervalMs?: number;
+  };
+}
 export interface DefaultExecutionConfig {
   /**
    * Default task execution harness when a task omits executionAgent.
@@ -297,6 +325,11 @@ export interface InvokerConfig {
    * The loader consumes this later; absent means no external workers.
    */
   externalWorkers?: ExternalWorkerConfig[];
+  /**
+   * Built-in PR maintenance worker overrides. When omitted, workers use their
+   * engine defaults and still require explicit worker startup.
+   */
+  prMaintenance?: PrMaintenanceConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
