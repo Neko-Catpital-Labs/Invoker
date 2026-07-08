@@ -4,8 +4,10 @@ import {
   type WorkflowMutationIntent,
   type WorkflowMutationPriority,
 } from '@invoker/data-store';
-import type { Logger } from '@invoker/contracts';
+import type { Logger, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { createWorkflowMutationTiming, type WorkflowMutationTiming } from './workflow-mutation-timing.js';
+
+export type WorkflowMutationFailedHandler = (event: WorkflowMutationFailedEvent) => void;
 
 type Deferred<T> = {
   resolve: (value: T) => void;
@@ -62,7 +64,7 @@ export class PersistedWorkflowMutationCoordinator {
     private readonly persistence: SQLiteAdapter,
     private readonly ownerId: string,
     private readonly dispatch: (channel: string, args: unknown[], context: WorkflowMutationContext) => Promise<unknown>,
-    private readonly options?: { logger?: Logger },
+    private readonly options?: { logger?: Logger; onIntentFailed?: WorkflowMutationFailedHandler },
   ) {
     this.enableTraceLogs = process.env.INVOKER_TRACE_MUTATION_QUEUE === '1';
   }
@@ -309,6 +311,7 @@ export class PersistedWorkflowMutationCoordinator {
         durationMs: Date.now() - intentStartedAtMs,
         error: error instanceof Error ? error.message : String(error),
       });
+      this.notifyIntentFailed(intent, message);
       deferred?.reject(error);
     } finally {
       clearInterval(leaseHeartbeat);
@@ -329,6 +332,28 @@ export class PersistedWorkflowMutationCoordinator {
       return -1;
     }
     return Date.now() - startedAt;
+  }
+
+  private notifyIntentFailed(intent: WorkflowMutationIntent, message: string): void {
+    const handler = this.options?.onIntentFailed;
+    if (!handler) return;
+    const firstArg = intent.args?.[0];
+    const taskId = typeof firstArg === 'string' ? firstArg : undefined;
+    try {
+      handler({
+        intentId: intent.id,
+        workflowId: intent.workflowId,
+        channel: intent.channel,
+        taskId,
+        message,
+        failedAt: new Date().toISOString(),
+      });
+    } catch (notifyError) {
+      this.options?.logger?.warn?.('workflow-mutation-failed handler threw', {
+        module: 'persisted-workflow-mutation-coordinator',
+        error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+      });
+    }
   }
 
   private trace(message: string): void {
