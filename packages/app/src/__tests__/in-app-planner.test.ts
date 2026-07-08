@@ -5,12 +5,14 @@ import {
   createPlanningCommandBuilderFromRegistry,
   listInAppPlanningPresets,
   planFromGoal,
+  listPlanningChatSessions,
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
   submitPlanningChatDraft,
   type LoadedGeneratedPlan,
 } from '../in-app-planner.js';
+import type { PlannerStreamEvent } from '@invoker/contracts';
 import { ConversationRepository, SQLiteAdapter, type InAppPlanningSessionRecord } from '@invoker/data-store';
 
 const VALID_PLAN = `Here is the plan.
@@ -525,6 +527,99 @@ tasks:
       sessions,
       loadGeneratedPlan: vi.fn(),
     })).resolves.toEqual({ ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' });
+  });
+
+  describe('live planner stream', () => {
+    const emitChunk = (self: unknown, chunk: string): void => {
+      (self as { onRawPlannerOutput?: (c: string) => void }).onRawPlannerOutput?.(chunk);
+    };
+
+    it('streams raw chunks off-transcript and clears transient text on success', async () => {
+      vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockImplementation(async function (this: PlanConversation) {
+        emitChunk(this, 'thinking');
+        emitChunk(this, ' harder');
+        return 'Final reply.';
+      });
+      const events: PlannerStreamEvent[] = [];
+      const sessions = createInAppPlanningChatSessions();
+
+      const result = await sendPlanningChatMessage({ message: 'hi', presetKey: 'codex' }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        onPlannerStream: (event) => events.push(event),
+      });
+
+      if (!result.ok) throw new Error(result.error);
+      expect(events.map((e) => e.chunk)).toEqual(['thinking', ' harder']);
+      expect(events.map((e) => e.text)).toEqual(['thinking', 'thinking harder']);
+      expect(events.every((e) => e.sessionId === result.sessionId)).toBe(true);
+
+      const session = sessions.get(result.sessionId);
+      // Transcript keeps only the final reply; live raw text never lands in messages.
+      expect(session?.messages.at(-1)?.text).toBe('Final reply.');
+      expect(session?.messages.some((m) => m.text.includes('thinking'))).toBe(false);
+      expect(session?.transientStreamText).toBeUndefined();
+    });
+
+    it('preserves transient text on failure and keeps it out of persisted history', async () => {
+      vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockImplementation(async function (this: PlanConversation) {
+        emitChunk(this, 'partial output');
+        throw new Error('planner blew up');
+      });
+      const adapter = await SQLiteAdapter.create(':memory:');
+      try {
+        const sessions = createInAppPlanningChatSessions();
+        const result = await sendPlanningChatMessage({ message: 'hi', presetKey: 'codex' }, {
+          config: {},
+          loadGeneratedPlan: vi.fn(),
+          sessions,
+          planningCommandBuilder,
+          onPlannerStream: vi.fn(),
+          planningSessionStore: adapter,
+        });
+
+        expect(result.ok).toBe(false);
+        const sessionId = result.sessionId as string;
+        const session = sessions.get(sessionId);
+        expect(session?.transientStreamText).toBe('partial output');
+        expect(session?.messages.some((m) => m.text.includes('partial output'))).toBe(false);
+
+        // Exposed on the live summary, but the persisted record stays final-only.
+        expect(listPlanningChatSessions({ sessions }).sessions[0]?.transientStreamText).toBe('partial output');
+        expect(JSON.stringify(adapter.loadInAppPlanningSession(sessionId))).not.toContain('partial output');
+      } finally {
+        adapter.close();
+      }
+    });
+
+    it('resets stale transient text at the start of the next send', async () => {
+      vi.spyOn(PlanConversation.prototype, 'spawnPlanner')
+        .mockImplementationOnce(async function (this: PlanConversation) {
+          emitChunk(this, 'leftover');
+          throw new Error('first fail');
+        })
+        .mockImplementationOnce(async () => {
+          throw new Error('second fail');
+        });
+      const sessions = createInAppPlanningChatSessions();
+
+      const first = await sendPlanningChatMessage({ message: 'hi', presetKey: 'codex' }, {
+        config: {}, loadGeneratedPlan: vi.fn(), sessions, planningCommandBuilder, onPlannerStream: vi.fn(),
+      });
+      expect(first.ok).toBe(false);
+      const sessionId = first.sessionId as string;
+      expect(sessions.get(sessionId)?.transientStreamText).toBe('leftover');
+
+      const second = await sendPlanningChatMessage({ sessionId, message: 'again' }, {
+        config: {}, loadGeneratedPlan: vi.fn(), sessions, planningCommandBuilder, onPlannerStream: vi.fn(),
+      });
+      // Second send also fails (so clear-on-success never runs), yet the leftover
+      // is gone → the reset at send start cleared it.
+      expect(second.ok).toBe(false);
+      expect(sessions.get(sessionId)?.transientStreamText).toBeUndefined();
+    });
   });
 
 

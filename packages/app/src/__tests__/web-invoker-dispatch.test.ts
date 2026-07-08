@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildWebInvokerDispatch } from '../web/web-invoker-dispatch.js';
+import { createInAppPlanningChatSessions, type InAppPlanningChatSessions } from '../in-app-planner.js';
 
 function makeTask(id: string) {
   return {
@@ -110,5 +111,51 @@ describe('buildWebInvokerDispatch', () => {
   it('an unknown channel rejects with code unknown_channel', async () => {
     const { dispatch } = makeDispatch();
     await expect(dispatch('invoker:does-not-exist', [])).rejects.toMatchObject({ code: 'unknown_channel' });
+  });
+
+  function makePlannerRuntime(sessions: InAppPlanningChatSessions) {
+    return {
+      sessions,
+      config: {},
+      planningCommandBuilder: vi.fn(() => ({ command: 'planner', args: ['prompt'] })),
+      loadGeneratedPlan: vi.fn(),
+    };
+  }
+
+  it('planning-chat-create routes to the shared planner runtime', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const { dispatch } = makeDispatch({ getPlannerRuntime: () => makePlannerRuntime(sessions) });
+    const result = await dispatch('invoker:planning-chat-create', [{ presetKey: 'codex' }]) as { ok: boolean };
+    expect(result.ok).toBe(true);
+    expect(sessions.size).toBe(1);
+  });
+
+  it('planning-chat-list returns sessions created through the runtime', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const { dispatch } = makeDispatch({ getPlannerRuntime: () => makePlannerRuntime(sessions) });
+    const created = await dispatch('invoker:planning-chat-create', [{ presetKey: 'codex', title: 'My plan' }]) as {
+      ok: true; session: { id: string };
+    };
+    const list = await dispatch('invoker:planning-chat-list', []) as { ok: true; sessions: Array<{ id: string }> };
+    expect(list.ok).toBe(true);
+    expect(list.sessions.map((s) => s.id)).toEqual([created.session.id]);
+  });
+
+  it('planning-chat-reset removes a session from the runtime', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const { dispatch } = makeDispatch({ getPlannerRuntime: () => makePlannerRuntime(sessions) });
+    const created = await dispatch('invoker:planning-chat-create', [{ presetKey: 'codex' }]) as {
+      ok: true; session: { id: string };
+    };
+    expect(sessions.size).toBe(1);
+    expect(await dispatch('invoker:planning-chat-reset', [{ sessionId: created.session.id }])).toEqual({ ok: true });
+    expect(sessions.size).toBe(0);
+  });
+
+  it('planning-chat channels are unsupported when no planner runtime is wired', async () => {
+    const { dispatch } = makeDispatch();
+    await expect(dispatch('invoker:planning-chat-create', [{}])).rejects.toMatchObject({ code: 'unsupported_on_web' });
+    await expect(dispatch('invoker:planning-chat-list', [])).rejects.toMatchObject({ code: 'unsupported_on_web' });
+    await expect(dispatch('invoker:planning-chat-send', [{ message: 'hi' }])).rejects.toMatchObject({ code: 'unsupported_on_web' });
   });
 });

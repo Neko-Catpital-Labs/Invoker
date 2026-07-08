@@ -197,6 +197,37 @@ describe('startWebBridge', () => {
     expect(received).toContain('event: invoker:task-output');
     expect(received).toContain('"taskId":"wf-1/task-1"');
   });
+
+  it('streams PLANNER_STREAM bus events over /events as invoker:planner-stream', async () => {
+    const { port, bus } = await startBridge();
+    const { promise, resolve } = Promise.withResolvers<string>();
+    const req = http.request(
+      { host: '127.0.0.1', port, path: '/events', headers: { cookie: `invoker_web=${TOKEN}` } },
+      (res) => {
+        expect(res.statusCode).toBe(200);
+        let buffer = '';
+        res.on('data', (c) => {
+          buffer += (c as Buffer).toString('utf8');
+          if (buffer.includes('event: invoker:planner-stream')) {
+            req.destroy();
+            resolve(buffer);
+          }
+        });
+      },
+    );
+    req.on('error', () => { /* destroyed after resolve */ });
+    req.end();
+    await new Promise((r) => setTimeout(r, 50));
+    // Channels.PLANNER_STREAM === 'planner.stream'
+    bus.publish('planner.stream', { sessionId: 'sess-1', chunk: 'draft', text: 'draft' });
+    const received = await Promise.race([
+      promise,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error('SSE timeout')), 2000)),
+    ]);
+    expect(received).toContain('event: invoker:planner-stream');
+    expect(received).toContain('"sessionId":"sess-1"');
+    expect(received).toContain('"chunk":"draft"');
+  });
 });
 
 describe('startWebBridge static serving', () => {

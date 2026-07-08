@@ -15,20 +15,47 @@
 
 import type {
   BundledSkillsStatus,
+  InAppPlanningChatRequest,
+  InAppPlanningCreateSessionRequest,
+  InAppPlanningResetRequest,
+  InAppPlanningSubmitRequest,
   Logger,
   SystemDiagnostics,
 } from '@invoker/contracts';
-import type { SQLiteAdapter } from '@invoker/data-store';
+import type { ConversationRepository, SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
+import type { PlanningCommandBuilder } from '@invoker/surfaces';
 import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
 import { resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
-import { listInAppPlanningPresets } from '../in-app-planner.js';
+import {
+  createPlanningChatSession,
+  listInAppPlanningPresets,
+  listPlanningChatSessions,
+  resetPlanningChat,
+  sendPlanningChatMessage,
+  submitPlanningChatDraft,
+  type InAppPlanningChatSessions,
+  type InAppPlanningSessionStore,
+  type LoadedGeneratedPlan,
+  type PlannerStreamSink,
+} from '../in-app-planner.js';
 import type { ApiMutationFacade } from '../api-server.js';
 import { buildReviewGateQueryResponse } from '../review-gate-query.js';
 import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
 import { collectSystemDiagnostics } from '../system-diagnostics.js';
 import { resolveAgentSession } from '../headless-query-list.js';
 import { buildTaskGraphSnapshot } from './task-graph-snapshot.js';
+
+export interface WebPlannerRuntime {
+  config: InvokerConfig;
+  workingDir?: string;
+  sessions: InAppPlanningChatSessions;
+  planningCommandBuilder: PlanningCommandBuilder;
+  loadGeneratedPlan: (planText: string) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
+  conversationRepo?: ConversationRepository;
+  planningSessionStore?: InAppPlanningSessionStore;
+  onPlannerStream?: PlannerStreamSink;
+}
 
 export interface WebInvokerDispatchDeps {
   orchestrator: Orchestrator;
@@ -46,6 +73,7 @@ export interface WebInvokerDispatchDeps {
   getSystemDiagnostics?: () => SystemDiagnostics;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   checkPrStatuses?: () => void | Promise<void>;
+  getPlannerRuntime?: () => WebPlannerRuntime | undefined;
   logger?: Logger;
 }
 
@@ -78,6 +106,12 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
     if (!workflow) return null;
     const tasks = persistence.loadTasks(workflowId);
     return buildReviewGateQueryResponse({ workflowId, workflow, tasks });
+  };
+
+  const requirePlannerRuntime = (channel: string): WebPlannerRuntime => {
+    const runtime = deps.getPlannerRuntime?.();
+    if (!runtime) unsupported(channel);
+    return runtime;
   };
 
   return async function dispatch(channel: string, args: unknown[]): Promise<unknown> {
@@ -139,6 +173,34 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return agentRegistry.listExecutionHarnesses();
       case 'invoker:get-planning-presets':
         return listInAppPlanningPresets(deps.loadConfig());
+
+      case 'invoker:planning-chat-create':
+        return createPlanningChatSession(
+          args[0] as InAppPlanningCreateSessionRequest | undefined,
+          requirePlannerRuntime(channel),
+        );
+      case 'invoker:planning-chat-list':
+        return listPlanningChatSessions({ sessions: requirePlannerRuntime(channel).sessions });
+      case 'invoker:planning-chat-send':
+        return sendPlanningChatMessage(
+          args[0] as InAppPlanningChatRequest,
+          requirePlannerRuntime(channel),
+        );
+      case 'invoker:planning-chat-submit': {
+        const runtime = requirePlannerRuntime(channel);
+        return submitPlanningChatDraft(args[0] as InAppPlanningSubmitRequest, {
+          sessions: runtime.sessions,
+          loadGeneratedPlan: runtime.loadGeneratedPlan,
+          planningSessionStore: runtime.planningSessionStore,
+        });
+      }
+      case 'invoker:planning-chat-reset': {
+        const runtime = requirePlannerRuntime(channel);
+        return resetPlanningChat(args[0] as InAppPlanningResetRequest, {
+          sessions: runtime.sessions,
+          planningSessionStore: runtime.planningSessionStore,
+        });
+      }
       case 'invoker:get-execution-defaults':
         return resolveDefaultTaskExecutionSettings(deps.loadConfig());
       case 'invoker:get-system-diagnostics':
