@@ -778,6 +778,8 @@ describe('SQLiteAdapter', () => {
       expect(adapter.listWorkerActions({ taskId: 'wf-1/task-1' }).map((action) => action.id)).toEqual(['wa-1']);
       expect(adapter.listWorkerActions({ workerKind: 'github' }).map((action) => action.id)).toEqual(['wa-3']);
       expect(adapter.listWorkerActions({ status: 'running', limit: 1 }).map((action) => action.id)).toEqual(['wa-3']);
+      expect(adapter.listWorkerActions({ status: 'running', limit: 1, offset: 1 }).map((action) => action.id)).toEqual(['wa-2']);
+      expect(adapter.listWorkerActions({ workerKind: 'autofix', limit: 1, offset: 1 }).map((action) => action.id)).toEqual(['wa-1']);
       expect(adapter.listWorkerActions({ limit: 0 })).toEqual([]);
     });
   });
