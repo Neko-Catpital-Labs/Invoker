@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor } from '@invoker/contracts';
+import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { useTasks } from './hooks/useTasks.js';
@@ -564,6 +564,7 @@ export function App() {
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
+  const [mutationFailure, setMutationFailure] = useState<WorkflowMutationFailedEvent | null>(null);
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
   const [updateCliPending, setUpdateCliPending] = useState(false);
@@ -698,6 +699,13 @@ export function App() {
             : session,
         ),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
+      setMutationFailure(event);
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -2975,6 +2983,55 @@ export function App() {
         >
           <span className="font-semibold text-blue-50">Read-only mode.</span>{' '}
           This window can browse workflows, but it cannot make changes until the write owner is available.
+        </div>
+      )}
+      {mutationFailure && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          data-testid="workflow-mutation-failed-banner"
+          className="px-4 py-3 border-b border-amber-700 bg-amber-950/60 flex items-start justify-between gap-4"
+        >
+          <div className="text-sm text-amber-100 min-w-0">
+            <div className="font-semibold text-amber-50">
+              {mutationFailure.channel === 'invoker:approve'
+                ? 'Approve failed'
+                : mutationFailure.channel === 'invoker:reject'
+                  ? 'Reject failed'
+                  : `Mutation failed (${mutationFailure.channel})`}
+            </div>
+            <div
+              data-testid="workflow-mutation-failed-message"
+              className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100/90"
+            >
+              {mutationFailure.message}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {mutationFailure.taskId && tasks.get(mutationFailure.taskId) && (
+              <button
+                type="button"
+                onClick={() => {
+                  const targetTaskId = mutationFailure.taskId;
+                  if (!targetTaskId) return;
+                  selectTaskById(targetTaskId);
+                  setMutationFailure(null);
+                }}
+                data-testid="workflow-mutation-failed-open-task"
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium transition-colors"
+              >
+                Open task
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setMutationFailure(null)}
+              data-testid="workflow-mutation-failed-dismiss"
+              className="px-2 py-1 text-amber-200 hover:text-white text-xs"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
