@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeWorkflowRollupFromSummaries } from '../workflow-rollup.js';
+import { computeWorkflowRollupFromSummaries, hasFailedDependencyPath } from '../workflow-rollup.js';
 import type { TaskStatus } from '../types.js';
 
 function task(id: string, status: TaskStatus, dependencies: string[] = []) {
@@ -109,5 +109,41 @@ describe('workflow rollup', () => {
     expect(rollup.status).not.toBe('completed');
     expect(rollup.countsByStatus.completed).toBe(2);
     expect(rollup.countsByStatus.closed).toBe(1);
+  });
+});
+
+describe('hasFailedDependencyPath', () => {
+  function mapOf(...tasks: ReturnType<typeof task>[]) {
+    return new Map(tasks.map((t) => [t.id, t]));
+  }
+
+  it('is true when a direct dependency failed', () => {
+    const root = task('root', 'failed');
+    const child = task('child', 'blocked', ['root']);
+    expect(hasFailedDependencyPath(child, mapOf(root, child))).toBe(true);
+  });
+
+  it('is true when a direct dependency is closed', () => {
+    const root = task('root', 'closed');
+    const child = task('child', 'blocked', ['root']);
+    expect(hasFailedDependencyPath(child, mapOf(root, child))).toBe(true);
+  });
+
+  it('is true transitively through an intermediate blocked task', () => {
+    const root = task('root', 'failed');
+    const mid = task('mid', 'blocked', ['root']);
+    const leaf = task('leaf', 'blocked', ['mid']);
+    expect(hasFailedDependencyPath(leaf, mapOf(root, mid, leaf))).toBe(true);
+  });
+
+  it('is false when every dependency is satisfied (external-gate shape)', () => {
+    const a = task('a', 'completed');
+    const b = task('b', 'completed', ['a']);
+    const gate = task('gate', 'blocked', ['a', 'b']);
+    expect(hasFailedDependencyPath(gate, mapOf(a, b, gate))).toBe(false);
+  });
+
+  it('is false when there are no dependencies', () => {
+    expect(hasFailedDependencyPath(task('solo', 'blocked'), mapOf())).toBe(false);
   });
 });
