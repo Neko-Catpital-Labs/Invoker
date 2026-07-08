@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Shared helpers for the two PR-maintenance cron jobs that run co-located with
-# the Invoker owner:
+# Shared helpers for PR maintenance worker tick scripts that run co-located
+# with the Invoker owner:
 #
 #   scripts/cron-coderabbit-address.sh  (Job 1) — address new CodeRabbit reviews
 #   scripts/cron-pr-conflict-rebase.sh  (Job 2) — rebase-recreate conflicting PRs
@@ -16,8 +16,8 @@
 #              resolve_workflow_for_pr
 #
 # Both jobs run their mutating operation SYNCHRONOUSLY while holding a single
-# shared lock, so only one PR cron operation runs at a time (the other exits
-# this tick and retries in 5 min). The lock prefers flock (Linux owner host)
+# shared lock, so only one PR maintenance operation runs at a time (the other
+# exits this tick and retries in 5 min). The lock prefers flock (Linux owner host)
 # and falls back to an atomic mkdir lock where flock is absent (e.g. macOS).
 
 # headless-lib.sh: REPO_ROOT, RUNNER, IPC_HELPER, headless_query, ... It keys
@@ -44,7 +44,7 @@ log_line() {
 }
 
 # ---------------------------------------------------------------------------
-# Shared cross-job lock (decision 3): one PR cron operation at a time.
+# Shared cross-job lock: one PR maintenance operation at a time.
 # Exits 0 (clean no-op) when the other job holds the lock.
 # ---------------------------------------------------------------------------
 
@@ -78,7 +78,7 @@ cron_lock() {
   if command -v flock >/dev/null 2>&1; then
     exec 9>"$CRON_LOCK"
     if ! flock -n 9; then
-      log_line "another PR cron operation in progress; exiting"
+      log_line "another PR maintenance operation in progress; exiting"
       exit 0
     fi
     return 0
@@ -88,7 +88,7 @@ cron_lock() {
   local lockdir="${CRON_LOCK}.d"
   [ -d "$lockdir" ] && _cron_lock_reap_stale "$lockdir"
   if ! mkdir "$lockdir" 2>/dev/null; then
-    log_line "another PR cron operation in progress; exiting"
+    log_line "another PR maintenance operation in progress; exiting"
     exit 0
   fi
   printf '%s\n' "$$" > "$lockdir/pid"

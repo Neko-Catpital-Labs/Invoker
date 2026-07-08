@@ -182,7 +182,6 @@ describe('resolveConflictImpl', () => {
       expect.stringContaining('Conflicting files: packages/app/src/headless.ts'),
       task.execution.workspacePath,
       'codex',
-      undefined,
     );
   });
 
@@ -224,46 +223,6 @@ describe('resolveConflictImpl', () => {
 
     expect(spawnAgentFix).toHaveBeenCalledTimes(1);
     expect(spawnAgentFix.mock.calls[0][2]).toBe('codex');
-  });
-
-  it('threads resolved executionModel to spawnAgentFix when merge fails', async () => {
-    const spawnAgentFix = vi.fn<
-      (prompt: string, cwd: string, agentName?: string, executionModel?: string) => Promise<{ stdout: string; sessionId: string }>
-    >(async () => ({ stdout: '', sessionId: 'sess-conflict-model' }));
-    const conflictError = JSON.stringify({
-      type: 'merge_conflict',
-      failedBranch: 'invoker/dep-1',
-      conflictFiles: ['src/index.ts'],
-    });
-    const task = {
-      id: 'task-conflict-model',
-      status: 'failed' as const,
-      execution: { error: conflictError, branch: 'invoker/task-conflict-model', workspacePath: createTempWorkspace() },
-      config: {},
-    };
-    const host: ConflictResolverHost = {
-      orchestrator: {
-        getTask: () => task,
-        getAllTasks: () => [],
-      } as unknown as Orchestrator,
-      persistence: {} as any,
-      cwd: '/tmp',
-      execGitReadonly: async () => '',
-      execGitIn: async (args: string[]) => {
-        if (args[0] === 'merge') throw new Error('merge conflict');
-        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
-        return '';
-      },
-      createMergeWorktree: async () => '/tmp/wt',
-      removeMergeWorktree: async () => {},
-      spawnAgentFix,
-    };
-
-    await resolveConflictImpl(host, 'task-conflict-model', undefined, 'codex', 'gpt-5.1-codex-max');
-
-    expect(spawnAgentFix).toHaveBeenCalledTimes(1);
-    expect(spawnAgentFix.mock.calls[0][2]).toBe('codex');
-    expect(spawnAgentFix.mock.calls[0][3]).toBe('gpt-5.1-codex-max');
   });
 
   it('threads agentName="claude" to spawnAgentFix by default', async () => {

@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions, ExecutionModelOption } from '../agent.js';
+
 export interface ClaudeExecutionAgentConfig {
   /** Command to invoke the Claude CLI. Default: 'claude'. */
   command?: string;

@@ -56,7 +56,9 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    ...(deps.hideE2eWindow ? { x: -32000, y: -32000, skipTaskbar: true } : {}),
+    ...(deps.hideE2eWindow
+      ? { x: -32000, y: -32000, skipTaskbar: true, paintWhenInitiallyHidden: true }
+      : {}),
     // Show explicitly after load/timeout rather than relying on Electron's
     // implicit initial map behavior, which has regressed on some Linux/X11
     // sessions and leaves the BrowserWindow unmapped. E2E windows stay hidden:

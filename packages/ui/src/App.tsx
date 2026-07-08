@@ -506,22 +506,12 @@ export function App() {
   const queueStatus = useQueueStatus();
   const [workerStatus, refreshWorkerStatus] = useWorkerStatus();
   const handleStartWorker = useCallback(async (kind: string) => {
-    if (!invoker) return;
-    try {
-      await invoker.startWorker(kind);
-      await refreshWorkerStatus();
-    } catch (err) {
-      console.error('Failed to start worker:', err);
-    }
+    await invoker.startWorker(kind);
+    await refreshWorkerStatus();
   }, [invoker, refreshWorkerStatus]);
   const handleStopWorker = useCallback(async (kind: string) => {
-    if (!invoker) return;
-    try {
-      await invoker.stopWorker(kind);
-      await refreshWorkerStatus();
-    } catch (err) {
-      console.error('Failed to stop worker:', err);
-    }
+    await invoker.stopWorker(kind);
+    await refreshWorkerStatus();
   }, [invoker, refreshWorkerStatus]);
   const runningTaskIds = useMemo(
     () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
@@ -685,6 +675,8 @@ export function App() {
     window.invoker?.terminalList?.().then((list) => {
       if (Array.isArray(list) && list.length > 0) {
         setTerminalSessions(list);
+        setActiveTerminalSessionId(list[list.length - 1]?.sessionId ?? null);
+        setTerminalDrawerState('partial');
       }
     }).catch(() => {});
   }, []);

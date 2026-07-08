@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+
 import type { App } from 'electron';
 
 export type GuiOwnerPreference = 'auto' | 'daemon' | 'gui';

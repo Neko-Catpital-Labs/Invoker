@@ -107,6 +107,8 @@ export interface RawPlan {
     gatePolicy?: string;
   }>;
   tasks?: RawPlanTask[];
+  splitterPlanId?: string;
+  splitterPerson?: string;
 }
 
 export interface RawPlanBundle extends RawPlan {
@@ -117,6 +119,8 @@ export interface PlanSubmissionBundle {
   name: string;
   plans: PlanDefinition[];
   isStack: boolean;
+  splitterPlanId?: string;
+  splitterPerson?: string;
 }
 
 /**
@@ -322,6 +326,13 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
   }
 
+  if (raw.splitterPlanId !== undefined && typeof raw.splitterPlanId !== 'string') {
+    throw new PlanParseError(`${ownerLabel} "splitterPlanId" must be a string when provided`);
+  }
+  if (raw.splitterPerson !== undefined && typeof raw.splitterPerson !== 'string') {
+    throw new PlanParseError(`${ownerLabel} "splitterPerson" must be a string when provided`);
+  }
+
   const topLevelExternalDependencies = parseExternalDependencies(ownerLabel, raw.externalDependencies);
 
   const seenTaskIds = new Set<string>();
@@ -409,6 +420,8 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     repoUrl: raw.repoUrl,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
+    splitterPlanId: raw.splitterPlanId?.trim() || undefined,
+    splitterPerson: raw.splitterPerson?.trim() || undefined,
     tasks,
   });
 }
@@ -442,6 +455,8 @@ function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): 
     mergeMode: workflow.mergeMode ?? stack.mergeMode,
     reviewProvider: workflow.reviewProvider ?? stack.reviewProvider,
     visualProof: workflow.visualProof ?? stack.visualProof,
+    splitterPlanId: workflow.splitterPlanId ?? stack.splitterPlanId,
+    splitterPerson: workflow.splitterPerson ?? stack.splitterPerson,
     externalDependencies: externalDependencies.length > 0 ? externalDependencies : workflow.externalDependencies,
   };
 }
@@ -455,7 +470,13 @@ export function parsePlanSubmissionBundle(yamlContent: string): PlanSubmissionBu
 
   if (raw.workflows === undefined) {
     const plan = parseRawPlan(raw, 'Plan');
-    return { name: plan.name, plans: [plan], isStack: false };
+    return {
+      name: plan.name,
+      plans: [plan],
+      isStack: false,
+      splitterPlanId: plan.splitterPlanId,
+      splitterPerson: plan.splitterPerson,
+    };
   }
 
   if (!raw.name || typeof raw.name !== 'string') {
@@ -479,6 +500,12 @@ export function parsePlanSubmissionBundle(yamlContent: string): PlanSubmissionBu
       'Plan stack-level "autoFixRetries" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
     );
   }
+  if (raw.splitterPlanId !== undefined && typeof raw.splitterPlanId !== 'string') {
+    throw new PlanParseError('Plan stack "splitterPlanId" must be a string when provided');
+  }
+  if (raw.splitterPerson !== undefined && typeof raw.splitterPerson !== 'string') {
+    throw new PlanParseError('Plan stack "splitterPerson" must be a string when provided');
+  }
   assertNoLegacyRoutingKeys('Plan stack', raw as object);
 
   const plans = raw.workflows.map((workflow, index) => {
@@ -488,7 +515,13 @@ export function parsePlanSubmissionBundle(yamlContent: string): PlanSubmissionBu
     return parseRawPlan(inheritStackWorkflowDefaults(raw, workflow), `Workflow ${index + 1}`);
   });
 
-  return { name: raw.name, plans, isStack: true };
+  return {
+    name: raw.name,
+    plans,
+    isStack: true,
+    splitterPlanId: typeof raw.splitterPlanId === 'string' ? raw.splitterPlanId.trim() || undefined : undefined,
+    splitterPerson: typeof raw.splitterPerson === 'string' ? raw.splitterPerson.trim() || undefined : undefined,
+  };
 }
 
 export function parsePlan(yamlContent: string): PlanDefinition {

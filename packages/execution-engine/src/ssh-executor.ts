@@ -423,8 +423,7 @@ ${runProvisionSection}stop_bootstrap_heartbeat
       bench('SshExecutor.payload.built', { command: true });
     } else if (request.actionType === 'ai_task') {
       if (this.agentRegistry) {
-        const agentName = request.inputs.executionAgent ?? 'claude';
-        const agent = this.agentRegistry.getOrThrow(agentName);
+        const agent = this.agentRegistry.getOrThrow(executionAgent);
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         agentSessionId = spec.sessionId;

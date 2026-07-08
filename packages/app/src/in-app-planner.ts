@@ -275,6 +275,16 @@ export async function planFromGoal(
   }
 }
 
+function formatDraftPlanReply(summary: { name: string; steps: string[] }): string {
+  const stepLines = summary.steps.map((step, index) => `${index + 1}. ${step}`);
+  return [
+    `I drafted "${summary.name}". Here is the simple version:`,
+    '',
+    ...stepLines,
+    '',
+    'If this looks right, choose Submit to Invoker.',
+  ].join('\n');
+}
 
 function formatConversationalPlanningMessage(message: string): string {
   return [
@@ -403,13 +413,14 @@ export async function sendPlanningChatMessage(
           draftPlanAvailable: false,
         };
       }
+      const formattedReply = formatDraftPlanReply(summary);
       activeSession.draftPlanSummary = summary;
       activeSession.status = 'draft_ready';
-      appendSessionMessage(activeSession, 'assistant', reply);
+      appendSessionMessage(activeSession, 'assistant', formattedReply);
       return {
         ok: true,
         sessionId: activeSession.id,
-        reply,
+        reply: formattedReply,
         draftPlanAvailable: true,
         draftPlanSummary: summary,
       };

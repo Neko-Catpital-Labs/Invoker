@@ -1,3 +1,10 @@
+/**
+ * QueueView — Displays worker-owned actions next to worker processes.
+ *
+ * Worker Actions only shows active work recorded by workers. It does not mirror
+ * the scheduler queue or backlog, because those belong in the normal task views.
+ */
+
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { TaskState, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';

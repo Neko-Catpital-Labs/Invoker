@@ -61,36 +61,19 @@ workflows:
     expect(summary!.steps).toEqual(['Workers Surface Contracts', 'Workers Surface UI']);
   });
 
-  it('keeps long descriptions intact after normalizing whitespace', () => {
+  it('truncates a description longer than 8 words to 8 words + ellipsis', () => {
     const words = Array.from({ length: 40 }, (_, i) => `word${i + 1}`);
     const yaml = `
 name: Long plan
 tasks:
-  - id: long
-    description: "${words.join('  ')}"
+  - id: a
+    description: ${words.join(' ')}
 `;
     const summary = summarizePlanText(yaml);
     expect(summary).not.toBeNull();
-    expect(summary!.steps[0]).toBe(words.join(' '));
-    expect(summary!.steps[0]).not.toContain('…');
-    expect(summary!.steps[0].split(' ')).toHaveLength(40);
-  });
-
-  it('keeps long workflow names intact after normalizing whitespace', () => {
-    const words = Array.from({ length: 24 }, (_, i) => `workflow${i + 1}`);
-    const yaml = `
-name: Long workflow stack
-workflows:
-  - name: "${words.join('  ')}"
-    tasks:
-      - id: task
-        description: Run task
-`;
-    const summary = summarizePlanText(yaml);
-    expect(summary).not.toBeNull();
-    expect(summary!.steps[0]).toBe(words.join(' '));
-    expect(summary!.steps[0]).not.toContain('…');
-    expect(summary!.steps[0].split(' ')).toHaveLength(24);
+    const expected = words.slice(0, 8).join(' ') + ' …';
+    expect(summary!.steps[0]).toBe(expected);
+    expect(summary!.steps[0].split(' ')).toHaveLength(9); // 8 words + the ellipsis token
   });
 
   it('collapses whitespace and newlines in descriptions', () => {

@@ -26,6 +26,8 @@ export const SCHEMA_DDL = `
         external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
         external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
         detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
+        splitter_plan_id TEXT,
+        splitter_person TEXT,
         generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -343,6 +345,34 @@ export const SCHEMA_DDL = `
 
       CREATE INDEX IF NOT EXISTS idx_output_spool_task_offset
         ON output_spool(task_id, offset);
+
+      CREATE TABLE IF NOT EXISTS terminal_sessions (
+        session_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('running', 'exited')),
+        exit_code INTEGER,
+        cwd TEXT,
+        command TEXT,
+        args_json TEXT CHECK (args_json IS NULL OR json_valid(args_json)),
+        linux_terminal_tail TEXT CHECK (linux_terminal_tail IS NULL OR linux_terminal_tail IN ('exec_bash', 'pause')),
+        mode TEXT NOT NULL CHECK (mode IN ('spawn', 'attached')),
+        attached INTEGER NOT NULL DEFAULT 0 CHECK (attached IN (0, 1)),
+        output_snapshot TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_terminal_sessions_task_updated
+        ON terminal_sessions(task_id, updated_at);
+
+      CREATE INDEX IF NOT EXISTS idx_terminal_sessions_status_updated
+        ON terminal_sessions(status, updated_at);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_terminal_sessions_running_target
+        ON terminal_sessions(target_key)
+        WHERE status = 'running';
     `;
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
@@ -411,6 +441,8 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
   'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
   'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
+  'ALTER TABLE workflows ADD COLUMN splitter_plan_id TEXT',
+  'ALTER TABLE workflows ADD COLUMN splitter_person TEXT',
 ];
 
 /**
@@ -454,6 +486,8 @@ export const WORKFLOWS_REBUILD_TABLE_DDL = `
         external_dependencies TEXT CHECK (external_dependencies IS NULL OR json_valid(external_dependencies)),
         external_dependency_changes TEXT CHECK (external_dependency_changes IS NULL OR json_valid(external_dependency_changes)),
         detached_external_dependencies TEXT CHECK (detached_external_dependencies IS NULL OR json_valid(detached_external_dependencies)),
+        splitter_plan_id TEXT,
+        splitter_person TEXT,
         generation INTEGER DEFAULT 0 CHECK (typeof(generation) = 'integer' AND generation >= 0),
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
@@ -466,12 +500,12 @@ export const WORKFLOWS_REBUILD_INSERT_DDL = `
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
         review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies,
-        generation, created_at, updated_at
+        splitter_plan_id, splitter_person, generation, created_at, updated_at
       )
       SELECT
         id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
         branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
         review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies,
-        generation, created_at, updated_at
+        splitter_plan_id, splitter_person, generation, created_at, updated_at
       FROM workflows
     `;

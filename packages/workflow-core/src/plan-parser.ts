@@ -56,6 +56,8 @@ export interface RawPlan {
     gatePolicy?: string;
   }>;
   tasks?: RawPlanTask[];
+  splitterPlanId?: string;
+  splitterPerson?: string;
 }
 
 
@@ -192,6 +194,13 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
   }
 
+  if (raw.splitterPlanId !== undefined && typeof raw.splitterPlanId !== 'string') {
+    throw new PlanParseError('Plan "splitterPlanId" must be a string when provided');
+  }
+  if (raw.splitterPerson !== undefined && typeof raw.splitterPerson !== 'string') {
+    throw new PlanParseError('Plan "splitterPerson" must be a string when provided');
+  }
+
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
   const seenTaskIds = new Set<string>();
   const tasks = raw.tasks.map((task, index) => {
@@ -262,6 +271,8 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     repoUrl: raw.repoUrl,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
+    splitterPlanId: raw.splitterPlanId?.trim() || undefined,
+    splitterPerson: raw.splitterPerson?.trim() || undefined,
     tasks,
   });
 }

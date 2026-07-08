@@ -67,6 +67,8 @@ export interface Workflow {
   externalDependencyChanges?: ExternalDependencyChange[];
   /** Read-only provenance for dependencies removed by `detachWorkflow`. Never re-read by scheduling. */
   detachedExternalDependencies?: DetachedExternalDependency[];
+  splitterPlanId?: string;
+  splitterPerson?: string;
   generation?: number;
   createdAt: string;
   updatedAt: string;
@@ -195,10 +197,31 @@ export interface WorkerActionListFilters {
   limit?: number;
 }
 
+export interface TerminalSessionRecord {
+  sessionId: string;
+  taskId: string;
+  targetKey: string;
+  status: 'running' | 'exited';
+  exitCode?: number;
+  cwd?: string;
+  command?: string;
+  args?: string[];
+  linuxTerminalTail?: 'exec_bash' | 'pause';
+  mode: 'spawn' | 'attached';
+  attached: boolean;
+  outputSnapshot: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TerminalSessionPatch = Partial<
+  Pick<TerminalSessionRecord, 'status' | 'exitCode' | 'outputSnapshot' | 'updatedAt'>
+>;
+
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: WorkflowSaveInput): void;
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void;
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'splitterPlanId' | 'splitterPerson' | 'generation' | 'updatedAt'>>): void;
   loadWorkflow(workflowId: string): Workflow | undefined;
   listWorkflows(): Workflow[];
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[];

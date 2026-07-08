@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { spawnAgentFixViaRegistry, spawnRemoteAgentFixImpl } from '../conflict-resolver.js';
-import type { AgentCommandBuildOptions, ExecutionAgent } from '../agent.js';
+import type { ExecutionAgent } from '../agent.js';
 import type { AgentRegistry } from '../agent-registry.js';
 
 vi.mock('node:child_process');
@@ -63,7 +63,7 @@ function mockSpawnChildErrorEvent(err: Error & { code?: string }) {
   return child;
 }
 
-function makeExecutionAgent(buildFixCommand: ExecutionAgent['buildFixCommand']): ExecutionAgent {
+function makeExecutionAgent(buildFixCommand: (prompt: string) => { cmd: string; args: string[]; sessionId?: string }): ExecutionAgent {
   return {
     name: 'codex',
     stdinMode: 'ignore',
@@ -96,21 +96,6 @@ describe('fix prompt transport for oversized prompts', () => {
     expect(captured.prompt).toContain('The full task instructions are in this file:');
     expect(captured.prompt).toContain('invoker-agent-prompt-');
     expect(captured.prompt).not.toContain(hugePrompt.slice(0, 200));
-  });
-  it('passes executionModel to local fix command builders', async () => {
-    const { spawn } = await import('node:child_process');
-    const buildFixCommand = vi.fn((prompt: string, options?: { executionModel?: string }) => ({
-      cmd: 'codex',
-      args: ['exec', '--json', ...(options?.executionModel ? ['--model', options.executionModel] : []), prompt],
-      sessionId: 'local-model-sess',
-    }));
-    const agent = makeExecutionAgent(buildFixCommand);
-
-    vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('ok', 0) as any);
-
-    const result = await spawnAgentFixViaRegistry('small prompt', '/tmp', agent, undefined, 'gpt-5.1-codex-max');
-    expect(result.sessionId).toBe('local-model-sess');
-    expect(buildFixCommand).toHaveBeenCalledWith('small prompt', { executionModel: 'gpt-5.1-codex-max' });
   });
 
   it('remote fix path writes oversized prompt to remote temp file and passes short bootstrap prompt', async () => {
@@ -151,76 +136,6 @@ describe('fix prompt transport for oversized prompts', () => {
     expect(stdinScript).toContain('PROMPT_FILE=');
     expect(stdinScript).toContain('base64 -d > "$PROMPT_FILE"');
     expect(stdinScript).toContain("trap 'rm -f \"$PROMPT_FILE\"' EXIT");
-  });
-
-  it('passes resolved executionModel into local OMP fix commands', async () => {
-    const { spawn } = await import('node:child_process');
-    const buildFixCommand = vi.fn((prompt: string, options?: AgentCommandBuildOptions) => ({
-      cmd: 'omp',
-      args: ['--model', options?.executionModel ?? 'missing', '-p', prompt],
-      sessionId: 'omp-local-sess',
-    }));
-    const agent: ExecutionAgent = {
-      name: 'omp',
-      stdinMode: 'ignore',
-      linuxTerminalTail: 'exec_bash',
-      buildCommand: (fullPrompt: string) => ({ cmd: 'omp', args: ['-p', fullPrompt] }),
-      buildResumeArgs: (sessionId: string) => ({ cmd: 'omp', args: ['resume', sessionId] }),
-      buildFixCommand,
-    };
-
-    vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('ok', 0) as any);
-
-    await spawnAgentFixViaRegistry(
-      'small prompt',
-      '/tmp',
-      agent,
-      undefined,
-      'anthropic/claude-opus-4',
-    );
-
-    expect(buildFixCommand).toHaveBeenCalledWith(
-      'small prompt',
-      { executionModel: 'anthropic/claude-opus-4' },
-    );
-  });
-
-  it('passes resolved executionModel into remote OMP fix commands', async () => {
-    const { spawn } = await import('node:child_process');
-    const buildFixCommand = vi.fn((prompt: string, options?: AgentCommandBuildOptions) => ({
-      cmd: 'omp',
-      args: ['--model', options?.executionModel ?? 'missing', '-p', prompt],
-      sessionId: 'omp-remote-sess',
-    }));
-
-    const child = mockSpawnChild('remote ok', 0) as any;
-    let stdinScript = '';
-    child.stdin.write = vi.fn((chunk: string) => {
-      stdinScript += chunk;
-      return true;
-    });
-    vi.mocked(spawn).mockReturnValueOnce(child);
-
-    const registry = {
-      get: () => ({ name: 'omp', buildFixCommand }),
-      getOrThrow: () => ({ name: 'omp', buildFixCommand }),
-      getSessionDriver: () => undefined,
-    } as unknown as AgentRegistry;
-
-    await spawnRemoteAgentFixImpl(
-      'small prompt',
-      '/home/user/worktree',
-      { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
-      'omp',
-      registry,
-      'anthropic/claude-opus-4',
-    );
-
-    expect(buildFixCommand).toHaveBeenCalledWith(
-      'small prompt',
-      { executionModel: 'anthropic/claude-opus-4' },
-    );
-    expect(stdinScript).toContain('eval "$(echo "');
   });
 });
 

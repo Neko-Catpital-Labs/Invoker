@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkflowMutationIntent, WorkflowMutationPriority } from '@invoker/data-store';
+import { Channels, type MessageBus } from '@invoker/transport';
 import type { TaskState } from '@invoker/workflow-core';
 
 import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
@@ -12,7 +13,8 @@ import {
   listAutoFixRecoveryScanCandidates,
   RECOVERY_WORKER_KIND,
 } from '../workers/auto-fix-recovery.js';
-import type { RecoveryWorkerWakeupHint } from '../lifecycle-events.js';
+import type { RecoveryWorkerWakeupHint, WorkflowLifecycleEvent } from '../lifecycle-events.js';
+import { buildTaskUpdatedLifecycleEvent } from '../lifecycle-events.js';
 
 const attemptStateKey = ['auto', 'FixAttempts'].join('');
 
@@ -25,6 +27,35 @@ const logger = {
   child: vi.fn(),
 };
 
+class TestMessageBus implements MessageBus {
+  private readonly handlers = new Map<string, Set<(message: unknown) => void>>();
+
+  subscribe<T>(channel: string, handler: (message: T) => void): () => void {
+    const handlers = this.handlers.get(channel) ?? new Set<(message: unknown) => void>();
+    const wrapped = handler as (message: unknown) => void;
+    handlers.add(wrapped);
+    this.handlers.set(channel, handlers);
+    return () => handlers.delete(wrapped);
+  }
+
+  publish<T>(channel: string, message: T): void {
+    for (const handler of this.handlers.get(channel) ?? []) {
+      handler(message);
+    }
+  }
+
+  async request<Req, Res>(): Promise<Res> {
+    throw new Error('request is not implemented in TestMessageBus');
+  }
+
+  onRequest<Req, Res>(): () => void {
+    return () => undefined;
+  }
+
+  disconnect(): void {
+    this.handlers.clear();
+  }
+}
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   const { config, execution, ...rest } = overrides;
@@ -127,6 +158,39 @@ describe('auto-fix recovery worker', () => {
     await runtime.stop();
   });
 
+  it('subscribes to lifecycle failures and wakes the worker to submit a fix intent', async () => {
+    const bus = new TestMessageBus();
+    const harness = makeRecoveryPolicyHarness();
+    const runtime = createRecoveryWorker({
+      logger,
+      instanceId: 'rec-subscribe',
+      intervalMs: 0,
+      tickOnStart: false,
+      messageBus: bus,
+      autoFix: harness.options,
+      installSignalHandlers: false,
+    });
+    runtime.start();
+
+    const event: WorkflowLifecycleEvent = buildTaskUpdatedLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      status: 'failed',
+      taskStateVersion: 4,
+      generation: 1,
+      attemptId: 'attempt-1',
+    });
+    bus.publish(Channels.WORKFLOW_LIFECYCLE, event);
+    await runtime.stop();
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.submit).toHaveBeenCalledWith(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
+    );
+  });
 });
 
 describe('auto-fix recovery scan candidates', () => {

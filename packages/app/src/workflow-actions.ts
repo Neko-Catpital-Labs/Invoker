@@ -847,7 +847,6 @@ function resolveTaskRunnerDefaultExecutionAgent(taskExecutor: TaskRunner): strin
   return configured && configured.length > 0 ? configured : DEFAULT_EXECUTION_AGENT;
 }
 
-
 export async function fixWithAgentAction(
   taskId: string,
   deps: Pick<CommandActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'autoApproveAIFixes' | 'commandService' | 'mutationTiming'> & { taskExecutor: TaskRunner },

@@ -8,21 +8,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { validateInvokerConfig } from './config-validation.js';
-
-export type HarnessModelPolicy =
-  | { kind: 'implicit' }
-  | { kind: 'fixed'; model: string }
-  | { kind: 'select'; models: string[]; defaultModel: string };
-
-export interface HarnessCapability {
-  modelPolicy: HarnessModelPolicy;
-}
-
-export interface MachineCapabilities {
-  planning?: Record<string, HarnessCapability>;
-  execution?: Record<string, HarnessCapability>;
-}
 const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
 
 export interface ExternalWorkerLaunchConfig {
@@ -33,6 +18,28 @@ export interface ExternalWorkerLaunchConfig {
   /** Optional process working directory for the worker launch. */
   cwd?: string;
 }
+export interface McpServerLaunchConfig {
+  /** Executable used to start the MCP server process. */
+  command: string;
+  /** Optional argv passed after the executable. */
+  args?: string[];
+  /** Optional process working directory for the server launch. */
+  cwd?: string;
+  /** Extra environment variables added to the inherited process environment. */
+  env?: Record<string, string>;
+}
+
+export interface SplitterFeedbackConfig {
+  /** Set false to disable automatic feedback even when experimentalPlanner is on. */
+  enabled?: boolean;
+  /** Person key passed to Splitter feedback tools. Default: "edbert". */
+  person?: string;
+  /** MCP stdio server to call. Defaults to the personal-stack-planner redirect server. */
+  mcpServer?: McpServerLaunchConfig;
+  /** Timeout for one feedback call. Default: 5000ms. */
+  timeoutMs?: number;
+}
+
 
 export interface ExternalWorkerConfig {
   /** Stable worker registry kind declared by the operator. */
@@ -40,17 +47,26 @@ export interface ExternalWorkerConfig {
   /** Process invocation used by the loader to start the external worker. */
   launch: ExternalWorkerLaunchConfig;
 }
-export interface DefaultExecutionConfig {
-  /**
-   * Default task execution harness when a task omits executionAgent.
-   * Falls back to the built-in default agent when unset.
-   */
-  executionAgent?: string;
-  /**
-   * Default task execution model paired with executionAgent.
-   * Only applied when the resolved task executionAgent matches this default agent.
-   */
-  executionModel?: string;
+
+export interface PrProcessWorkerConfig {
+  enabled?: boolean;
+  repoRoot?: string;
+  pollIntervalMs?: number;
+  env?: Record<string, string>;
+}
+
+export interface MergifyRequeueConfig extends PrProcessWorkerConfig {
+  pythonExecutable?: string;
+  repo?: string;
+  author?: string;
+  stateFile?: string;
+  extraArgs?: string[];
+}
+
+export interface PrMaintenanceConfig {
+  coderabbitAddress?: PrProcessWorkerConfig;
+  prConflictRebase?: PrProcessWorkerConfig;
+  mergifyRequeue?: MergifyRequeueConfig;
 }
 
 export interface InvokerConfig {
@@ -106,6 +122,12 @@ export interface InvokerConfig {
    */
   experimentalPlanner?: boolean;
   /**
+   * Automatic Splitter personalization feedback. Invoker sends accepted planner
+   * plan IDs back through the Splitter MCP server after a generated plan is
+   * submitted. Default: enabled only when experimentalPlanner is true.
+   */
+  splitterFeedback?: SplitterFeedbackConfig;
+  /**
    * Preferred execution agent for automatic fix retries.
    * When unset, auto-fix falls back to the task's executionAgent,
    * then to the built-in default agent.
@@ -115,11 +137,6 @@ export interface InvokerConfig {
   defaultExecutionAgent?: string;
   /** Default execution model for prompt-backed tasks when the task does not override it. */
   defaultExecutionModel?: string;
-  /**
-   * Config-owned default execution harness/model for tasks that omit them.
-   * This is separate from Slack planning presets and applies across surfaces.
-   */
-  defaultExecution?: DefaultExecutionConfig;
   /**
    * When true, failed CI checks on Invoker-created review-gate PRs can
    * trigger the same auto-fix recovery flow used for task failures.
@@ -225,7 +242,6 @@ export interface InvokerConfig {
      * Default for pooled SSH members: 1.
      */
     maxConcurrentTasks?: number;
-    capabilities?: MachineCapabilities;
   }>;
   /**
    * Named execution pools used by routing rules.
@@ -234,8 +250,8 @@ export interface InvokerConfig {
   executionPools?: Record<string, {
     /** Pool members can mix substrates under one shared queue. */
     members: Array<
-      | { type: 'ssh'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
-      | { type: 'worktree'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
+      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
     >;
     /** Member selection strategy for available capacity. Default: roundRobin */
     selectionStrategy?: 'roundRobin' | 'leastLoaded';
@@ -292,6 +308,8 @@ export interface InvokerConfig {
     /** Routing strategy. Defaults to "enforce". */
     strategy?: 'enforce' | 'route';
   }>;
+  /** Config-gated built-in PR maintenance worker tuning. */
+  prMaintenance?: PrMaintenanceConfig;
   /**
    * Operator-declared external worker list, with each worker identified by registry kind.
    * The loader consumes this later; absent means no external workers.
@@ -338,8 +356,7 @@ export function resolveConfigFileState(): { path: string; exists: boolean } {
   return { path, exists: existsSync(path) };
 }
 export function loadConfig(): InvokerConfig {
-  const config = readJsonSafe(resolveConfigFilePath());
-  return validateInvokerConfig(config);
+  return readJsonSafe(resolveConfigFilePath());
 }
 export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
   const configured = config.defaultExecutionAgent?.trim();

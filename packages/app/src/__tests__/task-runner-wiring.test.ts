@@ -49,31 +49,8 @@ vi.mock('../lifecycle-event-bridge.js', () => ({
 
 vi.mock('../config.js', () => ({
   loadConfig: vi.fn(() => ({
-    remoteTargets: {
-      remote: {
-        host: 'host',
-        capabilities: {
-          execution: {
-            claude: { modelPolicy: { kind: 'implicit' } },
-          },
-        },
-      },
-    },
-    executionPools: {
-      pool: {
-        members: [
-          {
-            type: 'worktree',
-            id: 'local',
-            capabilities: {
-              planning: {
-                cursor: { modelPolicy: { kind: 'fixed', model: 'claude' } },
-              },
-            },
-          },
-        ],
-      },
-    },
+    remoteTargets: { remote: { host: 'host' } },
+    executionPools: { pool: { members: [] } },
     autoFixAgent: 'codex',
     autoApproveAIFixes: true,
   })),
@@ -127,7 +104,6 @@ describe('task-runner-wiring', () => {
       repoRoot: '/repo',
       invokerConfig: {
         defaultBranch: 'main',
-        defaultExecution: { executionAgent: 'omp', executionModel: 'anthropic/claude-opus-4' },
         docker: { imageName: 'image' },
         autoFixCi: true,
       },
@@ -150,31 +126,8 @@ describe('task-runner-wiring', () => {
     const config = taskRunnerConstructor.mock.calls[0]?.[0] as any;
     expect(config.cwd).toBe('/repo');
     expect(config.dockerConfig).toEqual({ imageName: 'image', secretsFile: '/tmp/secrets.env' });
-    expect(config.remoteTargetsProvider()).toEqual({
-      remote: {
-        host: 'host',
-        capabilities: {
-          execution: {
-            claude: { modelPolicy: { kind: 'implicit' } },
-          },
-        },
-      },
-    });
-    expect(config.executionPoolsProvider()).toEqual({
-      pool: {
-        members: [
-          {
-            type: 'worktree',
-            id: 'local',
-            capabilities: {
-              planning: {
-                cursor: { modelPolicy: { kind: 'fixed', model: 'claude' } },
-              },
-            },
-          },
-        ],
-      },
-    });
+    expect(config.remoteTargetsProvider()).toEqual({ remote: { host: 'host' } });
+    expect(config.executionPoolsProvider()).toEqual({ pool: { members: [] } });
     expect(config.executionDefaultsProvider()).toEqual({ executionAgent: 'claude' });
     expect(loadConfig).toHaveBeenCalledTimes(3);
 

@@ -423,10 +423,13 @@ export class PlanConversation {
 
     if (this.experimentalPlanner) {
       parts.push(
-        '\n[EXPERIMENTAL_PLANNER] Before finalizing the order, call the `plan` MCP ' +
-        'tool with the conversation to get the experimental planner\'s ordered ' +
-        'features/tasks + dependency edges, and base your plan\'s ordering on it. ' +
-        'If the tool is unavailable, order the plan yourself as usual.');
+        "\n[EXPERIMENTAL_PLANNER] Before finalizing the order, call the `plan` MCP " +
+        "tool with the conversation to get the experimental planner's ordered " +
+        "features/tasks + dependency edges, and base your plan's ordering on it. " +
+        'If the tool returns `planId`, include it as top-level `splitterPlanId` in ' +
+        'the final Invoker YAML so Invoker can send acceptance feedback through the ' +
+        'Splitter MCP server after submission. If the tool is unavailable, order the ' +
+        'plan yourself as usual and omit `splitterPlanId`.');
     }
 
     return parts.join('\n');

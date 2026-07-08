@@ -55,6 +55,7 @@ base.describe('Launch stall watchdog', () => {
         env: {
           ...process.env,
           NODE_ENV: 'test',
+          INVOKER_USER_DATA_DIR: electronUserDataDir,
           INVOKER_GUI_OWNER_MODE: 'gui',
           INVOKER_DB_DIR: testDir,
           INVOKER_IPC_SOCKET: ipcSocketPath,
@@ -62,7 +63,6 @@ base.describe('Launch stall watchdog', () => {
           INVOKER_REPO_CONFIG_PATH: configPath,
           INVOKER_EXECUTING_STALL_TIMEOUT_MS: '3000',
           INVOKER_STARTUP_POLL_DELAY_MS: '0',
-          INVOKER_USER_DATA_DIR: electronUserDataDir,
         },
       });
       const page = await app.firstWindow();
@@ -164,6 +164,7 @@ base.describe('Launch stall watchdog', () => {
         env: {
           ...process.env,
           NODE_ENV: 'test',
+          INVOKER_USER_DATA_DIR: electronUserDataDir,
           INVOKER_GUI_OWNER_MODE: 'gui',
           INVOKER_DB_DIR: testDir,
           INVOKER_IPC_SOCKET: ipcSocketPath,
@@ -171,7 +172,6 @@ base.describe('Launch stall watchdog', () => {
           INVOKER_REPO_CONFIG_PATH: configPath,
           INVOKER_EXECUTING_STALL_TIMEOUT_MS: '3000',
           INVOKER_STARTUP_POLL_DELAY_MS: '0',
-          INVOKER_USER_DATA_DIR: electronUserDataDir,
         },
       });
       const page = await app.firstWindow();

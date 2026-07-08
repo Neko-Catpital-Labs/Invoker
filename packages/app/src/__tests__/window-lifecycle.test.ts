@@ -139,6 +139,7 @@ describe('window-lifecycle', () => {
     const options = electronMock.BrowserWindow.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(options.show).toBe(false);
     expect(options.skipTaskbar).toBe(true);
+    expect(options.paintWhenInitiallyHidden).toBe(true);
 
     const readyHandler = electronMock.fakeWindow.once.mock.calls.find(([eventName]) => eventName === 'ready-to-show')?.[1];
     expect(readyHandler).toBeDefined();

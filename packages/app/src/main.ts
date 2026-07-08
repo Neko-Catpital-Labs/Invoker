@@ -43,6 +43,7 @@ import {
   guiOwnerBootstrapTimeoutMs,
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
+  resolveElectronUserDataDir,
   runElectronReadyBootstrap,
   shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
@@ -59,8 +60,9 @@ configureEarlyElectronApp({ app, enableTestCompositor, isHeadless: earlyHeadless
 
 // Isolate userData (and with it the single-instance lock) for e2e runs so a
 // test instance can launch alongside a normally running Invoker.
-if (process.env.INVOKER_USER_DATA_DIR) {
-  app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
+const isolatedUserDataDir = resolveElectronUserDataDir();
+if (isolatedUserDataDir) {
+  app.setPath('userData', isolatedUserDataDir);
 }
 
 import { Orchestrator, CommandService, OrchestratorError, OrchestratorErrorCode, buildWorkflowInvalidationDeps } from '@invoker/workflow-core';
@@ -90,6 +92,7 @@ import type {
   WorkflowMeta,
   WorkflowMutationAcceptedResult,
   WorkResponse,
+  TerminalSessionDescriptor,
 } from '@invoker/contracts';
 import { SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -108,7 +111,6 @@ import {
   WorktreeExecutor,
   CI_FAILURE_WORKER_KIND,
   initializeShellEnvironment,
-  createAutoFixAttemptLedger,
   createWorkerRegistry,
   PR_STATUS_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
@@ -116,6 +118,7 @@ import {
   DEFAULT_EXECUTION_AGENT,
   registerBuiltinAgents,
   registerBuiltinWorkers,
+  createAutoFixAttemptLedger,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -149,6 +152,7 @@ import {
   resolveHeadlessTargetWorkflowId,
 } from './headless-command-classification.js';
 import { backupPlan } from './plan-backup.js';
+import { recordSplitterPlanFeedback } from './splitter-feedback.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
@@ -208,7 +212,6 @@ import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-m
 import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
 import { WorkflowRollupProjection } from './workflow-rollup-projection.js';
 import { seedTaskCachesFromSnapshot } from './viewer-cache-hydration.js';
-import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import { submitWorkflowMutationOrAcknowledgeDeleted } from './workflow-mutation-submit.js';
@@ -224,7 +227,6 @@ import {
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
 import {
-  buildFixWithAgentMutationArgs,
   buildHeadlessFixArgs,
   listOpenFixIntentsForTask,
   parseFixWithAgentMutationArgs,
@@ -237,9 +239,9 @@ import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
-  AUTO_STARTED_OWNER_WORKER_KINDS,
   createLocalWorkerStatusSnapshot,
   createWorkerRuntimeController,
+  getAutoStartedOwnerWorkerKinds,
   type WorkerRuntimeController,
 } from './worker-control.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
@@ -312,6 +314,39 @@ function submitRegisteredOwnerWorkerMutation(
   }
   return workflowMutationCoordinator.submit(workflowId, priority, channel, mutationArgs, options);
 }
+
+function buildPrMaintenanceWorkerDepsConfig(
+  config: InvokerConfig,
+  fallbackRepoRoot?: string,
+): WorkerRuntimeDependencies['prMaintenance'] {
+  const prMaintenance = config.prMaintenance;
+  if (!prMaintenance && !fallbackRepoRoot) return undefined;
+  return {
+    coderabbitAddress: {
+      ...(fallbackRepoRoot ? { repoRoot: fallbackRepoRoot } : {}),
+      ...(prMaintenance?.coderabbitAddress?.repoRoot ? { repoRoot: prMaintenance.coderabbitAddress.repoRoot } : {}),
+      ...(prMaintenance?.coderabbitAddress?.env ? { env: prMaintenance.coderabbitAddress.env } : {}),
+      ...(typeof prMaintenance?.coderabbitAddress?.pollIntervalMs === 'number' ? { intervalMs: prMaintenance.coderabbitAddress.pollIntervalMs } : {}),
+    },
+    prConflictRebase: {
+      ...(fallbackRepoRoot ? { repoRoot: fallbackRepoRoot } : {}),
+      ...(prMaintenance?.prConflictRebase?.repoRoot ? { repoRoot: prMaintenance.prConflictRebase.repoRoot } : {}),
+      ...(prMaintenance?.prConflictRebase?.env ? { env: prMaintenance.prConflictRebase.env } : {}),
+      ...(typeof prMaintenance?.prConflictRebase?.pollIntervalMs === 'number' ? { intervalMs: prMaintenance.prConflictRebase.pollIntervalMs } : {}),
+    },
+    mergifyRequeue: {
+      ...(fallbackRepoRoot ? { repoRoot: fallbackRepoRoot } : {}),
+      ...(prMaintenance?.mergifyRequeue?.repoRoot ? { repoRoot: prMaintenance.mergifyRequeue.repoRoot } : {}),
+      ...(prMaintenance?.mergifyRequeue?.env ? { env: prMaintenance.mergifyRequeue.env } : {}),
+      ...(typeof prMaintenance?.mergifyRequeue?.pollIntervalMs === 'number' ? { intervalMs: prMaintenance.mergifyRequeue.pollIntervalMs } : {}),
+      ...(prMaintenance?.mergifyRequeue?.pythonExecutable ? { pythonExecutable: prMaintenance.mergifyRequeue.pythonExecutable } : {}),
+      ...(prMaintenance?.mergifyRequeue?.repo ? { repo: prMaintenance.mergifyRequeue.repo } : {}),
+      ...(prMaintenance?.mergifyRequeue?.author ? { author: prMaintenance.mergifyRequeue.author } : {}),
+      ...(prMaintenance?.mergifyRequeue?.stateFile ? { stateFile: prMaintenance.mergifyRequeue.stateFile } : {}),
+      ...(prMaintenance?.mergifyRequeue?.extraArgs ? { extraArgs: prMaintenance.mergifyRequeue.extraArgs } : {}),
+    },
+  };
+}
 const autoFixAttemptLedger = createAutoFixAttemptLedger();
 
 
@@ -331,10 +366,11 @@ function buildRegisteredOwnerWorkerDeps(
     },
     autoFix: {
       defaultAutoFixRetries: invokerConfig.autoFixRetries,
-      attemptLedger: autoFixAttemptLedger,
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
+      attemptLedger: autoFixAttemptLedger,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
     },
+    prMaintenance: buildPrMaintenanceWorkerDepsConfig(invokerConfig),
   };
 }
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
@@ -1430,187 +1466,6 @@ function startHeadlessMode(): void {
           );
         }
 
-        const buildStandaloneAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
-          const workflowId = standaloneWorkflowIdForTaskArg(taskId);
-          if (!workflowId) {
-            return {
-              workflowId: null,
-              openIntentCountForWorkflow: 0,
-              openFixIntentCountForWorkflow: 0,
-              openFixIntentCountForTask: 0,
-              openFixIntentForTask: false,
-              openFixIntentHead: null,
-              openFixIntentPreview: [],
-            };
-          }
-          const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-          const openFixIntents = openIntents.filter((intent) => (
-            intent.channel === 'invoker:fix-with-agent' || intent.channel === 'headless.exec'
-          ));
-          const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-          return {
-            workflowId,
-            openIntentCountForWorkflow: openIntents.length,
-            openFixIntentCountForWorkflow: openFixIntents.length,
-            openFixIntentCountForTask: openTaskFixIntents.length,
-            openFixIntentForTask: openTaskFixIntents.length > 0,
-            openFixIntentHead: openTaskFixIntents[0]
-              ? {
-                id: openTaskFixIntents[0].id,
-                status: openTaskFixIntents[0].status,
-                channel: openTaskFixIntents[0].channel,
-              }
-              : null,
-            openFixIntentPreview: openTaskFixIntents.slice(0, 5).map((intent) => ({
-              id: intent.id,
-              status: intent.status,
-              channel: intent.channel,
-            })),
-          };
-        };
-
-        const logStandaloneAutoFixDebug = (
-          taskId: string,
-          phase: string,
-          details: Record<string, unknown> = {},
-        ): void => {
-          const task = orchestrator.getTask(taskId);
-          const payload = {
-            phase,
-            status: task?.status ?? 'missing',
-            ...buildStandaloneAutoFixQueueSnapshot(taskId),
-            ...details,
-          };
-          persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
-          const recoveryAction = classifyAutoFixRecoveryPhase(phase, payload);
-          if (recoveryAction) {
-            persistence.logEvent?.(
-              taskId,
-              recoveryWorkerEventType(recoveryAction),
-              buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
-            );
-          }
-          logger.info(
-            `[auto-fix-debug][standalone] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
-            { module: 'auto-fix' },
-          );
-        };
-
-        const scheduleStandaloneAutoFix = (taskId: string): void => {
-          logStandaloneAutoFixDebug(taskId, 'schedule-enter');
-          if (!workflowMutationCoordinator) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-workflow-mutation-coordinator' });
-            return;
-          }
-          if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', { reason: 'fix-handler-not-ready' });
-            return;
-          }
-          const workflowId = standaloneWorkflowIdForTaskArg(taskId);
-          if (!workflowId) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
-            return;
-          }
-          const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-          if (!shouldAutoFixNow) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', {
-              reason: 'shouldAutoFix-false',
-              shouldAutoFix: shouldAutoFixNow,
-            });
-            return;
-          }
-          const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-          const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-          if (openTaskFixIntents.length > 0) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', {
-              reason: 'already-queued-intent',
-              existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-            });
-            return;
-          }
-          const configuredAgent = loadConfig().autoFixAgent?.trim();
-          const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
-          logStandaloneAutoFixDebug(taskId, 'schedule-enqueue');
-          logStandaloneAutoFixDebug(taskId, 'schedule-enqueued');
-          void workflowMutationCoordinator.enqueue(
-            workflowId,
-            'normal',
-            'invoker:fix-with-agent',
-            buildFixWithAgentMutationArgs(taskId, selectedAgent, { autoFix: true }),
-          )
-            .then(() => {
-              logStandaloneAutoFixDebug(taskId, 'schedule-dispatch-finished');
-            })
-            .catch((err) => {
-              if (err instanceof StaleLineageError) {
-                logger.info(`auto-fix discarded stale result for "${taskId}": ${err.message}`, { module: 'auto-fix' });
-                return;
-              }
-              logStandaloneAutoFixDebug(taskId, 'schedule-dispatch-error', {
-                error: err instanceof Error ? err.stack ?? err.message : String(err),
-              });
-            });
-        };
-
-        const maybeScheduleStandaloneAutoFix = (
-          task: TaskState,
-          trigger: 'delta' | 'poll',
-        ): boolean => {
-          if (task.status !== 'failed') return false;
-          const cancellationError = shouldSkipAutoFixForError(task.execution.error);
-          const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(task.id);
-          logStandaloneAutoFixDebug(task.id, `${trigger}-failed`, {
-            shouldSkipForCancellation: cancellationError,
-            shouldAutoFixFromOrchestrator,
-          });
-          if (!cancellationError && shouldAutoFixFromOrchestrator) {
-            logStandaloneAutoFixDebug(task.id, `${trigger}-trigger-schedule`);
-            scheduleStandaloneAutoFix(task.id);
-            return true;
-          }
-          logStandaloneAutoFixDebug(task.id, `${trigger}-skip`, {
-            reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
-            shouldSkipForCancellation: cancellationError,
-            shouldAutoFixFromOrchestrator,
-          });
-          return false;
-        };
-
-        const startStandaloneAutoFixRecoveryPoll = (workflowId: string): void => {
-          const startedAtMs = Date.now();
-          const maxPollMs = 90_000;
-          const poll = setInterval(() => {
-            if (Date.now() - startedAtMs > maxPollMs) {
-              clearInterval(poll);
-              return;
-            }
-            try {
-              orchestrator.syncFromDb(workflowId);
-              const scheduled = orchestrator
-                .getAllTasks()
-                .filter((task) => task.config.workflowId === workflowId)
-                .some((task) => maybeScheduleStandaloneAutoFix(task, 'poll'));
-              if (scheduled) {
-                clearInterval(poll);
-              }
-            } catch (err) {
-              logger.warn(
-                `standalone auto-fix recovery poll failed for "${workflowId}": ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-                { module: 'auto-fix' },
-              );
-            }
-          }, 1_000);
-          poll.unref?.();
-        };
-
-        messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
-          const d = delta as TaskDelta;
-          if (d.type !== 'updated' || d.changes.status !== 'failed') return;
-          const task = orchestrator.getTask(d.taskId);
-          if (task) maybeScheduleStandaloneAutoFix(task, 'delta');
-        });
 
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
@@ -1622,7 +1477,6 @@ function startHeadlessMode(): void {
           orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
           const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
           const started = orchestrator.startExecution();
-          startStandaloneAutoFixRecoveryPoll(workflowId);
           logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
           return { workflowId, tasks };
@@ -1717,7 +1571,6 @@ function startHeadlessMode(): void {
             await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: delegatedWait,
-              noTrack: delegatedNoTrack,
               signal: activeMutationContext?.signal,
               mutationTiming: activeMutationContext?.mutationTiming,
             });
@@ -1751,7 +1604,7 @@ function startHeadlessMode(): void {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
           ),
-          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
           persistence,
           autoFixRetries: invokerConfig.autoFixRetries,
           canControl: () => !readOnlyMode,
@@ -1873,6 +1726,74 @@ function createEmbeddedTerminalBackendFromConfig(
   const embeddedTerminalManager = new EmbeddedTerminalManager({
     backend: createEmbeddedTerminalBackendFromConfig(resolveEmbeddedTerminalBackendConfig(invokerConfig)),
   });
+  const terminalRowToDescriptor = (row: ReturnType<SQLiteAdapter['listTerminalSessions']>[number]): TerminalSessionDescriptor => ({
+    sessionId: row.sessionId,
+    taskId: row.taskId,
+    status: row.status,
+    exitCode: row.exitCode,
+    cwd: row.cwd,
+    command: row.command,
+    args: row.args,
+    mode: row.mode,
+    attached: row.attached,
+    createdAt: row.createdAt,
+    outputSnapshot: row.outputSnapshot,
+  });
+
+  const restorePersistedTerminalSessions = (): void => {
+    const nowIso = () => new Date().toISOString();
+    for (const row of persistence.listTerminalSessions()) {
+      if (!persistence.loadTask(row.taskId)) {
+        persistence.deleteTerminalSession(row.sessionId);
+        continue;
+      }
+      if (row.status !== 'running') continue;
+      if (row.mode === 'attached') {
+        persistence.updateTerminalSession(row.sessionId, { status: 'exited', updatedAt: nowIso() });
+        continue;
+      }
+      try {
+        embeddedTerminalManager.restoreSpawnSession({
+          sessionId: row.sessionId,
+          taskId: row.taskId,
+          targetKey: row.targetKey,
+          spec: {
+            cwd: row.cwd,
+            command: row.command,
+            args: row.args,
+            linuxTerminalTail: row.linuxTerminalTail,
+          },
+          cwd: row.cwd ?? process.cwd(),
+          createdAt: row.createdAt,
+          outputSnapshot: row.outputSnapshot,
+        });
+      } catch {
+        persistence.updateTerminalSession(row.sessionId, { status: 'exited', updatedAt: nowIso() });
+      }
+    }
+  };
+
+  const registerTerminalSessionPersistence = (): void => {
+    embeddedTerminalManager.on('session-updated', (record) => {
+      persistence.upsertTerminalSession({
+        sessionId: record.sessionId,
+        taskId: record.taskId,
+        targetKey: record.targetKey,
+        status: record.status,
+        exitCode: record.exitCode,
+        cwd: record.cwd,
+        command: record.spec.command,
+        args: record.spec.args,
+        linuxTerminalTail: record.spec.linuxTerminalTail,
+        mode: record.mode,
+        attached: record.attached,
+        outputSnapshot: record.outputSnapshot,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      });
+    });
+    restorePersistedTerminalSessions();
+  };
   embeddedTerminalManager.on('output', (payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('invoker:terminal-output', payload);
@@ -2213,62 +2134,6 @@ function createEmbeddedTerminalBackendFromConfig(
     return result.started;
   };
 
-  const scheduleAutoFix = (taskId: string): void => {
-    logAutoFixDebug(taskId, 'schedule-enter');
-    if (!workflowMutationCoordinator) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-workflow-mutation-coordinator' });
-      return;
-    }
-    if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'fix-handler-not-ready' });
-      return;
-    }
-    const workflowId = workflowIdForTaskArg(taskId);
-    if (!workflowId) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
-      return;
-    }
-    const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-    if (!shouldAutoFixNow) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'shouldAutoFix-false',
-        shouldAutoFix: shouldAutoFixNow,
-      });
-      return;
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    if (openTaskFixIntents.length > 0) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'already-queued-intent',
-        existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-      });
-      return;
-    }
-    const configuredAgent = loadConfig().autoFixAgent?.trim();
-    const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
-    logAutoFixDebug(taskId, 'schedule-enqueue');
-    logAutoFixDebug(taskId, 'schedule-enqueued');
-    void runWorkflowMutation(
-      workflowId,
-      'normal',
-      'invoker:fix-with-agent',
-      [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
-    )
-      .then(() => {
-        logAutoFixDebug(taskId, 'schedule-dispatch-finished');
-      })
-      .catch((err) => {
-        if (err instanceof StaleLineageError) {
-          logger.info(`auto-fix discarded stale result for "${taskId}": ${err.message}`, { module: 'auto-fix' });
-          return;
-        }
-        logAutoFixDebug(taskId, 'schedule-dispatch-error', {
-          error: err instanceof Error ? err.stack ?? err.message : String(err),
-        });
-      });
-  };
 
   const parseExecutionDate = (value: unknown): Date | undefined => {
     if (!value) return undefined;
@@ -2889,31 +2754,11 @@ function createEmbeddedTerminalBackendFromConfig(
   }
 
   // Apply one owner task delta to the local cache and forward results to the
-  // renderer (and drive owner-side auto-fix). Extracted so the detached viewer
-  // can replay deltas that were buffered during hydration.
+  // renderer. Recovery work is owned by the auto-fix worker's lifecycle subscription.
   function processIncomingTaskDelta(d: TaskDelta): void {
     uiPerfStats.mainDeltaToUi += 1;
     if (traceUiDeltaFlow) {
       logger.debug(`delta→ui: ${JSON.stringify(d)}`, { module: 'ui' });
-    }
-    const deltaTaskId = d.type === 'updated' || d.type === 'removed' ? d.taskId : undefined;
-    if (d.type === 'updated' && d.changes.status === 'failed') {
-      const cancellationError = shouldSkipAutoFixForError(d.changes.execution?.error);
-      const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(d.taskId);
-      logAutoFixDebug(d.taskId, 'delta-failed', {
-        shouldSkipForCancellation: cancellationError,
-        shouldAutoFixFromOrchestrator,
-      });
-      if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
-        logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
-        scheduleAutoFix(deltaTaskId);
-      } else if (deltaTaskId) {
-        logAutoFixDebug(deltaTaskId, 'delta-skip', {
-          reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
-          shouldSkipForCancellation: cancellationError,
-          shouldAutoFixFromOrchestrator,
-        });
-      }
     }
     for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
       publishTaskDeltaToRenderer(rendererDelta);
@@ -3351,6 +3196,10 @@ function createEmbeddedTerminalBackendFromConfig(
     }
 
     if (ownerMode) {
+      registerTerminalSessionPersistence();
+    }
+
+    if (ownerMode) {
       rebuildTaskRunner();
       workflowMutationCoordinator = new PersistedWorkflowMutationCoordinator(
         persistence,
@@ -3525,7 +3374,7 @@ function createEmbeddedTerminalBackendFromConfig(
             await requireTaskExecutor().checkMergeGateStatuses();
           },
         ),
-        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
         persistence,
         autoFixRetries: invokerConfig.autoFixRetries,
         canControl: () => ownerMode,
@@ -3654,6 +3503,13 @@ function createEmbeddedTerminalBackendFromConfig(
       if (!workflowId) {
         throw new Error('Loaded plan did not create a workflow.');
       }
+      void recordSplitterPlanFeedback({
+        config: invokerConfig,
+        splitterPlanId: submission.splitterPlanId ?? submission.plans.find((plan) => plan.splitterPlanId)?.splitterPlanId,
+        splitterPerson: submission.splitterPerson ?? submission.plans.find((plan) => plan.splitterPerson)?.splitterPerson,
+        logger,
+      });
+
       return {
         planName: submission.name,
         workflowId,
@@ -4198,13 +4054,13 @@ function createEmbeddedTerminalBackendFromConfig(
         return createLocalWorkerStatusSnapshot({
           registry: createRegisteredWorkerRegistry(),
           persistence,
-          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
         });
       }
       return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
-        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: getAutoStartedOwnerWorkerKinds(invokerConfig),
       });
     });
 
@@ -5039,9 +4895,16 @@ function createEmbeddedTerminalBackendFromConfig(
         return { opened: false, reason: `Failed to start terminal session: ${reason}` };
       }
     });
-
     ipcMain.handle('invoker:terminal-list', async () => {
-      return embeddedTerminalManager.list();
+      const live = new Map(embeddedTerminalManager.list().map((session) => [session.sessionId, session]));
+      const merged = persistence.listTerminalSessions().map((row) => live.get(row.sessionId) ?? terminalRowToDescriptor(row));
+      const persistedIds = new Set(merged.map((session) => session.sessionId));
+      for (const session of live.values()) {
+        if (!persistedIds.has(session.sessionId)) {
+          merged.push(session);
+        }
+      }
+      return merged;
     });
 
     ipcMain.handle('invoker:terminal-write', async (_event, sessionId: string, data: string) => {
@@ -5051,9 +4914,10 @@ function createEmbeddedTerminalBackendFromConfig(
     ipcMain.handle('invoker:terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
       return embeddedTerminalManager.resize(sessionId, cols, rows);
     });
-
     ipcMain.handle('invoker:terminal-close', async (_event, sessionId: string) => {
-      return embeddedTerminalManager.close(sessionId);
+      const result = embeddedTerminalManager.close(sessionId);
+      persistence.deleteTerminalSession(sessionId);
+      return result.ok ? result : { ok: true };
     });
 
     Menu.setApplicationMenu(
@@ -5131,7 +4995,7 @@ function createEmbeddedTerminalBackendFromConfig(
           clearInterval(hourlyBackupInterval);
           hourlyBackupInterval = null;
         }
-        embeddedTerminalManager.closeAll();
+        embeddedTerminalManager.closeAll({ preserveForRestart: true });
         if (executorRegistry) {
           await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
         }

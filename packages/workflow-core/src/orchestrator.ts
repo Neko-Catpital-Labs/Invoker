@@ -230,8 +230,10 @@ export interface OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
+    splitterPlanId?: string;
+    splitterPerson?: string;
   }): void;
-  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[]; splitterPlanId?: string; splitterPerson?: string }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -248,6 +250,8 @@ export interface OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
+    splitterPlanId?: string;
+    splitterPerson?: string;
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
@@ -265,6 +269,8 @@ export interface OrchestratorPersistence {
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
       detachedExternalDependencies?: DetachedExternalDependency[];
+      splitterPlanId?: string;
+      splitterPerson?: string;
       generation?: number;
     }>;
     tasks: TaskState[];
@@ -297,6 +303,8 @@ export interface OrchestratorPersistence {
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
+    splitterPlanId?: string;
+    splitterPerson?: string;
     generation?: number;
   } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
@@ -364,6 +372,10 @@ export interface PlanDefinition {
     requiredStatus?: 'completed';
     gatePolicy?: 'completed' | 'review_ready';
   }>;
+  /** Splitter/personal-stack-planner plan id used for feedback. */
+  splitterPlanId?: string;
+  /** Splitter person key used for feedback. */
+  splitterPerson?: string;
   tasks: Array<{
     id: string;
     description: string;
@@ -1471,6 +1483,8 @@ export class Orchestrator {
       featureBranch: plan.featureBranch,
       mergeMode: plan.mergeMode,
       externalDependencies: workflowExternalDependencies.length > 0 ? workflowExternalDependencies : undefined,
+      splitterPlanId: plan.splitterPlanId,
+      splitterPerson: plan.splitterPerson,
       createdAt,
       updatedAt: createdAt,
     });

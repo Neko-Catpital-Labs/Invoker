@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Job 1 — CodeRabbit review address cron.
+# PR maintenance worker tick script — CodeRabbit review addressing.
 #
 # Every 5 min: for open PRs by $PR_AUTHOR, look for NEW CodeRabbit review
 # comments (inline + summary). On the first PR with new feedback, launch a
@@ -162,8 +162,8 @@ launch_omp() {
 
   log_line "PR #$num: launching omp on $CHECKOUT_DIR"
   # omp reads $ctx_file during the run, so clean it up only after omp returns.
-  # Bound the run so a hung omp cannot hold the shared cron lock indefinitely;
-  # a timeout exits non-zero and is handled exactly like any other failure.
+  # Bound the run so a hung omp cannot hold the shared PR maintenance lock
+  # indefinitely; a timeout exits non-zero and is handled like any other failure.
   local omp_run=("$omp_cmd" "${omp_args[@]}")
   if command -v timeout >/dev/null 2>&1; then
     omp_run=(timeout --kill-after=1m "${INVOKER_PR_CRON_OMP_TIMEOUT:-45m}" "$omp_cmd" "${omp_args[@]}")

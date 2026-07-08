@@ -6,7 +6,15 @@ import { LocalBus } from '@invoker/transport';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../index.js';
-import { HANDOFF_PROMPT_DESCRIPTION, handoffPrompt, submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
+import {
+  HANDOFF_PROMPT_DESCRIPTION,
+  createProcessRunner,
+  handoffPrompt,
+  resolveCliInvocation,
+  submitPlanForMcp,
+  validatePlanForMcp,
+  type McpCliRunner,
+} from '../mcp-server.js';
 
 const repoRoot = resolve(__dirname, '../../../..');
 const cliPath = resolve(repoRoot, 'packages/cli/dist/index.js');
@@ -106,7 +114,9 @@ describe('invoker-cli', () => {
 
     expect(code).toBe(0);
     expect(output.stdout).toContain('Worker kinds');
-    expect(output.stdout).toContain('autofix');
+    for (const kind of ['autofix', 'pr-status', 'ci-failure', 'coderabbit-address', 'pr-conflict-rebase', 'mergify-requeue']) {
+      expect(output.stdout).toContain(kind);
+    }
     output.restore();
   });
 
@@ -117,6 +127,9 @@ describe('invoker-cli', () => {
 
     expect(code).toBe(1);
     expect(output.stderr).toContain('Unknown worker kind: "missing-kind"');
+    for (const kind of ['autofix', 'pr-status', 'ci-failure', 'coderabbit-address', 'pr-conflict-rebase', 'mergify-requeue']) {
+      expect(output.stderr).toContain(kind);
+    }
     output.restore();
   });
 
@@ -305,6 +318,38 @@ tasks:
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('Invalid YAML');
+  });
+
+  it('spawns a compiled binary directly when cliPath equals execPath', () => {
+    const result = resolveCliInvocation(
+      '/v/invoker-cli',
+      '/v/invoker-cli',
+      ['run', fixturePlan, '--live', '--json'],
+    );
+
+    expect(result).toEqual({
+      command: '/v/invoker-cli',
+      args: ['run', fixturePlan, '--live', '--json'],
+    });
+  });
+
+  it('prepends the JS entry path in dev mode', () => {
+    const result = resolveCliInvocation(
+      '/usr/bin/node',
+      '/repo/dist/index.js',
+      ['run', fixturePlan, '--json'],
+    );
+
+    expect(result).toEqual({
+      command: '/usr/bin/node',
+      args: ['/repo/dist/index.js', 'run', fixturePlan, '--json'],
+    });
+  });
+
+  it('rejects missing MCP cliPath through the runner promise', async () => {
+    await expect(createProcessRunner('').run(['run', fixturePlan, '--json'])).rejects.toThrow(
+      'Unable to resolve CLI path for spawning invoker-cli',
+    );
   });
 
   it('submits MCP plans in live mode by default', async () => {

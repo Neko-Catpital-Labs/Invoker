@@ -119,10 +119,30 @@ tasks:
     const plan = parsePlan(yaml);
     expect(plan.intermediateRepoUrl).toBe('https://github.com/fork/repo.git');
   });
+  it('parses Splitter feedback metadata', () => {
+    const yaml = `
+name: Splitter Plan
+repoUrl: git@github.com:test/repo.git
+splitterPlanId: plan-123
+splitterPerson: edbert
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo hello
+`;
+    const bundle = parsePlanSubmissionBundle(yaml);
+    expect(bundle.splitterPlanId).toBe('plan-123');
+    expect(bundle.splitterPerson).toBe('edbert');
+    expect(bundle.plans[0].splitterPlanId).toBe('plan-123');
+    expect(bundle.plans[0].splitterPerson).toBe('edbert');
+  });
+
 
   it('parses a Workers Surface stacked workflow bundle in order', () => {
     const yaml = `
 name: Workers Surface
+splitterPlanId: stack-plan-123
+splitterPerson: edbert
 repoUrl: git@github.com:test/repo.git
 baseBranch: main
 onFinish: pull_request
@@ -154,6 +174,8 @@ workflows:
     const bundle = parsePlanSubmissionBundle(yaml);
     expect(bundle.name).toBe('Workers Surface');
     expect(bundle.isStack).toBe(true);
+    expect(bundle.splitterPlanId).toBe('stack-plan-123');
+    expect(bundle.splitterPerson).toBe('edbert');
     expect(bundle.plans.map((plan) => plan.name)).toEqual([
       'Workers Surface Contracts',
       'Workers Surface UI',
@@ -163,6 +185,8 @@ workflows:
     expect(bundle.plans[0].reviewProvider).toBe('github');
     expect(bundle.plans[0].featureBranch).toBe('plan/workers-surface-contracts');
     expect(bundle.plans[1].featureBranch).toBe('plan/workers-surface-ui');
+    expect(bundle.plans[0].splitterPlanId).toBe('stack-plan-123');
+    expect(bundle.plans[1].splitterPerson).toBe('edbert');
     expect(bundle.plans[1].tasks.map((task) => task.id)).toEqual([
       'build-workers-ui',
       'verify-workers-ui',

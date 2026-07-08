@@ -46,6 +46,8 @@ export function mapRowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
     externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
     externalDependencyChanges: row.external_dependency_changes ? JSON.parse(row.external_dependency_changes) as ExternalDependencyChange[] : undefined,
     detachedExternalDependencies: row.detached_external_dependencies ? JSON.parse(row.detached_external_dependencies) as DetachedExternalDependency[] : undefined,
+    splitterPlanId: row.splitter_plan_id ?? undefined,
+    splitterPerson: row.splitter_person ?? undefined,
     generation: row.generation ?? 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

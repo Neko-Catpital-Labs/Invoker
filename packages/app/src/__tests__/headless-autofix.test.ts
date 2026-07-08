@@ -19,6 +19,7 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
     config: { workflowId: 'wf-1', ...(config ?? {}) },
     execution: {
       error: 'boom',
+      autoFixAttempts: 0,
       generation: 1,
       selectedAttemptId: 'attempt-1',
       ...(execution ?? {}),

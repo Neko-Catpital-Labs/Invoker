@@ -68,6 +68,9 @@ importers:
       '@invoker/workflow-core':
         specifier: workspace:*
         version: link:../workflow-core
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.4.3)
       dockerode:
         specifier: ^4.0.0
         version: 4.0.9

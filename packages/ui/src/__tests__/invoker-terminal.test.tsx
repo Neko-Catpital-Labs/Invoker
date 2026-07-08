@@ -94,23 +94,11 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
-  it('shows full draft YAML in the transcript, then submits without starting execution', async () => {
-    const fullYamlReply = [
-      'Here is the plan.',
-      '',
-      '```yaml',
-      'name: Mock Plan',
-      'tasks:',
-      '  - id: first',
-      '    description: First full task description that remains visible',
-      '  - id: second',
-      '    description: Second full task description that remains visible',
-      '```',
-    ].join('\n');
+  it('shows the sticky ready bar and submits without starting execution', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
       sessionId: 'session-1',
-      reply: fullYamlReply,
+      reply: 'Here is the plan.',
       draftPlanAvailable: true,
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
     })) as any;
@@ -122,7 +110,6 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft plan ready: "Mock Plan" (2 steps).');
     });
-    expect(screen.getByTestId('invoker-terminal-transcript').textContent).toContain(fullYamlReply);
 
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
 

@@ -4,6 +4,8 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+- Fix Invoker MCP plan submission from standalone CLI builds so Claude can call the MCP tool without duplicating the executable path in argv.
+- Preserve Splitter planner IDs on submitted workflows and send accepted-plan feedback through the configured Splitter MCP server.
 - Move auto-fix attempt counts out of SQLite task state and into in-memory worker runtime policy.
 - Add a local master-head full-test repair cron that runs the destructive suite, asks OMP/Codex to fix confirmed failures, reruns the suite, and opens one validated PR per broken upstream SHA.
 - Make the browser UI load heavy Action Graph data only when that tab opens, trim huge diagnostic strings, gzip large `/invoke` JSON responses, and stop checking PR statuses on initial page load.
@@ -22,6 +24,9 @@ All notable changes to Invoker will be documented in this file.
 - Emit first-class recovery.worker submit/skip audit events from the auto-fix worker and add a mocked browser E2E proving worker-triggered fixes reach the Approve Fix UI.
 - Add task deletion across the desktop app, HTTP API, and headless commands. Deleting a task now kills it first when needed, rewires direct dependents to the deleted task's upstream dependencies, and blocks deleting the last task in a workflow so users delete the whole workflow instead.
 - Keep the launch dispatcher topping up ready work before each poll, so queued tasks do not sit idle after launch rows expire or are abandoned.
+- Show a visible task-sidebar notice and task event when Fix with Codex recreates a workflow because the original workspace is missing.
+
+- Persist embedded terminal tabs across desktop app restarts, restoring their recent output and reopening spawn-backed sessions.
 
 ## 0.0.6
 

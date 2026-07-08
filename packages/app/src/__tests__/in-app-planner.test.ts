@@ -255,7 +255,7 @@ describe('planning chat', () => {
     expect(spawnPlanner).toHaveBeenCalledTimes(2);
   });
 
-  it('returns the raw draft reply and keeps a draft plan summary for valid YAML', async () => {
+  it('returns a draft plan summary when the assistant drafts valid YAML', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
 
@@ -271,13 +271,18 @@ describe('planning chat', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      reply: VALID_PLAN,
+      reply: [
+        'I drafted "Mock Plan". Here is the simple version:',
+        '',
+        '1. First task',
+        '2. Second task',
+        '',
+        'If this looks right, choose Submit to Invoker.',
+      ].join('\n'),
       draftPlanAvailable: true,
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
     });
-    expect(result.ok && result.reply).toContain('```yaml');
-    expect(result.ok && result.reply).toContain('name: Mock Plan');
-    expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(VALID_PLAN);
+    expect(result.ok && result.reply).not.toContain('```yaml');
   });
 
   it('returns a stacked workflow summary when the assistant drafts workflow bundles', async () => {

@@ -58,6 +58,8 @@ import type {
   WorkerActionListFilters,
   WorkerActionRecord,
   WorkerActionWrite,
+  TerminalSessionPatch,
+  TerminalSessionRecord,
 } from './adapter.js';
 import {
   SCHEMA_DDL,
@@ -105,6 +107,8 @@ type WorkflowMetadataChanges = Partial<
     | 'externalDependencies'
     | 'externalDependencyChanges'
     | 'detachedExternalDependencies'
+    | 'splitterPlanId'
+    | 'splitterPerson'
     | 'generation'
     | 'updatedAt'
   >
@@ -355,6 +359,33 @@ export type TaskLaunchDispatchState =
 
 export type TaskLaunchDispatchPriority = 'high' | 'normal' | 'low';
 
+type TerminalSessionRow = {
+  session_id?: unknown;
+  task_id?: unknown;
+  target_key?: unknown;
+  status?: unknown;
+  exit_code?: unknown;
+  cwd?: unknown;
+  command?: unknown;
+  args_json?: unknown;
+  linux_terminal_tail?: unknown;
+  mode?: unknown;
+  attached?: unknown;
+  output_snapshot?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
+};
+
+function parseTerminalArgsJson(value: unknown): string[] {
+  if (typeof value !== 'string' || value.length === 0) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export interface TaskLaunchDispatch {
   id: number;
   taskId: string;
@@ -455,7 +486,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (isFile) {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
-
 
     try {
       const { DatabaseSync } = await loadNativeSqlite();
@@ -845,7 +875,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       }
     }
     this.migrateWorkflowStatusColumn();
-    this.dropTaskAutoFixAttemptsColumn();
+    this.migrateTaskAutoFixAttemptsColumn();
 
     // Replace old attempt_number index with created_at index, etc.
     for (const sql of POST_MIGRATION_STATEMENTS) {
@@ -880,7 +910,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.dirty = true;
   }
 
-  private dropTaskAutoFixAttemptsColumn(): void {
+  private migrateTaskAutoFixAttemptsColumn(): void {
     if (this.readOnly) return;
     const columns = this.queryAll('PRAGMA table_info(tasks)') as Array<{ name: string }>;
     if (!columns.some((column) => column.name === 'auto_fix_attempts')) return;
@@ -1018,6 +1048,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     applyPatchKeyToValidationCopy('reviewProvider');
     applyPatchKeyToValidationCopy('externalDependencies');
     applyPatchKeyToValidationCopy('externalDependencyChanges');
+    applyPatchKeyToValidationCopy('splitterPlanId');
+    applyPatchKeyToValidationCopy('splitterPerson');
     applyPatchKeyToValidationCopy('detachedExternalDependencies');
     applyPatchKeyToValidationCopy('generation');
 
@@ -1084,8 +1116,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   saveWorkflow(workflow: WorkflowSaveInput): void {
     assertWorkflowConsistent(workflow);
     this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, splitter_plan_id, splitter_person, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
@@ -1097,6 +1129,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workflow.externalDependencies ? JSON.stringify(workflow.externalDependencies) : null,
       workflow.externalDependencyChanges ? JSON.stringify(workflow.externalDependencyChanges) : null,
       workflow.detachedExternalDependencies ? JSON.stringify(workflow.detachedExternalDependencies) : null,
+      workflow.splitterPlanId ?? null,
+      workflow.splitterPerson ?? null,
       workflow.generation ?? 0,
       workflow.createdAt, workflow.updatedAt,
     ]);
@@ -1117,6 +1151,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       featureBranch: 'feature_branch',
       mergeMode: 'merge_mode',
       reviewProvider: 'review_provider',
+      splitterPlanId: 'splitter_plan_id',
+      splitterPerson: 'splitter_person',
     };
     for (const [key, column] of Object.entries(columnMap)) {
       if (key in changes) {
@@ -1575,6 +1611,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedAttemptId: 'selected_attempt_id',
         agentName: 'agent_name',
         lastAgentName: 'last_agent_name',
+        autoFixAttempts: 'auto_fix_attempts',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -1675,6 +1712,108 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const row = this.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
     if (!row) return undefined;
     return this.reconcileTaskFromSelectedAttempt(this.rowToTask(row));
+  }
+
+  upsertTerminalSession(record: TerminalSessionRecord): void {
+    this.ensureWritable();
+    this.db.run(
+      `INSERT INTO terminal_sessions (
+        session_id,
+        task_id,
+        target_key,
+        status,
+        exit_code,
+        cwd,
+        command,
+        args_json,
+        linux_terminal_tail,
+        mode,
+        attached,
+        output_snapshot,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        task_id = excluded.task_id,
+        target_key = excluded.target_key,
+        status = excluded.status,
+        exit_code = excluded.exit_code,
+        cwd = excluded.cwd,
+        command = excluded.command,
+        args_json = excluded.args_json,
+        linux_terminal_tail = excluded.linux_terminal_tail,
+        mode = excluded.mode,
+        attached = excluded.attached,
+        output_snapshot = excluded.output_snapshot,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at`,
+      [
+        record.sessionId,
+        record.taskId,
+        record.targetKey,
+        record.status,
+        record.exitCode ?? null,
+        record.cwd ?? null,
+        record.command ?? null,
+        JSON.stringify(record.args ?? []),
+        record.linuxTerminalTail ?? null,
+        record.mode,
+        record.attached ? 1 : 0,
+        record.outputSnapshot,
+        record.createdAt,
+        record.updatedAt,
+      ],
+    );
+    this.dirty = true;
+  }
+
+  listTerminalSessions(): TerminalSessionRecord[] {
+    const rows = this.queryAll(
+      'SELECT * FROM terminal_sessions ORDER BY updated_at ASC, created_at ASC',
+    ) as TerminalSessionRow[];
+    const records: TerminalSessionRecord[] = [];
+    for (const row of rows) {
+      const record = this.mapTerminalSessionRow(row);
+      if (record) records.push(record);
+    }
+    return records;
+  }
+
+  loadTerminalSession(sessionId: string): TerminalSessionRecord | undefined {
+    const row = this.queryOne('SELECT * FROM terminal_sessions WHERE session_id = ?', [sessionId]);
+    return row ? this.mapTerminalSessionRow(row as TerminalSessionRow) : undefined;
+  }
+
+  updateTerminalSession(sessionId: string, patch: TerminalSessionPatch): void {
+    this.ensureWritable();
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+    if (Object.hasOwn(patch, 'status')) {
+      setClauses.push('status = ?');
+      values.push(patch.status ?? null);
+    }
+    if (Object.hasOwn(patch, 'exitCode')) {
+      setClauses.push('exit_code = ?');
+      values.push(patch.exitCode ?? null);
+    }
+    if (Object.hasOwn(patch, 'outputSnapshot')) {
+      setClauses.push('output_snapshot = ?');
+      values.push(patch.outputSnapshot ?? '');
+    }
+    if (Object.hasOwn(patch, 'updatedAt')) {
+      setClauses.push('updated_at = ?');
+      values.push(patch.updatedAt ?? null);
+    }
+    if (setClauses.length === 0) return;
+    values.push(sessionId);
+    this.db.run(`UPDATE terminal_sessions SET ${setClauses.join(', ')} WHERE session_id = ?`, values);
+    this.dirty = true;
+  }
+
+  deleteTerminalSession(sessionId: string): void {
+    this.ensureWritable();
+    this.db.run('DELETE FROM terminal_sessions WHERE session_id = ?', [sessionId]);
+    this.dirty = true;
   }
 
   getAllTaskIds(): string[] {
@@ -1794,6 +1933,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM task_output WHERE task_id = ?', [taskId]);
       this.db.run('DELETE FROM attempts WHERE node_id = ?', [taskId]);
       this.db.run('DELETE FROM output_spool WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM terminal_sessions WHERE task_id = ?', [taskId]);
       this.db.run('DELETE FROM tasks WHERE id = ?', [taskId]);
     });
     this.removeOutputFiles([taskId]);
@@ -1835,6 +1975,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
           SELECT id FROM tasks WHERE workflow_id = ?
         )
       `, [workflowId]);
+      this.db.run(`
+        DELETE FROM terminal_sessions WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
     });
     this.removeOutputFiles(taskIds);
@@ -1852,6 +1997,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM task_output');
       this.db.run('DELETE FROM attempts');
       this.db.run('DELETE FROM output_spool');
+      this.db.run('DELETE FROM terminal_sessions');
       this.db.run('DELETE FROM tasks');
       this.db.run('DELETE FROM workflows');
     });
@@ -1901,6 +2047,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
 
+      this.db.run(`
+        DELETE FROM terminal_sessions WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
 
       this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
@@ -2816,6 +2967,36 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private rowToTask(row: any): TaskState {
     return mapRowToTask(row);
+  }
+
+  private mapTerminalSessionRow(row: TerminalSessionRow): TerminalSessionRecord | undefined {
+    if (row.status !== 'running' && row.status !== 'exited') return undefined;
+    if (row.mode !== 'spawn' && row.mode !== 'attached') return undefined;
+    const sessionId = typeof row.session_id === 'string' ? row.session_id : '';
+    const taskId = typeof row.task_id === 'string' ? row.task_id : '';
+    const targetKey = typeof row.target_key === 'string' ? row.target_key : '';
+    const createdAt = typeof row.created_at === 'string' ? row.created_at : '';
+    const updatedAt = typeof row.updated_at === 'string' ? row.updated_at : '';
+    if (!sessionId || !taskId || !targetKey || !createdAt || !updatedAt) return undefined;
+    return {
+      sessionId,
+      taskId,
+      targetKey,
+      status: row.status,
+      exitCode: typeof row.exit_code === 'number' ? row.exit_code : undefined,
+      cwd: typeof row.cwd === 'string' ? row.cwd : undefined,
+      command: typeof row.command === 'string' ? row.command : undefined,
+      args: parseTerminalArgsJson(row.args_json),
+      linuxTerminalTail:
+        row.linux_terminal_tail === 'exec_bash' || row.linux_terminal_tail === 'pause'
+          ? row.linux_terminal_tail
+          : undefined,
+      mode: row.mode,
+      attached: row.attached === 1,
+      outputSnapshot: typeof row.output_snapshot === 'string' ? row.output_snapshot : '',
+      createdAt,
+      updatedAt,
+    };
   }
 
   private reconcileTaskFromSelectedAttempt(task: TaskState): TaskState {

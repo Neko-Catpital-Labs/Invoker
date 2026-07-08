@@ -18,6 +18,23 @@ tasks:
     const plan = parsePlan(yaml);
     expect(plan.tasks.map((t) => t.id)).toEqual(['build', 'deploy']);
   });
+  it('parses Splitter feedback metadata', () => {
+    const yaml = `
+name: Splitter Plan
+repoUrl: git@github.com:test/repo.git
+splitterPlanId: plan-123
+splitterPerson: edbert
+baseBranch: main
+tasks:
+  - id: build
+    description: Build it
+    command: echo "build"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.splitterPlanId).toBe('plan-123');
+    expect(plan.splitterPerson).toBe('edbert');
+  });
+
 
   it('rejects plans with duplicate task ids', () => {
     const yaml = `
