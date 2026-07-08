@@ -5,7 +5,6 @@ import { resolveInvokerHomeRoot } from '@invoker/contracts';
 export { resolveInvokerHomeRoot };
 
 function utcTimestampCompact(): string {
-  // 2026-04-06T12:34:56.789Z -> 20260406-123456-789Z
   const iso = new Date().toISOString();
   return iso.replace(/[-:]/g, '').replace('T', '-').replace('.', '-');
 }
@@ -25,12 +24,16 @@ function createDbSnapshot(
   const stamp = utcTimestampCompact();
   const snapshotPath = path.join(backupDir, `invoker.db.${label}-${stamp}`);
 
+  // Copy the main .db file only. The pre-fix code also raw-copied
+  // `invoker.db-wal` and `invoker.db-shm`, which corrupts the live SQLite
+  // owner: the `-shm` file is SQLite's shared-memory wal-index, and
+  // concurrent third-party access to it under a live WAL connection is
+  // unsafe. On macOS/APFS it repeatedly dropped the running Electron
+  // process into a persistent `SQLITE_IOERR` (errcode 522) loop (see the
+  // 2026-07-08 field failure in ~/.invoker/invoker.log). SQLite's
+  // documented safe backup path for a live database is the online backup
+  // API or `VACUUM INTO` — not raw file copy of the sidecars.
   copyFileSync(dbPath, snapshotPath);
-
-  const walPath = `${dbPath}-wal`;
-  const shmPath = `${dbPath}-shm`;
-  if (existsSync(walPath)) copyFileSync(walPath, `${snapshotPath}-wal`);
-  if (existsSync(shmPath)) copyFileSync(shmPath, `${snapshotPath}-shm`);
 
   return snapshotPath;
 }
@@ -38,9 +41,12 @@ function createDbSnapshot(
 /**
  * Create a DB snapshot before destructive `delete-all`.
  *
- * Throws if snapshot cannot be created, so callers can abort deletion safely.
+ * Returns the snapshot path, or `null` when the DB file does not exist
+ * yet (fresh install / restore utility).
  */
-export function createDeleteAllSnapshot(invokerHomeRoot: string = resolveInvokerHomeRoot()): string | null {
+export function createDeleteAllSnapshot(
+  invokerHomeRoot: string = resolveInvokerHomeRoot(),
+): string | null {
   return createDbSnapshot('before-delete-all', invokerHomeRoot);
 }
 
@@ -60,11 +66,13 @@ function hourlySnapshotRetention(): number {
 }
 
 /**
- * Delete the oldest `hourly-auto` snapshots (and their -wal/-shm sidecars) so at
- * most `retain` remain. Without this the hourly backup grows without bound — a
- * single host accumulated 1,554 snapshots (~363 GB). `retain <= 0` disables
- * pruning. Only `hourly-auto` snapshots are pruned; manual and pre-delete-all
- * snapshots are left untouched. Returns the number of snapshots removed.
+ * Delete the oldest `hourly-auto` snapshots (and any legacy `-wal`/`-shm`
+ * sidecars left over from the pre-fix raw-copy era) so at most `retain`
+ * remain. Without this the hourly backup grows without bound — a single
+ * host accumulated 1,554 snapshots (~363 GB). `retain <= 0` disables
+ * pruning. Only `hourly-auto` snapshots are pruned; manual and
+ * pre-delete-all snapshots are left untouched. Returns the number of
+ * snapshots removed.
  */
 export function pruneHourlySnapshots(backupDir: string, retain: number): number {
   if (retain <= 0) return 0;
@@ -92,9 +100,6 @@ export function pruneHourlySnapshots(backupDir: string, retain: number): number 
       try {
         rmSync(path.join(backupDir, `${name}${suffix}`), { force: true });
       } catch (err) {
-        // Best effort: a transient error must not abort backup, but never swallow
-        // it silently — surface it so a persistent failure is visible.
-        // (rmSync with force:true already ignores a missing file.)
         console.warn(
           `[delete-all-snapshot] failed to prune snapshot file ${name}${suffix}: ${
             err instanceof Error ? err.message : String(err)
