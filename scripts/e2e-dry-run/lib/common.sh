@@ -203,9 +203,49 @@ invoker_e2e_cleanup() {
   fi
 }
 
+invoker_e2e_any_path_newer_than() {
+  local artifact="$1"
+  shift
+  local path
+  for path in "$@"; do
+    [ -e "$path" ] || continue
+    if [ -d "$path" ]; then
+      if find "$path" -type f -newer "$artifact" -print -quit 2>/dev/null | grep -q .; then
+        return 0
+      fi
+    elif [ "$path" -nt "$artifact" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+invoker_e2e_app_ui_build_is_fresh() {
+  local root="$INVOKER_E2E_REPO_ROOT"
+  local app_main="$root/packages/app/dist/main.js"
+  local app_headless="$root/packages/app/dist/headless-client.js"
+  local ui_index="$root/packages/ui/dist/index.html"
+  local inputs=(
+    "$root/package.json"
+    "$root/pnpm-lock.yaml"
+    "$root/tsconfig.json"
+    "$root/tsconfig.build.json"
+    "$root/packages/"*/package.json
+    "$root/packages/"*/tsconfig.json
+    "$root/packages/"*/tsconfig.tsup.json
+    "$root/packages/"*/tsup.config.ts
+    "$root/packages/"*/vite.config.ts
+    "$root/packages/"*/src
+  )
+
+  [ -f "$app_main" ] && [ -f "$app_headless" ] && [ -f "$ui_index" ] || return 1
+  invoker_e2e_any_path_newer_than "$app_main" "${inputs[@]}" && return 1
+  invoker_e2e_any_path_newer_than "$app_headless" "${inputs[@]}" && return 1
+  invoker_e2e_any_path_newer_than "$ui_index" "${inputs[@]}" && return 1
+  return 0
+}
+
 invoker_e2e_ensure_app_built() {
-  local app_dist="$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js"
-  local ui_dist="$INVOKER_E2E_REPO_ROOT/packages/ui/dist/index.html"
   # Containerized CI steps can lose checkout's temporary safe.directory config
   # before this helper runs, so re-establish it before the first git call.
   invoker_e2e_allow_repo_git_ops
@@ -213,7 +253,7 @@ invoker_e2e_ensure_app_built() {
   git_dir="$(git -C "$INVOKER_E2E_REPO_ROOT" rev-parse --git-dir)"
   local build_lock_dir="$git_dir/invoker-e2e-build.lock"
   local wait_secs=0
-  if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && [ -f "$app_dist" ] && [ -f "$ui_dist" ]; then
+  if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && invoker_e2e_app_ui_build_is_fresh; then
     echo "==> e2e: reusing existing app/ui build artifacts"
     return 0
   fi
@@ -222,7 +262,7 @@ invoker_e2e_ensure_app_built() {
   else
     echo "==> e2e: waiting for shared app/ui build lock"
     while [ -d "$build_lock_dir" ]; do
-      if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && [ -f "$app_dist" ] && [ -f "$ui_dist" ]; then
+      if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && invoker_e2e_app_ui_build_is_fresh; then
         echo "==> e2e: shared build completed by another shard"
         return 0
       fi
@@ -233,7 +273,7 @@ invoker_e2e_ensure_app_built() {
         return 1
       fi
     done
-    if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && [ -f "$app_dist" ] && [ -f "$ui_dist" ]; then
+    if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && invoker_e2e_app_ui_build_is_fresh; then
       echo "==> e2e: shared build completed by another shard"
       return 0
     fi

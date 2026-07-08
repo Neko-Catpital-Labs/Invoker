@@ -175,22 +175,14 @@ async function delegateGenericReadQuery(
 ): Promise<boolean> {
   if (!isGenericDelegatableReadCommand(args)) return false;
 
-  if (!refreshMessageBus) {
-    const owner = await tryPingHeadlessOwner(bus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
-    if (!owner) return false;
+  let messageBus = bus;
+  let owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
+  if (!owner && refreshMessageBus) {
+    messageBus = await refreshMessageBus();
+    owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
   }
+  if (!owner) return false;
 
-  const resolver = refreshMessageBus
-    ? createOwnerResolver(
-      { messageBus: bus, refreshMessageBus, ensureStandaloneOwner: async () => {} },
-      { discoveryTimeoutMs: GENERIC_READ_OWNER_PING_TIMEOUT_MS },
-    )
-    : null;
-  const ownerResult = resolver
-    ? await resolver.waitForAny(READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS)
-    : { resolved: true as const, bus };
-  if (!ownerResult.resolved) return false;
-  let messageBus = ownerResult.bus;
   const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const response = await tryDelegateQuery(
@@ -219,7 +211,7 @@ function shouldBootstrapStandaloneReadQuery(
   const isSpecialRead =
     (args[0] === 'query' && (args[1] === 'queue' || args[1] === 'ui-perf' || args[1] === 'action-graph'))
     || args[0] === 'queue';
-  return isSpecialRead || isGenericDelegatableReadCommand(args);
+  return isSpecialRead;
 }
 
 async function delegateReadOnlyQuery(
