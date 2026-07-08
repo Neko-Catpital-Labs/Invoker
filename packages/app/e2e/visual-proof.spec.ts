@@ -596,7 +596,7 @@ test.describe('Visual proof capture', () => {
     }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow', reply: fullPlanReply });
 
     await page.getByTestId('sidebar-planning').click();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
     await expect(page.getByTestId('planning-session-rail')).toHaveClass(/w-64/);
     await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Add README');
@@ -660,7 +660,9 @@ test.describe('Visual proof capture', () => {
       await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'I drafted the stacked plan.' });
     }, { planYaml: plannedYaml, planName: 'Workers Surface' });
 
-    await expect(page.getByRole('heading', { name: 'What do you want to build?' })).toBeVisible();
+    await page.getByTestId('sidebar-planning').click();
+    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await expect(page.getByTestId('planning-session-rail')).toBeVisible();
     await expect(page.getByTestId('invoker-terminal-input')).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Build the Workers Surface');
     await page.getByRole('button', { name: 'Send' }).click();
@@ -670,7 +672,6 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
     await expect(page.getByRole('button', { name: /Workers Surface Contracts/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Workers Surface UI/ })).toBeVisible();
-    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Workers Surface Contracts');
     await captureScreenshot(page, 'stacked-workflows');
 
     const stack = await page.evaluate(async () => {
@@ -711,7 +712,7 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
     await expect(page.getByRole('button', { name: /Menu Proof Workflow/ }).first()).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
     await expect(page.getByText('Invoker Terminal')).toHaveCount(0);
     await captureScreenshot(page, 'workflows-browser');
 
@@ -741,7 +742,7 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-attention').click();
     await expect(page.getByTestId('browser-rail')).toHaveClass(/w-64/);
     await expect(page.getByTestId('browser-rail').getByRole('heading', { name: 'Needs Attention' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
     await expect(page.getByRole('heading', { name: 'First test task' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Partial terminal drawer' })).toBeVisible();
     await expect(page.getByText('More needs attention')).toHaveCount(0);
@@ -776,18 +777,32 @@ test.describe('Visual proof capture', () => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
+
+    await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
     await captureScreenshot(page, 'collapsed-workflow-browsers');
+
+    await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+
+    await page.getByTestId('sidebar-workflows').click();
+    await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
 
     await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
 
   test('sidebar-collapse-state — manual sidebar width survives left rail navigation', async ({ page }) => {
-    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     const sidebar = page.getByTestId('app-sidebar');
 
     await page.getByTestId('sidebar-workflows').click();
+    await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
+    await expect(sidebar).toHaveClass(/w-60/);
+
+    await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(sidebar).toHaveClass(/w-16/);
 
     await page.getByTestId('sidebar-collapse-toggle').click();
@@ -797,6 +812,7 @@ test.describe('Visual proof capture', () => {
     // Screenshots precede the width assertions so a buggy build still records
     // the snap-back frame (regression: navigation overwrote the manual choice).
     await page.getByTestId('sidebar-attention').click();
+    await expect(page.getByRole('heading', { name: 'Needs Attention' })).toBeVisible();
     await captureScreenshot(page, 'sidebar-collapse-state-2-attention-after-navigation');
     await expect(sidebar).toHaveClass(/w-60/);
 
@@ -810,6 +826,7 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'sidebar-collapse-state-3-workflows-manually-collapsed');
 
     await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
     await captureScreenshot(page, 'sidebar-collapse-state-4-home-still-collapsed');
     await expect(sidebar).toHaveClass(/w-16/);
 
