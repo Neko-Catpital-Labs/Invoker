@@ -132,6 +132,7 @@ import {
   resolveConfigFileState,
   resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
+  resolvePrMaintenanceWorkerConfig,
   type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
 } from './config.js';
@@ -357,6 +358,7 @@ function buildRegisteredOwnerWorkerDeps(
       stallRequeueRetries: invokerConfig.stallRequeueRetries,
       stallRequeueBackoffMs: invokerConfig.stallRequeueBackoffMs,
     },
+    prMaintenance: resolvePrMaintenanceWorkerConfig(invokerConfig),
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,
