@@ -8,6 +8,7 @@ import {
   buildCanonicalPrBody,
   buildMakePrStackPublishPrompt,
   parseMakePrStackPublishResult,
+  renderWorkerActionPipeline,
   resolveSkillPathViaAgent,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
@@ -124,6 +125,44 @@ describe('buildCanonicalPrBody', () => {
 
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
+  });
+
+  it('renders worker actions in a time-ordered Pipeline section', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh summary',
+      workflowSummary: 'Summary.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'wa-2',
+            workerKind: 'merge-conflict-rebase',
+            actionType: 'rebase-recreate-conflicting-pr',
+            status: 'completed',
+            taskId: '__merge__wf-1',
+            summary: 'Rebase recreated',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            id: 'wa-1',
+            workerKind: 'coderabbit-update',
+            actionType: 'address-coderabbit-feedback',
+            status: 'running',
+            taskId: '__merge__wf-1',
+            summary: 'Addressing feedback',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body.indexOf('coderabbit-update')).toBeLessThan(body.indexOf('merge-conflict-rebase'));
+    expect(body).toContain('| 2026-01-01T00:01:00.000Z | coderabbit-update | address-coderabbit-feedback | running | __merge__wf-1 | Addressing feedback |');
+  });
+
+  it('omits the Pipeline section when no worker actions are present', () => {
+    expect(renderWorkerActionPipeline([])).toBe('');
   });
 });
 

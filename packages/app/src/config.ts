@@ -67,6 +67,11 @@ export interface PrMaintenanceConfig {
     confirmTimeoutMs?: number;
     confirmPollIntervalMs?: number;
   };
+  /** PR body summary refresh worker overrides. */
+  prSummaryRefresh?: {
+    pollIntervalMs?: number;
+    cwd?: string;
+  };
 }
 export interface DefaultExecutionConfig {
   /**

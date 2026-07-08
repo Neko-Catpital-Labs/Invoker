@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -233,6 +233,35 @@ export function formatWorkerActions(actions: WorkerActionRecord[]): string {
       `  ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${task}${attempts}${completed}${summary}`,
     );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerStatusSnapshot(status: WorkerStatusSnapshot): string {
+  if (status.workers.length === 0) {
+    return `${DIM}No worker kinds registered.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Worker status${RESET}`);
+  lines.push(`  generatedAt: ${escapeTerminalText(status.generatedAt)}`);
+  for (const worker of status.workers) {
+    const running = worker.lifecycle === 'running' ? GREEN : worker.lifecycle === 'exited' ? YELLOW : DIM;
+    const policy = worker.policyReason ? `${worker.policy} (${worker.policyReason})` : worker.policy;
+    lines.push('');
+    lines.push(
+      `${running}  ${BOLD}${escapeTerminalText(worker.kind)}${RESET}${running} ` +
+      `[${worker.lifecycle}] policy=${escapeTerminalText(policy)} autoStarts=${worker.autoStarts}${RESET}`,
+    );
+    lines.push(`    recentActions: ${worker.recentActions.length}`);
+    for (const action of worker.recentActions) {
+      const task = action.taskId ? ` task=${escapeTerminalText(action.taskId)}` : '';
+      const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+      lines.push(
+        `      ${escapeTerminalText(action.updatedAt)} ${escapeTerminalText(action.id)} ` +
+        `[${action.status}] ${escapeTerminalText(action.actionType)}${task}${summary}`,
+      );
+    }
   }
   return lines.join('\n');
 }

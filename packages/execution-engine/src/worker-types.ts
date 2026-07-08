@@ -141,9 +141,15 @@ export interface MergeConflictRebaseWorkerConfig {
   confirmPollIntervalMs?: number;
 }
 
+export interface PrSummaryRefreshWorkerConfig {
+  pollIntervalMs?: number;
+  cwd?: string;
+}
+
 export interface PrMaintenanceAutomationConfig {
   targetRepo?: string;
   author?: string;
   coderabbit?: CoderabbitUpdateWorkerConfig;
   mergeConflictRebase?: MergeConflictRebaseWorkerConfig;
+  prSummaryRefresh?: PrSummaryRefreshWorkerConfig;
 }
