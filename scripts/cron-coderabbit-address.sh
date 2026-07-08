@@ -1,29 +1,4 @@
 #!/usr/bin/env bash
-# Job 1 — CodeRabbit review address cron.
-#
-# Every 5 min: for open PRs by $PR_AUTHOR, look for NEW CodeRabbit review
-# comments (inline + summary). On the first PR with new feedback, launch a
-# standalone `omp` agent on a checkout of the PR head branch. The agent reads
-# the CodeRabbit comments + the branch commits + the Invoker tasks that
-# produced the PR + the PR summary, judges each concern, and — only for the
-# real ones — writes a bash repro proving the finding, fixes the branch, and
-# pushes the update. Invoker workflow state is never touched.
-#
-# At most ONE omp operation per tick (bounds the shared lock hold).
-#
-# Anti-loop guards:
-#   - new-since-last-run dedup (ledger max marker vs latest comment updated_at)
-#   - per-PR hard attempt cap ($MAX_CODERABBIT_ATTEMPTS)
-#
-# Env: INVOKER_GITHUB_TARGET_REPO, INVOKER_PR_CRON_AUTHOR,
-#      INVOKER_CODERABBIT_LOGIN (default coderabbitai[bot]),
-#      INVOKER_PR_CODERABBIT_MAX_ATTEMPTS (default 3),
-#      INVOKER_PR_CODERABBIT_STATE_FILE (ledger path),
-#      INVOKER_PR_CRON_WORKDIR (checkout root),
-#      INVOKER_PR_CRON_WORKDIR_MAX_AGE_DAYS (default 7),
-#      INVOKER_PR_CRON_OMP_MODEL (omp model, optional),
-#      INVOKER_OMP_COMMAND (omp binary, default omp),
-#      INVOKER_PR_CRON_DRY_RUN=1 (print intended actions only).
 set -euo pipefail
 
 # shellcheck source=scripts/cron-pr-lib.sh
