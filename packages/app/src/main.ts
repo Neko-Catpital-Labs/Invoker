@@ -802,20 +802,23 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   if (!readOnly && !hourlyBackupInterval) {
     const hourlyMs = Number(process.env.INVOKER_HOURLY_BACKUP_MS ?? 60 * 60 * 1000);
     if (Number.isFinite(hourlyMs) && hourlyMs > 0) {
+      const backupViaOwner = (dest: string) => persistence.backupTo(dest);
       hourlyBackupInterval = setInterval(() => {
-        try {
-          const snapshot = createHourlySnapshot(invokerHomeRoot);
-          if (snapshot) {
-            logger.info(`hourly snapshot: ${snapshot}`, { module: 'backup' });
-          } else {
-            logger.info('hourly snapshot skipped: DB file does not exist yet', { module: 'backup' });
+        void (async () => {
+          try {
+            const snapshot = await createHourlySnapshot(invokerHomeRoot, backupViaOwner);
+            if (snapshot) {
+              logger.info(`hourly snapshot: ${snapshot}`, { module: 'backup' });
+            } else {
+              logger.info('hourly snapshot skipped: DB file does not exist yet', { module: 'backup' });
+            }
+          } catch (err) {
+            logger.error(
+              `hourly snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
+              { module: 'backup' },
+            );
           }
-        } catch (err) {
-          logger.error(
-            `hourly snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
-            { module: 'backup' },
-          );
-        }
+        })();
       }, hourlyMs);
       hourlyBackupInterval.unref?.();
       logger.info(`hourly snapshots enabled (interval=${hourlyMs}ms)`, { module: 'backup' });

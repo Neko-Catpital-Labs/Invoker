@@ -4,20 +4,32 @@ import { resolveInvokerHomeRoot } from '@invoker/contracts';
 
 export { resolveInvokerHomeRoot };
 
+/**
+ * A caller-supplied backup implementation, expected to write a fully
+ * consistent single-file SQLite database at `destinationPath`.
+ *
+ * In production this is bound to `SQLiteAdapter.backupTo`, which uses the
+ * SQLite online backup API (via `node:sqlite`) — the only WAL-safe way to
+ * snapshot a live database. Raw `copyFileSync` of `.db` + `.db-wal` +
+ * `.db-shm` is not safe against a live WAL owner: concurrent access to the
+ * shared-memory wal-index (`-shm`) can drop the owner connection into a
+ * persistent `SQLITE_IOERR` state, and the resulting snapshot pair is not
+ * guaranteed to open as a valid database.
+ */
+export type SnapshotBackupFn = (destinationPath: string) => Promise<void>;
+
 function utcTimestampCompact(): string {
-  // 2026-04-06T12:34:56.789Z -> 20260406-123456-789Z
   const iso = new Date().toISOString();
   return iso.replace(/[-:]/g, '').replace('T', '-').replace('.', '-');
 }
 
-function createDbSnapshot(
+async function createDbSnapshot(
   label: string,
-  invokerHomeRoot: string = resolveInvokerHomeRoot(),
-): string | null {
+  invokerHomeRoot: string,
+  backup: SnapshotBackupFn | undefined,
+): Promise<string | null> {
   const dbPath = path.join(invokerHomeRoot, 'invoker.db');
-  if (!existsSync(dbPath)) {
-    return null;
-  }
+  if (!existsSync(dbPath)) return null;
 
   const backupDir = path.join(invokerHomeRoot, 'db-backups');
   mkdirSync(backupDir, { recursive: true });
@@ -25,12 +37,18 @@ function createDbSnapshot(
   const stamp = utcTimestampCompact();
   const snapshotPath = path.join(backupDir, `invoker.db.${label}-${stamp}`);
 
-  copyFileSync(dbPath, snapshotPath);
-
-  const walPath = `${dbPath}-wal`;
-  const shmPath = `${dbPath}-shm`;
-  if (existsSync(walPath)) copyFileSync(walPath, `${snapshotPath}-wal`);
-  if (existsSync(shmPath)) copyFileSync(shmPath, `${snapshotPath}-shm`);
+  if (backup) {
+    // WAL-safe path: SQLite online backup API produces a fully consistent
+    // single-file database. No -wal / -shm sidecars are ever written next to
+    // the snapshot, and the source owner's WAL state is untouched.
+    await backup(snapshotPath);
+  } else {
+    // Fallback for callers that don't have a live adapter (e.g. one-off
+    // restore utilities where the DB is quiescent). Deliberately does NOT
+    // copy the -wal / -shm sidecars: touching those files under a live WAL
+    // owner is the exact hazard this module now guards against.
+    copyFileSync(dbPath, snapshotPath);
+  }
 
   return snapshotPath;
 }
@@ -38,10 +56,18 @@ function createDbSnapshot(
 /**
  * Create a DB snapshot before destructive `delete-all`.
  *
- * Throws if snapshot cannot be created, so callers can abort deletion safely.
+ * `backup` should be `SQLiteAdapter.backupTo` bound to the running owner
+ * adapter. When omitted (headless / restore utilities without a live
+ * adapter), falls back to a plain file copy of the main `.db` — no
+ * sidecars.
+ *
+ * Returns the snapshot path, or `null` if no DB file exists to snapshot.
  */
-export function createDeleteAllSnapshot(invokerHomeRoot: string = resolveInvokerHomeRoot()): string | null {
-  return createDbSnapshot('before-delete-all', invokerHomeRoot);
+export async function createDeleteAllSnapshot(
+  invokerHomeRoot: string = resolveInvokerHomeRoot(),
+  backup?: SnapshotBackupFn,
+): Promise<string | null> {
+  return createDbSnapshot('before-delete-all', invokerHomeRoot, backup);
 }
 
 const DEFAULT_HOURLY_SNAPSHOT_RETENTION = 48;
@@ -60,8 +86,9 @@ function hourlySnapshotRetention(): number {
 }
 
 /**
- * Delete the oldest `hourly-auto` snapshots (and their -wal/-shm sidecars) so at
- * most `retain` remain. Without this the hourly backup grows without bound — a
+ * Delete the oldest `hourly-auto` snapshots (and any legacy -wal/-shm
+ * sidecars left over from the pre-WAL-safe raw-copy era) so at most
+ * `retain` remain. Without this the hourly backup grows without bound — a
  * single host accumulated 1,554 snapshots (~363 GB). `retain <= 0` disables
  * pruning. Only `hourly-auto` snapshots are pruned; manual and pre-delete-all
  * snapshots are left untouched. Returns the number of snapshots removed.
@@ -92,9 +119,6 @@ export function pruneHourlySnapshots(backupDir: string, retain: number): number 
       try {
         rmSync(path.join(backupDir, `${name}${suffix}`), { force: true });
       } catch (err) {
-        // Best effort: a transient error must not abort backup, but never swallow
-        // it silently — surface it so a persistent failure is visible.
-        // (rmSync with force:true already ignores a missing file.)
         console.warn(
           `[delete-all-snapshot] failed to prune snapshot file ${name}${suffix}: ${
             err instanceof Error ? err.message : String(err)
@@ -107,12 +131,18 @@ export function pruneHourlySnapshots(backupDir: string, retain: number): number 
   return removed;
 }
 
-/** Hourly periodic backup snapshot, bounded by `INVOKER_HOURLY_BACKUP_RETENTION`. */
-export function createHourlySnapshot(
+/**
+ * Hourly periodic backup snapshot, bounded by `INVOKER_HOURLY_BACKUP_RETENTION`.
+ *
+ * `backup` should be `SQLiteAdapter.backupTo` bound to the running owner
+ * adapter — see {@link createDeleteAllSnapshot} for why this matters.
+ */
+export async function createHourlySnapshot(
   invokerHomeRoot: string = resolveInvokerHomeRoot(),
+  backup?: SnapshotBackupFn,
   retain: number = hourlySnapshotRetention(),
-): string | null {
-  const snapshotPath = createDbSnapshot('hourly-auto', invokerHomeRoot);
+): Promise<string | null> {
+  const snapshotPath = await createDbSnapshot('hourly-auto', invokerHomeRoot, backup);
   if (snapshotPath !== null) {
     pruneHourlySnapshots(path.join(invokerHomeRoot, 'db-backups'), retain);
   }
