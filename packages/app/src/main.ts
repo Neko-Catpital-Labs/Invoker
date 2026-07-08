@@ -48,6 +48,7 @@ import {
   startGuiModeBootstrap,
   startMainProcessBootstrap,
 } from './bootstrap/app-bootstrap.js';
+import { createStartupWorkflowCache } from './bootstrap/startup-workflow-cache.js';
 
 const enableTestCompositor = process.env.INVOKER_E2E_ENABLE_COMPOSITOR === '1' || Boolean(process.env.CAPTURE_MODE);
 const hideE2eWindow = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_HIDE_WINDOW !== '0';
@@ -2004,7 +2005,6 @@ function createEmbeddedTerminalBackendFromConfig(
   // handles in `taskHandles`.
   const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
-  let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
   const lastKnownTaskStates = new TaskSnapshotCache();
   const workflowRollupProjection = new WorkflowRollupProjection();
@@ -2027,8 +2027,8 @@ function createEmbeddedTerminalBackendFromConfig(
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let workflowMetadataPublisher: CoalescedWorkflowMetadataPublisher | null = null;
   let lastKnownWorkflowCount = 0;
-  let lastActivityLogId = 0;
   let startupWorkflowId: string | null = null;
+  const startupWorkflowCache = createStartupWorkflowCache();
   // In detached viewer mode the local DB is an empty in-memory copy. Workflow
   // metadata for the bootstrap getter comes from the owner snapshot; task state
   // is derived live from `lastKnownTaskStates` (kept current by deltas).
@@ -3072,6 +3072,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
   function bootstrapInitialWorkflowState(): void {
     const workflows = listWorkflowsByStartupRecency();
+    startupWorkflowCache.set(workflows);
     lastKnownWorkflowCount = workflows.length;
     startupWorkflowId = workflows[0]?.id ?? null;
     if (!startupWorkflowId) {
@@ -3316,6 +3317,7 @@ function createEmbeddedTerminalBackendFromConfig(
                       outputs: {
                         exitCode: 1,
                         error: executingError,
+                        failureClass: 'liveness_stall',
                       },
                     };
                     logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
@@ -3414,18 +3416,6 @@ function createEmbeddedTerminalBackendFromConfig(
           }, 2000);
         }
 
-        activityPollInterval = setInterval(() => {
-          if (!mainWindow || mainWindow.isDestroyed()) return;
-          try {
-            const entries = persistence.getActivityLogs(lastActivityLogId);
-            if (entries.length > 0) {
-              lastActivityLogId = entries[entries.length - 1].id;
-              mainWindow.webContents.send('invoker:activity-log', entries);
-            }
-          } catch {
-            // DB might be locked — skip this tick
-          }
-        }, 2000);
       }, startupPollDelayMs).unref?.();
     }, 0);
   }
@@ -3527,7 +3517,13 @@ function createEmbeddedTerminalBackendFromConfig(
             activeMutationContext = undefined;
           }
         },
-        { logger },
+        {
+          logger,
+          onIntentFailed: (event) => {
+            if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) return;
+            mainWindow.webContents.send('invoker:workflow-mutation-failed', event);
+          },
+        },
       );
       launchDispatcher = new LaunchDispatcher({
         persistence,
@@ -3759,7 +3755,8 @@ function createEmbeddedTerminalBackendFromConfig(
     registerBootstrapStateIpc({
       ipcMain,
       getTasks: () => (ownerMode ? orchestrator.getAllTasks() : detachedViewerTasks()),
-      getWorkflows: () => detachedViewerWorkflows ?? listWorkflowsByStartupRecency(),
+      getWorkflows: () =>
+        detachedViewerWorkflows ?? startupWorkflowCache.takeOrLoad(listWorkflowsByStartupRecency),
       getInitialWorkflowId: () => startupWorkflowId,
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
@@ -5306,7 +5303,6 @@ function createEmbeddedTerminalBackendFromConfig(
         embeddedTerminalManager.closeAll({ preserveForRestart: true });
         await workerRuntimeController?.stopAll();
         if (dbPollInterval) clearInterval(dbPollInterval);
-        if (activityPollInterval) clearInterval(activityPollInterval);
         if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
         if (hourlyBackupInterval) {
           clearInterval(hourlyBackupInterval);

@@ -54,7 +54,6 @@ describe('hourly snapshot with a live WAL owner', () => {
 
       const snapshot = await createHourlySnapshot(root, (dest) => owner.backupTo(dest));
       expect(snapshot).not.toBeNull();
-
       expect(() => owner.saveWorkflow(makeWorkflow('wf-post-snapshot'))).not.toThrow();
 
       const ids = owner.listWorkflows().map((w) => w.id).sort();

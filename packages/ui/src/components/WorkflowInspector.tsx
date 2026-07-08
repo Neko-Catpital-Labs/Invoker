@@ -463,6 +463,17 @@ export function WorkflowInspector({
           {!task?.execution.error && task?.execution.exitCode !== undefined && task.execution.exitCode !== 0 && (
             <p className="mt-2 text-xs text-red-300">Exit code: {task.execution.exitCode}</p>
           )}
+          {task?.execution.pendingFixError && (
+            <div
+              data-testid="inspector-pending-fix-error"
+              className="mt-3 rounded border border-amber-500/40 bg-amber-950/40 p-2"
+            >
+              <h3 className="text-[11px] uppercase tracking-wide text-amber-200">Fix Error</h3>
+              <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100">
+                {task.execution.pendingFixError}
+              </pre>
+            </div>
+          )}
           {showApprovalActions && task && (
             <div className="mt-3 flex gap-2 border-t border-gray-700 pt-3">
               <button

@@ -13,7 +13,7 @@
  * downstream auto-start / deferred re-enqueue sequence are preserved exactly.
  */
 
-import type { TaskState, TaskDelta, TaskStateChanges } from '@invoker/workflow-graph';
+import type { FailureClass, TaskState, TaskDelta, TaskStateChanges } from '@invoker/workflow-graph';
 import type { Logger } from '@invoker/contracts';
 import type { ParsedResponse } from '../response-handler.js';
 import { scopePlanTaskId } from '../task-id-scope.js';
@@ -203,6 +203,7 @@ export function finalizeFailedTaskImpl(
     protocolErrorCode?: string;
     protocolErrorMessage?: string;
     mergeConflict?: { failedBranch: string; conflictFiles: string[] };
+    failureClass?: FailureClass;
   },
   eventName: string,
 ): TaskState[] {
@@ -308,6 +309,7 @@ export function handleFailedImpl(
       error: parsed.error,
       agentName: parsed.agentName,
       lastAgentName: parsed.agentName,
+      failureClass: parsed.failureClass,
       mergeConflict,
     },
     'task.failed',

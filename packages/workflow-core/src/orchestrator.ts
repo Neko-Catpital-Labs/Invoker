@@ -21,7 +21,7 @@ import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
-import { createTaskState, createAttempt } from '@invoker/workflow-graph';
+import { createTaskState, createAttempt, isLivenessFailureClass } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
@@ -3588,9 +3588,15 @@ export class Orchestrator {
   }
 
   /**
-   * Returns true if the workflow has any non-merge task in a live status
+   * Returns true if the workflow has any non-merge task doing live work
    * (`pending`, `running`, `fixing_with_ai`, `needs_input`,
-   * `awaiting_approval`, `review_ready`, `blocked`).
+   * `awaiting_approval`, `review_ready`, or a `blocked` task still held by an
+   * external cross-workflow gate).
+   *
+   * A task left `blocked` by a terminated/failed in-workflow upstream (with no
+   * external gate) is treated as NOT live: it is inert until the upstream is
+   * retried, so it must not keep an otherwise-dead workflow "live" and force
+   * `replaceTask` to fork instead of mutating in place.
    *
    * The merge node is excluded because it stays `pending` for the whole
    * workflow lifetime — including it would make every workflow live
@@ -3601,7 +3607,16 @@ export class Orchestrator {
     const tasks = this.stateMachine
       .getAllTasks()
       .filter((t) => t.config.workflowId === workflowId && !t.config.isMergeNode);
-    return tasks.some((t) => LIVE_TASK_STATUSES.has(t.status));
+    return tasks.some((t) => {
+      if (!LIVE_TASK_STATUSES.has(t.status)) return false;
+      // A cascade-blocked task (blocked by a cancelled/terminated upstream
+      // rather than a still-pending external gate) cannot progress on its
+      // own, so it does not count as live work.
+      if (t.status === 'blocked' && this.getExternalDependencyBlocker(t) === undefined) {
+        return false;
+      }
+      return true;
+    });
   }
 
   private assertMergeLeavesInvariant(workflowId: string): void {
@@ -3891,6 +3906,8 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) return false;
     if (task.status !== 'failed') return false;
+    // Liveness stalls are requeued by the requeue worker, never AI-auto-fixed.
+    if (isLivenessFailureClass(task.execution.failureClass)) return false;
     if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
     return this.getAutoFixRetryBudget(taskId) > 0;
   }
@@ -3988,6 +4005,32 @@ export class Orchestrator {
         runningCancelled.push(id);
       }
       this.clearQueuedSchedulerEntries(id, t.execution.selectedAttemptId);
+
+      // A downstream dependent that never started running was not itself
+      // cancelled or failed — it was only ever waiting on the now-terminated
+      // upstream. Mark it `blocked` (honest, retryable, and self-clearing:
+      // when the upstream is retried to completion the scheduler unblocks it
+      // via getReadyNodes/autoStartReadyTasks) instead of `failed`, so its
+      // badge does not masquerade as a real run failure. The cancel root, and
+      // any dependent that was actually executing when the cascade reached it,
+      // stay `failed`.
+      const neverStarted =
+        id !== rootId &&
+        !t.execution.startedAt &&
+        (t.status === 'pending' || t.status === 'blocked');
+
+      if (neverStarted) {
+        const blockedChanges: TaskStateChanges = {
+          status: 'blocked',
+          execution: { blockedBy: `upstream task "${upstreamLabel}" was terminated` },
+        };
+        const blockedUpdated = this.writeAndSync(id, blockedChanges);
+        const blockedDelta: TaskDelta = this.buildUpdateDelta(t, blockedUpdated, blockedChanges);
+        this.persistence.logEvent?.(id, 'task.blocked', blockedChanges);
+        this.messageBus.publish(TASK_DELTA_CHANNEL, blockedDelta);
+        cancelled.push(id);
+        continue;
+      }
 
       // Mark as failed
       const errorMsg =

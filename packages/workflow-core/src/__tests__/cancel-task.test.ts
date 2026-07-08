@@ -175,17 +175,33 @@ describe('cancelTask', () => {
     expect(task!.execution.error).toContain('Terminated by user');
   });
 
-  it('cascades cancel to pending dependents', () => {
+  it('cascades cancel to never-started dependents as blocked, not failed', () => {
     orchestrator.loadPlan(simplePlan());
 
     orchestrator.cancelTask('a');
 
+    const taskA = orchestrator.getTask('a');
     const taskB = orchestrator.getTask('b');
     const taskC = orchestrator.getTask('c');
-    expect(taskB!.status).toBe('failed');
-    expect(taskC!.status).toBe('failed');
-    expect(taskB!.execution.error).toContain('upstream task "a"');
-    expect(taskC!.execution.error).toContain('upstream task "a"');
+
+    // The cancel root stays failed — it is what the operator terminated.
+    expect(taskA!.status).toBe('failed');
+    expect(taskA!.execution.error).toContain('Terminated by user');
+
+    // Dependents that never started were only ever waiting on the terminated
+    // upstream, so they are blocked (not failed) and carry no error. A blocked
+    // dependent is retryable and self-clears once the upstream re-completes.
+    expect(taskB!.status).toBe('blocked');
+    expect(taskC!.status).toBe('blocked');
+    expect(taskB!.execution.blockedBy).toContain('upstream task "a"');
+    expect(taskC!.execution.blockedBy).toContain('upstream task "a"');
+    expect(taskB!.execution.error).toBeUndefined();
+    expect(taskC!.execution.error).toBeUndefined();
+
+    // The workflow still reports failed (the terminated root is failed, and
+    // `failed` outranks `blocked`), so nothing merges by mistake.
+    const wfId = taskA!.config.workflowId!;
+    expect(persistence.listWorkflows().find((w) => w.id === wfId)?.status).toBe('failed');
   });
 
   it('returns running tasks in runningCancelled', () => {
@@ -251,7 +267,10 @@ describe('cancelTask', () => {
 
     expect(orchestrator.getTask('b')!.status).toBe('completed');
     expect(orchestrator.getTask('c')!.status).toBe('failed');
-    expect(orchestrator.getTask('d')!.status).toBe('failed');
+    // D never started — it was only waiting on the terminated C, so it is
+    // blocked, not failed.
+    expect(orchestrator.getTask('d')!.status).toBe('blocked');
+    expect(orchestrator.getTask('d')!.execution.blockedBy).toContain('upstream task "c"');
     expect(result.cancelled).toContain(sid(orchestrator, 0, 'c'));
     expect(result.cancelled).toContain(sid(orchestrator, 0, 'd'));
     expect(result.cancelled).not.toContain(sid(orchestrator, 0, 'b'));

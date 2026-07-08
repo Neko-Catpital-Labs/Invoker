@@ -3506,6 +3506,23 @@ describe('Orchestrator', () => {
       expect(enabledOrchestrator.shouldAutoFix('t1')).toBe(true);
     });
 
+    it('shouldAutoFix is false for a liveness stall even with retry budget', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      p.saveTask('wf-stall', {
+        id: 't1',
+        description: 'stalled task',
+        status: 'failed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: { exitCode: 1, error: 'Execution stalled: ...', failureClass: 'liveness_stall' },
+      });
+      const o = new Orchestrator({ persistence: p, messageBus: b, defaultAutoFixRetries: 3 });
+      o.syncFromDb('wf-stall');
+      expect(o.shouldAutoFix('t1')).toBe(false);
+    });
+
     it('plain failed tasks stay failed in workflow-core', () => {
       orchestrator = new Orchestrator({
         persistence,

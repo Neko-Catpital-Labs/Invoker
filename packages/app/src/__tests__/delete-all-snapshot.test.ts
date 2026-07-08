@@ -61,6 +61,7 @@ describe('delete-all-snapshot (no-adapter fallback)', () => {
     expect(snapshot).toContain(join(root, 'db-backups', 'invoker.db.hourly-auto-'));
     expect(existsSync(snapshot as string)).toBe(true);
     expect(readFileSync(snapshot as string, 'utf-8')).toBe('db-main');
+
     expect(existsSync(`${snapshot}-wal`)).toBe(false);
     expect(existsSync(`${snapshot}-shm`)).toBe(false);
   });
@@ -159,6 +160,7 @@ describe('hourly snapshot retention', () => {
   });
 
   it('pruneHourlySnapshots deletes any legacy -wal/-shm sidecars of pruned snapshots', () => {
+
     const root = makeDbRoot();
     const backupDir = join(root, 'db-backups');
     seedHourly(backupDir, 4, true);
