@@ -6,8 +6,9 @@
  * lines in ~/.invoker/invoker.log with no intervening recovery, after which
  * the selected workflow's mini-DAG renders blank until the user reloads.
  *
- * Owner-side root cause (current production code at
- * packages/app/src/main.ts:2896–2904):
+ * Owner-side root cause (the pre-fix owner recovery loop; the current loop
+ * lives in `applyTaskDeltaToOwnerCacheOrRecover` in
+ * packages/app/src/window/renderer-task-feed.ts):
  *
  *   const { quarantined } = applyDelta(d, lastKnownTaskStates);
  *   for (const taskId of quarantined) {
