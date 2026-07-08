@@ -1547,4 +1547,75 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(iterationsBeforeAbort).toBeGreaterThan(0);
     await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
   });
+
+  it('invokes onIntentFailed with intent metadata when the async handler throws', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const failureEvents: Array<{
+      intentId: number;
+      workflowId: string;
+      channel: string;
+      taskId?: string;
+      message: string;
+      failedAt: string;
+    }> = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        throw new Error('SSH target "remote_digital_ocean_3" cannot run codex');
+      },
+      {
+        onIntentFailed: (event) => {
+          failureEvents.push(event);
+        },
+      },
+    );
+
+    const attempt = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:approve', ['wf-1/task-alpha']);
+    await expect(attempt).rejects.toThrow(/cannot run codex/);
+
+    expect(failureEvents).toHaveLength(1);
+    const [event] = failureEvents;
+    expect(event.workflowId).toBe('wf-1');
+    expect(event.channel).toBe('invoker:approve');
+    expect(event.taskId).toBe('wf-1/task-alpha');
+    expect(event.intentId).toBeGreaterThan(0);
+    expect(event.message).toMatch(/cannot run codex/);
+    expect(typeof event.failedAt).toBe('string');
+    expect(Number.isFinite(Date.parse(event.failedAt))).toBe(true);
+  });
+
+  it('leaves onIntentFailed out of the successful-completion path', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const failureEvents: unknown[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => 'ok',
+      {
+        onIntentFailed: (event) => {
+          failureEvents.push(event);
+        },
+      },
+    );
+
+    await coordinator.enqueue<string>('wf-1', 'normal', 'invoker:approve', ['wf-1/task-alpha']);
+    expect(failureEvents).toEqual([]);
+  });
 });
