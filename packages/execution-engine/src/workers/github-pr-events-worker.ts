@@ -6,7 +6,9 @@ import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store'
 import { Channels, type MessageBus } from '@invoker/transport';
 
 import type { GitHubPrEvent, GitHubPrEventChange } from '../pr-maintenance-events.js';
+import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
+import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 
 export const GITHUB_PR_EVENTS_WORKER_KIND = 'github-pr-events';
 export const DEFAULT_GITHUB_PR_EVENTS_INTERVAL_MS = 300_000;
@@ -314,4 +316,31 @@ export function createGitHubPrEventsWorker(options: GitHubPrEventsWorkerOptions)
     installSignalHandlers: options.installSignalHandlers,
     onTick: options.onTick ?? createGitHubPrEventsTick(options),
   });
+}
+export function registerGitHubPrEventsWorker(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registry.register({
+    kind: GITHUB_PR_EVENTS_WORKER_KIND,
+    note: 'Polls GitHub once and publishes shared PR maintenance wake events.',
+    factory: (deps) => {
+      const config = deps.prMaintenance?.githubPrEvents;
+      if (!config?.enabled || !deps.messageBus) {
+        return createWorkerRuntime({
+          kind: GITHUB_PR_EVENTS_WORKER_KIND,
+          logger: deps.logger,
+          intervalMs: 0,
+          tickOnStart: false,
+          onTick: async () => {},
+        });
+      }
+      return createGitHubPrEventsWorker({
+        logger: deps.logger,
+        store: deps.store,
+        messageBus: deps.messageBus,
+        config,
+      });
+    },
+  });
+  return registry;
 }
