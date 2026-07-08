@@ -73,7 +73,6 @@ import type {
 } from '@invoker/workflow-core';
 import {
   makeEnvelope,
-  CommandError,
   IpcChannels,
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
@@ -134,9 +133,7 @@ import {
 } from './config.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
-  assertExecutionCapacityInvariant,
   resolveEffectiveMaxConcurrency,
-  shouldFatalOnExecutionCapacityOvercommit,
 } from './execution-capacity.js';
 import {
   createHourlySnapshot,
@@ -292,6 +289,7 @@ import {
   requireWiredTaskRunner,
   type TaskHandleMap,
 } from './execution/task-runner-wiring.js';
+import { createWorkflowTaskActions, parseExecutionDate } from './execution/workflow-task-actions.js';
 import {
   createMainWindow,
   registerMainWindowActivateHandler,
@@ -2217,193 +2215,36 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataPublisher?.requestPublish(reason);
   };
 
-  const buildAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
-    const workflowId = workflowIdForTaskArg(taskId);
-    if (!workflowId) {
-      return {
-        workflowId: null,
-        openIntentCountForWorkflow: 0,
-        openFixIntentCountForWorkflow: 0,
-        openFixIntentCountForTask: 0,
-        openFixIntentForTask: false,
-        openFixIntentHead: null,
-        openFixIntentPreview: [],
-      };
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openFixIntents = openIntents.filter((intent) => (
-      intent.channel === 'invoker:fix-with-agent' || intent.channel === 'headless.exec'
-    ));
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    return {
-      workflowId,
-      openIntentCountForWorkflow: openIntents.length,
-      openFixIntentCountForWorkflow: openFixIntents.length,
-      openFixIntentCountForTask: openTaskFixIntents.length,
-      openFixIntentForTask: openTaskFixIntents.length > 0,
-      openFixIntentHead: openTaskFixIntents[0]
-        ? {
-          id: openTaskFixIntents[0].id,
-          status: openTaskFixIntents[0].status,
-          channel: openTaskFixIntents[0].channel,
-        }
-        : null,
-      openFixIntentPreview: openTaskFixIntents.slice(0, 5).map((intent) => ({
-        id: intent.id,
-        status: intent.status,
-        channel: intent.channel,
-      })),
-    };
-  };
-
-  const logAutoFixDebug = (
-    taskId: string,
-    phase: string,
-    details: Record<string, unknown> = {},
-  ): void => {
-    const task = orchestrator.getTask(taskId);
-    const payload = {
-      phase,
-      status: task?.status ?? 'missing',
-      ...buildAutoFixQueueSnapshot(taskId),
-      ...details,
-    };
-    persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
-    const recoveryAction = classifyAutoFixRecoveryPhase(phase, payload);
-    if (recoveryAction) {
-      persistence.logEvent?.(
-        taskId,
-        recoveryWorkerEventType(recoveryAction),
-        buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
-      );
-    }
-    logger.info(
-      `[auto-fix-debug] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
-      { module: 'auto-fix' },
-    );
-  };
-
-  const executeFixWithAgentMutation = async (
-    taskId: string,
-    agentName?: string,
-    source: 'ipc' | 'auto-fix' = 'ipc',
-    reviewGateContext?: ReviewGateCiContext,
-  ): Promise<TaskState[]> => {
-    const task = orchestrator.getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-    const savedError = task.execution.error ?? '';
-    const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
-    logger.info(
-      `fix-with-agent: "${taskId}" agent=${agentName ?? DEFAULT_EXECUTION_AGENT} source=${source} route=${recoveryRoute.kind}`,
-      { module: 'ipc' },
-    );
-
-    const result = await fixWithAgentAction(
-      taskId,
-      {
-        logger,
-        orchestrator,
-        persistence,
-        commandService,
-        taskExecutor: requireTaskExecutor(),
-        mutationTiming: activeMutationContext?.mutationTiming,
-        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-      },
-      {
-        agentName,
-        recoveryRoute,
-        recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
-        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Codex'}`,
-        reviewGateContext,
-        signal: activeMutationContext?.signal,
-      },
-    );
-    return result.started;
-  };
-
-  const scheduleAutoFix = (taskId: string): void => {
-    logAutoFixDebug(taskId, 'schedule-enter');
-    if (!workflowMutationCoordinator) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-workflow-mutation-coordinator' });
-      return;
-    }
-    if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'fix-handler-not-ready' });
-      return;
-    }
-    const workflowId = workflowIdForTaskArg(taskId);
-    if (!workflowId) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
-      return;
-    }
-    const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-    if (!shouldAutoFixNow) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'shouldAutoFix-false',
-        shouldAutoFix: shouldAutoFixNow,
-      });
-      return;
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    if (openTaskFixIntents.length > 0) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'already-queued-intent',
-        existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-      });
-      return;
-    }
-    const configuredAgent = loadConfig().autoFixAgent?.trim();
-    const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
-    logAutoFixDebug(taskId, 'schedule-enqueue');
-    logAutoFixDebug(taskId, 'schedule-enqueued');
-    void runWorkflowMutation(
-      workflowId,
-      'normal',
-      'invoker:fix-with-agent',
-      [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
-    )
-      .then(() => {
-        logAutoFixDebug(taskId, 'schedule-dispatch-finished');
-      })
-      .catch((err) => {
-        if (err instanceof StaleLineageError) {
-          logger.info(`auto-fix discarded stale result for "${taskId}": ${err.message}`, { module: 'auto-fix' });
-          return;
-        }
-        logAutoFixDebug(taskId, 'schedule-dispatch-error', {
-          error: err instanceof Error ? err.stack ?? err.message : String(err),
-        });
-      });
-  };
-
-  const parseExecutionDate = (value: unknown): Date | undefined => {
-    if (!value) return undefined;
-    if (value instanceof Date) return value;
-    if (typeof value !== 'string') return undefined;
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-  };
-
-  function assertFatalExecutionCapacity(label: string): void {
-    if (!shouldFatalOnExecutionCapacityOvercommit()) return;
-    try {
-      assertExecutionCapacityInvariant({
-        config: loadConfig(),
-        activeExecutions: taskHandles.size,
-        label,
-      });
-    } catch (err) {
-      logger.error(err instanceof Error ? err.stack ?? err.message : String(err), { module: 'exec' });
-      setImmediate(() => {
-        throw err;
-      });
-      throw err;
-    }
-  }
+  const {
+    logAutoFixDebug,
+    scheduleAutoFix,
+    executeFixWithAgentMutation,
+    assertFatalExecutionCapacity,
+    performCancelTask,
+    performDeleteTask,
+    performCancelWorkflow,
+    performDeleteWorkflow,
+    performDetachWorkflow,
+    preemptTaskSubgraph,
+    preemptWorkflowExecution,
+    performSharedApproveTask,
+  } = createWorkflowTaskActions({
+    getOrchestrator: () => orchestrator,
+    getPersistence: () => persistence,
+    getCommandService: () => commandService,
+    getActiveMutationContext: () => activeMutationContext,
+    getWorkflowMutationCoordinator: () => workflowMutationCoordinator,
+    getLogger: () => logger,
+    invokerConfig,
+    taskHandles,
+    workflowMutationDispatcher,
+    killRunningTask,
+    cancelDeferredWorkflowLaunch,
+    requireTaskExecutor,
+    requestWorkflowMetadataPublish,
+    workflowIdForTaskArg,
+    runWorkflowMutation,
+  });
 
   registerMainWindowSecondInstanceHandler({
     app,
@@ -2436,130 +2277,6 @@ function createEmbeddedTerminalBackendFromConfig(
       logger,
       taskHandles,
     }, taskId);
-  }
-
-  /** Cancel a task and cascade-kill all downstream DAG dependents. Shared by IPC, headless, and API. */
-  async function performCancelTask(taskId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
-    const envelope = makeEnvelope('cancel-task', 'ui', 'task', { taskId });
-    const cmdResult = await commandService.cancelTask(envelope);
-    if (!cmdResult.ok) throw CommandError.fromResult(cmdResult.error);
-    for (const id of cmdResult.data.runningCancelled) {
-      await killRunningTask(id);
-    }
-    return cmdResult.data;
-  }
-
-  async function performDeleteTask(taskId: string): Promise<void> {
-    logger.info(`performDeleteTask begin task="${taskId}"`, { module: 'kill' });
-    const task = orchestrator.getTask(taskId);
-    const workflowId = task?.config.workflowId;
-    if (task && (task.status === 'running' || task.status === 'fixing_with_ai')) {
-      await killRunningTask(task.id);
-    }
-    if (workflowId) {
-      await requireTaskExecutor().closeWorkflowReview(workflowId);
-    }
-    const envelope = makeEnvelope('delete-task', 'ui', 'task', { taskId });
-    const result = await commandService.deleteTask(envelope);
-    if (!result.ok) throw CommandError.fromResult(result.error);
-    remoteFetchForPool.enabled = false;
-    try {
-      await dispatchStartedTasksWithGlobalTopup({
-        orchestrator,
-        taskExecutor: requireTaskExecutor(),
-        logger,
-        context: 'ipc.delete-task',
-        started: result.data,
-        scopedTaskIds: result.data.map((startedTask) => startedTask.id),
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
-    } finally {
-      remoteFetchForPool.enabled = true;
-    }
-    requestWorkflowMetadataPublish('delete-task');
-    logger.info(`performDeleteTask end task="${taskId}"`, { module: 'kill' });
-  }
-
-  /** Cancel all active tasks in a workflow and kill any running processes. */
-  async function performCancelWorkflow(workflowId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
-    logger.info(`performCancelWorkflow begin workflow="${workflowId}"`, { module: 'kill' });
-    const envelope = makeEnvelope('cancel-workflow', 'ui', 'workflow', { workflowId });
-    const cmdResult = await commandService.cancelWorkflow(envelope);
-    if (!cmdResult.ok) throw CommandError.fromResult(cmdResult.error);
-    logger.info(
-      `performCancelWorkflow commandService complete workflow="${workflowId}" cancelled=${cmdResult.data.cancelled.length} runningCancelled=${cmdResult.data.runningCancelled.length}`,
-      { module: 'kill' },
-    );
-    for (const id of cmdResult.data.runningCancelled) {
-      logger.info(`performCancelWorkflow killing running task "${id}"`, { module: 'kill' });
-      await killRunningTask(id);
-    }
-    logger.info(`performCancelWorkflow end workflow="${workflowId}"`, { module: 'kill' });
-    return cmdResult.data;
-  }
-
-  async function performDeleteWorkflow(workflowId: string): Promise<void> {
-    logger.info(`performDeleteWorkflow begin workflow="${workflowId}"`, { module: 'kill' });
-    // Kill all running tasks belonging to the workflow (process management is outside orchestrator scope)
-    const allTasks = orchestrator.getAllTasks();
-    const workflowTasks = allTasks.filter(
-      (t) =>
-        t.config.workflowId === workflowId &&
-        (t.status === 'running' || t.status === 'fixing_with_ai'),
-    );
-    for (const task of workflowTasks) {
-      await killRunningTask(task.id);
-    }
-    await requireTaskExecutor().closeWorkflowReview(workflowId);
-    // Serialized via CommandService: DB delete + memory clear + scheduler cleanup + removal deltas
-    const envelope = makeEnvelope('delete-workflow', 'ui', 'workflow', { workflowId });
-    const result = await commandService.deleteWorkflow(envelope);
-    if (!result.ok) throw new Error(result.error.message);
-    requestWorkflowMetadataPublish('delete-workflow');
-    logger.info(`performDeleteWorkflow end workflow="${workflowId}"`, { module: 'kill' });
-  }
-
-  async function performDetachWorkflow(workflowId: string, upstreamWorkflowId: string): Promise<void> {
-    logger.info(`performDetachWorkflow begin workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
-    const envelope = makeEnvelope('detach-workflow', 'ui', 'workflow', { workflowId, upstreamWorkflowId });
-    const result = await commandService.detachWorkflow(envelope);
-    if (!result.ok) throw new Error(result.error.message);
-    logger.info(`performDetachWorkflow end workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
-    requestWorkflowMetadataPublish('detach-workflow');
-  }
-
-  /** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
-  const preemptSkipCodes: ReadonlySet<string> = new Set([
-    OrchestratorErrorCode.TASK_NOT_FOUND,
-    OrchestratorErrorCode.TASK_ALREADY_TERMINAL,
-    OrchestratorErrorCode.WORKFLOW_NOT_FOUND,
-  ]);
-
-  async function preemptTaskSubgraph(taskId: string): Promise<void> {
-    try {
-      await performCancelTask(taskId);
-    } catch (err) {
-      if (err instanceof CommandError && preemptSkipCodes.has(err.code)) {
-        logger.info(`preemptTaskSubgraph skipped for "${taskId}": ${err.message}`, { module: 'ipc' });
-        return;
-      }
-      throw err;
-    }
-  }
-
-  async function preemptWorkflowExecution(workflowId: string): Promise<WorkflowCancelResult> {
-    try {
-      logger.info(`preemptWorkflowExecution begin for "${workflowId}"`, { module: 'ipc' });
-      const result = await performCancelWorkflow(workflowId);
-      logger.info(`preemptWorkflowExecution end for "${workflowId}"`, { module: 'ipc' });
-      return result;
-    } catch (err) {
-      if (err instanceof CommandError && preemptSkipCodes.has(err.code)) {
-        logger.info(`preemptWorkflowExecution skipped for "${workflowId}": ${err.message}`, { module: 'ipc' });
-        return { cancelled: [], runningCancelled: [] };
-      }
-      throw err;
-    }
   }
 
   function requireTaskExecutor(): TaskRunner {
@@ -2887,28 +2604,6 @@ function createEmbeddedTerminalBackendFromConfig(
       default:
         return null;
     }
-  }
-
-  async function performSharedApproveTask(
-    taskId: string,
-    source: 'ui' | 'surface' | 'api',
-    scope: 'task' | 'workflow' = 'task',
-  ): Promise<{ started: TaskState[] }> {
-    const envelope = makeEnvelope('approve', source === 'api' ? 'surface' : source, scope, { taskId });
-    return sharedApproveTask(taskId, {
-      orchestrator,
-      taskExecutor: requireTaskExecutor(),
-      approve: async (approvedTaskId) => {
-        const result = await commandService.approve({ ...envelope, payload: { taskId: approvedTaskId } });
-        if (!result.ok) throw new Error(result.error.message);
-        return result.data;
-      },
-      resumeAfterFixApproval: async (approvedTaskId) => {
-        const result = await commandService.resumeTaskAfterFixApproval({ ...envelope, payload: { taskId: approvedTaskId } });
-        if (!result.ok) throw new Error(result.error.message);
-        return result.data;
-      },
-    });
   }
 
   const guiMutationRegistrationContext: GuiMutationRegistrationContext = {
