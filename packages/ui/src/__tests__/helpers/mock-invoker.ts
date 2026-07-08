@@ -16,7 +16,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { ActionGraphResponse, InAppPlanningSessionSummary, RuntimeStatus, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult } from '@invoker/contracts';
+import type { ActionGraphResponse, InAppPlanningSessionSummary, RuntimeStatus, TerminalOutputEvent, WorkerActionHistoryRequest, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -37,6 +37,8 @@ export interface MockInvoker {
   setRuntimeStatus: (status: RuntimeStatus) => void;
   /** Replace the worker status snapshot returned by getWorkerStatus. */
   setWorkerStatus: (status: WorkerStatusSnapshot) => void;
+  /** Set the durable action history returned by getWorkerActionHistory for a worker kind (newest first). */
+  setWorkerActionHistory: (kind: string, actions: WorkerActionSummary[]) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -104,6 +106,7 @@ export function createMockInvoker(
     generatedAt: '2026-01-01T00:00:00.000Z',
     workers: [],
   };
+  const workerActionHistory = new Map<string, WorkerActionSummary[]>();
 
   const accepted = (channel: string, workflowId = 'wf-1'): WorkflowMutationAcceptedResult => ({
     ok: true,
@@ -309,6 +312,21 @@ export function createMockInvoker(
       queued: [],
     })),
     getWorkerStatus: vi.fn(async () => workerStatus),
+    getWorkerActionHistory: vi.fn(async (request: WorkerActionHistoryRequest) => {
+      const all = workerActionHistory.get(request.workerKind) ?? [];
+      const offset = request.offset ?? 0;
+      const limit = request.limit ?? all.length;
+      const page = all.slice(offset, offset + limit);
+      const hasMore = offset + limit < all.length;
+      return {
+        workerKind: request.workerKind,
+        actions: page,
+        limit,
+        offset,
+        hasMore,
+        ...(hasMore ? { nextOffset: offset + page.length } : {}),
+      };
+    }),
     startWorker: vi.fn(async (kind: string) => {
       const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
       return row;
@@ -348,6 +366,9 @@ export function createMockInvoker(
   }
   function setWorkerStatus(status: WorkerStatusSnapshot) {
     workerStatus = status;
+  }
+  function setWorkerActionHistory(kind: string, actions: WorkerActionSummary[]) {
+    workerActionHistory.set(kind, actions);
   }
 
 
@@ -391,6 +412,7 @@ export function createMockInvoker(
     setActionGraph,
     setRuntimeStatus,
     setWorkerStatus,
+    setWorkerActionHistory,
     fireDelta,
     fireGraphEvent,
     fireWorkflowsChanged,

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { QueueView } from '../components/QueueView.js';
-import { makeUITask } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { TaskState, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot } from '../types.js';
 
 describe('QueueView', () => {
@@ -9,6 +9,8 @@ describe('QueueView', () => {
   const onStartWorker = vi.fn();
   const onStopWorker = vi.fn();
   const onSelectWorker = vi.fn();
+
+  let mock: MockInvoker;
 
   const EMPTY_WORKER_STATUS: WorkerStatusSnapshot = {
     generatedAt: '2026-01-01T00:00:00.000Z',
@@ -55,13 +57,22 @@ describe('QueueView', () => {
     };
   }
 
-  function renderQueueView(
-    tasks: Map<string, TaskState>,
-    workerStatus: WorkerStatusSnapshot = EMPTY_WORKER_STATUS,
-    selectedTaskId: string | null = null,
-    readOnly = false,
-    selectedWorkerKind: string | null = null,
-  ) {
+  interface RenderOptions {
+    workerStatus?: WorkerStatusSnapshot;
+    selectedTaskId?: string | null;
+    readOnly?: boolean;
+    selectedWorkerKind?: string | null;
+    historyPageSize?: number;
+  }
+
+  function renderQueueView(tasks: Map<string, TaskState>, options: RenderOptions = {}) {
+    const {
+      workerStatus = EMPTY_WORKER_STATUS,
+      selectedTaskId = null,
+      readOnly = false,
+      selectedWorkerKind = null,
+      historyPageSize,
+    } = options;
     render(
       <QueueView
         tasks={tasks}
@@ -73,6 +84,7 @@ describe('QueueView', () => {
         selectedTaskId={selectedTaskId}
         selectedWorkerKind={selectedWorkerKind}
         onSelectWorker={onSelectWorker}
+        historyPageSize={historyPageSize}
       />,
     );
   }
@@ -83,80 +95,130 @@ describe('QueueView', () => {
     onStopWorker.mockReset();
     onSelectWorker.mockReset();
     vi.stubGlobal('confirm', vi.fn(() => true));
+    mock = createMockInvoker();
+    mock.install();
   });
 
   afterEach(() => {
+    mock.cleanup();
     vi.unstubAllGlobals();
   });
 
-  it('shows only active work recorded by worker processes', () => {
-    const targetTask = makeUITask({
-      id: 'wf-1/fix-target',
-      status: 'fixing_with_ai',
-      description: 'needs fix',
-    });
-    const randomRunningTask = makeUITask({
-      id: 'wf-1/random-runner',
-      status: 'running',
-      description: 'normal scheduler work',
-    });
-    const mergeGateTask = makeUITask({
-      id: '__merge__wf-1',
-      status: 'blocked',
-      description: 'Workflow gate for queued merge',
-    });
-    const tasks = new Map<string, TaskState>([
-      [targetTask.id, targetTask],
-      [randomRunningTask.id, randomRunningTask],
-      [mergeGateTask.id, mergeGateTask],
+  it('shows the selected worker durable history with agent-triggered rows', async () => {
+    const target = makeUITask({ id: 'wf-1/fix-target', status: 'completed', description: 'needs fix' });
+    mock.setWorkerActionHistory('autofix', [
+      makeWorkerAction({ id: 'a-claude', agentName: 'claude', status: 'completed', taskId: target.id, subjectId: target.id }),
+      makeWorkerAction({ id: 'a-codex', agentName: 'codex', status: 'completed', taskId: 'wf-1/other', subjectId: 'wf-1/other' }),
     ]);
+    renderQueueView(new Map([[target.id, target]]), {
+      workerStatus: makeWorkerStatus([makeWorker({ kind: 'autofix' })]),
+      selectedWorkerKind: 'autofix',
+    });
 
-    renderQueueView(
-      tasks,
-      makeWorkerStatus([
-        makeWorker({
-          recentActions: [
-            makeWorkerAction({ taskId: targetTask.id, subjectId: targetTask.id, externalKey: targetTask.id }),
-            makeWorkerAction({ id: 'completed-action', status: 'completed', taskId: randomRunningTask.id }),
-          ],
-        }),
-      ]),
-    );
-
-    expect(screen.getByText('Worker Actions (1)')).toBeInTheDocument();
-    expect(screen.getByText('Only work started by a worker process appears here.')).toBeInTheDocument();
-    expect(screen.getByText('Fix With Agent · needs fix')).toBeInTheDocument();
-    expect(screen.queryByText('normal scheduler work')).not.toBeInTheDocument();
-    expect(screen.queryByText('Workflow gate for queued merge')).not.toBeInTheDocument();
-    expect(screen.queryByText(/Backlog/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Action Queue/)).not.toBeInTheDocument();
+    expect(await screen.findByText('Fix with Claude')).toBeInTheDocument();
+    expect(screen.getByText('Fix with Codex')).toBeInTheDocument();
+    expect(screen.getByText('Recorded actions for Autofix, newest first.')).toBeInTheDocument();
+    expect(screen.getByTestId('worker-history-title')).toHaveTextContent('History (2)');
+    // No cross-worker "active work only" framing anymore.
+    expect(screen.queryByText('Only work started by a worker process appears here.')).not.toBeInTheDocument();
   });
 
-  it('opens the affected task from a worker action row', () => {
-    const task = makeUITask({ id: 'wf-1/fix-target', status: 'failed', description: 'needs fix' });
-    renderQueueView(
-      new Map([[task.id, task]]),
-      makeWorkerStatus([
-        makeWorker({ recentActions: [makeWorkerAction({ taskId: task.id, subjectId: task.id })] }),
-      ]),
+  it('swaps the left pane to the newly selected worker history', async () => {
+    mock.setWorkerActionHistory('pr-status', []);
+    mock.setWorkerActionHistory('autofix', [
+      makeWorkerAction({ id: 'a-claude', agentName: 'claude', status: 'completed' }),
+    ]);
+    const workerStatus = makeWorkerStatus([
+      makeWorker({ kind: 'pr-status', note: 'Checks pull request status.' }),
+      makeWorker({ kind: 'autofix' }),
+    ]);
+    const { rerender } = render(
+      <QueueView
+        tasks={new Map()}
+        workerStatus={workerStatus}
+        readOnly={false}
+        onStartWorker={onStartWorker}
+        onStopWorker={onStopWorker}
+        onTaskClick={onTaskClick}
+        selectedTaskId={null}
+        selectedWorkerKind="pr-status"
+        onSelectWorker={onSelectWorker}
+      />,
     );
 
-    fireEvent.click(screen.getByText('Fix With Agent · needs fix'));
+    expect(
+      await screen.findByText('No persisted PR status actions. This worker updates review gates directly.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Fix with Claude')).not.toBeInTheDocument();
 
+    // Selecting Autofix (App flips selectedWorkerKind) swaps the pane to Autofix history.
+    rerender(
+      <QueueView
+        tasks={new Map()}
+        workerStatus={workerStatus}
+        readOnly={false}
+        onStartWorker={onStartWorker}
+        onStopWorker={onStopWorker}
+        onTaskClick={onTaskClick}
+        selectedTaskId={null}
+        selectedWorkerKind="autofix"
+        onSelectWorker={onSelectWorker}
+      />,
+    );
+
+    expect(await screen.findByText('Fix with Claude')).toBeInTheDocument();
+    expect(screen.getByText('Recorded actions for Autofix, newest first.')).toBeInTheDocument();
+    expect(
+      screen.queryByText('No persisted PR status actions. This worker updates review gates directly.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens the affected task from a history row', async () => {
+    const task = makeUITask({ id: 'wf-1/fix-target', status: 'failed', description: 'needs fix' });
+    mock.setWorkerActionHistory('autofix', [makeWorkerAction({ agentName: 'claude', taskId: task.id, subjectId: task.id })]);
+    renderQueueView(new Map([[task.id, task]]), {
+      workerStatus: makeWorkerStatus([makeWorker()]),
+      selectedWorkerKind: 'autofix',
+    });
+
+    fireEvent.click(await screen.findByText('Fix with Claude'));
     expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
   });
 
-  it('keeps worker actions and worker processes in independent scroll panes', () => {
-    const task = makeUITask({ id: 'wf-1/action-task', status: 'running', description: 'running task' });
-    renderQueueView(
-      new Map([[task.id, task]]),
-      makeWorkerStatus([
-        makeWorker({
-          kind: 'autofix',
-          recentActions: [makeWorkerAction({ taskId: task.id, subjectId: task.id })],
-        }),
-      ]),
-    );
+  it('loads older actions without replacing the first page', async () => {
+    mock.setWorkerActionHistory('autofix', [
+      makeWorkerAction({ id: 'a1', agentName: 'claude', summary: 'first page a1' }),
+      makeWorkerAction({ id: 'a2', agentName: 'claude', summary: 'first page a2' }),
+      makeWorkerAction({ id: 'a3', agentName: 'codex', summary: 'second page a3' }),
+    ]);
+    renderQueueView(new Map(), {
+      workerStatus: makeWorkerStatus([makeWorker()]),
+      selectedWorkerKind: 'autofix',
+      historyPageSize: 2,
+    });
+
+    expect(await screen.findByText('first page a1')).toBeInTheDocument();
+    expect(screen.getByText('first page a2')).toBeInTheDocument();
+    expect(screen.queryByText('second page a3')).not.toBeInTheDocument();
+    expect(screen.getByTestId('worker-history-title')).toHaveTextContent('History (2)');
+
+    fireEvent.click(screen.getByTestId('worker-history-load-more'));
+
+    // Older page appends; the first page is still there.
+    expect(await screen.findByText('second page a3')).toBeInTheDocument();
+    expect(screen.getByText('first page a1')).toBeInTheDocument();
+    expect(screen.getByText('first page a2')).toBeInTheDocument();
+    expect(screen.getByTestId('worker-history-title')).toHaveTextContent('History (3)');
+    // No further pages -> load-more control gone.
+    expect(screen.queryByTestId('worker-history-load-more')).not.toBeInTheDocument();
+  });
+
+  it('keeps history and worker processes in independent scroll panes', async () => {
+    mock.setWorkerActionHistory('autofix', [makeWorkerAction({ agentName: 'claude' })]);
+    renderQueueView(new Map(), {
+      workerStatus: makeWorkerStatus([makeWorker({ kind: 'autofix' })]),
+      selectedWorkerKind: 'autofix',
+    });
 
     const actionSection = screen.getByTestId('action-queue-section');
     const actionList = screen.getByTestId('worker-action-list');
@@ -166,73 +228,80 @@ describe('QueueView', () => {
     expect(actionSection.className).toContain('overflow-hidden');
     expect(actionList.className).toContain('overflow-y-auto');
     expect(workersSection.className).toContain('overflow-hidden');
-    expect(within(actionSection).getByText('Worker Actions (1)')).toBeInTheDocument();
     expect(within(workersSection).getByText('Worker processes (1)')).toBeInTheDocument();
     expect(within(workersSection).getByTestId('worker-row-autofix')).toBeInTheDocument();
     expect(within(actionSection).queryByTestId('worker-row-autofix')).not.toBeInTheDocument();
+    expect(await within(actionSection).findByText('Fix with Claude')).toBeInTheDocument();
   });
 
-  it('shows an empty worker-action state without showing unrelated tasks', () => {
-    const unrelatedTask = makeUITask({ id: 'wf-1/random-task', status: 'running', description: 'not worker owned' });
-    renderQueueView(
-      new Map([[unrelatedTask.id, unrelatedTask]]),
-      makeWorkerStatus([
-        makeWorker({ kind: 'pr-status', note: 'Checks pull request status.', recentActions: [] }),
-      ]),
-    );
+  it('shows no unrelated scheduler tasks in the history pane', async () => {
+    const unrelated = makeUITask({ id: 'wf-1/random', status: 'running', description: 'normal scheduler work' });
+    mock.setWorkerActionHistory('autofix', [makeWorkerAction({ agentName: 'claude', taskId: 'wf-1/fix', subjectId: 'wf-1/fix' })]);
+    renderQueueView(new Map([[unrelated.id, unrelated]]), {
+      workerStatus: makeWorkerStatus([makeWorker()]),
+      selectedWorkerKind: 'autofix',
+    });
 
-    expect(screen.getByText('Worker Actions (0)')).toBeInTheDocument();
-    expect(screen.getByText('No worker action is running.')).toBeInTheDocument();
-    expect(screen.queryByText('not worker owned')).not.toBeInTheDocument();
-    expect(screen.getByText('PR status')).toBeInTheDocument();
+    expect(await screen.findByText('Fix with Claude')).toBeInTheDocument();
+    expect(screen.queryByText('normal scheduler work')).not.toBeInTheDocument();
   });
 
-  it('renders missing worker action targets without linking a random task', () => {
-    renderQueueView(
-      new Map(),
-      makeWorkerStatus([
-        makeWorker({
-          recentActions: [makeWorkerAction({ taskId: 'wf-1/missing-target', subjectId: 'wf-1/missing-target' })],
-        }),
-      ]),
-    );
+  it('renders missing history targets without linking a random task', async () => {
+    mock.setWorkerActionHistory('autofix', [
+      makeWorkerAction({ agentName: 'claude', taskId: 'wf-1/missing-target', subjectId: 'wf-1/missing-target' }),
+    ]);
+    renderQueueView(new Map(), {
+      workerStatus: makeWorkerStatus([makeWorker()]),
+      selectedWorkerKind: 'autofix',
+    });
 
-    expect(screen.getByText('Fix With Agent · missing-target')).toBeInTheDocument();
+    expect(await screen.findByText('Fix with Claude')).toBeInTheDocument();
     expect(screen.getByText('Target task is not loaded.')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Fix With Agent · missing-target'));
+    fireEvent.click(screen.getByText('Fix with Claude'));
     expect(onTaskClick).not.toHaveBeenCalled();
   });
 
+  it('falls back to a generic label when a fix-with-agent action has no agent name', async () => {
+    mock.setWorkerActionHistory('ci-failure', [makeWorkerAction({ workerKind: 'ci-failure', agentName: undefined })]);
+    renderQueueView(new Map(), {
+      workerStatus: makeWorkerStatus([makeWorker({ kind: 'ci-failure' })]),
+      selectedWorkerKind: 'ci-failure',
+    });
+
+    expect(await screen.findByText('Fix with agent')).toBeInTheDocument();
+  });
+
+  it('keeps pr-status empty-state guidance instead of pretending it owns queue tasks', async () => {
+    const unrelated = makeUITask({ id: 'wf-1/random', status: 'running', description: 'not worker owned' });
+    mock.setWorkerActionHistory('pr-status', []);
+    renderQueueView(new Map([[unrelated.id, unrelated]]), {
+      workerStatus: makeWorkerStatus([makeWorker({ kind: 'pr-status', note: 'Checks pull request status.' })]),
+      selectedWorkerKind: 'pr-status',
+    });
+
+    expect(
+      await screen.findByText('No persisted PR status actions. This worker updates review gates directly.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('not worker owned')).not.toBeInTheDocument();
+    // Process-list row still names the worker.
+    expect(screen.getByText('PR status')).toBeInTheDocument();
+  });
+
+  it('prompts to select a worker when none is selected', () => {
+    renderQueueView(new Map(), { workerStatus: EMPTY_WORKER_STATUS, selectedWorkerKind: null });
+
+    expect(screen.getByText('Select a worker process to see its recorded history.')).toBeInTheDocument();
+    expect(screen.getByTestId('worker-history-title')).toHaveTextContent('History (0)');
+  });
+
   it('shows all registered workers in snapshot order', () => {
-    renderQueueView(
-      new Map(),
-      makeWorkerStatus([
-        makeWorker({
-          kind: 'autofix',
-          note: 'Auto-fixes failed tasks.',
-          lifecycle: 'stopped',
-          autoStarts: false,
-          startable: true,
-          stoppable: false,
-        }),
-        makeWorker({
-          kind: 'pr-status',
-          note: 'Checks pull request status.',
-          lifecycle: 'running',
-          autoStarts: true,
-          startable: false,
-          stoppable: true,
-        }),
-        makeWorker({
-          kind: 'ci-failure',
-          note: 'Repairs failed CI.',
-          lifecycle: 'running',
-          autoStarts: true,
-          startable: false,
-          stoppable: true,
-        }),
+    renderQueueView(new Map(), {
+      workerStatus: makeWorkerStatus([
+        makeWorker({ kind: 'autofix', lifecycle: 'stopped', autoStarts: false, startable: true, stoppable: false }),
+        makeWorker({ kind: 'pr-status', lifecycle: 'running', autoStarts: true, startable: false, stoppable: true }),
+        makeWorker({ kind: 'ci-failure', lifecycle: 'running', autoStarts: true, startable: false, stoppable: true }),
       ]),
-    );
+    });
 
     const rows = screen.getAllByTestId(/^worker-row-/);
     expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual([
@@ -247,9 +316,8 @@ describe('QueueView', () => {
   });
 
   it('shows disabled Autofix and CI rows when policy is disabled', () => {
-    renderQueueView(
-      new Map(),
-      makeWorkerStatus([
+    renderQueueView(new Map(), {
+      workerStatus: makeWorkerStatus([
         makeWorker({
           kind: 'autofix',
           lifecycle: 'stopped',
@@ -271,7 +339,7 @@ describe('QueueView', () => {
           stoppable: false,
         }),
       ]),
-    );
+    });
 
     expect(within(screen.getByTestId('worker-row-autofix')).getByText('Disabled · autoFixRetries=0')).toBeInTheDocument();
     expect(within(screen.getByTestId('worker-row-ci-failure')).getByText('Disabled · autoFixRetries=0')).toBeInTheDocument();
@@ -279,116 +347,66 @@ describe('QueueView', () => {
   });
 
   it('calls start worker for a stopped row', () => {
-    renderQueueView(
-      new Map(),
-      makeWorkerStatus([
-        makeWorker({
-          lifecycle: 'stopped',
-          autoStarts: false,
-          startable: true,
-          stoppable: false,
-        }),
-      ]),
-    );
+    renderQueueView(new Map(), {
+      workerStatus: makeWorkerStatus([makeWorker({ lifecycle: 'stopped', autoStarts: false, startable: true, stoppable: false })]),
+    });
 
     fireEvent.click(within(screen.getByTestId('worker-row-autofix')).getByRole('button', { name: 'Start process' }));
     expect(onStartWorker).toHaveBeenCalledWith('autofix');
   });
 
   it('calls stop worker for a running row', () => {
-    renderQueueView(
-      new Map(),
-      makeWorkerStatus([
-        makeWorker({
-          kind: 'ci-failure',
-          autoStarts: true,
-          startable: false,
-          stoppable: true,
-        }),
-      ]),
-    );
+    renderQueueView(new Map(), {
+      workerStatus: makeWorkerStatus([makeWorker({ kind: 'ci-failure', autoStarts: true, startable: false, stoppable: true })]),
+    });
 
     fireEvent.click(within(screen.getByTestId('worker-row-ci-failure')).getByRole('button', { name: 'Stop process' }));
     expect(onStopWorker).toHaveBeenCalledWith('ci-failure');
   });
 
   it('disables worker controls in read-only mode', () => {
-    renderQueueView(
-      new Map(),
-      makeWorkerStatus([
-        makeWorker({
-          lifecycle: 'stopped',
-          autoStarts: false,
-          startable: true,
-          stoppable: false,
-        }),
-      ]),
-      null,
-      true,
-    );
+    renderQueueView(new Map(), {
+      workerStatus: makeWorkerStatus([makeWorker({ lifecycle: 'stopped', autoStarts: false, startable: true, stoppable: false })]),
+      readOnly: true,
+    });
 
     const start = within(screen.getByTestId('worker-row-autofix')).getByRole('button', { name: 'Start process' });
     expect(start).toBeDisabled();
     expect(start).toHaveAttribute('title', 'Read-only window');
   });
 
-  it('selects worker rows and keeps action details out of the process list', () => {
-    const task = makeUITask({ id: 'wf-1/fix-target', status: 'failed', description: 'needs fix' });
-    renderQueueView(
-      new Map([[task.id, task]]),
-      makeWorkerStatus([
-        makeWorker({
-          kind: 'ci-failure',
-          recentActions: [makeWorkerAction({
-            workerKind: 'ci-failure',
-            taskId: task.id,
-            subjectId: task.id,
-          })],
-        }),
-      ]),
-      null,
-      false,
-      'ci-failure',
-    );
+  it('selects worker rows from the process list, separate from history rows', async () => {
+    mock.setWorkerActionHistory('ci-failure', [makeWorkerAction({ workerKind: 'ci-failure', agentName: 'codex' })]);
+    renderQueueView(new Map(), {
+      workerStatus: makeWorkerStatus([makeWorker({ kind: 'ci-failure' })]),
+      selectedWorkerKind: 'ci-failure',
+    });
 
     const row = screen.getByTestId('worker-row-ci-failure');
     expect(row.className).toContain('ring-cyan');
-    expect(within(row).getByText('Active work')).toBeInTheDocument();
-    expect(within(row).getByText('Active work: Fix With Agent · Running')).toBeInTheDocument();
-    expect(within(row).queryByText('Last recorded action')).not.toBeInTheDocument();
-    expect(within(row).queryByRole('button', { name: 'Open task: fix-target' })).not.toBeInTheDocument();
+    // History rows live in the other section, never inside a process-list row.
+    expect(within(row).queryByText('Fix with Codex')).not.toBeInTheDocument();
+    expect(await within(screen.getByTestId('action-queue-section')).findByText('Fix with Codex')).toBeInTheDocument();
 
     fireEvent.click(row);
     expect(onSelectWorker).toHaveBeenCalledWith('ci-failure');
   });
 
-  it('expands relationships only for the affected worker action task', () => {
-    const buildTask = makeUITask({
-      id: 'wf-1/build',
-      status: 'running',
-      description: 'Build the project',
-      dependencies: [],
-    });
-    const deployTask = makeUITask({
-      id: 'wf-1/deploy',
-      status: 'blocked',
-      description: 'Deploy after build',
-      dependencies: ['wf-1/build'],
-    });
+  it('expands relationships only for the affected history task', async () => {
+    const buildTask = makeUITask({ id: 'wf-1/build', status: 'running', description: 'Build the project', dependencies: [] });
+    const deployTask = makeUITask({ id: 'wf-1/deploy', status: 'blocked', description: 'Deploy after build', dependencies: ['wf-1/build'] });
     const tasks = new Map<string, TaskState>([
       [buildTask.id, buildTask],
       [deployTask.id, deployTask],
     ]);
+    mock.setWorkerActionHistory('autofix', [makeWorkerAction({ agentName: 'claude', taskId: buildTask.id, subjectId: buildTask.id })]);
+    renderQueueView(tasks, {
+      workerStatus: makeWorkerStatus([makeWorker()]),
+      selectedWorkerKind: 'autofix',
+    });
 
-    renderQueueView(
-      tasks,
-      makeWorkerStatus([
-        makeWorker({ recentActions: [makeWorkerAction({ taskId: buildTask.id, subjectId: buildTask.id })] }),
-      ]),
-    );
-
+    await screen.findByText('Fix with Claude');
     expect(screen.getByTestId('queue-rels-toggle-action-wf-1/build')).toBeInTheDocument();
-    expect(screen.queryByTestId('queue-rels-toggle-backlog-wf-1/deploy')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText('Expand relationships'));
 
@@ -402,33 +420,21 @@ describe('QueueView', () => {
     expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: deployTask.id }));
   });
 
-  it('selection highlight persists on expanded worker action rows', () => {
-    const buildTask = makeUITask({
-      id: 'wf-1/build',
-      status: 'running',
-      description: 'Build the project',
-      dependencies: [],
-    });
-    const deployTask = makeUITask({
-      id: 'wf-1/deploy',
-      status: 'blocked',
-      description: 'Deploy after build',
-      dependencies: ['wf-1/build'],
-    });
+  it('keeps the selection highlight on an expanded history row', async () => {
+    const buildTask = makeUITask({ id: 'wf-1/build', status: 'running', description: 'Build the project', dependencies: [] });
+    const deployTask = makeUITask({ id: 'wf-1/deploy', status: 'blocked', description: 'Deploy after build', dependencies: ['wf-1/build'] });
     const tasks = new Map<string, TaskState>([
       [buildTask.id, buildTask],
       [deployTask.id, deployTask],
     ]);
+    mock.setWorkerActionHistory('autofix', [makeWorkerAction({ agentName: 'claude', taskId: buildTask.id, subjectId: buildTask.id })]);
+    renderQueueView(tasks, {
+      workerStatus: makeWorkerStatus([makeWorker()]),
+      selectedTaskId: buildTask.id,
+      selectedWorkerKind: 'autofix',
+    });
 
-    renderQueueView(
-      tasks,
-      makeWorkerStatus([
-        makeWorker({ recentActions: [makeWorkerAction({ taskId: buildTask.id, subjectId: buildTask.id })] }),
-      ]),
-      buildTask.id,
-    );
-
-    const selectedRow = screen.getByText('Fix With Agent · Build the project').closest('[data-row-id]');
+    const selectedRow = (await screen.findByText('Fix with Claude')).closest('[data-row-id]');
     expect(selectedRow?.className).toContain('bg-cyan-950/30');
 
     fireEvent.click(screen.getByLabelText('Expand relationships'));

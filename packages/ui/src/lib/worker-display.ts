@@ -22,6 +22,18 @@ export function formatWorkerValue(value: string): string {
     .join(' ');
 }
 
+/**
+ * Human-readable label for a worker action row. `fix-with-agent` actions read
+ * as "Fix with <Agent>" (e.g. "Fix with Claude", "Fix with Codex") when the
+ * triggering agent is known, so agent-triggered history is legible at a glance.
+ */
+export function getWorkerActionLabel(action: WorkerActionSummary): string {
+  if (action.actionType === 'fix-with-agent') {
+    return action.agentName ? `Fix with ${formatWorkerValue(action.agentName)}` : 'Fix with agent';
+  }
+  return formatWorkerValue(action.actionType);
+}
+
 export function displayWorkerTaskId(taskId: string): string {
   if (taskId.startsWith('__merge__')) return 'merge gate';
   const slash = taskId.lastIndexOf('/');

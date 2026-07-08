@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { TaskState, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot } from '../types.js';
+import type { TaskState, WorkerActionSummary, WorkerStatusSnapshot } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';
 import {
   displayWorkerTaskId,
   formatWorkerValue,
-  getActiveWorkerActions,
+  getWorkerActionLabel,
   getWorkerDisplayCopy,
 } from '../lib/worker-display.js';
+import { useWorkerActionHistory, WORKER_ACTION_HISTORY_PAGE_SIZE } from '../hooks/useWorkerActionHistory.js';
 import { WorkerActivityCard } from './WorkerActivityCard.js';
 
 interface QueueViewProps {
@@ -19,13 +20,9 @@ interface QueueViewProps {
   selectedTaskId: string | null;
   selectedWorkerKind: string | null;
   onSelectWorker: (kind: string) => void;
+  /** Page size for the history pane; each "load older" click fetches one more page. */
+  historyPageSize?: number;
 }
-
-type WorkerActionRow = {
-  action: WorkerActionSummary;
-  worker: WorkerStatusEntry;
-};
-
 
 function actionTargetLabel(action: WorkerActionSummary, tasks: Map<string, TaskState>): string {
   if (action.taskId) {
@@ -34,17 +31,25 @@ function actionTargetLabel(action: WorkerActionSummary, tasks: Map<string, TaskS
   return `${formatWorkerValue(action.subjectType)} ${action.subjectId}`;
 }
 
-function actionRowKey(row: WorkerActionRow): string {
-  return `${row.worker.kind}:${row.action.id}`;
-}
-
-function actionTargetTask(action: WorkerActionSummary, tasks: Map<string, TaskState>): TaskState | null {
-  return action.taskId ? tasks.get(action.taskId) ?? null : null;
-}
-
-export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStopWorker, onTaskClick, selectedTaskId, selectedWorkerKind, onSelectWorker }: QueueViewProps) {
+export function QueueView({
+  tasks,
+  workerStatus,
+  readOnly,
+  onStartWorker,
+  onStopWorker,
+  onTaskClick,
+  selectedTaskId,
+  selectedWorkerKind,
+  onSelectWorker,
+  historyPageSize = WORKER_ACTION_HISTORY_PAGE_SIZE,
+}: QueueViewProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  const { actions, loading, loadingMore, hasMore, error, loadMore } = useWorkerActionHistory(
+    selectedWorkerKind,
+    historyPageSize,
+  );
 
   /** Reverse index: taskId → list of task IDs that depend on it. */
   const dependentsMap = useMemo(() => {
@@ -61,13 +66,6 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
     }
     return map;
   }, [tasks]);
-
-  const actionRows = useMemo<WorkerActionRow[]>(
-    () => (workerStatus?.workers ?? []).flatMap((worker) =>
-      getActiveWorkerActions(worker).map((action) => ({ action, worker })),
-    ),
-    [workerStatus],
-  );
 
   const toggleExpanded = useCallback((rowKey: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -90,31 +88,62 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
     [tasks, onTaskClick],
   );
 
+  const copy = selectedWorkerKind ? getWorkerDisplayCopy(selectedWorkerKind) : null;
+  const subtitle = copy
+    ? `Recorded actions for ${copy.name}, newest first.`
+    : 'Select a worker process to see its history.';
+
+  let emptyState: JSX.Element | null = null;
+  if (actions.length === 0) {
+    if (!selectedWorkerKind) {
+      emptyState = (
+        <div className="rounded-xl border border-gray-800 bg-gray-850/60 p-4 text-sm text-gray-400">
+          Select a worker process to see its recorded history.
+        </div>
+      );
+    } else if (loading) {
+      emptyState = (
+        <div data-testid="worker-history-loading" className="rounded-xl border border-gray-800 bg-gray-850/60 p-4 text-sm text-gray-400">
+          Loading history…
+        </div>
+      );
+    } else if (error) {
+      emptyState = (
+        <div data-testid="worker-history-error" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+          Couldn’t load history: {error}
+        </div>
+      );
+    } else {
+      emptyState = (
+        <div className="rounded-xl border border-gray-800 bg-gray-850/60 p-4 text-sm text-gray-400">
+          {copy?.noActionText}
+        </div>
+      );
+    }
+  }
+
   return (
     <div className="grid h-full min-h-0 grid-cols-[minmax(20rem,24rem)_minmax(28rem,1fr)] overflow-hidden bg-gray-900">
       <section data-testid="action-queue-section" className="flex h-full min-h-0 flex-col overflow-hidden border-r border-gray-800">
         <div className="shrink-0 border-b border-gray-800 p-4">
-          <h3 className="text-lg font-semibold text-gray-100">
-            Worker Actions ({actionRows.length})
+          <h3 data-testid="worker-history-title" className="text-lg font-semibold text-gray-100">
+            History ({actions.length})
           </h3>
-          <div className="mt-1 text-sm text-gray-400">
-            Only work started by a worker process appears here.
-          </div>
+          <div className="mt-1 text-sm text-gray-400">{subtitle}</div>
         </div>
 
         <div data-testid="worker-action-list" className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           <div className="space-y-1">
-            {actionRows.map((row) => {
-              const { action, worker } = row;
-              const task = actionTargetTask(action, tasks);
-              const rowKey = actionRowKey(row);
+            {actions.map((action) => {
+              const task = action.taskId ? tasks.get(action.taskId) ?? null : null;
+              const rowKey = action.id;
               const taskId = action.taskId;
               const upstream = task?.dependencies ?? [];
               const downstream = taskId ? dependentsMap.get(taskId) ?? [] : [];
               const hasRelationships = upstream.length > 0 || downstream.length > 0;
               const isExpanded = expandedRows.has(rowKey);
               const colors = getStatusColor(action.status);
-              const copy = getWorkerDisplayCopy(worker.kind);
+              const label = getWorkerActionLabel(action);
               return (
                 <div
                   key={rowKey}
@@ -150,14 +179,14 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
                       className={`min-w-0 flex-1 p-3 text-left ${task ? 'cursor-pointer' : 'cursor-default'}`}
                     >
                       <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-gray-100">{copy.name}</span>
+                        <span className="truncate text-sm font-medium text-gray-100">{label}</span>
                         <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${colors.bg} ${colors.border} ${colors.text}`}>
                           <span className={`h-1.5 w-1.5 rounded-full ${colors.dot}`} aria-hidden="true" />
                           {formatWorkerValue(action.status)}
                         </span>
                       </div>
                       <div className="mt-1 truncate text-xs text-gray-400">
-                        {formatWorkerValue(action.actionType)} · {actionTargetLabel(action, tasks)}
+                        {actionTargetLabel(action, tasks)}
                       </div>
                       {action.summary ? (
                         <div className="mt-1 truncate text-xs text-gray-500">{action.summary}</div>
@@ -204,11 +233,23 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
                 </div>
               );
             })}
-            {actionRows.length === 0 && (
-              <div className="rounded-xl border border-gray-800 bg-gray-850/60 p-4 text-sm text-gray-400">
-                No worker action is running.
+            {emptyState}
+            {hasMore ? (
+              <button
+                type="button"
+                data-testid="worker-history-load-more"
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="mt-2 w-full rounded-xl border border-gray-800 bg-gray-850/60 px-3 py-2 text-sm text-gray-300 hover:border-gray-700 hover:bg-gray-800/80 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loadingMore ? 'Loading…' : 'Load older actions'}
+              </button>
+            ) : null}
+            {error && actions.length > 0 ? (
+              <div data-testid="worker-history-error" className="mt-2 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                Couldn’t load more history: {error}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
       </section>
