@@ -3,10 +3,14 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const mainSource = readFileSync(path.resolve(__dirname, '..', 'main.ts'), 'utf8');
+const workflowTaskActionsSource = readFileSync(
+  path.resolve(__dirname, '..', 'execution', 'workflow-task-actions.ts'),
+  'utf8',
+);
 
 function getTranslatorSource(): string {
   const start = mainSource.indexOf('function translateGuiMutationToHeadless');
-  const end = mainSource.indexOf('  async function performSharedApproveTask', start);
+  const end = mainSource.indexOf('  const guiMutationRegistrationContext', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   return mainSource.slice(start, end);
@@ -21,19 +25,27 @@ function getStandaloneClassifierSource(): string {
 }
 
 function getPerformDeleteWorkflowSource(): string {
-  const start = mainSource.indexOf('async function performDeleteWorkflow');
-  const end = mainSource.indexOf('  async function performDetachWorkflow', start);
+  const start = workflowTaskActionsSource.indexOf('async function performDeleteWorkflow');
+  const end = workflowTaskActionsSource.indexOf('  async function performDetachWorkflow', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return mainSource.slice(start, end);
+  return workflowTaskActionsSource.slice(start, end);
 }
 
 function getPerformDetachWorkflowSource(): string {
-  const start = mainSource.indexOf('async function performDetachWorkflow');
-  const end = mainSource.indexOf('  /** Orchestrator error codes', start);
+  const start = workflowTaskActionsSource.indexOf('async function performDetachWorkflow');
+  const end = workflowTaskActionsSource.indexOf('  const preemptSkipCodes', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return mainSource.slice(start, end);
+  return workflowTaskActionsSource.slice(start, end);
+}
+
+function getPerformSharedApproveTaskSource(): string {
+  const start = workflowTaskActionsSource.indexOf('async function performSharedApproveTask');
+  const end = workflowTaskActionsSource.indexOf('  return {', start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return workflowTaskActionsSource.slice(start, end);
 }
 
 function getSetMergeBranchSource(): string {
@@ -95,7 +107,17 @@ describe('GUI mutation translation', () => {
   it('publishes workflow metadata after every successful workflow detach', () => {
     const detachSource = getPerformDetachWorkflowSource();
     expect(detachSource).toMatch(
-      /if \(!result\.ok\) throw new Error\(result\.error\.message\);\s*logger\.info\(`performDetachWorkflow end workflow="\$\{workflowId\}" upstream="\$\{upstreamWorkflowId\}"`, \{ module: 'kill' \}\);\s*requestWorkflowMetadataPublish\('detach-workflow'\);/,
+      /if \(!result\.ok\) throw new Error\(result\.error\.message\);\s*getLogger\(\)\.info\(`performDetachWorkflow end workflow="\$\{workflowId\}" upstream="\$\{upstreamWorkflowId\}"`, \{ module: 'kill' \}\);\s*requestWorkflowMetadataPublish\('detach-workflow'\);/,
+    );
+  });
+
+  it('keeps API approvals on the surface approval envelope', () => {
+    const approveSource = getPerformSharedApproveTaskSource();
+    expect(approveSource).toMatch(
+      /const envelope = makeEnvelope\('approve', source === 'api' \? 'surface' : source, scope, \{ taskId \}\);/,
+    );
+    expect(approveSource).toMatch(
+      /return sharedApproveTask\(taskId, \{/,
     );
   });
 
