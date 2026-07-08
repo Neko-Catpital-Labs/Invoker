@@ -46,6 +46,7 @@ import {
   formatTaskStatus,
   formatWorkflowStatus,
 } from './lib/workflow-progress-surfaces.js';
+import { computeSearchResults, type SearchResult } from './lib/search.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
@@ -74,10 +75,6 @@ type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'
 type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
-type SearchResult =
-  | { kind: 'workflow'; id: string; title: string; subtitle: string }
-  | { kind: 'task'; id: string; workflowId: string | null; title: string; subtitle: string };
-
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
 const STATUS_KEY_ORDER: readonly WorkflowStatus[] = [
@@ -188,10 +185,6 @@ function getOrderedSidebarNavItems(root: ParentNode): HTMLElement[] {
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest(EDITABLE_SELECTOR));
-}
-
-function normalizedSearchText(value: string | undefined): string {
-  return (value ?? '').toLowerCase();
 }
 
 interface WorkflowContextMenuProps {
@@ -953,54 +946,10 @@ export function App() {
   const attentionEntries = useMemo(() => getAttentionTaskEntries(tasks, workflows), [tasks, workflows]);
   const runningEntries = useMemo(() => getRunningTaskEntries(tasks, workflows, queueStatus), [tasks, workflows, queueStatus]);
 
-  const searchResults = useMemo<SearchResult[]>(() => {
-    const query = normalizedSearchText(searchQuery.trim());
-    if (!query) return [];
-    const results: SearchResult[] = [];
-    for (const workflow of workflows.values()) {
-      const workflowTasks = [...tasks.values()].filter((task) => task.config.workflowId === workflow.id);
-      const reviewUrl = workflowTasks.find((task) => task.execution.reviewUrl)?.execution.reviewUrl;
-      const haystack = [
-        workflow.id,
-        workflow.name,
-        workflow.status,
-        workflow.repoUrl,
-        workflow.intermediateRepoUrl,
-        reviewUrl,
-      ].map(normalizedSearchText).join(' ');
-      if (haystack.includes(query)) {
-        results.push({
-          kind: 'workflow',
-          id: workflow.id,
-          title: workflow.name || workflow.id,
-          subtitle: `Workflow · ${workflow.status}`,
-        });
-      }
-    }
-    for (const task of tasks.values()) {
-      const workflow = task.config.workflowId ? workflows.get(task.config.workflowId) : null;
-      const haystack = [
-        task.id,
-        task.description,
-        task.status,
-        task.config.summary,
-        task.config.prompt,
-        task.config.command,
-        task.execution.reviewUrl,
-        workflow?.name,
-      ].map(normalizedSearchText).join(' ');
-      if (haystack.includes(query)) {
-        results.push({
-          kind: 'task',
-          id: task.id,
-          workflowId: task.config.workflowId ?? null,
-          title: task.description || task.id,
-          subtitle: `Task · ${workflow?.name ?? task.config.workflowId ?? 'unknown workflow'}`,
-        });
-      }
-    }
-    return results.slice(0, 12);
-  }, [searchQuery, tasks, workflows]);
+  const searchResults = useMemo<SearchResult[]>(
+    () => computeSearchResults(searchQuery, tasks, workflows),
+    [searchQuery, tasks, workflows],
+  );
 
   useEffect(() => {
     setSearchActiveIndex(0);
