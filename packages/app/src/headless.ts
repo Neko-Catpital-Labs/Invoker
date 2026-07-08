@@ -19,9 +19,12 @@ import {
   createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
+  registerCoderabbitUpdateWorker,
+  registerMergeConflictRebaseWorker,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
+  type WorkerRegistry,
 } from '@invoker/execution-engine';
 import {
   parseMetadataValue,
@@ -424,7 +427,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerHeadlessBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
   );
 
   if (subCommand === 'list') {
@@ -487,6 +490,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
+      prMaintenance: deps.invokerConfig.prMaintenance,
     });
     await worker.tick('manual');
     await worker.stop();
@@ -497,6 +501,15 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
   const label = definition.kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : definition.kind;
   process.stdout.write(`${label} worker scan completed.\n`);
+}
+
+function registerHeadlessBuiltinWorkers(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registerAutoFixWorker(registry);
+  registerCoderabbitUpdateWorker(registry);
+  registerMergeConflictRebaseWorker(registry);
+  return registry;
 }
 
 function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
@@ -964,4 +977,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-

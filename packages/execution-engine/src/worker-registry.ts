@@ -46,3 +46,35 @@ export function createWorkerRegistry<TDeps = unknown>(): WorkerRegistry<TDeps> {
     },
   };
 }
+
+export {
+  CODERABBIT_UPDATE_WORKER_KIND,
+  DEFAULT_CODERABBIT_AUTHOR,
+  DEFAULT_CODERABBIT_EXECUTION_AGENT,
+  DEFAULT_CODERABBIT_LOGIN,
+  DEFAULT_CODERABBIT_MAX_ATTEMPTS,
+  DEFAULT_CODERABBIT_TARGET_REPO,
+  DEFAULT_CODERABBIT_TIMEOUT_MS,
+  DEFAULT_CODERABBIT_WORK_DIR,
+  coderabbitActionKey,
+  collectCoderabbitComments,
+  createCoderabbitUpdateTick,
+  createCoderabbitUpdateWorker,
+  createGhCliWorkerGitHubClient,
+  parseTargetRepo,
+  registerCoderabbitUpdateWorker,
+  runPrMaintenanceCommand,
+} from './workers/coderabbit-update-worker.js';
+export {
+  DEFAULT_MERGE_CONFLICT_AUTHOR,
+  DEFAULT_MERGE_CONFLICT_CONFIRM_POLL_INTERVAL_MS,
+  DEFAULT_MERGE_CONFLICT_CONFIRM_TIMEOUT_MS,
+  DEFAULT_MERGE_CONFLICT_MAX_ATTEMPTS,
+  DEFAULT_MERGE_CONFLICT_TARGET_REPO,
+  MERGE_CONFLICT_REBASE_WORKER_KIND,
+  createMergeConflictRebaseTick,
+  createMergeConflictRebaseWorker,
+  mergeConflictManualAttentionKey,
+  mergeConflictRebaseActionKey,
+  registerMergeConflictRebaseWorker,
+} from './workers/merge-conflict-rebase-worker.js';
