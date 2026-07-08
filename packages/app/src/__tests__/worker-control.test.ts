@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
   createWorkerRegistry,
+  PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
@@ -87,6 +89,8 @@ function controller() {
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
   register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
+  register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
+  register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
   register('external-preview', 'External preview worker.');
 
   return {
@@ -102,7 +106,7 @@ function controller() {
 }
 
 describe('createWorkerRuntimeController', () => {
-  it('auto-start starts only pr-status and ci-failure', () => {
+  it('auto-start starts every built-in owner worker except autofix', () => {
     const setup = controller();
 
     setup.controller.startAutoStartedWorkers();
@@ -110,6 +114,8 @@ describe('createWorkerRuntimeController', () => {
 
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
   });
@@ -150,22 +156,22 @@ describe('createWorkerRuntimeController', () => {
     expect(setup.runtimes.get(PR_STATUS_WORKER_KIND)?.[0]?.stops).toBe(1);
   });
 
-  it('retry budget policy does not disable worker starts', () => {
+  it('built-in worker policy stays enabled for maintenance workers', () => {
     const setup = controller();
 
-    const autoFix = setup.controller.start(AUTO_FIX_WORKER_KIND);
-    const ciFailure = setup.controller.start(CI_FAILURE_WORKER_KIND);
-
-    expect(autoFix).toMatchObject({
-      lifecycle: 'running',
-      policy: 'enabled',
-      startable: false,
-    });
-    expect(ciFailure).toMatchObject({
-      lifecycle: 'running',
-      policy: 'enabled',
-      startable: false,
-    });
+    for (const kind of [
+      AUTO_FIX_WORKER_KIND,
+      CI_FAILURE_WORKER_KIND,
+      CODERABBIT_ADDRESS_WORKER_KIND,
+      PR_CONFLICT_REBASE_WORKER_KIND,
+    ] as const) {
+      expect(setup.controller.start(kind)).toMatchObject({
+        kind,
+        lifecycle: 'running',
+        policy: 'enabled',
+        startable: false,
+      });
+    }
   });
 
   it('an exited external worker row reports exited', () => {
