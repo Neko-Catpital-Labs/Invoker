@@ -18,11 +18,16 @@ function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
 }
 
+function transcriptTextLength(lines: InvokerTerminalLine[]): number {
+  return lines.reduce((total, line) => total + line.text.length, 0);
+}
+
 // Planning-chat render churn thresholds. A keystroke whose reconcile + DOM
 // commit takes at least this long is jank worth flagging; reports are throttled
 // but carry the worst render seen in the window so the owner-side max is exact.
 const PLANNING_CHAT_RENDER_JANK_MS = 50;
 const PLANNING_CHAT_REPORT_THROTTLE_MS = 1000;
+const PLANNING_CHAT_INPUT_REPORT_THROTTLE_MS = 1000;
 
 interface InvokerTerminalProps {
   lines: InvokerTerminalLine[];
@@ -78,6 +83,15 @@ export function InvokerTerminal({
   // last throttled report so throttling never hides a slower keystroke.
   const keystrokeMarkRef = useRef<{ at: number } | null>(null);
   const chatRenderWindowRef = useRef<{ maxRenderMs: number; lastEmitAt: number }>({ maxRenderMs: 0, lastEmitAt: 0 });
+  const chatInputWindowRef = useRef<{ inputEvents: number; maxValueLength: number; lastEmitAt: number }>({
+    inputEvents: 0,
+    maxValueLength: 0,
+    lastEmitAt: 0,
+  });
+  const transcriptGrowthRef = useRef<{ lineCount: number; textLength: number }>({
+    lineCount: lines.length,
+    textLength: transcriptTextLength(lines),
+  });
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -95,6 +109,23 @@ export function InvokerTerminal({
       scrollTranscriptToBottom();
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined' || !window.invoker) return;
+    const textLength = transcriptTextLength(lines);
+    const previous = transcriptGrowthRef.current;
+    const addedLines = Math.max(0, lines.length - previous.lineCount);
+    const addedTextLength = Math.max(0, textLength - previous.textLength);
+    transcriptGrowthRef.current = { lineCount: lines.length, textLength };
+    if (addedLines === 0 && addedTextLength === 0) return;
+    void window.invoker.reportUiPerf?.('planning_chat_transcript_growth', {
+      lineCount: lines.length,
+      textLength,
+      addedLines,
+      addedTextLength,
+      expanded,
+    });
+  }, [lines, expanded]);
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -291,6 +322,25 @@ export function InvokerTerminal({
           rows={expanded ? 8 : 3}
           onChange={(event) => {
             keystrokeMarkRef.current = { at: performance.now() };
+            const nextValue = event.target.value;
+            const inputWindow = chatInputWindowRef.current;
+            inputWindow.inputEvents += 1;
+            inputWindow.maxValueLength = Math.max(inputWindow.maxValueLength, nextValue.length);
+            const now = Date.now();
+            if (now - inputWindow.lastEmitAt >= PLANNING_CHAT_INPUT_REPORT_THROTTLE_MS) {
+              const inputEvents = inputWindow.inputEvents;
+              const maxValueLength = inputWindow.maxValueLength;
+              inputWindow.inputEvents = 0;
+              inputWindow.maxValueLength = 0;
+              inputWindow.lastEmitAt = now;
+              void window.invoker?.reportUiPerf?.('planning_chat_input_change', {
+                inputEvents,
+                valueLength: nextValue.length,
+                maxValueLength,
+                lineCount: lines.length,
+                expanded,
+              });
+            }
             onValueChange(event.target.value);
           }}
           onKeyDown={(event) => {

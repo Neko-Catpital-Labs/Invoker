@@ -678,6 +678,12 @@ export function App() {
     window.invoker?.terminalList?.().then((list) => {
       if (Array.isArray(list) && list.length > 0) {
         setTerminalSessions(list);
+        setActiveTerminalSessionId((current) => (
+          current && list.some((session) => session.sessionId === current)
+            ? current
+            : list[0]?.sessionId ?? null
+        ));
+        setTerminalDrawerState((current) => (current === 'minimized' ? 'partial' : current));
       }
     }).catch(() => {});
   }, []);
@@ -3347,4 +3353,3 @@ export function App() {
     </div>
   );
 }
-

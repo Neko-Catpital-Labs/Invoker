@@ -64,7 +64,7 @@ function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
-): void {
+): number {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
   if (
@@ -77,12 +77,14 @@ function seedTerminalOutputSnapshot(
     )
   ) {
     try {
+      const startedAt = performance.now();
       term.write(outputSnapshot);
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
         term,
       };
+      return performance.now() - startedAt;
     } catch (err) {
       console.warn(
         `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
@@ -90,6 +92,7 @@ function seedTerminalOutputSnapshot(
       );
     }
   }
+  return 0;
 }
 
 function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPaneProps): JSX.Element {
@@ -97,6 +100,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const activeReportRef = useRef(false);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -145,13 +149,19 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    const seedWriteMs = seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
     if (typeof window !== 'undefined' && window.invoker) {
       // One-shot attach cost (xterm construction + open + snapshot seed).
       void window.invoker.reportUiPerf?.('terminal_attach', {
         attachMs: Math.round(performance.now() - attachStartedAt),
         snapshotBytes: session.outputSnapshot?.length ?? 0,
       });
+      if (session.outputSnapshot) {
+        void window.invoker.reportUiPerf?.('terminal_seed_output_snapshot', {
+          bytes: session.outputSnapshot.length,
+          writeMs: Math.round(seedWriteMs),
+        });
+      }
     }
 
     const inputDisposable = term.onData((data) => {
@@ -181,25 +191,30 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       }
     });
 
-    const tryFit = () => {
+    const tryFit = (source: 'initial' | 'resize' | 'switch') => {
       try {
+        const startedAt = performance.now();
         fit.fit();
         void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+        void window.invoker?.reportUiPerf?.('terminal_fit', {
+          source,
+          fitMs: Math.round(performance.now() - startedAt),
+          cols: term.cols,
+          rows: term.rows,
+        });
       } catch {
         /* host has zero size or fit unsupported */
       }
     };
 
     const raf = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame(tryFit)
+      ? requestAnimationFrame(() => tryFit('initial'))
       : null;
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       try {
-        resizeObserver = new ResizeObserver(() => {
-          tryFit();
-        });
+        resizeObserver = new ResizeObserver(() => tryFit('resize'));
         resizeObserver.observe(host);
       } catch {
         resizeObserver = null;
@@ -227,7 +242,13 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    const seedWriteMs = seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    if (seedWriteMs > 0) {
+      void window.invoker?.reportUiPerf?.('terminal_seed_output_snapshot', {
+        bytes: session.outputSnapshot?.length ?? 0,
+        writeMs: Math.round(seedWriteMs),
+      });
+    }
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
@@ -236,9 +257,24 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const fit = fitRef.current;
     if (!term || !fit) return;
     try {
+      const startedAt = performance.now();
       fit.fit();
       void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
       term.focus();
+      const fitMs = Math.round(performance.now() - startedAt);
+      void window.invoker?.reportUiPerf?.('terminal_fit', {
+        source: 'switch',
+        fitMs,
+        cols: term.cols,
+        rows: term.rows,
+      });
+      void window.invoker?.reportUiPerf?.('terminal_switch', {
+        initial: !activeReportRef.current,
+        fitMs,
+        cols: term.cols,
+        rows: term.rows,
+      });
+      activeReportRef.current = true;
     } catch {
       /* fit failed (e.g., hidden) */
     }

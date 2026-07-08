@@ -395,7 +395,7 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
 
-  it('reports planning_chat_render perf markers for slow keystrokes', async () => {
+  it('reports planning chat input, render, and transcript-growth perf markers', async () => {
     const reportUiPerf = vi.fn();
     (mock.api as unknown as { reportUiPerf: typeof reportUiPerf }).reportUiPerf = reportUiPerf;
     // Force each keystroke's reconcile + commit to read as jank by advancing
@@ -408,31 +408,50 @@ describe('Invoker terminal (component)', () => {
 
     function Harness(): JSX.Element {
       const [value, setValue] = useState('');
+      const [lines, setLines] = useState([{ id: 1, text: 'First line', role: 'system' as const }]);
       return (
-        <InvokerTerminal
-          activeConversationKey="chat-1"
-          lines={[{ id: 1, text: 'First line', role: 'system' as const }]}
-          busy={false}
-          value={value}
-          selectedPresetKey="codex"
-          presetOptions={[{ key: 'codex', label: 'Codex' }]}
-          draftPlanAvailable={false}
-          onValueChange={setValue}
-          onSubmit={vi.fn()}
-          onSubmitDraft={vi.fn()}
-          onPresetChange={vi.fn()}
-          onExpand={vi.fn()}
-        />
+        <>
+          <button
+            type="button"
+            data-testid="append-transcript-line"
+            onClick={() => setLines((prev) => [...prev, { id: 2, text: 'Second line', role: 'assistant' as const }])}
+          >
+            Append
+          </button>
+          <InvokerTerminal
+            activeConversationKey="chat-1"
+            lines={lines}
+            busy={false}
+            value={value}
+            selectedPresetKey="codex"
+            presetOptions={[{ key: 'codex', label: 'Codex' }]}
+            draftPlanAvailable={false}
+            onValueChange={setValue}
+            onSubmit={vi.fn()}
+            onSubmitDraft={vi.fn()}
+            onPresetChange={vi.fn()}
+            onExpand={vi.fn()}
+          />
+        </>
       );
     }
 
     render(<Harness />);
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByTestId('append-transcript-line'));
 
     await waitFor(() => {
       expect(reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_change',
+        expect.objectContaining({ valueLength: 5, maxValueLength: 5, inputEvents: 1, lineCount: 1, expanded: false }),
+      );
+      expect(reportUiPerf).toHaveBeenCalledWith(
         'planning_chat_render',
         expect.objectContaining({ valueLength: 5, lineCount: 1, expanded: false }),
+      );
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_transcript_growth',
+        expect.objectContaining({ lineCount: 2, textLength: 21, addedLines: 1, addedTextLength: 11, expanded: false }),
       );
     });
     const call = reportUiPerf.mock.calls.find((c) => c[0] === 'planning_chat_render');

@@ -433,7 +433,7 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
-  it('reports terminal attach and output-burst perf markers', async () => {
+  it('reports terminal attach, seed, fit, and output-burst perf markers', async () => {
     const reportUiPerf = vi.fn();
     (mock.api as unknown as { reportUiPerf: typeof reportUiPerf }).reportUiPerf = reportUiPerf;
     const session = makeTerminalSession('task-alpha', { outputSnapshot: 'seed\n' });
@@ -455,6 +455,15 @@ describe('Terminal drawer (component)', () => {
       expect(attach).toBeDefined();
       expect(typeof attach![1].attachMs).toBe('number');
       expect(attach![1].snapshotBytes).toBe('seed\n'.length);
+      const seed = reportUiPerf.mock.calls.find((c) => c[0] === 'terminal_seed_output_snapshot');
+      expect(seed).toBeDefined();
+      expect(seed![1].bytes).toBe('seed\n'.length);
+      const fit = reportUiPerf.mock.calls.find((c) => c[0] === 'terminal_fit');
+      expect(fit).toBeDefined();
+      expect(fit![1]).toEqual(expect.objectContaining({ source: expect.any(String), cols: 80, rows: 24 }));
+      const activeSwitch = reportUiPerf.mock.calls.find((c) => c[0] === 'terminal_switch');
+      expect(activeSwitch).toBeDefined();
+      expect(activeSwitch![1]).toEqual(expect.objectContaining({ initial: true, cols: 80, rows: 24 }));
     });
 
     // A burst of output well under the flush window accumulates but is not yet reported.
