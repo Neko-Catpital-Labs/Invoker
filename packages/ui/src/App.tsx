@@ -856,6 +856,7 @@ export function App() {
   }, [miniDagTasks, selectedTask, selectedWorkflow, selectedWorkflowId, tasks.size, workflowSelectionDismissed]);
   const isSelectedWorkflowGraphRefreshing = displayedSelectedWorkflowGraph !== null
     && !(selectedWorkflow && miniDagTasks.size > 0);
+  const selectedWorkflowGraphAvailable = displayedSelectedWorkflowGraph !== null;
   const selectedTaskDagWorkflows = useMemo(() => {
     const workflowForDag = displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow;
     if (!workflowForDag || workflows.has(workflowForDag.id)) {
@@ -1516,7 +1517,7 @@ export function App() {
     setSelectedWorkerKind(workerStatus?.workers[0]?.kind ?? null);
   }, [selectedWorkerKind, sidebarSurface, workerStatus]);
   useEffect(() => {
-    if (viewMode !== 'dag' || sidebarSurface === 'home' || displayedSelectedWorkflowGraph === null) {
+    if (viewMode !== 'dag' || sidebarSurface === 'home' || !selectedWorkflowGraphAvailable) {
       return;
     }
 
@@ -1540,9 +1541,9 @@ export function App() {
       cancelAnimationFrame(fitFrame);
     };
   }, [
-    displayedSelectedWorkflowGraph,
     issueCameraCommand,
     selectedTaskId,
+    selectedWorkflowGraphAvailable,
     sidebarSurface,
     viewMode,
   ]);
