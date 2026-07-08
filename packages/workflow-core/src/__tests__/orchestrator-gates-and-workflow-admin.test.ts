@@ -721,6 +721,63 @@ describe('Orchestrator', () => {
     });
   });
 
+  describe('reclaimStalledFixSession (stalled-fix watchdog recovery)', () => {
+    beforeEach(() => {
+      orchestrator.loadPlan({
+        name: 'reclaim-plan',
+        tasks: [{ id: 'r1', description: 'Root task' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'r1', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+      expect(orchestrator.getTask('r1')!.status).toBe('failed');
+    });
+
+    const beginFix = () => {
+      orchestrator.beginFixSession('r1');
+      const task = orchestrator.getTask('r1')!;
+      expect(task.status).toBe('fixing_with_ai');
+      return {
+        taskId: task.id,
+        selectedAttemptId: task.execution.selectedAttemptId,
+        generation: task.execution.generation ?? 0,
+      };
+    };
+
+    it('leases the fix attempt so an orphaned session becomes reclaimable', () => {
+      orchestrator.beginFixSession('r1');
+      const attemptId = orchestrator.getTask('r1')!.execution.selectedAttemptId!;
+      expect(persistence.loadAttempt(attemptId)?.leaseExpiresAt).toBeInstanceOf(Date);
+    });
+
+    it('reverts a stalled fix session to its entry status', () => {
+      const expectedLineage = beginFix();
+      const outcome = orchestrator.reclaimStalledFixSession('r1', { reason: 'owner died', expectedLineage });
+      expect(outcome).toBe('reverted');
+      const task = orchestrator.getTask('r1')!;
+      expect(task.status).toBe('failed');
+      expect(task.execution.isFixingWithAI).toBeFalsy();
+    });
+
+    it('no-ops when the task is not in a fix session', () => {
+      const outcome = orchestrator.reclaimStalledFixSession('r1', { reason: 'x' });
+      expect(outcome).toBe('noop');
+      expect(orchestrator.getTask('r1')!.status).toBe('failed');
+      expect(orchestrator.getTask('r1')!.execution.fixSessionEntryStatus).toBeUndefined();
+    });
+
+    it('no-ops on lineage mismatch and leaves the live fix session untouched', () => {
+      const { taskId, generation } = beginFix();
+      const outcome = orchestrator.reclaimStalledFixSession('r1', {
+        reason: 'x',
+        expectedLineage: { taskId, selectedAttemptId: 'stale-attempt', generation },
+      });
+      expect(outcome).toBe('noop');
+      expect(orchestrator.getTask('r1')!.execution.fixSessionEntryStatus).toBe('failed');
+    });
+  });
+
   describe('beginFixSession / revertFixSession', () => {
     beforeEach(() => {
       orchestrator.loadPlan({
