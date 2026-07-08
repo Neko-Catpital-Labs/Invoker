@@ -188,17 +188,19 @@ export function ApprovalModal({
       <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-700">
         {/* Header */}
         <div className="p-6 pb-0 shrink-0">
-          <h2 className="text-lg font-semibold text-gray-100 mb-2 shrink-0">
+          <h2 className="text-lg font-semibold text-gray-100">
             {heading}
           </h2>
-          <p className="text-sm text-gray-300 mb-1">
-            Task: <span className="font-mono text-gray-200">{task.id}</span>
-          </p>
-          <p className="text-sm text-gray-400">{task.description}</p>
         </div>
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
+          <div>
+            <p className="text-sm text-gray-300 mb-1">
+              Task: <span className="font-mono text-gray-200">{task.id}</span>
+            </p>
+            <p className="text-sm text-gray-400 break-words">{task.description}</p>
+          </div>
           {sessionId && (
             <div className="bg-gray-700/50 rounded p-3" data-testid="claude-session-context">
               <h3 className="text-sm font-medium text-gray-300 mb-2">{agentLabel} Session</h3>

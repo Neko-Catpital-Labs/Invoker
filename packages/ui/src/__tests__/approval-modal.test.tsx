@@ -116,6 +116,35 @@ describe('ApprovalModal', () => {
     expect(screen.getByText('Approve AI Fix')).toBeInTheDocument();
   });
 
+  it('keeps the heading pinned and scrolls a large task description', () => {
+    const longDescription = 'Extract workflow task actions. '.repeat(200).trim();
+    render(
+      <ApprovalModal
+        task={makeTask({
+          id: 'wf-1783449124770-10/extract-workflow-task-actions',
+          description: longDescription,
+          execution: { pendingFixError: 'Test failed: expected 1 but got 2' },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // A large description must live inside the scrollable region so it can
+    // never push the footer action buttons off-screen.
+    const description = screen.getByText(longDescription);
+    expect(description.closest('.overflow-y-auto')).not.toBeNull();
+
+    // The heading stays pinned outside the scroll region.
+    const heading = screen.getByRole('heading', { name: 'Approve AI Fix' });
+    expect(heading.closest('.overflow-y-auto')).toBeNull();
+
+    // Action buttons remain reachable (pinned footer).
+    expect(screen.getByRole('button', { name: 'Approve Fix' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reject Fix' })).toBeInTheDocument();
+  });
+
   it('pre-fills rejection reason with session and error for fix approval', () => {
     render(
       <ApprovalModal
