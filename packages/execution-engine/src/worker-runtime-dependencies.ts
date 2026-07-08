@@ -7,14 +7,18 @@ import type {
   AutoFixWorkerConfig,
 } from './auto-fix-recovery.js';
 import type { CiFailureWorkerStore, CiFailureWorkerSubmitter } from './workers/ci-failure-worker.js';
-import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
+import type {
+  PrMaintenanceAutomationConfig,
+} from './worker-types.js';
+import type { CoderabbitUpdateWorkerStore } from './workers/coderabbit-update-worker.js';
+import type { MergeConflictRebaseWorkerStore } from './workers/merge-conflict-rebase-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore & CiFailureWorkerStore;
+  store: AutoFixRecoveryStore & CiFailureWorkerStore & CoderabbitUpdateWorkerStore & MergeConflictRebaseWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter;
   /** Operator logger. */
@@ -25,8 +29,8 @@ export interface WorkerRuntimeDependencies {
   reviewGate?: PrStatusReviewGate;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
-  /** PR-maintenance shell worker launch configuration. */
-  prMaintenance?: PrMaintenanceWorkerConfig;
+  /** Built-in PR maintenance worker configuration. */
+  prMaintenance?: PrMaintenanceAutomationConfig;
   /** Disk-headroom worker configuration (local/remote paths and thresholds). */
   diskHeadroom?: DiskHeadroomWorkerConfig;
 }

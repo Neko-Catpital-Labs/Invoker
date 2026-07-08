@@ -20,6 +20,10 @@ export class MockGit {
   calls: string[][] = [];
   private scripts: ScriptedResponse[] = [];
   private defaultBranch = 'master';
+  private currentBranch: string | undefined = 'master';
+  private currentHead = 'abc123';
+  private localHeads = new Map<string, string>([['master', 'abc123']]);
+  private remoteHeads = new Map<string, string>([['master', 'abc123']]);
   private hasStagedChanges = false;
 
   /** Script a response for calls matching a predicate. */
@@ -65,6 +69,10 @@ export class MockGit {
   reset(): this {
     this.scripts = [];
     this.calls = [];
+    this.currentBranch = this.defaultBranch;
+    this.currentHead = 'abc123';
+    this.localHeads = new Map([[this.defaultBranch, this.currentHead]]);
+    this.remoteHeads = new Map([[this.defaultBranch, this.currentHead]]);
     this.hasStagedChanges = false;
     return this;
   }
@@ -112,27 +120,44 @@ export class MockGit {
     // Default responses for common commands
     if (args[0] === 'branch' && args[1] === '--show-current') return this.defaultBranch;
     if (args[0] === 'checkout') {
-      // Reset staged changes on checkout
       this.hasStagedChanges = false;
+      if (args[1] === '-b' && args[2]) {
+        this.currentBranch = args[2];
+        this.localHeads.set(args[2], this.currentHead);
+        return '';
+      }
+      const target = args[args.length - 1];
+      if (target && !target.startsWith('-')) {
+        this.currentBranch = args.includes('--detach') ? undefined : target;
+        this.currentHead = this.resolveRefSha(target);
+      }
       return '';
     }
     if (args[0] === 'merge') {
-      // Squash merge stages changes
       if (args.includes('--squash')) {
         this.hasStagedChanges = true;
       }
+      this.updateCurrentBranchHead();
       return '';
     }
     if (args[0] === 'rebase') return '';
     if (args[0] === 'commit') {
-      // Commit clears staged changes
       this.hasStagedChanges = false;
+      this.updateCurrentBranchHead();
       return '';
     }
     if (args[0] === 'branch') return '';
     if (args[0] === 'symbolic-ref') return `refs/remotes/origin/${this.defaultBranch}`;
-    if (args[0] === 'rev-parse') return 'abc123';
-    if (args[0] === 'push') return '';
+    if (args[0] === 'rev-parse') return this.resolveRefSha(args[args.length - 1]);
+    if (args[0] === 'push') {
+      this.recordPush(args);
+      return '';
+    }
+    if (args[0] === 'ls-remote') return this.lsRemote(args);
+    if (args[0] === 'update-ref' && args[1]?.startsWith('refs/heads/') && args[2]) {
+      this.localHeads.set(args[1].slice('refs/heads/'.length), args[2]);
+      return '';
+    }
     // diff --cached --quiet exits non-zero when there are staged changes
     if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) {
       if (this.hasStagedChanges) {
@@ -141,5 +166,43 @@ export class MockGit {
       return '';
     }
     return '';
+  }
+
+  private updateCurrentBranchHead(): void {
+    if (this.currentBranch) {
+      this.localHeads.set(this.currentBranch, this.currentHead);
+    }
+  }
+
+  private resolveRefSha(ref: string | undefined): string {
+    if (!ref || ref === 'HEAD') return this.currentHead;
+    const normalized = ref
+      .replace(/\^\{commit\}$/, '')
+      .replace(/^refs\/heads\//, '')
+      .replace(/^refs\/remotes\/origin\//, '');
+    return this.localHeads.get(normalized)
+      ?? this.remoteHeads.get(normalized)
+      ?? this.currentHead;
+  }
+
+  private recordPush(args: string[]): void {
+    const remoteIndex = args.findIndex((arg, index) => index > 0 && !arg.startsWith('-'));
+    if (remoteIndex < 0) return;
+    const refspecs = args.slice(remoteIndex + 1).filter((arg) => arg && !arg.startsWith('-'));
+    for (const refspec of refspecs) {
+      const [sourceRef, destinationRef] = refspec.includes(':')
+        ? refspec.split(/:(.*)/s, 2)
+        : [refspec, refspec];
+      const branch = destinationRef?.replace(/^refs\/heads\//, '');
+      if (!branch) continue;
+      this.remoteHeads.set(branch, this.resolveRefSha(sourceRef));
+    }
+  }
+
+  private lsRemote(args: string[]): string {
+    const branch = args[args.length - 1];
+    if (!branch || branch.startsWith('-')) return '';
+    const sha = this.remoteHeads.get(branch);
+    return sha ? `${sha}\trefs/heads/${branch}` : '';
   }
 }

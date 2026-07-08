@@ -3,7 +3,8 @@ import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js
 import type { WorkerRegistry } from './worker-registry.js';
 import { registerCiFailureWorker } from './workers/ci-failure-worker.js';
 import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
-import { registerPrMaintenanceWorkers } from './workers/pr-maintenance-workers.js';
+import { registerCoderabbitUpdateWorker } from './workers/coderabbit-update-worker.js';
+import { registerMergeConflictRebaseWorker } from './workers/merge-conflict-rebase-worker.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
@@ -14,6 +15,7 @@ export function registerBuiltinWorkers(
   registerPrStatusWorker(registry);
   registerCiFailureWorker(registry);
   registerDiskHeadroomWorker(registry);
-  registerPrMaintenanceWorkers(registry);
+  registerCoderabbitUpdateWorker(registry);
+  registerMergeConflictRebaseWorker(registry);
   return registry;
 }

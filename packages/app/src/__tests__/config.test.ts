@@ -210,6 +210,25 @@ describe('loadConfig', () => {
     expect(config.externalWorkers).toEqual(externalWorkers);
   });
 
+  it('reads PR maintenance worker config from user config', () => {
+    const prMaintenance = {
+      targetRepo: 'owner/repo',
+      author: 'octocat',
+      coderabbit: {
+        login: 'coderabbitai[bot]',
+        maxAttempts: 2,
+        executionAgent: 'omp',
+      },
+      mergeConflictRebase: {
+        maxAttempts: 4,
+        confirmTimeoutMs: 30_000,
+      },
+    };
+    writeUserConfig({ prMaintenance });
+    const config = loadConfig();
+    expect(config.prMaintenance).toEqual(prMaintenance);
+  });
+
   it('reads imageStorage from user config', () => {
     const imageStorage = {
       provider: 'r2',
@@ -639,4 +658,3 @@ describe('resolveEmbeddedTerminalBackendConfig', () => {
     )).toThrow(/Invalid embedded terminal backend/);
   });
 });
-
