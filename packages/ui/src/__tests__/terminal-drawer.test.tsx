@@ -432,4 +432,48 @@ describe('Terminal drawer (component)', () => {
       expect(mock.api.terminalClose).toHaveBeenCalledWith('mock-session-task-alpha');
     });
   });
+
+  it('emits a terminal_attach marker when a session pane mounts', () => {
+    const session = makeTerminalSession('task-alpha');
+    render(
+      <TerminalDrawer
+        state="maximized"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'terminal_attach',
+      expect.objectContaining({ attachMs: expect.any(Number), sessionId: session.sessionId }),
+    );
+  });
+
+  it('flushes a terminal_output_burst marker once a chunk burst fills the window', () => {
+    const session = makeTerminalSession('task-alpha');
+    render(
+      <TerminalDrawer
+        state="maximized"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    act(() => {
+      for (let i = 0; i < 64; i += 1) {
+        mock.fireTerminalOutput({ sessionId: session.sessionId, taskId: session.taskId, data: 'x'.repeat(16) });
+      }
+    });
+
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'terminal_output_burst',
+      expect.objectContaining({ chunks: 64, bytes: 64 * 16, sessionId: session.sessionId }),
+    );
+  });
 });

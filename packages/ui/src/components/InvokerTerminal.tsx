@@ -14,6 +14,9 @@ interface PlanningPresetOptionView {
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
 
+// Throttle chat render-churn markers so a fast typist emits at most ~2/sec.
+const CHAT_INPUT_REPORT_INTERVAL_MS = 500;
+
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
 }
@@ -67,6 +70,11 @@ export function InvokerTerminal({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  // Timestamp + length of the last keystroke, consumed by the layout effect
+  // below to measure keystroke → committed-render latency. Null when the
+  // pending render was not driven by a keystroke (mount, programmatic clear).
+  const pendingKeystrokeRef = useRef<{ at: number; length: number } | null>(null);
+  const perfThrottleRef = useRef<Record<string, number>>({});
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -84,6 +92,27 @@ export function InvokerTerminal({
       scrollTranscriptToBottom();
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+
+  // Chat render churn: measure keystroke → committed-render latency. The parent
+  // (App) owns the planning value, so a keystroke round-trips through App's
+  // re-render before this layout effect fires — capturing the full owner render
+  // cost that produces beach-ball stalls while typing. Throttled to bound the
+  // ui-perf log volume; the owner accumulates the max across samples.
+  useLayoutEffect(() => {
+    const pending = pendingKeystrokeRef.current;
+    if (!pending) return;
+    pendingKeystrokeRef.current = null;
+    const latencyMs = performance.now() - pending.at;
+    const now = Date.now();
+    if (now - (perfThrottleRef.current.chat_input_render ?? 0) < CHAT_INPUT_REPORT_INTERVAL_MS) return;
+    perfThrottleRef.current.chat_input_render = now;
+    // Defensive: window.invoker is undefined in vitest/jsdom environments.
+    void window.invoker?.reportUiPerf?.('chat_input_render', {
+      latencyMs: Math.round(latencyMs),
+      valueLength: pending.length,
+      lineCount: lines.length,
+    });
+  }, [value, lines.length]);
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -250,7 +279,10 @@ export function InvokerTerminal({
           value={value}
           disabled={busy || readOnly}
           rows={expanded ? 8 : 3}
-          onChange={(event) => onValueChange(event.target.value)}
+          onChange={(event) => {
+            pendingKeystrokeRef.current = { at: performance.now(), length: event.target.value.length };
+            onValueChange(event.target.value);
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
               event.preventDefault();
