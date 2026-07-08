@@ -3935,6 +3935,21 @@ function createEmbeddedTerminalBackendFromConfig(
         },
       );
       ipcMain.handle(
+        'invoker:inject-worker-actions',
+        async (_event, actions: Array<Record<string, unknown>>) => {
+          if (!ownerMode) {
+            await messageBus.request('headless.gui-mutation', {
+              channel: 'invoker:inject-worker-actions',
+              args: [actions],
+            } satisfies GuiMutationPayload);
+            return;
+          }
+          for (const action of actions) {
+            persistence.upsertWorkerAction(action as never);
+          }
+        },
+      );
+      ipcMain.handle(
         'invoker:set-test-plan-from-goal-response',
         async (_event, response: { planYaml: string; planName: string } | null) => {
           testPlanFromGoalResponse = response;
