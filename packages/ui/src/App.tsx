@@ -2975,7 +2975,7 @@ export function App() {
           </div>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
         {renderGraphCanvas()}
       </div>
       {viewMode === 'dag' && renderGraphTerminalChrome()}
