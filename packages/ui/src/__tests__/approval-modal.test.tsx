@@ -836,7 +836,7 @@ describe('ApprovalModal', () => {
     expect(screen.getByRole('heading', { name: 'Confirm Pull Request' })).toBeInTheDocument();
   });
 
-  it('shows "Confirm Merge" button label for merge node with onFinish="merge"', () => {
+  it('shows a "Confirm Merge" *button* matching the heading for onFinish="merge"', () => {
     render(
       <ApprovalModal
         task={makeTask({ config: { isMergeNode: true } })}
@@ -846,7 +846,7 @@ describe('ApprovalModal', () => {
         onFinish="merge"
       />,
     );
-    expect(screen.getByText('Confirm Merge')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm Merge' })).toBeInTheDocument();
   });
 
   // Repro: the modal heading says "Confirm Merge" but the primary button on
