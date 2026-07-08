@@ -115,8 +115,20 @@ function resolveCursorTarget(): BundledSkillTargetStatus {
   };
 }
 
+function resolveOmpSkillTarget(): BundledSkillTargetStatus {
+  return {
+    id: 'omp',
+    name: 'OMP',
+    path: path.join(homedir(), '.omp', 'agent', 'skills'),
+    available: true,
+    installed: false,
+    upToDate: false,
+    installedSkillNames: [],
+  };
+}
+
 function resolveManagedTargets(): BundledSkillTargetStatus[] {
-  return [resolveCodexTarget(), resolveClaudeTarget(), resolveCursorTarget()];
+  return [resolveCodexTarget(), resolveClaudeTarget(), resolveCursorTarget(), resolveOmpSkillTarget()];
 }
 
 function resolveManagedCommandTargets(): HarnessConfigState[] {
