@@ -199,6 +199,27 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('failure_class persistence', () => {
+    it('round-trips execution.failureClass through insert, update, and clear', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', {
+        status: 'failed',
+        execution: { error: 'Execution stalled: ...', failureClass: 'liveness_stall' },
+      }));
+
+      // Insert path (saveTask → INSERT OR REPLACE).
+      expect(adapter.loadTasks('wf-1')[0].execution.failureClass).toBe('liveness_stall');
+
+      // Update path (updateTask → dynamic UPDATE): clear it as a requeue reset would.
+      adapter.updateTask('t1', { execution: { failureClass: undefined } } as TaskStateChanges);
+      expect(adapter.loadTasks('wf-1')[0].execution.failureClass).toBeUndefined();
+
+      // Update path: set it back on.
+      adapter.updateTask('t1', { execution: { failureClass: 'liveness_stall' } } as TaskStateChanges);
+      expect(adapter.loadTasks('wf-1')[0].execution.failureClass).toBe('liveness_stall');
+    });
+  });
+
   describe('terminal_sessions', () => {
     it('creates the terminal_sessions schema with strict checks', () => {
       adapter.saveWorkflow(testWorkflow);
