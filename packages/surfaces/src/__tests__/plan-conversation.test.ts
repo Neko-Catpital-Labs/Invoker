@@ -264,10 +264,23 @@ Let me know if you'd like changes!`;
     expect(plan.tasks[0].prompt).toContain('```typescript');
   });
 
-  it('returns null for truncated YAML with no closing fence', () => {
-    const text = '```yaml\nname: "Truncated"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []';
+  it('recovers a valid final YAML plan that ends at EOF without a closing fence', () => {
+    const text = '```yaml\nname: "Recoverable"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []';
     const result = extractYamlPlan(text);
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    const plan = parsePlanText(result!);
+    expect(plan.name).toBe('Recoverable');
+    expect(plan.tasks[0].id).toBe('t1');
+  });
+
+  it('returns null for incomplete YAML with no closing fence', () => {
+    const text = '```yaml\nname: "Incomplete"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: [';
+    expect(extractYamlPlan(text)).toBeNull();
+  });
+
+  it('returns null for an invalid plan shape with no closing fence', () => {
+    const text = '```yaml\nname: "Invalid"\ntasks:\n  - id: t1';
+    expect(extractYamlPlan(text)).toBeNull();
   });
 
   it('extracts from the last YAML block when multiple exist', () => {
@@ -339,11 +352,9 @@ Does this look better?`;
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
-    it('logs when no closing fence found', () => {
-      extractYamlPlan('```yaml\nname: "Truncated"\ntasks:\n  - id: t1\n    description: "test"');
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('no closing fence found'),
-      );
+    it('does not log when a missing closing fence is recovered at EOF', () => {
+      extractYamlPlan('```yaml\nname: "Recovered"\ntasks:\n  - id: t1\n    description: "test"');
+      expect(warnSpy).not.toHaveBeenCalled();
     });
 
     it('logs on YAML parse error', () => {
