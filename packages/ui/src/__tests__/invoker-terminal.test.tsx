@@ -63,6 +63,20 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('emits a chat keystroke render perf marker while typing', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hel' } });
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'ui_chat_keystroke_render',
+        expect.objectContaining({ valueLength: 3, latencyMs: expect.any(Number) }),
+      );
+    });
+  });
+
   it('continues the same planning session', async () => {
     render(<App />);
     await openPlanningTerminal();

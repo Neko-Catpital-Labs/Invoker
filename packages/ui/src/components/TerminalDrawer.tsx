@@ -15,6 +15,11 @@ import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
 
+// Throttle embedded-terminal output-burst perf markers. A busy session streams
+// many small chunks; we summarize write pressure per window instead of emitting
+// one marker per chunk through the reportUiPerf → ui-perf activity-log path.
+const TERMINAL_OUTPUT_BURST_EMIT_INTERVAL_MS = 1000;
+
 /**
  * The drawer has one explicit state model:
  *   - `minimized`: only the header/tab strip; no terminal body.
@@ -96,6 +101,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   useEffect(() => {
     const host = containerRef.current;
     if (!host) return;
+    const attachStartedAt = performance.now();
 
     let term: XTermTerminal;
     let fit: FitAddon;
@@ -124,13 +130,52 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     });
 
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
+    // Perf: windowed accounting of xterm write pressure for this session. Output
+    // bursts run term.write() on the main thread and can starve typing, so we
+    // accumulate bytes/chunks/write-time per window and emit a throttled summary.
+    const outputBurst = { bytes: 0, chunks: 0, totalWriteMs: 0, maxWriteMs: 0, windowStartedAt: 0, lastEmitAt: 0 };
+    const flushOutputBurst = (nowMs: number): void => {
+      if (outputBurst.chunks === 0) return;
+      // Defensive: window.invoker is undefined in vitest/jsdom environments.
+      void window.invoker?.reportUiPerf?.('ui_terminal_output_burst', {
+        byteCount: outputBurst.bytes,
+        chunkCount: outputBurst.chunks,
+        totalWriteMs: Math.round(outputBurst.totalWriteMs),
+        maxWriteMs: Math.round(outputBurst.maxWriteMs),
+        windowMs: Math.round(nowMs - outputBurst.windowStartedAt),
+      });
+      outputBurst.bytes = 0;
+      outputBurst.chunks = 0;
+      outputBurst.totalWriteMs = 0;
+      outputBurst.maxWriteMs = 0;
+    };
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
+      const writeStartedAt = performance.now();
       try {
         term.write(event.data);
       } catch {
         /* terminal disposed */
+        return;
       }
+      const writeMs = performance.now() - writeStartedAt;
+      if (outputBurst.chunks === 0) outputBurst.windowStartedAt = writeStartedAt;
+      outputBurst.bytes += event.data.length;
+      outputBurst.chunks += 1;
+      outputBurst.totalWriteMs += writeMs;
+      outputBurst.maxWriteMs = Math.max(outputBurst.maxWriteMs, writeMs);
+      const nowMs = performance.now();
+      if (nowMs - outputBurst.lastEmitAt >= TERMINAL_OUTPUT_BURST_EMIT_INTERVAL_MS) {
+        outputBurst.lastEmitAt = nowMs;
+        flushOutputBurst(nowMs);
+      }
+    });
+
+    // Perf: synchronous attach cost — xterm construct + snapshot seed + wiring.
+    // Defensive: window.invoker is undefined in vitest/jsdom environments.
+    void window.invoker?.reportUiPerf?.('ui_terminal_attach', {
+      attachMs: Math.round(performance.now() - attachStartedAt),
+      snapshotBytes: session.outputSnapshot?.length ?? 0,
     });
 
     const tryFit = () => {
@@ -159,6 +204,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     }
 
     return () => {
+      flushOutputBurst(performance.now());
       if (raf !== null && typeof cancelAnimationFrame === 'function') {
         cancelAnimationFrame(raf);
       }

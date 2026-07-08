@@ -2059,6 +2059,14 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataCoalescedRequests: 0,
     largeTaskDeltaBatches: 0,
     maxTaskDeltaBatchSize: 0,
+    chatKeystrokeReports: 0,
+    maxChatKeystrokeRenderMs: 0,
+    maxChatTranscriptLines: 0,
+    terminalAttaches: 0,
+    maxTerminalAttachMs: 0,
+    terminalOutputBursts: 0,
+    terminalOutputBytes: 0,
+    maxTerminalOutputWriteMs: 0,
   };
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
@@ -2121,6 +2129,14 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
     uiPerfStats.largeTaskDeltaBatches = 0;
     uiPerfStats.maxTaskDeltaBatchSize = 0;
+    uiPerfStats.chatKeystrokeReports = 0;
+    uiPerfStats.maxChatKeystrokeRenderMs = 0;
+    uiPerfStats.maxChatTranscriptLines = 0;
+    uiPerfStats.terminalAttaches = 0;
+    uiPerfStats.maxTerminalAttachMs = 0;
+    uiPerfStats.terminalOutputBursts = 0;
+    uiPerfStats.terminalOutputBytes = 0;
+    uiPerfStats.maxTerminalOutputWriteMs = 0;
   };
 
   const getUiPerfStats = (): Record<string, unknown> => ({
@@ -4425,6 +4441,34 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
+      }
+      // Planning-chat typing pressure: keystroke → committed-render latency and
+      // transcript growth. Explains beach-ball stalls while typing in the
+      // owner-held composer.
+      if (metric === 'ui_chat_keystroke_render' && data) {
+        uiPerfStats.chatKeystrokeReports += 1;
+        if (typeof data.latencyMs === 'number') {
+          uiPerfStats.maxChatKeystrokeRenderMs = Math.max(uiPerfStats.maxChatKeystrokeRenderMs, data.latencyMs);
+        }
+        if (typeof data.lineCount === 'number') {
+          uiPerfStats.maxChatTranscriptLines = Math.max(uiPerfStats.maxChatTranscriptLines, data.lineCount);
+        }
+      }
+      // Embedded terminal attach cost (xterm construct + snapshot seed).
+      if (metric === 'ui_terminal_attach' && typeof data?.attachMs === 'number') {
+        uiPerfStats.terminalAttaches += 1;
+        uiPerfStats.maxTerminalAttachMs = Math.max(uiPerfStats.maxTerminalAttachMs, data.attachMs);
+      }
+      // Embedded terminal output burst pressure: bytes written and worst
+      // synchronous xterm write within each throttled window.
+      if (metric === 'ui_terminal_output_burst' && data) {
+        uiPerfStats.terminalOutputBursts += 1;
+        if (typeof data.byteCount === 'number') {
+          uiPerfStats.terminalOutputBytes += data.byteCount;
+        }
+        if (typeof data.maxWriteMs === 'number') {
+          uiPerfStats.maxTerminalOutputWriteMs = Math.max(uiPerfStats.maxTerminalOutputWriteMs, data.maxWriteMs);
+        }
       }
       uiPerfStats.rendererReports += 1;
       try {
