@@ -466,6 +466,15 @@ export interface WorkflowMutationAcceptedResult {
   channel: string;
 }
 
+export interface WorkflowMutationFailedEvent {
+  intentId: number;
+  workflowId: string;
+  channel: string;
+  taskId?: string;
+  message: string;
+  failedAt: string;
+}
+
 export interface CancelResult {
   cancelled: string[];
   runningCancelled: string[];
@@ -1078,6 +1087,9 @@ export const IpcEventChannels = {
   },
   'invoker:terminal-exit': {} as {
     payload: TerminalExitEvent;
+  },
+  'invoker:workflow-mutation-failed': {} as {
+    payload: WorkflowMutationFailedEvent;
   },
 } as const;
 
