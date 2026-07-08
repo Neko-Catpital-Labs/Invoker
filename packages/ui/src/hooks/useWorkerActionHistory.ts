@@ -44,8 +44,11 @@ export function useWorkerActionHistory(
   const requestSeqRef = useRef(0);
   const mountedRef = useRef(true);
 
-  useEffect(() => () => {
-    mountedRef.current = false;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   const fetchPage = useCallback(
@@ -85,11 +88,11 @@ export function useWorkerActionHistory(
     setActions([]);
     setHasMore(false);
     setError(null);
+    setLoadingMore(false);
     if (!workerKind) {
       // Cancel any in-flight page and drop to the idle empty state.
       requestSeqRef.current += 1;
       setLoading(false);
-      setLoadingMore(false);
       return;
     }
     void fetchPage(workerKind, 0, 'reset');

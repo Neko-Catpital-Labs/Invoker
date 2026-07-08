@@ -1,3 +1,4 @@
+import { StrictMode, type ReactNode } from 'react';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useWorkerActionHistory } from '../hooks/useWorkerActionHistory.js';
@@ -36,6 +37,19 @@ function pageFor(kind: string, offset: number, limit: number): WorkerActionHisto
   };
 }
 
+function deferredResponse(): {
+  promise: Promise<WorkerActionHistoryResponse>;
+  resolve: (response: WorkerActionHistoryResponse) => void;
+} {
+  let resolve: (response: WorkerActionHistoryResponse) => void = () => {
+    throw new Error('deferred response resolved before initialization');
+  };
+  const promise = new Promise<WorkerActionHistoryResponse>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function setHistoryFn(fn: (request: WorkerActionHistoryRequest) => Promise<WorkerActionHistoryResponse>) {
   (window as unknown as { invoker: { getWorkerActionHistory: typeof fn } }).invoker = { getWorkerActionHistory: fn };
 }
@@ -59,6 +73,22 @@ describe('useWorkerActionHistory', () => {
     expect(result.current.actions.map((a) => a.id)).toEqual(['a1', 'a2']);
     expect(result.current.hasMore).toBe(true);
     expect(result.current.error).toBeNull();
+  });
+
+  it('loads the first page under React StrictMode remounts', async () => {
+    history.autofix = [makeAction('a1')];
+    const deferred = deferredResponse();
+    setHistoryFn(vi.fn(() => deferred.promise));
+
+    const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
+    const { result } = renderHook(() => useWorkerActionHistory('autofix', 5), { wrapper });
+
+    await act(async () => {
+      deferred.resolve(pageFor('autofix', 0, 5));
+    });
+
+    await waitFor(() => expect(result.current.actions.map((a) => a.id)).toEqual(['a1']));
+    expect(result.current.loading).toBe(false);
   });
 
   it('appends older pages on loadMore and stops when exhausted', async () => {
@@ -86,6 +116,35 @@ describe('useWorkerActionHistory', () => {
     rerender({ kind: 'ci-failure' });
 
     await waitFor(() => expect(result.current.actions.map((a) => a.id)).toEqual(['c1', 'c2']));
+  });
+
+  it('clears loadingMore when switching workers during an older-page fetch', async () => {
+    history.autofix = [makeAction('a1'), makeAction('a2'), makeAction('a3')];
+    history['ci-failure'] = [makeAction('c1'), makeAction('c2'), makeAction('c3')];
+    const deferredAppend = deferredResponse();
+    const fn = vi.fn(({ workerKind, offset, limit }: WorkerActionHistoryRequest) => {
+      if (workerKind === 'autofix' && (offset ?? 0) === 2) return deferredAppend.promise;
+      return Promise.resolve(pageFor(workerKind, offset ?? 0, limit ?? 1000));
+    });
+    setHistoryFn(fn);
+
+    const { result, rerender } = renderHook(({ kind }) => useWorkerActionHistory(kind, 2), {
+      initialProps: { kind: 'autofix' as string | null },
+    });
+    await waitFor(() => expect(result.current.actions.map((a) => a.id)).toEqual(['a1', 'a2']));
+
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.loadingMore).toBe(true));
+
+    rerender({ kind: 'ci-failure' });
+    await waitFor(() => expect(result.current.actions.map((a) => a.id)).toEqual(['c1', 'c2']));
+
+    await act(async () => {
+      deferredAppend.resolve(pageFor('autofix', 2, 2));
+    });
+
+    expect(result.current.loadingMore).toBe(false);
+    expect(result.current.hasMore).toBe(true);
   });
 
   it('does not fetch when no worker is selected', async () => {
