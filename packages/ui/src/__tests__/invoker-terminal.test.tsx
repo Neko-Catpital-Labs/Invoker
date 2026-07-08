@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -392,5 +393,69 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+
+  it('gives the planning session rail list a scrollable body inside the rail frame', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    const rail = screen.getByTestId('planning-session-rail');
+    const scrollBody = within(rail).getByTestId('rail-list-scroll');
+    // Owns the vertical overflow and is height-bounded (h-full) so it scrolls inside
+    // the rail instead of growing it.
+    expect(scrollBody.className).toContain('overflow-y-auto');
+    expect(scrollBody.className).toContain('h-full');
+    // Sits in the shrinkable flex shell (min-h-0 flex-1) the fix preserves.
+    expect(scrollBody.parentElement?.className).toContain('min-h-0');
+    expect(scrollBody.parentElement?.className).toContain('flex-1');
+  });
+
+  it('gives the workflows rail list a scrollable body inside the rail frame', async () => {
+    const workflows: WorkflowMeta[] = [{ id: 'wf-scroll', name: 'Scrollable rail', status: 'running' }];
+    const task = makeUITask({ id: 'task-run', description: 'Live work', status: 'running', workflowId: 'wf-scroll' });
+
+    render(<App />);
+    act(() => mock.setTasks([task], workflows));
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    const rail = await screen.findByTestId('browser-rail');
+    const scrollBody = await within(rail).findByTestId('rail-list-scroll');
+    expect(scrollBody.className).toContain('overflow-y-auto');
+    expect(scrollBody.className).toContain('h-full');
+    expect(scrollBody.parentElement?.className).toContain('min-h-0');
+    expect(scrollBody.parentElement?.className).toContain('flex-1');
+  });
+
+  it('gives the attention rail list a scrollable body inside the rail frame', async () => {
+    // No workflow: keeps the auto-selected task out of the mini-DAG surface so the test
+    // exercises only the rail's scroll contract, not the graph camera machinery.
+    const task = makeUITask({ id: 'task-attn', description: 'Needs a decision', status: 'needs_input' });
+
+    render(<App />);
+    act(() => mock.setTasks([task]));
+
+    fireEvent.click(await screen.findByTestId('sidebar-attention'));
+    const rail = await screen.findByTestId('browser-rail');
+    const scrollBody = await within(rail).findByTestId('rail-list-scroll');
+    expect(scrollBody.className).toContain('overflow-y-auto');
+    expect(scrollBody.className).toContain('h-full');
+    expect(scrollBody.parentElement?.className).toContain('min-h-0');
+    expect(scrollBody.parentElement?.className).toContain('flex-1');
+  });
+
+  it('gives the running rail list a scrollable body inside the rail frame', async () => {
+    // No workflow: see the attention test — isolates the rail scroll contract.
+    const task = makeUITask({ id: 'task-run', description: 'Live work', status: 'running' });
+
+    render(<App />);
+    act(() => mock.setTasks([task]));
+
+    fireEvent.click(await screen.findByTestId('sidebar-running'));
+    const rail = await screen.findByTestId('browser-rail');
+    const scrollBody = await within(rail).findByTestId('rail-list-scroll');
+    expect(scrollBody.className).toContain('overflow-y-auto');
+    expect(scrollBody.className).toContain('h-full');
+    expect(scrollBody.parentElement?.className).toContain('min-h-0');
+    expect(scrollBody.parentElement?.className).toContain('flex-1');
   });
 });
