@@ -8,7 +8,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TaskGraphEvent, TaskState, WorkflowMeta, WorkflowRollupPatch } from '../types.js';
-import { applyDelta } from '../lib/delta.js';
+import { applyDeltaInPlace } from '../lib/delta.js';
 import { normalizeWorkflowStatus } from '../lib/workflow-status.js';
 import {
   createTaskGraphEventPipeline,
@@ -296,6 +296,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         }
 
         const removedWorkflowIds: string[] = [];
+        let hasAppliedTaskDelta = false;
         for (const event of deltaEvents) {
           if (event.type !== 'delta') continue;
           const delta = event.delta;
@@ -313,7 +314,11 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
           ) {
             shouldRefreshWorkflows = true;
           }
-          nextTasks = applyDelta(nextTasks, delta);
+          if (!hasAppliedTaskDelta) {
+            nextTasks = new Map(nextTasks);
+            hasAppliedTaskDelta = true;
+          }
+          applyDeltaInPlace(nextTasks, delta);
           for (const patch of event.workflowRollups) {
             if (patch.removed && nextWorkflows.has(patch.workflowId)) {
               removedWorkflowIds.push(patch.workflowId);
