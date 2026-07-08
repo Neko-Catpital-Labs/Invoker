@@ -21,6 +21,7 @@ import {
   registerAutoFixWorker,
   registerCoderabbitUpdateWorker,
   registerMergeConflictRebaseWorker,
+  registerPrSummaryRefreshWorker,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
@@ -41,11 +42,8 @@ import {
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
-import {
-  collectRecoveryWorkerStatus,
-  type RecoveryWorkerStatus,
-} from './recovery-worker-observability.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import { createLocalWorkerStatusSnapshot } from './worker-control.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -440,20 +438,24 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
 
   if (subCommand === 'status') {
     const flags = parseQueryFlags(args.slice(1));
-    const status = collectRecoveryWorkerStatus(deps.persistence);
-    const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+    const status = createLocalWorkerStatusSnapshot({
+      registry,
+      persistence: deps.persistence,
+      autoStartKinds: [],
+    });
+    const { formatAsJson, formatAsJsonl, formatWorkerStatusSnapshot } = await import('./formatter.js');
     switch (flags.output) {
       case 'label':
-        process.stdout.write(`${status.workerId}\n`);
+        process.stdout.write(status.workers.map((worker) => worker.kind).join('\n') + '\n');
         break;
       case 'json':
         process.stdout.write(formatAsJson(status) + '\n');
         break;
       case 'jsonl':
-        process.stdout.write(formatAsJsonl([status]) + '\n');
+        process.stdout.write(formatAsJsonl(status.workers) + '\n');
         break;
       default:
-        process.stdout.write(formatRecoveryWorkerStatus(status) + '\n');
+        process.stdout.write(formatWorkerStatusSnapshot(status) + '\n');
         break;
     }
     return;
@@ -509,31 +511,8 @@ function registerHeadlessBuiltinWorkers(
   registerAutoFixWorker(registry);
   registerCoderabbitUpdateWorker(registry);
   registerMergeConflictRebaseWorker(registry);
+  registerPrSummaryRefreshWorker(registry);
   return registry;
-}
-
-function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
-  const lines = [
-    `${BOLD}Recovery worker${RESET}`,
-    `  kind: ${status.kind}`,
-    `  workerId: ${status.workerId}`,
-    `  owner: ${status.owner}`,
-    `  lastWakeupAt: ${status.lastWakeupAt ?? 'never'}`,
-    `  lastScanAt: ${status.lastScanAt ?? 'never'}`,
-    `  lastSubmitAt: ${status.lastSubmitAt ?? 'never'}`,
-    `  lastSkip: ${status.lastSkipAt ?? 'never'}${status.lastSkipReason ? ` (${status.lastSkipReason} task=${status.lastSkipTaskId})` : ''}`,
-    `  counts: wakeups=${status.wakeups} scans=${status.scans} submissions=${status.submissions} skips=${status.skips}`,
-  ];
-  if (status.recent.length > 0) {
-    lines.push('');
-    lines.push(`${BOLD}Recent recovery decisions${RESET}`);
-    for (const event of status.recent) {
-      const reason = event.reason ? ` reason=${event.reason}` : '';
-      const phase = event.phase ? ` phase=${event.phase}` : '';
-      lines.push(`  ${event.at} ${event.taskId} ${event.action}${phase}${reason}`);
-    }
-  }
-  return lines.join('\n');
 }
 
 async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdle'>): Promise<void> {

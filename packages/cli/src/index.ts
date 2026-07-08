@@ -15,6 +15,7 @@ import {
   registerAutoFixWorker,
   registerCoderabbitUpdateWorker,
   registerMergeConflictRebaseWorker,
+  registerPrSummaryRefreshWorker,
   registerExternalWorkers,
   WorkerLockHeldError,
   registerBuiltinAgents,
@@ -134,6 +135,10 @@ type CliRuntimeConfig = {
       pollIntervalMs?: number;
       confirmTimeoutMs?: number;
       confirmPollIntervalMs?: number;
+    };
+    prSummaryRefresh?: {
+      pollIntervalMs?: number;
+      cwd?: string;
     };
   };
   externalWorkers?: ExternalWorkerConfig[];
@@ -701,6 +706,7 @@ function registerCliBuiltinWorkers(
   registerAutoFixWorker(registry);
   registerCoderabbitUpdateWorker(registry);
   registerMergeConflictRebaseWorker(registry);
+  registerPrSummaryRefreshWorker(registry);
   return registry;
 }
 

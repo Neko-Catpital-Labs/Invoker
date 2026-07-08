@@ -5,6 +5,7 @@ import { registerCiFailureWorker } from './workers/ci-failure-worker.js';
 import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
 import { registerCoderabbitUpdateWorker } from './workers/coderabbit-update-worker.js';
 import { registerMergeConflictRebaseWorker } from './workers/merge-conflict-rebase-worker.js';
+import { registerPrSummaryRefreshWorker } from './workers/pr-summary-refresh-worker.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
@@ -17,5 +18,6 @@ export function registerBuiltinWorkers(
   registerDiskHeadroomWorker(registry);
   registerCoderabbitUpdateWorker(registry);
   registerMergeConflictRebaseWorker(registry);
+  registerPrSummaryRefreshWorker(registry);
   return registry;
 }

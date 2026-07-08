@@ -14,11 +14,12 @@ import type {
 } from './worker-types.js';
 import type { CoderabbitUpdateWorkerStore } from './workers/coderabbit-update-worker.js';
 import type { MergeConflictRebaseWorkerStore } from './workers/merge-conflict-rebase-worker.js';
+import type { PrSummaryRefreshWorkerStore } from './workers/pr-summary-refresh-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore & CiFailureWorkerStore & CoderabbitUpdateWorkerStore & MergeConflictRebaseWorkerStore;
+  store: AutoFixRecoveryStore & CiFailureWorkerStore & CoderabbitUpdateWorkerStore & MergeConflictRebaseWorkerStore & PrSummaryRefreshWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter;
   /** Operator logger. */

@@ -16,6 +16,7 @@ import {
   CODERABBIT_UPDATE_WORKER_KIND,
 } from '../workers/coderabbit-update-worker.js';
 import { MERGE_CONFLICT_REBASE_WORKER_KIND } from '../workers/merge-conflict-rebase-worker.js';
+import { PR_SUMMARY_REFRESH_WORKER_KIND } from '../workers/pr-summary-refresh-worker.js';
 import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
 
 const silentLogger = {
@@ -69,6 +70,7 @@ describe('worker registry', () => {
       DISK_HEADROOM_WORKER_KIND,
       CODERABBIT_UPDATE_WORKER_KIND,
       MERGE_CONFLICT_REBASE_WORKER_KIND,
+      PR_SUMMARY_REFRESH_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
@@ -76,6 +78,7 @@ describe('worker registry', () => {
     expect(registry.get(DISK_HEADROOM_WORKER_KIND)).toBeDefined();
     expect(registry.get(CODERABBIT_UPDATE_WORKER_KIND)).toBeDefined();
     expect(registry.get(MERGE_CONFLICT_REBASE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(PR_SUMMARY_REFRESH_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>());
@@ -106,5 +109,7 @@ describe('worker registry', () => {
       .toBe(CODERABBIT_UPDATE_WORKER_KIND);
     expect(registry.get(MERGE_CONFLICT_REBASE_WORKER_KIND)?.factory(deps()).identity.kind)
       .toBe(MERGE_CONFLICT_REBASE_WORKER_KIND);
+    expect(registry.get(PR_SUMMARY_REFRESH_WORKER_KIND)?.factory(deps()).identity.kind)
+      .toBe(PR_SUMMARY_REFRESH_WORKER_KIND);
   });
 });

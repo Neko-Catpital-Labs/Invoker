@@ -223,6 +223,10 @@ describe('loadConfig', () => {
         maxAttempts: 4,
         confirmTimeoutMs: 30_000,
       },
+      prSummaryRefresh: {
+        pollIntervalMs: 120_000,
+        cwd: '/tmp/repo',
+      },
     };
     writeUserConfig({ prMaintenance });
     const config = loadConfig();

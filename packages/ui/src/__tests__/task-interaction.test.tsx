@@ -70,6 +70,44 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('renders task.worker_action events in the task log surface', async () => {
+    vi.mocked(mock.api.getEvents).mockResolvedValue([
+      {
+        id: 1,
+        taskId: 'task-alpha',
+        eventType: 'task.worker_action',
+        payload: JSON.stringify({
+          worker: 'coderabbit-update',
+          actionType: 'address-coderabbit-feedback',
+          status: 'completed',
+          phase: 'completed',
+          prNumber: '101',
+          summary: 'CodeRabbit feedback addressed and pushed',
+        }),
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByText('coderabbit-update address-coderabbit-feedback completed: CodeRabbit feedback addressed and pushed')).toBeInTheDocument();
+      expect(screen.getByText(/"worker":"coderabbit-update"/)).toBeInTheDocument();
+      expect(screen.getByText(/"prNumber":"101"/)).toBeInTheDocument();
+    });
+  });
+
   it('selecting a mini DAG task shows task sidebar state', async () => {
     const failedTask = makeUITask({
       id: 'task-failed',

@@ -117,6 +117,7 @@ describe('invoker-cli', () => {
     expect(output.stdout).toContain('autofix');
     expect(output.stdout).toContain('coderabbit-update');
     expect(output.stdout).toContain('merge-conflict-rebase');
+    expect(output.stdout).toContain('pr-summary-refresh');
     output.restore();
   });
 

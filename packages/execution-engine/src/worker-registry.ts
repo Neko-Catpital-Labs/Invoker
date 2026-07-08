@@ -78,3 +78,12 @@ export {
   mergeConflictRebaseActionKey,
   registerMergeConflictRebaseWorker,
 } from './workers/merge-conflict-rebase-worker.js';
+export {
+  DEFAULT_PR_SUMMARY_REFRESH_INTERVAL_MS,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
+  buildPrSummaryRefreshBody,
+  createPrSummaryRefreshTick,
+  createPrSummaryRefreshWorker,
+  prSummaryRefreshActionKey,
+  registerPrSummaryRefreshWorker,
+} from './workers/pr-summary-refresh-worker.js';
