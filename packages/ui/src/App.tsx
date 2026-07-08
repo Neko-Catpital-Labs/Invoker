@@ -856,6 +856,12 @@ export function App() {
   }, [miniDagTasks, selectedTask, selectedWorkflow, selectedWorkflowId, tasks.size, workflowSelectionDismissed]);
   const isSelectedWorkflowGraphRefreshing = displayedSelectedWorkflowGraph !== null
     && !(selectedWorkflow && miniDagTasks.size > 0);
+  // A stable "the browser-surface task graph has content" flag. It flips
+  // false→true once when the graph first appears and stays true across live
+  // task updates, whereas `displayedSelectedWorkflowGraph` is a brand-new object
+  // on every streamed tick. The browser-surface camera effect below keys off
+  // this boolean so it does not re-fire (and re-center) on every update.
+  const selectedWorkflowGraphAvailable = displayedSelectedWorkflowGraph !== null;
   const selectedTaskDagWorkflows = useMemo(() => {
     const workflowForDag = displayedSelectedWorkflowGraph?.workflow ?? selectedWorkflow;
     if (!workflowForDag || workflows.has(workflowForDag.id)) {
@@ -1515,8 +1521,14 @@ export function App() {
     if (selectedWorkerKind && workerStatus?.workers.some((worker) => worker.kind === selectedWorkerKind)) return;
     setSelectedWorkerKind(workerStatus?.workers[0]?.kind ?? null);
   }, [selectedWorkerKind, sidebarSurface, workerStatus]);
+  // On a browser surface (Needs Attention / Running / Workflows) frame the task
+  // graph once when the user lands on it, when its content first arrives, or
+  // when the selected task changes — then leave the camera alone. Keying on the
+  // stable `selectedWorkflowGraphAvailable` boolean (not the per-tick
+  // `displayedSelectedWorkflowGraph` object) is what stops live task updates
+  // from re-centering the graph on the selection while the user is panning it.
   useEffect(() => {
-    if (viewMode !== 'dag' || sidebarSurface === 'home' || displayedSelectedWorkflowGraph === null) {
+    if (viewMode !== 'dag' || sidebarSurface === 'home' || !selectedWorkflowGraphAvailable) {
       return;
     }
 
@@ -1540,9 +1552,9 @@ export function App() {
       cancelAnimationFrame(fitFrame);
     };
   }, [
-    displayedSelectedWorkflowGraph,
     issueCameraCommand,
     selectedTaskId,
+    selectedWorkflowGraphAvailable,
     sidebarSurface,
     viewMode,
   ]);
