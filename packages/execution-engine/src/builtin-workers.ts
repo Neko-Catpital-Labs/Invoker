@@ -5,6 +5,7 @@ import { registerCiFailureWorker } from './workers/ci-failure-worker.js';
 import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
 import { registerPrMaintenanceWorkers } from './workers/pr-maintenance-workers.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
+import { registerPrSummaryRefreshWorker } from './workers/pr-summary-refresh-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
 export function registerBuiltinWorkers(
@@ -12,6 +13,7 @@ export function registerBuiltinWorkers(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registerAutoFixWorker(registry);
   registerPrStatusWorker(registry);
+  registerPrSummaryRefreshWorker(registry);
   registerCiFailureWorker(registry);
   registerDiskHeadroomWorker(registry);
   registerPrMaintenanceWorkers(registry);

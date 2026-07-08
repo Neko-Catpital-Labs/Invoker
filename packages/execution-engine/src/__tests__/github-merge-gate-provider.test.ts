@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { GitHubMergeGateProvider } from '../github-merge-gate-provider.js';
 
 vi.mock('node:child_process');
@@ -299,8 +300,16 @@ describe('GitHubMergeGateProvider', () => {
           '--method', 'PATCH',
           '-f', 'base=main',
           '-f', 'title=Updated PR',
-          '-f', 'body=## Summary',
         ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining([
+          'pr', 'edit', '10',
+          '--repo', 'owner/repo',
+          '--body-file',
+        ]),
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
     });
@@ -353,8 +362,16 @@ describe('GitHubMergeGateProvider', () => {
           '--method', 'PATCH',
           '-f', 'base=main',
           '-f', 'title=Updated PR',
-          '-f', 'body=## Summary',
         ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining([
+          'pr', 'edit', '11',
+          '--repo', 'owner/repo',
+          '--body-file',
+        ]),
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
     });
@@ -453,6 +470,39 @@ describe('GitHubMergeGateProvider', () => {
           '--method', 'PATCH',
           '-f', 'state=closed',
         ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
+  });
+
+  describe('updateReviewBody', () => {
+    it('updates PR bodies through a temporary body file', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      let bodyFileContents = '';
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'edit') {
+          const bodyFileIndex = args.indexOf('--body-file');
+          bodyFileContents = readFileSync(args[bodyFileIndex + 1]!, 'utf8');
+          return mockSpawnResult('', 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await provider.updateReviewBody({
+        identifier: '42',
+        cwd: '/tmp/repo',
+        body: '## Summary\n\nBody from file',
+      });
+
+      expect(bodyFileContents).toBe('## Summary\n\nBody from file');
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['pr', 'edit', '42', '--repo', 'owner/repo', '--body-file']),
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
     });

@@ -12,6 +12,7 @@ import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   type WorkerRegistry,
   type WorkerRuntime,
@@ -21,7 +22,12 @@ import {
 
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
 
-export const AUTO_STARTED_OWNER_WORKER_KINDS = [PR_STATUS_WORKER_KIND, CI_FAILURE_WORKER_KIND, DISK_HEADROOM_WORKER_KIND] as const;
+export const AUTO_STARTED_OWNER_WORKER_KINDS = [
+  PR_STATUS_WORKER_KIND,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
+  CI_FAILURE_WORKER_KIND,
+  DISK_HEADROOM_WORKER_KIND,
+] as const;
 
 export interface WorkerRuntimeController {
   startAutoStartedWorkers(): void;
@@ -89,6 +95,7 @@ interface RuntimeHandle {
 const BUILT_IN_WORKER_KINDS = new Set<string>([
   AUTO_FIX_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
 ]);

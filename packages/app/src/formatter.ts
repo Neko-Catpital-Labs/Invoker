@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -235,6 +235,42 @@ export function formatWorkerActions(actions: WorkerActionRecord[]): string {
     );
   }
   return lines.join('\n');
+}
+
+export function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  const lines: string[] = [];
+  lines.push(`${BOLD}Workers (${snapshot.workers.length})${RESET}`);
+  lines.push(`${DIM}generatedAt=${escapeTerminalText(snapshot.generatedAt)}${RESET}`);
+  for (const worker of snapshot.workers) {
+    const lifecycle = escapeTerminalText(worker.lifecycle);
+    const policy = escapeTerminalText(worker.policy);
+    const note = escapeTerminalText(worker.note);
+    const auto = worker.autoStarts ? ' auto' : '';
+    lines.push('');
+    lines.push(`  ${BOLD}${escapeTerminalText(worker.kind)}${RESET} [${lifecycle}] policy=${policy}${auto}`);
+    if (note) {
+      lines.push(`    ${DIM}${note}${RESET}`);
+    }
+    if (worker.recentActions.length === 0) {
+      lines.push(`    ${DIM}recentActions: none${RESET}`);
+      continue;
+    }
+    lines.push('    recentActions:');
+    for (const action of worker.recentActions) {
+      lines.push(`      ${formatWorkerActionSummaryLine(action)}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function formatWorkerActionSummaryLine(action: WorkerActionSummary): string {
+  const task = action.taskId ? ` task=${escapeTerminalText(action.taskId)}` : '';
+  const workflow = action.workflowId ? ` workflow=${escapeTerminalText(action.workflowId)}` : '';
+  const completed = action.completedAt ? ` completed=${escapeTerminalText(action.completedAt)}` : '';
+  const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+  return `${escapeTerminalText(action.updatedAt)} ${escapeTerminalText(action.id)} ` +
+    `[${escapeTerminalText(action.status)}] ${escapeTerminalText(action.actionType)}` +
+    `${workflow}${task}${completed}${summary}`;
 }
 
 /**
