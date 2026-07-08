@@ -373,8 +373,15 @@ export interface InAppPlanningSessionSummary {
   draftPlanSummary?: InAppPlanningPlanSummary;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
+  transientStreamText?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PlannerStreamEvent {
+  sessionId: string;
+  chunk: string;
+  text: string;
 }
 
 export interface InAppPlanningCreateSessionRequest {
@@ -1066,6 +1073,9 @@ export const IpcEventChannels = {
   },
   'invoker:task-output': {} as {
     payload: TaskOutputData;
+  },
+  'invoker:planner-stream': {} as {
+    payload: PlannerStreamEvent;
   },
   'invoker:activity-log': {} as {
     payload: ActivityLogEntry[];
