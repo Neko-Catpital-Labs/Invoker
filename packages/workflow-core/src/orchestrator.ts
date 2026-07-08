@@ -21,7 +21,7 @@ import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
-import { createTaskState, createAttempt, isLivenessFailureClass } from '@invoker/workflow-graph';
+import { createTaskState, createAttempt, hasFailedDependencyPath, isLivenessFailureClass } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
@@ -3624,15 +3624,21 @@ export class Orchestrator {
    * mutations (`replaceTask`).
    */
   private isWorkflowLive(workflowId: string): boolean {
-    const tasks = this.stateMachine
+    const workflowTasks = this.stateMachine
       .getAllTasks()
-      .filter((t) => t.config.workflowId === workflowId && !t.config.isMergeNode);
-    return tasks.some((t) => {
+      .filter((t) => t.config.workflowId === workflowId);
+    const tasksById = new Map(workflowTasks.map((t) => [t.id, t]));
+    return workflowTasks.some((t) => {
+      if (t.config.isMergeNode) return false;
       if (!LIVE_TASK_STATUSES.has(t.status)) return false;
-      // A cascade-blocked task (blocked by a cancelled/terminated upstream
-      // rather than a still-pending external gate) cannot progress on its
-      // own, so it does not count as live work.
-      if (t.status === 'blocked' && this.getExternalDependencyBlocker(t) === undefined) {
+      // A task left `blocked` behind a terminated/failed in-workflow upstream
+      // is inert: it cannot progress until that upstream is retried, so it does
+      // not keep the workflow "live". A task blocked on an external
+      // cross-workflow gate has all its in-workflow deps satisfied (no failed
+      // path) and stays live. Deriving this from dependency status — instead of
+      // a coarse workflow-scoped heuristic — is precise per task and survives
+      // reloads, because task statuses are persisted.
+      if (t.status === 'blocked' && hasFailedDependencyPath(t, tasksById)) {
         return false;
       }
       return true;
