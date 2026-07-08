@@ -236,10 +236,10 @@ export interface WorkerStatusEntry {
   stoppedAt?: string;
   lastError?: string;
   recentActions: WorkerActionSummary[];
-  recentLogs?: WorkerLogEntry[];
+  recentLogs: WorkerLogEntry[];
   recovery?: WorkerRecoverySummary;
-  source?: WorkerSource;
-  availability?: WorkerAvailability;
+  source: WorkerSource;
+  availability: WorkerAvailability;
   running?: boolean;
 }
 

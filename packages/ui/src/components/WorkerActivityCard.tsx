@@ -70,8 +70,7 @@ export function WorkerActivityCard({
             const showStart = worker.lifecycle !== 'running';
             const isControlDisabled = Boolean(disabledTitle);
             const selected = selectedWorkerKind === worker.kind;
-            const recentLogs = worker.recentLogs ?? [];
-            const latestLog = recentLogs[0];
+            const latestLog = worker.recentLogs[0];
             const latestAction = worker.recentActions[0];
             const footer = latestLog
               ? `Latest log: ${latestLog.summary ?? formatWorkerValue(latestLog.eventType ?? latestLog.actionType ?? latestLog.source)}`
