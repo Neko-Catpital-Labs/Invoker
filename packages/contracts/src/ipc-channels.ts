@@ -177,6 +177,8 @@ export interface WorkerActionSummary {
   executionModel?: string;
   sessionId?: string;
   summary?: string;
+  reason?: string;
+  decision?: 'act' | 'skip';
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -229,6 +231,23 @@ export interface WorkerActionHistoryRequest {
 
 export interface WorkerActionHistoryResponse {
   workerKind: string;
+  actions: WorkerActionSummary[];
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  nextOffset?: number;
+}
+export interface WorkerDecisionsRequest {
+  workflowId?: string;
+  workerKind?: string;
+  decision?: 'act' | 'skip';
+  reason?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface WorkerDecisionsResponse {
+  workflowId?: string;
   actions: WorkerActionSummary[];
   limit: number;
   offset: number;
@@ -944,6 +963,10 @@ export const IpcChannels = {
   'invoker:get-worker-action-history': {} as {
     request: [request: WorkerActionHistoryRequest];
     response: WorkerActionHistoryResponse;
+  },
+  'invoker:get-worker-decisions': {} as {
+    request: [request: WorkerDecisionsRequest];
+    response: WorkerDecisionsResponse;
   },
   'invoker:start-worker': {} as {
     request: [kind: string];
