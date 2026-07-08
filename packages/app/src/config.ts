@@ -91,6 +91,8 @@ export interface InvokerConfig {
    * Default: 0 (disabled).
    */
   autoFixRetries?: number;
+  stallRequeueRetries?: number;
+  stallRequeueBackoffMs?: number;
   /**
    * When true, successful AI-applied fixes are automatically approved.
    * This skips the manual "Approve Fix" step for fix-with-agent and
