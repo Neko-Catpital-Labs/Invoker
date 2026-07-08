@@ -247,4 +247,42 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
     });
   });
+
+  it('renders task.worker_action events in the task log surface', async () => {
+    const mergeTask = makeUITask({
+      id: 'wf-a/__merge__',
+      description: 'Merge task',
+      status: 'review_ready',
+      workflowId: 'wf-a',
+      isMergeNode: true,
+    });
+    vi.mocked(mock.api.getEvents).mockResolvedValue([
+      {
+        id: 1,
+        taskId: mergeTask.id,
+        eventType: 'task.worker_action',
+        payload: JSON.stringify({
+          worker: 'pr-summary-refresh',
+          workerKind: 'pr-summary-refresh',
+          actionType: 'refresh-pr-summary',
+          status: 'completed',
+          attemptCount: 1,
+          summary: 'Updated PR body with the latest Invoker pipeline summary',
+        }),
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+
+    render(<App />);
+    act(() => mock.setTasks([mergeTask], workflows));
+
+    fireEvent.click(await screen.findByTestId('rf__node-wf-a/__merge__'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent(
+        'pr-summary-refresh/refresh-pr-summary completed - Updated PR body with the latest Invoker pipeline summary',
+      );
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('"attemptCount":1');
+    });
+  });
 });

@@ -4,6 +4,7 @@ import type { WorkerRegistry } from './worker-registry.js';
 import { registerCiFailureWorker } from './workers/ci-failure-worker.js';
 import { registerCodeRabbitUpdateWorker } from './workers/coderabbit-update-worker.js';
 import { registerMergeConflictRebaseWorker } from './workers/merge-conflict-rebase-worker.js';
+import { registerPrSummaryRefreshWorker } from './workers/pr-summary-refresh-worker.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
@@ -13,6 +14,7 @@ export function registerBuiltinWorkers(
   registerAutoFixWorker(registry);
   registerPrStatusWorker(registry);
   registerCiFailureWorker(registry);
+  registerPrSummaryRefreshWorker(registry);
   registerCodeRabbitUpdateWorker(registry);
   registerMergeConflictRebaseWorker(registry);
   return registry;

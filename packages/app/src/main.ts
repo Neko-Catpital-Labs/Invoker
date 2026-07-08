@@ -111,6 +111,7 @@ import {
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
+  GitHubMergeGateProvider,
   PR_STATUS_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
@@ -331,12 +332,15 @@ function buildRegisteredOwnerWorkerDeps(
     reviewGate: {
       checkMergeGateStatuses,
     },
+    mergeGateProvider: new GitHubMergeGateProvider(),
+    cwd: repoRoot,
     autoFix: {
       defaultAutoFixRetries: invokerConfig.autoFixRetries,
       attemptLedger: autoFixAttemptLedger,
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
     },
+    prMaintenance: invokerConfig.prMaintenance,
   };
 }
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {

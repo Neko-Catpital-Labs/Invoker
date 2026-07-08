@@ -125,6 +125,44 @@ describe('buildCanonicalPrBody', () => {
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
   });
+
+  it('renders worker Pipeline rows in time order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Worker visibility',
+      workflowSummary: 'Added worker visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'coderabbit-update',
+            actionType: 'address-coderabbit-feedback',
+            status: 'completed',
+            taskId: 'wf-1/__merge__',
+            attemptCount: 1,
+            summary: 'Addressed review feedback',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'queued',
+            taskId: 'wf-1/test',
+            attemptCount: 2,
+            summary: 'Queued CI fix',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body).toContain('| Time | Worker | Action | Status | Attempts | Target | Summary |');
+    const ciIndex = body.indexOf('ci-failure | fix-ci-failure');
+    const codeRabbitIndex = body.indexOf('coderabbit-update | address-coderabbit-feedback');
+    expect(ciIndex).toBeGreaterThan(0);
+    expect(codeRabbitIndex).toBeGreaterThan(ciIndex);
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
 });
 
 // ── validateReviewStackPrBody ────────────────────────────

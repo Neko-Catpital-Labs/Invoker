@@ -10,7 +10,10 @@ import {
 import { registerBuiltinWorkers } from '../builtin-workers.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import { createWorkerRegistry } from '../worker-registry.js';
+import { CODERABBIT_UPDATE_WORKER_KIND } from '../workers/coderabbit-update-worker.js';
 import { CI_FAILURE_WORKER_KIND } from '../workers/ci-failure-worker.js';
+import { MERGE_CONFLICT_REBASE_WORKER_KIND } from '../workers/merge-conflict-rebase-worker.js';
+import { PR_SUMMARY_REFRESH_WORKER_KIND } from '../workers/pr-summary-refresh-worker.js';
 import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
 
 const silentLogger = {
@@ -61,10 +64,14 @@ describe('worker registry', () => {
       AUTO_FIX_WORKER_KIND,
       PR_STATUS_WORKER_KIND,
       CI_FAILURE_WORKER_KIND,
+      PR_SUMMARY_REFRESH_WORKER_KIND,
+      CODERABBIT_UPDATE_WORKER_KIND,
+      MERGE_CONFLICT_REBASE_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
     expect(registry.get(CI_FAILURE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(PR_SUMMARY_REFRESH_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>());
@@ -89,5 +96,6 @@ describe('worker registry', () => {
 
     expect(registry.get(PR_STATUS_WORKER_KIND)?.factory(deps()).identity.kind).toBe(PR_STATUS_WORKER_KIND);
     expect(registry.get(CI_FAILURE_WORKER_KIND)?.factory(deps()).identity.kind).toBe(CI_FAILURE_WORKER_KIND);
+    expect(registry.get(PR_SUMMARY_REFRESH_WORKER_KIND)?.factory(deps()).identity.kind).toBe(PR_SUMMARY_REFRESH_WORKER_KIND);
   });
 });

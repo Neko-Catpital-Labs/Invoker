@@ -33,6 +33,21 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Worker action evidence rendered into the PR Pipeline section. */
+export interface PrAuthoringWorkerActionEntry {
+  workerKind: string;
+  actionType: string;
+  status: string;
+  taskId?: string;
+  subjectType?: string;
+  subjectId?: string;
+  attemptCount?: number;
+  summary?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +61,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Worker actions to expose in the PR Pipeline summary. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -244,6 +261,54 @@ export function validateReviewStackPrBody(body: string): string[] {
 
 function promptByteLength(prompt: string): number {
   return Buffer.byteLength(prompt, 'utf8');
+}
+
+function tableCell(value: unknown): string {
+  if (value === undefined || value === null || value === '') return '-';
+  return String(value)
+    .replace(/\r?\n/g, '<br>')
+    .replace(/\|/g, '\\|')
+    .trim() || '-';
+}
+
+function workerActionTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.completedAt ?? action.updatedAt ?? action.createdAt ?? '';
+}
+
+function compareWorkerActionsByTime(
+  a: PrAuthoringWorkerActionEntry,
+  b: PrAuthoringWorkerActionEntry,
+): number {
+  const at = workerActionTime(a);
+  const bt = workerActionTime(b);
+  if (at !== bt) return at.localeCompare(bt);
+  return `${a.workerKind}:${a.actionType}:${a.taskId ?? ''}:${a.subjectId ?? ''}`
+    .localeCompare(`${b.workerKind}:${b.actionType}:${b.taskId ?? ''}:${b.subjectId ?? ''}`);
+}
+
+function renderWorkerPipeline(lines: string[], workerActions: readonly PrAuthoringWorkerActionEntry[]): void {
+  if (workerActions.length === 0) return;
+
+  lines.push('## Pipeline');
+  lines.push('');
+  lines.push('| Time | Worker | Action | Status | Attempts | Target | Summary |');
+  lines.push('| --- | --- | --- | --- | ---: | --- | --- |');
+  for (const action of [...workerActions].sort(compareWorkerActionsByTime)) {
+    const target = action.taskId
+      ?? (action.subjectType || action.subjectId
+        ? `${action.subjectType ?? 'subject'}:${action.subjectId ?? '-'}`
+        : '-');
+    lines.push([
+      tableCell(workerActionTime(action)),
+      tableCell(action.workerKind),
+      tableCell(action.actionType),
+      tableCell(action.status),
+      tableCell(action.attemptCount ?? 0),
+      tableCell(target),
+      tableCell(action.summary),
+    ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+  }
+  lines.push('');
 }
 
 function buildPromptFileBootstrap(promptPath: string): string {
@@ -482,6 +547,8 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  renderWorkerPipeline(lines, args.structuredContext?.workerActions ?? []);
+
   // ## Test Plan
   lines.push('## Test Plan');
   lines.push('');
@@ -579,6 +646,20 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    if ((ctx.workerActions?.length ?? 0) > 0) {
+      lines.push('Worker actions (oldest first):');
+      for (const action of [...ctx.workerActions!].sort(compareWorkerActionsByTime)) {
+        const time = workerActionTime(action) || 'unknown time';
+        const target = action.taskId ? ` task=${action.taskId}` : '';
+        const summary = action.summary ? ` — ${action.summary}` : '';
+        lines.push(
+          `- ${time} ${action.workerKind}/${action.actionType} `
+            + `[${action.status}] attempts=${action.attemptCount ?? 0}${target}${summary}`,
+        );
+      }
+      lines.push('');
     }
 
     if (ctx.visualProofMarkdown) {

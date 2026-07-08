@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -233,6 +233,41 @@ export function formatWorkerActions(actions: WorkerActionRecord[]): string {
       `  ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${task}${attempts}${completed}${summary}`,
     );
+  }
+  return lines.join('\n');
+}
+
+function formatWorkerActionSummary(action: WorkerActionSummary): string {
+  const task = action.taskId ? ` task=${escapeTerminalText(action.taskId)}` : '';
+  const workflow = action.workflowId ? ` workflow=${escapeTerminalText(action.workflowId)}` : '';
+  const completed = action.completedAt ? ` completed=${escapeTerminalText(action.completedAt)}` : '';
+  const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+  return `    - [${action.status}] ${escapeTerminalText(action.workerKind)}/${escapeTerminalText(action.actionType)}`
+    + `${workflow}${task} attempts=${action.attemptCount} updated=${escapeTerminalText(action.updatedAt)}${completed}${summary}`;
+}
+
+export function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  if (snapshot.workers.length === 0) {
+    return `${DIM}No workers registered.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Worker status${RESET} ${DIM}(${snapshot.generatedAt})${RESET}`);
+  for (const worker of snapshot.workers) {
+    const autoStart = worker.autoStarts ? ' autoStart=yes' : ' autoStart=no';
+    const runtime = worker.instanceId ? ` instance=${escapeTerminalText(worker.instanceId)}` : '';
+    lines.push(
+      `  ${BOLD}${escapeTerminalText(worker.kind)}${RESET} [${worker.lifecycle}] policy=${worker.policy}`
+        + `${autoStart}${runtime}`,
+    );
+    if (worker.recentActions.length === 0) {
+      lines.push(`    ${DIM}No recent actions${RESET}`);
+    } else {
+      lines.push(`    Recent actions (${worker.recentActions.length})`);
+      for (const action of worker.recentActions) {
+        lines.push(formatWorkerActionSummary(action));
+      }
+    }
   }
   return lines.join('\n');
 }

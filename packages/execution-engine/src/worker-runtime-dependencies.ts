@@ -14,6 +14,7 @@ import type {
   WorkerStateStore,
 } from './worker-types.js';
 import type { CodeRabbitUpdateAgent } from './workers/coderabbit-update-worker.js';
+import type { MergeGateProvider } from './merge-gate-provider.js';
 
 export interface PrMaintenanceWorkerConfig {
   targetRepo?: string;
@@ -47,6 +48,10 @@ export interface WorkerRuntimeDependencies {
   messageBus?: MessageBus;
   /** Review-gate polling surface owned by the task runner. */
   reviewGate?: PrStatusReviewGate;
+  /** Review provider used by PR maintenance workers that update PR metadata. */
+  mergeGateProvider?: MergeGateProvider;
+  /** Repository working directory for provider CLIs. */
+  cwd?: string;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
   /** GitHub PR/comment surface used by PR maintenance workers. */

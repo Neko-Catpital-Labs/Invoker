@@ -4,6 +4,7 @@ import {
   formatWorkflowStatus,
   formatEventLog,
   formatWorkerActions,
+  formatWorkerStatusSnapshot,
   serializeWorkflow,
   serializeTask,
   serializeEvent,
@@ -14,6 +15,7 @@ import {
 } from '../formatter.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
+import type { WorkerStatusSnapshot } from '@invoker/contracts';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -215,6 +217,47 @@ describe('formatWorkerActions', () => {
     expect(output).toContain('auto\\nfix/fix\\ttask');
     expect(output).toContain('task=wf-1/task\\r1');
     expect(output).toContain('Retry\\nnext');
+  });
+});
+
+// ── formatWorkerStatusSnapshot ──────────────────────────────
+
+describe('formatWorkerStatusSnapshot', () => {
+  it('renders recent worker actions in status output', () => {
+    const snapshot: WorkerStatusSnapshot = {
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workers: [{
+        kind: 'pr-summary-refresh',
+        note: 'Refreshes PR summaries.',
+        lifecycle: 'stopped',
+        policy: 'enabled',
+        autoStarts: true,
+        startable: true,
+        stoppable: false,
+        recentActions: [{
+          id: 'action-1',
+          workerKind: 'pr-summary-refresh',
+          actionType: 'refresh-pr-summary',
+          workflowId: 'wf-1',
+          taskId: 'wf-1/__merge__',
+          subjectType: 'pull_request',
+          subjectId: '301',
+          externalKey: 'pr-summary-refresh:wf-1:301',
+          status: 'completed',
+          attemptCount: 1,
+          summary: 'Updated PR body with the latest Invoker pipeline summary',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:01:00.000Z',
+          completedAt: '2026-01-01T00:01:00.000Z',
+        }],
+      }],
+    };
+
+    const output = formatWorkerStatusSnapshot(snapshot);
+    expect(output).toContain('Worker status');
+    expect(output).toContain('pr-summary-refresh');
+    expect(output).toContain('refresh-pr-summary');
+    expect(output).toContain('Updated PR body with the latest Invoker pipeline summary');
   });
 });
 

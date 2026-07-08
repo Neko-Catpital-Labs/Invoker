@@ -27,14 +27,20 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'agentName',
   'artifactCount',
   'attempt',
+  'attemptCount',
   'baseBranch',
   'branch',
+  'actionType',
+  'externalKey',
   'featureBranch',
   'reviewId',
   'reviewUrl',
   'status',
   'reason',
   'route',
+  'summary',
+  'worker',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -81,15 +87,35 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
   return Object.keys(detail).length > 0 ? JSON.stringify(detail) : undefined;
 }
 
+function workerActionMessage(payload: Record<string, unknown> | undefined): string | undefined {
+  if (!payload) return undefined;
+  const workerKind = typeof payload.workerKind === 'string'
+    ? payload.workerKind
+    : typeof payload.worker === 'string'
+      ? payload.worker
+      : undefined;
+  const actionType = typeof payload.actionType === 'string' ? payload.actionType : undefined;
+  const status = typeof payload.status === 'string' ? payload.status : undefined;
+  if (!workerKind || !actionType || !status) return undefined;
+  const summary = typeof payload.summary === 'string' && payload.summary.trim()
+    ? ` - ${payload.summary.trim()}`
+    : '';
+  return `${workerKind}/${actionType} ${status}${summary}`;
+}
+
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
   const payloadMessage = payload?.message;
+  const workerMessage = event.eventType === 'task.worker_action'
+    ? workerActionMessage(payload)
+    : undefined;
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
     level: inferLogLevel(event, payload),
-    message: typeof payloadMessage === 'string' && payloadMessage.trim()
+    message: workerMessage
+      ?? (typeof payloadMessage === 'string' && payloadMessage.trim()
       ? payloadMessage
-      : event.eventType,
+      : event.eventType),
     detail: formatLogDetail(payload),
     createdAt: event.createdAt,
   };
