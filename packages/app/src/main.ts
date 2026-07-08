@@ -48,6 +48,7 @@ import {
   startGuiModeBootstrap,
   startMainProcessBootstrap,
 } from './bootstrap/app-bootstrap.js';
+import { createStartupWorkflowCache } from './bootstrap/startup-workflow-cache.js';
 
 const enableTestCompositor = process.env.INVOKER_E2E_ENABLE_COMPOSITOR === '1' || Boolean(process.env.CAPTURE_MODE);
 const hideE2eWindow = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_HIDE_WINDOW !== '0';
@@ -2026,6 +2027,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   let startupWorkflowId: string | null = null;
+  const startupWorkflowCache = createStartupWorkflowCache();
   // In detached viewer mode the local DB is an empty in-memory copy. Workflow
   // metadata for the bootstrap getter comes from the owner snapshot; task state
   // is derived live from `lastKnownTaskStates` (kept current by deltas).
@@ -3069,6 +3071,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
   function bootstrapInitialWorkflowState(): void {
     const workflows = listWorkflowsByStartupRecency();
+    startupWorkflowCache.set(workflows);
     lastKnownWorkflowCount = workflows.length;
     startupWorkflowId = workflows[0]?.id ?? null;
     if (!startupWorkflowId) {
@@ -3756,7 +3759,8 @@ function createEmbeddedTerminalBackendFromConfig(
     registerBootstrapStateIpc({
       ipcMain,
       getTasks: () => (ownerMode ? orchestrator.getAllTasks() : detachedViewerTasks()),
-      getWorkflows: () => detachedViewerWorkflows ?? listWorkflowsByStartupRecency(),
+      getWorkflows: () =>
+        detachedViewerWorkflows ?? startupWorkflowCache.takeOrLoad(listWorkflowsByStartupRecency),
       getInitialWorkflowId: () => startupWorkflowId,
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
