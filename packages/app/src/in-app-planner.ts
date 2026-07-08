@@ -15,6 +15,7 @@ import type {
   InAppPlanningSessionSummary,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
+  PlannerStreamEvent,
   PlanningPresetOption,
 } from '@invoker/contracts';
 import type {
@@ -24,7 +25,7 @@ import type {
   InAppPlanningSessionRecord,
 } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
-import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
+import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder, RawPlannerOutputHandler } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
 export interface LoadedGeneratedPlan {
@@ -40,6 +41,8 @@ export interface InAppPlanningSessionStore {
   deleteInAppPlanningSession(sessionId: string): void;
 }
 
+export type PlannerStreamSink = (event: PlannerStreamEvent) => void;
+
 export interface InAppPlannerDeps {
   config: InvokerConfig;
   loadGeneratedPlan: (planText: string) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
@@ -47,6 +50,7 @@ export interface InAppPlannerDeps {
   planningCommandBuilder?: PlanningCommandBuilder;
   conversationRepo?: ConversationRepository;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  onPlannerStream?: PlannerStreamSink;
 }
 
 export interface InAppPlanningChatSession {
@@ -58,6 +62,7 @@ export interface InAppPlanningChatSession {
   conversation: PlanConversation;
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
+  transientStreamText?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   createdAt: string;
@@ -203,6 +208,7 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     draftPlanSummary: session.draftPlanSummary,
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
+    transientStreamText: session.transientStreamText,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
@@ -275,10 +281,25 @@ function formatConversationalPlanningMessage(message: string): string {
   ].join('\n');
 }
 
+function makePlannerStreamHandler(
+  sessionId: string,
+  deps: { sessions: InAppPlanningChatSessions; onPlannerStream?: PlannerStreamSink },
+): RawPlannerOutputHandler | undefined {
+  const sink = deps.onPlannerStream;
+  if (!sink) return undefined;
+  return (chunk: string): void => {
+    const session = deps.sessions.get(sessionId);
+    if (!session) return;
+    session.transientStreamText = (session.transientStreamText ?? '') + chunk;
+    sink({ sessionId, chunk, text: session.transientStreamText });
+  };
+}
+
 function planConversationConfig(
   preset: HarnessPreset,
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo'>,
   threadTs: string,
+  onRawPlannerOutput?: RawPlannerOutputHandler,
 ): PlanConversationConfig {
   return {
     threadTs,
@@ -292,6 +313,7 @@ function planConversationConfig(
     experimentalPlanner: deps.config.experimentalPlanner,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
+    onRawPlannerOutput,
   };
 }
 
@@ -328,7 +350,7 @@ async function createSession(
       tone: 'muted',
       createdAt,
     }],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id)),
+    conversation: new PlanConversation(planConversationConfig(preset, deps, id, makePlannerStreamHandler(id, deps))),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 2,
@@ -461,6 +483,7 @@ export async function sendPlanningChatMessage(
     const activeSession = session;
     const previousSend = activeSession.pendingSend ?? Promise.resolve();
     const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
+      activeSession.transientStreamText = undefined;
       appendSessionMessage(activeSession, 'user', message);
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);
@@ -476,6 +499,7 @@ export async function sendPlanningChatMessage(
         if (deps.plannerReplyOverride) {
           saveOverrideConversation(deps.conversationRepo, activeSession.id, formattedMessage, reply);
         }
+        activeSession.transientStreamText = undefined;
         const planText = activeSession.conversation.getDraftedPlan() ?? extractYamlPlan(reply);
         if (!planText) {
           activeSession.draftPlanSummary = undefined;
@@ -624,7 +648,9 @@ export async function restorePlanningChatSessions(
     const preset = presets[record.presetKey];
     if (!preset) continue;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id));
+    const conversation = new PlanConversation(
+      planConversationConfig(preset, deps, record.id, makePlannerStreamHandler(record.id, deps)),
+    );
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;

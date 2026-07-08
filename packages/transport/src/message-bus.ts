@@ -47,4 +47,5 @@ export const Channels = {
   EXPERIMENT_SELECTED: 'experiment.selected',
   /** Orchestrator → surface events (workflow progress cards, etc.) for out-of-process surfaces. */
   SURFACE_EVENT: 'surface.event',
+  PLANNER_STREAM: 'planner.stream',
 } as const;

@@ -86,6 +86,7 @@ import type {
   InAppPlanningChatRequest,
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
+  PlannerStreamEvent,
   Logger,
   WorkflowMeta,
   WorkflowMutationAcceptedResult,
@@ -247,7 +248,7 @@ import {
 } from './worker-control.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
-import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
+import { buildWebInvokerDispatch, type WebPlannerRuntime } from './web/web-invoker-dispatch.js';
 import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
 import { resolveWebToken, resolveWebHost, resolveWebPort } from './web/start-web-surface.js';
 import {
@@ -433,6 +434,10 @@ let commandService: CommandService;
 // resolve via this getter at cancel-in-flight time.
 let latestTaskExecutor: TaskRunner | null = null;
 let guiUsingDaemonOwner = false;
+
+function publishPlannerStream(event: PlannerStreamEvent): void {
+  messageBus.publish(Channels.PLANNER_STREAM, event);
+}
 
 function buildCommandServiceInvalidationDeps() {
   return buildWorkflowInvalidationDeps({
@@ -1124,6 +1129,7 @@ function startHeadlessMode(): void {
         loadGeneratedPlan,
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
+        onPlannerStream: publishPlannerStream,
       });
 
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
@@ -1167,6 +1173,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              onPlannerStream: publishPlannerStream,
             });
           }
           case 'invoker:planning-chat-list': {
@@ -1181,6 +1188,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              onPlannerStream: publishPlannerStream,
             });
           }
           case 'invoker:planning-chat-submit': {
@@ -1910,6 +1918,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let workerRuntimeController: WorkerRuntimeController | null = null;
   let apiServer: ApiServer | null = null;
   let webBridge: WebBridge | null = null;
+  let resolveWebPlannerRuntime: (() => WebPlannerRuntime) | undefined;
   let ownerMode = true;
   const taskHandles: TaskHandleMap = new Map();
   const embeddedTerminalManager = new EmbeddedTerminalManager({
@@ -3214,6 +3223,7 @@ function createEmbeddedTerminalBackendFromConfig(
             presets: invokerConfig.slackHarnessPresets ?? DEFAULT_SLACK_HARNESS_PRESETS,
             defaultPreset: invokerConfig.defaultSlackHarnessPreset ?? 'cursor+claude',
           }),
+          getPlannerRuntime: () => resolveWebPlannerRuntime?.(),
           logger,
         });
         webBridge = startWebBridge({
@@ -3700,6 +3710,12 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
+    messageBus.subscribe(Channels.PLANNER_STREAM, (data: unknown) => {
+      if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
+        mainWindow.webContents.send('invoker:planner-stream', data);
+      }
+    });
+
     // Register IPC handlers
     const computeRuntimeStatus = () => (
       process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_READ_ONLY_STATUS === '1'
@@ -3782,6 +3798,16 @@ function createEmbeddedTerminalBackendFromConfig(
       warn: (message) => logger.warn(message, { module: 'planning-chat' }),
       error: (message) => logger.error(message, { module: 'planning-chat' }),
     });
+    resolveWebPlannerRuntime = () => ({
+      config: invokerConfig,
+      workingDir: repoRoot,
+      sessions: planningChatSessions,
+      planningCommandBuilder,
+      loadGeneratedPlan: loadGeneratedPlanPreview,
+      conversationRepo: planningConversationRepo,
+      planningSessionStore: ownerMode ? persistence : undefined,
+      onPlannerStream: publishPlannerStream,
+    });
     await restorePlanningChatSessions(persistence.listInAppPlanningSessions(), {
       config: invokerConfig,
       workingDir: repoRoot,
@@ -3790,6 +3816,7 @@ function createEmbeddedTerminalBackendFromConfig(
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      onPlannerStream: publishPlannerStream,
     });
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     let testPlanningChatResponse: { planYaml: string; planName: string; reply?: string } | null = null;
@@ -3817,6 +3844,7 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
+        onPlannerStream: publishPlannerStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -3835,6 +3863,7 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
+        onPlannerStream: publishPlannerStream,
         plannerReplyOverride,
       });
     });
