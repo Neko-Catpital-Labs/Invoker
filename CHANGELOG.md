@@ -24,7 +24,6 @@ All notable changes to Invoker will be documented in this file.
 - Emit first-class recovery.worker submit/skip audit events from the auto-fix worker and add a mocked browser E2E proving worker-triggered fixes reach the Approve Fix UI.
 - Add task deletion across the desktop app, HTTP API, and headless commands. Deleting a task now kills it first when needed, rewires direct dependents to the deleted task's upstream dependencies, and blocks deleting the last task in a workflow so users delete the whole workflow instead.
 - Keep the launch dispatcher topping up ready work before each poll, so queued tasks do not sit idle after launch rows expire or are abandoned.
-- Make the Workers surface's left pane show the selected worker's durable action history instead of cross-worker active work. A load-more control pages through older actions and appends them below the first page (it never replaces what is already shown), fix-with-agent rows name the triggering agent (e.g. "Fix with Claude", "Fix with Codex") when known, and pr-status keeps its "updates review gates directly" empty state. The worker process list stays selectable on the other side and the details panel still holds current work and the last recorded action.
 
 ## 0.0.6
 
