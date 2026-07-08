@@ -607,7 +607,67 @@ describe('WorkflowInspector', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reject Fix' }));
     expect(onReject).toHaveBeenCalledWith(task);
+
+    expect(screen.getByTestId('inspector-pending-fix-error')).toHaveTextContent('tests failed');
   });
+
+  it('surfaces an executor-selection failure captured in pendingFixError so approve dispatch errors are visible', () => {
+    const capabilityError =
+      'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"';
+    const task = makeTask({
+      status: 'awaiting_approval',
+      execution: {
+        pendingFixError: capabilityError,
+      },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={task}
+        collapsed={false}
+        advancedExpanded={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const panel = screen.getByTestId('inspector-pending-fix-error');
+    expect(panel).toHaveTextContent(/cannot run codex/);
+    expect(panel).toHaveTextContent(/missing execution harness "codex"/);
+  });
+
+  it('renders pendingFixError alongside execution.error when both are present', () => {
+    const task = makeTask({
+      status: 'awaiting_approval',
+      execution: {
+        error: 'exit 1',
+        exitCode: 1,
+        pendingFixError: 'Approval blocked: capability mismatch',
+      },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={task}
+        collapsed={false}
+        advancedExpanded={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('exit 1')).toBeInTheDocument();
+    expect(screen.getByTestId('inspector-pending-fix-error')).toHaveTextContent(
+      'Approval blocked: capability mismatch',
+    );
+  });
+
   it('shows selected action graph node details', () => {
     render(
       <WorkflowInspector
