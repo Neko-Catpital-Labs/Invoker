@@ -18,6 +18,12 @@ function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
 }
 
+// Planning-chat render churn thresholds. A keystroke whose reconcile + DOM
+// commit takes at least this long is jank worth flagging; reports are throttled
+// but carry the worst render seen in the window so the owner-side max is exact.
+const PLANNING_CHAT_RENDER_JANK_MS = 50;
+const PLANNING_CHAT_REPORT_THROTTLE_MS = 1000;
+
 interface InvokerTerminalProps {
   lines: InvokerTerminalLine[];
   busy: boolean;
@@ -67,6 +73,11 @@ export function InvokerTerminal({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  // Set on each keystroke (onChange); consumed by the render-latency layout
+  // effect below. `chatRenderWindowRef` accumulates the worst render since the
+  // last throttled report so throttling never hides a slower keystroke.
+  const keystrokeMarkRef = useRef<{ at: number } | null>(null);
+  const chatRenderWindowRef = useRef<{ maxRenderMs: number; lastEmitAt: number }>({ maxRenderMs: 0, lastEmitAt: 0 });
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -90,6 +101,34 @@ export function InvokerTerminal({
     if (!transcript) return;
     setShouldFollowTranscript(isTranscriptNearBottom(transcript));
   }, []);
+
+  // Measure planning-chat keystroke → commit latency. The mark is set in the
+  // textarea onChange; this layout effect runs after React commits the new
+  // value but before paint, so `now - mark.at` covers reconcile + DOM mutation
+  // for that keystroke — the churn behind beach-ball stalls while typing.
+  // Emits only jank (>= threshold), throttled, over the existing owner-side
+  // `reportUiPerf` (`ui-perf`) path; see report-ui-perf in packages/app/src/main.ts.
+  useLayoutEffect(() => {
+    const mark = keystrokeMarkRef.current;
+    keystrokeMarkRef.current = null;
+    if (!mark) return;
+    if (typeof window === 'undefined' || !window.invoker) return;
+    const renderMs = performance.now() - mark.at;
+    const win = chatRenderWindowRef.current;
+    win.maxRenderMs = Math.max(win.maxRenderMs, renderMs);
+    const now = Date.now();
+    if (win.maxRenderMs < PLANNING_CHAT_RENDER_JANK_MS) return;
+    if (now - win.lastEmitAt < PLANNING_CHAT_REPORT_THROTTLE_MS) return;
+    win.lastEmitAt = now;
+    const reportedRenderMs = win.maxRenderMs;
+    win.maxRenderMs = 0;
+    void window.invoker.reportUiPerf?.('planning_chat_render', {
+      renderMs: Math.round(reportedRenderMs),
+      lineCount: lines.length,
+      valueLength: value.length,
+      expanded,
+    });
+  }, [value, lines.length, expanded]);
 
   useEffect(() => {
     if (!busy && !readOnly) {
@@ -250,7 +289,10 @@ export function InvokerTerminal({
           value={value}
           disabled={busy || readOnly}
           rows={expanded ? 8 : 3}
-          onChange={(event) => onValueChange(event.target.value)}
+          onChange={(event) => {
+            keystrokeMarkRef.current = { at: performance.now() };
+            onValueChange(event.target.value);
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
               event.preventDefault();

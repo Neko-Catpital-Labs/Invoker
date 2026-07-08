@@ -432,4 +432,44 @@ describe('Terminal drawer (component)', () => {
       expect(mock.api.terminalClose).toHaveBeenCalledWith('mock-session-task-alpha');
     });
   });
+
+  it('reports terminal attach and output-burst perf markers', async () => {
+    const reportUiPerf = vi.fn();
+    (mock.api as unknown as { reportUiPerf: typeof reportUiPerf }).reportUiPerf = reportUiPerf;
+    const session = makeTerminalSession('task-alpha', { outputSnapshot: 'seed\n' });
+
+    const view = render(
+      <TerminalDrawer
+        state="maximized"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    // Attach cost is reported once on mount (xterm construct + open + snapshot seed).
+    await waitFor(() => {
+      const attach = reportUiPerf.mock.calls.find((c) => c[0] === 'terminal_attach');
+      expect(attach).toBeDefined();
+      expect(typeof attach![1].attachMs).toBe('number');
+      expect(attach![1].snapshotBytes).toBe('seed\n'.length);
+    });
+
+    // A burst of output well under the flush window accumulates but is not yet reported.
+    act(() => {
+      mock.fireTerminalOutput({ sessionId: session.sessionId, taskId: session.taskId, data: 'aaa' });
+      mock.fireTerminalOutput({ sessionId: session.sessionId, taskId: session.taskId, data: 'bb' });
+      mock.fireTerminalOutput({ sessionId: session.sessionId, taskId: session.taskId, data: 'cccc' });
+    });
+    expect(reportUiPerf.mock.calls.some((c) => c[0] === 'terminal_output_burst')).toBe(false);
+
+    // Unmount flushes the trailing burst with aggregate pressure (bytes / writes / max write ms).
+    view.unmount();
+    const burst = reportUiPerf.mock.calls.find((c) => c[0] === 'terminal_output_burst');
+    expect(burst).toBeDefined();
+    expect(burst![1]).toMatchObject({ writes: 3, bytes: 9 });
+    expect(typeof burst![1].maxWriteMs).toBe('number');
+  });
 });

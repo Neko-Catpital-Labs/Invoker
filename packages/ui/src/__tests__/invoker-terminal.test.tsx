@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { useState } from 'react';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -392,5 +393,52 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+
+  it('reports planning_chat_render perf markers for slow keystrokes', async () => {
+    const reportUiPerf = vi.fn();
+    (mock.api as unknown as { reportUiPerf: typeof reportUiPerf }).reportUiPerf = reportUiPerf;
+    // Force each keystroke's reconcile + commit to read as jank by advancing
+    // the perf clock 100ms on every performance.now() call.
+    let clock = 0;
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => {
+      clock += 100;
+      return clock;
+    });
+
+    function Harness(): JSX.Element {
+      const [value, setValue] = useState('');
+      return (
+        <InvokerTerminal
+          activeConversationKey="chat-1"
+          lines={[{ id: 1, text: 'First line', role: 'system' as const }]}
+          busy={false}
+          value={value}
+          selectedPresetKey="codex"
+          presetOptions={[{ key: 'codex', label: 'Codex' }]}
+          draftPlanAvailable={false}
+          onValueChange={setValue}
+          onSubmit={vi.fn()}
+          onSubmitDraft={vi.fn()}
+          onPresetChange={vi.fn()}
+          onExpand={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_render',
+        expect.objectContaining({ valueLength: 5, lineCount: 1, expanded: false }),
+      );
+    });
+    const call = reportUiPerf.mock.calls.find((c) => c[0] === 'planning_chat_render');
+    // Jank threshold in the component is 50ms; the mocked clock guarantees >= 100ms.
+    expect(call?.[1].renderMs).toBeGreaterThanOrEqual(50);
+
+    nowSpy.mockRestore();
   });
 });

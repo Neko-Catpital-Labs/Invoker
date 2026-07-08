@@ -15,6 +15,11 @@ import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
 
+// Embedded-terminal output writes are aggregated into bursts flushed at most
+// once per window; heavy xterm traffic then reports as one pressure sample
+// (bytes / writes / max write ms) instead of one IPC per write.
+const TERMINAL_OUTPUT_BURST_WINDOW_MS = 1000;
+
 /**
  * The drawer has one explicit state model:
  *   - `minimized`: only the header/tab strip; no terminal body.
@@ -97,6 +102,29 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const host = containerRef.current;
     if (!host) return;
 
+    const attachStartedAt = performance.now();
+
+    // Aggregate xterm output writes into throttled bursts over the existing
+    // owner-side reportUiPerf (`ui-perf`) path — one report per window, not one
+    // IPC per write. Flushed on the window boundary and on unmount so the
+    // trailing burst is never lost.
+    let outputBurst:
+      | { bytes: number; writes: number; writeMs: number; maxWriteMs: number; windowStartAt: number }
+      | null = null;
+    const flushOutputBurst = (): void => {
+      const burst = outputBurst;
+      outputBurst = null;
+      if (!burst || burst.writes === 0) return;
+      if (typeof window === 'undefined' || !window.invoker) return;
+      void window.invoker.reportUiPerf?.('terminal_output_burst', {
+        bytes: burst.bytes,
+        writes: burst.writes,
+        writeMs: Math.round(burst.writeMs),
+        maxWriteMs: Math.round(burst.maxWriteMs),
+        windowMs: Math.round(Date.now() - burst.windowStartAt),
+      });
+    };
+
     let term: XTermTerminal;
     let fit: FitAddon;
     try {
@@ -118,6 +146,13 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     fitRef.current = fit;
 
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    if (typeof window !== 'undefined' && window.invoker) {
+      // One-shot attach cost (xterm construction + open + snapshot seed).
+      void window.invoker.reportUiPerf?.('terminal_attach', {
+        attachMs: Math.round(performance.now() - attachStartedAt),
+        snapshotBytes: session.outputSnapshot?.length ?? 0,
+      });
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -126,10 +161,23 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
+      const writeStartedAt = performance.now();
       try {
         term.write(event.data);
       } catch {
         /* terminal disposed */
+      }
+      const writeMs = performance.now() - writeStartedAt;
+      const nowMs = Date.now();
+      if (!outputBurst) {
+        outputBurst = { bytes: 0, writes: 0, writeMs: 0, maxWriteMs: 0, windowStartAt: nowMs };
+      }
+      outputBurst.bytes += event.data.length;
+      outputBurst.writes += 1;
+      outputBurst.writeMs += writeMs;
+      outputBurst.maxWriteMs = Math.max(outputBurst.maxWriteMs, writeMs);
+      if (nowMs - outputBurst.windowStartAt >= TERMINAL_OUTPUT_BURST_WINDOW_MS) {
+        flushOutputBurst();
       }
     });
 
@@ -165,6 +213,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       resizeObserver?.disconnect();
       inputDisposable.dispose();
       unsubscribeOutput?.();
+      flushOutputBurst();
       try {
         term.dispose();
       } catch {
