@@ -101,6 +101,8 @@ describe('headless worker autofix', () => {
 
     expect(stdout).toContain('Worker kinds');
     expect(stdout).toContain('autofix');
+    expect(stdout).toContain('coderabbit-update');
+    expect(stdout).toContain('merge-conflict-rebase');
   });
 
   it('rejects unknown worker kinds with a clear error', async () => {
