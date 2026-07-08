@@ -361,6 +361,9 @@ function buildRegisteredOwnerWorkerDeps(
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,
     },
+    autoApprove: {
+      enabled: invokerConfig.autoApproveAIFixes === true,
+    },
   };
 }
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
