@@ -203,6 +203,8 @@ export interface QueryFlags {
   noMerge?: boolean;
   reset?: boolean;
   groupBy?: string;
+  decision?: string;
+  reason?: string;
   positional: string[];
 }
 
@@ -232,6 +234,16 @@ export function parseQueryFlags(args: string[]): QueryFlags {
       i += 1;
     } else if (arg === '--group-by' && i + 1 < args.length) {
       flags.groupBy = args[i + 1];
+      i += 2;
+    } else if (arg === '--decision' && i + 1 < args.length) {
+      const val = args[i + 1];
+      if (val !== 'act' && val !== 'skip') {
+        throw new Error(`Invalid --decision: "${val}". Must be act|skip.`);
+      }
+      flags.decision = val;
+      i += 2;
+    } else if (arg === '--reason' && i + 1 < args.length) {
+      flags.reason = args[i + 1];
       i += 2;
     } else if (arg.startsWith('--')) {
       throw new Error(`Unknown query flag: "${arg}"`);

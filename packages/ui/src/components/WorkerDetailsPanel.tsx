@@ -5,6 +5,7 @@ import {
   getActiveWorkerAction,
   getWorkerDisplayCopy,
 } from '../lib/worker-display.js';
+import { WorkerDecisionsSection } from './WorkerDecisionsSection.js';
 
 interface WorkerDetailsPanelProps {
   worker: WorkerStatusEntry | null;
@@ -180,6 +181,8 @@ export function WorkerDetailsPanel({ worker, tasks, collapsed, onToggleCollapsed
                 </div>
               </section>
             ) : null}
+
+            <WorkerDecisionsSection workerKind={worker.kind} />
           </>
         )}
       </div>
