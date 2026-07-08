@@ -19,6 +19,7 @@ import {
   createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
+  registerPrMaintenanceWorkers,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
@@ -43,6 +44,7 @@ import {
   type RecoveryWorkerStatus,
 } from './recovery-worker-observability.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import { resolveRegisteredOwnerPrMaintenanceConfig } from './config.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -424,7 +426,9 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerPrMaintenanceWorkers(
+      registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    ),
   );
 
   if (subCommand === 'list') {
@@ -487,6 +491,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
+      prMaintenance: resolveRegisteredOwnerPrMaintenanceConfig(deps.invokerConfig),
     });
     await worker.tick('manual');
     await worker.stop();
