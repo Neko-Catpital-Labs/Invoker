@@ -654,6 +654,55 @@ test.describe('Visual proof capture', () => {
     });
   });
 
+  test('terminal planning follows a long transcript to the newest reply', async ({ page }) => {
+    // Auto-follow proof for the planning transcript surface: build a genuinely
+    // long conversation with the repo's existing planning helper, then prove the
+    // transcript stays pinned to the newest reply without any manual scroll.
+    const plannedYaml = yamlStringify(TERMINAL_PLANNED_PLAN);
+
+    await page.getByTestId('sidebar-planning').click();
+    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+
+    const input = page.getByTestId('invoker-terminal-input');
+    const send = page.getByRole('button', { name: 'Send' });
+    const transcript = page.getByTestId('invoker-terminal-transcript');
+
+    // Drive several turns. Each reply carries a unique marker plus the full plan
+    // YAML, so the transcript overflows the collapsed pane fast. Gating the next
+    // turn on the marker guarantees the prior reply landed (and `busy` cleared)
+    // before we send again — no manual busy polling, no race.
+    const turns = 4;
+    let lastReplyMarker = '';
+    for (let turn = 1; turn <= turns; turn += 1) {
+      lastReplyMarker = `Revision ${turn} ready.`;
+      await page.evaluate(async ({ planYaml, planName, reply }) => {
+        await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply });
+      }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow', reply: lastReplyMarker });
+
+      await input.fill(`Revision request ${turn}`);
+      await send.click();
+      await expect(transcript).toContainText(`Revision request ${turn}`);
+      await expect(transcript).toContainText(lastReplyMarker);
+    }
+
+    // The transcript now overflows the collapsed pane, yet the user never
+    // scrolled, so follow mode keeps it pinned to the newest reply: the bottom
+    // is in view, within the component's 32px near-bottom tolerance.
+    const followState = await transcript.evaluate((el) => ({
+      overflowing: el.scrollHeight > el.clientHeight + 32,
+      gapFromBottom: el.scrollHeight - el.scrollTop - el.clientHeight,
+    }));
+    expect(followState.overflowing).toBe(true);
+    expect(followState.gapFromBottom).toBeLessThanOrEqual(32);
+    await expect(transcript).toContainText(lastReplyMarker);
+
+    await captureScreenshot(page, 'terminal-planning-autofollow-long-transcript');
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanningChatResponse(null);
+    });
+  });
+
   test('terminal planning submits Workers Surface as stacked workflows', async ({ page }) => {
     const plannedYaml = yamlStringify(WORKERS_SURFACE_STACKED_PLAN);
     await page.evaluate(async ({ planYaml, planName }) => {
