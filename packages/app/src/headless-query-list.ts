@@ -6,8 +6,8 @@
  * helpers, agent session resolution, and `query-select`.
  *
  * The deprecated top-level aliases (`list`, `status`, `task-status`, `queue`,
- * `audit`, `session`) route here through the `headless.ts` router. This
- * module depends only on `headless-shared.ts`.
+ * `audit`, `session`) route here through the `headless.ts` router. It depends on
+ * `headless-shared.ts` and reuses `worker-control.ts` for the worker-decisions view.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -23,6 +23,7 @@ import {
   restoreWorkflowForTask,
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
+import { listWorkerDecisions } from './worker-control.js';
 
 /**
  * The read-query family writes its formatted output through {@link writeOut}.
@@ -54,13 +55,13 @@ export type HeadlessQueryDeps = Pick<
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|worker-actions|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
   const {
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
-    formatEventLog, formatQueueStatus, formatWorkflowStats, formatWorkerActions,
+    formatEventLog, formatQueueStatus, formatWorkflowStats, formatWorkerActions, formatWorkerDecisions,
     serializeWorkflow, serializeTask, serializeEvent, serializeWorkerAction,
     formatAsLabel, formatAsJson, formatAsJsonl,
   } = await import('./formatter.js');
@@ -250,12 +251,28 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       const actions = deps.persistence.listWorkerActions({
         workflowId: workflowFilter,
         status: flags.status,
+        ...(flags.decision === 'act' || flags.decision === 'skip' ? { decision: flags.decision } : {}),
       });
       switch (flags.output) {
         case 'label': writeOut(formatAsLabel(actions) + '\n'); break;
         case 'json': writeOut(formatAsJson(actions.map(serializeWorkerAction)) + '\n'); break;
         case 'jsonl': writeOut(formatAsJsonl(actions.map(serializeWorkerAction)) + '\n'); break;
         default: writeOut(formatWorkerActions(actions) + '\n'); break;
+      }
+      break;
+    }
+    case 'worker-decisions': {
+      const workflowFilter = flags.workflow ?? flags.positional[0];
+      const response = listWorkerDecisions(deps.persistence, {
+        ...(workflowFilter ? { workflowId: workflowFilter } : {}),
+        ...(flags.decision === 'act' || flags.decision === 'skip' ? { decision: flags.decision } : {}),
+        ...(flags.reason ? { reason: flags.reason } : {}),
+      });
+      switch (flags.output) {
+        case 'label': writeOut(formatAsLabel(response.actions) + '\n'); break;
+        case 'json': writeOut(formatAsJson(response.actions) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl(response.actions) + '\n'); break;
+        default: writeOut(formatWorkerDecisions(response.actions) + '\n'); break;
       }
       break;
     }

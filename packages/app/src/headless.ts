@@ -559,6 +559,10 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query action-graph [--output F]                     Print action graph source-of-truth snapshot
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
+  query worker-actions [--workflow <id>] [--status S] [--decision act|skip]
+                                                      List durable worker action rows (all workers)
+  query worker-decisions [--workflow <id>] [--decision act|skip] [--reason <substr>]
+                                                      Show what each worker decided: submitted vs skipped, and why
   query ui-perf [--output F] [--reset]               Print live UI perf stats
   query stats [--output F]                           Aggregate stats across all workflows
 
