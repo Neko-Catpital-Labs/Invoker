@@ -35,6 +35,18 @@ export interface WorkerGitHubPullRequest {
   headSha?: string;
   branch?: string;
   baseBranch?: string;
+  title?: string;
+  body?: string;
+  mergeable?: string;
+  mergeStateStatus?: string;
+}
+
+export interface WorkerGitHubComment {
+  body: string;
+  updatedAt: string;
+  path?: string;
+  url?: string;
+  authorLogin?: string;
 }
 
 export interface WorkerGitHubCheckRun {
@@ -47,11 +59,34 @@ export interface WorkerGitHubCheckRun {
 }
 
 export interface WorkerGitHubClient {
+  listPullRequests?(args: {
+    owner: string;
+    repo: string;
+    author?: string;
+    state?: 'open' | 'closed' | 'all';
+    limit?: number;
+  }): Promise<WorkerGitHubPullRequest[]>;
   getPullRequest(args: {
     owner: string;
     repo: string;
     pullNumber: number;
   }): Promise<WorkerGitHubPullRequest | undefined>;
+  listPullRequestReviewComments?(args: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+  }): Promise<WorkerGitHubComment[]>;
+  listIssueComments?(args: {
+    owner: string;
+    repo: string;
+    issueNumber: number;
+  }): Promise<WorkerGitHubComment[]>;
+  createPullRequestComment?(args: {
+    owner: string;
+    repo: string;
+    pullNumber: number;
+    body: string;
+  }): Promise<void>;
   listCheckRuns?(args: {
     owner: string;
     repo: string;
@@ -66,4 +101,49 @@ export interface WorkerConfig {
   maxAttempts?: number;
   agentName?: string;
   executionModel?: string;
+}
+
+export interface PrMaintenanceCommandResult {
+  stdout: string;
+  stderr: string;
+}
+
+export interface PrMaintenanceCommandOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+}
+
+export type PrMaintenanceCommandRunner = (
+  command: string,
+  args: string[],
+  options?: PrMaintenanceCommandOptions,
+) => Promise<PrMaintenanceCommandResult>;
+
+export interface CoderabbitUpdateWorkerConfig {
+  targetRepo?: string;
+  author?: string;
+  login?: string;
+  maxAttempts?: number;
+  workDir?: string;
+  executionAgent?: string;
+  executionModel?: string;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
+export interface MergeConflictRebaseWorkerConfig {
+  targetRepo?: string;
+  author?: string;
+  maxAttempts?: number;
+  pollIntervalMs?: number;
+  confirmTimeoutMs?: number;
+  confirmPollIntervalMs?: number;
+}
+
+export interface PrMaintenanceAutomationConfig {
+  targetRepo?: string;
+  author?: string;
+  coderabbit?: CoderabbitUpdateWorkerConfig;
+  mergeConflictRebase?: MergeConflictRebaseWorkerConfig;
 }
