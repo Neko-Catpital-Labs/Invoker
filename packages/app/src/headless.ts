@@ -19,9 +19,11 @@ import {
   createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
+  registerPrMaintenanceWorkers,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
+  type WorkerRegistry,
 } from '@invoker/execution-engine';
 import {
   parseMetadataValue,
@@ -43,6 +45,7 @@ import {
   type RecoveryWorkerStatus,
 } from './recovery-worker-observability.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import { resolvePrMaintenanceWorkerConfig, type InvokerConfig } from './config.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -420,12 +423,49 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
   }
 }
 
+/**
+ * Registry of worker kinds a manual headless one-shot run can execute: the
+ * auto-fix recovery worker, both PR-maintenance workers (coderabbit-address
+ * and pr-conflict-rebase), and any operator-declared external workers.
+ */
+export function createHeadlessWorkerRegistry(
+  externalWorkers: InvokerConfig['externalWorkers'],
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  return registerExternalWorkersFromConfig(
+    externalWorkers,
+    registerPrMaintenanceWorkers(
+      registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    ),
+  );
+}
+
+/**
+ * Build the worker runtime dependencies for a manual headless one-shot tick.
+ * Threads the resolved `prMaintenance` launch config so the PR-maintenance
+ * worker kinds run with the same configuration owner startup would use.
+ */
+export function createHeadlessWorkerRuntimeDeps(
+  deps: Pick<HeadlessDeps, 'persistence' | 'logger' | 'invokerConfig'>,
+): WorkerRuntimeDependencies {
+  return {
+    store: deps.persistence,
+    submitter: {
+      submit: (workflowId, priority, channel, mutationArgs) =>
+        deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority),
+    },
+    logger: deps.logger,
+    autoFix: {
+      defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+      attemptLedger: createAutoFixAttemptLedger(),
+      getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
+    },
+    prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
+  };
+}
+
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
-  const registry = registerExternalWorkersFromConfig(
-    deps.invokerConfig?.externalWorkers,
-    registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
-  );
+  const registry = createHeadlessWorkerRegistry(deps.invokerConfig?.externalWorkers);
 
   if (subCommand === 'list') {
     process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
@@ -472,22 +512,8 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     }
     throw err;
   }
-  const autoFixAttemptLedger = createAutoFixAttemptLedger();
   try {
-    const worker = definition.factory({
-      store: deps.persistence,
-      submitter: {
-        submit: (workflowId, priority, channel, mutationArgs) => (
-          deps.persistence.enqueueWorkflowMutationIntent(workflowId, channel, mutationArgs, priority)
-        ),
-      },
-      logger: deps.logger,
-      autoFix: {
-        defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
-        attemptLedger: autoFixAttemptLedger,
-        getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
-      },
-    });
+    const worker = definition.factory(createHeadlessWorkerRuntimeDeps(deps));
     await worker.tick('manual');
     await worker.stop();
   } finally {
