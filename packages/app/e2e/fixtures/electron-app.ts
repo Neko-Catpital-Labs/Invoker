@@ -7,6 +7,7 @@
  */
 
 import type { TaskStateChanges } from '@invoker/workflow-core';
+import type { WorkerActionWrite } from '@invoker/data-store';
 import type { InvokerConfig } from '../../src/config.js';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
@@ -277,6 +278,14 @@ export async function injectTaskStates(
   await page.evaluate(async (u) => {
     await window.invoker.injectTaskStates!(u);
   }, resolvedUpdates);
+  await page.waitForTimeout(200);
+}
+
+/** Test-only: inject worker_actions into the owner's persistence via the NODE_ENV=test IPC. */
+export async function injectWorkerActions(page: Page, actions: WorkerActionWrite[]): Promise<void> {
+  await page.evaluate(async (a) => {
+    await window.invoker.injectWorkerActions!(a);
+  }, actions as unknown as Array<Record<string, unknown>>);
   await page.waitForTimeout(200);
 }
 

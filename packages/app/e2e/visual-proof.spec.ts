@@ -18,6 +18,7 @@ import {
   captureScreenshot,
   assertPageScreenshot,
   getTasks,
+  injectWorkerActions,
   E2E_REPO_URL,
 } from './fixtures/electron-app.js';
 import * as fs from 'node:fs/promises';
@@ -2385,5 +2386,30 @@ test.describe('Visual proof capture', () => {
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
+  });
+
+  test('worker decisions - Workers tab decisions panel', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 771 });
+    await injectWorkerActions(page, [
+      { id: 'wd-act-1', workerKind: 'autofix', actionType: 'auto-fix', subjectType: 'task', subjectId: 'wf-42/build-api', externalKey: 'autofix:wf-42/build-api:1:a1', status: 'queued', attemptCount: 1, agentName: 'claude', summary: 'Queued auto-fix with agent', payload: { channel: 'invoker:fix-with-agent' } },
+      { id: 'wd-skip-1', workerKind: 'autofix', actionType: 'auto-fix', subjectType: 'task', subjectId: 'wf-42/migrate-db', externalKey: 'autofix:wf-42/migrate-db:1:a2', status: 'skipped', summary: 'Skipped auto-fix: worker-retry-budget-exhausted', payload: { reason: 'worker-retry-budget-exhausted' } },
+      { id: 'wd-skip-2', workerKind: 'autofix', actionType: 'auto-fix', subjectType: 'task', subjectId: 'wf-42/lint-fix', externalKey: 'autofix:wf-42/lint-fix:1:a3', status: 'skipped', summary: 'Skipped auto-fix: not-eligible', payload: { reason: 'not-eligible' } },
+      { id: 'wd-act-2', workerKind: 'autofix', actionType: 'auto-fix', subjectType: 'task', subjectId: 'wf-42/typecheck', externalKey: 'autofix:wf-42/typecheck:2:a4', status: 'queued', attemptCount: 2, agentName: 'codex', summary: 'Queued auto-fix with agent' },
+    ]);
+
+    await page.getByTestId('sidebar-workers').click();
+    await expect(page.getByTestId('worker-processes-section')).toBeVisible();
+    await expect(page.getByTestId('worker-row-autofix')).toBeVisible();
+
+    const showDetails = page.getByRole('button', { name: 'Show details' });
+    if (await showDetails.count()) {
+      await showDetails.first().click();
+    }
+
+    await expect(page.getByTestId('worker-decisions-section')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('worker-decision-row').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('worker-decision-row')).toHaveCount(4);
+
+    await captureScreenshot(page, 'worker-decisions-e2e');
   });
 });
