@@ -1,7 +1,6 @@
 /**
  * Migration routines for {@link SQLiteAdapter}, as free functions over a narrow
- * {@link SqliteExecutor} context (plus a {@link SqliteMigrationHost} for the raw
- * statement runner and adapter flags the executor deliberately omits).
+ * {@link SqliteExecutor} context.
  *
  * The adapter delegates to these from one-line methods so migration control flow
  * lives here while the DDL strings still come from `./sqlite-schema.js` and run
@@ -21,25 +20,15 @@ import {
   mergeExternalDependencySets,
 } from './sqlite-external-dependencies.js';
 
-/** The low-level SQL runner the migrations need beyond {@link SqliteExecutor}. */
-interface MigrationDatabase {
-  run(sql: string, params?: unknown[]): void;
-  getRowsModified(): number;
-}
-
-/** Adapter capabilities the migration routines need beyond the executor. */
-export interface SqliteMigrationHost {
-  readonly db: MigrationDatabase;
-  readonly readOnly: boolean;
-  markDirty(): void;
-  reconcileTerminalSessionInvariants(): void;
-}
-
 /** Add columns that may not exist in older databases. */
-export function migrate(exec: SqliteExecutor, host: SqliteMigrationHost): void {
+export function migrate(
+  exec: SqliteExecutor,
+  readOnly: boolean,
+  reconcileTerminalSessionInvariants: () => void,
+): void {
   for (const sql of COLUMN_MIGRATIONS) {
     try {
-      host.db.run(sql);
+      exec.execRun(sql);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes('duplicate column name')) {
@@ -47,52 +36,50 @@ export function migrate(exec: SqliteExecutor, host: SqliteMigrationHost): void {
       }
     }
   }
-  migrateWorkflowStatusColumn(exec, host);
-  dropTaskAutoFixAttemptsColumn(exec, host);
+  migrateWorkflowStatusColumn(exec, readOnly);
+  migrateTaskAutoFixAttemptsColumn(exec, readOnly);
 
-  if (!host.readOnly) {
-    host.reconcileTerminalSessionInvariants();
+  if (!readOnly) {
+    reconcileTerminalSessionInvariants();
   }
 
   // Replace old attempt_number index with created_at index, etc.
   for (const sql of POST_MIGRATION_STATEMENTS) {
-    host.db.run(sql);
+    exec.execRun(sql);
   }
 
-  if (!host.readOnly) {
+  if (!readOnly) {
     migrateTestCommands(exec);
     migrateGatePolicyApprovedToCompleted(exec);
     migrateTaskExternalDependenciesToWorkflows(exec);
-    runCompatibilityMigration(exec, host);
+    runCompatibilityMigration(exec);
   }
 }
 
-export function migrateWorkflowStatusColumn(exec: SqliteExecutor, host: SqliteMigrationHost): void {
-  if (host.readOnly) return;
+export function migrateWorkflowStatusColumn(exec: SqliteExecutor, readOnly: boolean): void {
+  if (readOnly) return;
   const columns = exec.queryAll('PRAGMA table_info(workflows)') as Array<{ name: string }>;
   if (!columns.some((column) => column.name === 'status')) return;
 
   const foreignKeys = exec.queryOne('PRAGMA foreign_keys') as { foreign_keys?: number } | undefined;
   const foreignKeysEnabled = foreignKeys?.foreign_keys === 1;
   if (foreignKeysEnabled) {
-    host.db.run('PRAGMA foreign_keys = OFF');
+    exec.execRun('PRAGMA foreign_keys = OFF');
   }
-  host.db.run(WORKFLOWS_REBUILD_TABLE_DDL);
-  host.db.run(WORKFLOWS_REBUILD_INSERT_DDL);
-  host.db.run('DROP TABLE workflows');
-  host.db.run('ALTER TABLE workflows_new RENAME TO workflows');
+  exec.execRun(WORKFLOWS_REBUILD_TABLE_DDL);
+  exec.execRun(WORKFLOWS_REBUILD_INSERT_DDL);
+  exec.execRun('DROP TABLE workflows');
+  exec.execRun('ALTER TABLE workflows_new RENAME TO workflows');
   if (foreignKeysEnabled) {
-    host.db.run('PRAGMA foreign_keys = ON');
+    exec.execRun('PRAGMA foreign_keys = ON');
   }
-  host.markDirty();
 }
 
-export function dropTaskAutoFixAttemptsColumn(exec: SqliteExecutor, host: SqliteMigrationHost): void {
-  if (host.readOnly) return;
+export function migrateTaskAutoFixAttemptsColumn(exec: SqliteExecutor, readOnly: boolean): void {
+  if (readOnly) return;
   const columns = exec.queryAll('PRAGMA table_info(tasks)') as Array<{ name: string }>;
   if (!columns.some((column) => column.name === 'auto_fix_attempts')) return;
-  host.db.run('ALTER TABLE tasks DROP COLUMN auto_fix_attempts');
-  host.markDirty();
+  exec.execRun('ALTER TABLE tasks DROP COLUMN auto_fix_attempts');
 }
 
 /**
@@ -213,10 +200,7 @@ export function migrateTaskExternalDependenciesToWorkflows(exec: SqliteExecutor)
   }
 }
 
-export function runCompatibilityMigration(
-  exec: SqliteExecutor,
-  host: SqliteMigrationHost,
-): {
+export function runCompatibilityMigration(exec: SqliteExecutor): {
   migratedFixingWithAiStatuses: number;
   normalizedMergeModes: number;
   staleAutoFixExperimentTasks: number;
@@ -233,25 +217,25 @@ export function runCompatibilityMigration(
     backfilledMissingSshPoolMemberIds: 0,
   };
   exec.runTransaction(() => {
-    host.db.run(
+    exec.execRun(
       `UPDATE tasks
          SET status = 'fixing_with_ai'
          WHERE status = 'running' AND is_fixing_with_ai = 1`,
     );
-    report.migratedFixingWithAiStatuses = host.db.getRowsModified();
+    report.migratedFixingWithAiStatuses = rowsModified(exec);
 
-    host.db.run(
+    exec.execRun(
       `UPDATE tasks
          SET is_fixing_with_ai = 0
          WHERE status = 'fixing_with_ai' AND is_fixing_with_ai != 0`,
     );
 
-    host.db.run(
+    exec.execRun(
       `UPDATE workflows
          SET merge_mode = 'external_review'
          WHERE merge_mode = 'github'`,
     );
-    report.normalizedMergeModes = host.db.getRowsModified();
+    report.normalizedMergeModes = rowsModified(exec);
 
     const staleAutoFixRows = exec.queryAll(
       `SELECT id FROM tasks
@@ -267,7 +251,7 @@ export function runCompatibilityMigration(
              )
            )`,
     );
-    host.db.run(
+    exec.execRun(
       `UPDATE tasks
          SET status = 'stale',
              error = 'Stale auto-fix experiment branch; migrated to modern retry model',
@@ -287,7 +271,7 @@ export function runCompatibilityMigration(
     );
     report.staleAutoFixExperimentTasks = staleAutoFixRows.length;
 
-    host.db.run(
+    exec.execRun(
       `UPDATE tasks
          SET launch_phase = NULL,
              launch_started_at = NULL,
@@ -297,7 +281,7 @@ export function runCompatibilityMigration(
            AND started_at IS NOT NULL
            AND (julianday(started_at) - julianday(launch_started_at)) * 86400.0 > 3600.0`,
     );
-    report.normalizedStaleLaunchMetadata = host.db.getRowsModified();
+    report.normalizedStaleLaunchMetadata = rowsModified(exec);
 
     const nowIso = new Date().toISOString();
     const stalePendingLaunchRows = exec.queryAll(
@@ -325,7 +309,7 @@ export function runCompatibilityMigration(
     if (stalePendingLaunchRows.length > 0) {
       const taskIds = stalePendingLaunchRows.map((row) => String(row.id));
       const taskPlaceholders = taskIds.map(() => '?').join(', ');
-      host.db.run(
+      exec.execRun(
         `UPDATE tasks
               SET launch_phase = NULL,
                   launch_started_at = NULL,
@@ -340,7 +324,7 @@ export function runCompatibilityMigration(
         .filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
       if (attemptIds.length > 0) {
         const attemptPlaceholders = attemptIds.map(() => '?').join(', ');
-        host.db.run(
+        exec.execRun(
           `UPDATE attempts
                 SET status = 'pending',
                     claimed_at = NULL,
@@ -354,7 +338,7 @@ export function runCompatibilityMigration(
       report.normalizedStaleLaunchMetadata += stalePendingLaunchRows.length;
     }
 
-    host.db.run(
+    exec.execRun(
       `UPDATE task_launch_dispatch
          SET state = 'abandoned',
              completed_at = ?,
@@ -381,9 +365,9 @@ export function runCompatibilityMigration(
            )`,
       [nowIso],
     );
-    report.normalizedLegacyAcknowledgedLaunchDispatches += host.db.getRowsModified();
+    report.normalizedLegacyAcknowledgedLaunchDispatches += rowsModified(exec);
 
-    host.db.run(
+    exec.execRun(
       `UPDATE task_launch_dispatch
          SET state = 'leased',
              leased_at = COALESCE(leased_at, acknowledged_at, ?),
@@ -393,9 +377,9 @@ export function runCompatibilityMigration(
            AND fenced_until >= ?`,
       [nowIso, nowIso],
     );
-    report.normalizedLegacyAcknowledgedLaunchDispatches += host.db.getRowsModified();
+    report.normalizedLegacyAcknowledgedLaunchDispatches += rowsModified(exec);
 
-    host.db.run(
+    exec.execRun(
       `UPDATE task_launch_dispatch
          SET state = 'enqueued',
              dispatch_owner = NULL,
@@ -404,7 +388,7 @@ export function runCompatibilityMigration(
              fenced_until = NULL
          WHERE state = 'acknowledged'`,
     );
-    report.normalizedLegacyAcknowledgedLaunchDispatches += host.db.getRowsModified();
+    report.normalizedLegacyAcknowledgedLaunchDispatches += rowsModified(exec);
 
     // One-time compatibility backfill for SSH tasks created before
     // pool_member_id was durably written to tasks. Runtime routing must use
@@ -428,7 +412,7 @@ export function runCompatibilityMigration(
     for (const row of missingSshPoolRows) {
       const poolMemberId = parseExecutorSelectedPoolMemberId(row.payload);
       if (!poolMemberId) continue;
-      host.db.run(
+      exec.execRun(
         `UPDATE tasks
            SET pool_member_id = ?,
                task_state_version = task_state_version + 1
@@ -439,10 +423,15 @@ export function runCompatibilityMigration(
              AND TRIM(workspace_path) != ''`,
         [poolMemberId, row.id],
       );
-      report.backfilledMissingSshPoolMemberIds += host.db.getRowsModified();
+      report.backfilledMissingSshPoolMemberIds += rowsModified(exec);
     }
   });
   return report;
+}
+
+function rowsModified(exec: SqliteExecutor): number {
+  const row = exec.queryOne('SELECT changes() AS rows_modified') as { rows_modified?: number | bigint } | undefined;
+  return Number(row?.rows_modified ?? 0);
 }
 
 function rewritePnpmTestCommand(cmd: string): string {

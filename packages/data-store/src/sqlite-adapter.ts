@@ -68,11 +68,10 @@ import {
   runCompatibilityMigration,
   migrate,
   migrateWorkflowStatusColumn,
-  dropTaskAutoFixAttemptsColumn,
+  migrateTaskAutoFixAttemptsColumn,
   migrateTestCommands,
   migrateGatePolicyApprovedToCompleted,
   migrateTaskExternalDependenciesToWorkflows,
-  type SqliteMigrationHost,
 } from './sqlite-migrations.js';
 import {
   mapRowToWorkflow,
@@ -659,17 +658,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
     };
   }
 
-  private migrationHost(): SqliteMigrationHost {
-    return {
-      db: this.db,
-      readOnly: this.readOnly,
-      markDirty: () => {
-        this.dirty = true;
-      },
-      reconcileTerminalSessionInvariants: () => this.reconcileTerminalSessionInvariants(),
-    };
-  }
-
   runCompatibilityMigration(): {
     migratedFixingWithAiStatuses: number;
     normalizedMergeModes: number;
@@ -678,7 +666,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     normalizedLegacyAcknowledgedLaunchDispatches: number;
     backfilledMissingSshPoolMemberIds: number;
   } {
-    return runCompatibilityMigration(this.sqliteExecutor(), this.migrationHost());
+    return runCompatibilityMigration(this.sqliteExecutor());
   }
 
   checkpointWal(mode: 'PASSIVE' | 'FULL' | 'RESTART' | 'TRUNCATE' = 'PASSIVE'): void {
@@ -707,25 +695,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.db.run(SCHEMA_DDL);
   }
 
-  private migrate(): void {
-    migrate(this.sqliteExecutor(), this.migrationHost());
-  }
+  private migrate(): void { migrate(this.sqliteExecutor(), this.readOnly, () => this.reconcileTerminalSessionInvariants()); }
 
-  private migrateWorkflowStatusColumn(): void {
-    migrateWorkflowStatusColumn(this.sqliteExecutor(), this.migrationHost());
-  }
+  private migrateWorkflowStatusColumn(): void { migrateWorkflowStatusColumn(this.sqliteExecutor(), this.readOnly); }
 
-  private dropTaskAutoFixAttemptsColumn(): void {
-    dropTaskAutoFixAttemptsColumn(this.sqliteExecutor(), this.migrationHost());
-  }
+  private dropTaskAutoFixAttemptsColumn(): void { migrateTaskAutoFixAttemptsColumn(this.sqliteExecutor(), this.readOnly); }
 
-  private migrateTestCommands(): void {
-    migrateTestCommands(this.sqliteExecutor());
-  }
+  private migrateTestCommands(): void { migrateTestCommands(this.sqliteExecutor()); }
 
-  private migrateGatePolicyApprovedToCompleted(): void {
-    migrateGatePolicyApprovedToCompleted(this.sqliteExecutor());
-  }
+  private migrateGatePolicyApprovedToCompleted(): void { migrateGatePolicyApprovedToCompleted(this.sqliteExecutor()); }
 
   private buildWorkflowAfterChanges(
     before: Workflow,
@@ -761,9 +739,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return after;
   }
 
-  private migrateTaskExternalDependenciesToWorkflows(): void {
-    migrateTaskExternalDependenciesToWorkflows(this.sqliteExecutor());
-  }
+  private migrateTaskExternalDependenciesToWorkflows(): void { migrateTaskExternalDependenciesToWorkflows(this.sqliteExecutor()); }
 
   private reconcileTerminalSessionInvariants(): void {
     const rows = this.queryAll(
