@@ -35,7 +35,12 @@ afterEach(() => {
 });
 
 describe('delete-all-snapshot', () => {
-  it('creates delete-all snapshot with sqlite sidecar files', () => {
+  it('snapshots the main .db only — never copies live -wal/-shm sidecars', () => {
+    // Pre-fix behavior raw-copied -wal and -shm alongside .db. That is unsafe
+    // against a live SQLite owner: the -shm file is the wal-index, and
+    // concurrent third-party access to it corrupts the owner connection
+    // (see the 2026-07-08 field failure that produced hours of SQLITE_IOERR
+    // 522 loops). The snapshot must not touch the sidecars.
     const root = makeDbRoot();
     const dbPath = join(root, 'invoker.db');
     writeFileSync(dbPath, 'db-main');
@@ -44,23 +49,27 @@ describe('delete-all-snapshot', () => {
 
     const snapshot = createDeleteAllSnapshot(root);
     expect(snapshot).toContain(join(root, 'db-backups', 'invoker.db.before-delete-all-'));
-    expect(existsSync(snapshot)).toBe(true);
-    expect(existsSync(`${snapshot}-wal`)).toBe(true);
-    expect(existsSync(`${snapshot}-shm`)).toBe(true);
-    expect(readFileSync(snapshot, 'utf-8')).toBe('db-main');
-    expect(readFileSync(`${snapshot}-wal`, 'utf-8')).toBe('db-wal');
-    expect(readFileSync(`${snapshot}-shm`, 'utf-8')).toBe('db-shm');
+    expect(existsSync(snapshot as string)).toBe(true);
+    expect(readFileSync(snapshot as string, 'utf-8')).toBe('db-main');
+    expect(existsSync(`${snapshot}-wal`)).toBe(false);
+    expect(existsSync(`${snapshot}-shm`)).toBe(false);
   });
 
   it('creates hourly snapshots with hourly-auto label', () => {
     const root = makeDbRoot();
     const dbPath = join(root, 'invoker.db');
     writeFileSync(dbPath, 'db-main');
+    writeFileSync(`${dbPath}-wal`, 'db-wal');
+    writeFileSync(`${dbPath}-shm`, 'db-shm');
 
     const snapshot = createHourlySnapshot(root);
     expect(snapshot).toContain(join(root, 'db-backups', 'invoker.db.hourly-auto-'));
-    expect(existsSync(snapshot)).toBe(true);
-    expect(readFileSync(snapshot, 'utf-8')).toBe('db-main');
+    expect(existsSync(snapshot as string)).toBe(true);
+    expect(readFileSync(snapshot as string, 'utf-8')).toBe('db-main');
+    // Same WAL safety invariant as the delete-all snapshot: the live wal-index
+    // must be left alone.
+    expect(existsSync(`${snapshot}-wal`)).toBe(false);
+    expect(existsSync(`${snapshot}-shm`)).toBe(false);
   });
 
   it('returns null when DB does not exist', () => {
@@ -84,7 +93,7 @@ describe('delete-all-snapshot', () => {
     mkdirSync(join(root, 'db-backups'), { recursive: true });
 
     const snapshot = createDeleteAllSnapshot(root);
-    expect(readFileSync(snapshot, 'utf-8')).toBe('restored-db');
+    expect(readFileSync(snapshot as string, 'utf-8')).toBe('restored-db');
   });
 });
 
@@ -123,7 +132,9 @@ describe('hourly snapshot retention', () => {
     expect(existsSync(join(backupDir, 'invoker.db.hourly-auto-20260101-000004-000Z'))).toBe(true);
   });
 
-  it('pruneHourlySnapshots deletes the -wal/-shm sidecars of pruned snapshots', () => {
+  it('pruneHourlySnapshots deletes any legacy -wal/-shm sidecars of pruned snapshots', () => {
+    // Pre-fix snapshots on disk carry -wal/-shm sidecars; pruning must clean
+    // those up too so upgraded hosts don't leak sidecars indefinitely.
     const root = makeDbRoot();
     const backupDir = join(root, 'db-backups');
     seedHourly(backupDir, 4, true);
