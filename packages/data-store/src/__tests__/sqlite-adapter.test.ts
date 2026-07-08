@@ -803,6 +803,15 @@ describe('SQLiteAdapter', () => {
       expect(adapter.listWorkerActions({ workerKind: 'autofix', limit: 1, offset: 1 }).map((action) => action.id)).toEqual(['wa-1']);
       expect(adapter.listWorkerActions({ limit: 0 })).toEqual([]);
     });
+
+    it('filters worker actions by decision class derived from status', () => {
+      adapter.upsertWorkerAction(makeWorkerAction({ id: 'wa-act', externalKey: 'dec-act', status: 'queued', updatedAt: '2026-01-01T00:00:01.000Z' }));
+      adapter.upsertWorkerAction(makeWorkerAction({ id: 'wa-skip', externalKey: 'dec-skip', status: 'skipped', updatedAt: '2026-01-01T00:00:02.000Z' }));
+      adapter.upsertWorkerAction(makeWorkerAction({ id: 'wa-done', externalKey: 'dec-done', status: 'completed', updatedAt: '2026-01-01T00:00:03.000Z' }));
+
+      expect(adapter.listWorkerActions({ decision: 'skip' }).map((action) => action.id)).toEqual(['wa-skip']);
+      expect(adapter.listWorkerActions({ decision: 'act' }).map((action) => action.id)).toEqual(['wa-done', 'wa-act']);
+    });
   });
 
   describe('execution resource leases', () => {
