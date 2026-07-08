@@ -13,6 +13,8 @@ import {
   createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
+  registerCoderabbitUpdateWorker,
+  registerMergeConflictRebaseWorker,
   registerExternalWorkers,
   WorkerLockHeldError,
   registerBuiltinAgents,
@@ -111,6 +113,29 @@ type CliRuntimeConfig = {
   autoFixAgent?: string;
   autoFixExecutionModel?: string;
   autoApproveAIFixes?: boolean;
+  prMaintenance?: {
+    targetRepo?: string;
+    author?: string;
+    coderabbit?: {
+      targetRepo?: string;
+      author?: string;
+      login?: string;
+      maxAttempts?: number;
+      workDir?: string;
+      executionAgent?: string;
+      executionModel?: string;
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+    };
+    mergeConflictRebase?: {
+      targetRepo?: string;
+      author?: string;
+      maxAttempts?: number;
+      pollIntervalMs?: number;
+      confirmTimeoutMs?: number;
+      confirmPollIntervalMs?: number;
+    };
+  };
   externalWorkers?: ExternalWorkerConfig[];
 };
 
@@ -472,6 +497,7 @@ async function createDefaultMessageBus(): Promise<MessageBus> {
 function readWorkerConfig(homeRoot: string): {
   autoFixRetries?: number;
   autoFixAgent?: string;
+  prMaintenance?: CliRuntimeConfig['prMaintenance'];
   externalWorkers?: ExternalWorkerConfig[];
 } {
   const configPath = join(homeRoot, 'config.json');
@@ -481,6 +507,7 @@ function readWorkerConfig(homeRoot: string): {
     return {
       autoFixRetries: typeof parsed.autoFixRetries === 'number' ? parsed.autoFixRetries : undefined,
       autoFixAgent: typeof parsed.autoFixAgent === 'string' ? parsed.autoFixAgent : undefined,
+      prMaintenance: parsed.prMaintenance,
       externalWorkers: Array.isArray(parsed.externalWorkers) ? parsed.externalWorkers : undefined,
     };
   } catch (err) {
@@ -515,7 +542,7 @@ function isExternalWorkerRuntime(worker: WorkerRuntime): worker is ExternalWorke
 async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>, bus: MessageBus): Promise<number> {
   const owner = await discoverLiveOwner(bus);
   const homeRoot = resolveInvokerHomeRoot();
-  const { autoFixRetries, autoFixAgent } = readWorkerConfig(homeRoot);
+  const { autoFixRetries, autoFixAgent, prMaintenance } = readWorkerConfig(homeRoot);
 
   // Single-instance guard: refuse if another worker of this kind (this door or
   // the dev `--headless worker <kind>` door) already holds the cross-process
@@ -553,6 +580,7 @@ async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>
         attemptLedger: autoFixAttemptLedger,
         getAutoFixAgent: () => autoFixAgent,
       },
+      prMaintenance,
     });
 
     worker.start();
@@ -596,7 +624,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';
       const registry = registerExternalWorkers(
-        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+        registerCliBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
         readWorkerConfig(resolveInvokerHomeRoot()).externalWorkers,
       );
       if (subcommand === 'list') {
@@ -665,6 +693,15 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       disconnect.call(bus);
     }
   }
+}
+
+function registerCliBuiltinWorkers(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registerAutoFixWorker(registry);
+  registerCoderabbitUpdateWorker(registry);
+  registerMergeConflictRebaseWorker(registry);
+  return registry;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
