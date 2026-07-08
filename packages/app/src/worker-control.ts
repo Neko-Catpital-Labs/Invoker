@@ -2,6 +2,8 @@ import type {
   WorkerActionHistoryRequest,
   WorkerActionHistoryResponse,
   WorkerActionSummary,
+  WorkerDecisionsRequest,
+  WorkerDecisionsResponse,
   WorkerPolicyStatus,
   WorkerRecoverySummary,
   WorkerStatusEntry,
@@ -73,6 +75,55 @@ export function listWorkerActionHistory(
   const hasMore = rows.length > limit;
   return {
     workerKind,
+    actions,
+    limit,
+    offset,
+    hasMore,
+    ...(hasMore ? { nextOffset: offset + actions.length } : {}),
+  };
+}
+
+export function listWorkerDecisions(
+  persistence: Pick<SQLiteAdapter, 'listWorkerActions'>,
+  request: WorkerDecisionsRequest,
+): WorkerDecisionsResponse {
+  const workflowId = typeof request?.workflowId === 'string' && request.workflowId.trim().length > 0
+    ? request.workflowId.trim()
+    : undefined;
+  const workerKind = typeof request?.workerKind === 'string' && request.workerKind.trim().length > 0
+    ? request.workerKind.trim()
+    : undefined;
+  const decision = request?.decision === 'act' || request?.decision === 'skip' ? request.decision : undefined;
+  const reasonNeedle = typeof request?.reason === 'string' && request.reason.trim().length > 0
+    ? request.reason.trim().toLowerCase()
+    : undefined;
+  const limit = Math.min(
+    positiveIntegerOrDefault(request?.limit, DEFAULT_WORKER_ACTION_HISTORY_LIMIT),
+    MAX_WORKER_ACTION_HISTORY_LIMIT,
+  );
+  const offset = nonNegativeIntegerOrZero(request?.offset);
+  const baseFilters = {
+    ...(workflowId ? { workflowId } : {}),
+    ...(workerKind ? { workerKind } : {}),
+    ...(decision ? { decision } : {}),
+  };
+
+  let actions: WorkerActionSummary[];
+  let hasMore: boolean;
+  if (reasonNeedle) {
+    const matched = persistence.listWorkerActions(baseFilters)
+      .map(toWorkerActionSummary)
+      .filter((action) => (action.reason ?? '').toLowerCase().includes(reasonNeedle));
+    actions = matched.slice(offset, offset + limit);
+    hasMore = matched.length > offset + limit;
+  } else {
+    const rows = persistence.listWorkerActions({ ...baseFilters, limit: limit + 1, offset });
+    actions = rows.slice(0, limit).map(toWorkerActionSummary);
+    hasMore = rows.length > limit;
+  }
+
+  return {
+    ...(workflowId ? { workflowId } : {}),
     actions,
     limit,
     offset,
@@ -254,6 +305,11 @@ function getControlDisabledReason(canControl: boolean): string | undefined {
 }
 
 export function toWorkerActionSummary(action: WorkerActionRecord): WorkerActionSummary {
+  const payload = action.payload;
+  const rawReason = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>).reason
+    : undefined;
+  const reason = typeof rawReason === 'string' && rawReason.length > 0 ? rawReason : undefined;
   return {
     id: action.id,
     workerKind: action.workerKind,
@@ -270,6 +326,8 @@ export function toWorkerActionSummary(action: WorkerActionRecord): WorkerActionS
     ...(action.executionModel ? { executionModel: action.executionModel } : {}),
     ...(action.sessionId ? { sessionId: action.sessionId } : {}),
     ...(action.summary ? { summary: action.summary } : {}),
+    ...(reason ? { reason } : {}),
+    decision: action.status === 'skipped' ? 'skip' : 'act',
     createdAt: action.createdAt,
     updatedAt: action.updatedAt,
     ...(action.completedAt ? { completedAt: action.completedAt } : {}),

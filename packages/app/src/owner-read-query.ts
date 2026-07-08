@@ -1,10 +1,10 @@
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { WorkerActionHistoryRequest, WorkerActionHistoryResponse, WorkerStatusSnapshot } from '@invoker/contracts';
+import type { WorkerActionHistoryRequest, WorkerActionHistoryResponse, WorkerDecisionsRequest, WorkerDecisionsResponse, WorkerStatusSnapshot } from '@invoker/contracts';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { isHeadlessReadOnlyCommand } from './headless-command-classification.js';
 import { runReadOnlyHeadlessQueryToString, type HeadlessQueryDeps } from './headless-query-list.js';
-import { listWorkerActionHistory } from './worker-control.js';
+import { listWorkerActionHistory, listWorkerDecisions } from './worker-control.js';
 
 /**
  * Shared dispatcher for the owner's `headless.query` IPC channel.
@@ -30,6 +30,7 @@ export interface OwnerReadQueryHandlers {
   resetUiPerfStats: () => void;
   getQueueStatus: () => Record<string, unknown>;
   listWorkerActionHistory: (request: WorkerActionHistoryRequest) => WorkerActionHistoryResponse;
+  listWorkerDecisions: (request: WorkerDecisionsRequest) => WorkerDecisionsResponse;
   getWorkerStatus: () => WorkerStatusSnapshot;
   getWorkflowStatus: (workflowId?: string) => Record<string, unknown>;
   getTasksSnapshot: (opts: { refresh: boolean }) => Record<string, unknown>;
@@ -57,6 +58,8 @@ export function answerOwnerReadQuery(
     taskId?: string;
     fromOffset?: number;
     workerKind?: string;
+    decision?: string;
+    reason?: string;
     limit?: number;
     offset?: number;
   };
@@ -80,6 +83,14 @@ export function answerOwnerReadQuery(
     ...(body.limit !== undefined ? { limit: body.limit } : {}),
     ...(body.offset !== undefined ? { offset: body.offset } : {}),
   });
+  const workerDecisionsRequest = (): WorkerDecisionsRequest => ({
+    ...(typeof body.workflowId === 'string' ? { workflowId: body.workflowId } : {}),
+    ...(typeof body.workerKind === 'string' ? { workerKind: body.workerKind } : {}),
+    ...(body.decision === 'act' || body.decision === 'skip' ? { decision: body.decision } : {}),
+    ...(typeof body.reason === 'string' ? { reason: body.reason } : {}),
+    ...(body.limit !== undefined ? { limit: body.limit } : {}),
+    ...(body.offset !== undefined ? { offset: body.offset } : {}),
+  });
 
 
   switch (kind) {
@@ -92,6 +103,8 @@ export function answerOwnerReadQuery(
       return { workerStatus: handlers.getWorkerStatus() };
     case 'worker-action-history':
       return { workerActionHistory: handlers.listWorkerActionHistory(workerActionHistoryRequest()) };
+    case 'worker-decisions':
+      return { workerDecisions: handlers.listWorkerDecisions(workerDecisionsRequest()) };
     case 'workflow-status':
       return handlers.getWorkflowStatus(body.workflowId);
     case 'tasks':
@@ -193,6 +206,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     getQueueStatus: () => orchestrator.getQueueStatus() as unknown as Record<string, unknown>,
     getWorkerStatus: deps.getWorkerStatus,
     listWorkerActionHistory: (request: WorkerActionHistoryRequest) => listWorkerActionHistory(persistence, request),
+    listWorkerDecisions: (request: WorkerDecisionsRequest) => listWorkerDecisions(persistence, request),
     getWorkflowStatus: (workflowId?: string) => orchestrator.getWorkflowStatus(workflowId) as unknown as Record<string, unknown>,
     getTasksSnapshot: ({ refresh }) => {
       if (refresh) orchestrator.syncAllFromDb();
