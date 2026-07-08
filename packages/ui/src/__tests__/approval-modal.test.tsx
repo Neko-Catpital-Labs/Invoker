@@ -882,4 +882,36 @@ describe('ApprovalModal', () => {
     );
     expect(screen.getByText('Confirm Create PR')).toBeInTheDocument();
   });
+
+  // ── Bug 3 repro: reject-button label does not reflect onFinish ──────────
+  // Heading and approve button branch on onFinish (Confirm Pull Request /
+  // Confirm Create PR), but the reject button stays "Reject Merge" for a
+  // pull_request gate. The user is rejecting a PR-creation confirmation,
+  // not a merge, so the label reads wrong.
+  it.fails('reject button says "Reject PR" (not "Reject Merge") for onFinish="pull_request"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Reject PR' })).toBeInTheDocument();
+  });
+
+  it.fails('confirm-reject button says "Confirm Reject PR" for onFinish="pull_request"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /reject/i }));
+    expect(screen.getByRole('button', { name: 'Confirm Reject PR' })).toBeInTheDocument();
+  });
 });
