@@ -182,25 +182,6 @@ export function beginFixSessionImpl(
   return startFixSession(host, task, task.status, opts.savedError);
 }
 
-/**
- * @deprecated Use `beginFixSessionImpl`. Failed-only entry guard kept for
- * callers not yet migrated; removed once call sites move over.
- */
-export function beginConflictResolutionImpl(
-  host: MergeHost,
-  taskId: string,
-  expectedLineage?: TaskLineageExpectation,
-): { savedError: string } {
-  host.refreshFromDb();
-  const task = host.stateGetTask(taskId);
-  if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-  if (!host.taskMatchesLineageExpectation(task, expectedLineage)) {
-    throw new Error(`Task ${taskId} lineage is stale for conflict resolution start`);
-  }
-  if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
-  return startFixSession(host, task, task.status, undefined);
-}
-
 function startFixSession(
   host: MergeHost,
   task: TaskState,
@@ -327,26 +308,6 @@ export function revertFixSessionImpl(
     fixError: opts.fixError ?? null,
   });
   publishTaskDelta(host.messageBus, delta);
-}
-
-/**
- * @deprecated Use `revertFixSessionImpl`. Always restores `failed`; removed
- * once call sites move over.
- */
-export function revertConflictResolutionImpl(
-  host: MergeHost,
-  taskId: string,
-  savedError: string,
-  fixError?: string,
-  expectedLineage?: TaskLineageExpectation,
-): void {
-  host.refreshFromDb();
-  const task = host.stateGetTask(taskId);
-  if (!task) {
-    throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-  }
-  if (!host.taskMatchesLineageExpectation(task, expectedLineage)) return;
-  restoreFailedEntry(host, task, savedError, fixError);
 }
 
 function restoreFailedEntry(

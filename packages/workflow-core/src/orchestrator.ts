@@ -110,9 +110,7 @@ import {
 import {
   recreateWorkflowFromFreshBaseImpl,
   getKnownFreshBaseCommitImpl,
-  beginConflictResolutionImpl,
   beginFixSessionImpl,
-  revertConflictResolutionImpl,
   revertFixSessionImpl,
   getMergeNodeImpl,
 } from './orchestrator/merge.js';
@@ -2638,27 +2636,6 @@ export class Orchestrator {
     },
   ): void {
     revertFixSessionImpl(this as unknown as MergeHost, taskId, opts);
-  }
-
-  /**
-   * @deprecated Use `beginFixSession`. Failed-only entry guard kept for
-   * callers not yet migrated; removed once call sites move over.
-   */
-  beginConflictResolution(taskId: string, expectedLineage?: TaskLineageExpectation): { savedError: string } {
-    return beginConflictResolutionImpl(this as unknown as MergeHost, taskId, expectedLineage);
-  }
-
-  /**
-   * @deprecated Use `revertFixSession`. Always restores `failed`; removed
-   * once call sites move over.
-   */
-  revertConflictResolution(
-    taskId: string,
-    savedError: string,
-    fixError?: string,
-    expectedLineage?: TaskLineageExpectation,
-  ): void {
-    revertConflictResolutionImpl(this as unknown as MergeHost, taskId, savedError, fixError, expectedLineage);
   }
 
   /**
