@@ -4,19 +4,33 @@ import { resolveInvokerHomeRoot } from '@invoker/contracts';
 
 export { resolveInvokerHomeRoot };
 
+/**
+ * Caller-supplied backup implementation, expected to write a fully
+ * consistent single-file SQLite database at `destinationPath`.
+ *
+ * In production this is bound to `SQLiteAdapter.backupTo`, which uses the
+ * SQLite online backup API (via `node:sqlite`). That path is the reason
+ * this callback exists: it checkpoints the WAL frames into the destination
+ * as part of the backup, producing a snapshot that includes recent commits
+ * still living in the source database's `-wal` file. The raw `copyFileSync`
+ * fallback below preserves the sidecar-free WAL safety introduced in the
+ * previous slice but produces a potentially stale snapshot (any commits
+ * still in the live `-wal` are missing).
+ */
+export type SnapshotBackupFn = (destinationPath: string) => Promise<void>;
+
 function utcTimestampCompact(): string {
   const iso = new Date().toISOString();
   return iso.replace(/[-:]/g, '').replace('T', '-').replace('.', '-');
 }
 
-function createDbSnapshot(
+async function createDbSnapshot(
   label: string,
-  invokerHomeRoot: string = resolveInvokerHomeRoot(),
-): string | null {
+  invokerHomeRoot: string,
+  backup: SnapshotBackupFn | undefined,
+): Promise<string | null> {
   const dbPath = path.join(invokerHomeRoot, 'invoker.db');
-  if (!existsSync(dbPath)) {
-    return null;
-  }
+  if (!existsSync(dbPath)) return null;
 
   const backupDir = path.join(invokerHomeRoot, 'db-backups');
   mkdirSync(backupDir, { recursive: true });
@@ -24,16 +38,18 @@ function createDbSnapshot(
   const stamp = utcTimestampCompact();
   const snapshotPath = path.join(backupDir, `invoker.db.${label}-${stamp}`);
 
-  // Copy the main .db file only. The pre-fix code also raw-copied
-  // `invoker.db-wal` and `invoker.db-shm`, which corrupts the live SQLite
-  // owner: the `-shm` file is SQLite's shared-memory wal-index, and
-  // concurrent third-party access to it under a live WAL connection is
-  // unsafe. On macOS/APFS it repeatedly dropped the running Electron
-  // process into a persistent `SQLITE_IOERR` (errcode 522) loop (see the
-  // 2026-07-08 field failure in ~/.invoker/invoker.log). SQLite's
-  // documented safe backup path for a live database is the online backup
-  // API or `VACUUM INTO` — not raw file copy of the sidecars.
-  copyFileSync(dbPath, snapshotPath);
+  if (backup) {
+    // WAL-safe AND WAL-complete path: the callback (SQLiteAdapter.backupTo)
+    // checkpoints the source's WAL frames into the snapshot as part of the
+    // online backup, producing a fully up-to-date single-file DB. Nothing
+    // touches the live `-shm`, so the owner connection is unaffected.
+    await backup(snapshotPath);
+  } else {
+    // Fallback for callers without a live adapter (e.g. one-off restore
+    // utilities): copy the main .db only. This is WAL-safe but may miss
+    // commits still in the live `-wal`. Preserved for backward compatibility.
+    copyFileSync(dbPath, snapshotPath);
+  }
 
   return snapshotPath;
 }
@@ -41,13 +57,15 @@ function createDbSnapshot(
 /**
  * Create a DB snapshot before destructive `delete-all`.
  *
- * Returns the snapshot path, or `null` when the DB file does not exist
- * yet (fresh install / restore utility).
+ * `backup` should be `SQLiteAdapter.backupTo` bound to the running owner
+ * adapter. When omitted, falls back to a sidecar-free file copy of the
+ * main `.db` — WAL-safe but potentially stale.
  */
-export function createDeleteAllSnapshot(
+export async function createDeleteAllSnapshot(
   invokerHomeRoot: string = resolveInvokerHomeRoot(),
-): string | null {
-  return createDbSnapshot('before-delete-all', invokerHomeRoot);
+  backup?: SnapshotBackupFn,
+): Promise<string | null> {
+  return createDbSnapshot('before-delete-all', invokerHomeRoot, backup);
 }
 
 const DEFAULT_HOURLY_SNAPSHOT_RETENTION = 48;
@@ -112,12 +130,18 @@ export function pruneHourlySnapshots(backupDir: string, retain: number): number 
   return removed;
 }
 
-/** Hourly periodic backup snapshot, bounded by `INVOKER_HOURLY_BACKUP_RETENTION`. */
-export function createHourlySnapshot(
+/**
+ * Hourly periodic backup snapshot, bounded by `INVOKER_HOURLY_BACKUP_RETENTION`.
+ *
+ * `backup` should be `SQLiteAdapter.backupTo` bound to the running owner
+ * adapter — see {@link createDeleteAllSnapshot} for rationale.
+ */
+export async function createHourlySnapshot(
   invokerHomeRoot: string = resolveInvokerHomeRoot(),
+  backup?: SnapshotBackupFn,
   retain: number = hourlySnapshotRetention(),
-): string | null {
-  const snapshotPath = createDbSnapshot('hourly-auto', invokerHomeRoot);
+): Promise<string | null> {
+  const snapshotPath = await createDbSnapshot('hourly-auto', invokerHomeRoot, backup);
   if (snapshotPath !== null) {
     pruneHourlySnapshots(path.join(invokerHomeRoot, 'db-backups'), retain);
   }
