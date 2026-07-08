@@ -267,8 +267,8 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     await (executor as any).cloneMergeWorktree(cloneSource, clonePath);
 
     expect(calls).toEqual([
-      ['clone', '--local', '--no-checkout', cloneSource, clonePath],
-      ['clone', '--no-local', '--no-checkout', cloneSource, clonePath],
+      ['clone', '--local', '--no-checkout', '--', cloneSource, clonePath],
+      ['clone', '--no-local', '--no-checkout', '--', cloneSource, clonePath],
     ]);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('retrying without hardlinks'));
   });
