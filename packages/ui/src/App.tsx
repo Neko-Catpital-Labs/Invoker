@@ -2909,7 +2909,7 @@ export function App() {
 
     const copy = getWorkerDisplayCopy(selectedWorker.kind);
     const activeAction = getActiveWorkerAction(selectedWorker);
-    const recentLogs = selectedWorker.recentLogs ?? [];
+    const recentLogs = selectedWorker.recentLogs;
     const hasResponseHistory = selectedWorker.recentActions.length > 0 || recentLogs.length > 0;
 
     return (
