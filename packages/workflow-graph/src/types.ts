@@ -183,6 +183,7 @@ export interface TaskExecution {
   readonly inputPrompt?: string;
   readonly exitCode?: number;
   readonly error?: string;
+  readonly failureClass?: FailureClass;
   readonly protocolErrorCode?: string;
   readonly protocolErrorMessage?: string;
   readonly startedAt?: Date;

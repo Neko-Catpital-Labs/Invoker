@@ -56,6 +56,7 @@ export const TASK_EXECUTION_RESET_RULES = {
   inputPrompt: clearFor(['detach', 'newAttempt']),
   exitCode: clearFor(retryRecreateDetachNewAttempt),
   error: clearFor(retryRecreateDetachNewAttempt),
+  failureClass: clearFor(retryRecreateDetachNewAttempt),
   protocolErrorCode: preserve,
   protocolErrorMessage: preserve,
   startedAt: clearFor(launchReset),
