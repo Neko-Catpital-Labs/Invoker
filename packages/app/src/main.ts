@@ -803,6 +803,27 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   });
   // Upgrade root logger with DB persistence now that SQLiteAdapter is ready.
   logger = new FileAndDbLogger({ module: 'main' }, { persistence });
+  // Surface auto-restore / empty-fallback loudly so a silent quarantine can never
+  // repeat the "boot shows zero tasks with no explanation" incident. Owner-only
+  // adapters carry `corruptionRecovery`; detached viewers never do.
+  if (persistence.corruptionRecovery) {
+    const { detectedAt, quarantinedPath, restoredFromSnapshot } = persistence.corruptionRecovery;
+    if (restoredFromSnapshot) {
+      logger.warn(
+        `[db-recovery] Corrupt database quarantined to ${quarantinedPath} at ${detectedAt}; ` +
+          `auto-restored from clean hourly snapshot ${restoredFromSnapshot}. ` +
+          'Activity between the snapshot timestamp and the corruption event is lost.',
+        { module: 'db-recovery' },
+      );
+    } else {
+      logger.error(
+        `[db-recovery] Corrupt database quarantined to ${quarantinedPath} at ${detectedAt}; ` +
+          'NO clean hourly snapshot available — started with an empty database. ' +
+          `Historical rows may still be recoverable from ${quarantinedPath} via sqlite3 .recover.`,
+        { module: 'db-recovery' },
+      );
+    }
+  }
   const shellEnv = await initializeShellEnvironment();
   if (process.platform === 'darwin') {
     const suffix = shellEnv.reason ? ` (${shellEnv.reason})` : '';
@@ -818,6 +839,19 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       hourlyBackupInterval = setInterval(() => {
         void (async () => {
           try {
+            // Refuse to propagate a corrupt image into the snapshot ring. Once
+            // the live DB is damaged, every subsequent hourly snapshot rewrites
+            // the ring with the corrupt file, so the next boot has no clean
+            // candidate for `SQLiteAdapter.create`'s auto-restore invariant. A
+            // failed quick_check MUST skip that hour and log loudly.
+            if (!persistence.quickCheck()) {
+              logger.error(
+                'hourly snapshot skipped: source DB failed PRAGMA quick_check. ' +
+                  'The snapshot ring is preserved so the next boot can auto-restore from the last clean image.',
+                { module: 'backup' },
+              );
+              return;
+            }
             const snapshot = await createHourlySnapshot(invokerHomeRoot, backupViaOwner);
             if (snapshot) {
               logger.info(`hourly snapshot: ${snapshot}`, { module: 'backup' });

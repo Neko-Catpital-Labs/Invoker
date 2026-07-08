@@ -8,17 +8,19 @@
 import {
   appendFileSync,
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
   readFileSync,
   readSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import type {
   TaskState,
@@ -215,6 +217,74 @@ export function isDatabaseCorruptionError(err: unknown): boolean {
   // Fallback for runtimes that do not surface a numeric errcode.
   const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
   return message.includes('malformed') || message.includes('not a database');
+}
+
+/**
+ * Metadata attached to an adapter that opened via the corruption-recovery
+ * branch of {@link SQLiteAdapter.create}. `restoredFromSnapshot` is the source
+ * of the recovered data when auto-restore succeeded, or `null` when no clean
+ * hourly snapshot was available and the adapter fell back to an empty schema.
+ * `quarantinedPath` always points at the preserved pre-recovery file so the
+ * user can attempt manual `.recover` later.
+ */
+export interface CorruptionRecovery {
+  readonly detectedAt: string;
+  readonly quarantinedPath: string;
+  readonly restoredFromSnapshot: string | null;
+}
+
+/** Prefix produced by `createHourlySnapshot` in `packages/app/src/delete-all-snapshot.ts`. */
+const HOURLY_SNAPSHOT_LABEL = 'hourly-auto-';
+
+/**
+ * Run `PRAGMA quick_check` on the raw file at `dbPath`. Returns `true` iff the
+ * check reports a single `'ok'` row. Any open failure, IO error, or non-ok row
+ * yields `false` so callers can treat the file as unusable without unwrapping
+ * SQLite error taxonomy. The connection is closed before returning so we never
+ * leave a `-shm` mapping on a file we're about to copy or ignore.
+ */
+async function fileQuickCheckOk(dbPath: string): Promise<boolean> {
+  try {
+    const { DatabaseSync } = await loadNativeSqlite();
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const rows = db.prepare('PRAGMA quick_check').all() as Array<{ quick_check?: unknown }>;
+      return rows.length === 1 && rows[0]?.quick_check === 'ok';
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find the newest `<dbBasename>.hourly-auto-*` file in `backupDir` whose
+ * `quick_check` passes. Returns `null` when the directory is missing, has no
+ * matching snapshots, or every candidate is corrupt. Snapshot names embed an
+ * ISO-derived timestamp (`YYYYMMDD-HHMMSS-mmmZ`), so lexicographic descending
+ * order is chronologically newest-first.
+ */
+async function findLatestCleanHourlySnapshot(
+  backupDir: string,
+  dbBasename: string,
+): Promise<string | null> {
+  let entries: string[];
+  try {
+    entries = readdirSync(backupDir);
+  } catch {
+    return null;
+  }
+  const prefix = `${dbBasename}.${HOURLY_SNAPSHOT_LABEL}`;
+  const snapshots = entries
+    .filter((name) => name.startsWith(prefix) && !name.endsWith('-wal') && !name.endsWith('-shm'))
+    .sort()
+    .reverse();
+  for (const name of snapshots) {
+    const candidate = join(backupDir, name);
+    if (await fileQuickCheckOk(candidate)) return candidate;
+  }
+  return null;
 }
 
 class NativeStatementCompat {
@@ -464,8 +534,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private activityLogWritesSincePrune = 0;
   private readonly exclusiveLocking: boolean;
 
+  /**
+   * Non-null only when this adapter was opened via the corruption-recovery
+   * branch of {@link SQLiteAdapter.create}. Callers (e.g. `main.ts`) surface
+   * this to the user so a silent auto-restore or empty-DB fallback is never
+   * invisible again. Field, not method, so it's cheap to check on every boot.
+   */
+  readonly corruptionRecovery: CorruptionRecovery | null;
+
   /** Use SQLiteAdapter.create() instead. */
-  private constructor(db: DatabaseSync, dbPath: string | null, options?: SQLiteAdapterOptions) {
+  private constructor(
+    db: DatabaseSync,
+    dbPath: string | null,
+    options?: SQLiteAdapterOptions,
+    corruptionRecovery: CorruptionRecovery | null = null,
+  ) {
     this.nativeDb = db;
     this.db = new NativeDatabaseCompat(db);
     this.dbPath = dbPath;
@@ -474,6 +557,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.exclusiveLocking = options?.exclusiveLocking === true;
+    this.corruptionRecovery = corruptionRecovery;
     this.configureConnection(dbPath !== null);
     if (!this.readOnly) {
       this.initSchema();
@@ -548,19 +632,70 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (!isFile || options?.readOnly === true || !existsSync(dbPath) || !isDatabaseCorruptionError(err)) {
         throw err;
       }
+      const detectedAt = new Date().toISOString();
       const backupPath = `${dbPath}.corrupt-${Date.now()}`;
       console.error(
         `[SQLiteAdapter] Database corrupted (${err instanceof Error ? err.message : String(err)}). ` +
-        `Backing up to ${backupPath} and starting fresh.`,
+        `Quarantining to ${backupPath}.`,
       );
       renameSync(dbPath, backupPath);
       for (const suffix of ['-wal', '-shm']) {
         const sidecar = `${dbPath}${suffix}`;
         if (existsSync(sidecar)) renameSync(sidecar, `${backupPath}${suffix}`);
       }
+
+      // Data-preserving recovery: prefer the newest clean hourly snapshot over
+      // silently starting empty. The invariant only holds if the snapshot is
+      // itself intact (quick_check == ok), so we walk newest-first and skip
+      // any candidate whose pages are also damaged.
+      const backupDir = join(dirname(dbPath), 'db-backups');
+      const cleanSnapshot = await findLatestCleanHourlySnapshot(backupDir, basename(dbPath));
+      let restoredFromSnapshot: string | null = null;
+      if (cleanSnapshot) {
+        try {
+          copyFileSync(cleanSnapshot, dbPath);
+          restoredFromSnapshot = cleanSnapshot;
+          console.error(
+            `[SQLiteAdapter] Auto-restored ${dbPath} from clean snapshot ${cleanSnapshot}.`,
+          );
+        } catch (copyErr) {
+          console.error(
+            `[SQLiteAdapter] Failed to restore from ${cleanSnapshot}: ` +
+              (copyErr instanceof Error ? copyErr.message : String(copyErr)) +
+              '. Falling back to empty database.',
+          );
+        }
+      } else {
+        console.error(
+          `[SQLiteAdapter] No clean hourly snapshot in ${backupDir}; starting fresh empty database.`,
+        );
+      }
+
+      const recovery: CorruptionRecovery = {
+        detectedAt,
+        quarantinedPath: backupPath,
+        restoredFromSnapshot,
+      };
       const { DatabaseSync } = await loadNativeSqlite();
       const db = new DatabaseSync(dbPath);
-      return new SQLiteAdapter(db, dbPath, options);
+      return new SQLiteAdapter(db, dbPath, options, recovery);
+    }
+  }
+
+  /**
+   * Cheap ("~milliseconds on hundreds of MB") integrity gate for the live
+   * connection. Returns `true` iff SQLite's `PRAGMA quick_check` produces a
+   * single `'ok'` row. Callers use this to refuse destructive downstream work
+   * on a damaged DB — most importantly, to skip the hourly snapshot when the
+   * source is corrupt (otherwise the corruption propagates into every backup
+   * and defeats the auto-restore invariant in {@link SQLiteAdapter.create}).
+   */
+  quickCheck(): boolean {
+    try {
+      const rows = this.nativeDb.prepare('PRAGMA quick_check').all() as Array<{ quick_check?: unknown }>;
+      return rows.length === 1 && rows[0]?.quick_check === 'ok';
+    } catch {
+      return false;
     }
   }
 
