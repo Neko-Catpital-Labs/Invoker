@@ -1,5 +1,8 @@
 import type { Logger } from '@invoker/contracts';
 import type {
+  WorkerActionRecord,
+  WorkerActionStatus,
+  WorkerActionWrite,
   WorkflowMutationIntent,
   WorkflowMutationIntentStatus,
   WorkflowMutationPriority,
@@ -21,6 +24,7 @@ import {
   shouldSkipAutoFixForError,
   isLivenessFailureTask,
 } from './auto-fix-gating.js';
+import { recordWorkerDecisionRow, isMeaningfulSkipReason } from './worker-decision-ledger.js';
 import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from './lifecycle-events.js';
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
 import type { WorkerRegistry } from './worker-registry.js';
@@ -33,6 +37,7 @@ export const RECOVERY_WORKER_KIND = 'recovery';
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
 const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
+const AUTO_FIX_ACTION_TYPE = 'auto-fix';
 
 const AUTO_FIX_WORKER_AUDIT_EVENTS: Record<string, { eventType: string; action: 'submit' | 'skip' }> = {
   'worker-autofix-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
@@ -47,6 +52,8 @@ export interface AutoFixRecoveryStore {
     workflowId?: string,
     statuses?: WorkflowMutationIntentStatus[],
   ): WorkflowMutationIntent[];
+  getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
+  upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
 }
 
@@ -259,6 +266,43 @@ function logAutoFixWorkerEvent(
   });
 }
 
+function recordAutoFixDecisionRow(
+  options: AutoFixRecoveryPolicyOptions,
+  candidate: AutoFixRecoveryCandidate,
+  fields: {
+    status: WorkerActionStatus;
+    summary: string;
+    reason?: string;
+    intentId?: number;
+    agentName?: string;
+    incrementAttempt?: boolean;
+    extraPayload?: Record<string, unknown>;
+  },
+): void {
+  recordWorkerDecisionRow(options.store, {
+    workerKind: AUTO_FIX_WORKER_KIND,
+    actionType: AUTO_FIX_ACTION_TYPE,
+    externalKey: `${AUTO_FIX_WORKER_KIND}:${candidate.taskId}:${candidate.generation}:${candidate.attemptId ?? ''}`,
+    subjectType: 'task',
+    subjectId: candidate.taskId,
+    workflowId: candidate.workflowId,
+    taskId: candidate.taskId,
+    status: fields.status,
+    summary: fields.summary,
+    reason: fields.reason,
+    intentId: fields.intentId,
+    agentName: fields.agentName,
+    incrementAttempt: fields.incrementAttempt,
+    payload: {
+      source: candidate.source,
+      generation: candidate.generation,
+      attemptId: candidate.attemptId ?? null,
+      taskStateVersion: candidate.taskStateVersion,
+      ...fields.extraPayload,
+    },
+  });
+}
+
 function skipAutoFixCandidate(
   options: AutoFixRecoveryPolicyOptions,
   candidate: AutoFixRecoveryCandidate,
@@ -274,6 +318,14 @@ function skipAutoFixCandidate(
     attemptId: candidate.attemptId ?? null,
     ...details,
   });
+  if (isMeaningfulSkipReason(reason)) {
+    recordAutoFixDecisionRow(options, candidate, {
+      status: 'skipped',
+      summary: `Skipped auto-fix: ${reason}`,
+      reason,
+      extraPayload: details,
+    });
+  }
 }
 
 function compareAutoFixCandidateSnapshot(
@@ -422,6 +474,17 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         attemptId: candidate.attemptId ?? null,
         agent: selectedAgent ?? null,
         workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+      });
+      recordAutoFixDecisionRow(options, candidate, {
+        status: 'queued',
+        summary: 'Queued auto-fix with agent',
+        intentId,
+        agentName: selectedAgent,
+        incrementAttempt: true,
+        extraPayload: {
+          channel: AUTO_FIX_COMMAND_CHANNEL,
+          workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+        },
       });
     }
   };

@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -232,6 +232,34 @@ export function formatWorkerActions(actions: WorkerActionRecord[]): string {
     lines.push(
       `  ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${task}${attempts}${completed}${summary}`,
+    );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
+  if (actions.length === 0) {
+    return `${DIM}No worker decisions found.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Worker decisions (${actions.length})${RESET}`);
+  for (const action of actions) {
+    const decision = (action.decision ?? (action.status === 'skipped' ? 'skip' : 'act')).toUpperCase();
+    const id = escapeTerminalText(action.id);
+    const workerKind = escapeTerminalText(action.workerKind);
+    const actionType = escapeTerminalText(action.actionType);
+    const subject = action.taskId
+      ? ` task=${escapeTerminalText(action.taskId)}`
+      : ` ${escapeTerminalText(action.subjectType)}=${escapeTerminalText(action.subjectId)}`;
+    const workflow = action.workflowId ? ` workflow=${escapeTerminalText(action.workflowId)}` : '';
+    const attempts = ` attempts=${action.attemptCount}`;
+    const agent = action.agentName ? ` agent=${escapeTerminalText(action.agentName)}` : '';
+    const reason = action.reason ? ` reason=${escapeTerminalText(action.reason)}` : '';
+    const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+    lines.push(
+      `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
+        `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
     );
   }
   return lines.join('\n');
