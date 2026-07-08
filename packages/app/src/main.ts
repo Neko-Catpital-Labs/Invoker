@@ -73,7 +73,6 @@ import type {
 } from '@invoker/workflow-core';
 import {
   makeEnvelope,
-  CommandError,
   IpcChannels,
   resolveInvokerIpcSocketPath,
   resolveRepoRoot,
@@ -134,9 +133,7 @@ import {
 } from './config.js';
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
-  assertExecutionCapacityInvariant,
   resolveEffectiveMaxConcurrency,
-  shouldFatalOnExecutionCapacityOvercommit,
 } from './execution-capacity.js';
 import {
   createHourlySnapshot,
@@ -290,7 +287,7 @@ import {
   requireWiredTaskRunner,
   type TaskHandleMap,
 } from './execution/task-runner-wiring.js';
-import { createWorkflowTaskActions } from './execution/workflow-task-actions.js';
+import { createWorkflowTaskActions, parseExecutionDate } from './execution/workflow-task-actions.js';
 import {
   createMainWindow,
   registerMainWindowActivateHandler,
@@ -2221,24 +2218,17 @@ function createEmbeddedTerminalBackendFromConfig(
     getCommandService: () => commandService,
     getActiveMutationContext: () => activeMutationContext,
     getWorkflowMutationCoordinator: () => workflowMutationCoordinator,
-    logger,
+    getLogger: () => logger,
     invokerConfig,
     taskHandles,
     workflowMutationDispatcher,
     killRunningTask,
+    cancelDeferredWorkflowLaunch,
     requireTaskExecutor,
     requestWorkflowMetadataPublish,
     workflowIdForTaskArg,
     runWorkflowMutation,
   });
-
-  const parseExecutionDate = (value: unknown): Date | undefined => {
-    if (!value) return undefined;
-    if (value instanceof Date) return value;
-    if (typeof value !== 'string') return undefined;
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-  };
 
   registerMainWindowSecondInstanceHandler({
     app,

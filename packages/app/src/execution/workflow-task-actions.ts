@@ -27,25 +27,18 @@ import type {
 } from '../persisted-workflow-mutation-coordinator.js';
 import type { TaskHandleMap } from './task-runner-wiring.js';
 
-/**
- * Dependencies for the workflow/task action orchestration extracted from
- * main.ts. The core services (orchestrator, commandService, persistence) and
- * the mutable mutation state are reassigned by initServices() and the reset
- * paths, so they are exposed as getters read at invocation time — never
- * captured at construction. Stable references (logger, invokerConfig,
- * taskHandles, the dispatcher map) and main.ts wiring closures pass by value.
- */
 export interface WorkflowTaskActionsDeps {
   getOrchestrator: () => Orchestrator;
   getPersistence: () => SQLiteAdapter;
   getCommandService: () => CommandService;
   getActiveMutationContext: () => WorkflowMutationContext | undefined;
   getWorkflowMutationCoordinator: () => PersistedWorkflowMutationCoordinator | null;
-  logger: Logger;
+  getLogger: () => Logger;
   invokerConfig: InvokerConfig;
   taskHandles: TaskHandleMap;
   workflowMutationDispatcher: Map<string, (...args: unknown[]) => Promise<unknown>>;
   killRunningTask: (taskId: string) => Promise<void>;
+  cancelDeferredWorkflowLaunch: (workflowId: string, reason: string) => void;
   requireTaskExecutor: () => TaskRunner;
   requestWorkflowMetadataPublish: (reason: string) => void;
   workflowIdForTaskArg: (taskIdArg: unknown) => string | undefined;
@@ -58,6 +51,14 @@ export interface WorkflowTaskActionsDeps {
   ) => Promise<T>;
 }
 
+export function parseExecutionDate(value: unknown): Date | undefined {
+  if (!value) return undefined;
+  if (value instanceof Date) return value;
+  if (typeof value !== 'string') return undefined;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
 export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
   const {
     getOrchestrator,
@@ -65,7 +66,7 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
     getCommandService,
     getActiveMutationContext,
     getWorkflowMutationCoordinator,
-    logger,
+    getLogger,
     invokerConfig,
     taskHandles,
     workflowMutationDispatcher,
@@ -136,7 +137,7 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
         buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
       );
     }
-    logger.info(
+    getLogger().info(
       `[auto-fix-debug] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
       { module: 'auto-fix' },
     );
@@ -154,7 +155,7 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
     }
     const savedError = task.execution.error ?? '';
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
-    logger.info(
+    getLogger().info(
       `fix-with-agent: "${taskId}" agent=${agentName ?? DEFAULT_EXECUTION_AGENT} source=${source} route=${recoveryRoute.kind}`,
       { module: 'ipc' },
     );
@@ -162,7 +163,7 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
     const result = await fixWithAgentAction(
       taskId,
       {
-        logger,
+        logger: getLogger(),
         orchestrator: getOrchestrator(),
         persistence: getPersistence(),
         commandService: getCommandService(),
@@ -230,7 +231,7 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
       })
       .catch((err) => {
         if (err instanceof StaleLineageError) {
-          logger.info(`auto-fix discarded stale result for "${taskId}": ${err.message}`, { module: 'auto-fix' });
+          getLogger().info(`auto-fix discarded stale result for "${taskId}": ${err.message}`, { module: 'auto-fix' });
           return;
         }
         logAutoFixDebug(taskId, 'schedule-dispatch-error', {
@@ -248,7 +249,7 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
         label,
       });
     } catch (err) {
-      logger.error(err instanceof Error ? err.stack ?? err.message : String(err), { module: 'exec' });
+      getLogger().error(err instanceof Error ? err.stack ?? err.message : String(err), { module: 'exec' });
       setImmediate(() => {
         throw err;
       });
@@ -256,7 +257,6 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
     }
   }
 
-  /** Cancel a task and cascade-kill all downstream DAG dependents. Shared by IPC, headless, and API. */
   async function performCancelTask(taskId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
     const envelope = makeEnvelope('cancel-task', 'ui', 'task', { taskId });
     const cmdResult = await getCommandService().cancelTask(envelope);
@@ -268,7 +268,7 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
   }
 
   async function performDeleteTask(taskId: string): Promise<void> {
-    logger.info(`performDeleteTask begin task="${taskId}"`, { module: 'kill' });
+    getLogger().info(`performDeleteTask begin task="${taskId}"`, { module: 'kill' });
     const task = getOrchestrator().getTask(taskId);
     const workflowId = task?.config.workflowId;
     if (task && (task.status === 'running' || task.status === 'fixing_with_ai')) {
@@ -285,7 +285,7 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
       await dispatchStartedTasksWithGlobalTopup({
         orchestrator: getOrchestrator(),
         taskExecutor: requireTaskExecutor(),
-        logger,
+        logger: getLogger(),
         context: 'ipc.delete-task',
         started: result.data,
         scopedTaskIds: result.data.map((startedTask) => startedTask.id),
@@ -295,30 +295,28 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
       remoteFetchForPool.enabled = true;
     }
     requestWorkflowMetadataPublish('delete-task');
-    logger.info(`performDeleteTask end task="${taskId}"`, { module: 'kill' });
+    getLogger().info(`performDeleteTask end task="${taskId}"`, { module: 'kill' });
   }
 
-  /** Cancel all active tasks in a workflow and kill any running processes. */
   async function performCancelWorkflow(workflowId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
-    logger.info(`performCancelWorkflow begin workflow="${workflowId}"`, { module: 'kill' });
+    getLogger().info(`performCancelWorkflow begin workflow="${workflowId}"`, { module: 'kill' });
     const envelope = makeEnvelope('cancel-workflow', 'ui', 'workflow', { workflowId });
     const cmdResult = await getCommandService().cancelWorkflow(envelope);
     if (!cmdResult.ok) throw CommandError.fromResult(cmdResult.error);
-    logger.info(
+    getLogger().info(
       `performCancelWorkflow commandService complete workflow="${workflowId}" cancelled=${cmdResult.data.cancelled.length} runningCancelled=${cmdResult.data.runningCancelled.length}`,
       { module: 'kill' },
     );
     for (const id of cmdResult.data.runningCancelled) {
-      logger.info(`performCancelWorkflow killing running task "${id}"`, { module: 'kill' });
+      getLogger().info(`performCancelWorkflow killing running task "${id}"`, { module: 'kill' });
       await killRunningTask(id);
     }
-    logger.info(`performCancelWorkflow end workflow="${workflowId}"`, { module: 'kill' });
+    getLogger().info(`performCancelWorkflow end workflow="${workflowId}"`, { module: 'kill' });
     return cmdResult.data;
   }
 
   async function performDeleteWorkflow(workflowId: string): Promise<void> {
-    logger.info(`performDeleteWorkflow begin workflow="${workflowId}"`, { module: 'kill' });
-    // Kill all running tasks belonging to the workflow (process management is outside orchestrator scope)
+    getLogger().info(`performDeleteWorkflow begin workflow="${workflowId}"`, { module: 'kill' });
     const allTasks = getOrchestrator().getAllTasks();
     const workflowTasks = allTasks.filter(
       (t) =>
@@ -329,24 +327,22 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
       await killRunningTask(task.id);
     }
     await requireTaskExecutor().closeWorkflowReview(workflowId);
-    // Serialized via CommandService: DB delete + memory clear + scheduler cleanup + removal deltas
     const envelope = makeEnvelope('delete-workflow', 'ui', 'workflow', { workflowId });
     const result = await getCommandService().deleteWorkflow(envelope);
     if (!result.ok) throw new Error(result.error.message);
     requestWorkflowMetadataPublish('delete-workflow');
-    logger.info(`performDeleteWorkflow end workflow="${workflowId}"`, { module: 'kill' });
+    getLogger().info(`performDeleteWorkflow end workflow="${workflowId}"`, { module: 'kill' });
   }
 
   async function performDetachWorkflow(workflowId: string, upstreamWorkflowId: string): Promise<void> {
-    logger.info(`performDetachWorkflow begin workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    getLogger().info(`performDetachWorkflow begin workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
     const envelope = makeEnvelope('detach-workflow', 'ui', 'workflow', { workflowId, upstreamWorkflowId });
     const result = await getCommandService().detachWorkflow(envelope);
     if (!result.ok) throw new Error(result.error.message);
-    logger.info(`performDetachWorkflow end workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    getLogger().info(`performDetachWorkflow end workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
     requestWorkflowMetadataPublish('detach-workflow');
   }
 
-  /** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
   const preemptSkipCodes: Record<string, true> = {
     [OrchestratorErrorCode.TASK_NOT_FOUND]: true,
     [OrchestratorErrorCode.TASK_ALREADY_TERMINAL]: true,
@@ -358,7 +354,7 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
       await performCancelTask(taskId);
     } catch (err) {
       if (err instanceof CommandError && preemptSkipCodes[err.code] === true) {
-        logger.info(`preemptTaskSubgraph skipped for "${taskId}": ${err.message}`, { module: 'ipc' });
+        getLogger().info(`preemptTaskSubgraph skipped for "${taskId}": ${err.message}`, { module: 'ipc' });
         return;
       }
       throw err;
@@ -367,13 +363,13 @@ export function createWorkflowTaskActions(deps: WorkflowTaskActionsDeps) {
 
   async function preemptWorkflowExecution(workflowId: string): Promise<WorkflowCancelResult> {
     try {
-      logger.info(`preemptWorkflowExecution begin for "${workflowId}"`, { module: 'ipc' });
+      getLogger().info(`preemptWorkflowExecution begin for "${workflowId}"`, { module: 'ipc' });
       const result = await performCancelWorkflow(workflowId);
-      logger.info(`preemptWorkflowExecution end for "${workflowId}"`, { module: 'ipc' });
+      getLogger().info(`preemptWorkflowExecution end for "${workflowId}"`, { module: 'ipc' });
       return result;
     } catch (err) {
       if (err instanceof CommandError && preemptSkipCodes[err.code] === true) {
-        logger.info(`preemptWorkflowExecution skipped for "${workflowId}": ${err.message}`, { module: 'ipc' });
+        getLogger().info(`preemptWorkflowExecution skipped for "${workflowId}": ${err.message}`, { module: 'ipc' });
         return { cancelled: [], runningCancelled: [] };
       }
       throw err;
