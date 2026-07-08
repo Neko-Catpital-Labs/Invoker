@@ -381,9 +381,14 @@ export function cancelWorkflow(
  * structured logger, etc.).
  */
 export async function deleteAllWorkflows(
-  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'taskExecutor'>,
+  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'taskExecutor'>
+    & { persistence?: ActionDeps['persistence'] },
 ): Promise<{ snapshotPath: string | null }> {
-  const snapshotPath = createDeleteAllSnapshot();
+  const persistence = deps.persistence;
+  const snapshotPath = await createDeleteAllSnapshot(
+    undefined,
+    persistence ? (dest) => persistence.backupTo(dest) : undefined,
+  );
   deps.logger?.info(
     snapshotPath
       ? `delete-all-workflows snapshot: ${snapshotPath}`
@@ -421,9 +426,14 @@ export async function deleteAllWorkflows(
  * (e.g. `invoker:workflows-changed`).
  */
 export async function deleteAllWorkflowsBulk(
-  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'taskExecutor'>,
+  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'taskExecutor'>
+    & { persistence?: ActionDeps['persistence'] },
 ): Promise<{ snapshotPath: string | null }> {
-  const snapshotPath = createDeleteAllSnapshot();
+  const persistence = deps.persistence;
+  const snapshotPath = await createDeleteAllSnapshot(
+    undefined,
+    persistence ? (dest) => persistence.backupTo(dest) : undefined,
+  );
   deps.logger?.info(
     snapshotPath
       ? `delete-all-workflows-bulk snapshot: ${snapshotPath}`
