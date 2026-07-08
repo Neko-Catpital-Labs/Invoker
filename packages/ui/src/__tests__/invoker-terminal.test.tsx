@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -392,5 +393,43 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+
+  function expectRailScrollContract(listBody: HTMLElement) {
+    // The list body owns the overflow and fills the rail frame instead of
+    // growing it, so a long list scrolls inside the fixed-height rail.
+    expect(listBody.className).toContain('overflow-y-auto');
+    expect(listBody.className).toContain('h-full');
+    // Its parent is the shrinkable rail frame (min-h-0 flex-1): h-full resolves
+    // against a flex-constrained height, so overflow-y-auto actually engages.
+    const frame = listBody.parentElement;
+    expect(frame).not.toBeNull();
+    expect(frame!.className).toContain('min-h-0');
+    expect(frame!.className).toContain('flex-1');
+  }
+
+  it('makes the workflow, attention, and running rail lists scroll inside the rail frame', async () => {
+    const workflows: WorkflowMeta[] = [{ id: 'wf-scroll', name: 'Scroll WF', status: 'running' }];
+    const running = makeUITask({ id: 'task-running', description: 'Running task', status: 'running', workflowId: 'wf-scroll' });
+    const attention = makeUITask({ id: 'task-failed', description: 'Failed task', status: 'failed', workflowId: 'wf-scroll' });
+
+    render(<App />);
+    act(() => mock.setTasks([running, attention], workflows));
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    expectRailScrollContract(await screen.findByTestId('workflow-rail-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    expectRailScrollContract(await screen.findByTestId('task-rail-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    expectRailScrollContract(await screen.findByTestId('task-rail-list'));
+  });
+
+  it('makes the planning session rail list scroll inside the rail frame', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    expectRailScrollContract(screen.getByTestId('planning-session-list'));
   });
 });

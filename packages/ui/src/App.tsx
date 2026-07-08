@@ -2749,7 +2749,7 @@ export function App() {
 
   const renderWorkflowsList = (): JSX.Element => (
     workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
-      <div className="overflow-y-auto p-3">
+      <div data-testid="workflow-rail-list" className="h-full overflow-y-auto p-3">
         <div className="space-y-1">
           {workflowEntries.map((entry) => {
             const selected = selectedWorkflow?.id === entry.workflow.id;
@@ -2773,7 +2773,7 @@ export function App() {
 
   const renderTaskList = (entries: typeof attentionEntries, emptyTitle: string, emptyCopy: string, tone: 'attention' | 'running'): JSX.Element => (
     entries.length === 0 ? renderBrowserEmptyState(emptyTitle, emptyCopy) : (
-      <div className="overflow-y-auto p-3">
+      <div data-testid="task-rail-list" className="h-full overflow-y-auto p-3">
         <div className="space-y-1">
           {entries.map((entry) => {
             const selected = selectedTask?.id === entry.task.id;
@@ -2800,7 +2800,7 @@ export function App() {
 
 
   const renderPlanningSessionList = (): JSX.Element => (
-    <div className="overflow-y-auto p-3">
+    <div data-testid="planning-session-list" className="h-full overflow-y-auto p-3">
       <div className="space-y-1">
         {planningSessions.map((session) => {
           const selected = session.id === activePlanningSession.id;
