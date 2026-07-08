@@ -25,6 +25,7 @@ import {
   type AutoFixAttemptLedger,
 } from '../auto-fix-attempt-ledger.js';
 import { normalizeAutoFixRetryBudget } from '../auto-fix-gating.js';
+import { recordWorkerDecisionRow } from '../worker-decision-ledger.js';
 import type {
   ReviewGateCiFailedLifecycleEvent,
   ReviewGateFailedCheck,
@@ -252,10 +253,6 @@ function staleReasonForEvent(
   };
 }
 
-function actionIdForKey(externalKey: string): string {
-  return `${CI_FAILURE_WORKER_KIND}:${externalKey}`;
-}
-
 function isOpenOrCompletedActionStatus(status: string): boolean {
   return status === 'queued'
     || status === 'pending'
@@ -263,10 +260,6 @@ function isOpenOrCompletedActionStatus(status: string): boolean {
     || status === 'needs_input'
     || status === 'review_ready'
     || status === 'completed';
-}
-
-function coerceActionStatus(status: CiFailureActionStatus): WorkerActionStatus {
-  return status;
 }
 
 function recordCiFailureAction(
@@ -279,26 +272,20 @@ function recordCiFailureAction(
   agentName?: string,
   executionModel?: string,
 ): WorkerActionRecord | undefined {
-  const externalKey = ciFailureActionKey(event);
-  const existing = options.store.getWorkerAction?.(CI_FAILURE_WORKER_KIND, externalKey);
-  const now = new Date().toISOString();
-  return options.store.upsertWorkerAction?.({
-    id: existing?.id ?? actionIdForKey(externalKey),
+  return recordWorkerDecisionRow(options.store, {
     workerKind: CI_FAILURE_WORKER_KIND,
     actionType: CI_FAILURE_ACTION_TYPE,
-    workflowId: event.workflowId,
-    taskId: event.taskId,
+    externalKey: ciFailureActionKey(event),
     subjectType: 'review',
     subjectId: event.reviewId,
-    externalKey,
-    status: coerceActionStatus(status),
-    attemptCount: status === 'queued' || status === 'failed'
-      ? (existing?.attemptCount ?? 0) + 1
-      : existing?.attemptCount ?? 0,
-    ...(intentId !== undefined ? { intentId: String(intentId) } : {}),
+    workflowId: event.workflowId,
+    taskId: event.taskId,
+    status,
+    summary,
+    intentId,
     agentName,
     executionModel,
-    summary,
+    incrementAttempt: status === 'queued' || status === 'failed',
     payload: {
       reviewId: event.reviewId,
       reviewUrl: event.reviewUrl,
@@ -312,8 +299,6 @@ function recordCiFailureAction(
       failedChecks: event.failedChecks.map((check) => ({ ...check })),
       ...payload,
     },
-    updatedAt: now,
-    ...(status === 'skipped' || status === 'failed' || status === 'completed' ? { completedAt: now } : {}),
   });
 }
 
@@ -446,9 +431,6 @@ async function handleCiFailureEvent(
 ): Promise<void> {
   const task = loadTaskForEvent(event, options);
   if (!task) {
-    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because task no longer exists', {
-      reason: 'task-not-found',
-    });
     logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', { reason: 'task-not-found' });
     return;
   }
@@ -461,10 +443,6 @@ async function handleCiFailureEvent(
 
   const stale = staleReasonForEvent(event, task);
   if (stale.stale) {
-    recordCiFailureAction(options, event, 'skipped', `Skipped stale CI repair: ${stale.reason}`, {
-      reason: stale.reason,
-      ...stale.details,
-    });
     logCiFailureWorkerEvent(options, event, 'worker-ci-failure-stale', {
       reason: stale.reason,
       ...stale.details,

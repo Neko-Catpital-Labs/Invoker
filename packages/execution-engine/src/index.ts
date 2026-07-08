@@ -55,6 +55,7 @@ export * from './workers/disk-headroom.js';
 export * from './workers/pr-maintenance-workers.js';
 export * from './auto-fix-gating.js';
 export * from './auto-fix-attempt-ledger.js';
+export * from './worker-decision-ledger.js';
 export * from './auto-fix-intents.js';
 export * from './lifecycle-events.js';
 export * from './external-worker.js';

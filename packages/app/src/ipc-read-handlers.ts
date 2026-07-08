@@ -1,5 +1,5 @@
 import type { IpcMain } from 'electron';
-import type { Logger, SearchOptions, WorkerActionHistoryRequest, WorkerActionHistoryResponse } from '@invoker/contracts';
+import type { Logger, SearchOptions, WorkerActionHistoryRequest, WorkerActionHistoryResponse, WorkerDecisionsRequest, WorkerDecisionsResponse } from '@invoker/contracts';
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { DEFAULT_EXECUTION_AGENT, type AgentRegistry } from '@invoker/execution-engine';
@@ -8,7 +8,7 @@ import type { MessageBus } from '@invoker/transport';
 import { loadConfig } from './config.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { buildTaskGraphSnapshot } from './web/task-graph-snapshot.js';
-import { listWorkerActionHistory } from './worker-control.js';
+import { listWorkerActionHistory, listWorkerDecisions } from './worker-control.js';
 
 export interface RegisterReadOnlyIpcHandlersContext {
   ipcMain: IpcMain;
@@ -188,6 +188,13 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
       request as unknown as Record<string, unknown>,
       'workerActionHistory',
       () => listWorkerActionHistory(persistence, request),
+    ));
+  ipcMain.handle('invoker:get-worker-decisions', (_event, request: WorkerDecisionsRequest) =>
+    delegatedRead<WorkerDecisionsResponse>(
+      'worker-decisions',
+      request as unknown as Record<string, unknown>,
+      'workerDecisions',
+      () => listWorkerDecisions(persistence, request),
     ));
 
   ipcMain.handle('invoker:get-claude-session', async (_event, sessionId: string) => {

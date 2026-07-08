@@ -282,9 +282,9 @@ describe('PR status and CI failure workers', () => {
     await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1 });
 
     expect(harness.submit).not.toHaveBeenCalled();
-    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
-      status: 'skipped',
-      summary: expect.stringContaining('head-sha-changed'),
-    });
+    // Stale events are routine scan noise: logged, but NOT recorded as a durable
+    // decision row. Only meaningful skips (e.g. retry-budget-exhausted) persist.
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toBeUndefined();
+    expect(harness.store.upsertWorkerAction).not.toHaveBeenCalled();
   });
 });
