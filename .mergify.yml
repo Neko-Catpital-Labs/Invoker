@@ -19,8 +19,11 @@ queue_rules:
       - "#approved-reviews-by >= 1"
       - -label=merge-hold
       - "#review-threads-unresolved = 0"
-    # Temporary queue stabilizer: heavy CI still runs on PRs, but does not block
-    # Mergify until the flaky queue-only failures are fixed.
+    # Heavy e2e proof and the full Vitest Workspace run on PRs but do NOT block
+    # Mergify (the whole-workspace suite is currently red on master — unrelated
+    # worker-registry + SSH executor drift). "UI Vitest" runs only @invoker/ui
+    # and IS required: it holds the UI component guards, so a UI regression
+    # cannot merge even when the diff still type-checks.
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
@@ -28,6 +31,7 @@ queue_rules:
       - check-success = quality / TypeScript Types
       - check-success = required-fast / Guardrails
       - check-success = required-fast / Submit Workflow Chain
+      - check-success = UI Vitest
       - "#review-threads-unresolved = 0"
 
   - name: admin-bypass
@@ -41,8 +45,11 @@ queue_rules:
       - label=admin-bypass
       - -label=merge-hold
       - "#review-threads-unresolved = 0"
-    # Temporary queue stabilizer: heavy CI still runs on PRs, but does not block
-    # Mergify until the flaky queue-only failures are fixed.
+    # Heavy e2e proof and the full Vitest Workspace run on PRs but do NOT block
+    # Mergify (the whole-workspace suite is currently red on master — unrelated
+    # worker-registry + SSH executor drift). "UI Vitest" runs only @invoker/ui
+    # and IS required: it holds the UI component guards, so a UI regression
+    # cannot merge even when the diff still type-checks.
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
@@ -50,6 +57,7 @@ queue_rules:
       - check-success = quality / TypeScript Types
       - check-success = required-fast / Guardrails
       - check-success = required-fast / Submit Workflow Chain
+      - check-success = UI Vitest
       - "#review-threads-unresolved = 0"
 
 pull_request_rules:
