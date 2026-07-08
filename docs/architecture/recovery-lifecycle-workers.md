@@ -103,6 +103,45 @@ Operators can inspect recovery ownership and recent decisions with:
 
 The status view is audit-backed and read-only. It reports the recovery worker id, owner, last wakeup, last scan, last submitted recovery command, and the latest skip reason. Status reporting must not change recovery eligibility or command submission ordering.
 
+## Worker Decision Ledger
+
+Every worker that owns act/skip decisions records them into the durable
+`worker_actions` table through the shared `recordWorkerDecisionRow` helper in
+`@invoker/execution-engine`. This gives operators one queryable, cross-worker
+history of what each worker decided — which tasks the auto-fix worker submitted
+for fixing, and which it deliberately skipped and why — instead of
+reconstructing it from scattered per-task debug events.
+
+Recording policy:
+
+- **Act** decisions (submit / complete / fail) are always recorded.
+- **Meaningful skips** (retry budget exhausted or disabled, not eligible, run
+  failure) are recorded with `status: 'skipped'` and a `reason`.
+- **Routine scan noise** (stale snapshots, dedupe hits, lock contention,
+  vanished tasks) is logged as a per-task debug event only and never creates a
+  durable row. `isMeaningfulSkipReason` classifies the reason.
+
+Rows are latest-state-per-lineage: repeated decisions on the same task lineage
+(`autofix:<taskId>:<generation>:<attemptId>` for auto-fix) update a single row,
+with `attemptCount` and timestamps carrying the history.
+
+Query decisions read-only:
+
+```bash
+./run.sh --headless query worker-decisions --workflow <id> --output json
+./run.sh --headless query worker-decisions --decision skip --reason budget
+```
+
+The desktop Workers tab surfaces the same feed: selecting a worker shows a
+`Decisions` list (act vs skip, with reasons) backed by the
+`invoker:get-worker-decisions` IPC channel.
+
+Only the auto-fix and CI-failure workers own per-task decisions. The
+PR-maintenance crons record coarse run-level rows (running → completed/failed);
+the pr-status worker delegates its decisions to the review gate, and the
+disk-headroom and external-process workers have no task/workflow decision to
+record.
+
 ## External Recovery Worker
 
 The external recovery worker owns integration with external recovery automation. It subscribes to lifecycle wakeups, scans persisted state, and decides whether an external recovery command should be submitted or whether an external process should be coordinated through a command route.
