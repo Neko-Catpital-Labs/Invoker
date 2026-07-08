@@ -678,6 +678,12 @@ export function App() {
     window.invoker?.terminalList?.().then((list) => {
       if (Array.isArray(list) && list.length > 0) {
         setTerminalSessions(list);
+        setActiveTerminalSessionId((prev) =>
+          prev && list.some((session) => session.sessionId === prev)
+            ? prev
+            : list[0]?.sessionId ?? null,
+        );
+        setTerminalDrawerState((prev) => prev === 'minimized' ? 'partial' : prev);
       }
     }).catch(() => {});
   }, []);
@@ -2114,6 +2120,7 @@ export function App() {
   const showStart = hasLoadedPlan && !hasStarted;
   const showStop = hasStarted && !allSettled;
   const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
+  const autoCollapseSidebar = viewportWidth < 1440;
   const autoCollapseInspector = sidebarSurface !== 'home' && viewportWidth < 1440;
   const effectiveInspectorCollapsed = inspectorCollapsed || (autoCollapseInspector && !inspectorManualOpen);
   const showWorkerDetailsPanel = viewMode === 'queue' && sidebarSurface === 'workers';
@@ -2183,7 +2190,7 @@ export function App() {
     setGraphActionsMenuOpen(false);
     if (nextSurface === 'workers') {
       setSidebarSurface('workers');
-      setSidebarCollapsed(true);
+      if (autoCollapseSidebar) setSidebarCollapsed(true);
       setInspectorCollapsed(true);
       setInspectorManualOpen(false);
       setStatusFilters(new Set<WorkflowStatus>());
@@ -2193,23 +2200,23 @@ export function App() {
     setViewMode('dag');
     if (nextSurface === 'home') {
       setSidebarSurface('home');
-      setSidebarCollapsed(false);
+      if (autoCollapseSidebar) setSidebarCollapsed(false);
       setInspectorManualOpen(false);
       return;
     }
     setSidebarSurface(nextSurface);
-    setSidebarCollapsed(true);
+    if (autoCollapseSidebar) setSidebarCollapsed(true);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, []);
+  }, [autoCollapseSidebar]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
     setSidebarSurface('home');
-    setSidebarCollapsed(false);
+    if (autoCollapseSidebar) setSidebarCollapsed(false);
     setInspectorManualOpen(false);
     setViewMode('dag');
-  }, []);
+  }, [autoCollapseSidebar]);
 
   // ── Task actions ──────────────────────────────────────────
   const handleProvideInput = useCallback(
@@ -3347,4 +3354,3 @@ export function App() {
     </div>
   );
 }
-
