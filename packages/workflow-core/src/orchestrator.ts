@@ -21,7 +21,7 @@ import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
-import { createTaskState, createAttempt } from '@invoker/workflow-graph';
+import { createTaskState, createAttempt, isLivenessFailureClass } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
@@ -1671,6 +1671,34 @@ export class Orchestrator {
     }
     const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
     this.persistence.logEvent?.(id, 'task.running', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+  }
+
+  /**
+   * Escalate a task that keeps failing as a liveness stall to `needs_input`, so
+   * a human is prompted instead of the requeue worker retrying forever. Scoped
+   * and idempotent: only a task still parked as `failed` with a liveness
+   * `failureClass` is transitioned; anything else (already `needs_input`,
+   * requeued, recreated, or a non-liveness failure) is a no-op. The requeue
+   * worker owns the decision to call this once its backoff budget is exhausted.
+   */
+  escalateStalledToNeedsInput(taskId: string, prompt: string): void {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task || task.status !== 'failed') return;
+    if (!isLivenessFailureClass(task.execution.failureClass)) return;
+    const id = task.id;
+
+    const changes: TaskStateChanges = {
+      status: 'needs_input',
+      execution: { inputPrompt: prompt, failureClass: undefined },
+    };
+    const updated = this.writeAndSync(id, changes);
+    if (task.execution.selectedAttemptId) {
+      this.taskRepository.updateAttempt(task.execution.selectedAttemptId, { status: 'needs_input' });
+    }
+    const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
+    this.persistence.logEvent?.(id, 'task.needs_input', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
@@ -3891,6 +3919,8 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) return false;
     if (task.status !== 'failed') return false;
+    // Liveness stalls are requeued by the requeue worker, never AI-auto-fixed.
+    if (isLivenessFailureClass(task.execution.failureClass)) return false;
     if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
     return this.getAutoFixRetryBudget(taskId) > 0;
   }

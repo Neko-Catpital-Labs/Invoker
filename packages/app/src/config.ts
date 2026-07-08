@@ -91,6 +91,21 @@ export interface InvokerConfig {
    */
   autoFixRetries?: number;
   /**
+   * Maximum number of automatic requeues (re-runs) the requeue worker will
+   * submit for a task that keeps failing with a liveness class (e.g. an
+   * `Execution stalled` timeout) before escalating it to `needs_input`.
+   * Budget is keyed by task lineage (id + generation), so a genuinely new
+   * generation resets it. Default: 3.
+   */
+  stallRequeueRetries?: number;
+  /**
+   * Minimum delay, in milliseconds, between successive requeues of the same
+   * stalled task lineage. Prevents the requeue worker from instantly re-running
+   * a task that will just re-stall while the machine is still overloaded.
+   * Default: 120000 (2 minutes).
+   */
+  stallRequeueBackoffMs?: number;
+  /**
    * When true, successful AI-applied fixes are automatically approved.
    * This skips the manual "Approve Fix" step for fix-with-agent and
    * resolve-conflict flows.

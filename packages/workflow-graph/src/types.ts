@@ -171,12 +171,37 @@ export interface ReviewGateState {
   readonly artifacts: readonly ReviewGateArtifact[];
 }
 
+/**
+ * Structured failure classification for recovery routing. A `liveness_stall`
+ * is an infrastructure/liveness timeout (the executing-stall guard force-failed
+ * a task whose executor stopped heartbeating), NOT a defect in the task's work.
+ * Such failures must be requeued (re-run) rather than sent to AI auto-fix.
+ */
+export type FailureClass = 'liveness_stall';
+
+/**
+ * True when a failure class is a liveness stall — recovered by re-running the
+ * task (requeue worker), never by AI auto-fix. Shared by the orchestrator's
+ * auto-fix gate and the execution-engine recovery workers so both engines agree
+ * on the routing without duplicating the literal.
+ */
+export function isLivenessFailureClass(failureClass: FailureClass | undefined): boolean {
+  return failureClass === 'liveness_stall';
+}
+
 export interface TaskExecution {
   readonly generation?: number;
   readonly blockedBy?: string;
   readonly inputPrompt?: string;
   readonly exitCode?: number;
   readonly error?: string;
+  /**
+   * Structured class of the recorded failure, when the failure was produced by
+   * a recovery guard rather than the task's own work. Drives recovery routing:
+   * `liveness_stall` is excluded from AI auto-fix and handled by the requeue
+   * worker instead. Cleared whenever a fresh attempt/generation starts.
+   */
+  readonly failureClass?: FailureClass;
   readonly protocolErrorCode?: string;
   readonly protocolErrorMessage?: string;
   readonly startedAt?: Date;

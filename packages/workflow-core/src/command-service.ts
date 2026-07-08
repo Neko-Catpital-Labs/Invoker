@@ -132,6 +132,21 @@ export class CommandService {
   }
 
   /**
+   * Escalate a repeatedly-stalled (liveness) task to `needs_input`. Submitted by
+   * the requeue worker once its backoff/retry budget is exhausted, so the task
+   * is parked for a human instead of looping. Idempotent at the orchestrator.
+   */
+  async escalateStalledToNeedsInput(
+    envelope: CommandEnvelope<{ taskId: string; prompt: string }>,
+  ): Promise<CommandResult<void>> {
+    return this.executeCommand<void>(
+      'ESCALATE_STALLED_FAILED',
+      () => this.orchestrator.escalateStalledToNeedsInput(envelope.payload.taskId, envelope.payload.prompt),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
+  /**
    * Retry a task — **retry-class** invalidation per Step 13's
    * canonical `{retry, recreate} × {task, workflow}` matrix
    * (`docs/architecture/task-invalidation-chart.md`). Preserves

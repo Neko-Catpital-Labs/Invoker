@@ -5,7 +5,7 @@
  * Orchestrator writes a WorkRequest; executor runs the action;
  * executor returns a WorkResponse (via callback or IPC).
  */
-import type { ReviewGateArtifact, ReviewGateState, TaskStatus } from '@invoker/workflow-graph';
+import type { FailureClass, ReviewGateArtifact, ReviewGateState, TaskStatus } from '@invoker/workflow-graph';
 
 // ── Action Types ────────────────────────────────────────────
 
@@ -108,6 +108,13 @@ export type ResponseStatus =
 export interface WorkResponseOutputs {
   exitCode?: number;
   error?: string;
+  /**
+   * Structured failure classification set by recovery guards (e.g. the
+   * executing-stall watchdog stamps `liveness_stall`). Persisted onto the task
+   * so recovery workers route the failure: liveness stalls are requeued, not
+   * AI-auto-fixed.
+   */
+  failureClass?: FailureClass;
   summary?: string;
   commitHash?: string;
   agentSessionId?: string;

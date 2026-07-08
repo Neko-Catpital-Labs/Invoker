@@ -117,6 +117,8 @@ import {
   DEFAULT_EXECUTION_AGENT,
   registerBuiltinAgents,
   registerBuiltinWorkers,
+  parseRequeueMutationArgs,
+  parseRequeueEscalateMutationArgs,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -349,6 +351,10 @@ function buildRegisteredOwnerWorkerDeps(
       attemptLedger: autoFixAttemptLedger,
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
+    },
+    requeue: {
+      stallRequeueRetries: invokerConfig.stallRequeueRetries,
+      stallRequeueBackoffMs: invokerConfig.stallRequeueBackoffMs,
     },
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
@@ -1449,6 +1455,28 @@ function startHeadlessMode(): void {
               signal: activeMutationContext?.signal,
               mutationTiming: activeMutationContext?.mutationTiming,
             });
+            return { ok: true };
+          });
+        }
+        if (!workflowMutationDispatcher.has('invoker:requeue')) {
+          workflowMutationDispatcher.set('invoker:requeue', async (...requeueArgs: unknown[]) => {
+            const { taskId } = parseRequeueMutationArgs(requeueArgs);
+            await runHeadless(['retry-task', taskId], {
+              ...headlessDeps,
+              waitForApproval: false,
+              noTrack: true,
+              signal: activeMutationContext?.signal,
+              mutationTiming: activeMutationContext?.mutationTiming,
+            });
+            return { ok: true };
+          });
+        }
+        if (!workflowMutationDispatcher.has('invoker:requeue-escalate')) {
+          workflowMutationDispatcher.set('invoker:requeue-escalate', async (...escalateArgs: unknown[]) => {
+            const { taskId, prompt } = parseRequeueEscalateMutationArgs(escalateArgs);
+            const envelope = makeEnvelope('escalate-stalled', 'headless', 'task', { taskId, prompt });
+            const result = await commandService.escalateStalledToNeedsInput(envelope);
+            if (!result.ok) throw new Error(result.error.message);
             return { ok: true };
           });
         }
@@ -3313,6 +3341,7 @@ function createEmbeddedTerminalBackendFromConfig(
                       outputs: {
                         exitCode: 1,
                         error: executingError,
+                        failureClass: 'liveness_stall',
                       },
                     };
                     logger.error(`[executing-stall] forcing failure for "${task.id}": ${executingError}`, { module: 'db-poll' });
