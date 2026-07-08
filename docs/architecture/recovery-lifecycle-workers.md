@@ -92,6 +92,47 @@ The engine should only act when persisted state shows that:
 
 When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition. A sweep-and-assert guard test fails the build if any auto-fix is triggered outside this shared worker engine.
 
+## Requeue Worker (liveness stalls)
+
+Not every failure is a defect the AI should fix. The executing-stall watchdog
+force-fails a task whose executor stopped heartbeating with `Execution stalled:
+... (attempt lease expired)`. That is a liveness/infrastructure timeout — the
+task's work was never proven broken — so handing it to the auto-fix worker just
+re-runs the same step, re-stalls, and loops.
+
+Such failures are tagged with a structured `execution.failureClass` of
+`liveness_stall` when the stall guard records them. Two rules follow:
+
+- **Auto-fix skips liveness failures.** Both `orchestrator.shouldAutoFix` and the
+  auto-fix worker's eligibility check return false for a `liveness_stall`, the
+  same way they already skip user-cancelled failures.
+- **The requeue worker owns them.** A dedicated subscriber worker wakes on
+  lifecycle events, scans persisted state for `failed` + `liveness_stall` tasks,
+  and submits the normal `retry-task` command (a requeue — re-run the same work,
+  not an AI fix).
+
+The requeue worker is bounded, so it cannot become a different infinite loop:
+
+1. A runtime-local ledger keyed by task **lineage** (`taskId` + `generation`,
+   which `retryTask` preserves) caps requeues at `stallRequeueRetries`
+   (default 3).
+2. A backoff of `stallRequeueBackoffMs` (default 2 minutes) spaces requeues so a
+   task is not instantly re-run into the same stall while the machine is still
+   overloaded.
+3. Once the budget is exhausted the worker submits an escalation command that
+   parks the task in `needs_input` with an operator-facing reason, exactly once.
+
+`failureClass` is cleared on every retry/recreate reset, so a requeued run that
+later fails for a real reason is classified fresh and routed to auto-fix
+normally. As with auto-fix, a sweep-and-assert guard fails the build if the
+requeue channel is referenced outside the requeue worker engine and its
+dispatcher registration.
+
+Complementary hardening: the merge-gate publish paths (`executeMergeNode` and
+`publishAfterFix`) pump the attempt heartbeat/lease while the make-pr publisher
+runs, so a slow-but-alive publish is not misclassified as a stall in the first
+place.
+
 ## Operator Status
 
 Operators can inspect recovery ownership and recent decisions with:
