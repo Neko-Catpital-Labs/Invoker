@@ -31,16 +31,8 @@ afterEach(() => {
   delete (window as any).invoker;
 });
 
-// Repro: when a modal is open, pressing Escape should close it — this is
-// standard keyboard-accessibility behavior. On master the modals do not have
-// their own Escape handlers, and App.tsx's global keyboard handler explicitly
-// short-circuits when a modal is active, so Escape is a dead key. Each test
-// is marked `.fails` so the failing assertion documents the current behavior
-// without turning CI red. The fix slice removes the `.fails` marker after
-// adding the local keydown handler.
-
-describe('Modal Escape-to-close (regression)', () => {
-  it.fails('ApprovalModal closes on Escape', () => {
+describe('Modal Escape-to-close', () => {
+  it('ApprovalModal closes on Escape', () => {
     const onClose = vi.fn();
     render(
       <ApprovalModal
@@ -54,7 +46,7 @@ describe('Modal Escape-to-close (regression)', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it.fails('InputModal closes on Escape', () => {
+  it('InputModal closes on Escape', () => {
     const onClose = vi.fn();
     render(
       <InputModal
@@ -67,7 +59,7 @@ describe('Modal Escape-to-close (regression)', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it.fails('ExperimentModal closes on Escape', () => {
+  it('ExperimentModal closes on Escape', () => {
     const onClose = vi.fn();
     render(
       <ExperimentModal
@@ -87,7 +79,7 @@ describe('Modal Escape-to-close (regression)', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it.fails('ReplaceTaskModal closes on Escape', () => {
+  it('ReplaceTaskModal closes on Escape', () => {
     const onClose = vi.fn();
     render(
       <ReplaceTaskModal
