@@ -183,7 +183,7 @@ export function ApprovalModal({
       ? onFinish === 'merge'
         ? 'Confirm Merge'
         : onFinish === 'pull_request'
-          ? 'Confirm Pull Request'
+          ? 'Confirm Create PR'
           : 'Approve Merge'
       : 'Manual Approval Required';
 
