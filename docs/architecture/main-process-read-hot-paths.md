@@ -54,8 +54,10 @@ matching index.
 ## How to catch regressions
 
 - Unit cost guards under fat fixtures (many events / large attempt errors).
-- Main-process hitch e2e: while worker-status polls, cheap IPC RTT must stay
+- Main-process hitch e2e (`packages/app/e2e/main-process-hitch-responsiveness.spec.ts`):
+  while worker-status polls against a seeded fat DB, cheap IPC RTT must stay
   under budget (window-drag stickiness maps to main-loop stalls, not renderer
   frame gaps alone).
-- Optional: log main-process queries slower than a small threshold to activity /
-  ui-perf so the next spike shows up without attaching a sampler.
+- Slow-query telemetry: `SQLiteAdapter` logs statements slower than 25ms
+  (`slowQueryThresholdMs` / `onSlowQuery`) so the next spike shows up without
+  attaching a sampler. Set `slowQueryThresholdMs: 0` to disable.
