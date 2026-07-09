@@ -14,6 +14,11 @@ import yaml from 'js-yaml';
 import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
+import {
+  mutationFailureBannerMessage,
+  mutationFailureTitle,
+  shouldShowMutationFailureBanner,
+} from './lib/mutation-failure-display.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
 import { useWorkerStatus } from './hooks/useWorkerStatus.js';
@@ -720,13 +725,6 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
-      setMutationFailure(event);
-    });
-    return () => { unsubscribe?.(); };
-  }, []);
-
-  useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
 
     const shouldEmit = (key: string, minIntervalMs: number): boolean => {
@@ -1058,6 +1056,37 @@ export function App() {
     recenterForSelection('task', task.id);
     focusKeyboardRegion('taskGraph');
   }, [focusKeyboardRegion, recenterForSelection]);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
+      // Task/workflow mutation failures belong in the task panel, not the top banner.
+      if (!shouldShowMutationFailureBanner(event)) {
+        if (event.taskId) {
+          // Set selection from the event ids directly so the inspector opens even
+          // if the task map has not hydrated this id yet.
+          setSelectedTaskId(event.taskId);
+          setWorkflowSelectionDismissed(false);
+          if (event.workflowId) {
+            setSelectedWorkflowId(event.workflowId);
+          }
+          setContextMenu(null);
+          setWorkflowContextMenu(null);
+          focusKeyboardRegion('taskGraph');
+        } else if (event.workflowId) {
+          setSelectedWorkflowId(event.workflowId);
+          setSelectedTaskId(null);
+          setWorkflowSelectionDismissed(false);
+          setContextMenu(null);
+          setWorkflowContextMenu(null);
+          focusKeyboardRegion('workflowGraph');
+        }
+        setMutationFailure(null);
+        return;
+      }
+      setMutationFailure(event);
+    });
+    return () => { unsubscribe?.(); };
+  }, [focusKeyboardRegion]);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
@@ -3047,35 +3076,16 @@ export function App() {
         >
           <div className="text-sm text-amber-100 min-w-0">
             <div className="font-semibold text-amber-50">
-              {mutationFailure.channel === 'invoker:approve'
-                ? 'Approve failed'
-                : mutationFailure.channel === 'invoker:reject'
-                  ? 'Reject failed'
-                  : `Mutation failed (${mutationFailure.channel})`}
+              {mutationFailureTitle(mutationFailure)}
             </div>
             <div
               data-testid="workflow-mutation-failed-message"
               className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100/90"
             >
-              {mutationFailure.message}
+              {mutationFailureBannerMessage(mutationFailure)}
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {mutationFailure.taskId && tasks.get(mutationFailure.taskId) && (
-              <Button
-                size="sm"
-                data-testid="workflow-mutation-failed-open-task"
-                className="bg-amber-600 text-white hover:bg-amber-500"
-                onClick={() => {
-                  const targetTaskId = mutationFailure.taskId;
-                  if (!targetTaskId) return;
-                  selectTaskById(targetTaskId);
-                  setMutationFailure(null);
-                }}
-              >
-                Open task
-              </Button>
-            )}
             <Button
               size="sm"
               variant="ghost"

@@ -1,10 +1,9 @@
 /**
- * Integration test: workflow-mutation-failed banner in <App />.
+ * Integration test: workflow-mutation-failed handling in <App />.
  *
- * Reproduces the "Approve Fix does nothing" symptom by firing the
- * onWorkflowMutationFailed event that the owner-side coordinator now emits when
- * an intent dispatch throws. The renderer must surface the failure so the user
- * knows the mutation did not actually run.
+ * Task-scoped and workflow-scoped mutation failures must not open the top
+ * banner. Task failures select the task so the right-hand panel can show the
+ * error.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -44,13 +43,21 @@ describe('Workflow mutation failed banner', () => {
     mock.cleanup();
   });
 
-  it('renders an alert with the coordinator message when onWorkflowMutationFailed fires', async () => {
-    render(<App />);
+  async function settleTasks(): Promise<void> {
     act(() => mock.setTasks([targetTask], [workflow]));
-
     await waitFor(() => {
-      expect(screen.queryByTestId('workflow-mutation-failed-banner')).not.toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
     });
+    // Open the workflow so task nodes are mounted before mutation-failure selection.
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-wf-1/verify-worker-summary-surface')).toBeInTheDocument();
+    });
+  }
+
+  it('does not show the banner for task-scoped approve failures and opens the task instead', async () => {
+    render(<App />);
+    await settleTasks();
 
     act(() => {
       mock.fireWorkflowMutationFailed({
@@ -63,60 +70,29 @@ describe('Workflow mutation failed banner', () => {
       });
     });
 
-    const banner = await screen.findByTestId('workflow-mutation-failed-banner');
-    expect(banner).toHaveAttribute('role', 'alert');
-    expect(banner).toHaveTextContent('Approve failed');
-    expect(screen.getByTestId('workflow-mutation-failed-message')).toHaveTextContent(
-      /missing execution harness "codex"/,
-    );
-  });
-
-  it('clears the banner when Dismiss is clicked', async () => {
-    render(<App />);
-    act(() => mock.setTasks([targetTask], [workflow]));
-
-    act(() => {
-      mock.fireWorkflowMutationFailed({
-        intentId: 43,
-        workflowId: 'wf-1',
-        channel: 'invoker:approve',
-        taskId: 'wf-1/verify-worker-summary-surface',
-        message: 'dispatch blew up',
-        failedAt: '2026-07-08T10:00:00.000Z',
-      });
-    });
-
-    const banner = await screen.findByTestId('workflow-mutation-failed-banner');
-    expect(banner).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('workflow-mutation-failed-dismiss'));
-
     await waitFor(() => {
       expect(screen.queryByTestId('workflow-mutation-failed-banner')).not.toBeInTheDocument();
     });
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Verify worker summary surface');
+    });
   });
 
-  it('selects the failing task when the operator clicks Open task', async () => {
+  it('does not show the banner for headless fix failures', async () => {
     render(<App />);
-    act(() => mock.setTasks([targetTask], [workflow]));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
-    });
+    await settleTasks();
 
     act(() => {
       mock.fireWorkflowMutationFailed({
-        intentId: 44,
+        intentId: 46,
         workflowId: 'wf-1',
-        channel: 'invoker:approve',
+        channel: 'headless.exec',
+        headlessCommand: 'fix',
         taskId: 'wf-1/verify-worker-summary-surface',
-        message: 'dispatch blew up',
+        message: 'SSH remote script failed (exit=1, phase=remote_agent_fix)\nSTDOUT:\n{"type":"thread.started"}\n{"type":"error","message":"model unsupported"}',
         failedAt: '2026-07-08T10:00:00.000Z',
       });
     });
-
-    const openTask = await screen.findByTestId('workflow-mutation-failed-open-task');
-    fireEvent.click(openTask);
 
     await waitFor(() => {
       expect(screen.queryByTestId('workflow-mutation-failed-banner')).not.toBeInTheDocument();
@@ -126,22 +102,22 @@ describe('Workflow mutation failed banner', () => {
     });
   });
 
-  it('labels the banner "Mutation failed (invoker:reject)" when the channel is not approve', async () => {
+  it('does not show the banner for workflow-scoped failures', async () => {
     render(<App />);
-    act(() => mock.setTasks([targetTask], [workflow]));
+    await settleTasks();
 
     act(() => {
       mock.fireWorkflowMutationFailed({
-        intentId: 45,
+        intentId: 47,
         workflowId: 'wf-1',
-        channel: 'invoker:edit-task-command',
-        taskId: 'wf-1/verify-worker-summary-surface',
-        message: 'edit failed',
+        channel: 'invoker:recreate',
+        message: 'recreate failed',
         failedAt: '2026-07-08T10:00:00.000Z',
       });
     });
 
-    const banner = await screen.findByTestId('workflow-mutation-failed-banner');
-    expect(banner).toHaveTextContent('Mutation failed (invoker:edit-task-command)');
+    await waitFor(() => {
+      expect(screen.queryByTestId('workflow-mutation-failed-banner')).not.toBeInTheDocument();
+    });
   });
 });
