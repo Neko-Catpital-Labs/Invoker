@@ -416,4 +416,16 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
+
+  it('constrains the planning session list to a bounded scroll region', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    const list = screen.getByTestId('planning-session-list');
+    // Regression guard: an auto-height overflow container never scrolls; long
+    // session lists overflow the rail and get clipped by the ancestor
+    // overflow-hidden instead. The scroll region needs a definite height.
+    expect(list.className).toContain('overflow-y-auto');
+    expect(list.className).toMatch(/\b(h-full|h-\[|max-h-\S+)/);
+  });
 });

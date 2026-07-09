@@ -2808,7 +2808,7 @@ export function App() {
 
 
   const renderPlanningSessionList = (): JSX.Element => (
-    <div className="overflow-y-auto py-1">
+    <div data-testid="planning-session-list" className="h-full overflow-y-auto py-1">
       <div className="space-y-0.5">
         {planningSessions.map((session) => {
           const selected = session.id === activePlanningSession.id;
