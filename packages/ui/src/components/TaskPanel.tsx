@@ -18,6 +18,7 @@ import {
 } from '../lib/colors.js';
 import { useNow } from '../hooks/useNow.js';
 import { mergeGatePanelHeading } from '../lib/merge-gate.js';
+import { Button } from './primitives/index.js';
 
 interface TaskAuditEvent {
   eventType: string;
@@ -580,20 +581,25 @@ export function TaskPanel({
                 data-testid="edit-command-input"
               />
               <div className="flex gap-2">
-                <button
+                <Button
+                  type="button"
+                  size="sm"
                   onClick={handleSaveCommand}
-                  className="flex-1 px-3 py-1.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded text-xs font-medium transition-colors"
+                  className="flex-1"
                   data-testid="save-command-btn"
                 >
                   Save & Re-run
-                </button>
-                <button
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
                   onClick={handleCancelEdit}
-                  className="flex-1 px-3 py-1.5 bg-muted hover:bg-accent text-foreground text-white rounded text-xs font-medium transition-colors"
+                  className="flex-1"
                   data-testid="cancel-edit-btn"
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             </div>
           ) : isEditingPrompt && task.config.prompt !== undefined ? (
@@ -606,20 +612,25 @@ export function TaskPanel({
                 data-testid="edit-prompt-input"
               />
               <div className="flex gap-2">
-                <button
+                <Button
+                  type="button"
+                  size="sm"
                   onClick={handleSavePrompt}
-                  className="flex-1 px-3 py-1.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded text-xs font-medium transition-colors"
+                  className="flex-1"
                   data-testid="save-prompt-btn"
                 >
                   Save & Re-run
-                </button>
-                <button
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
                   onClick={handleCancelPromptEdit}
-                  className="flex-1 px-3 py-1.5 bg-muted hover:bg-accent text-foreground text-white rounded text-xs font-medium transition-colors"
+                  className="flex-1"
                   data-testid="cancel-prompt-edit-btn"
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             </div>
           ) : (
@@ -1104,38 +1115,43 @@ export function TaskPanel({
       {/* Action buttons */}
       <div className="space-y-2 pt-2">
         {task.status === 'needs_input' && !task.config.isReconciliation && (
-          <button
+          <Button
+            type="button"
+            className="w-full bg-amber-600 text-white hover:bg-amber-500"
             onClick={() => onProvideInput(task)}
-            className="w-full px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded text-sm font-medium transition-colors"
           >
             Provide Input
-          </button>
+          </Button>
         )}
 
         {showApprovalActions && (task.status === 'awaiting_approval' || task.status === 'review_ready') && (
           <div className="flex gap-2">
-            <button
+            <Button
+              type="button"
+              className="flex-1 bg-green-600 text-white hover:bg-green-500"
               onClick={() => onApprove(task)}
-              className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors"
             >
               {isFixApproval ? 'Approve Fix' : task.config.isMergeNode ? 'Approve Merge' : 'Approve'}
-            </button>
-            <button
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              className="flex-1"
               onClick={() => onReject(task)}
-              className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded text-sm font-medium transition-colors"
             >
               {isFixApproval ? 'Reject Fix' : task.config.isMergeNode ? 'Reject Merge' : 'Reject'}
-            </button>
+            </Button>
           </div>
         )}
 
         {task.config.isReconciliation && task.status === 'needs_input' && (
-          <button
+          <Button
+            type="button"
+            className="w-full bg-purple-600 text-white hover:bg-purple-500"
             onClick={() => onSelectExperiment(task)}
-            className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded text-sm font-medium transition-colors"
           >
             Select Experiment
-          </button>
+          </Button>
         )}
 
       </div>
