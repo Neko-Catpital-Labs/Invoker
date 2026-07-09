@@ -41,6 +41,19 @@ export function defaultPlanningCommand(
   return { command: cursorCommand, args };
 }
 
+const EMPTY_PLANNER_STDERR_TAIL_LIMIT = 500;
+
+// Shared with slack-surface.ts so both planner spawn paths surface the same
+// actionable error when the CLI exits 0 but writes nothing to stdout. The
+// stderr tail is preserved because Cursor/Codex/OMP often log the real reason
+// (auth expiry, permission denial, context overflow) to stderr while still
+// reporting a successful exit.
+export function buildEmptyPlannerOutputError(plannerLabel: string, stderr: string): Error {
+  const trimmed = stderr.trim();
+  const tail = trimmed ? ` — stderr tail: ${trimmed.slice(-EMPTY_PLANNER_STDERR_TAIL_LIMIT)}` : '';
+  return new Error(`${plannerLabel} exited 0 but produced no output${tail}`);
+}
+
 export interface PlanConversationConfig {
   /** Command to invoke the agent CLI. Default: 'agent'. */
   cursorCommand?: string;
@@ -490,7 +503,12 @@ export class PlanConversation {
         clearTimeout(timer);
         this.log('plan-conversation', 'info', `[PERF] cursor_exit: code=${code}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms`);
         if (code === 0) {
-          resolve(stdout.trim() || '(no output)');
+          const trimmed = stdout.trim();
+          if (trimmed) {
+            resolve(trimmed);
+          } else {
+            reject(buildEmptyPlannerOutputError(plannerLabel, stderr));
+          }
         } else {
           const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';
           reject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`));
