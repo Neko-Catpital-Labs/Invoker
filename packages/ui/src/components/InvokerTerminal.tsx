@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Button } from './primitives/index.js';
 
 export interface InvokerTerminalLine {
   id: number;
@@ -278,13 +279,13 @@ export function InvokerTerminal({
               ))}
             </select>
           </label>
-          <button
+          <Button
             type="submit"
             disabled={busy || readOnly || !value.trim()}
-            className="rounded-full bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-full px-5"
           >
             Send
-          </button>
+          </Button>
         </div>
       </form>
     </section>
