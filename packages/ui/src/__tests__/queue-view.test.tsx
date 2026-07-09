@@ -148,6 +148,16 @@ describe('QueueView', () => {
 
   it('keeps worker actions and worker processes in independent scroll panes', () => {
     const task = makeUITask({ id: 'wf-1/action-task', status: 'running', description: 'running task' });
+    const tallWorkerList = Array.from({ length: 24 }, (_, index) =>
+      makeWorker({
+        kind: `worker-${index}`,
+        lifecycle: index % 2 === 0 ? 'running' : 'stopped',
+        autoStarts: false,
+        startable: index % 2 !== 0,
+        stoppable: index % 2 === 0,
+      }),
+    );
+
     renderQueueView(
       new Map([[task.id, task]]),
       makeWorkerStatus([
@@ -155,20 +165,31 @@ describe('QueueView', () => {
           kind: 'autofix',
           recentActions: [makeWorkerAction({ taskId: task.id, subjectId: task.id })],
         }),
+        ...tallWorkerList,
       ]),
     );
 
     const actionSection = screen.getByTestId('action-queue-section');
     const actionList = screen.getByTestId('worker-action-list');
     const workersSection = screen.getByTestId('worker-processes-section');
+    const workerProcessList = screen.getByTestId('worker-process-list');
+    const workerActivityCard = screen.getByTestId('worker-activity-card');
 
     expect(actionSection.compareDocumentPosition(workersSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(actionSection.className).toContain('overflow-hidden');
     expect(actionList.className).toContain('overflow-y-auto');
     expect(workersSection.className).toContain('overflow-hidden');
+    expect(workersSection.className).toContain('min-h-0');
+    expect(workerProcessList.className).toContain('min-h-0');
+    expect(workerProcessList.className).toContain('flex-1');
+    expect(workerProcessList.className).toContain('overflow-y-auto');
+    expect(workerActivityCard.className).toContain('min-h-0');
+    expect(workerActivityCard.className).toContain('flex-1');
+    expect(workerActivityCard.className).not.toContain('overflow-y-auto');
     expect(within(actionSection).getByText('Worker Actions (1)')).toBeInTheDocument();
-    expect(within(workersSection).getByText('Worker processes (1)')).toBeInTheDocument();
-    expect(within(workersSection).getByTestId('worker-row-autofix')).toBeInTheDocument();
+    expect(within(workersSection).getByText('Worker processes (25)')).toBeInTheDocument();
+    expect(within(workerProcessList).getByTestId('worker-row-autofix')).toBeInTheDocument();
+    expect(within(workerProcessList).getByTestId('worker-row-worker-23')).toBeInTheDocument();
     expect(within(actionSection).queryByTestId('worker-row-autofix')).not.toBeInTheDocument();
   });
 
