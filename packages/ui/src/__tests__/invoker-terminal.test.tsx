@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -36,6 +37,44 @@ describe('Invoker terminal (component)', () => {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
+
+  function expectRailListScrollContract(listTestId: string, railTestId: string) {
+    const rail = screen.getByTestId(railTestId);
+    const list = screen.getByTestId(listTestId);
+
+    expect(rail).toContainElement(list);
+    expect(list).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto', 'p-3');
+    expect(list.parentElement).toHaveClass('min-h-0', 'flex', 'flex-1', 'flex-col');
+  }
+
+  it('keeps every left rail list as the shrinking scroll container', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha Workflow', status: 'running' },
+      { id: 'wf-beta', name: 'Beta Workflow', status: 'failed' },
+    ];
+    const tasks = [
+      makeUITask({ id: 'wf-alpha/run', description: 'Running rail task', status: 'running', workflowId: 'wf-alpha' }),
+      makeUITask({ id: 'wf-beta/fail', description: 'Attention rail task', status: 'failed', workflowId: 'wf-beta' }),
+    ];
+    mock.setTasks(tasks, workflows);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    await screen.findByTestId('browser-workflows-list');
+    expectRailListScrollContract('browser-workflows-list', 'browser-rail');
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    await screen.findByTestId('browser-attention-list');
+    expectRailListScrollContract('browser-attention-list', 'browser-rail');
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    await screen.findByTestId('browser-running-list');
+    expectRailListScrollContract('browser-running-list', 'browser-rail');
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    await screen.findByTestId('planning-session-list');
+    expectRailListScrollContract('planning-session-list', 'planning-session-rail');
+  });
 
   it('generates a planning reply from plain language', async () => {
     render(<App />);

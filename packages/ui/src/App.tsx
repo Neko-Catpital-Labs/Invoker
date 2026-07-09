@@ -9,7 +9,7 @@
  * - Modals overlay when needed
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type ReactNode, type RefObject } from 'react';
 import yaml from 'js-yaml';
 import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
@@ -2721,6 +2721,12 @@ export function App() {
     </div>
   );
 
+  const renderRailListBody = (testId: string, children: ReactNode): JSX.Element => (
+    <div data-testid={testId} className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="space-y-1">{children}</div>
+    </div>
+  );
+
   const workflowsSubtitle = `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'}`;
   const attentionSubtitle = attentionEntries.length === 0
     ? 'Nothing needs a decision right now.'
@@ -2767,71 +2773,68 @@ export function App() {
 
   const renderWorkflowsList = (): JSX.Element => (
     workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
-      <div className="overflow-y-auto p-3">
-        <div className="space-y-1">
-          {workflowEntries.map((entry) => (
-            <BrowserWorkflowRow
-              key={entry.workflow.id}
-              workflowId={entry.workflow.id}
-              name={entry.workflow.name}
-              taskCount={entry.taskCount}
-              statusLabel={formatWorkflowStatus(entry.workflow.status)}
-              selected={selectedWorkflow?.id === entry.workflow.id}
-              onSelect={selectWorkflowById}
-            />
-          ))}
-        </div>
-      </div>
+      renderRailListBody(
+        'browser-workflows-list',
+        workflowEntries.map((entry) => (
+          <BrowserWorkflowRow
+            key={entry.workflow.id}
+            workflowId={entry.workflow.id}
+            name={entry.workflow.name}
+            taskCount={entry.taskCount}
+            statusLabel={formatWorkflowStatus(entry.workflow.status)}
+            selected={selectedWorkflow?.id === entry.workflow.id}
+            onSelect={selectWorkflowById}
+          />
+        )),
+      )
     )
   );
 
   const renderTaskList = (entries: typeof attentionEntries, emptyTitle: string, emptyCopy: string, tone: 'attention' | 'running'): JSX.Element => (
     entries.length === 0 ? renderBrowserEmptyState(emptyTitle, emptyCopy) : (
-      <div className="overflow-y-auto p-3">
-        <div className="space-y-1">
-          {entries.map((entry) => (
-            <BrowserTaskRow
-              key={entry.task.id}
-              taskId={entry.task.id}
-              title={entry.task.description || entry.task.id}
-              workflowName={entry.workflow?.name}
-              statusLabel={formatTaskStatus(entry.task.status)}
-              tone={tone}
-              selected={selectedTaskId === entry.task.id}
-              onSelect={selectTaskById}
-            />
-          ))}
-        </div>
-      </div>
+      renderRailListBody(
+        `browser-${tone}-list`,
+        entries.map((entry) => (
+          <BrowserTaskRow
+            key={entry.task.id}
+            taskId={entry.task.id}
+            title={entry.task.description || entry.task.id}
+            workflowName={entry.workflow?.name}
+            statusLabel={formatTaskStatus(entry.task.status)}
+            tone={tone}
+            selected={selectedTaskId === entry.task.id}
+            onSelect={selectTaskById}
+          />
+        )),
+      )
     )
   );
 
 
   const renderPlanningSessionList = (): JSX.Element => (
-    <div className="overflow-y-auto p-3">
-      <div className="space-y-1">
-        {planningSessions.map((session) => {
-          const selected = session.id === activePlanningSession.id;
-          return (
-            <button
-              key={session.id}
-              type="button"
-              onClick={() => setActivePlanningSessionId(session.id)}
-              className={`block w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${selected ? 'bg-accent/60 text-accent-foreground ring-1 ring-border-strong' : 'text-foreground hover:bg-accent/30'}`}
-            >
-              <div className="truncate text-body font-medium">{session.title}</div>
-              <div className="mt-0.5 truncate text-caption text-muted-foreground">{previewPlanningMessage(session)}</div>
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <span className={`rounded-full px-2 py-0.5 text-[11px] ${planningStatusClass(session.status)}`}>
-                  {planningStatusLabel(session.status)}
-                </span>
-                <span className="shrink-0 text-[11px] text-muted-foreground">{relativePlanningUpdatedAt(session.updatedAt)}</span>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    renderRailListBody(
+      'planning-session-list',
+      planningSessions.map((session) => {
+        const selected = session.id === activePlanningSession.id;
+        return (
+          <button
+            key={session.id}
+            type="button"
+            onClick={() => setActivePlanningSessionId(session.id)}
+            className={`block w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${selected ? 'bg-accent/60 text-accent-foreground ring-1 ring-border-strong' : 'text-foreground hover:bg-accent/30'}`}
+          >
+            <div className="truncate text-body font-medium">{session.title}</div>
+            <div className="mt-0.5 truncate text-caption text-muted-foreground">{previewPlanningMessage(session)}</div>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span className={`rounded-full px-2 py-0.5 text-[11px] ${planningStatusClass(session.status)}`}>
+                {planningStatusLabel(session.status)}
+              </span>
+              <span className="shrink-0 text-[11px] text-muted-foreground">{relativePlanningUpdatedAt(session.updatedAt)}</span>
+            </div>
+          </button>
+        );
+      }),
+    )
   );
 
   const planningReadyCount = planningSessions.filter((session) => session.status === 'draft_ready').length;
@@ -2855,7 +2858,7 @@ export function App() {
             New chat
           </Button>
         </div>
-        <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
+        <div className="min-h-0 flex flex-1 flex-col">{renderPlanningSessionList()}</div>
       </div>
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="border-b border-border bg-card/50 px-4 py-4">
@@ -2916,7 +2919,7 @@ export function App() {
           Close
         </button>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex flex-1 flex-col">
         {sidebarSurface === 'workflows'
           ? renderWorkflowsList()
           : sidebarSurface === 'attention'
