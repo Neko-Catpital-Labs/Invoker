@@ -41,6 +41,7 @@ import { LeftStatusColumn } from './components/LeftStatusColumn.js';
 import { InvokerTerminal, type InvokerTerminalLine } from './components/InvokerTerminal.js';
 import { Toaster, toast } from 'sonner';
 import { Button } from './components/primitives/index.js';
+import { CommandPalette } from './components/CommandPalette.js';
 import {
   getAttentionTaskEntries,
   getRunningTaskEntries,
@@ -557,6 +558,19 @@ export function App() {
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
   const [graphMaximized, setGraphMaximized] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const isPaletteShortcut =
+        (event.key === 'k' || event.key === 'K') && (event.metaKey || event.ctrlKey);
+      if (!isPaletteShortcut) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setCommandPaletteOpen((prev) => !prev);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
   const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
   const selectedActionNode = useMemo(
     () => actionGraph?.nodes.find((node) => node.id === selectedActionNodeId) ?? null,
@@ -2976,6 +2990,19 @@ export function App() {
           },
         }}
       />
+      {commandPaletteOpen && (
+        <CommandPalette
+          open={commandPaletteOpen}
+          onOpenChange={setCommandPaletteOpen}
+          workflows={workflows}
+          tasks={tasks}
+          onSelectSurface={handleSelectSidebarSurface}
+          onSelectWorkflow={selectWorkflowById}
+          onSelectTask={selectTaskById}
+          onOpenSettings={() => setShowSystemSetup(true)}
+          planningSessionCount={planningSessions.length}
+        />
+      )}
       {showSystemBanner && (
         <div className="px-4 py-3 border-b border-amber-700 bg-amber-950/50 flex items-center justify-between gap-4">
           <div className="text-sm text-amber-100">
