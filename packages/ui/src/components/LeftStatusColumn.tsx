@@ -9,12 +9,15 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   InvokerIcon,
+  MoonIcon,
   PlanningTerminalIcon,
   RunningIcon,
   SettingsIcon,
+  SunIcon,
   WorkerIcon,
   WorkflowsIcon,
 } from './icons/index.js';
+import type { ThemeMode } from '../lib/theme.js';
 
 interface LeftStatusColumnProps {
   workflows: Map<string, WorkflowMeta>;
@@ -27,6 +30,8 @@ interface LeftStatusColumnProps {
   onToggleCollapsed: () => void;
   planningSessionCount: number;
   onOpenSettings: () => void;
+  theme: ThemeMode;
+  onToggleTheme: () => void;
 }
 
 interface SourceItem {
@@ -71,6 +76,8 @@ export function LeftStatusColumn({
   onToggleCollapsed,
   planningSessionCount,
   onOpenSettings,
+  theme,
+  onToggleTheme,
 }: LeftStatusColumnProps): JSX.Element {
   const workflowEntries = getSortedWorkflows(workflows, tasks);
   const attentionEntries = getAttentionTaskEntries(tasks, workflows);
@@ -231,6 +238,20 @@ export function LeftStatusColumn({
       )}
 
       <div className={[collapsed ? 'mt-auto space-y-1.5' : 'mt-auto border-t border-sidebar-border px-2.5 pt-3 space-y-1.5'].join(' ')}>
+        <button
+          type="button"
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          data-testid="rail-theme-toggle"
+          data-theme={theme}
+          onClick={onToggleTheme}
+          className={[
+            'flex w-full items-center rounded-md border border-border text-xs font-medium text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground transition-colors duration-100',
+            collapsed ? 'justify-center px-2 py-2' : 'justify-center gap-2 px-2.5 py-1.5',
+          ].join(' ')}
+        >
+          {theme === 'dark' ? <SunIcon className={ICON_CLASS} /> : <MoonIcon className={ICON_CLASS} />}
+          {!collapsed && <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>}
+        </button>
         <button
           type="button"
           aria-label="Open settings"

@@ -15,3 +15,27 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
   Element.prototype.scrollIntoView = function noopScrollIntoView(): void {};
 }
+
+if (typeof window !== 'undefined' && !window.localStorage) {
+  const store: Record<string, string> = {};
+  const storage: Storage = {
+    getItem: (key) => (key in store ? store[key] : null),
+    setItem: (key, value) => {
+      store[key] = String(value);
+    },
+    removeItem: (key) => {
+      delete store[key];
+    },
+    clear: () => {
+      for (const key of Object.keys(store)) delete store[key];
+    },
+    key: (i) => Object.keys(store)[i] ?? null,
+    get length(): number {
+      return Object.keys(store).length;
+    },
+  };
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: storage,
+  });
+}
