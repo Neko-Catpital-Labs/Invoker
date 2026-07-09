@@ -231,6 +231,22 @@ describe('QueueView', () => {
           startable: false,
           stoppable: true,
         }),
+        makeWorker({
+          kind: 'coderabbit-address',
+          note: 'Runs the CodeRabbit review-address cron entrypoint under worker scheduling.',
+          lifecycle: 'stopped',
+          autoStarts: false,
+          startable: true,
+          stoppable: false,
+        }),
+        makeWorker({
+          kind: 'pr-conflict-rebase',
+          note: 'Runs the PR conflict rebase-recreate cron entrypoint under worker scheduling.',
+          lifecycle: 'stopped',
+          autoStarts: false,
+          startable: true,
+          stoppable: false,
+        }),
       ]),
     );
 
@@ -239,11 +255,17 @@ describe('QueueView', () => {
       'worker-row-autofix',
       'worker-row-pr-status',
       'worker-row-ci-failure',
+      'worker-row-coderabbit-address',
+      'worker-row-pr-conflict-rebase',
     ]);
-    expect(screen.getByText('Worker processes (3)')).toBeInTheDocument();
+    expect(screen.getByText('Worker processes (5)')).toBeInTheDocument();
     expect(screen.getByText('Autofix')).toBeInTheDocument();
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('CI failure repair')).toBeInTheDocument();
+    expect(screen.getByText('Coderabbit Address')).toBeInTheDocument();
+    expect(screen.getByText('Pr Conflict Rebase')).toBeInTheDocument();
+    // Built-in policy: no "Unknown" policy badge on the PR-maintenance rows.
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
   });
 
   it('shows disabled Autofix and CI rows when policy is disabled', () => {
