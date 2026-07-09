@@ -1703,13 +1703,68 @@ export class SQLiteAdapter implements PersistenceAdapter {
           `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy} LIMIT ?`,
           [taskId, Math.floor(limit)],
         );
-    return rows.map((row: any) => ({
+    return rows.map((row: any) => this.rowToTaskEvent(row));
+  }
+
+  getEventsByTypes(
+    eventTypes: readonly string[],
+    sortBy: 'asc' | 'desc' = 'desc',
+    limit = 50,
+  ): TaskEvent[] {
+    if (eventTypes.length === 0 || limit <= 0) return [];
+    const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
+    const placeholders = eventTypes.map(() => '?').join(', ');
+    const rows = this.queryAll(
+      `SELECT * FROM events
+       WHERE event_type IN (${placeholders})
+       ORDER BY created_at ${orderBy}, id ${orderBy}
+       LIMIT ?`,
+      [...eventTypes, Math.floor(limit)],
+    );
+    return rows.map((row: any) => this.rowToTaskEvent(row));
+  }
+
+  countEventsByTypes(eventTypes: readonly string[]): Array<{
+    eventType: string;
+    count: number;
+    lastCreatedAt: string | null;
+  }> {
+    if (eventTypes.length === 0) return [];
+    const placeholders = eventTypes.map(() => '?').join(', ');
+    const rows = this.queryAll(
+      `SELECT event_type AS eventType,
+              COUNT(*) AS count,
+              MAX(created_at) AS lastCreatedAt
+       FROM events
+       WHERE event_type IN (${placeholders})
+       GROUP BY event_type`,
+      [...eventTypes],
+    );
+    const byType = new Map(
+      rows.map((row) => [
+        String(row.eventType),
+        {
+          eventType: String(row.eventType),
+          count: Number(row.count ?? 0),
+          lastCreatedAt: (row.lastCreatedAt as string | null) ?? null,
+        },
+      ]),
+    );
+    return eventTypes.map((eventType) => byType.get(eventType) ?? {
+      eventType,
+      count: 0,
+      lastCreatedAt: null,
+    });
+  }
+
+  private rowToTaskEvent(row: any): TaskEvent {
+    return {
       id: row.id,
       taskId: row.task_id,
       eventType: row.event_type,
       payload: row.payload ?? undefined,
       createdAt: row.created_at,
-    }));
+    };
   }
 
   getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined {
