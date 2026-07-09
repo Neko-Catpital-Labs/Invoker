@@ -38,6 +38,7 @@ import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
 import { LeftStatusColumn } from './components/LeftStatusColumn.js';
+import { BrowserTaskRow, BrowserWorkflowRow } from './components/BrowserListRows.js';
 import { useTheme } from './lib/theme.js';
 import { InvokerTerminal, type InvokerTerminalLine } from './components/InvokerTerminal.js';
 import { Toaster, toast } from 'sonner';
@@ -492,6 +493,8 @@ export function App() {
   const { tasks, workflows, clearTasks, refreshTaskGraph } = useTasks({
     onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
   });
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
   const {
     graph: actionGraph,
@@ -1043,7 +1046,7 @@ export function App() {
   }, [focusKeyboardRegion, recenterForSelection]);
 
   const selectTaskById = useCallback((taskId: string) => {
-    const task = tasks.get(taskId);
+    const task = tasksRef.current.get(taskId);
     if (!task) return;
     setSelectedTaskId(task.id);
     setWorkflowSelectionDismissed(false);
@@ -1054,7 +1057,7 @@ export function App() {
     setWorkflowContextMenu(null);
     recenterForSelection('task', task.id);
     focusKeyboardRegion('taskGraph');
-  }, [focusKeyboardRegion, recenterForSelection, tasks]);
+  }, [focusKeyboardRegion, recenterForSelection]);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
@@ -2730,23 +2733,17 @@ export function App() {
     workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
       <div className="overflow-y-auto p-3">
         <div className="space-y-1">
-          {workflowEntries.map((entry) => {
-            const selected = selectedWorkflow?.id === entry.workflow.id;
-            return (
-              <button
-                key={entry.workflow.id}
-                type="button"
-                onClick={() => selectWorkflowById(entry.workflow.id)}
-                className={`block w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${selected ? 'bg-accent/60 text-accent-foreground ring-1 ring-border-strong' : 'text-foreground hover:bg-accent/30'}`}
-              >
-                <div className="truncate text-body font-medium">{entry.workflow.name}</div>
-                <div className="mt-0.5 truncate text-caption text-muted-foreground">
-                  {formatWorkflowStatus(entry.workflow.status)}
-                  {entry.taskCount > 0 && ` · ${entry.taskCount} task${entry.taskCount === 1 ? '' : 's'}`}
-                </div>
-              </button>
-            );
-          })}
+          {workflowEntries.map((entry) => (
+            <BrowserWorkflowRow
+              key={entry.workflow.id}
+              workflowId={entry.workflow.id}
+              name={entry.workflow.name}
+              taskCount={entry.taskCount}
+              statusLabel={formatWorkflowStatus(entry.workflow.status)}
+              selected={selectedWorkflow?.id === entry.workflow.id}
+              onSelect={selectWorkflowById}
+            />
+          ))}
         </div>
       </div>
     )
@@ -2756,26 +2753,18 @@ export function App() {
     entries.length === 0 ? renderBrowserEmptyState(emptyTitle, emptyCopy) : (
       <div className="overflow-y-auto p-3">
         <div className="space-y-1">
-          {entries.map((entry) => {
-            const selected = selectedTask?.id === entry.task.id;
-            const accent = tone === 'attention'
-              ? selected ? 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/40' : 'text-foreground hover:bg-accent/30'
-              : selected ? 'bg-accent/60 text-accent-foreground ring-1 ring-border-strong' : 'text-foreground hover:bg-accent/30';
-            return (
-              <button
-                key={entry.task.id}
-                type="button"
-                onClick={() => selectTaskById(entry.task.id)}
-                className={`block w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${accent}`}
-              >
-                <div className="truncate text-body font-medium">{entry.task.description || entry.task.id}</div>
-                <div className="mt-0.5 truncate text-caption text-muted-foreground">
-                  {formatTaskStatus(entry.task.status)}
-                  {entry.workflow?.name && ` · ${entry.workflow.name}`}
-                </div>
-              </button>
-            );
-          })}
+          {entries.map((entry) => (
+            <BrowserTaskRow
+              key={entry.task.id}
+              taskId={entry.task.id}
+              title={entry.task.description || entry.task.id}
+              workflowName={entry.workflow?.name}
+              statusLabel={formatTaskStatus(entry.task.status)}
+              tone={tone}
+              selected={selectedTaskId === entry.task.id}
+              onSelect={selectTaskById}
+            />
+          ))}
         </div>
       </div>
     )
