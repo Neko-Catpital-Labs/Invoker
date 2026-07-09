@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  computeGuiRuntimeStatus,
+  createDaemonOwnerLossController,
+  shouldTreatAsDaemonOwnerLoss,
   configureEarlyElectronApp,
   formatGuiOwnerBootstrapFallbackMessage,
   guiOwnerBootstrapTimeoutMs,
+  isMutationOwnerUnavailableError,
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
   resolveElectronUserDataDir,
@@ -251,6 +255,40 @@ describe('app-bootstrap', () => {
     expect(shouldRefreshGuiOwnerRoute('gui', true)).toBe(false);
   });
 
+  it('computes runtime status so daemon clients stay writable until owner loss', () => {
+    expect(computeGuiRuntimeStatus({ ownerMode: true, guiUsingDaemonOwner: false })).toEqual({
+      ownerMode: true,
+      readOnly: false,
+      mode: 'local-owner',
+    });
+    expect(computeGuiRuntimeStatus({ ownerMode: false, guiUsingDaemonOwner: true })).toEqual({
+      ownerMode: false,
+      readOnly: false,
+      mode: 'daemon-owner',
+    });
+    expect(computeGuiRuntimeStatus({ ownerMode: false, guiUsingDaemonOwner: false })).toEqual({
+      ownerMode: false,
+      readOnly: true,
+      mode: 'read-only',
+    });
+    expect(computeGuiRuntimeStatus({
+      ownerMode: false,
+      guiUsingDaemonOwner: false,
+      connectionLost: true,
+    })).toEqual({
+      ownerMode: false,
+      readOnly: true,
+      mode: 'connection-lost',
+    });
+  });
+
+  it('detects mutation-owner-unavailable transport failures', () => {
+    expect(isMutationOwnerUnavailableError(new Error('No mutation owner is available'))).toBe(true);
+    expect(isMutationOwnerUnavailableError({ code: 'NO_HANDLER', message: 'missing' })).toBe(true);
+    expect(isMutationOwnerUnavailableError(new Error('No request handler registered for channel: headless.exec'))).toBe(true);
+    expect(isMutationOwnerUnavailableError(new Error('timeout'))).toBe(false);
+  });
+
   it('uses a bounded daemon bootstrap timeout and ignores invalid overrides', () => {
     expect(guiOwnerBootstrapTimeoutMs({ INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS: '2500' })).toBe(2500);
     expect(guiOwnerBootstrapTimeoutMs({ INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS: '-1' })).toBe(60000);
@@ -306,4 +344,24 @@ describe('app-bootstrap', () => {
 
     expect([...handlers.keys()]).toEqual(['window-all-closed', 'before-quit']);
   });
+
+  it('tracks daemon owner loss and restore through the controller', () => {
+    let state = { usingDaemonOwner: true, connectionLost: false };
+    const warn = vi.fn();
+    const notify = vi.fn();
+    const controller = createDaemonOwnerLossController({
+      getState: () => state,
+      setState: (next) => { state = next; },
+      warn,
+    });
+    controller.setNotify(notify);
+    controller.markUnavailable('owner gone');
+    expect(state).toEqual({ usingDaemonOwner: false, connectionLost: true });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledOnce();
+    controller.restoreDaemonOwner();
+    expect(state).toEqual({ usingDaemonOwner: true, connectionLost: false });
+    expect(shouldTreatAsDaemonOwnerLoss(new Error('No mutation owner is available'))).toBe(true);
+  });
+
 });

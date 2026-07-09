@@ -37,6 +37,48 @@ export function formatGuiOwnerBootstrapFallbackMessage(message: string): string 
   ].join('\n');
 }
 
+export type RuntimeModeSnapshot = 'local-owner' | 'daemon-owner' | 'read-only' | 'connection-lost';
+
+export interface RuntimeStatusFields {
+  ownerMode: boolean;
+  readOnly: boolean;
+  mode: RuntimeModeSnapshot;
+}
+
+/** Compute the GUI runtime status from ownership flags. */
+export function computeGuiRuntimeStatus(input: {
+  ownerMode: boolean;
+  guiUsingDaemonOwner: boolean;
+  connectionLost?: boolean;
+}): RuntimeStatusFields {
+  const { ownerMode, guiUsingDaemonOwner, connectionLost = false } = input;
+  if (ownerMode) {
+    return { ownerMode: true, readOnly: false, mode: 'local-owner' };
+  }
+  if (guiUsingDaemonOwner) {
+    return { ownerMode: false, readOnly: false, mode: 'daemon-owner' };
+  }
+  if (connectionLost) {
+    return { ownerMode: false, readOnly: true, mode: 'connection-lost' };
+  }
+  return { ownerMode: false, readOnly: true, mode: 'read-only' };
+}
+
+/** True when an owner IPC/delegation failure means no mutation owner is reachable. */
+export function isMutationOwnerUnavailableError(error: unknown): boolean {
+  if (error instanceof Error && error.message === 'No mutation owner is available') {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code ?? '')
+    : '';
+  return code === 'NO_HANDLER'
+    || code === 'DISCONNECTED'
+    || message.includes('No request handler registered')
+    || message.includes('No mutation owner is available');
+}
+
 export interface ElectronUserDataEnv {
   INVOKER_USER_DATA_DIR?: string;
   INVOKER_DB_DIR?: string;
@@ -141,6 +183,44 @@ export interface MainProcessBootstrapOptions {
   isHeadless: boolean;
   startHeadlessMode: () => void;
   startGuiMode: () => void;
+}
+
+
+export interface DaemonOwnerLossState {
+  usingDaemonOwner: boolean;
+  connectionLost: boolean;
+}
+
+export function shouldTreatAsDaemonOwnerLoss(error: unknown): boolean {
+  if (isMutationOwnerUnavailableError(error)) return true;
+  return error instanceof Error && /Timed out after .* waiting for daemon owner/.test(error.message);
+}
+
+export function createDaemonOwnerLossController(options: {
+  getState: () => DaemonOwnerLossState;
+  setState: (state: DaemonOwnerLossState) => void;
+  warn: (message: string) => void;
+}) {
+  let notify: (() => void) | null = null;
+  return {
+    setNotify(fn: (() => void) | null) {
+      notify = fn;
+    },
+    markUnavailable(reason: string): void {
+      const state = options.getState();
+      if (!state.usingDaemonOwner && !state.connectionLost) return;
+      options.setState({ usingDaemonOwner: false, connectionLost: true });
+      options.warn(`daemon mutation owner unavailable; connection lost: ${reason}`);
+      notify?.();
+    },
+    restoreDaemonOwner(): void {
+      options.setState({ usingDaemonOwner: true, connectionLost: false });
+      notify?.();
+    },
+    clearConnectionLost(): void {
+      options.setState({ ...options.getState(), connectionLost: false });
+    },
+  };
 }
 
 export function startMainProcessBootstrap(options: MainProcessBootstrapOptions): void {
