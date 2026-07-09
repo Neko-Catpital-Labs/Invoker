@@ -11,6 +11,7 @@
 import type { TaskState, TaskStateChanges, Attempt } from '@invoker/workflow-core';
 import {
   assertTaskConsistent,
+  isActiveAttempt,
   isDiscardedAttempt,
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
@@ -671,6 +672,25 @@ export class SqliteTaskAttemptRepository {
     const attempt = this.loadAttempt(attemptId);
     if (!attempt) return task;
 
+    if (attempt.status === 'failed' || isDiscardedAttempt(attempt)) {
+      const newer = this.findNewerActiveAttempt(task.id, attempt);
+      if (newer) {
+        const cleaned: TaskState = {
+          ...task,
+          execution: {
+            ...task.execution,
+            error: undefined,
+            exitCode: undefined,
+            completedAt: undefined,
+          },
+        };
+        if (newer.status === 'needs_input') {
+          return { ...cleaned, status: 'needs_input' };
+        }
+        return cleaned;
+      }
+    }
+
     if (isDiscardedAttempt(attempt)) {
       return {
         ...task,
@@ -728,5 +748,20 @@ export class SqliteTaskAttemptRepository {
     }
 
     return task;
+  }
+
+  private findNewerActiveAttempt(nodeId: string, selected: Attempt): Attempt | undefined {
+    const attempts = this.loadAttempts(nodeId);
+    const selectedTs = selected.createdAt.getTime();
+    let newest: Attempt | undefined;
+    for (const candidate of attempts) {
+      if (candidate.id === selected.id) continue;
+      if (!isActiveAttempt(candidate)) continue;
+      if (candidate.createdAt.getTime() <= selectedTs) continue;
+      if (!newest || candidate.createdAt.getTime() > newest.createdAt.getTime()) {
+        newest = candidate;
+      }
+    }
+    return newest;
   }
 }
