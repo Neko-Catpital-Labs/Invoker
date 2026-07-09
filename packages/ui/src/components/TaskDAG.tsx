@@ -157,7 +157,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const { fitView, setCenter, getZoom } = useReactFlow();
   const graphRootRef = useRef<HTMLDivElement>(null);
   const prevNodeCount = useRef(0);
-  const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
   const reportedGraphVisibleRef = useRef(false);
   const watchdogMissCountRef = useRef(0);
   const watchdogRecoveryAttemptedRef = useRef(false);
@@ -599,18 +598,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       if (task && onTaskClick) {
         onTaskClick(task);
       }
-      if (task && onTaskDoubleClick) {
-        const now = Date.now();
-        const lastClick = lastNodeClickRef.current;
-        if (lastClick?.id === node.id && now - lastClick.at <= 500) {
-          lastNodeClickRef.current = null;
-          onTaskDoubleClick(task);
-        } else {
-          lastNodeClickRef.current = { id: node.id, at: now };
-        }
-      }
     },
-    [tasks, onTaskClick, onTaskDoubleClick],
+    [tasks, onTaskClick],
   );
 
   const onNodeDoubleClick = useCallback(
