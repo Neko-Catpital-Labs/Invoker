@@ -7,6 +7,14 @@
 
 import { useState, useEffect } from 'react';
 import type { TaskState, ClaudeMessage, AgentSessionData } from '../types.js';
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './primitives/index.js';
 
 interface ApprovalModalProps {
   task: TaskState;
@@ -89,17 +97,6 @@ export function ApprovalModal({
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
 
   useEffect(() => {
     if (task.execution.agentSessionId || task.execution.lastAgentSessionId || fallbackSessionId) return;
@@ -205,16 +202,12 @@ export function ApprovalModal({
     : (isFixApproval ? 'Reject Fix' : isMergeNode ? mergeRejectLabel : 'Reject');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-secondary rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-border">
-        {/* Header */}
-        <div className="p-6 pb-0 shrink-0">
-          <h2 className="text-lg font-semibold text-foreground">
-            {heading}
-          </h2>
-        </div>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col gap-0 p-0 overflow-hidden">
+        <DialogHeader className="p-6 pb-0 shrink-0">
+          <DialogTitle>{heading}</DialogTitle>
+        </DialogHeader>
 
-        {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
           <div>
             <p className="text-sm text-muted-foreground mb-1">
@@ -281,34 +274,30 @@ export function ApprovalModal({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="p-6 pt-4 shrink-0 border-t border-border">
-          <div className="flex gap-3 justify-end">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleReject}
+        <DialogFooter className="p-6 pt-4 shrink-0 border-t border-border sm:justify-end">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={submitting}
+            onClick={handleReject}
+          >
+            {rejectButtonLabel}
+          </Button>
+          {!showRejectInput && (
+            <Button
+              type="button"
               disabled={submitting}
-              className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-muted disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
+              className="bg-green-600 text-white hover:bg-green-500"
+              onClick={handleApprove}
             >
-              {rejectButtonLabel}
-            </button>
-            {!showRejectInput && (
-              <button
-                onClick={handleApprove}
-                disabled={submitting}
-                className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-muted disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
-              >
-                {approveButtonLabel}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
+              {approveButtonLabel}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
