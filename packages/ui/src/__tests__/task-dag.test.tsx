@@ -60,7 +60,7 @@ describe('TaskDAG status filters', () => {
       expect(screen.getByTestId(`rf__node-${pendingTask.id}`)).toBeInTheDocument();
     });
 
-    expect(screen.getByText('ASSIGNING')).toBeInTheDocument();
+    expect(screen.getByText('Assigning')).toBeInTheDocument();
 
     const assigningNode = screen.getByTestId(`rf__node-${assigningTask.id}`).firstElementChild as HTMLElement;
     const pendingNode = screen.getByTestId(`rf__node-${pendingTask.id}`).firstElementChild as HTMLElement;
