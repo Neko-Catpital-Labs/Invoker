@@ -386,6 +386,33 @@ export class SqliteTaskAttemptRepository {
     }));
   }
 
+  loadAllHistoryTasks(): Array<TaskState & { workflowName: string; lastEventAt: string | null; eventCount: number }> {
+    const rows = this.exec.queryAll(`
+      SELECT t.*,
+             w.name AS workflow_name,
+             e.max_created_at AS last_event_at,
+             COALESCE(e.event_count, 0) AS event_count
+      FROM tasks t
+      JOIN workflows w ON w.id = t.workflow_id
+      LEFT JOIN (
+        SELECT task_id, MAX(created_at) AS max_created_at, COUNT(*) AS event_count
+        FROM events
+        GROUP BY task_id
+      ) e ON e.task_id = t.id
+      WHERE COALESCE(e.event_count, 0) > 0 OR t.status != 'pending'
+      ORDER BY COALESCE(e.max_created_at, t.completed_at, t.started_at, t.created_at) DESC
+    `);
+    return rows.map((row) => {
+      const task = this.reconcileTaskFromSelectedAttempt(mapRowToTask(row));
+      return {
+        ...task,
+        workflowName: row.workflow_name as string,
+        lastEventAt: (row.last_event_at as string | null) ?? null,
+        eventCount: Number(row.event_count ?? 0),
+      };
+    });
+  }
+
   // ── Scalar task-column getters ───────────────────────────
 
   getSelectedExperiment(taskId: string): string | null {

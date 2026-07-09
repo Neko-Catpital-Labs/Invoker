@@ -3490,6 +3490,139 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('loadAllHistoryTasks', () => {
+    it('returns tasks across all non-pending statuses with workflowName and lastEventAt', () => {
+      adapter.saveWorkflow({ id: 'wf-1', name: 'Alpha Plan', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
+      adapter.saveWorkflow({ id: 'wf-2', name: 'Beta Plan', createdAt: '2024-01-02T00:00:00Z', updatedAt: '2024-01-02T00:00:00Z' });
+
+      adapter.saveTask('wf-1', makeTask('completed-task', { status: 'completed', execution: { completedAt: new Date('2024-01-05T00:00:00Z') } }));
+      adapter.saveTask('wf-1', makeTask('failed-task', { status: 'failed', execution: { completedAt: new Date('2024-01-04T00:00:00Z') } }));
+      adapter.saveTask('wf-2', makeTask('running-task', { status: 'running' }));
+      adapter.saveTask('wf-2', makeTask('pending-task', { status: 'pending' }));
+
+      adapter.logEvent('running-task', 'task.started');
+      adapter.logEvent('failed-task', 'task.failed');
+
+      const results = adapter.loadAllHistoryTasks();
+      const ids = results.map((r) => r.id);
+      expect(ids).toContain('completed-task');
+      expect(ids).toContain('failed-task');
+      expect(ids).toContain('running-task');
+      expect(ids).not.toContain('pending-task');
+
+      const running = results.find((r) => r.id === 'running-task');
+      expect(running?.workflowName).toBe('Beta Plan');
+      expect(running?.lastEventAt).toBeTruthy();
+      expect(running?.eventCount).toBe(1);
+
+      const completed = results.find((r) => r.id === 'completed-task');
+      expect(completed?.eventCount).toBe(0);
+      expect(completed?.lastEventAt).toBeNull();
+    });
+
+    it('includes a pending task once it has any recorded event', () => {
+      adapter.saveWorkflow({ id: 'wf-1', name: 'Test', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
+      adapter.saveTask('wf-1', makeTask('pending-task', { status: 'pending' }));
+
+      expect(adapter.loadAllHistoryTasks()).toHaveLength(0);
+
+      adapter.logEvent('pending-task', 'task.pending');
+
+      const results = adapter.loadAllHistoryTasks();
+      expect(results).toHaveLength(1);
+      expect(results[0].id).toBe('pending-task');
+      expect(results[0].eventCount).toBe(1);
+      expect(results[0].lastEventAt).toBeTruthy();
+    });
+
+    it('orders results by most recent event descending', () => {
+      adapter.saveWorkflow({ id: 'wf-1', name: 'Test', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
+      adapter.saveTask('wf-1', makeTask('t-old', { status: 'completed', execution: { completedAt: new Date('2024-01-02T00:00:00Z') } }));
+      adapter.saveTask('wf-1', makeTask('t-new', { status: 'completed', execution: { completedAt: new Date('2024-01-05T00:00:00Z') } }));
+
+      // Pin created_at so ordering is deterministic across fast test runs.
+      const db = (adapter as unknown as { db: { run: (sql: string, params?: unknown[]) => void } }).db;
+      db.run(`INSERT INTO events (task_id, event_type, created_at) VALUES ('t-old', 'task.completed', '2024-01-02T12:00:00Z')`);
+      db.run(`INSERT INTO events (task_id, event_type, created_at) VALUES ('t-new', 'task.completed', '2024-01-05T12:00:00Z')`);
+
+      const results = adapter.loadAllHistoryTasks();
+      expect(results.map((r) => r.id)).toEqual(['t-new', 't-old']);
+    });
+
+    it('falls back to completed_at / started_at / created_at when there are no events', () => {
+      adapter.saveWorkflow({ id: 'wf-1', name: 'Test', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
+      adapter.saveTask('wf-1', makeTask('t-old', {
+        status: 'completed',
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+        execution: { completedAt: new Date('2024-01-02T00:00:00Z') },
+      }));
+      adapter.saveTask('wf-1', makeTask('t-new', {
+        status: 'completed',
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+        execution: { completedAt: new Date('2024-01-05T00:00:00Z') },
+      }));
+
+      const results = adapter.loadAllHistoryTasks();
+      expect(results.map((r) => r.id)).toEqual(['t-new', 't-old']);
+      expect(results.every((r) => r.eventCount === 0)).toBe(true);
+      expect(results.every((r) => r.lastEventAt === null)).toBe(true);
+    });
+
+    it('reconciles selected-attempt status like loadTasks', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const attempt = createAttempt('t1', {
+        status: 'failed',
+        exitCode: 1,
+        error: 'boom',
+        completedAt: new Date(),
+      });
+      adapter.saveTask('wf-1', makeTask('t1', {
+        status: 'running',
+        execution: {
+          startedAt: new Date(),
+        },
+      }));
+      adapter.saveAttempt(attempt);
+      adapter.updateTask('t1', {
+        execution: { selectedAttemptId: attempt.id },
+      });
+
+      const [fromLoadTasks] = adapter.loadTasks('wf-1');
+      const [fromHistory] = adapter.loadAllHistoryTasks();
+      expect(fromLoadTasks.status).toBe('failed');
+      expect(fromHistory.status).toBe('failed');
+      expect(fromHistory.execution.exitCode).toBe(1);
+      expect(fromHistory.execution.error).toBe('boom');
+    });
+
+    it('does not override fixing_with_ai with a failed selected attempt', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const attempt = createAttempt('t1', {
+        status: 'failed',
+        exitCode: 1,
+        error: 'boom',
+        completedAt: new Date(),
+      });
+      adapter.saveTask('wf-1', makeTask('t1', {
+        status: 'fixing_with_ai',
+        execution: {
+          startedAt: new Date(),
+        },
+      }));
+      adapter.saveAttempt(attempt);
+      adapter.updateTask('t1', {
+        execution: { selectedAttemptId: attempt.id },
+      });
+
+      const [fromHistory] = adapter.loadAllHistoryTasks();
+      expect(fromHistory.status).toBe('fixing_with_ai');
+    });
+
+    it('returns empty array on empty database', () => {
+      expect(adapter.loadAllHistoryTasks()).toHaveLength(0);
+    });
+  });
+
   describe('workflowId on tasks', () => {
     it('loadTasks returns workflowId on each task', () => {
       adapter.saveWorkflow(testWorkflow);

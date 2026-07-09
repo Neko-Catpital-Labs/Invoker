@@ -182,6 +182,8 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     delegatedRead('output-tail', { taskId }, 'tail', () => persistence.getOutputTail(taskId)));
   ipcMain.handle('invoker:get-all-completed-tasks', () =>
     delegatedRead('all-completed-tasks', {}, 'tasks', () => persistence.loadAllCompletedTasks()));
+  ipcMain.handle('invoker:get-history-tasks', () =>
+    delegatedRead('history-tasks', {}, 'tasks', () => persistence.loadAllHistoryTasks()));
   ipcMain.handle('invoker:get-worker-action-history', (_event, request: WorkerActionHistoryRequest) =>
     delegatedRead<WorkerActionHistoryResponse>(
       'worker-action-history',
