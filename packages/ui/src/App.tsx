@@ -139,30 +139,8 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
   };
 }
 
-function planningStatusLabel(status: InAppPlanningSessionStatus): string {
-  switch (status) {
-    case 'waiting_for_answer':
-      return 'Waiting for you';
-    case 'draft_ready':
-      return 'Draft ready';
-    case 'submitted':
-      return 'Submitted';
-    case 'still_discussing':
-      return 'Still discussing';
-  }
-}
-
-function planningStatusDotClass(status: InAppPlanningSessionStatus): string {
-  switch (status) {
-    case 'waiting_for_answer':
-      return 'bg-amber-400';
-    case 'draft_ready':
-      return 'bg-emerald-400';
-    case 'submitted':
-      return 'bg-muted-foreground';
-    case 'still_discussing':
-      return 'bg-border-strong';
-  }
+function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
+  return status === 'waiting_for_answer' || status === 'draft_ready';
 }
 
 function previewPlanningMessage(session: PlanningSessionView): string {
@@ -172,15 +150,44 @@ function previewPlanningMessage(session: PlanningSessionView): string {
 
 function relativePlanningUpdatedAt(value: string): string {
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return 'Updated just now';
+  if (!Number.isFinite(timestamp)) return 'now';
   const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
-  if (seconds < 60) return 'Updated just now';
+  if (seconds < 60) return 'now';
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `Updated ${minutes}m ago`;
+  if (minutes < 60) return `${minutes}m`;
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `Updated ${hours}h ago`;
+  if (hours < 24) return `${hours}h`;
   const days = Math.round(hours / 24);
-  return `Updated ${days}d ago`;
+  if (days < 30) return `${days}d`;
+  const months = Math.round(days / 30);
+  if (months < 12) return `${months}mo`;
+  return `${Math.round(months / 12)}y`;
+}
+
+function PlanningSessionStatusIcon({
+  busy,
+  status,
+}: {
+  busy: boolean;
+  status: InAppPlanningSessionStatus;
+}): JSX.Element {
+  if (busy) {
+    return (
+      <span
+        className="mt-1 inline-block h-2.5 w-2.5 shrink-0 animate-spin rounded-full border border-muted-foreground border-t-foreground"
+        aria-label="Running"
+      />
+    );
+  }
+  if (planningNeedsAttention(status)) {
+    return (
+      <span
+        className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"
+        aria-label="Needs attention"
+      />
+    );
+  }
+  return <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0" aria-hidden="true" />;
 }
 
 
@@ -2817,16 +2824,19 @@ export function App() {
               key={session.id}
               type="button"
               onClick={() => setActivePlanningSessionId(session.id)}
-              className={`block w-full border-l-2 px-3 py-2 text-left transition-colors ${selected ? 'border-l-foreground bg-accent/40 text-accent-foreground' : 'border-l-transparent text-foreground hover:bg-accent/20'}`}
+              className={`flex w-full items-start gap-2 border-l-2 px-3 py-2 text-left transition-colors ${selected ? 'border-l-foreground bg-accent/40 text-accent-foreground' : 'border-l-transparent text-foreground hover:bg-accent/20'}`}
             >
-              <div className="truncate text-sm font-medium">{session.title}</div>
-              <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{previewPlanningMessage(session)}</div>
-              <div className="mt-1.5 flex items-center justify-between gap-2">
-                <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
-                  <span className={`h-1.5 w-1.5 rounded-full ${planningStatusDotClass(session.status)}`} aria-hidden="true" />
-                  {planningStatusLabel(session.status)}
-                </span>
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{relativePlanningUpdatedAt(session.updatedAt)}</span>
+              <PlanningSessionStatusIcon busy={session.busy} status={session.status} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="truncate text-sm font-medium">{session.title}</div>
+                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                    {relativePlanningUpdatedAt(session.updatedAt)}
+                  </span>
+                </div>
+                <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                  {previewPlanningMessage(session)}
+                </div>
               </div>
             </button>
           );
@@ -2859,22 +2869,8 @@ export function App() {
         <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2.5">
-          <div className="min-w-0">
-            <h2 className="truncate text-sm font-medium text-foreground">{activePlanningSession.title}</h2>
-            <div className="mt-1 inline-flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
-              <span className={`h-1.5 w-1.5 rounded-full ${planningStatusDotClass(activePlanningSession.status)}`} aria-hidden="true" />
-              {planningStatusLabel(activePlanningSession.status)}
-            </div>
-          </div>
-          <button
-            type="button"
-            aria-label="Return home"
-            onClick={handleDismissBrowserSurface}
-            className="rounded-sm border border-border px-2.5 py-1 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
-          >
-            Home
-          </button>
+        <div className="border-b border-border bg-card px-4 py-2.5">
+          <h2 className="truncate text-sm font-medium text-foreground">{activePlanningSession.title}</h2>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden bg-background">
           <InvokerTerminal
