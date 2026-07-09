@@ -226,14 +226,22 @@ function TimelineEntry({
   );
 }
 
+const HISTORY_EVENTS_PAGE_SIZE = 50;
+
 function Timeline({
   taskId,
   events,
   loading,
+  hasMore,
+  loadingMore,
+  onLoadMore,
 }: {
   taskId: string;
   events: TaskEvent[] | undefined;
   loading: boolean;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
 }) {
   if (loading) {
     return <div className="text-xs text-gray-500 py-2">Loading timeline...</div>;
@@ -241,27 +249,37 @@ function Timeline({
   if (!events || events.length === 0) {
     return <div className="text-xs text-gray-500 py-2">No recorded events for this task.</div>;
   }
-  // getEvents() returns oldest-first; the timeline UI shows newest-first.
-  const newestFirst = [...events].reverse();
+  const newestFirst = events;
   return (
-    <ol
-      className="mt-1 pl-1"
-      aria-label={`Timeline for task ${taskId}`}
-      data-testid={`history-timeline-${taskId}`}
-    >
-      {newestFirst.map((event, idxFromTop) => {
-        // The chronologically-previous event sits BELOW the current one in a
-        // newest-first list, i.e. at index+1.
-        const chronologicallyPrev = newestFirst[idxFromTop + 1]?.createdAt;
-        return (
-          <TimelineEntry
-            key={event.id}
-            event={event}
-            prevChronologicalCreatedAt={chronologicallyPrev}
-          />
-        );
-      })}
-    </ol>
+    <div>
+      <ol
+        className="mt-1 pl-1"
+        aria-label={`Timeline for task ${taskId}`}
+        data-testid={`history-timeline-${taskId}`}
+      >
+        {newestFirst.map((event, idxFromTop) => {
+          const chronologicallyPrev = newestFirst[idxFromTop + 1]?.createdAt;
+          return (
+            <TimelineEntry
+              key={event.id}
+              event={event}
+              prevChronologicalCreatedAt={chronologicallyPrev}
+            />
+          );
+        })}
+      </ol>
+      {hasMore && (
+        <button
+          type="button"
+          className="mt-2 text-xs text-indigo-300 hover:text-indigo-100"
+          onClick={onLoadMore}
+          disabled={loadingMore}
+          data-testid={`history-load-more-${taskId}`}
+        >
+          {loadingMore ? 'Loading…' : 'Load more'}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -271,7 +289,10 @@ function HistoryRow({
   expanded,
   events,
   eventsLoading,
+  hasMore,
+  loadingMore,
   onToggleExpand,
+  onLoadMore,
   onSelect,
 }: {
   entry: TaskHistoryEntry;
@@ -279,7 +300,10 @@ function HistoryRow({
   expanded: boolean;
   events: TaskEvent[] | undefined;
   eventsLoading: boolean;
+  hasMore: boolean;
+  loadingMore: boolean;
   onToggleExpand: (taskId: string) => void;
+  onLoadMore: (taskId: string) => void;
   onSelect: (task: TaskState) => void;
 }) {
   const rowClass = selected
@@ -324,7 +348,14 @@ function HistoryRow({
       </div>
       {expanded && (
         <div className="px-3 pb-2 pl-8 border-t border-gray-700/60">
-          <Timeline taskId={entry.id} events={events} loading={eventsLoading} />
+          <Timeline
+            taskId={entry.id}
+            events={events}
+            loading={eventsLoading}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={() => onLoadMore(entry.id)}
+          />
         </div>
       )}
     </li>
@@ -526,7 +557,9 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [eventsByTask, setEventsByTask] = useState<Map<string, TaskEvent[]>>(new Map());
+  const [eventsHasMoreByTask, setEventsHasMoreByTask] = useState<Map<string, boolean>>(new Map());
   const [eventsLoadingTaskId, setEventsLoadingTaskId] = useState<string | null>(null);
+  const [eventsLoadingMoreTaskId, setEventsLoadingMoreTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -554,16 +587,54 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
     if (!invoker?.getEvents) return;
     setEventsLoadingTaskId(taskId);
     try {
-      const evs = await invoker.getEvents(taskId);
+      const evs = await invoker.getEvents(taskId, {
+        limit: HISTORY_EVENTS_PAGE_SIZE,
+        sortBy: 'desc',
+      });
       setEventsByTask((prev) => {
         const next = new Map(prev);
         next.set(taskId, evs);
+        return next;
+      });
+      setEventsHasMoreByTask((prev) => {
+        const next = new Map(prev);
+        next.set(taskId, evs.length >= HISTORY_EVENTS_PAGE_SIZE);
         return next;
       });
     } finally {
       setEventsLoadingTaskId((current) => (current === taskId ? null : current));
     }
   }, []);
+
+  const loadMoreEvents = useCallback(async (taskId: string) => {
+    const invoker = getInvoker();
+    if (!invoker?.getEvents) return;
+    const existing = eventsByTask.get(taskId) ?? [];
+    const oldest = existing[existing.length - 1];
+    if (!oldest) return;
+    setEventsLoadingMoreTaskId(taskId);
+    try {
+      const page = await invoker.getEvents(taskId, {
+        limit: HISTORY_EVENTS_PAGE_SIZE,
+        sortBy: 'desc',
+        beforeId: oldest.id,
+      });
+      setEventsByTask((prev) => {
+        const next = new Map(prev);
+        const current = next.get(taskId) ?? [];
+        const seen = new Set(current.map((event) => event.id));
+        next.set(taskId, [...current, ...page.filter((event) => !seen.has(event.id))]);
+        return next;
+      });
+      setEventsHasMoreByTask((prev) => {
+        const next = new Map(prev);
+        next.set(taskId, page.length >= HISTORY_EVENTS_PAGE_SIZE);
+        return next;
+      });
+    } finally {
+      setEventsLoadingMoreTaskId((current) => (current === taskId ? null : current));
+    }
+  }, [eventsByTask]);
 
   useEffect(() => {
     const invoker = getInvoker();
@@ -641,7 +712,10 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
               expanded={expandedTaskId === entry.id}
               events={eventsByTask.get(entry.id)}
               eventsLoading={eventsLoadingTaskId === entry.id}
+              hasMore={eventsHasMoreByTask.get(entry.id) === true}
+              loadingMore={eventsLoadingMoreTaskId === entry.id}
               onToggleExpand={toggleExpand}
+              onLoadMore={loadMoreEvents}
               onSelect={onTaskClick}
             />
           ))}
