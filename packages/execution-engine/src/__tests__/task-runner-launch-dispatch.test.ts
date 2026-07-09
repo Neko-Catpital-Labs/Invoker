@@ -245,9 +245,9 @@ describe('TaskRunner launch-dispatch wiring', () => {
     expect(launchOutbox.failCalls).toHaveLength(0);
   });
 
-  it('dispatches the member-resolved OMP model to executor.start', async () => {
+  it('dispatches the task-requested execution agent and model to executor.start', async () => {
     const task = makeTask({
-      config: { workflowId: 'wf-d', runnerKind: 'ssh', poolId: 'ssh-pool', executionAgent: 'omp' },
+      config: { workflowId: 'wf-d', runnerKind: 'ssh', poolId: 'ssh-pool', executionAgent: 'omp', executionModel: 'anthropic/claude-opus-4' },
     });
     let completeCallback: ((response: WorkResponse) => void) | undefined;
     const executor = {
@@ -298,13 +298,6 @@ describe('TaskRunner launch-dispatch wiring', () => {
             {
               type: 'ssh',
               id: 'remote-a',
-              capabilities: {
-                execution: {
-                  omp: {
-                    modelPolicy: { kind: 'fixed', model: 'anthropic/claude-opus-4' },
-                  },
-                },
-              },
             },
           ],
         },
