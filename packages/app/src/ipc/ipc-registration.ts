@@ -19,6 +19,7 @@ export interface GuiMutationRegistrationContext {
   getOwnerMode: () => boolean;
   getMessageBus: () => Pick<MessageBus, 'request'>;
   refreshOwnerRoute?: () => Promise<void>;
+  onMutationOwnerUnavailable?: (reason: string) => void;
   translateGuiMutationToHeadless: (payload: GuiMutationPayload) => TranslatedGuiMutation;
   guiMutationHandlers?: Map<string, (...args: unknown[]) => Promise<unknown>>;
 }
