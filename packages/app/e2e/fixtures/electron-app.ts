@@ -104,6 +104,7 @@ exit 64
     chmodSync(codexStub, 0o755);
     const pathEnv = `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`;
     const forceReadOnlyStatus = guiOwnerMode === 'read-only-status';
+    const forceConnectionLostStatus = guiOwnerMode === 'connection-lost-status';
     // Playwright's `use.video` option only applies to browser contexts, so the
     // Electron walkthrough video must be requested at launch time.
     const recordVideo = process.env.CAPTURE_VIDEO
@@ -123,7 +124,7 @@ exit 64
         NODE_ENV: 'test',
         INVOKER_DISABLE_SLACK: '1',
         TZ: 'UTC',
-        INVOKER_GUI_OWNER_MODE: forceReadOnlyStatus ? 'gui' : guiOwnerMode,
+        INVOKER_GUI_OWNER_MODE: (forceReadOnlyStatus || forceConnectionLostStatus) ? 'gui' : guiOwnerMode,
         INVOKER_DB_DIR: testDir,
         INVOKER_IPC_SOCKET: ipcSocketPath,
         INVOKER_ALLOW_DELETE_ALL: '1',
@@ -139,6 +140,7 @@ exit 64
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
         ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
         ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
+        ...(forceConnectionLostStatus ? { INVOKER_E2E_FORCE_CONNECTION_LOST_STATUS: '1' } : {}),
         PATH: pathEnv,
       },
     });
