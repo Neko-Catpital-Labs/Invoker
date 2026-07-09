@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkerStatusSnapshot } from '../types.js';
+import { areStructurallyEqual } from './useDedupedState.js';
 
 export function useWorkerStatus(pollMs = 2000): readonly [snapshot: WorkerStatusSnapshot | null, refresh: () => Promise<void>] {
   const [snapshot, setSnapshot] = useState<WorkerStatusSnapshot | null>(null);
@@ -13,7 +14,9 @@ export function useWorkerStatus(pollMs = 2000): readonly [snapshot: WorkerStatus
     try {
       const status = await window.invoker?.getWorkerStatus();
       if (mountedRef.current && status) {
-        setSnapshot(status);
+        setSnapshot((previous) =>
+          areStructurallyEqual(previous, status) ? previous : status,
+        );
       }
     } catch {
       // ignore polling errors
