@@ -19,6 +19,7 @@ import {
 import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
 import { DISK_HEADROOM_WORKER_KIND } from '../workers/disk-headroom-worker.js';
 import { REQUEUE_WORKER_KIND } from '../workers/requeue-worker.js';
+import { WORKFLOW_RESUME_WORKER_KIND } from '../workers/workflow-resume-worker.js';
 
 const silentLogger = {
   debug: () => {},
@@ -67,6 +68,7 @@ describe('worker registry', () => {
     expect(registry.list().map((d) => d.kind)).toEqual([
       AUTO_FIX_WORKER_KIND,
       REQUEUE_WORKER_KIND,
+      WORKFLOW_RESUME_WORKER_KIND,
       PR_STATUS_WORKER_KIND,
       CI_FAILURE_WORKER_KIND,
       DISK_HEADROOM_WORKER_KIND,
@@ -76,6 +78,7 @@ describe('worker registry', () => {
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(REQUEUE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(WORKFLOW_RESUME_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
     expect(registry.get(CI_FAILURE_WORKER_KIND)).toBeDefined();
     expect(registry.get(DISK_HEADROOM_WORKER_KIND)).toBeDefined();
