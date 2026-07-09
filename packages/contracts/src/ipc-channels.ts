@@ -625,7 +625,7 @@ export interface SystemDiagnostics {
   readiness?: PrerequisiteReport | PrerequisiteCheck[];
 }
 
-export type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only';
+export type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only' | 'connection-lost';
 
 export interface RuntimeStatus {
   ownerMode: boolean;
@@ -1130,6 +1130,9 @@ export const IpcEventChannels = {
   },
   'invoker:workflow-mutation-failed': {} as {
     payload: WorkflowMutationFailedEvent;
+  },
+  'invoker:runtime-status': {} as {
+    payload: RuntimeStatus;
   },
 } as const;
 
