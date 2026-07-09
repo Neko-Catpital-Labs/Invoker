@@ -11,8 +11,8 @@
 # Provides:
 #   Variables: REPO_ROOT, RUNNER, IPC_HELPER (from headless-lib.sh),
 #              TARGET_REPO, PR_AUTHOR, CODERABBIT_LOGIN, CRON_LOCK, DRY_RUN
-#   Functions: log_line, cron_lock, ledger_init, ledger_record, ledger_count,
-#              ledger_marker_seen, ledger_max_marker, gh_json,
+#   Functions: log_line, cron_lock, claim_key, ledger_init, ledger_record,
+#              ledger_count, ledger_marker_seen, ledger_max_marker, gh_json,
 #              resolve_workflow_for_pr, prune_stale_pr_workdirs
 #
 # Both jobs run their mutating operation SYNCHRONOUSLY while holding a single
@@ -33,6 +33,7 @@ TARGET_REPO="${INVOKER_GITHUB_TARGET_REPO:-Neko-Catpital-Labs/Invoker}"
 PR_AUTHOR="${INVOKER_PR_CRON_AUTHOR:-EdbertChan}"
 CODERABBIT_LOGIN="${INVOKER_CODERABBIT_LOGIN:-coderabbitai[bot]}"
 CRON_LOCK="${INVOKER_PR_CRON_LOCK:-${TMPDIR:-/tmp}/invoker-pr-crons.lock}"
+CLAIM_LOCK_ROOT="${INVOKER_PR_CLAIM_LOCK_ROOT:-${TMPDIR:-/tmp}/invoker-pr-claims}"
 DRY_RUN="${INVOKER_PR_CRON_DRY_RUN:-0}"
 
 # ---------------------------------------------------------------------------
@@ -95,6 +96,43 @@ cron_lock() {
   CRON_LOCK_DIR="$lockdir"
   # shellcheck disable=SC2064
   trap 'rm -rf "'"$lockdir"'" 2>/dev/null || true' EXIT
+}
+
+# Per-item claim lock: cron_lock already serializes a whole tick, so this is
+# only useful when a script iterates several PRs/stacks and wants to skip any
+# already claimed by another worker (fine-grained no-op when only one cron runs
+# at a time, and still safe if concurrency ever increases).
+claim_key() {
+  local key="$1"
+  local safe slot_path
+  safe="$(python3 - "$key" <<'PY'
+import hashlib, sys
+print(hashlib.sha256((sys.argv[1] or '').encode()).hexdigest())
+PY
+)"
+  mkdir -p "$CLAIM_LOCK_ROOT"
+  slot_path="$CLAIM_LOCK_ROOT/$safe.lock"
+  if command -v flock >/dev/null 2>&1; then
+    local fd
+    exec {fd}>"$slot_path"
+    if ! flock -n "$fd"; then
+      eval "exec ${fd}>&-"
+      return 1
+    fi
+    CLAIM_FD="$fd"
+    CLAIM_KEY="$key"
+    return 0
+  fi
+
+  local lockdir="${slot_path}.d"
+  [ -d "$lockdir" ] && _cron_lock_reap_stale "$lockdir"
+  if ! mkdir "$lockdir" 2>/dev/null; then
+    return 1
+  fi
+  printf '%s\n' "$$" > "$lockdir/pid"
+  CLAIM_LOCK_DIR="$lockdir"
+  CLAIM_KEY="$key"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
