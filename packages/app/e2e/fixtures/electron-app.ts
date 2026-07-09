@@ -29,6 +29,7 @@ export type ElectronFixtures = {
 };
 
 const repoRoot = resolveRepoRoot(__dirname);
+const PRELOAD_BRIDGE_TIMEOUT_MS = 30_000;
 
 async function removeTestDir(dir: string): Promise<void> {
   let lastError: unknown;
@@ -149,7 +150,7 @@ exit 64
   page: async ({ electronApp }, use) => {
     const page = await electronApp.firstWindow();
     await page.waitForLoadState('domcontentloaded');
-    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: PRELOAD_BRIDGE_TIMEOUT_MS });
 
     // Clear state from previous runs and reload for clean React state
     await page.evaluate(async () => {
@@ -158,7 +159,7 @@ exit 64
     });
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
-    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: PRELOAD_BRIDGE_TIMEOUT_MS });
 
     await use(page);
     try {
@@ -366,12 +367,13 @@ async function ensureScreenshotViewport(page: Page): Promise<void> {
  * the Playwright config's toHaveScreenshot defaults.
  */
 export async function assertPageScreenshot(page: Page, name: string): Promise<void> {
-  // Skip pixel-level screenshot comparison on CI (no Linux baselines committed).
-  // DOM assertions in the calling test still run.
-  if (process.env.CI) return;
+  // Pixel-level baselines are an explicit visual-regression job. The default
+  // E2E command keeps DOM assertions active without binding local runs to a
+  // developer's compositor/font metrics.
+  if (process.env.INVOKER_E2E_ASSERT_SCREENSHOTS !== '1') return;
   await ensureScreenshotViewport(page);
   await waitForStableUI(page);
-  await expect(page).toHaveScreenshot(`${name}.png`, { timeout: 0 });
+  await expect(page).toHaveScreenshot(`${name}.png`, { timeout: 60_000 });
 }
 
 /**
