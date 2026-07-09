@@ -55,9 +55,12 @@ export async function discoverOwner(
 ): Promise<OwnerDiscoveryResult> {
   const raw = await tryPingHeadlessOwner(messageBus, timeoutMs);
   if (!raw) return null;
+  const ownerId = typeof raw.ownerId === 'string' ? raw.ownerId : '';
+  const mode = typeof raw.mode === 'string' ? raw.mode : '';
+  if (!ownerId || !mode) return null;
   return {
-    ownerId: raw.ownerId ?? '',
-    canAcceptStandaloneMutations: raw.mode === 'standalone' || raw.mode === 'gui',
+    ownerId,
+    canAcceptStandaloneMutations: mode === 'standalone' || mode === 'gui',
   };
 }
 
