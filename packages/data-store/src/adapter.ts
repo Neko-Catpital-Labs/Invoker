@@ -67,6 +67,19 @@ export interface ActivityLogEntry {
   message: string;
 }
 
+export interface WorkerDesiredState<TDesiredState = unknown> {
+  workerKind: string;
+  desiredState: TDesiredState;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkerDesiredStateInput<TDesiredState = unknown> {
+  workerKind: string;
+  desiredState: TDesiredState;
+  updatedAt?: string;
+}
+
 export interface WorkflowTaskSnapshot {
   workflows: Workflow[];
   tasks: TaskState[];
@@ -134,6 +147,15 @@ export interface PersistenceAdapter {
   // Agent queries
   /** Read the configured execution agent name for a task (e.g. 'claude', 'codex'). */
   getExecutionAgent?(taskId: string): string | null;
+
+  // Worker desired state
+  saveWorkerDesiredState<TDesiredState = unknown>(state: WorkerDesiredStateInput<TDesiredState>): void;
+  saveWorkerDesiredState<TDesiredState = unknown>(workerKind: string, desiredState: TDesiredState): void;
+  writeWorkerDesiredState<TDesiredState = unknown>(workerKind: string, desiredState: TDesiredState): void;
+  loadWorkerDesiredState<TDesiredState = unknown>(workerKind: string): WorkerDesiredState<TDesiredState> | undefined;
+  readWorkerDesiredState<TDesiredState = unknown>(workerKind: string): WorkerDesiredState<TDesiredState> | undefined;
+  listWorkerDesiredStates<TDesiredState = unknown>(): Array<WorkerDesiredState<TDesiredState>>;
+  deleteWorkerDesiredState(workerKind: string): void;
 
   // Lifecycle
   close(): void;

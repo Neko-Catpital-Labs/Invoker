@@ -43,7 +43,13 @@ import type {
   ActivityLogEntry,
   Conversation,
   ConversationMessage,
+  WorkerDesiredState,
+  WorkerDesiredStateInput,
 } from './adapter.js';
+import {
+  WORKER_DESIRED_STATE_SCHEMA_SQL,
+  WORKER_DESIRED_STATE_TABLE,
+} from './sqlite-schema.js';
 
 /**
  * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
@@ -221,6 +227,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows;
   }
 
+  private tableExists(tableName: string): boolean {
+    return Boolean(this.queryOne(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      [tableName],
+    ));
+  }
+
   private ensureWritable(): void {
     if (this.readOnly) {
       throw new Error('SQLiteAdapter is read-only in this process');
@@ -375,6 +388,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private initSchema(): void {
+    const hadPersistentSchema = this.tableExists('workflows') || this.tableExists('tasks');
+    const hadWorkerDesiredStateTable = this.tableExists(WORKER_DESIRED_STATE_TABLE);
+
     this.db.run(`
       CREATE TABLE IF NOT EXISTS workflows (
         id TEXT PRIMARY KEY,
@@ -602,7 +618,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE INDEX IF NOT EXISTS idx_output_spool_task_offset
         ON output_spool(task_id, offset);
+
+      ${WORKER_DESIRED_STATE_SCHEMA_SQL}
     `);
+
+    if (!this.readOnly && hadPersistentSchema && !hadWorkerDesiredStateTable) {
+      this.dirty = true;
+    }
   }
 
   /** Add columns that may not exist in older databases. */
@@ -1558,6 +1580,76 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (row?.pool_member_id as string) ?? null;
   }
 
+  // ── Worker Desired State ─────────────────────────────────
+
+  saveWorkerDesiredState<TDesiredState = unknown>(state: WorkerDesiredStateInput<TDesiredState>): void;
+  saveWorkerDesiredState<TDesiredState = unknown>(workerKind: string, desiredState: TDesiredState): void;
+  saveWorkerDesiredState<TDesiredState = unknown>(
+    stateOrWorkerKind: WorkerDesiredStateInput<TDesiredState> | string,
+    desiredState?: TDesiredState,
+  ): void {
+    const state = typeof stateOrWorkerKind === 'string'
+      ? { workerKind: stateOrWorkerKind, desiredState: desiredState as TDesiredState }
+      : stateOrWorkerKind;
+    const workerKind = state.workerKind.trim();
+    if (!workerKind) {
+      throw new Error('workerKind is required');
+    }
+    const desiredStateJson = JSON.stringify(state.desiredState);
+    if (desiredStateJson === undefined) {
+      throw new Error('Worker desired state must be JSON-serializable');
+    }
+    const updatedAt = state.updatedAt ?? new Date().toISOString();
+
+    this.execRun(
+      `INSERT INTO ${WORKER_DESIRED_STATE_TABLE} (
+         worker_kind, desired_state, created_at, updated_at
+       ) VALUES (?, ?, ?, ?)
+       ON CONFLICT(worker_kind) DO UPDATE SET
+         desired_state = excluded.desired_state,
+         updated_at = excluded.updated_at`,
+      [workerKind, desiredStateJson, updatedAt, updatedAt],
+    );
+  }
+
+  writeWorkerDesiredState<TDesiredState = unknown>(workerKind: string, desiredState: TDesiredState): void {
+    this.saveWorkerDesiredState(workerKind, desiredState);
+  }
+
+  setWorkerDesiredState<TDesiredState = unknown>(workerKind: string, desiredState: TDesiredState): void {
+    this.saveWorkerDesiredState(workerKind, desiredState);
+  }
+
+  loadWorkerDesiredState<TDesiredState = unknown>(workerKind: string): WorkerDesiredState<TDesiredState> | undefined {
+    const row = this.queryOne(
+      `SELECT * FROM ${WORKER_DESIRED_STATE_TABLE} WHERE worker_kind = ?`,
+      [workerKind],
+    );
+    return row ? this.rowToWorkerDesiredState<TDesiredState>(row) : undefined;
+  }
+
+  readWorkerDesiredState<TDesiredState = unknown>(workerKind: string): WorkerDesiredState<TDesiredState> | undefined {
+    return this.loadWorkerDesiredState<TDesiredState>(workerKind);
+  }
+
+  getWorkerDesiredState<TDesiredState = unknown>(workerKind: string): TDesiredState | undefined {
+    return this.loadWorkerDesiredState<TDesiredState>(workerKind)?.desiredState;
+  }
+
+  listWorkerDesiredStates<TDesiredState = unknown>(): Array<WorkerDesiredState<TDesiredState>> {
+    const rows = this.queryAll(
+      `SELECT * FROM ${WORKER_DESIRED_STATE_TABLE} ORDER BY worker_kind ASC`,
+    );
+    return rows.map((row) => this.rowToWorkerDesiredState<TDesiredState>(row));
+  }
+
+  deleteWorkerDesiredState(workerKind: string): void {
+    this.execRun(
+      `DELETE FROM ${WORKER_DESIRED_STATE_TABLE} WHERE worker_kind = ?`,
+      [workerKind],
+    );
+  }
+
   // ── Conversations ───────────────────────────────────────
 
   saveConversation(conversation: Conversation): void {
@@ -1998,6 +2090,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
 
     return rollups;
+  }
+
+  private rowToWorkerDesiredState<TDesiredState = unknown>(
+    row: Record<string, unknown>,
+  ): WorkerDesiredState<TDesiredState> {
+    return {
+      workerKind: String(row.worker_kind),
+      desiredState: JSON.parse(String(row.desired_state)) as TDesiredState,
+      createdAt: String(row.created_at ?? ''),
+      updatedAt: String(row.updated_at ?? ''),
+    };
   }
 
   private rowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
