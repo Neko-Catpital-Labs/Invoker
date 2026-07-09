@@ -358,6 +358,13 @@ function hasBareRetryAlreadySubmitted(
   return existing.attemptCount > 0;
 }
 
+function canPersistBareRetryDecision(options: AutoFixRecoveryPolicyOptions): boolean {
+  return (
+    typeof options.store.getWorkerAction === 'function' &&
+    typeof options.store.upsertWorkerAction === 'function'
+  );
+}
+
 function skipAutoFixCandidate(
   options: AutoFixRecoveryPolicyOptions,
   candidate: AutoFixRecoveryCandidate,
@@ -494,7 +501,7 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         continue;
       }
 
-      if (!hasBareRetryAlreadySubmitted(options, candidate)) {
+      if (canPersistBareRetryDecision(options) && !hasBareRetryAlreadySubmitted(options, candidate)) {
         const intentId = options.submitter.submit(
           candidate.workflowId,
           'normal',

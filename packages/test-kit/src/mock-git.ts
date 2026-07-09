@@ -21,6 +21,7 @@ export class MockGit {
   private scripts: ScriptedResponse[] = [];
   private defaultBranch = 'master';
   private hasStagedChanges = false;
+  private remoteHeads = new Map<string, string>();
 
   /** Script a response for calls matching a predicate. */
   on(match: (args: string[]) => boolean, response: string | Error, once = false): this {
@@ -66,6 +67,7 @@ export class MockGit {
     this.scripts = [];
     this.calls = [];
     this.hasStagedChanges = false;
+    this.remoteHeads.clear();
     return this;
   }
 
@@ -132,7 +134,13 @@ export class MockGit {
     if (args[0] === 'branch') return '';
     if (args[0] === 'symbolic-ref') return `refs/remotes/origin/${this.defaultBranch}`;
     if (args[0] === 'rev-parse') return 'abc123';
-    if (args[0] === 'push') return '';
+    if (args[0] === 'push') {
+      this.recordPushedHead(args);
+      return '';
+    }
+    if (args[0] === 'ls-remote' && args.includes('--heads')) {
+      return this.resolveLsRemoteHeads(args);
+    }
     // diff --cached --quiet exits non-zero when there are staged changes
     if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) {
       if (this.hasStagedChanges) {
@@ -141,5 +149,20 @@ export class MockGit {
       return '';
     }
     return '';
+  }
+
+  private recordPushedHead(args: string[]): void {
+    const refspec = args.find((arg) => arg.includes(':refs/heads/'));
+    if (!refspec) return;
+    const branch = refspec.split(':refs/heads/')[1];
+    if (!branch) return;
+    this.remoteHeads.set(branch, 'abc123');
+  }
+
+  private resolveLsRemoteHeads(args: string[]): string {
+    const branch = args[args.length - 1];
+    if (!branch || branch === '--') return '';
+    const sha = this.remoteHeads.get(branch);
+    return sha ? `${sha}\trefs/heads/${branch}\n` : '';
   }
 }
