@@ -322,6 +322,8 @@ export type {
   AgentSessionData,
   QueueStatus,
   ReviewGateQueryResponse,
+  TaskEvent,
+  TaskHistoryEntry,
   WorkerActionSummary,
   WorkerDecisionsRequest,
   WorkerDecisionsResponse,
