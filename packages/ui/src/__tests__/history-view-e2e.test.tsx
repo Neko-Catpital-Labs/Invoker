@@ -171,6 +171,34 @@ describe('History view (component)', () => {
     });
   });
 
+  it('filters by status chip and shows closed status option', async () => {
+    const completed = makeHistoryEntry({ id: 'task-done', description: 'Done task', status: 'completed' });
+    const closed = makeHistoryEntry({
+      id: 'task-closed',
+      description: 'Closed task',
+      status: 'closed',
+      lastEventAt: '2026-07-01T09:00:00.000Z',
+    });
+    mock.setHistoryTasks([completed, closed]);
+    act(() => mock.setTasks([completed, closed], workflows));
+
+    render(<App />);
+    await chooseGraphMenuItem('rail-history');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('history-row-task-done')).toBeInTheDocument();
+      expect(screen.getByTestId('history-row-task-closed')).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole('button', { name: 'Closed' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Closed' }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('history-row-task-done')).not.toBeInTheDocument();
+      expect(screen.getByTestId('history-row-task-closed')).toBeInTheDocument();
+      expect(screen.getByText('1 / 2')).toBeInTheDocument();
+    });
+  });
 
   it('shows empty state when there is no history', async () => {
     mock.setHistoryTasks([]);
