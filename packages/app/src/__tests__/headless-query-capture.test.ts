@@ -112,4 +112,30 @@ describe('runReadOnlyHeadlessQueryToString', () => {
     await expect(runReadOnlyHeadlessQueryToString(['query', 'ui-perf'], deps)).resolves.toContain('mainDeltaToUi');
     expect(resetUiPerfStats).not.toHaveBeenCalled();
   });
+
+  it('answers a delegated `worker status` query on the writable owner', async () => {
+    const deps = makeQueryDeps(() => []);
+    deps.persistence = {
+      listWorkflows: () => [],
+      loadTasks: () => [],
+      getEvents: () => [],
+    } as unknown as HeadlessQueryDeps['persistence'];
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    try {
+      const label = await runReadOnlyHeadlessQueryToString(['worker', 'status', '--output', 'label'], deps);
+      expect(label).toBe('auto-fix-recovery\n');
+      const json = await runReadOnlyHeadlessQueryToString(['worker', 'status', '--output', 'json'], deps);
+      expect(JSON.parse(json).workerId).toBe('auto-fix-recovery');
+      expect(writeSpy).not.toHaveBeenCalled();
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  it('rejects a mutating `worker autofix` scan as non-delegatable', async () => {
+    const deps = makeQueryDeps(() => []);
+    await expect(
+      runReadOnlyHeadlessQueryToString(['worker', 'autofix'], deps),
+    ).rejects.toThrow(/worker autofix is not a delegatable read-only query/);
+  });
 });

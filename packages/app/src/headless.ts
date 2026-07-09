@@ -40,10 +40,6 @@ import {
 } from './global-topup.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
-import {
-  collectRecoveryWorkerStatus,
-  type RecoveryWorkerStatus,
-} from './recovery-worker-observability.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 
 export {
@@ -76,7 +72,7 @@ import {
 
 export { createHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
 export type { HeadlessDeps, QueryFlags };
-import { headlessQuery, headlessQuerySelect } from './headless-query-list.js';
+import { headlessQuery, headlessQuerySelect, renderWorkerStatus } from './headless-query-list.js';
 export { resolveAgentSession } from './headless-query-list.js';
 import {
   headlessRun,
@@ -440,23 +436,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
 
   if (subCommand === 'status') {
-    const flags = parseQueryFlags(args.slice(1));
-    const status = collectRecoveryWorkerStatus(deps.persistence);
-    const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
-    switch (flags.output) {
-      case 'label':
-        process.stdout.write(`${status.workerId}\n`);
-        break;
-      case 'json':
-        process.stdout.write(formatAsJson(status) + '\n');
-        break;
-      case 'jsonl':
-        process.stdout.write(formatAsJsonl([status]) + '\n');
-        break;
-      default:
-        process.stdout.write(formatRecoveryWorkerStatus(status) + '\n');
-        break;
-    }
+    await renderWorkerStatus(args.slice(1), deps);
     return;
   }
 
@@ -502,30 +482,6 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
   const label = definition.kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : definition.kind;
   process.stdout.write(`${label} worker scan completed.\n`);
-}
-
-function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
-  const lines = [
-    `${BOLD}Recovery worker${RESET}`,
-    `  kind: ${status.kind}`,
-    `  workerId: ${status.workerId}`,
-    `  owner: ${status.owner}`,
-    `  lastWakeupAt: ${status.lastWakeupAt ?? 'never'}`,
-    `  lastScanAt: ${status.lastScanAt ?? 'never'}`,
-    `  lastSubmitAt: ${status.lastSubmitAt ?? 'never'}`,
-    `  lastSkip: ${status.lastSkipAt ?? 'never'}${status.lastSkipReason ? ` (${status.lastSkipReason} task=${status.lastSkipTaskId})` : ''}`,
-    `  counts: wakeups=${status.wakeups} scans=${status.scans} submissions=${status.submissions} skips=${status.skips}`,
-  ];
-  if (status.recent.length > 0) {
-    lines.push('');
-    lines.push(`${BOLD}Recent recovery decisions${RESET}`);
-    for (const event of status.recent) {
-      const reason = event.reason ? ` reason=${event.reason}` : '';
-      const phase = event.phase ? ` phase=${event.phase}` : '';
-      lines.push(`  ${event.at} ${event.taskId} ${event.action}${phase}${reason}`);
-    }
-  }
-  return lines.join('\n');
 }
 
 async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdle'>): Promise<void> {
