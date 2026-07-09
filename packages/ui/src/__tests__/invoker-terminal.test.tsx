@@ -288,7 +288,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('hello');
     await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
 
     expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('');
     expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('I can help draft that.');
@@ -320,7 +320,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('first session request');
     await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
 
     const secondInput = screen.getByTestId('invoker-terminal-input');
     expect(secondInput).not.toBeDisabled();
@@ -415,5 +415,17 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+
+  it('constrains the planning session list to a bounded scroll region', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    const list = screen.getByTestId('planning-session-list');
+    // Regression guard: an auto-height overflow container never scrolls; long
+    // session lists overflow the rail and get clipped by the ancestor
+    // overflow-hidden instead. The scroll region needs a definite height.
+    expect(list.className).toContain('overflow-y-auto');
+    expect(list.className).toMatch(/\b(h-full|h-\[|max-h-\S+)/);
   });
 });
