@@ -102,6 +102,7 @@ export function registerAutoFixWorker(
       createRecoveryWorker({
         logger: deps.logger,
         messageBus: deps.messageBus,
+        tickOnStart: true,
         autoFix: {
           store: deps.store,
           submitter: deps.submitter,
