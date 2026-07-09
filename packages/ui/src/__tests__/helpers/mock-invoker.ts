@@ -11,6 +11,8 @@ import type {
   TaskState,
   TaskDelta,
   TaskGraphEvent,
+  TaskHistoryEntry,
+  TaskEvent,
   WorkflowMeta,
   TaskStatus,
   TaskConfig,
@@ -23,6 +25,10 @@ export interface MockInvoker {
   api: InvokerAPI;
   /** Replace the task snapshot and fire matching 'created' graph events. */
   setTasks: (tasks: TaskState[], workflows?: WorkflowMeta[]) => void;
+  /** Replace the history list returned by getHistoryTasks. */
+  setHistoryTasks: (entries: TaskHistoryEntry[]) => void;
+  /** Replace the events returned by getEvents for a task id. */
+  setEvents: (taskId: string, events: TaskEvent[]) => void;
   /** Directly fire a task delta to subscribers. */
   fireDelta: (delta: TaskDelta) => void;
   /** Directly fire a task graph event to subscribers. */
@@ -88,6 +94,8 @@ export function createMockInvoker(
 ): MockInvoker {
   let taskSnapshot = initialTasks;
   let workflowSnapshot = initialWorkflows;
+  let historySnapshot: TaskHistoryEntry[] = [];
+  const eventsByTask = new Map<string, TaskEvent[]>();
   let graphEventCallback: ((event: TaskGraphEvent) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
@@ -260,8 +268,8 @@ export function createMockInvoker(
     runInvokerCliSetup: vi.fn(async () => ({ ok: true, steps: [{ id: 'tools', name: 'Run setup', ok: true, output: 'setup ok' }] })),
     replaceTask: vi.fn(async () => accepted('invoker:replace-task')),
     getActivityLogs: vi.fn(async () => []),
-    getEvents: vi.fn(async () => []),
-    getHistoryTasks: vi.fn(async () => []),
+    getEvents: vi.fn(async (taskId: string) => eventsByTask.get(taskId) ?? []),
+    getHistoryTasks: vi.fn(async () => historySnapshot),
     openTerminal: vi.fn(async (taskId: string) => ({
       opened: true,
       session: {
@@ -349,6 +357,14 @@ export function createMockInvoker(
     });
   }
 
+  function setHistoryTasks(entries: TaskHistoryEntry[]) {
+    historySnapshot = entries;
+  }
+
+  function setEvents(taskId: string, events: TaskEvent[]) {
+    eventsByTask.set(taskId, events);
+  }
+
   function setActionGraph(response: ActionGraphResponse) {
     actionGraphSnapshot = response;
   }
@@ -399,11 +415,15 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
     terminalOutputCallbacks.clear();
     workflowMutationFailedCallbacks.clear();
+    eventsByTask.clear();
+    historySnapshot = [];
   }
 
   return {
     api,
     setTasks,
+    setHistoryTasks,
+    setEvents,
     setActionGraph,
     setRuntimeStatus,
     setWorkerStatus,

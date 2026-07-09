@@ -556,8 +556,10 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
 
   useEffect(() => {
     const invoker = getInvoker();
-    if (!invoker?.onTaskDelta) return;
-    return invoker.onTaskDelta((delta) => {
+    if (!invoker?.onTaskGraphEvent) return;
+    return invoker.onTaskGraphEvent((event) => {
+      if (event.type !== 'delta') return;
+      const delta = event.delta;
       setEntries((prev) => applyDelta(prev, delta));
       const affectedId = 'taskId' in delta ? delta.taskId : delta.task.id;
       if (affectedId && expandedTaskId === affectedId) {
