@@ -37,6 +37,42 @@ export function formatGuiOwnerBootstrapFallbackMessage(message: string): string 
   ].join('\n');
 }
 
+export type RuntimeModeSnapshot = 'local-owner' | 'daemon-owner' | 'read-only';
+
+export interface RuntimeStatusFields {
+  ownerMode: boolean;
+  readOnly: boolean;
+  mode: RuntimeModeSnapshot;
+}
+
+/** Compute the GUI runtime status from ownership flags. */
+export function computeGuiRuntimeStatus(input: {
+  ownerMode: boolean;
+  guiUsingDaemonOwner: boolean;
+}): RuntimeStatusFields {
+  const { ownerMode, guiUsingDaemonOwner } = input;
+  return {
+    ownerMode,
+    readOnly: !ownerMode && !guiUsingDaemonOwner,
+    mode: ownerMode ? 'local-owner' : guiUsingDaemonOwner ? 'daemon-owner' : 'read-only',
+  };
+}
+
+/** True when an owner IPC/delegation failure means no mutation owner is reachable. */
+export function isMutationOwnerUnavailableError(error: unknown): boolean {
+  if (error instanceof Error && error.message === 'No mutation owner is available') {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code ?? '')
+    : '';
+  return code === 'NO_HANDLER'
+    || code === 'DISCONNECTED'
+    || message.includes('No request handler registered')
+    || message.includes('No mutation owner is available');
+}
+
 export interface ElectronUserDataEnv {
   INVOKER_USER_DATA_DIR?: string;
   INVOKER_DB_DIR?: string;
