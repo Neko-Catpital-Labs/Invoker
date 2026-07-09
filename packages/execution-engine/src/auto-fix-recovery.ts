@@ -37,10 +37,13 @@ export const RECOVERY_WORKER_KIND = 'recovery';
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
 const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
+const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:restart-task';
 const AUTO_FIX_ACTION_TYPE = 'auto-fix';
+const AUTO_FIX_BARE_RETRY_ACTION_TYPE = 'auto-retry';
 
 const AUTO_FIX_WORKER_AUDIT_EVENTS: Record<string, { eventType: string; action: 'submit' | 'skip' }> = {
   'worker-autofix-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
+  'worker-autofix-bare-retry-submitted': { eventType: 'recovery.worker.submit', action: 'submit' },
   'worker-autofix-skip': { eventType: 'recovery.worker.skip', action: 'skip' },
 };
 
@@ -61,7 +64,7 @@ export interface AutoFixRecoverySubmitter {
   submit(
     workflowId: string,
     priority: WorkflowMutationPriority,
-    channel: typeof AUTO_FIX_COMMAND_CHANNEL,
+    channel: typeof AUTO_FIX_COMMAND_CHANNEL | typeof AUTO_FIX_BARE_RETRY_CHANNEL,
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number;
@@ -266,6 +269,14 @@ function logAutoFixWorkerEvent(
   });
 }
 
+function autoFixDecisionExternalKey(candidate: AutoFixRecoveryCandidate): string {
+  return `${AUTO_FIX_WORKER_KIND}:${candidate.taskId}:${candidate.generation}:${candidate.attemptId ?? ''}`;
+}
+
+function autoFixBareRetryExternalKey(candidate: AutoFixRecoveryCandidate): string {
+  return `${AUTO_FIX_WORKER_KIND}:retry:${candidate.taskId}:${candidate.generation}:${candidate.attemptId ?? ''}`;
+}
+
 function recordAutoFixDecisionRow(
   options: AutoFixRecoveryPolicyOptions,
   candidate: AutoFixRecoveryCandidate,
@@ -282,7 +293,7 @@ function recordAutoFixDecisionRow(
   recordWorkerDecisionRow(options.store, {
     workerKind: AUTO_FIX_WORKER_KIND,
     actionType: AUTO_FIX_ACTION_TYPE,
-    externalKey: `${AUTO_FIX_WORKER_KIND}:${candidate.taskId}:${candidate.generation}:${candidate.attemptId ?? ''}`,
+    externalKey: autoFixDecisionExternalKey(candidate),
     subjectType: 'task',
     subjectId: candidate.taskId,
     workflowId: candidate.workflowId,
@@ -301,6 +312,50 @@ function recordAutoFixDecisionRow(
       ...fields.extraPayload,
     },
   });
+}
+
+function recordAutoFixBareRetryRow(
+  options: AutoFixRecoveryPolicyOptions,
+  candidate: AutoFixRecoveryCandidate,
+  fields: {
+    status: WorkerActionStatus;
+    summary: string;
+    intentId?: number;
+    extraPayload?: Record<string, unknown>;
+  },
+): void {
+  recordWorkerDecisionRow(options.store, {
+    workerKind: AUTO_FIX_WORKER_KIND,
+    actionType: AUTO_FIX_BARE_RETRY_ACTION_TYPE,
+    externalKey: autoFixBareRetryExternalKey(candidate),
+    subjectType: 'task',
+    subjectId: candidate.taskId,
+    workflowId: candidate.workflowId,
+    taskId: candidate.taskId,
+    status: fields.status,
+    summary: fields.summary,
+    intentId: fields.intentId,
+    incrementAttempt: true,
+    payload: {
+      source: candidate.source,
+      generation: candidate.generation,
+      attemptId: candidate.attemptId ?? null,
+      taskStateVersion: candidate.taskStateVersion,
+      ...fields.extraPayload,
+    },
+  });
+}
+
+function hasBareRetryAlreadySubmitted(
+  options: AutoFixRecoveryPolicyOptions,
+  candidate: AutoFixRecoveryCandidate,
+): boolean {
+  const existing = options.store.getWorkerAction?.(
+    AUTO_FIX_WORKER_KIND,
+    autoFixBareRetryExternalKey(candidate),
+  );
+  if (!existing) return false;
+  return existing.attemptCount > 0;
 }
 
 function skipAutoFixCandidate(
@@ -438,6 +493,34 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         skipAutoFixCandidate(options, candidate, 'duplicate-candidate');
         continue;
       }
+
+      if (!hasBareRetryAlreadySubmitted(options, candidate)) {
+        const intentId = options.submitter.submit(
+          candidate.workflowId,
+          'normal',
+          AUTO_FIX_BARE_RETRY_CHANNEL,
+          [candidate.taskId],
+        );
+        submittedThisTick.add(candidate.taskId);
+        logAutoFixWorkerEvent(options, candidate.taskId, 'worker-autofix-bare-retry-submitted', {
+          workflowId: candidate.workflowId,
+          intentId,
+          channel: AUTO_FIX_BARE_RETRY_CHANNEL,
+          generation: candidate.generation,
+          taskStateVersion: candidate.taskStateVersion,
+          attemptId: candidate.attemptId ?? null,
+        });
+        recordAutoFixBareRetryRow(options, candidate, {
+          status: 'queued',
+          summary: 'Queued bare retry-task before consuming auto-fix attempts',
+          intentId,
+          extraPayload: {
+            channel: AUTO_FIX_BARE_RETRY_CHANNEL,
+          },
+        });
+        continue;
+      }
+
       const retryBudget = retryBudgetForTask(candidate.task, options);
       const attemptDecision = options.attemptLedger.consume(
         autoFixAttemptLedgerKeyFromTask(candidate.task),
