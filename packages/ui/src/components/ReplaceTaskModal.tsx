@@ -1,12 +1,17 @@
 /**
  * ReplaceTaskModal — Modal for replacing a broken/failed task with a new subgraph.
- *
- * Accepts YAML task definitions (same format as plan tasks) and calls
- * window.invoker.replaceTask() to splice the replacement into the graph.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { TaskState, TaskReplacementDef } from '../types.js';
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './primitives/index.js';
 
 interface ReplaceTaskModalProps {
   task: TaskState;
@@ -55,17 +60,6 @@ export function ReplaceTaskModal({ task, onSubmit, onClose }: ReplaceTaskModalPr
   );
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const handleGlobalKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', handleGlobalKeyDown);
-    return () => document.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [onClose]);
-
   const handleSubmit = () => {
     setError(null);
     try {
@@ -94,13 +88,13 @@ export function ReplaceTaskModal({ task, onSubmit, onClose }: ReplaceTaskModalPr
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-secondary rounded-lg shadow-xl w-full max-w-lg p-6 border border-border">
-        <h2 className="text-lg font-semibold text-foreground mb-2">
-          Replace Task
-        </h2>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Replace Task</DialogTitle>
+        </DialogHeader>
 
-        <div className="mb-4">
+        <div>
           <p className="text-sm text-muted-foreground mb-1">
             Replacing: <span className="font-mono text-foreground">{task.id}</span>
           </p>
@@ -110,7 +104,7 @@ export function ReplaceTaskModal({ task, onSubmit, onClose }: ReplaceTaskModalPr
           </p>
         </div>
 
-        <div className="mb-4">
+        <div>
           <textarea
             value={yaml}
             onChange={(e) => setYaml(e.target.value)}
@@ -124,26 +118,20 @@ export function ReplaceTaskModal({ task, onSubmit, onClose }: ReplaceTaskModalPr
         </div>
 
         {error && (
-          <div className="mb-4 bg-red-900/30 border border-red-700 rounded p-3">
+          <div className="bg-red-900/30 border border-red-700 rounded p-3">
             <p className="text-sm text-red-300">{error}</p>
           </div>
         )}
 
-        <div className="flex gap-3 justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded text-sm font-medium transition-colors"
-          >
+          </Button>
+          <Button type="button" onClick={handleSubmit}>
             Replace
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
