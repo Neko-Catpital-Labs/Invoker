@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Guard proof for Job 2 (scripts/cron-pr-conflict-rebase.sh):
+# Guard proof for Job 2 via the native `pr-conflict-rebase` worker path:
 #   1. a DIRTY PR mapped to a workflow at generation g -> "would rebase-recreate"
 #   2. once generation g is in the ledger -> "already fired for generation g; skip"
 #   3. once the per-workflow attempt cap is reached -> "giving up"
 #
 # Runs fully offline in dry-run with a fake `gh` and a stubbed review-gate
-# resolver; touches only a temp ledger/lock.
+# resolver served through the worker's prMaintenance config; touches only temp
+# ledger/lock files.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -39,13 +40,74 @@ printf '{"workflowId":"wf-100-1","workflowGeneration":%s,"mergeTaskId":"__merge_
 RG
 chmod +x "$TMP/review-gate.sh"
 
-export PATH="$TMP/bin:$PATH"
-export INVOKER_PR_CRON_DRY_RUN=1
-export INVOKER_PR_CONFLICT_STATE_FILE="$LEDGER"
-export INVOKER_PR_CRON_LOCK="$TMP/crons.lock"
-export INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh"
+WORKER_CONFIG="$TMP/pr-maintenance-config.json"
+WORKER_RUNNER="$TMP/run-pr-maintenance-worker.mjs"
+WORKER_LOADER="$TMP/ts-js-loader.mjs"
 
-run() { bash scripts/cron-pr-conflict-rebase.sh 2>&1; }
+cat > "$WORKER_LOADER" <<'NODE'
+export async function resolve(specifier, context, nextResolve) {
+  try {
+    return await nextResolve(specifier, context);
+  } catch (err) {
+    if (specifier.endsWith('.js')) {
+      return nextResolve(`${specifier.slice(0, -3)}.ts`, context);
+    }
+    throw err;
+  }
+}
+NODE
+
+cat > "$WORKER_RUNNER" <<'NODE'
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+const [kind, configPath, repoRoot] = process.argv.slice(2);
+const engine = await import(pathToFileURL(
+  `${repoRoot}/packages/execution-engine/src/workers/pr-maintenance-workers.ts`,
+).href);
+const config = JSON.parse(readFileSync(configPath, 'utf8')).prMaintenance;
+const logger = {
+  info(message) { console.log(message); },
+  warn(message) { console.error(message); },
+  error(message) { console.error(message); },
+  debug() {},
+  child() { return this; },
+};
+const worker = kind === 'coderabbit-address'
+  ? engine.createCoderabbitAddressWorker({ logger, ...config, installSignalHandlers: false })
+  : engine.createPrConflictRebaseWorker({ logger, ...config, installSignalHandlers: false });
+try {
+  await worker.tick('manual');
+  await worker.stop();
+  console.log(`${kind} worker scan completed.`);
+} catch (err) {
+  await worker.stop();
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exitCode = 1;
+}
+NODE
+
+jq -n \
+  --arg repoRoot "$ROOT" \
+  --arg lock "$TMP/crons.lock" \
+  --arg path "$TMP/bin:$PATH" \
+  --arg ledger "$LEDGER" \
+  --arg reviewGate "$TMP/review-gate.sh" \
+  '{
+    enabled: true,
+    repoRoot: $repoRoot,
+    lockPath: $lock,
+    env: {
+      PATH: $path,
+      INVOKER_PR_CRON_DRY_RUN: "1",
+      INVOKER_PR_CONFLICT_STATE_FILE: $ledger,
+      INVOKER_PR_CRON_REVIEW_GATE_CMD: $reviewGate
+    }
+  } | { prMaintenance: . }' > "$WORKER_CONFIG"
+
+run() {
+  NODE_NO_WARNINGS=1 node --loader "$WORKER_LOADER" "$WORKER_RUNNER" pr-conflict-rebase "$WORKER_CONFIG" "$ROOT" 2>&1
+}
 
 # Branch 1: fresh ledger -> would rebase-recreate at generation 2.
 out="$(INVOKER_TEST_WF_GEN=2 run)"
