@@ -2912,8 +2912,13 @@ export function App() {
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
         <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-100">{browserSelectedTitle}</h2>
+          <div className="min-w-0 flex-1">
+            <h2
+              className="text-lg font-semibold text-gray-100 line-clamp-2"
+              title={browserSelectedTitle}
+            >
+              {browserSelectedTitle}
+            </h2>
             <p className="mt-1 text-sm text-gray-400">{browserSelectedContext}</p>
             <div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${browserStatusToneClass}`}>
               {browserSelectedStatus}
