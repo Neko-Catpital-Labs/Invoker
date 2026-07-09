@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Dedup proof for Job 1 (scripts/cron-coderabbit-address.sh):
+# Dedup proof for Job 1 via the native `coderabbit-address` worker path:
 #   1. a PR with a coderabbitai[bot] comment updated at T -> "would launch omp ... at T"
 #   2. once T is in the ledger -> "no new CodeRabbit comments since T; skip"
 #   3. a newer comment T2 -> "would launch omp ... at T2" again
 #   4. once the per-PR attempt cap is reached -> "hit cap"
 #
-# Runs fully offline in dry-run with a fake `gh` serving captured comment JSON;
-# touches only a temp ledger/lock.
+# Runs fully offline in dry-run with a fake `gh` served through the worker's
+# prMaintenance config; touches only a temp ledger/lock.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -44,12 +44,72 @@ exit 1
 GH
 chmod +x "$TMP/bin/gh"
 
-export PATH="$TMP/bin:$PATH"
-export INVOKER_PR_CRON_DRY_RUN=1
-export INVOKER_PR_CODERABBIT_STATE_FILE="$LEDGER"
-export INVOKER_PR_CRON_LOCK="$TMP/crons.lock"
+WORKER_CONFIG="$TMP/pr-maintenance-config.json"
+WORKER_RUNNER="$TMP/run-pr-maintenance-worker.mjs"
+WORKER_LOADER="$TMP/ts-js-loader.mjs"
 
-run() { bash scripts/cron-coderabbit-address.sh 2>&1; }
+cat > "$WORKER_LOADER" <<'NODE'
+export async function resolve(specifier, context, nextResolve) {
+  try {
+    return await nextResolve(specifier, context);
+  } catch (err) {
+    if (specifier.endsWith('.js')) {
+      return nextResolve(`${specifier.slice(0, -3)}.ts`, context);
+    }
+    throw err;
+  }
+}
+NODE
+
+cat > "$WORKER_RUNNER" <<'NODE'
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+const [kind, configPath, repoRoot] = process.argv.slice(2);
+const engine = await import(pathToFileURL(
+  `${repoRoot}/packages/execution-engine/src/workers/pr-maintenance-workers.ts`,
+).href);
+const config = JSON.parse(readFileSync(configPath, 'utf8')).prMaintenance;
+const logger = {
+  info(message) { console.log(message); },
+  warn(message) { console.error(message); },
+  error(message) { console.error(message); },
+  debug() {},
+  child() { return this; },
+};
+const worker = kind === 'coderabbit-address'
+  ? engine.createCoderabbitAddressWorker({ logger, ...config, installSignalHandlers: false })
+  : engine.createPrConflictRebaseWorker({ logger, ...config, installSignalHandlers: false });
+try {
+  await worker.tick('manual');
+  await worker.stop();
+  console.log(`${kind} worker scan completed.`);
+} catch (err) {
+  await worker.stop();
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exitCode = 1;
+}
+NODE
+
+jq -n \
+  --arg repoRoot "$ROOT" \
+  --arg lock "$TMP/crons.lock" \
+  --arg path "$TMP/bin:$PATH" \
+  --arg ledger "$LEDGER" \
+  '{
+    enabled: true,
+    repoRoot: $repoRoot,
+    lockPath: $lock,
+    env: {
+      PATH: $path,
+      INVOKER_PR_CRON_DRY_RUN: "1",
+      INVOKER_PR_CODERABBIT_STATE_FILE: $ledger
+    }
+  } | { prMaintenance: . }' > "$WORKER_CONFIG"
+
+run() {
+  NODE_NO_WARNINGS=1 node --loader "$WORKER_LOADER" "$WORKER_RUNNER" coderabbit-address "$WORKER_CONFIG" "$ROOT" 2>&1
+}
 
 T1="2026-06-25T08:00:00Z"
 T2="2026-06-25T09:30:00Z"
