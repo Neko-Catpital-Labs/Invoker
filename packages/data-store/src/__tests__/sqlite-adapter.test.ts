@@ -1824,6 +1824,97 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('worker desired state', () => {
+    it('round-trips desired state keyed by worker kind', () => {
+      adapter.saveWorkerDesiredState('workflow-mutator', { enabled: true, concurrency: 2 });
+      adapter.saveWorkerDesiredState({
+        workerKind: 'terminal-session',
+        desiredState: { enabled: false },
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      expect(adapter.loadWorkerDesiredState<{ enabled: boolean; concurrency: number }>('workflow-mutator'))
+        .toMatchObject({
+          workerKind: 'workflow-mutator',
+          desiredState: { enabled: true, concurrency: 2 },
+        });
+      expect(adapter.getWorkerDesiredState<{ enabled: boolean }>('terminal-session')).toEqual({ enabled: false });
+      expect(adapter.listWorkerDesiredStates().map((state) => state.workerKind)).toEqual([
+        'terminal-session',
+        'workflow-mutator',
+      ]);
+    });
+
+    it('updates an existing worker kind without changing createdAt', () => {
+      adapter.saveWorkerDesiredState({
+        workerKind: 'workflow-mutator',
+        desiredState: { enabled: true },
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+      adapter.saveWorkerDesiredState({
+        workerKind: 'workflow-mutator',
+        desiredState: { enabled: false },
+        updatedAt: '2026-01-02T00:00:00.000Z',
+      });
+
+      const loaded = adapter.loadWorkerDesiredState<{ enabled: boolean }>('workflow-mutator');
+      expect(loaded).toMatchObject({
+        workerKind: 'workflow-mutator',
+        desiredState: { enabled: false },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-02T00:00:00.000Z',
+      });
+      expect(adapter.listWorkerDesiredStates()).toHaveLength(1);
+    });
+
+    it('deletes desired state by worker kind', () => {
+      adapter.saveWorkerDesiredState('workflow-mutator', { enabled: true });
+      adapter.deleteWorkerDesiredState('workflow-mutator');
+
+      expect(adapter.loadWorkerDesiredState('workflow-mutator')).toBeUndefined();
+    });
+
+    it('persists the desired-state table migration for existing databases', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-worker-state-migration-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const oldDb = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        oldDb.saveWorkflow(testWorkflow);
+        (oldDb as any).db.run('DROP TABLE worker_desired_state');
+        (oldDb as any).dirty = true;
+        oldDb.close();
+
+        const migrated = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(sqliteScalar(migrated, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'worker_desired_state'")).toBe(1);
+        migrated.close();
+
+        const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+        expect(sqliteScalar(reader, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'worker_desired_state'")).toBe(1);
+        reader.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects desired-state writes on a read-only adapter', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-worker-state-readonly-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const writer = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        writer.saveWorkerDesiredState('workflow-mutator', { enabled: true });
+        writer.close();
+
+        const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+        expect(reader.loadWorkerDesiredState('workflow-mutator')?.desiredState).toEqual({ enabled: true });
+        expect(() => reader.saveWorkerDesiredState('workflow-mutator', { enabled: false })).toThrow(/read-only/i);
+        expect(() => reader.deleteWorkerDesiredState('workflow-mutator')).toThrow(/read-only/i);
+        reader.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('read-only / flush safety', () => {
     it('persists file-backed writes before close so restart recovery can read them', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-durable-'));
