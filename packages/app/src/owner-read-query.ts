@@ -181,6 +181,7 @@ type ReadPersistence = Pick<
   | 'getOutputTail'
   | 'replayOutputFrom'
   | 'loadAllCompletedTasks'
+  | 'loadAllHistoryTasks'
   | 'listWorkerActions'
 >;
 

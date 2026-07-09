@@ -401,12 +401,15 @@ export class SqliteTaskAttemptRepository {
       WHERE COALESCE(e.event_count, 0) > 0 OR t.status != 'pending'
       ORDER BY COALESCE(e.max_created_at, t.completed_at, t.started_at, t.created_at) DESC
     `);
-    return rows.map((row) => ({
-      ...mapRowToTask(row),
-      workflowName: row.workflow_name as string,
-      lastEventAt: (row.last_event_at as string | null) ?? null,
-      eventCount: Number(row.event_count ?? 0),
-    }));
+    return rows.map((row) => {
+      const task = this.reconcileTaskFromSelectedAttempt(mapRowToTask(row));
+      return {
+        ...task,
+        workflowName: row.workflow_name as string,
+        lastEventAt: (row.last_event_at as string | null) ?? null,
+        eventCount: Number(row.event_count ?? 0),
+      };
+    });
   }
 
   // ── Scalar task-column getters ───────────────────────────
