@@ -40,6 +40,7 @@ const STATUS_OPTIONS: readonly TaskStatus[] = [
   'pending',
   'review_ready',
   'stale',
+  'closed',
 ] as const;
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -48,6 +49,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   fixing_with_ai: 'Autofixing',
   completed: 'Completed',
   failed: 'Failed',
+  closed: 'Closed',
   needs_input: 'Needs input',
   blocked: 'Blocked',
   review_ready: 'Review ready',
@@ -61,6 +63,7 @@ const STATUS_STYLE: Record<TaskStatus, string> = {
   fixing_with_ai: 'bg-amber-700 text-amber-100',
   completed: 'bg-emerald-700 text-emerald-100',
   failed: 'bg-red-700 text-red-100',
+  closed: 'bg-gray-600 text-gray-200',
   needs_input: 'bg-purple-700 text-purple-100',
   blocked: 'bg-red-900 text-red-100',
   review_ready: 'bg-teal-700 text-teal-100',
