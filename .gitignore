@@ -15,6 +15,7 @@ packages/app/e2e/visual-proof/after/*
 !packages/app/e2e/visual-proof/after/stacked-workflows.png
 !packages/app/e2e/visual-proof/after/approve-merge-modal-master.png
 !packages/app/e2e/visual-proof/after/approve-merge-modal-branch.png
+!packages/app/e2e/visual-proof/after/neutral-chrome-home-graph.png
 packages/app/e2e/test-results/
 packages/app/test-results/
 packages/app/test-results/

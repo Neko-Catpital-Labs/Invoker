@@ -18,14 +18,14 @@ interface WorkerDetailsPanelProps {
 function processClass(worker: WorkerStatusEntry): string {
   if (worker.lifecycle === 'running') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
   if (worker.lifecycle === 'exited') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
-  return 'border-gray-600 bg-gray-700/60 text-gray-300';
+  return 'border-border-strong bg-muted/60 text-muted-foreground';
 }
 
 function activityClass(worker: WorkerStatusEntry): string {
   if (getActiveWorkerAction(worker)) return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
-  if (worker.lifecycle === 'running') return 'border-gray-600 bg-gray-700/60 text-gray-300';
+  if (worker.lifecycle === 'running') return 'border-border-strong bg-muted/60 text-muted-foreground';
   if (worker.lifecycle === 'exited') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
-  return 'border-gray-600 bg-gray-700/60 text-gray-300';
+  return 'border-border-strong bg-muted/60 text-muted-foreground';
 }
 
 function activityLabel(worker: WorkerStatusEntry): string {
@@ -59,9 +59,9 @@ function TargetLine({ action, tasks, onTaskClick }: {
         </button>
       );
     }
-    return <div className="mt-2 text-xs text-gray-400">Target task: {displayWorkerTaskId(action.taskId)}</div>;
+    return <div className="mt-2 text-xs text-muted-foreground">Target task: {displayWorkerTaskId(action.taskId)}</div>;
   }
-  return <div className="mt-2 text-xs text-gray-400">Target: {action.subjectType} {action.subjectId}</div>;
+  return <div className="mt-2 text-xs text-muted-foreground">Target: {action.subjectType} {action.subjectId}</div>;
 }
 
 function ActionDetails({ title, action, tasks, onTaskClick }: {
@@ -71,17 +71,17 @@ function ActionDetails({ title, action, tasks, onTaskClick }: {
   onTaskClick: (task: TaskState) => void;
 }) {
   return (
-    <section className="rounded border border-gray-800 bg-gray-850/60 p-3">
-      <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{title}</h3>
+    <section className="rounded border border-border bg-card/60 p-3">
+      <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
       <dl className="mt-2 grid grid-cols-[4.5rem_1fr] gap-x-3 gap-y-1 text-xs">
-        <dt className="text-gray-500">Action</dt>
-        <dd className="text-gray-200">{formatWorkerValue(action.actionType)}</dd>
-        <dt className="text-gray-500">Status</dt>
-        <dd className="text-gray-200">{formatWorkerValue(action.status)}</dd>
+        <dt className="text-muted-foreground">Action</dt>
+        <dd className="text-foreground">{formatWorkerValue(action.actionType)}</dd>
+        <dt className="text-muted-foreground">Status</dt>
+        <dd className="text-foreground">{formatWorkerValue(action.status)}</dd>
         {action.summary ? (
           <>
-            <dt className="text-gray-500">Summary</dt>
-            <dd className="text-gray-200">{action.summary}</dd>
+            <dt className="text-muted-foreground">Summary</dt>
+            <dd className="text-foreground">{action.summary}</dd>
           </>
         ) : null}
       </dl>
@@ -93,14 +93,14 @@ function ActionDetails({ title, action, tasks, onTaskClick }: {
 export function WorkerDetailsPanel({ worker, tasks, collapsed, onToggleCollapsed, onTaskClick }: WorkerDetailsPanelProps) {
   if (collapsed) {
     return (
-      <aside className="flex h-full w-full items-start justify-center border-l border-gray-800 bg-gray-900 pt-3">
+      <aside className="flex h-full w-full items-start justify-center border-l border-border bg-background pt-3">
         <button
           type="button"
           onClick={onToggleCollapsed}
           aria-label="Show details"
           data-sidebar-nav-item
           data-sidebar-nav-order="10"
-          className="rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
+          className="rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-secondary"
         >
           Show details
         </button>
@@ -113,13 +113,13 @@ export function WorkerDetailsPanel({ worker, tasks, collapsed, onToggleCollapsed
   const latestAction = worker?.recentActions[0];
 
   return (
-    <aside className="flex h-full w-full flex-col border-l border-gray-800 bg-gray-900">
-      <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
+    <aside className="flex h-full w-full flex-col border-l border-border bg-background">
+      <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <div className="min-w-0">
-          <h2 data-testid="worker-details-title" className="max-w-[270px] truncate text-sm font-medium text-gray-100">
+          <h2 data-testid="worker-details-title" className="max-w-[270px] truncate text-sm font-medium text-foreground">
             {copy?.name ?? 'Worker details'}
           </h2>
-          <div className="max-w-[270px] truncate text-[11px] text-gray-400">
+          <div className="max-w-[270px] truncate text-[11px] text-muted-foreground">
             {worker ? `Kind: ${worker.kind}` : 'Select a worker to see details.'}
           </div>
         </div>
@@ -129,7 +129,7 @@ export function WorkerDetailsPanel({ worker, tasks, collapsed, onToggleCollapsed
           aria-label="Minimize inspector"
           data-sidebar-nav-item
           data-sidebar-nav-order="10"
-          className="rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800"
+          className="rounded border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-secondary"
         >
           Minimize
         </button>
@@ -137,12 +137,12 @@ export function WorkerDetailsPanel({ worker, tasks, collapsed, onToggleCollapsed
 
       <div className="flex-1 space-y-3 overflow-auto p-3 text-sm">
         {!worker ? (
-          <div className="rounded border border-gray-800 bg-gray-850/60 p-3 text-sm text-gray-400">
+          <div className="rounded border border-border bg-card/60 p-3 text-sm text-muted-foreground">
             Select a worker process to inspect its current work and last recorded action.
           </div>
         ) : (
           <>
-            <section className="rounded border border-gray-800 bg-gray-850/60 p-3">
+            <section className="rounded border border-border bg-card/60 p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className={`rounded-full border px-2 py-0.5 text-[11px] ${processClass(worker)}`}>
                   Process: {formatWorkerValue(worker.lifecycle)}
@@ -156,25 +156,25 @@ export function WorkerDetailsPanel({ worker, tasks, collapsed, onToggleCollapsed
             {activeAction ? (
               <ActionDetails title="Current work" action={activeAction} tasks={tasks} onTaskClick={onTaskClick} />
             ) : (
-              <section className="rounded border border-gray-800 bg-gray-850/60 p-3">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Current work</h3>
-                <div className="mt-2 text-sm text-gray-300">{idleExplanation(worker)}</div>
+              <section className="rounded border border-border bg-card/60 p-3">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Current work</h3>
+                <div className="mt-2 text-sm text-muted-foreground">{idleExplanation(worker)}</div>
               </section>
             )}
 
             {latestAction ? (
               <ActionDetails title="Last recorded action" action={latestAction} tasks={tasks} onTaskClick={onTaskClick} />
             ) : (
-              <section className="rounded border border-gray-800 bg-gray-850/60 p-3">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Last recorded action</h3>
-                <div className="mt-2 text-sm text-gray-400">{copy?.noActionText}</div>
+              <section className="rounded border border-border bg-card/60 p-3">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Last recorded action</h3>
+                <div className="mt-2 text-sm text-muted-foreground">{copy?.noActionText}</div>
               </section>
             )}
 
             {worker.kind === 'autofix' && worker.recovery ? (
-              <section className="rounded border border-gray-800 bg-gray-850/60 p-3">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Autofix history</h3>
-                <div className="mt-2 text-sm text-gray-300">
+              <section className="rounded border border-border bg-card/60 p-3">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Autofix history</h3>
+                <div className="mt-2 text-sm text-muted-foreground">
                   Scanned {worker.recovery.scans} · submitted {worker.recovery.submissions} · skipped {worker.recovery.skips}
                   {worker.recovery.lastSkipReason ? ` · last skip: ${worker.recovery.lastSkipReason}` : ''}
                   {worker.recovery.lastSkipTaskId ? ` on task ${displayWorkerTaskId(worker.recovery.lastSkipTaskId)}` : ''}

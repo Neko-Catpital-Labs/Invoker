@@ -95,16 +95,16 @@ export function ReplaceTaskModal({ task, onSubmit, onClose }: ReplaceTaskModalPr
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-lg p-6 border border-gray-700">
-        <h2 className="text-lg font-semibold text-gray-100 mb-2">
+      <div className="bg-secondary rounded-lg shadow-xl w-full max-w-lg p-6 border border-border">
+        <h2 className="text-lg font-semibold text-foreground mb-2">
           Replace Task
         </h2>
 
         <div className="mb-4">
-          <p className="text-sm text-gray-300 mb-1">
-            Replacing: <span className="font-mono text-gray-200">{task.id}</span>
+          <p className="text-sm text-muted-foreground mb-1">
+            Replacing: <span className="font-mono text-foreground">{task.id}</span>
           </p>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-muted-foreground">
             Define replacement tasks in YAML format. Root tasks (no internal deps) will
             inherit the original task&apos;s upstream dependencies.
           </p>
@@ -115,12 +115,12 @@ export function ReplaceTaskModal({ task, onSubmit, onClose }: ReplaceTaskModalPr
             value={yaml}
             onChange={(e) => setYaml(e.target.value)}
             onKeyDown={handleKeyDown}
-            className="w-full bg-gray-900 border border-gray-600 rounded p-3 text-sm text-gray-100 font-mono placeholder-gray-500 focus:outline-none focus:border-gray-500"
+            className="w-full bg-background border border-border-strong rounded p-3 text-sm text-foreground font-mono placeholder:text-muted-foreground focus:outline-none focus:border-ring"
             rows={10}
             placeholder={`- id: fix-step1\n  description: First fix step\n  command: echo "step 1"\n- id: fix-step2\n  description: Second fix step\n  command: echo "step 2"\n  dependencies: [fix-step1]`}
             autoFocus
           />
-          <p className="text-xs text-gray-500 mt-1">Ctrl+Enter to submit</p>
+          <p className="text-xs text-muted-foreground mt-1">Ctrl+Enter to submit</p>
         </div>
 
         {error && (
@@ -132,13 +132,13 @@ export function ReplaceTaskModal({ task, onSubmit, onClose }: ReplaceTaskModalPr
         <div className="flex gap-3 justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+            className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             Cancel
           </button>
           <button
             onClick={handleSubmit}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-medium transition-colors"
+            className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded text-sm font-medium transition-colors"
           >
             Replace
           </button>

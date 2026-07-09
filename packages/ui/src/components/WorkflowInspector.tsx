@@ -123,7 +123,7 @@ function logLevelClass(level: TaskLogLevel): string {
       return 'bg-slate-800 text-slate-300 border-slate-700';
     case 'info':
     default:
-      return 'bg-blue-900/30 text-blue-300 border-blue-800';
+      return 'bg-secondary/70 text-foreground border-border-strong';
   }
 }
 
@@ -197,10 +197,10 @@ function ReviewGateStackSection({ reviewGate }: { reviewGate: ReviewGateQueryRes
   const artifacts = reviewGate.artifacts;
   const hasConnectors = artifacts.length > 1;
   return (
-    <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
-      <div className="text-[11px] uppercase tracking-wide text-gray-400">Pull Request Stack</div>
+    <section className="rounded border border-border bg-secondary/70 p-3">
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Pull Request Stack</div>
       {artifacts.length === 0 ? (
-        <div className="mt-2 text-xs text-gray-500">No pull requests yet</div>
+        <div className="mt-2 text-xs text-muted-foreground">No pull requests yet</div>
       ) : (
         <ol className="mt-2 space-y-2">
           {artifacts.map((artifact, index) => (
@@ -209,10 +209,10 @@ function ReviewGateStackSection({ reviewGate }: { reviewGate: ReviewGateQueryRes
                 <span
                   aria-hidden="true"
                   data-testid="review-gate-connector"
-                  className="absolute left-1 top-0 h-full border-l border-gray-600 before:absolute before:left-0 before:top-3 before:w-3 before:border-t before:border-gray-600"
+                  className="absolute left-1 top-0 h-full border-l border-border-strong before:absolute before:left-0 before:top-3 before:w-3 before:border-t before:border-border-strong"
                 />
               )}
-              <div className="rounded border border-gray-700 bg-gray-950/80 px-2 py-1">
+              <div className="rounded border border-border bg-card/80 px-2 py-1">
                 {artifact.url ? (
                   <a
                     href={artifact.url}
@@ -221,14 +221,14 @@ function ReviewGateStackSection({ reviewGate }: { reviewGate: ReviewGateQueryRes
                     data-testid="inspector-pr-link"
                     data-sidebar-nav-item
                     data-sidebar-nav-order={String(30 + index)}
-                    className="text-blue-300 underline break-words"
+                    className="text-foreground underline break-words"
                   >
                     {artifactLabel(artifact)}
                   </a>
                 ) : (
-                  <div className="text-gray-200">{artifactLabel(artifact)}</div>
+                  <div className="text-foreground">{artifactLabel(artifact)}</div>
                 )}
-                <div className="mt-1 text-[11px] text-gray-400">{formatStatus(artifact.status)}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">{formatStatus(artifact.status)}</div>
               </div>
             </li>
           ))}
@@ -354,8 +354,8 @@ export function WorkflowInspector({
   const hasExecutableContent = Boolean(hasPrompt || hasCommand);
   const canEditPrompt = Boolean(task?.config.prompt !== undefined && onEditPrompt && !isTaskBusy);
   const canEditCommand = Boolean(task?.config.command !== undefined && onEditCommand && !isTaskBusy);
-  const statusBorder = taskColors?.border ?? workflowVisual?.borderClass ?? 'border-gray-700';
-  const statusText = taskColors?.text ?? workflowVisual?.textClass ?? 'text-gray-300';
+  const statusBorder = taskColors?.border ?? workflowVisual?.borderClass ?? 'border-border';
+  const statusText = taskColors?.text ?? workflowVisual?.textClass ?? 'text-muted-foreground';
   const statusDot = taskColors?.dot ?? '';
   const isFixApproval = Boolean(task?.execution.pendingFixError);
   const showApprovalActions = Boolean(
@@ -408,13 +408,13 @@ export function WorkflowInspector({
 
   if (collapsed) {
     return (
-      <aside className="h-full w-full border-l border-gray-800 bg-gray-900 flex items-start justify-center pt-3">
+      <aside className="h-full w-full border-l border-border bg-background flex items-start justify-center pt-3">
         <button
           onClick={onToggleCollapsed}
           aria-label="Maximize inspector"
           data-sidebar-nav-item
           data-sidebar-nav-order="10"
-          className="rounded border border-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
+          className="rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-secondary"
         >
           Show
         </button>
@@ -423,12 +423,12 @@ export function WorkflowInspector({
   }
 
   return (
-    <aside className="h-full w-full border-l border-gray-800 bg-gray-900 flex flex-col">
-      <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
+    <aside className="h-full w-full border-l border-border bg-background flex flex-col">
+      <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <div className="min-w-0">
-          <h2 data-testid="workflow-inspector-title" className="text-sm font-medium text-gray-100 truncate max-w-[270px]">{nodeTitle}</h2>
+          <h2 data-testid="workflow-inspector-title" className="text-sm font-medium text-foreground truncate max-w-[270px]">{nodeTitle}</h2>
           {workflow && task && (
-            <div className="text-[11px] text-gray-400 truncate max-w-[270px]">{workflow.name}</div>
+            <div className="text-[11px] text-muted-foreground truncate max-w-[270px]">{workflow.name}</div>
           )}
         </div>
         <button
@@ -436,15 +436,15 @@ export function WorkflowInspector({
           aria-label="Minimize inspector"
           data-sidebar-nav-item
           data-sidebar-nav-order="10"
-          className="rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800"
+          className="rounded border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-secondary"
         >
           Minimize
         </button>
       </div>
 
       <div className="flex-1 overflow-auto p-3 space-y-3 text-sm">
-        <section className={`rounded border p-3 ${statusBorder} bg-gray-800/70`}>
-          <h3 className="text-[11px] uppercase tracking-wide text-gray-400">{statusHeading}</h3>
+        <section className={`rounded border p-3 ${statusBorder} bg-secondary/70`}>
+          <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">{statusHeading}</h3>
           <div data-testid="workflow-inspector-status-label" className={`mt-1 inline-flex items-center gap-2 text-xs ${statusText}`}>
             {taskColors && (
               <span className={`h-2 w-2 rounded-full ${statusDot} ${task?.status === 'running' ? 'animate-pulse' : ''}`} />
@@ -475,7 +475,7 @@ export function WorkflowInspector({
             </div>
           )}
           {showApprovalActions && task && (
-            <div className="mt-3 flex gap-2 border-t border-gray-700 pt-3">
+            <div className="mt-3 flex gap-2 border-t border-border pt-3">
               <button
                 type="button"
                 onClick={() => onApprove?.(task)}
@@ -511,10 +511,10 @@ export function WorkflowInspector({
         )}
 
         {actionNode && (
-          <section data-testid="workflow-inspector-action-node" className="rounded border border-blue-500/40 bg-blue-950/20 p-3">
-            <h3 className="text-[11px] uppercase tracking-wide text-blue-200">Action Graph Detail</h3>
-            <div className="mt-1 text-sm font-medium text-gray-100 break-words">{actionNode.label}</div>
-            <div data-testid="workflow-inspector-action-node-status" className="mt-2 inline-flex rounded border border-blue-300/40 px-2 py-1 text-[10px] font-semibold uppercase text-blue-100">
+          <section data-testid="workflow-inspector-action-node" className="rounded border border-border-strong bg-card p-3">
+            <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground">Action Graph Detail</h3>
+            <div className="mt-1 text-sm font-medium text-foreground break-words">{actionNode.label}</div>
+            <div data-testid="workflow-inspector-action-node-status" className="mt-2 inline-flex rounded border border-border-strong px-2 py-1 text-[10px] font-semibold uppercase text-foreground">
               {actionNode.status.toUpperCase()}
             </div>
             <dl className="mt-3 space-y-1 text-xs">
@@ -532,14 +532,14 @@ export function WorkflowInspector({
                 ['leaseExpiresAt', actionNode.leaseExpiresAt],
               ].filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => (
                 <div key={String(key)} className="flex justify-between gap-3">
-                  <dt className="shrink-0 text-gray-500">{key}</dt>
-                  <dd className="min-w-0 break-all text-right text-gray-200">{String(value)}</dd>
+                  <dt className="shrink-0 text-muted-foreground">{key}</dt>
+                  <dd className="min-w-0 break-all text-right text-foreground">{String(value)}</dd>
                 </div>
               ))}
               {actionNode.durations && Object.entries(actionNode.durations).map(([key, value]) => (
                 <div key={`duration-${key}`} className="flex justify-between gap-3">
-                  <dt className="shrink-0 text-gray-500">{key}</dt>
-                  <dd className="min-w-0 break-all text-right text-gray-200">{String(value)}</dd>
+                  <dt className="shrink-0 text-muted-foreground">{key}</dt>
+                  <dd className="min-w-0 break-all text-right text-foreground">{String(value)}</dd>
                 </div>
               ))}
             </dl>
@@ -547,13 +547,13 @@ export function WorkflowInspector({
               <div className="mt-3 text-xs text-red-300 break-words">{actionNode.latestError}</div>
             )}
             {actionNode.suggestedNextAction && (
-              <div className="mt-3 text-xs text-blue-100 break-words">{actionNode.suggestedNextAction}</div>
+              <div className="mt-3 text-xs text-foreground break-words">{actionNode.suggestedNextAction}</div>
             )}
             {actionNode.history && actionNode.history.length > 0 && (
-              <div className="mt-3 space-y-1 border-t border-blue-400/20 pt-2">
+              <div className="mt-3 space-y-1 border-t border-border pt-2">
                 {[...actionNode.history].reverse().map((entry) => (
-                  <div key={entry.id} className="text-[11px] text-gray-300">
-                    <span className="text-gray-500">{entry.timestamp}</span> {entry.source}: {entry.message}
+                  <div key={entry.id} className="text-[11px] text-muted-foreground">
+                    <span className="text-muted-foreground">{entry.timestamp}</span> {entry.source}: {entry.message}
                   </div>
                 ))}
               </div>
@@ -562,16 +562,16 @@ export function WorkflowInspector({
         )}
 
         {task && !task.config.isMergeNode && onEditPool && (
-          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+          <section className="rounded border border-border bg-secondary/70 p-3">
             <label className="flex items-center justify-between gap-3">
-              <span className="text-xs uppercase tracking-wide text-gray-400">Executor Pool</span>
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">Executor Pool</span>
               <select
                 value={task.config.poolId ?? ''}
                 onChange={(event) => {
                   if (event.target.value) onEditPool(task.id, event.target.value);
                 }}
                 disabled={isTaskBusy || poolOptions.length === 0}
-                className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                className="min-w-0 max-w-[190px] rounded border border-border-strong bg-muted px-2 py-1 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 data-testid="executor-pool-select"
               >
                 {!task.config.poolId && <option value="">No pool</option>}
@@ -584,14 +584,14 @@ export function WorkflowInspector({
         )}
 
         {task?.config.prompt && onEditAgent && (
-          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
+          <section className="rounded border border-border bg-secondary/70 p-3">
             <label className="flex items-center justify-between gap-3">
-              <span className="text-xs uppercase tracking-wide text-gray-400">AI Agent</span>
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">AI Agent</span>
               <select
                 value={currentAgent}
                 onChange={(event) => onEditAgent(task.id, event.target.value)}
                 disabled={isTaskBusy || agentOptions.length === 0}
-                className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                className="min-w-0 max-w-[190px] rounded border border-border-strong bg-muted px-2 py-1 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 data-testid="execution-agent-select"
               >
                 {agentOptions.map((agentName) => (
@@ -603,10 +603,10 @@ export function WorkflowInspector({
         )}
 
         {isMergeNode && (onSetMergeBranch || onSetMergeMode) && (
-          <section className="rounded border border-gray-700 bg-gray-800/70 p-3 space-y-3">
+          <section className="rounded border border-border bg-secondary/70 p-3 space-y-3">
             {onSetMergeBranch && (
               <label className="flex items-center justify-between gap-3">
-                <span className="text-xs uppercase tracking-wide text-gray-400">Target Branch</span>
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">Target Branch</span>
                 <input
                   data-testid="target-branch-input"
                   value={branchValue}
@@ -620,18 +620,18 @@ export function WorkflowInspector({
                       setBranchValue(workflow?.baseBranch ?? '');
                     }
                   }}
-                  className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-right font-mono text-xs text-gray-100 focus:border-blue-500 focus:outline-none"
+                  className="min-w-0 max-w-[190px] rounded border border-border-strong bg-muted px-2 py-1 text-right font-mono text-xs text-foreground focus:border-border-strong focus:outline-none"
                 />
               </label>
             )}
             {onSetMergeMode && workflow?.id && (
               <label className="flex items-center justify-between gap-3">
-                <span className="text-xs uppercase tracking-wide text-gray-400">Merge mode</span>
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">Merge mode</span>
                 <select
                   value={mergeModeValue(workflow.mergeMode)}
                   onChange={(event) => void onSetMergeMode(workflow.id, event.target.value as MergeMode)}
                   disabled={isTaskBusy}
-                  className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="min-w-0 max-w-[190px] rounded border border-border-strong bg-muted px-2 py-1 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                   data-testid="merge-mode-select"
                 >
                   <option value="manual">Manual</option>
@@ -642,8 +642,8 @@ export function WorkflowInspector({
             )}
             {workflow?.repoUrl && (
               <div className="flex items-start justify-between gap-3">
-                <span className="text-xs uppercase tracking-wide text-gray-400">PR target repo</span>
-                <span className="max-w-[210px] break-all text-right text-xs text-gray-200">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">PR target repo</span>
+                <span className="max-w-[210px] break-all text-right text-xs text-foreground">
                   {workflow.repoUrl.replace(/^https?:\/\//, '')}
                 </span>
               </div>
@@ -652,8 +652,8 @@ export function WorkflowInspector({
         )}
 
         {hasExecutableContent && (
-          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
-            <div className="text-[11px] uppercase tracking-wide text-gray-400">
+          <section className="rounded border border-border bg-secondary/70 p-3">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
               {hasPrompt ? 'Prompt' : 'Command'}
             </div>
             {isEditingPrompt && task?.config.prompt !== undefined ? (
@@ -662,14 +662,14 @@ export function WorkflowInspector({
                   value={editPromptValue}
                   onChange={(event) => setEditPromptValue(event.target.value)}
                   rows={5}
-                  className="w-full resize-y rounded border border-blue-500 bg-gray-950 p-2 text-xs text-gray-100 focus:outline-none"
+                  className="w-full resize-y rounded border border-border-strong bg-card p-2 text-xs text-foreground focus:outline-none"
                   data-testid="edit-prompt-input"
                 />
                 <div className="flex gap-2">
-                  <button data-testid="save-prompt-btn" onClick={savePrompt} className="flex-1 rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500">
+                  <button data-testid="save-prompt-btn" onClick={savePrompt} className="flex-1 rounded bg-primary text-primary-foreground px-2 py-1 text-xs text-white hover:bg-primary/90">
                     Save & Re-run
                   </button>
-                  <button onClick={() => setIsEditingPrompt(false)} className="flex-1 rounded bg-gray-700 px-2 py-1 text-xs text-gray-100 hover:bg-gray-600">
+                  <button onClick={() => setIsEditingPrompt(false)} className="flex-1 rounded bg-muted px-2 py-1 text-xs text-foreground hover:bg-accent">
                     Cancel
                   </button>
                 </div>
@@ -680,14 +680,14 @@ export function WorkflowInspector({
                   value={editCommandValue}
                   onChange={(event) => setEditCommandValue(event.target.value)}
                   rows={4}
-                  className="w-full resize-y rounded border border-blue-500 bg-gray-950 p-2 font-mono text-xs text-green-300 focus:outline-none"
+                  className="w-full resize-y rounded border border-border-strong bg-card p-2 font-mono text-xs text-green-300 focus:outline-none"
                   data-testid="edit-command-input"
                 />
                 <div className="flex gap-2">
-                  <button data-testid="save-command-btn" onClick={saveCommand} className="flex-1 rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500">
+                  <button data-testid="save-command-btn" onClick={saveCommand} className="flex-1 rounded bg-primary text-primary-foreground px-2 py-1 text-xs text-white hover:bg-primary/90">
                     Save & Re-run
                   </button>
-                  <button onClick={() => setIsEditingCommand(false)} className="flex-1 rounded bg-gray-700 px-2 py-1 text-xs text-gray-100 hover:bg-gray-600">
+                  <button onClick={() => setIsEditingCommand(false)} className="flex-1 rounded bg-muted px-2 py-1 text-xs text-foreground hover:bg-accent">
                     Cancel
                   </button>
                 </div>
@@ -696,8 +696,8 @@ export function WorkflowInspector({
               <div
                 className={`mt-2 rounded border p-2 text-xs leading-relaxed ${
                   canEditPrompt || canEditCommand
-                    ? 'cursor-pointer border-gray-600 bg-gray-950 hover:border-blue-500'
-                    : 'cursor-text border-gray-700 bg-gray-950'
+                    ? 'cursor-pointer border-border-strong bg-card hover:border-border-strong'
+                    : 'cursor-text border-border bg-card'
                 }`}
                 onClick={startEditingPromptOrCommand}
                 onDoubleClick={startEditingPromptOrCommand}
@@ -709,7 +709,7 @@ export function WorkflowInspector({
               >
                 <div data-testid="prompt-command-display" onClick={startEditingPromptOrCommand} onDoubleClick={startEditingPromptOrCommand}>
                   {hasPrompt ? (
-                    <p className="whitespace-pre-wrap break-words text-gray-200">{task?.config.prompt}</p>
+                    <p className="whitespace-pre-wrap break-words text-foreground">{task?.config.prompt}</p>
                   ) : (
                     <code className="whitespace-pre-wrap break-words font-mono text-green-300">{task?.config.command}</code>
                   )}
@@ -722,8 +722,8 @@ export function WorkflowInspector({
         {reviewGate ? (
           <ReviewGateStackSection reviewGate={reviewGate} />
         ) : reviewUrl && (
-          <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
-            <div className="text-[11px] uppercase tracking-wide text-gray-400">Pull Request</div>
+          <section className="rounded border border-border bg-secondary/70 p-3">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Pull Request</div>
             <a
               href={reviewUrl}
               target="_blank"
@@ -731,7 +731,7 @@ export function WorkflowInspector({
               data-testid="inspector-pr-link"
               data-sidebar-nav-item
               data-sidebar-nav-order="30"
-              className="mt-1 block text-xs text-blue-300 underline break-all"
+              className="mt-1 block text-xs text-foreground underline break-all"
             >
               {reviewUrl}
             </a>
@@ -739,11 +739,11 @@ export function WorkflowInspector({
         )}
 
         {task && (
-          <section className="rounded border border-gray-700 bg-gray-800/70" data-testid="task-logs-section">
+          <section className="rounded border border-border bg-secondary/70" data-testid="task-logs-section">
             <div className="flex items-center justify-between gap-3 px-3 py-2">
               <button
                 onClick={() => setShowLogs(!showLogs)}
-                className="text-left text-[11px] uppercase tracking-wide text-gray-300 hover:text-gray-100"
+                className="text-left text-[11px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
                 data-testid="task-logs-toggle"
                 data-sidebar-nav-item
                 data-sidebar-nav-order="80"
@@ -752,12 +752,12 @@ export function WorkflowInspector({
               >
                 Logs {showLogs ? '▲' : '▼'}
               </button>
-              <label className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-gray-400">
+              <label className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
                 Level
                 <select
                   value={logLevelFilter}
                   onChange={(event) => setLogLevelFilter(event.target.value as TaskLogLevel)}
-                  className="rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs normal-case text-gray-100 focus:border-blue-500 focus:outline-none"
+                  className="rounded border border-border-strong bg-muted px-2 py-1 text-xs normal-case text-foreground focus:border-border-strong focus:outline-none"
                   data-testid="task-log-level-select"
                 >
                   <option value="debug">Debug+</option>
@@ -768,31 +768,31 @@ export function WorkflowInspector({
               </label>
             </div>
             {showLogs && (
-              <div className="border-t border-gray-700 px-3 py-2">
+              <div className="border-t border-border px-3 py-2">
                 {taskLogError && (
                   <p className="mb-2 rounded border border-amber-800 bg-amber-950/30 px-2 py-1 text-xs text-amber-300" data-testid="task-log-error">
                     {taskLogError}
                   </p>
                 )}
                 {visibleLogEntries.length === 0 ? (
-                  <p className="text-xs text-gray-500">No logs at this level.</p>
+                  <p className="text-xs text-muted-foreground">No logs at this level.</p>
                 ) : (
                   <div className="space-y-2">
                     {visibleLogEntries.slice(0, 20).map((entry) => (
-                      <div key={entry.id} className="rounded border border-gray-700 bg-gray-950/60 p-2" data-testid="task-log-entry">
+                      <div key={entry.id} className="rounded border border-border bg-card/60 p-2" data-testid="task-log-entry">
                         <div className="flex items-start gap-2">
                           <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${logLevelClass(entry.level)}`}>
                             {entry.level}
                           </span>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-baseline justify-between gap-2">
-                              <p className="break-words text-xs text-gray-200">{entry.message}</p>
+                              <p className="break-words text-xs text-foreground">{entry.message}</p>
                               {entry.createdAt && (
-                                <span className="shrink-0 text-[10px] text-gray-500">{formatEventTime(entry.createdAt)}</span>
+                                <span className="shrink-0 text-[10px] text-muted-foreground">{formatEventTime(entry.createdAt)}</span>
                               )}
                             </div>
                             {entry.detail && (
-                              <code className="mt-1 block break-all text-[10px] text-gray-500">{entry.detail}</code>
+                              <code className="mt-1 block break-all text-[10px] text-muted-foreground">{entry.detail}</code>
                             )}
                           </div>
                         </div>
@@ -805,7 +805,7 @@ export function WorkflowInspector({
           </section>
         )}
 
-        <section className="rounded border border-gray-700 bg-gray-800/70">
+        <section className="rounded border border-border bg-secondary/70">
           <button
             onClick={onToggleAdvanced}
             data-testid="inspector-advanced-disclosure"
@@ -813,12 +813,12 @@ export function WorkflowInspector({
             data-sidebar-nav-order="90"
             data-sidebar-expandable="true"
             aria-expanded={advancedExpanded}
-            className="w-full px-3 py-2 text-left text-[11px] uppercase tracking-wide text-gray-300 hover:bg-gray-800"
+            className="w-full px-3 py-2 text-left text-[11px] uppercase tracking-wide text-muted-foreground hover:bg-secondary"
           >
             Advanced metadata {advancedExpanded ? '▲' : '▼'}
           </button>
           {advancedExpanded && (
-            <div className="border-t border-gray-700 px-3 py-2 space-y-1 text-xs text-gray-300">
+            <div className="border-t border-border px-3 py-2 space-y-1 text-xs text-muted-foreground">
               <div>workflow id: {workflow?.id ?? 'n/a'}</div>
               <div>task id: {task?.id ?? 'n/a'}</div>
               <div>target branch: {workflow?.featureBranch ?? task?.config.featureBranch ?? 'n/a'}</div>

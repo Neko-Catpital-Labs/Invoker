@@ -119,7 +119,7 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
 
   if (taskList.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-500 text-sm">
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
         No tasks to display
       </div>
     );
@@ -163,7 +163,7 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
             >
               <div className="flex items-center gap-3 px-2 py-1.5">
                 {/* Task label */}
-                <div className="w-40 shrink-0 truncate text-xs text-gray-300 select-text cursor-text" title={task.description}>
+                <div className="w-40 shrink-0 truncate text-xs text-muted-foreground select-text cursor-text" title={task.description}>
                   {task.id}
                 </div>
                 {phaseLabel && (
@@ -173,7 +173,7 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
                 )}
 
                 {/* Bar area */}
-                <div className="flex-1 h-6 relative bg-gray-800 rounded overflow-hidden">
+                <div className="flex-1 h-6 relative bg-secondary rounded overflow-hidden">
                   {bar.widthPercent > 0 && (
                     <div
                       className={`absolute top-0 bottom-0 rounded ${

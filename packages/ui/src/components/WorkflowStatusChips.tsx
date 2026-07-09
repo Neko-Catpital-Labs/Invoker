@@ -37,7 +37,7 @@ export function WorkflowStatusChips({
   const hasFilters = activeFilters.size > 0;
 
   return (
-    <div data-testid="workflow-status-chips" className="flex items-center gap-6 px-4 py-2 bg-gray-800 border-t border-gray-700 text-sm">
+    <div data-testid="workflow-status-chips" className="flex items-center gap-6 px-4 py-2 bg-secondary border-t border-border text-sm">
       {DISPLAY_ORDER.map((status) => {
         const visual = workflowStatusVisual(status);
         const active = activeFilters.has(status);
@@ -51,7 +51,7 @@ export function WorkflowStatusChips({
               'px-2 py-0.5 text-xs rounded-full cursor-pointer select-none transition-opacity duration-75',
               visual.textClass,
               active ? 'ring-1 ring-current' : hasFilters ? 'opacity-60' : 'hover:brightness-125',
-              keyboardActiveKey === status ? 'ring-2 ring-blue-300/90 ring-offset-1 ring-offset-gray-800' : '',
+              keyboardActiveKey === status ? 'ring-2 ring-ring/90 ring-offset-1 ring-offset-background' : '',
             ].join(' ')}
           >
             {status.replaceAll('_', ' ')} ({count})

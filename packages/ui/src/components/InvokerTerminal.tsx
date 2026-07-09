@@ -102,21 +102,21 @@ export function InvokerTerminal({
   };
 
   return (
-    <section className={`flex min-h-0 flex-col rounded-3xl border border-gray-800 bg-gray-950/95 shadow-2xl ${expanded ? 'h-full' : ''}`}>
-      <div className="flex items-start justify-between gap-4 border-b border-gray-900 px-5 py-4">
+    <section className={`flex min-h-0 flex-col rounded-3xl border border-border bg-card/95 shadow-2xl ${expanded ? 'h-full' : ''}`}>
+      <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight text-gray-50">What do you want to build?</h1>
-          <p className="mt-1 text-sm text-gray-400">Talk it through, then submit the plan to Invoker.</p>
+          <h1 className="text-lg font-semibold tracking-tight text-foreground">What do you want to build?</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Talk it through, then submit the plan to Invoker.</p>
         </div>
         <div className="flex items-center gap-2">
-          {busy && <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs text-blue-200">Working…</span>}
-          {readOnly && <span className="rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300">Submitted</span>}
+          {busy && <span className="rounded-full bg-accent/30 px-3 py-1 text-xs text-muted-foreground">Working…</span>}
+          {readOnly && <span className="rounded-full bg-secondary px-3 py-1 text-xs text-muted-foreground">Submitted</span>}
           {expanded ? (
             <button
               type="button"
               aria-label="Close planning chat"
               onClick={onCloseExpanded}
-              className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-300 hover:border-gray-600 hover:text-gray-100"
+              className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
             >
               Close
             </button>
@@ -127,7 +127,7 @@ export function InvokerTerminal({
                   type="button"
                   aria-label="Collapse planning chat"
                   onClick={onCollapse}
-                  className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-300 hover:border-gray-600 hover:text-gray-100"
+                  className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
                 >
                   Collapse
                 </button>
@@ -136,7 +136,7 @@ export function InvokerTerminal({
                 type="button"
                 aria-label="Expand planning chat"
                 onClick={onExpand}
-                className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-300 hover:border-gray-600 hover:text-gray-100"
+                className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
               >
                 Expand
               </button>
@@ -157,14 +157,14 @@ export function InvokerTerminal({
             : line.tone === 'success'
               ? 'text-emerald-300'
               : line.tone === 'muted'
-                ? 'text-gray-500'
+                ? 'text-muted-foreground'
                 : line.role === 'assistant'
-                  ? 'text-gray-200'
-                  : 'text-gray-300';
+                  ? 'text-foreground'
+                  : 'text-muted-foreground';
           const label = line.role === 'user' ? 'You' : line.role === 'assistant' ? 'Invoker' : 'System';
           return (
             <div key={line.id} className="space-y-1">
-              <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{label}</div>
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
               <div className={`whitespace-pre-wrap leading-6 ${toneClass}`}>{line.text}</div>
             </div>
           );
@@ -240,7 +240,7 @@ export function InvokerTerminal({
       )}
 
       <form
-        className="border-t border-gray-900 px-5 py-4"
+        className="border-t border-border px-5 py-4"
         onSubmit={(event) => {
           event.preventDefault();
           if (!value.trim() || busy || readOnly) return;
@@ -261,17 +261,17 @@ export function InvokerTerminal({
             }
           }}
           placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe the change, ask questions, or say “draft the full plan”.'}
-          className="min-h-24 w-full resize-none rounded-2xl border border-gray-800 bg-gray-900/70 px-4 py-3 text-sm leading-6 text-gray-100 outline-none placeholder:text-gray-600 focus:border-blue-400 disabled:cursor-wait"
+          className="min-h-24 w-full resize-none rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:border-ring disabled:cursor-wait"
         />
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <label className="flex items-center gap-2 text-sm text-gray-400">
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
             <span>AI:</span>
             <select
               data-testid="invoker-terminal-harness"
               value={selectedPresetKey}
               onChange={(event) => onPresetChange(event.target.value)}
               disabled={readOnly}
-              className="rounded-full border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-200 outline-none hover:border-gray-600 focus:border-blue-400"
+              className="rounded-full border border-border bg-card px-3 py-2 text-sm text-foreground outline-none hover:border-border-strong focus:border-ring"
             >
               {presetOptions.map((option) => (
                 <option key={option.key} value={option.key}>{option.label}</option>
@@ -281,7 +281,7 @@ export function InvokerTerminal({
           <button
             type="submit"
             disabled={busy || readOnly || !value.trim()}
-            className="rounded-full bg-blue-400 px-5 py-2 text-sm font-medium text-gray-950 hover:bg-blue-300 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-full bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary disabled:cursor-not-allowed disabled:opacity-50"
           >
             Send
           </button>
