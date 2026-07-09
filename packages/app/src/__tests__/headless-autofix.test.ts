@@ -4,9 +4,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { runHeadless } from '../headless.js';
-import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import type { TaskState } from '@invoker/workflow-core';
-import type { WorkflowMutationPriority } from '@invoker/data-store';
+import type {
+  WorkerActionRecord,
+  WorkerActionWrite,
+  WorkflowMutationPriority,
+} from '@invoker/data-store';
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   const { config, execution, ...rest } = overrides;
@@ -43,8 +46,9 @@ describe('headless auto-fix cutover', () => {
 });
 
 describe('headless worker autofix', () => {
-  it('runs a one-shot scan under the single-instance lock and enqueues the normal fix command intent', async () => {
+  it('runs a one-shot scan under the single-instance lock and enqueues a bare restart first', async () => {
     const task = makeTask();
+    const actions = new Map<string, WorkerActionRecord>();
     const enqueueWorkflowMutationIntent = vi.fn((
       _workflowId: string,
       _channel: string,
@@ -66,6 +70,21 @@ describe('headless worker autofix', () => {
           loadTasks: vi.fn(() => [task]),
           loadTask: vi.fn(() => task),
           listWorkflowMutationIntents: vi.fn(() => []),
+          getWorkerAction: vi.fn((workerKind: string, externalKey: string) =>
+            actions.get(`${workerKind}:${externalKey}`)),
+          upsertWorkerAction: vi.fn((writeAction: WorkerActionWrite) => {
+            const key = `${writeAction.workerKind}:${writeAction.externalKey}`;
+            const existing = actions.get(key);
+            const now = '2026-01-01T00:00:00.000Z';
+            const saved: WorkerActionRecord = {
+              ...writeAction,
+              attemptCount: writeAction.attemptCount ?? 0,
+              createdAt: existing?.createdAt ?? writeAction.createdAt ?? now,
+              updatedAt: writeAction.updatedAt ?? now,
+            };
+            actions.set(key, saved);
+            return saved;
+          }),
           logEvent: vi.fn(),
           enqueueWorkflowMutationIntent,
         },
@@ -80,8 +99,8 @@ describe('headless worker autofix', () => {
 
     expect(enqueueWorkflowMutationIntent).toHaveBeenCalledWith(
       'wf-1',
-      'invoker:fix-with-agent',
-      buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
+      'invoker:restart-task',
+      ['wf-1/task-1'],
       'normal',
     );
   });
