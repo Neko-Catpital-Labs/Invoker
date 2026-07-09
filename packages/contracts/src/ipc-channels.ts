@@ -253,6 +253,72 @@ export interface SystemDiagnostics {
   bundledSkills?: BundledSkillsStatus;
 }
 
+export type PlanningTerminalMode = 'manual';
+export type PlanningTerminalKind = 'planning';
+export type PlanningTerminalBackend = 'process';
+export type PlanningTerminalStatus = 'running' | 'exited';
+
+export interface PlanningTerminalSession {
+  id: string;
+  kind: PlanningTerminalKind;
+  planningSessionId: string;
+  mode: PlanningTerminalMode;
+  backend: PlanningTerminalBackend;
+  cwd: string;
+  cols: number;
+  rows: number;
+  status: PlanningTerminalStatus;
+  createdAt: string;
+  lastActiveAt: string;
+  exitCode?: number | null;
+  signal?: string | null;
+}
+
+export interface OpenPlanningTerminalRequest {
+  planningSessionId: string;
+  cols?: number;
+  rows?: number;
+}
+
+export interface OpenPlanningTerminalResult {
+  session: PlanningTerminalSession;
+  reused: boolean;
+  output: string;
+}
+
+export interface PlanningTerminalWriteRequest {
+  planningSessionId: string;
+  data: string;
+}
+
+export interface PlanningTerminalWriteResult {
+  accepted: boolean;
+}
+
+export interface PlanningTerminalResizeRequest {
+  planningSessionId: string;
+  cols: number;
+  rows: number;
+}
+
+export interface PlanningTerminalCloseRequest {
+  planningSessionId: string;
+}
+
+export interface PlanningTerminalCloseResult {
+  closed: boolean;
+}
+
+export interface PlanningTerminalOutputEvent {
+  sessionId: string;
+  planningSessionId: string;
+  data: string;
+}
+
+export interface PlanningTerminalClosedEvent {
+  session: PlanningTerminalSession;
+}
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
@@ -502,6 +568,26 @@ export const IpcChannels = {
     request: [taskId: string];
     response: { opened: boolean; reason?: string };
   },
+  'invoker:open-planning-terminal': {} as {
+    request: [request: OpenPlanningTerminalRequest];
+    response: OpenPlanningTerminalResult;
+  },
+  'invoker:list-planning-terminals': {} as {
+    request: [];
+    response: PlanningTerminalSession[];
+  },
+  'invoker:write-planning-terminal': {} as {
+    request: [request: PlanningTerminalWriteRequest];
+    response: PlanningTerminalWriteResult;
+  },
+  'invoker:resize-planning-terminal': {} as {
+    request: [request: PlanningTerminalResizeRequest];
+    response: PlanningTerminalSession;
+  },
+  'invoker:close-planning-terminal': {} as {
+    request: [request: PlanningTerminalCloseRequest];
+    response: PlanningTerminalCloseResult;
+  },
 
   // Worktree Cleanup
   'invoker:cleanup-worktrees': {} as {
@@ -549,6 +635,12 @@ export const IpcEventChannels = {
   },
   'invoker:workflows-changed': {} as {
     payload: unknown[];
+  },
+  'invoker:planning-terminal-output': {} as {
+    payload: PlanningTerminalOutputEvent;
+  },
+  'invoker:planning-terminal-closed': {} as {
+    payload: PlanningTerminalClosedEvent;
   },
 } as const;
 

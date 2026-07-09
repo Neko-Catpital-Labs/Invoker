@@ -59,7 +59,15 @@ import type {
   TaskStateChanges,
 } from '@invoker/workflow-core';
 import { makeEnvelope, CommandError } from '@invoker/contracts';
-import type { WorkResponse } from '@invoker/contracts';
+import type {
+  OpenPlanningTerminalRequest,
+  PlanningTerminalCloseRequest,
+  PlanningTerminalClosedEvent,
+  PlanningTerminalOutputEvent,
+  PlanningTerminalResizeRequest,
+  PlanningTerminalWriteRequest,
+  WorkResponse,
+} from '@invoker/contracts';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels, TransportError, TransportErrorCode } from '@invoker/transport';
@@ -132,6 +140,7 @@ import {
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
+import { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
 import { createRequire } from 'node:module';
@@ -1168,6 +1177,7 @@ if (isHeadless) {
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
   let apiServer: ApiServer | null = null;
+  let planningTerminalManager: EmbeddedTerminalManager | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
   const launchingTasks = new Set<string>();
@@ -1193,6 +1203,23 @@ if (isHeadless) {
   };
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const sendPlanningTerminalOutput = (event: PlanningTerminalOutputEvent): void => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('invoker:planning-terminal-output', event);
+  };
+
+  const sendPlanningTerminalClosed = (event: PlanningTerminalClosedEvent): void => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('invoker:planning-terminal-closed', event);
+  };
+
+  const getPlanningTerminalManager = (): EmbeddedTerminalManager => {
+    if (!planningTerminalManager) {
+      throw new Error('Planning terminal manager is not initialized.');
+    }
+    return planningTerminalManager;
+  };
   const pendingUiTaskDeltas: TaskDelta[] = [];
   let uiTaskDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let workflowMetadataInvalidator: WorkflowMetadataInvalidator | null = null;
@@ -2549,6 +2576,10 @@ if (isHeadless) {
       recordStartupMark('initServices.readOnly.end', { ownerMode: false });
     }
 
+    planningTerminalManager = new EmbeddedTerminalManager({ repoRoot, logger });
+    planningTerminalManager.on('output', sendPlanningTerminalOutput);
+    planningTerminalManager.on('closed', sendPlanningTerminalClosed);
+
     if (ownerMode) {
       rebuildTaskRunner();
       workflowMutationCoordinator = new PersistedWorkflowMutationCoordinator(
@@ -3850,7 +3881,7 @@ if (isHeadless) {
       return persistence.getActivityLogs(0, 2000);
     });
 
-    // ── External terminal launcher ──────────────────────────────
+    // ── Terminal launchers ──────────────────────────────────────
     ipcMain.handle('invoker:open-terminal', async (_event, taskId: string): Promise<{ opened: boolean; reason?: string }> => {
       logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
       return openExternalTerminalForTask({
@@ -3863,6 +3894,27 @@ if (isHeadless) {
         runningTaskReason:
           'Task is still running or being fixed with AI. View output in the terminal panel below.',
       });
+    });
+
+    ipcMain.handle('invoker:open-planning-terminal', (_event, request: OpenPlanningTerminalRequest) => {
+      logger.info(`open-planning-terminal: "${request?.planningSessionId ?? ''}"`, { module: 'embedded-terminal' });
+      return getPlanningTerminalManager().openPlanningTerminal(request);
+    });
+
+    ipcMain.handle('invoker:list-planning-terminals', () => {
+      return getPlanningTerminalManager().listPlanningTerminals();
+    });
+
+    ipcMain.handle('invoker:write-planning-terminal', (_event, request: PlanningTerminalWriteRequest) => {
+      return getPlanningTerminalManager().writePlanningTerminal(request);
+    });
+
+    ipcMain.handle('invoker:resize-planning-terminal', (_event, request: PlanningTerminalResizeRequest) => {
+      return getPlanningTerminalManager().resizePlanningTerminal(request);
+    });
+
+    ipcMain.handle('invoker:close-planning-terminal', (_event, request: PlanningTerminalCloseRequest) => {
+      return getPlanningTerminalManager().closePlanningTerminal(request);
     });
 
     seedUiSnapshotCache();
@@ -3900,6 +3952,7 @@ if (isHeadless) {
 
     try {
       if (apiServer) await apiServer.close().catch(() => {});
+      planningTerminalManager?.dispose();
       if (dbPollInterval) clearInterval(dbPollInterval);
       if (activityPollInterval) clearInterval(activityPollInterval);
       if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
