@@ -59,6 +59,7 @@ export * from './workers/disk-headroom-monitor.js';
 export * from './workers/disk-headroom.js';
 export * from './workers/pr-maintenance-workers.js';
 export * from './workers/requeue-worker.js';
+export * from './workers/workflow-resume-worker.js';
 export * from './requeue-attempt-ledger.js';
 export * from './auto-fix-gating.js';
 export * from './auto-fix-attempt-ledger.js';
