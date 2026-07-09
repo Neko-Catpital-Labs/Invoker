@@ -50,6 +50,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No CI repair actions recorded yet.',
     };
   }
+  if (kind === 'e2e-autofix') {
+    return {
+      name: 'Daily e2e auto-fix',
+      idleText: 'Idle. Runs the extended e2e battery on a schedule and opens one fix PR per failing suite.',
+      noActionText: 'No e2e auto-fix runs recorded yet.',
+    };
+  }
   return {
     name: formatWorkerValue(kind),
     idleText: 'Idle. Waiting for worker-owned work.',
