@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import { resolveRepoRoot } from '@invoker/contracts';
 import { IpcBus } from '@invoker/transport';
@@ -196,22 +197,32 @@ async function delegateGenericReadQuery(
     }
     if (!refreshMessageBus) break;
     messageBus = await refreshMessageBus();
+    owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
+    if (!owner) return false;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
+  owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
+  if (!owner) return false;
   throw new Error('Live owner is present but did not serve cli-query');
 }
 
-function shouldBootstrapStandaloneReadQuery(
+function invokerDatabaseHasWalSidecars(): boolean {
+  const dbPath = join(resolveInvokerHomeRoot(), 'invoker.db');
+  return existsSync(`${dbPath}-wal`) || existsSync(`${dbPath}-shm`);
+}
+
+function shouldBootstrapReadQuery(
   args: string[],
   standaloneMode: boolean,
   internalOwnerServe: boolean,
 ): boolean {
-  if (!standaloneMode || internalOwnerServe) return false;
+  if (internalOwnerServe) return false;
   const isSpecialRead =
     (args[0] === 'query' && (args[1] === 'queue' || args[1] === 'ui-perf' || args[1] === 'action-graph'))
     || args[0] === 'queue';
-  return isSpecialRead;
+  if (!isSpecialRead && !isGenericDelegatableReadCommand(args)) return false;
+  return standaloneMode || invokerDatabaseHasWalSidecars();
 }
 
 async function delegateReadOnlyQuery(
@@ -313,10 +324,14 @@ export interface HeadlessClientDeps {
   runElectronHeadless: (args: string[]) => Promise<number>;
 }
 
-async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void> {
+async function ensureStandaloneOwnerViaBootstrap(
+  bus: MessageBus,
+  refreshMessageBus?: () => Promise<MessageBus>,
+): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
   const bootstrapLock = tryAcquireOwnerBootstrapLock(invokerHomeRoot);
   const startedAt = Date.now();
+  let currentBus = bus;
   delegationClientLog(`bootstrap begin lockAcquired=${bootstrapLock ? 'true' : 'false'} home=${invokerHomeRoot}`);
   try {
     if (bootstrapLock) {
@@ -327,12 +342,15 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
     let attempts = 0;
     while (Date.now() < deadline) {
       attempts += 1;
-      const owner = await discoverOwner(bus, 500);
+      const owner = await discoverOwner(currentBus, 500);
       if (isStandaloneCapable(owner)) {
         delegationClientLog(
           `bootstrap owner ready attempts=${attempts} elapsedMs=${Date.now() - startedAt} ownerId=${owner.ownerId}`,
         );
         return;
+      }
+      if (refreshMessageBus) {
+        currentBus = await refreshMessageBus();
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
@@ -459,7 +477,7 @@ export async function runHeadlessClientCommand(
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
   }
-  if (shouldBootstrapStandaloneReadQuery(args, standaloneMode, internalOwnerServe)) {
+  if (shouldBootstrapReadQuery(args, standaloneMode, internalOwnerServe)) {
     await deps.ensureStandaloneOwner(deps.messageBus);
     const delegatedAfterBootstrap = await delegateReadOnlyQuery(
       args,
@@ -499,7 +517,7 @@ export async function runHeadlessClient(argv: string[]): Promise<number> {
     await bus.ready();
     return await runHeadlessClientCommand(argv, {
       messageBus: bus,
-      ensureStandaloneOwner: (currentBus) => ensureStandaloneOwnerViaBootstrap(currentBus ?? bus),
+      ensureStandaloneOwner: (currentBus) => ensureStandaloneOwnerViaBootstrap(currentBus ?? bus, refreshMessageBus),
       refreshMessageBus,
       runElectronHeadless,
     });
