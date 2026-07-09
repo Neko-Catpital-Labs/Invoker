@@ -7,6 +7,10 @@ import {
 import type { Logger, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { resolveHeadlessTarget } from './headless-command-classification.js';
 import { createWorkflowMutationTiming, type WorkflowMutationTiming } from './workflow-mutation-timing.js';
+import {
+  resolveHeadlessExecCommand,
+  summarizeMutationFailureMessage,
+} from './mutation-failure-message.js';
 
 export type WorkflowMutationFailedHandler = (event: WorkflowMutationFailedEvent) => void;
 
@@ -370,7 +374,7 @@ export class PersistedWorkflowMutationCoordinator {
       });
       deferred?.resolve(result);
     } catch (error) {
-      const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+      const message = summarizeMutationFailureMessage(error);
       const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
       if (latestIntent?.status === 'running') {
         this.persistence.failWorkflowMutationIntent(intent.id, message);
@@ -541,6 +545,9 @@ export class PersistedWorkflowMutationCoordinator {
   }
 
   private notifyIntentFailed(intent: WorkflowMutationIntent, message: string): void {
+    const headlessCommand = intent.channel === 'headless.exec'
+      ? resolveHeadlessExecCommand(intent.args ?? [])
+      : undefined;
     const event = compactFailedEvent({
       workflowId: intent.workflowId,
       intentId: intent.id,
@@ -548,6 +555,7 @@ export class PersistedWorkflowMutationCoordinator {
       message,
       failedAt: new Date().toISOString(),
       taskId: this.resolveIntentFailureTaskId(intent),
+      headlessCommand,
     });
     try {
       this.options?.onIntentFailed?.(event);
