@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -1876,6 +1876,59 @@ describe('SQLiteAdapter', () => {
       const [task] = adapter.loadTasks('wf-1');
       expect(task.status).toBe('stale');
     });
+
+    it('projects the newest active attempt without scanning every attempt for the node (perf regression #3746)', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', { status: 'running' }));
+
+      const selectedFailed: Attempt = {
+        ...createAttempt('t1', { status: 'failed' }),
+        id: 't1-aOLD',
+        createdAt: new Date('2026-07-09T05:00:00.000Z'),
+        error: 'boom',
+      };
+      const newerPending: Attempt = {
+        ...createAttempt('t1', { status: 'pending' }),
+        id: 't1-aNEW',
+        createdAt: new Date('2026-07-09T06:00:00.000Z'),
+        supersedesAttemptId: selectedFailed.id,
+      };
+      adapter.saveAttempt(selectedFailed);
+      adapter.saveAttempt(newerPending);
+
+      const bigError = 'x'.repeat(200_000);
+      for (let i = 0; i < 50; i += 1) {
+        adapter.saveAttempt({
+          ...createAttempt('t1', { status: i % 2 === 0 ? 'failed' : 'superseded' }),
+          id: `t1-old-${i}`,
+          createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)),
+          error: bigError,
+        });
+      }
+
+      adapter.updateTask('t1', { execution: { selectedAttemptId: selectedFailed.id } });
+
+      const spy = vi.spyOn(
+        adapter as unknown as { queryAll: (sql: string, params?: unknown[]) => unknown },
+        'queryAll',
+      );
+      try {
+        const [task] = adapter.loadTasks('wf-1');
+        expect(task.status).toBe('running');
+        expect(task.execution.error).toBeUndefined();
+        expect(task.execution.selectedAttemptId).toBe(selectedFailed.id);
+      } finally {
+        spy.mockRestore();
+      }
+
+      const ranUnboundedScan = spy.mock.calls.some(
+        ([sql]) =>
+          typeof sql === 'string' &&
+          /FROM attempts\s+WHERE node_id = \?\s+ORDER BY created_at ASC/.test(sql),
+      );
+      expect(ranUnboundedScan).toBe(false);
+    });
+
   });
 
   describe('loadActionGraphAttempts', () => {

@@ -11,7 +11,6 @@
 import type { TaskState, TaskStateChanges, Attempt } from '@invoker/workflow-core';
 import {
   assertTaskConsistent,
-  isActiveAttempt,
   isDiscardedAttempt,
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
@@ -700,8 +699,8 @@ export class SqliteTaskAttemptRepository {
     if (!attempt) return task;
 
     if (attempt.status === 'failed' || isDiscardedAttempt(attempt)) {
-      const newer = this.findNewerActiveAttempt(task.id, attempt);
-      if (newer) {
+      const [activeAfter] = this.findActiveAttemptsAfter(task.id, attempt, 1);
+      if (activeAfter) {
         const cleaned: TaskState = {
           ...task,
           execution: {
@@ -711,7 +710,7 @@ export class SqliteTaskAttemptRepository {
             completedAt: undefined,
           },
         };
-        if (newer.status === 'needs_input') {
+        if (activeAfter.status === 'needs_input') {
           return { ...cleaned, status: 'needs_input' };
         }
         return cleaned;
@@ -777,18 +776,18 @@ export class SqliteTaskAttemptRepository {
     return task;
   }
 
-  private findNewerActiveAttempt(nodeId: string, selected: Attempt): Attempt | undefined {
-    const attempts = this.loadAttempts(nodeId);
-    const selectedTs = selected.createdAt.getTime();
-    let newest: Attempt | undefined;
-    for (const candidate of attempts) {
-      if (candidate.id === selected.id) continue;
-      if (!isActiveAttempt(candidate)) continue;
-      if (candidate.createdAt.getTime() <= selectedTs) continue;
-      if (!newest || candidate.createdAt.getTime() > newest.createdAt.getTime()) {
-        newest = candidate;
-      }
-    }
-    return newest;
+  private findActiveAttemptsAfter(nodeId: string, selected: Attempt, limit = 1): Attempt[] {
+    const cappedLimit = Math.max(0, Math.floor(limit));
+    if (cappedLimit === 0) return [];
+    const rows = this.exec.queryAll(
+      `SELECT * FROM attempts
+       WHERE node_id = ?
+         AND created_at > ?
+         AND status IN ('pending', 'claimed', 'running', 'needs_input')
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [nodeId, selected.createdAt.toISOString(), cappedLimit],
+    );
+    return rows.map((row) => mapRowToAttempt(row));
   }
 }
