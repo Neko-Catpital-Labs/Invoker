@@ -5,12 +5,16 @@ import type { TaskState } from '@invoker/workflow-core';
 
 import { buildFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import {
+  AUTO_FIX_WORKER_KIND,
   collectValidatedAutoFixRecoveryCandidates,
   createAutoFixRecoveryTick,
   createAutoFixAttemptLedger,
   createRecoveryWorker,
+  createWorkerRegistry,
   listAutoFixRecoveryScanCandidates,
+  registerAutoFixWorker,
   RECOVERY_WORKER_KIND,
+  type WorkerRuntimeDependencies,
 } from '../workers/auto-fix-recovery.js';
 import type { RecoveryWorkerWakeupHint } from '../lifecycle-events.js';
 
@@ -125,6 +129,38 @@ describe('auto-fix recovery worker', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(onTick).toHaveBeenCalledTimes(1);
     await runtime.stop();
+  });
+
+  it('scans every failed task and submits a fix-with-agent intent when the registered worker is turned on', async () => {
+    const harness = makeRecoveryPolicyHarness();
+    const registry = registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>());
+    const definition = registry.get(AUTO_FIX_WORKER_KIND);
+    expect(definition).toBeDefined();
+
+    const messageBus = { subscribe: vi.fn(() => vi.fn()) };
+    const worker = definition!.factory({
+      store: harness.options.store,
+      submitter: harness.options.submitter,
+      logger,
+      messageBus,
+      autoFix: {
+        defaultAutoFixRetries: 3,
+        getAutoFixAgent: () => 'codex',
+        attemptLedger: harness.attemptLedger,
+      },
+    } as unknown as WorkerRuntimeDependencies);
+
+    worker.start();
+    await worker.stop();
+
+    expect(messageBus.subscribe).toHaveBeenCalled();
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.submit).toHaveBeenCalledWith(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      buildFixWithAgentMutationArgs('wf-1/task-1', 'codex', { autoFix: true }),
+    );
   });
 
 });
