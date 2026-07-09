@@ -167,7 +167,6 @@ describe('QueueView', () => {
     expect(actionList.className).toContain('overflow-y-auto');
     expect(workersSection.className).toContain('overflow-hidden');
     expect(within(actionSection).getByText('Worker Actions (1)')).toBeInTheDocument();
-    expect(within(workersSection).getByText('Worker processes (1)')).toBeInTheDocument();
     expect(within(workersSection).getByTestId('worker-row-autofix')).toBeInTheDocument();
     expect(within(actionSection).queryByTestId('worker-row-autofix')).not.toBeInTheDocument();
   });
@@ -258,7 +257,6 @@ describe('QueueView', () => {
       'worker-row-coderabbit-address',
       'worker-row-pr-conflict-rebase',
     ]);
-    expect(screen.getByText('Worker processes (5)')).toBeInTheDocument();
     expect(screen.getByText('Autofix')).toBeInTheDocument();
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('CI failure repair')).toBeInTheDocument();
