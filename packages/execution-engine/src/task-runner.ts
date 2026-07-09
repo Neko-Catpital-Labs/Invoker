@@ -78,6 +78,9 @@ import {
   takeResolvedExecutionSelection,
   selectExecutor,
   clearSshExecutorCache,
+  recordPoolMemberTransportFailure,
+  recordPoolMemberStartSuccess,
+  getPoolMemberHealthSnapshot,
 } from './task-runner-pool.js';
 import type {
   ExecutionPoolMember,
@@ -86,6 +89,7 @@ import type {
   RemoteTargetDisplay,
   ResolvedExecutionSelection,
   SelectedExecutor,
+  PoolMemberHealth,
 } from './task-runner-pool.js';
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
@@ -223,6 +227,7 @@ export class TaskRunner {
   /** Cache for SSH executors, keyed by poolMemberId. One instance per target for correct git locking. */
   /** @internal */ sshExecutorCache = new Map<string, SshExecutor>();
   /** @internal */ poolRoundRobinCursor = new Map<string, number>();
+  poolMemberHealth = new Map<string, PoolMemberHealth>();
   /** @internal */ readonly pendingPoolSelections = new Map<string, PoolSelection>();
   /** @internal */ readonly freshBaseCommits = new Map<string, FreshBaseCommit>();
 
@@ -723,6 +728,18 @@ export class TaskRunner {
 
   /** @internal */ poolMemberKey(member: ExecutionPoolMember): string {
     return poolMemberKey(member);
+  }
+
+  recordPoolMemberTransportFailure(memberKey: string, error: unknown): PoolMemberHealth {
+    return recordPoolMemberTransportFailure(this, memberKey, error);
+  }
+
+  recordPoolMemberStartSuccess(memberKey: string): boolean {
+    return recordPoolMemberStartSuccess(this, memberKey);
+  }
+
+  getPoolMemberHealthSnapshot(now: number = Date.now()): ReturnType<typeof getPoolMemberHealthSnapshot> {
+    return getPoolMemberHealthSnapshot(this, now);
   }
 
   private selectPoolMember(

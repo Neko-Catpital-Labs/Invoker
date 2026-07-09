@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
 import type { ExecutionPoolMember } from '../task-runner-pool.js';
 import { ResourceLimitError } from '../repo-pool.js';
 import { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
+import {
+  computePoolMemberCooldownMs,
+  POOL_MEMBER_COOLDOWN_BASE_MS,
+  POOL_MEMBER_COOLDOWN_MAX_MS,
+} from '../task-runner-launch-support.js';
 
 function makeTask(id: string): TaskState {
   return {
@@ -431,5 +436,107 @@ describe('SSH pool member capacity', () => {
     } finally {
       adapter.close();
     }
+  });
+});
+
+describe('computePoolMemberCooldownMs', () => {
+  it('starts at the base cooldown and grows, capped at the max', () => {
+    expect(computePoolMemberCooldownMs(1)).toBe(POOL_MEMBER_COOLDOWN_BASE_MS);
+    expect(computePoolMemberCooldownMs(2)).toBe(Math.min(POOL_MEMBER_COOLDOWN_BASE_MS * 2, POOL_MEMBER_COOLDOWN_MAX_MS));
+    expect(computePoolMemberCooldownMs(2)).toBeGreaterThanOrEqual(computePoolMemberCooldownMs(1));
+    expect(computePoolMemberCooldownMs(1000)).toBe(POOL_MEMBER_COOLDOWN_MAX_MS);
+  });
+
+  it('clamps non-positive failure counts to the base cooldown', () => {
+    expect(computePoolMemberCooldownMs(0)).toBe(POOL_MEMBER_COOLDOWN_BASE_MS);
+    expect(computePoolMemberCooldownMs(-5)).toBe(POOL_MEMBER_COOLDOWN_BASE_MS);
+  });
+});
+
+describe('execution-pool member circuit breaker', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('takes a member out of rotation after a transport failure and routes to a healthy member', () => {
+    const runner = makeRunner({
+      strategy: 'roundRobin',
+      members: [
+        { id: 'remote-a', type: 'ssh', maxConcurrentTasks: 1 },
+        { id: 'remote-b', type: 'ssh', maxConcurrentTasks: 1 },
+      ],
+    });
+
+    // remote-a would be picked first by the round-robin cursor; evict it.
+    runner.recordPoolMemberTransportFailure('ssh:remote-a', new Error('connection timed out'));
+
+    runner.selectExecutor(makeTask('wf-1/task-a'));
+    expect(getPendingSelection(runner, 'wf-1/task-a').member.id).toBe('remote-b');
+  });
+
+  it('re-admits a member automatically once its cooldown expires', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-09T00:00:00Z'));
+    const runner = makeRunner();
+
+    const health = runner.recordPoolMemberTransportFailure('ssh:remote-a', new Error('no route to host'));
+    expect(runner.getPoolMemberHealthSnapshot().map((h) => h.memberKey)).toContain('ssh:remote-a');
+
+    // Still down one ms before the cooldown ends.
+    vi.setSystemTime(new Date(health.downUntil - 1));
+    expect(runner.getPoolMemberHealthSnapshot().map((h) => h.memberKey)).toContain('ssh:remote-a');
+
+    // Cooldown elapsed → back in rotation, no operator action needed.
+    vi.setSystemTime(new Date(health.downUntil + 1));
+    expect(runner.getPoolMemberHealthSnapshot()).toHaveLength(0);
+    runner.selectExecutor(makeTask('wf-1/task-a'));
+    expect(getPendingSelection(runner, 'wf-1/task-a').member.id).toBe('remote-a');
+  });
+
+  it('re-admits a member immediately on a successful start', () => {
+    const runner = makeRunner();
+    runner.recordPoolMemberTransportFailure('ssh:remote-a', new Error('broken pipe'));
+
+    expect(runner.recordPoolMemberStartSuccess('ssh:remote-a')).toBe(true);
+    expect(runner.recordPoolMemberStartSuccess('ssh:remote-a')).toBe(false);
+    expect(runner.getPoolMemberHealthSnapshot()).toHaveLength(0);
+  });
+
+  it('backs off further on each consecutive failure', () => {
+    const runner = makeRunner();
+    const first = runner.recordPoolMemberTransportFailure('ssh:remote-a', new Error('exit=255'));
+    const second = runner.recordPoolMemberTransportFailure('ssh:remote-a', new Error('exit=255'));
+
+    expect(first.consecutiveFailures).toBe(1);
+    expect(second.consecutiveFailures).toBe(2);
+    expect(second.cooldownMs).toBeGreaterThan(first.cooldownMs);
+  });
+
+  it('defers with a down reason when every member is out of rotation', () => {
+    const runner = makeRunner({
+      strategy: 'roundRobin',
+      members: [
+        { id: 'remote-a', type: 'ssh', maxConcurrentTasks: 1 },
+        { id: 'remote-b', type: 'ssh', maxConcurrentTasks: 1 },
+      ],
+    });
+    runner.recordPoolMemberTransportFailure('ssh:remote-a', new Error('connection reset'));
+    runner.recordPoolMemberTransportFailure('ssh:remote-b', new Error('connection reset'));
+
+    expect(() => runner.selectExecutor(makeTask('wf-1/task-a'))).toThrow(/no member capacity/);
+    try {
+      runner.selectExecutor(makeTask('wf-1/task-a'));
+    } catch (err) {
+      expect((err as Error).cause).toBeInstanceOf(ResourceLimitError);
+      expect((err as Error).message).toMatch(/down \d+s/);
+    }
+  });
+
+  it('snapshot excludes members whose cooldown has already elapsed', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-09T00:00:00Z'));
+    const runner = makeRunner();
+    const health = runner.recordPoolMemberTransportFailure('ssh:remote-a', new Error('operation timed out'));
+
+    vi.setSystemTime(new Date(health.downUntil + 1));
+    expect(runner.getPoolMemberHealthSnapshot()).toHaveLength(0);
   });
 });

@@ -107,6 +107,16 @@ export async function dispatchExecutor(
           }, startTimeoutMs);
         }),
       ]);
+      if (poolSelectionForStart) {
+        const readmitted = host.recordPoolMemberStartSuccess(poolSelectionForStart.memberKey);
+        if (readmitted) {
+          host.persistence.logEvent?.(task.id, 'task.executor.member-readmitted', {
+            poolId: poolSelectionForStart.poolId,
+            poolMemberId: poolSelectionForStart.member.id,
+            memberKey: poolSelectionForStart.memberKey,
+          });
+        }
+      }
       break;
     } catch (err) {
       const meta = err as StartupFailureMetadata;
@@ -118,6 +128,17 @@ export async function dispatchExecutor(
         && isRetryableSshStartupTransportError(err)
       ) {
         attemptedPoolMemberKeys.add(poolSelectionForStart.memberKey);
+        const evictedHealth = host.recordPoolMemberTransportFailure(poolSelectionForStart.memberKey, err);
+        host.persistence.logEvent?.(task.id, 'task.executor.member-evicted', {
+          poolId: poolSelectionForStart.poolId,
+          poolMemberId: poolSelectionForStart.member.id,
+          memberKey: poolSelectionForStart.memberKey,
+          consecutiveFailures: evictedHealth.consecutiveFailures,
+          cooldownMs: evictedHealth.cooldownMs,
+          downUntil: evictedHealth.downUntil,
+          reason: 'ssh-startup-transport-failure',
+          error: err instanceof Error ? err.message : String(err),
+        });
         const pool = host.getExecutionPools()[poolSelectionForStart.poolId];
         const hasAnotherSshMember = pool?.members.some((member) =>
           member.type === 'ssh' && !attemptedPoolMemberKeys.has(host.poolMemberKey(member)),
