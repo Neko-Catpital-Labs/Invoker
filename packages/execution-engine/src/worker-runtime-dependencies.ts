@@ -16,13 +16,18 @@ import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
 import type { RequeueWorkerConfig, RequeueWorkerSubmitter } from './workers/requeue-worker.js';
+import type {
+  WorkflowResumeWorkerConfig,
+  WorkflowResumeWorkerStore,
+  WorkflowResumeWorkerSubmitter,
+} from './workers/workflow-resume-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore & CiFailureWorkerStore & AutoApproveWorkerStore;
+  store: AutoFixRecoveryStore & CiFailureWorkerStore & AutoApproveWorkerStore & WorkflowResumeWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
-  submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter & RequeueWorkerSubmitter & AutoApproveWorkerSubmitter;
+  submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter & RequeueWorkerSubmitter & AutoApproveWorkerSubmitter & WorkflowResumeWorkerSubmitter;
   /** Operator logger. */
   logger: Logger;
   /** Optional bus that turns lifecycle events into immediate wakeups. */
@@ -39,4 +44,6 @@ export interface WorkerRuntimeDependencies {
   diskHeadroom?: DiskHeadroomWorkerConfig;
   /** Auto-approval tuning for worker-owned AI fix approvals. */
   autoApprove?: AutoApproveWorkerConfig;
+  /** Workflow-resume worker tuning (cooldown and poll cadence). */
+  workflowResume?: WorkflowResumeWorkerConfig;
 }
