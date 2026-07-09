@@ -644,6 +644,7 @@ describe('SQLiteAdapter', () => {
       expect(tableIndexes(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
         'idx_worker_actions_task_updated',
         'idx_worker_actions_workflow_status',
+        'idx_worker_actions_kind_updated',
       ]));
       expect(tableForeignKeys(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
         'workflows.id:CASCADE',
