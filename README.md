@@ -280,7 +280,7 @@ Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh
 
 ### Auto-fix worker (single shared engine)
 
-Auto-fix recovery runs through **one** shared worker engine in `@invoker/execution-engine`. Owner processes auto-start that worker when `autoFixRetries > 0`; failure lifecycle events wake it, and its periodic scan covers missed wakeups. The manual dev door `./run.sh --headless worker autofix` runs the same engine for an explicit one-shot scan. `autoFixRetries` is enforced from a worker-local in-memory ledger before the worker submits another fix intent. A sweep-and-assert guard test fails the build if auto-fix is ever triggered outside this shared worker engine. See [docs/architecture/recovery-lifecycle-workers.md](docs/architecture/recovery-lifecycle-workers.md).
+Auto-fix recovery runs through **one** shared worker engine in `@invoker/execution-engine`. Starting that worker — the Workers-tab off→on toggle — now runs a full scan immediately, submitting a fix-with-agent intent for every task that is already failed, so turning it on reconciles the current backlog at once. After that startup scan, failure lifecycle events wake it and its periodic scan covers missed wakeups. The manual dev door `./run.sh --headless worker autofix` runs the same engine for an explicit one-shot scan. `autoFixRetries` is enforced from a worker-local in-memory ledger before the worker submits another fix intent. A sweep-and-assert guard test fails the build if auto-fix is ever triggered outside this shared worker engine. See [docs/architecture/recovery-lifecycle-workers.md](docs/architecture/recovery-lifecycle-workers.md).
 
 ## Architecture (at a glance)
 
