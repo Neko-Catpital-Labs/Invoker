@@ -259,25 +259,25 @@ export function ContextMenu({
   // Get variant styles
   const getVariantClasses = (variant?: MenuItem['variant'], enabled?: boolean) => {
     if (!enabled) {
-      return 'text-gray-500 cursor-not-allowed';
+      return 'text-muted-foreground cursor-not-allowed';
     }
 
     switch (variant) {
       case 'primary':
-        return 'text-blue-300 hover:bg-gray-700';
+        return 'text-foreground hover:bg-muted';
       case 'warning':
-        return 'text-yellow-300 hover:bg-gray-700';
+        return 'text-yellow-300 hover:bg-muted';
       case 'danger':
-        return 'text-red-300 hover:bg-gray-700';
+        return 'text-red-300 hover:bg-muted';
       default:
-        return 'text-gray-100 hover:bg-gray-700';
+        return 'text-foreground hover:bg-muted';
     }
   };
 
   // Render separator
   const renderSeparator = (label: string) => (
-    <div className="border-t border-gray-600 my-1">
-      <div className="text-xs text-gray-500 text-center py-1">{label}</div>
+    <div className="border-t border-border-strong my-1">
+      <div className="text-xs text-muted-foreground text-center py-1">{label}</div>
     </div>
   );
 
@@ -285,7 +285,7 @@ export function ContextMenu({
     <div
       ref={menuRef}
       role="menu"
-      className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+      className="fixed z-50 bg-secondary border border-border-strong rounded-lg shadow-xl py-1 min-w-[160px]"
       style={{ left: position.left, top: position.top }}
       onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
@@ -311,7 +311,7 @@ export function ContextMenu({
               className={`w-full text-left px-3 py-1.5 text-sm ${getVariantClasses(
                 item.variant,
                 item.enabled
-              )} ${isFocused ? 'bg-gray-700' : ''}`}
+              )} ${isFocused ? 'bg-muted' : ''}`}
               onClick={() => handleItemClick(item)}
               onMouseEnter={() => setFocusedIndex(idx)}
               disabled={!item.enabled}
@@ -324,12 +324,12 @@ export function ContextMenu({
       })}
       {hasMoreButton && (
         <div>
-          <div className="border-t border-gray-600 my-1" />
+          <div className="border-t border-border-strong my-1" />
           <button
             ref={moreButtonRef}
             type="button"
             role="menuitem"
-            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${focusedIndex === moreButtonIndex ? 'bg-gray-700' : ''}`}
+            className={`w-full text-left px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted ${focusedIndex === moreButtonIndex ? 'bg-muted' : ''}`}
             onClick={() => {
               setShowMore(true);
               setFocusedIndex(safeItems.length);

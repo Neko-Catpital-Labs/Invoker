@@ -85,7 +85,7 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
       <Handle
         type="target"
         position={Position.Left}
-        className="!h-2 !w-2 !border !border-slate-400 !bg-gray-900"
+        className="!h-2 !w-2 !border !border-slate-400 !bg-background"
         isConnectable={false}
       />
       <WorkflowNode
@@ -99,7 +99,7 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
       <Handle
         type="source"
         position={Position.Right}
-        className="!h-2 !w-2 !border !border-slate-400 !bg-gray-900"
+        className="!h-2 !w-2 !border !border-slate-400 !bg-background"
         isConnectable={false}
       />
     </div>
@@ -309,7 +309,7 @@ function WorkflowGraphInner({
 
   if (graph.nodes.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-500 text-sm">
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
         Your plan will appear here.
       </div>
     );
@@ -339,12 +339,12 @@ function WorkflowGraphInner({
           elementsSelectable
           proOptions={{ hideAttribution: true }}
         >
-          <Background color="#374151" gap={20} />
+          <Background color="var(--graph-grid)" gap={20} />
           <Controls
             style={{
-              background: '#1f2937',
+              background: 'var(--graph-controls)',
               borderRadius: '8px',
-              border: '1px solid #374151',
+              border: '1px solid var(--graph-controls-border)',
             }}
           />
         </ReactFlow>

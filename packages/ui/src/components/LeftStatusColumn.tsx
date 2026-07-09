@@ -61,7 +61,7 @@ function navButtonClass(selected: boolean, collapsed: boolean): string {
 function countClass(tone: SourceItem['tone']): string {
   const base = 'border border-border';
   if (tone === 'attention') return `${base} text-amber-300`;
-  if (tone === 'running') return `${base} text-blue-300`;
+  if (tone === 'running') return `${base} text-foreground`;
   return `${base} text-muted-foreground`;
 }
 

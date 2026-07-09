@@ -35,7 +35,7 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-500 text-sm">
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
         Loading history...
       </div>
     );
@@ -43,7 +43,7 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
 
   if (tasks.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-500 text-sm">
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
         No completed tasks
       </div>
     );
@@ -55,7 +55,7 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
     <div className="h-full overflow-y-auto p-4">
       {Array.from(grouped.entries()).map(([workflowName, workflowTasks]) => (
         <div key={workflowName} className="mb-6">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
             {workflowName}
           </h3>
           <div className="space-y-1">
@@ -66,12 +66,12 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
                 className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
                   selectedTaskId === task.id
                     ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+                    : 'bg-secondary hover:bg-muted text-foreground'
                 }`}
               >
                 <div className="flex justify-between items-center">
                   <span className="truncate mr-2">{task.description}</span>
-                  <span className="text-xs text-gray-400 shrink-0">
+                  <span className="text-xs text-muted-foreground shrink-0">
                     {task.execution?.completedAt
                       ? new Date(task.execution.completedAt).toLocaleDateString()
                       : ''}

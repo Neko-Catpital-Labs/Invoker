@@ -153,9 +153,9 @@ function planningStatusClass(status: InAppPlanningSessionStatus): string {
     case 'draft_ready':
       return 'bg-emerald-950/70 text-emerald-100';
     case 'submitted':
-      return 'bg-gray-800 text-gray-200';
+      return 'bg-secondary text-foreground';
     case 'still_discussing':
-      return 'bg-blue-950/70 text-blue-100';
+      return 'bg-secondary text-secondary-foreground';
   }
 }
 
@@ -312,8 +312,8 @@ function WorkflowContextMenu({
     onClose({ restoreFocus: autoFocus });
   };
 
-  const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-gray-100 hover:bg-gray-700';
-  const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-gray-700';
+  const buttonClass = 'w-full px-3 py-1.5 text-left text-sm text-foreground hover:bg-muted';
+  const dangerButtonClass = 'w-full px-3 py-1.5 text-left text-sm text-red-300 hover:bg-muted';
   const visibleItems: WorkflowMenuItem[] = [
     { id: 'open-workflow', label: 'Open Workflow', className: buttonClass, action: () => runAction(onOpenWorkflow) },
     { id: 'open-pr', label: 'Open PR', className: buttonClass, action: () => runAction(onOpenPr) },
@@ -323,7 +323,7 @@ function WorkflowContextMenu({
       ? [{
           id: 'more',
           label: 'More',
-          className: 'w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700',
+          className: 'w-full px-3 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted',
           separator: true,
           action: () => {
             setShowMore(true);
@@ -402,7 +402,7 @@ function WorkflowContextMenu({
     <div
       ref={menuRef}
       role="menu"
-      className="fixed z-50 min-w-[200px] rounded-lg border border-gray-600 bg-gray-800 py-1 shadow-xl"
+      className="fixed z-50 min-w-[200px] rounded-lg border border-border-strong bg-secondary py-1 shadow-xl"
       style={{ left: position.left, top: position.top }}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
@@ -410,7 +410,7 @@ function WorkflowContextMenu({
     >
       {visibleItems.map((item, index) => (
         <div key={item.id}>
-          {item.separator && <div className="my-1 border-t border-gray-600" />}
+          {item.separator && <div className="my-1 border-t border-border-strong" />}
           <button
             ref={(element) => {
               itemRefs.current[index] = element;
@@ -419,7 +419,7 @@ function WorkflowContextMenu({
             role="menuitem"
             onClick={item.action}
             onMouseEnter={() => setFocusedIndex(index)}
-            className={`${item.className} ${index === focusedIndex ? 'bg-gray-700' : ''}`}
+            className={`${item.className} ${index === focusedIndex ? 'bg-muted' : ''}`}
           >
             {item.label}
           </button>
@@ -431,21 +431,21 @@ function WorkflowContextMenu({
 
 function EmptyGraphTutorial(): JSX.Element {
   return (
-    <aside className="h-full w-full border-l border-gray-800 bg-gray-900/90 p-4">
-      <div className="rounded-xl border border-gray-800 bg-gray-950/70 p-4">
-        <h2 className="text-sm font-semibold text-gray-100">What to expect</h2>
-        <ol className="mt-3 space-y-3 text-sm text-gray-400">
+    <aside className="h-full w-full border-l border-border bg-background/90 p-4">
+      <div className="rounded-xl border border-border bg-card/70 p-4">
+        <h2 className="text-sm font-semibold text-foreground">What to expect</h2>
+        <ol className="mt-3 space-y-3 text-sm text-muted-foreground">
           <li>
-            <div className="font-medium text-gray-200">1. Type a goal</div>
-            <div className="mt-1 text-xs text-gray-500">Describe the change in the terminal to generate a plan.</div>
+            <div className="font-medium text-foreground">1. Type a goal</div>
+            <div className="mt-1 text-xs text-muted-foreground">Describe the change in the terminal to generate a plan.</div>
           </li>
           <li>
-            <div className="font-medium text-gray-200">2. Review the plan</div>
-            <div className="mt-1 text-xs text-gray-500">Check the graph before starting work.</div>
+            <div className="font-medium text-foreground">2. Review the plan</div>
+            <div className="mt-1 text-xs text-muted-foreground">Check the graph before starting work.</div>
           </li>
           <li>
-            <div className="font-medium text-gray-200">3. Run it</div>
-            <div className="mt-1 text-xs text-gray-500">Start the workflow when the plan looks right.</div>
+            <div className="font-medium text-foreground">3. Run it</div>
+            <div className="mt-1 text-xs text-muted-foreground">Start the workflow when the plan looks right.</div>
           </li>
         </ol>
       </div>
@@ -455,11 +455,11 @@ function EmptyGraphTutorial(): JSX.Element {
 
 function EmptyInspectorPlaceholder(): JSX.Element {
   return (
-    <aside className="h-full w-full border-l border-gray-800 bg-gray-900/90 p-4">
-      <div className="rounded-xl border border-dashed border-gray-800 bg-gray-950/50 p-4">
-        <h2 className="text-sm font-semibold text-gray-100">No task selected</h2>
-        <p className="mt-2 text-sm text-gray-400">Select a task in the graph to see details.</p>
-        <p className="mt-2 text-xs text-gray-500">Status, logs, and actions will appear here.</p>
+    <aside className="h-full w-full border-l border-border bg-background/90 p-4">
+      <div className="rounded-xl border border-dashed border-border bg-card/50 p-4">
+        <h2 className="text-sm font-semibold text-foreground">No task selected</h2>
+        <p className="mt-2 text-sm text-muted-foreground">Select a task in the graph to see details.</p>
+        <p className="mt-2 text-xs text-muted-foreground">Status, logs, and actions will appear here.</p>
       </div>
     </aside>
   );
@@ -2440,7 +2440,7 @@ export function App() {
         type="button"
         data-testid="rail-refresh"
         onClick={handleRefresh}
-        className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+        className="rounded border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary"
       >
         Refresh
       </button>
@@ -2457,14 +2457,14 @@ export function App() {
             type="button"
             data-testid="graph-more-button"
             onClick={() => setGraphActionsMenuOpen((open) => !open)}
-            className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+            className="rounded border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary"
           >
             More ▾
           </button>
           {graphActionsMenuOpen && (
             <div
               data-testid="graph-more-menu"
-              className="absolute right-0 top-10 z-20 w-48 rounded-lg border border-gray-700 bg-gray-950 p-1 shadow-xl"
+              className="absolute right-0 top-10 z-20 w-48 rounded-lg border border-border bg-card p-1 shadow-xl"
             >
               <button
                 type="button"
@@ -2473,7 +2473,7 @@ export function App() {
                   handleSelectSidebarSurface('home');
                   selectViewMode('dag');
                 }}
-                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
                 Home
               </button>
@@ -2481,7 +2481,7 @@ export function App() {
                 type="button"
                 data-testid="rail-timeline"
                 onClick={() => selectViewMode('timeline')}
-                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
                 Timeline
               </button>
@@ -2489,7 +2489,7 @@ export function App() {
                 type="button"
                 data-testid="rail-history"
                 onClick={() => selectViewMode('history')}
-                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
                 History
               </button>
@@ -2497,7 +2497,7 @@ export function App() {
                 type="button"
                 data-testid="rail-action-graph"
                 onClick={() => selectViewMode('actionGraph')}
-                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
                 Action Graph
               </button>
@@ -2505,11 +2505,11 @@ export function App() {
                 type="button"
                 data-testid="rail-queue"
                 onClick={() => selectViewMode('queue')}
-                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
                 Queue
               </button>
-              <div className="my-1 border-t border-gray-800" />
+              <div className="my-1 border-t border-border" />
               <button
                 type="button"
                 data-testid="rail-clear"
@@ -2517,7 +2517,7 @@ export function App() {
                   setGraphActionsMenuOpen(false);
                   await handleClear();
                 }}
-                className="block w-full rounded px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-800"
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
                 Clear
               </button>
@@ -2547,7 +2547,7 @@ export function App() {
         data-keyboard-region="taskGraph"
         tabIndex={0}
         data-keyboard-active={keyboardRegion === 'taskGraph' ? 'true' : 'false'}
-        className={`flex h-full min-h-0 flex-1 outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-blue-300/60' : ''}`}
+        className={`flex h-full min-h-0 flex-1 outline-none ${keyboardRegion === 'taskGraph' ? 'ring-2 ring-inset ring-ring/60' : ''}`}
       >
         {isSelectedWorkflowGraphRefreshing && (
           <div data-testid="selected-workflow-mini-dag-refreshing" className="px-2 py-1 text-xs text-amber-200">
@@ -2590,9 +2590,9 @@ export function App() {
       <div className="flex h-full min-h-0 flex-col p-4">
         <div
           data-testid="selected-workflow-mini-dag"
-          className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-gray-700 bg-gray-900/95 shadow-lg"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-border bg-background/95 shadow-lg"
         >
-          <div className="border-b border-gray-700 px-3 py-2 text-[11px] text-gray-300">
+          <div className="border-b border-border px-3 py-2 text-[11px] text-muted-foreground">
             {displayedSelectedWorkflowGraph.workflow.name} task DAG
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
@@ -2610,7 +2610,7 @@ export function App() {
       data-keyboard-region="workflowGraph"
       tabIndex={0}
       data-keyboard-active={keyboardRegion === 'workflowGraph' ? 'true' : 'false'}
-      className={`flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900 outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
+      className={`flex-1 relative overflow-hidden border-r border-border bg-background outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
       onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
     >
       {viewMode === 'queue' ? (
@@ -2662,10 +2662,10 @@ export function App() {
 
   const renderGraphWorkspace = (title: string, subtitle: string, showMoreMenu: boolean): JSX.Element => (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b border-gray-800 bg-gray-950/50 px-4 py-2">
+      <div className="flex items-center justify-between border-b border-border bg-card/50 px-4 py-2">
         <div>
-          <h2 className="text-sm font-semibold text-gray-100">{title}</h2>
-          <p className="text-xs text-gray-500">{subtitle}</p>
+          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+          <p className="text-xs text-muted-foreground">{subtitle}</p>
         </div>
         {renderGraphActions(showMoreMenu)}
       </div>
@@ -2676,8 +2676,8 @@ export function App() {
   const renderBrowserEmptyState = (title: string, copy: string): JSX.Element => (
     <div className="flex h-full items-center justify-center px-6 text-center">
       <div>
-        <div className="text-sm font-medium text-gray-200">{title}</div>
-        <div className="mt-2 text-sm text-gray-500">{copy}</div>
+        <div className="text-sm font-medium text-foreground">{title}</div>
+        <div className="mt-2 text-sm text-muted-foreground">{copy}</div>
       </div>
     </div>
   );
@@ -2717,10 +2717,10 @@ export function App() {
       ? formatTaskStatus(selectedTask.status)
       : 'No item selected';
   const browserStatusToneClass = sidebarSurface === 'running'
-    ? 'bg-blue-950/70 text-blue-100'
+    ? 'bg-secondary text-secondary-foreground'
     : sidebarSurface === 'attention'
       ? 'bg-amber-950/70 text-amber-100'
-      : 'bg-gray-800 text-gray-200';
+      : 'bg-secondary text-foreground';
 
   const relatedBrowserTasks = Array.from(miniDagTasks.values()).filter((task) =>
     sidebarSurface === 'workflows' || task.id !== selectedTask?.id,
@@ -2760,7 +2760,7 @@ export function App() {
             const selected = selectedTask?.id === entry.task.id;
             const accent = tone === 'attention'
               ? selected ? 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/40' : 'text-foreground hover:bg-accent/30'
-              : selected ? 'bg-blue-500/15 text-blue-100 ring-1 ring-blue-500/40' : 'text-foreground hover:bg-accent/30';
+              : selected ? 'bg-accent/60 text-accent-foreground ring-1 ring-border-strong' : 'text-foreground hover:bg-accent/30';
             return (
               <button
                 key={entry.task.id}
@@ -2792,15 +2792,15 @@ export function App() {
               key={session.id}
               type="button"
               onClick={() => setActivePlanningSessionId(session.id)}
-              className={`block w-full rounded-xl px-3 py-2 text-left transition-colors ${selected ? 'bg-gray-800 text-white ring-1 ring-gray-700' : 'text-gray-200 hover:bg-gray-900/80'}`}
+              className={`block w-full rounded-xl px-3 py-2 text-left transition-colors ${selected ? 'bg-secondary text-white ring-1 ring-border' : 'text-foreground hover:bg-background/80'}`}
             >
               <div className="truncate font-medium">{session.title}</div>
-              <div className="mt-1 truncate text-xs text-gray-500">{previewPlanningMessage(session)}</div>
+              <div className="mt-1 truncate text-xs text-muted-foreground">{previewPlanningMessage(session)}</div>
               <div className="mt-2 flex items-center justify-between gap-2">
                 <span className={`rounded-full px-2 py-0.5 text-[11px] ${planningStatusClass(session.status)}`}>
                   {planningStatusLabel(session.status)}
                 </span>
-                <span className="shrink-0 text-[11px] text-gray-500">{relativePlanningUpdatedAt(session.updatedAt)}</span>
+                <span className="shrink-0 text-[11px] text-muted-foreground">{relativePlanningUpdatedAt(session.updatedAt)}</span>
               </div>
             </button>
           );
@@ -2813,11 +2813,11 @@ export function App() {
 
   const renderPlanningTerminalSurface = (): JSX.Element => (
     <div className="flex-1 flex overflow-hidden">
-      <div data-testid="planning-session-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
-        <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
+      <div data-testid="planning-session-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-card/45">
+        <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-4">
           <div>
-            <h2 className="text-sm font-semibold text-gray-100">Planning Terminal</h2>
-            <p className="mt-1 text-xs text-gray-500">
+            <h2 className="text-sm font-semibold text-foreground">Planning Terminal</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
               {planningSessions.length} chat{planningSessions.length === 1 ? '' : 's'}
               {planningReadyCount > 0 ? ` · ${planningReadyCount} ready` : ''}
             </p>
@@ -2833,11 +2833,11 @@ export function App() {
         <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
       </div>
       <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
+        <div className="border-b border-border bg-card/50 px-4 py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-lg font-semibold text-gray-100">{activePlanningSession.title}</h2>
-              <p className="mt-1 text-sm text-gray-400">Planning chat window</p>
+              <h2 className="text-lg font-semibold text-foreground">{activePlanningSession.title}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">Planning chat window</p>
               <div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${planningStatusClass(activePlanningSession.status)}`}>
                 {planningStatusLabel(activePlanningSession.status)}
               </div>
@@ -2846,13 +2846,13 @@ export function App() {
               type="button"
               aria-label="Return home"
               onClick={handleDismissBrowserSurface}
-              className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+              className="rounded border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary"
             >
               Home
             </button>
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto bg-gray-900 p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-background p-4">
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
@@ -2875,18 +2875,18 @@ export function App() {
     </div>
   );
   const renderBrowserRail = (): JSX.Element => (
-    <div data-testid="browser-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
-      <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
+    <div data-testid="browser-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-card/45">
+      <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-4">
         <div>
-          <h2 className="text-sm font-semibold text-gray-100">{browserSurfaceTitle}</h2>
-          <p className="mt-1 text-xs text-gray-500">{browserSurfaceSubtitle}</p>
+          <h2 className="text-sm font-semibold text-foreground">{browserSurfaceTitle}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">{browserSurfaceSubtitle}</p>
         </div>
         <button
           type="button"
           aria-label="Close browser panel"
           data-testid="browser-rail-dismiss"
           onClick={handleDismissBrowserSurface}
-          className="rounded-lg border border-gray-700 px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+          className="rounded-lg border border-border px-2 py-1.5 text-xs text-muted-foreground hover:bg-secondary"
         >
           Close
         </button>
@@ -2906,7 +2906,7 @@ export function App() {
       data-keyboard-region="bottomBar"
       tabIndex={0}
       data-keyboard-active={keyboardRegion === 'bottomBar' ? 'true' : 'false'}
-      className={`outline-none ${keyboardRegion === 'bottomBar' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
+      className={`outline-none ${keyboardRegion === 'bottomBar' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
     >
       {sidebarSurface === 'home' && (
         <WorkflowStatusChips
@@ -2935,16 +2935,16 @@ export function App() {
 
   const renderBrowserDetailWorkspace = (): JSX.Element => (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
+      <div className="border-b border-border bg-card/50 px-4 py-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <h2
-              className="text-lg font-semibold text-gray-100 line-clamp-2"
+              className="text-lg font-semibold text-foreground line-clamp-2"
               title={browserSelectedTitle}
             >
               {browserSelectedTitle}
             </h2>
-            <p className="mt-1 text-sm text-gray-400">{browserSelectedContext}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{browserSelectedContext}</p>
             <div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${browserStatusToneClass}`}>
               {browserSelectedStatus}
             </div>
@@ -2956,7 +2956,7 @@ export function App() {
               aria-label="Return home"
               data-testid="browser-return-home"
               onClick={handleDismissBrowserSurface}
-              className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+              className="rounded border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary"
             >
               Home
             </button>
@@ -3043,9 +3043,9 @@ export function App() {
           role="status"
           aria-live="polite"
           data-testid="read-only-mode-banner"
-          className="border-b border-blue-700 bg-blue-950/70 px-4 py-2 text-sm text-blue-100"
+          className="border-b border-border-strong bg-secondary px-4 py-2 text-sm text-foreground"
         >
-          <span className="font-semibold text-blue-50">Read-only mode.</span>{' '}
+          <span className="font-semibold text-foreground">Read-only mode.</span>{' '}
           This window can browse workflows, but it cannot make changes until the write owner is available.
         </div>
       )}
@@ -3122,7 +3122,7 @@ export function App() {
         />
 
         <div className="flex-1 flex overflow-hidden">
-          <main className="flex-1 flex flex-col overflow-hidden bg-gray-900">
+          <main className="flex-1 flex flex-col overflow-hidden bg-background">
             {sidebarSurface === 'home' ? (
               renderGraphWorkspace('Plan graph', homeSubtitle, true)
             ) : sidebarSurface === 'planning' ? (
@@ -3143,7 +3143,7 @@ export function App() {
               data-keyboard-region="inspector"
               tabIndex={0}
               data-keyboard-active={keyboardRegion === 'inspector' ? 'true' : 'false'}
-              className={`${showEmptyGraphTutorial || showInspectorPlaceholder ? 'w-96' : effectiveInspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-blue-400/50' : ''}`}
+              className={`${showEmptyGraphTutorial || showInspectorPlaceholder ? 'w-96' : effectiveInspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
             >
               {showEmptyGraphTutorial ? (
                 <EmptyGraphTutorial />
@@ -3189,7 +3189,7 @@ export function App() {
           role="dialog"
           aria-modal="true"
           aria-label="Planning chat"
-          className="fixed inset-0 z-50 flex flex-col bg-gray-950"
+          className="fixed inset-0 z-50 flex flex-col bg-card"
         >
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
@@ -3219,12 +3219,12 @@ export function App() {
           role="dialog"
           aria-modal="true"
           aria-label="Full graph"
-          className="fixed inset-0 z-50 flex flex-col bg-gray-950"
+          className="fixed inset-0 z-50 flex flex-col bg-card"
         >
-          <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div>
-              <h2 className="text-sm font-semibold text-gray-100">Full graph</h2>
-              <p className="text-xs text-gray-500">Press Escape to return.</p>
+              <h2 className="text-sm font-semibold text-foreground">Full graph</h2>
+              <p className="text-xs text-muted-foreground">Press Escape to return.</p>
             </div>
             <Button
               variant="outline"
@@ -3275,7 +3275,7 @@ export function App() {
           onClick={() => setSearchOpen(false)}
         >
           <div
-            className="w-full max-w-2xl overflow-hidden rounded-lg border border-gray-700 bg-gray-900 shadow-2xl"
+            className="w-full max-w-2xl overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             <input
@@ -3284,7 +3284,7 @@ export function App() {
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder="Search workflows, tasks, summaries, commands, or PRs"
-              className="w-full border-b border-gray-800 bg-gray-950 px-4 py-3 text-sm text-gray-100 outline-none placeholder:text-gray-500"
+              className="w-full border-b border-border bg-card px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
             <div
               role="listbox"
@@ -3292,10 +3292,10 @@ export function App() {
               className="max-h-[360px] overflow-auto py-1"
             >
               {searchQuery.trim() && searchResults.length === 0 && (
-                <div className="px-4 py-6 text-center text-sm text-gray-500">No matches</div>
+                <div className="px-4 py-6 text-center text-sm text-muted-foreground">No matches</div>
               )}
               {!searchQuery.trim() && (
-                <div className="px-4 py-6 text-center text-sm text-gray-500">Start typing to search workflows and tasks</div>
+                <div className="px-4 py-6 text-center text-sm text-muted-foreground">Start typing to search workflows and tasks</div>
               )}
               {searchResults.map((result, index) => (
                 <button
@@ -3304,12 +3304,12 @@ export function App() {
                   role="option"
                   aria-selected={index === searchActiveIndex}
                   data-testid={`keyboard-search-result-${result.kind}-${result.id}`}
-                  className={`flex w-full flex-col px-4 py-2 text-left text-sm ${index === searchActiveIndex ? 'bg-blue-600/25 text-white' : 'text-gray-200 hover:bg-gray-800'}`}
+                  className={`flex w-full flex-col px-4 py-2 text-left text-sm ${index === searchActiveIndex ? 'bg-accent text-accent-foreground' : 'text-foreground hover:bg-secondary'}`}
                   onMouseEnter={() => setSearchActiveIndex(index)}
                   onClick={() => activateSearchResult(result)}
                 >
                   <span className="truncate font-medium">{result.title}</span>
-                  <span className="truncate text-xs text-gray-400">{result.subtitle}</span>
+                  <span className="truncate text-xs text-muted-foreground">{result.subtitle}</span>
                 </button>
               ))}
             </div>
@@ -3395,7 +3395,7 @@ export function App() {
           role="status"
           aria-live="polite"
           data-testid="detach-feedback"
-          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border border-gray-600 bg-gray-800 px-4 py-2 text-sm text-gray-100 shadow-xl"
+          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border border-border-strong bg-secondary px-4 py-2 text-sm text-foreground shadow-xl"
         >
           {detachNotice}
         </div>

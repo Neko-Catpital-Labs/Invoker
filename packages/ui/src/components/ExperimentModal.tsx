@@ -51,17 +51,17 @@ export function ExperimentModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-lg p-6 border border-gray-700">
-        <h2 className="text-lg font-semibold text-gray-100 mb-2">
+      <div className="bg-secondary rounded-lg shadow-xl w-full max-w-lg p-6 border border-border">
+        <h2 className="text-lg font-semibold text-foreground mb-2">
           Select Experiments
         </h2>
 
-        <p className="text-sm text-gray-400 mb-4">
+        <p className="text-sm text-muted-foreground mb-4">
           Choose one or more experiment results to use for reconciliation.
         </p>
 
         {results.length === 0 ? (
-          <p className="text-sm text-gray-500 py-4">
+          <p className="text-sm text-muted-foreground py-4">
             No experiment results available yet.
           </p>
         ) : (
@@ -73,11 +73,11 @@ export function ExperimentModal({
                 className={`w-full text-left p-3 rounded border transition-colors ${
                   selected.has(result.id)
                     ? 'border-purple-500 bg-purple-900/30'
-                    : 'border-gray-600 bg-gray-700/50 hover:bg-gray-700'
+                    : 'border-border-strong bg-muted/50 hover:bg-muted'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-gray-200">
+                  <span className="text-sm font-medium text-foreground">
                     {selected.has(result.id) ? '\u2611 ' : '\u2610 '}{result.id}
                   </span>
                   <span
@@ -91,10 +91,10 @@ export function ExperimentModal({
                   </span>
                 </div>
                 {result.summary && (
-                  <p className="text-xs text-gray-400 mt-1">{result.summary}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{result.summary}</p>
                 )}
                 {result.exitCode !== undefined && (
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-muted-foreground mt-1">
                     Exit code: {result.exitCode}
                   </p>
                 )}
@@ -106,14 +106,14 @@ export function ExperimentModal({
         <div className="flex gap-3 justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+            className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             Cancel
           </button>
           <button
             onClick={handleConfirm}
             disabled={selected.size === 0}
-            className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-muted disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
           >
             Confirm Selection ({selected.size})
           </button>
