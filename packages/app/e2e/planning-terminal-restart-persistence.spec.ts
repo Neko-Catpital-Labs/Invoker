@@ -124,7 +124,7 @@ base.describe('Planning Terminal restart persistence', () => {
 
       await openPlanningTerminal(page);
       await submitPlanningText(page, 'Add README');
-      await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('Draft plan ready', { timeout: 10000 });
+      await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('draft ready', { timeout: 10000 });
       const savedSessionId = await page.evaluate(async () => {
         const list = await window.invoker.planningChatList();
         return list.sessions[0]?.id;
@@ -141,9 +141,9 @@ base.describe('Planning Terminal restart persistence', () => {
 
       await expect(page.getByTestId('invoker-terminal-transcript')).toContainText('Add README', { timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-transcript')).toContainText('I drafted the restart plan.');
-      await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('Draft plan ready: "Planning Terminal Restart"');
+      await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('draft ready · "Planning Terminal Restart"');
       await expect(page.getByTestId('invoker-terminal-input')).toBeEnabled();
-      await expect(page.getByText('Working…')).toHaveCount(0);
+      await expect(page.getByText('working…')).toHaveCount(0);
       const restoredSessionId = await page.evaluate(async () => {
         const list = await window.invoker.planningChatList();
         return list.sessions[0]?.id;
