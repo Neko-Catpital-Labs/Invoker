@@ -490,6 +490,8 @@ export interface WorkflowMutationFailedEvent {
   workflowId: string;
   channel: string;
   taskId?: string;
+  /** Present for headless.exec failures — the CLI subcommand (e.g. fix, approve). */
+  headlessCommand?: string;
   message: string;
   failedAt: string;
 }
