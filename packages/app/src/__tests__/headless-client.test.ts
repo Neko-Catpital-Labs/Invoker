@@ -62,6 +62,29 @@ describe('headless-client', () => {
     expect(runElectronHeadless).not.toHaveBeenCalled();
   });
 
+  it('falls back to direct execution for generic standalone reads when no owner exists', async () => {
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const refreshMessageBus = vi.fn().mockResolvedValue(secondBus);
+    const runElectronHeadless = vi.fn(async () => 23);
+
+    const argv = ['task-status', 'wf-1/task-a'];
+    const exitCode = await runHeadlessClientCommand(argv, {
+      messageBus: firstBus,
+      ensureStandaloneOwner,
+      refreshMessageBus,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(23);
+    expect(refreshMessageBus).toHaveBeenCalledTimes(1);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(runElectronHeadless).toHaveBeenCalledWith(argv);
+  });
+
   it('delegates mutating commands to a standalone-capable owner endpoint', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => ({ ok: true }));

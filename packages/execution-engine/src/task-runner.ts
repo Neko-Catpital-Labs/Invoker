@@ -17,8 +17,6 @@ import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
-import type { MachineCapabilities } from './harness-capabilities.js';
-import { resolveHarnessSelection } from './harness-capabilities.js';
 import { BaseExecutor } from './base-executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { createExecutionBench } from './execution-bench.js';
@@ -86,8 +84,8 @@ export type ActiveExecutionEntry = {
 };
 
 export type ExecutionPoolMember =
-  | { type: 'ssh'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
-  | { type: 'worktree'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities };
+  | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
+  | { type: 'worktree'; id: string; maxConcurrentTasks?: number };
 
 export type ExecutionPoolConfig = {
   members: ExecutionPoolMember[];
@@ -132,7 +130,6 @@ type RemoteTargetDisplay = {
   secretsFile?: string;
   remoteHeartbeatIntervalSeconds?: number;
   maxConcurrentTasks?: number;
-  capabilities?: MachineCapabilities;
 };
 
 export interface ReviewGateCiFailureTrigger {
@@ -217,12 +214,11 @@ export interface TaskRunnerConfig {
     secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
     maxConcurrentTasks?: number;
-    capabilities?: MachineCapabilities;
   }>;
   executionPoolsProvider?: () => Record<string, {
     members: Array<
-      | { type: 'ssh'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
-      | { type: 'worktree'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
+      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
     >;
     selectionStrategy?: 'roundRobin' | 'leastLoaded';
     maxConcurrentTasksPerMember?: number;
@@ -390,33 +386,6 @@ export class TaskRunner {
     const defaultModel = defaults.executionModel?.trim();
     if (!defaultModel) return undefined;
     return this.resolveExecutionAgent(task) === defaultAgent ? defaultModel : undefined;
-  }
-
-  private executionRequirementLabel(task: Pick<TaskState, 'config'>): string {
-    const executionAgent = this.resolveExecutionAgent(task);
-    const executionModel = this.resolveExecutionModel(task);
-    return executionModel ? `${executionAgent}/${executionModel}` : executionAgent;
-  }
-
-  private resolveExecutionForMember(
-    task: Pick<TaskState, 'config'>,
-    memberCapabilities: MachineCapabilities | undefined,
-  ): { ok: true; selection: ResolvedExecutionSelection } | { ok: false; reason: string } {
-    const resolvedAgent = this.resolveExecutionAgent(task);
-    const requestedModel = this.resolveExecutionModel(task);
-    const result = resolveHarnessSelection(memberCapabilities, {
-      role: 'execution',
-      harness: resolvedAgent,
-      model: requestedModel,
-    });
-    if (!result.ok) return result;
-    return {
-      ok: true,
-      selection: {
-        executionAgent: result.selection.harness,
-        executionModel: result.selection.model,
-      },
-    };
   }
 
   /**
@@ -814,18 +783,8 @@ export class TaskRunner {
     const limit = this.poolMemberLimit(pool, member);
     return limit === undefined || this.poolMemberLoad(poolId, this.poolMemberKey(member)) < limit;
   }
-  private memberCapabilities(member: ExecutionPoolMember): MachineCapabilities | undefined {
-    if (member.capabilities) return member.capabilities;
-    return member.type === 'ssh' ? this.getRemoteTargets()[member.id]?.capabilities : undefined;
-  }
-
-  private memberCapabilityMismatch(member: ExecutionPoolMember, task: Pick<TaskState, 'config'>): string | undefined {
-    const match = this.resolveExecutionForMember(task, this.memberCapabilities(member));
-    return match.ok ? undefined : match.reason;
-  }
 
   private selectPoolMember(
-    task: Pick<TaskState, 'config'>,
     poolId: string,
     pool: ExecutionPoolConfig,
     excludedMemberKeys: Set<string> = new Set(),
@@ -838,7 +797,6 @@ export class TaskRunner {
         const index = (cursor + offset) % pool.members.length;
         const member = pool.members[index];
         if (excludedMemberKeys.has(this.poolMemberKey(member))) continue;
-        if (this.memberCapabilityMismatch(member, task)) continue;
         if (!this.poolMemberHasCapacity(poolId, pool, member)) continue;
         this.poolRoundRobinCursor.set(poolId, (index + 1) % pool.members.length);
         return member;
@@ -857,16 +815,14 @@ export class TaskRunner {
           index,
           load,
           hasCapacity: limit === undefined || load < limit,
-          capabilityMismatch: this.memberCapabilityMismatch(member, task),
         };
       });
-    const candidates = scored.filter((entry) => entry.hasCapacity && !entry.capabilityMismatch);
+    const candidates = scored.filter((entry) => entry.hasCapacity);
     candidates.sort((a, b) => a.load - b.load || a.index - b.index);
     return candidates[0]?.member;
   }
 
   private poolCapacitySnapshot(
-    task: Pick<TaskState, 'config'>,
     poolId: string,
     pool: ExecutionPoolConfig,
     excludedMemberKeys: Set<string>,
@@ -876,7 +832,6 @@ export class TaskRunner {
     load: number;
     limit: number | undefined;
     excluded: boolean;
-    capabilityMismatch?: string;
   }> {
     return pool.members.map((member) => {
       const memberKey = this.poolMemberKey(member);
@@ -886,7 +841,6 @@ export class TaskRunner {
         load: this.poolMemberLoad(poolId, memberKey),
         limit: this.poolMemberLimit(pool, member),
         excluded: excludedMemberKeys.has(memberKey),
-        capabilityMismatch: this.memberCapabilityMismatch(member, task),
       };
     });
   }
@@ -897,7 +851,7 @@ export class TaskRunner {
     pool: ExecutionPoolConfig,
     excludedMemberKeys: Set<string>,
   ): Error {
-    const snapshot = this.poolCapacitySnapshot(task, poolId, pool, excludedMemberKeys);
+    const snapshot = this.poolCapacitySnapshot(poolId, pool, excludedMemberKeys);
     const requirementAgent = this.resolveExecutionAgent(task);
     const requirementModel = this.resolveExecutionModel(task);
     const requirementLabel = requirementModel ? `${requirementAgent}/${requirementModel}` : requirementAgent;
@@ -905,7 +859,6 @@ export class TaskRunner {
       .map((member) => {
         const reasons = [
           member.excluded ? 'excluded' : undefined,
-          member.capabilityMismatch,
           member.limit !== undefined && member.load >= member.limit ? `capacity ${member.load}/${member.limit}` : undefined,
         ].filter((reason): reason is string => Boolean(reason));
         return `${member.memberType}:${member.memberId}${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}`;
@@ -1084,13 +1037,6 @@ export class TaskRunner {
       const pool = this.getExecutionPools()[task.config.poolId];
       const member = pool?.members.find((candidate) => candidate.type === 'ssh' && candidate.id === explicitPoolMemberId);
       if (pool && member) {
-        const memberExecution = this.resolveExecutionForMember(task, this.memberCapabilities(member));
-        if (!memberExecution.ok) {
-          throw new Error(
-            `Execution pool "${task.config.poolId}" member "${explicitPoolMemberId}" cannot run ` +
-            `${this.executionRequirementLabel(task)}: ${memberExecution.reason}`,
-          );
-        }
         if (
           excludedPoolMemberKeys.has(this.poolMemberKey(member))
           || !this.poolMemberHasCapacity(task.config.poolId, pool, member)
@@ -1099,7 +1045,6 @@ export class TaskRunner {
         }
         effectiveType = member.type;
         selectedPoolMemberId = member.id;
-        resolvedExecution = memberExecution.selection;
         this.pendingPoolSelections.set(task.id, {
           poolId: task.config.poolId,
           member,
@@ -1110,18 +1055,10 @@ export class TaskRunner {
       }
     } else if (task.config.poolId) {
       const pool = this.getExecutionPools()[task.config.poolId];
-      const member = pool ? this.selectPoolMember(task, task.config.poolId, pool, excludedPoolMemberKeys) : undefined;
+      const member = pool ? this.selectPoolMember(task.config.poolId, pool, excludedPoolMemberKeys) : undefined;
       if (member) {
-        const memberExecution = this.resolveExecutionForMember(task, this.memberCapabilities(member));
-        if (!memberExecution.ok) {
-          throw new Error(
-            `Execution pool "${task.config.poolId}" member "${member.id}" cannot run ` +
-            `${this.executionRequirementLabel(task)}: ${memberExecution.reason}`,
-          );
-        }
         effectiveType = member.type;
         selectedPoolMemberId = member.type === 'ssh' ? member.id : undefined;
-        resolvedExecution = memberExecution.selection;
         this.pendingPoolSelections.set(task.id, {
           poolId: task.config.poolId,
           member,
@@ -1198,13 +1135,6 @@ export class TaskRunner {
             `entry exists in remoteTargets config. Available: [${Object.keys(remoteTargets).join(', ')}]`,
           );
         }
-        const directExecution = this.resolveExecutionForMember(task, target.capabilities);
-        if (!directExecution.ok) {
-          throw new Error(
-            `SSH target "${targetId}" cannot run ${this.executionRequirementLabel(task)}: ${directExecution.reason}`,
-          );
-        }
-        resolvedExecution = directExecution.selection;
 
         const configFingerprint = JSON.stringify({
           host: target.host,
