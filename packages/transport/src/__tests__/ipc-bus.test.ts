@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join, dirname } from 'node:path';
 import { existsSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
@@ -9,6 +9,7 @@ import {
   IpcBus,
   DEFAULT_REQUEST_DEADLINE_MS,
   MALFORMED_FRAME_RATE_LIMIT_MS,
+  resolveDefaultSocketPath,
   type MalformedFrameEvent,
 } from '../ipc-bus.js';
 import { TransportError, TransportErrorCode } from '../transport-error.js';
@@ -24,6 +25,55 @@ function tempSocketPath(): string {
   const dir = mkdtempSync(join(tmpdir(), 'ipc-bus-test-'));
   return join(dir, 'test.sock');
 }
+
+describe('resolveDefaultSocketPath', () => {
+  const originalInvokerDbDir = process.env.INVOKER_DB_DIR;
+  const originalInvokerIpcSocket = process.env.INVOKER_IPC_SOCKET;
+  const originalNodeEnv = process.env.NODE_ENV;
+
+  afterEach(() => {
+    if (originalInvokerDbDir === undefined) {
+      delete process.env.INVOKER_DB_DIR;
+    } else {
+      process.env.INVOKER_DB_DIR = originalInvokerDbDir;
+    }
+    if (originalInvokerIpcSocket === undefined) {
+      delete process.env.INVOKER_IPC_SOCKET;
+    } else {
+      process.env.INVOKER_IPC_SOCKET = originalInvokerIpcSocket;
+    }
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('scopes the default socket to INVOKER_DB_DIR', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-ipc-root-'));
+    process.env.INVOKER_DB_DIR = dir;
+    delete process.env.INVOKER_IPC_SOCKET;
+
+    expect(resolveDefaultSocketPath()).toBe(join(dir, 'ipc-transport.sock'));
+  });
+
+  it('keeps explicit INVOKER_IPC_SOCKET as the strongest override', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-ipc-root-'));
+    const socket = join(dir, 'custom.sock');
+    process.env.INVOKER_DB_DIR = dir;
+    process.env.INVOKER_IPC_SOCKET = socket;
+
+    expect(resolveDefaultSocketPath()).toBe(socket);
+  });
+
+  it('keeps test mode away from the live Invoker socket when no DB dir is set', () => {
+    delete process.env.INVOKER_DB_DIR;
+    delete process.env.INVOKER_IPC_SOCKET;
+    process.env.NODE_ENV = 'test';
+
+    expect(resolveDefaultSocketPath()).toBe(join(homedir(), '.invoker', 'test', 'ipc-transport.sock'));
+  });
+});
 
 describe('IpcBus', () => {
   const buses: IpcBus[] = [];

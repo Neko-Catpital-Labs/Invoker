@@ -14,7 +14,12 @@
  * - Multi-task quarantine isolation
  */
 import { describe, it, expect } from 'vitest';
-import { applyDelta, resolveQuarantine, TaskSnapshotCache } from '../delta-merge.js';
+import {
+  applyDelta,
+  recoverQuarantinedTask,
+  resolveQuarantine,
+  TaskSnapshotCache,
+} from '../delta-merge.js';
 import type { TaskState, TaskDelta } from '@invoker/workflow-core';
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -91,11 +96,27 @@ describe('applyDelta', () => {
       const result = applyDelta(delta, cache);
 
       expect(result.quarantined).toEqual([]);
+      expect(result.accepted).toBe(true);
       expect(cache.has('t1')).toBe(true);
       const stored = JSON.parse(cache.get('t1')!);
       expect(stored.id).toBe('t1');
       expect(stored.status).toBe('running');
       expect(cache.getEntry('t1')?.taskStateVersion).toBe(2);
+    });
+    it('drops stale created deltas that would downgrade cache state', () => {
+      const cache = new TaskSnapshotCache();
+      cache.set('t1', JSON.stringify(makeTask('t1', { taskStateVersion: 5, status: 'running' })));
+
+      const result = applyDelta({
+        type: 'created',
+        task: makeTask('t1', { taskStateVersion: 4, status: 'completed' }),
+      }, cache);
+
+      expect(result.accepted).toBe(false);
+      expect(result.quarantined).toEqual([]);
+      expect(cache.getEntry('t1')?.taskStateVersion).toBe(5);
+      const stored = JSON.parse(cache.get('t1')!);
+      expect(stored.status).toBe('running');
     });
   });
 
@@ -116,6 +137,7 @@ describe('applyDelta', () => {
       const result = applyDelta(delta, cache);
 
       expect(result.quarantined).toEqual([]);
+      expect(result.accepted).toBe(true);
       const stored = JSON.parse(cache.get('t1')!);
       expect(stored.status).toBe('completed');
       expect(stored.execution.exitCode).toBe(0);
@@ -175,6 +197,25 @@ describe('applyDelta', () => {
       expect(stored.status).toBe('running');
       expect(stored.taskStateVersion).toBe(1);
     });
+    it('drops stale updated deltas without quarantining', () => {
+      const cache = new TaskSnapshotCache();
+      cache.set('t1', JSON.stringify(makeTask('t1', { taskStateVersion: 5, status: 'running' })));
+
+      const result = applyDelta({
+        type: 'updated',
+        taskId: 't1',
+        changes: { status: 'completed' },
+        taskStateVersion: 4,
+        previousTaskStateVersion: 3,
+      }, cache);
+
+      expect(result.accepted).toBe(false);
+      expect(result.quarantined).toEqual([]);
+      expect(cache.getEntry('t1')?.taskStateVersion).toBe(5);
+      expect(cache.isQuarantined('t1')).toBe(false);
+      const stored = JSON.parse(cache.get('t1')!);
+      expect(stored.status).toBe('running');
+    });
 
     it('quarantines when task is unknown (no prior created)', () => {
       const cache = new TaskSnapshotCache();
@@ -230,9 +271,25 @@ describe('applyDelta', () => {
 
       const delta: TaskDelta = { type: 'removed', taskId: 't1', previousTaskStateVersion: 1 };
 
-      applyDelta(delta, cache);
+      const result = applyDelta(delta, cache);
 
       expect(cache.has('t1')).toBe(false);
+      expect(result.accepted).toBe(true);
+    });
+    it('drops stale removed deltas that would delete newer cache state', () => {
+      const cache = new TaskSnapshotCache();
+      cache.set('t1', JSON.stringify(makeTask('t1', { taskStateVersion: 5 })));
+
+      const result = applyDelta({
+        type: 'removed',
+        taskId: 't1',
+        previousTaskStateVersion: 3,
+      }, cache);
+
+      expect(result.accepted).toBe(false);
+      expect(result.quarantined).toEqual([]);
+      expect(cache.has('t1')).toBe(true);
+      expect(cache.getEntry('t1')?.taskStateVersion).toBe(5);
     });
   });
 
@@ -333,29 +390,41 @@ describe('resolveQuarantine', () => {
 
 // ── Gap recovery: main-process integration simulation ────────
 //
-// These tests simulate the recovery loop from main.ts (lines 2429-2437):
+// These tests simulate the production recovery loop in main.ts:
 //   1. applyDelta detects gap → returns quarantined IDs
-//   2. caller loads authoritative state from persistence (loadTask)
-//   3. resolveQuarantine re-seeds cache
-//   4. caller sends { type: 'created', task: authoritative } to renderer
+//   2. caller delegates to recoverQuarantinedTask, which restores the
+//      cache from persistence OR (for synthetic merge ids) the orchestrator
+//      in-memory state, and ALWAYS returns a renderer delta so no message
+//      to the renderer is silently dropped.
+//   3. caller forwards the returned renderer delta.
 //
-// The mock persistence loader is a plain function, not a real SQLite
-// adapter, which keeps tests deterministic and fast.
+// The mock loaders are plain functions, keeping the tests deterministic
+// and fast. `getMergeNode` defaults to returning undefined for the
+// non-synthetic tests in this file; the synthetic-merge-quarantine repro
+// covers the orchestrator-fallback path.
 
 /** Simulates the main-process recovery loop from main.ts. */
 function simulateMainProcessDeltaHandler(
   delta: TaskDelta,
   cache: TaskSnapshotCache,
   persistence: { loadTask: (id: string) => TaskState | undefined },
+  orchestrator: { getMergeNode: (workflowId: string) => TaskState | undefined } = {
+    getMergeNode: () => undefined,
+  },
 ): { rendererDeltas: TaskDelta[] } {
   const rendererDeltas: TaskDelta[] = [];
 
-  const { quarantined } = applyDelta(delta, cache);
+  const { quarantined, accepted } = applyDelta(delta, cache);
+  if (quarantined.length === 0 && accepted) {
+    rendererDeltas.push(delta);
+  }
   for (const taskId of quarantined) {
-    const authoritative = persistence.loadTask(taskId);
-    resolveQuarantine(cache, taskId, authoritative);
-    if (authoritative) {
-      rendererDeltas.push({ type: 'created', task: authoritative });
+    const { rendererDelta } = recoverQuarantinedTask(cache, taskId, {
+      loadTask: persistence.loadTask,
+      getMergeNode: orchestrator.getMergeNode,
+    });
+    if (rendererDelta) {
+      rendererDeltas.push(rendererDelta);
     }
   }
   return { rendererDeltas };
@@ -390,7 +459,12 @@ describe('gap recovery: unknown task → quarantine + authoritative reload', () 
     expect((rendererDeltas[0] as { type: 'created'; task: TaskState }).task.taskStateVersion).toBe(3);
   });
 
-  it('unknown task with no persistence record removes cache entry silently', () => {
+  it('unknown task with no persistence record removes cache entry AND emits removed delta', () => {
+    // No-implicit-message-drops contract: any time the owner deletes a cache
+    // entry during recovery, it MUST tell the renderer so the renderer can
+    // drop its stale copy too. Silently dropping the recovery message is
+    // what causes the synthetic __merge__ graph-blank bug; the same
+    // discipline applies to non-synthetic ghost ids.
     const cache = new TaskSnapshotCache();
     const persistence = { loadTask: (_id: string) => undefined };
 
@@ -405,8 +479,10 @@ describe('gap recovery: unknown task → quarantine + authoritative reload', () 
     const { rendererDeltas } = simulateMainProcessDeltaHandler(delta, cache, persistence);
 
     expect(cache.has('ghost')).toBe(false);
-    // No renderer delta emitted for a task that doesn't exist in persistence
-    expect(rendererDeltas).toHaveLength(0);
+    expect(rendererDeltas).toHaveLength(1);
+    const [first] = rendererDeltas;
+    expect(first.type).toBe('removed');
+    expect((first as { type: 'removed'; taskId: string }).taskId).toBe('ghost');
   });
 });
 
@@ -667,7 +743,8 @@ describe('regression: out-of-order updates never merge from orchestrator memory'
       previousTaskStateVersion: 2,
     }, cache);
 
-    expect(result.quarantined).toEqual(['t1']);
+    expect(result.accepted).toBe(false);
+    expect(result.quarantined).toEqual([]);
     // Cache still shows taskStateVersion 5, not downgraded
     const stored = JSON.parse(cache.get('t1')!);
     expect(stored.status).toBe('completed');

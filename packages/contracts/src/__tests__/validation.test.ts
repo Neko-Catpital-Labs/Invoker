@@ -50,6 +50,27 @@ describe('validateWorkResponse', () => {
     status: 'completed',
     outputs: { exitCode: 0 },
   };
+  const validReviewGate = {
+    activeGeneration: 1,
+    completion: { required: 'all', status: 'approved' },
+    artifacts: [
+      {
+        id: 'contracts',
+        title: 'Define contracts',
+        required: true,
+        status: 'approved',
+        generation: 1,
+      },
+      {
+        id: 'runtime',
+        title: 'Wire runtime',
+        required: true,
+        status: 'open',
+        generation: 1,
+        dependsOn: ['contracts'],
+      },
+    ],
+  } as const;
 
   it('accepts a valid completed response', () => {
     const result = validateWorkResponse(baseResponse);
@@ -74,6 +95,97 @@ describe('validateWorkResponse', () => {
       },
     });
     expect(result.valid).toBe(true);
+  });
+
+  it('accepts a valid two-artifact reviewGate stack', () => {
+    const result = validateWorkResponse({
+      ...baseResponse,
+      outputs: {
+        exitCode: 0,
+        reviewGate: validReviewGate,
+      },
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects reviewGate duplicate artifact ids', () => {
+    const result = validateWorkResponse({
+      ...baseResponse,
+      outputs: {
+        reviewGate: {
+          ...validReviewGate,
+          artifacts: [
+            validReviewGate.artifacts[0],
+            {
+              ...validReviewGate.artifacts[1],
+              id: 'contracts',
+            },
+          ],
+        },
+      },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('outputs.reviewGate.artifacts[1].id duplicates artifact "contracts"');
+  });
+
+  it('rejects reviewGate unknown dependencies', () => {
+    const result = validateWorkResponse({
+      ...baseResponse,
+      outputs: {
+        reviewGate: {
+          ...validReviewGate,
+          artifacts: [
+            validReviewGate.artifacts[0],
+            {
+              ...validReviewGate.artifacts[1],
+              dependsOn: ['missing'],
+            },
+          ],
+        },
+      },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('outputs.reviewGate.artifacts[1].dependsOn references unknown artifact "missing"');
+  });
+
+  it('rejects reviewGate self-dependencies', () => {
+    const result = validateWorkResponse({
+      ...baseResponse,
+      outputs: {
+        reviewGate: {
+          ...validReviewGate,
+          artifacts: [
+            {
+              ...validReviewGate.artifacts[0],
+              dependsOn: ['contracts'],
+            },
+            validReviewGate.artifacts[1],
+          ],
+        },
+      },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('outputs.reviewGate.artifacts[0].dependsOn must not reference itself');
+  });
+
+  it('rejects reviewGate dependency cycles', () => {
+    const result = validateWorkResponse({
+      ...baseResponse,
+      outputs: {
+        reviewGate: {
+          ...validReviewGate,
+          artifacts: [
+            {
+              ...validReviewGate.artifacts[0],
+              dependsOn: ['runtime'],
+            },
+            validReviewGate.artifacts[1],
+          ],
+        },
+      },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('outputs.reviewGate.artifacts dependency graph has a cycle');
   });
 
   it('accepts a valid spawn_experiments response with dagMutation', () => {
@@ -242,4 +354,5 @@ describe('validateWorkResponse', () => {
       expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
     });
   });
+
 });

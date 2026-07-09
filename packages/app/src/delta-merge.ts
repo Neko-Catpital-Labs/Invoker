@@ -88,36 +88,51 @@ export class TaskSnapshotCache {
 export interface ApplyDeltaResult {
   /** Task IDs that need authoritative reload from persistence. */
   quarantined: string[];
+  /** True when the original delta is current and safe to forward to the renderer. */
+  accepted: boolean;
 }
 
 /**
  * Apply a single TaskDelta to the snapshot cache.
  *
  * Task-state-version-aware semantics:
- * - `created`: unconditionally stores the task snapshot and taskStateVersion.
+ * - `created`: stores new task snapshots, but rejects stale snapshots that
+ *   would downgrade an existing cache entry.
  * - `updated` with matching `previousTaskStateVersion`: merges changes, bumps
  *   the cached taskStateVersion to `delta.taskStateVersion`.
- * - `updated` with a taskStateVersion gap or unknown task: quarantines the task
- *   and returns its id in `result.quarantined`.
- * - `removed`: deletes the cache entry.
+ * - `updated` with a forward taskStateVersion gap or unknown task: quarantines
+ *   the task and returns its id in `result.quarantined`.
+ * - `updated` at or behind the cached taskStateVersion is stale and ignored.
+ * - `removed`: deletes the cache entry unless the remove is stale.
  * - Deltas targeting a quarantined task are silently ignored.
  *
- * @returns IDs of tasks that were quarantined and need authoritative reload.
+ * @returns IDs of tasks that were quarantined and whether the original delta was accepted.
  */
 export function applyDelta(
   delta: TaskDelta,
   cache: TaskSnapshotCache,
 ): ApplyDeltaResult {
-  const result: ApplyDeltaResult = { quarantined: [] };
+  const result: ApplyDeltaResult = { quarantined: [], accepted: false };
 
   if (delta.type === 'created') {
+    const entry = cache.getEntry(delta.task.id);
+    const nextVersion = delta.task.taskStateVersion ?? 1;
+    if (entry && nextVersion < entry.taskStateVersion) {
+      return result;
+    }
+
     cache.set(delta.task.id, JSON.stringify(delta.task));
-    return result;
+    return { quarantined: [], accepted: true };
   }
 
   if (delta.type === 'removed') {
+    const entry = cache.getEntry(delta.taskId);
+    if (entry && delta.previousTaskStateVersion < entry.taskStateVersion) {
+      return result;
+    }
+
     cache.delete(delta.taskId);
-    return result;
+    return { quarantined: [], accepted: true };
   }
 
   // delta.type === 'updated'
@@ -128,13 +143,22 @@ export function applyDelta(
     return result;
   }
 
-  // Unknown task or taskStateVersion gap → quarantine.
-  if (!entry || entry.taskStateVersion !== delta.previousTaskStateVersion) {
-    // Mark as quarantined.  If the entry exists, keep its snapshot but
-    // flag it; if it doesn't, create a placeholder entry.
-    if (entry) {
-      entry.quarantined = true;
-    }
+  // Unknown task → quarantine so persistence can tell the renderer to create
+  // or remove the task authoritatively.
+  if (!entry) {
+    result.quarantined.push(delta.taskId);
+    return result;
+  }
+
+  // Stale/backward delta → drop without quarantining or mutating cache.
+  if (delta.taskStateVersion <= entry.taskStateVersion) {
+    return result;
+  }
+
+  // Forward gap → quarantine. Keep the cached snapshot but block later deltas
+  // until recovery replaces or removes it.
+  if (entry.taskStateVersion !== delta.previousTaskStateVersion) {
+    entry.quarantined = true;
     result.quarantined.push(delta.taskId);
     return result;
   }
@@ -154,7 +178,7 @@ export function applyDelta(
   entry.snapshot = snapshot;
   entry.taskStateVersion = delta.taskStateVersion;
 
-  return result;
+  return { quarantined: [], accepted: true };
 }
 
 /**
@@ -162,6 +186,11 @@ export function applyDelta(
  * with the authoritative snapshot from persistence.
  *
  * If `task` is undefined (task no longer exists), the cache entry is removed.
+ *
+ * NOTE: this primitive is intentionally low-level — it does NOT notify the
+ * renderer. Production callers should go through `recoverQuarantinedTask`
+ * below, which enforces the "no implicit message drops" rule by always
+ * returning a renderer delta whenever it mutates the owner cache.
  */
 export function resolveQuarantine(
   cache: TaskSnapshotCache,
@@ -173,4 +202,76 @@ export function resolveQuarantine(
     return;
   }
   cache.set(taskId, JSON.stringify(task));
+}
+
+// ── Authoritative recovery (no implicit message drops) ──────
+
+/**
+ * Loaders the recovery loop consults to find an authoritative snapshot
+ * for a quarantined task id.
+ *
+ * - `loadTask`: persistence by id. Returns `undefined` for ids that have
+ *   never been persisted (notably synthetic merge nodes).
+ * - `getMergeNode`: orchestrator in-memory lookup by workflowId. Authoritative
+ *   source for synthetic `__merge__${workflowId}` ids, which are not stored
+ *   in persistence but are tracked in `Orchestrator.stateMachine`.
+ */
+export interface RecoveryLoaders {
+  loadTask: (taskId: string) => TaskState | undefined;
+  getMergeNode: (workflowId: string) => TaskState | undefined;
+}
+
+export interface RecoveryResult {
+  /**
+   * Renderer-bound delta the caller MUST forward to keep the renderer in
+   * sync with the owner cache. `undefined` only when no cache mutation
+   * happened (currently never — every branch either restores from an
+   * authoritative source or emits `removed`).
+   */
+  rendererDelta?: TaskDelta;
+}
+
+const SYNTHETIC_MERGE_PREFIX = '__merge__';
+
+/**
+ * Single source of truth for the main-process quarantine-recovery loop.
+ *
+ * Contract — no implicit message drops:
+ * - If persistence has the task → restore from persistence, emit `created`.
+ * - Else if it's a synthetic merge id and the orchestrator has it in memory
+ *   → restore from orchestrator, emit `created`.
+ * - Else (truly absent) → delete the cache entry, emit `removed` so the
+ *   renderer drops its stale copy too.
+ *
+ * This replaces the legacy `if (authoritative) { sendTaskDeltaToRenderer(...) }`
+ * pattern that silently dropped the recovery message whenever
+ * `loadTask` returned `undefined`. For synthetic merge nodes that path
+ * never produced a recovery delta, leaving the renderer's selected
+ * mini-DAG blank after every `[gap-detect]` event.
+ */
+export function recoverQuarantinedTask(
+  cache: TaskSnapshotCache,
+  taskId: string,
+  loaders: RecoveryLoaders,
+): RecoveryResult {
+  const persisted = loaders.loadTask(taskId);
+  if (persisted) {
+    resolveQuarantine(cache, taskId, persisted);
+    return { rendererDelta: { type: 'created', task: persisted } };
+  }
+
+  if (taskId.startsWith(SYNTHETIC_MERGE_PREFIX)) {
+    const workflowId = taskId.slice(SYNTHETIC_MERGE_PREFIX.length);
+    const synthetic = loaders.getMergeNode(workflowId);
+    if (synthetic) {
+      resolveQuarantine(cache, taskId, synthetic);
+      return { rendererDelta: { type: 'created', task: synthetic } };
+    }
+  }
+
+  const previousTaskStateVersion = cache.getEntry(taskId)?.taskStateVersion ?? 0;
+  resolveQuarantine(cache, taskId, undefined);
+  return {
+    rendererDelta: { type: 'removed', taskId, previousTaskStateVersion },
+  };
 }

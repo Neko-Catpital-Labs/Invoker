@@ -31,13 +31,13 @@ fixtures/
 Positive fixtures demonstrate valid plan patterns:
 
 - **01-minimal-verification.yaml** - Verification-only plan with `onFinish: none`
-- **02-feature-implementation.yaml** - Standard implement → test → verify pattern
+- **02-feature-implementation.yaml** - Standard implement → focused proof → verify pattern
 - **03-multi-step-refactor-worktrees.yaml** - Multi-step refactor using worktrees
 - **04-large-refactor-pull-request.yaml** - Complex plan with diamond dependencies and `onFinish: pull_request`
-- **05-ui-change-with-visual-proof.yaml** - UI workflow that pairs visual proof with a final full-suite regression gate
-- **06-invoker-dogfood-mergify-stack.yaml** - Invoker-on-Invoker PR publication example with a final full-suite regression gate
+- **05-ui-change-with-visual-proof.yaml** - UI workflow that pairs visual proof with focused verification
+- **06-invoker-dogfood-mergify-stack.yaml** - Invoker-on-Invoker PR publication example with focused skill verification
 - **07-prompt-edit-layered-split-with-dormant.yaml** - Dependency-first layer split for prompt-edit bridge work, including a dormant activation slice
-- Implementation fixtures with `onFinish != none` end with a final `pnpm run test:all` task
+- Implementation fixtures use focused verification by default. Full-suite gates are optional and risk-based, not a validator requirement.
 
 All positive fixtures are extracted from `references/examples.md` sections 1-4.
 
@@ -47,15 +47,18 @@ Negative fixtures demonstrate anti-patterns and validation errors:
 
 ### Anti-Patterns (from examples.md Section 5)
 
-- **anti-pattern-a-npx-vitest.yaml** - Using `npx vitest run` instead of `pnpm test` (banned_pattern)
-- **anti-pattern-b-tests-from-root.yaml** - Running tests from repo root instead of cd-ing into package
+- **anti-pattern-a-npx-vitest.yaml** - Using `npx vitest run` instead of a repo-supported script or explicit package-local command (banned_pattern)
+- **anti-pattern-b-tests-from-root.yaml** - Running package-scoped tests from repo root instead of the package directory
 - **anti-pattern-c-both-command-and-prompt.yaml** - Task with both command and prompt (command_prompt_exclusive)
 - **anti-pattern-d-missing-dependencies.yaml** - Task missing dependencies field (missing_required_field)
 - **anti-pattern-e-no-verification.yaml** - Implementation without verification (policy violation)
 - **anti-pattern-f-dangerous-commands.yaml** - Dangerous commands (rm -rf, force push, etc.)
 - **anti-pattern-g-monolithic-prompt-edit-bridge.yaml** - Monolithic `wf-1777929074509-8`-shaped workflow missing required layer/state decomposition metadata (**fails `skill-doctor` lint, not YAML schema**)
 - **anti-pattern-h-layer-order-violation.yaml** - Lower architectural layer depends on a higher layer without `Layer exception: allowed` (**fails `skill-doctor` lint, not YAML schema**)
-- **anti-pattern-i-final-regression-not-test-all.yaml** - Implementation workflow missing the terminal `pnpm run test:all` regression gate (**fails `skill-doctor` lint, not YAML schema**)
+- **anti-pattern-j-zero-context-missing-metadata.yaml** - Prompt task omits strict zero-context handoff metadata (**fails `skill-doctor` lint, not YAML schema**)
+- **anti-pattern-k-missing-review-compression.yaml** - Implementation task omits review-compression metadata (**fails `skill-doctor` lint, not YAML schema**)
+- **anti-pattern-n-broad-autofix-policy-review-unit.yaml** - #1574-shaped auto-fix policy task combines scan, validation, duplicate suppression, and submit work (**fails `skill-doctor` review-unit lint**)
+- **anti-pattern-o-all-in-one-autofix-review-unit.yaml** - Original all-in-one auto-fix task combines ownership, policy, wakeups, and CLI activation (**fails `skill-doctor` review-unit lint**)
 
 ### Edge Cases (specific validation errors)
 
@@ -67,7 +70,7 @@ Negative fixtures demonstrate anti-patterns and validation errors:
 - **edge-neither-command-nor-prompt.yaml** - Task with neither command nor prompt
 - **edge-invalid-merge-mode.yaml** - Invalid `mergeMode` enum value
 - **edge-invalid-on-finish.yaml** - Invalid `onFinish` enum value
-- **edge-invalid-runner-kind.yaml** - Invalid `runnerKind` enum value
+- **edge-invalid-runner-kind.yaml** - Obsolete `runnerKind` routing field
 - **edge-invalid-dependency-reference.yaml** - Dependency on non-existent task
 - **edge-missing-description-for-pr.yaml** - Missing description when `onFinish: pull_request`
 - **edge-cyclic-dependency.yaml** - Cyclic dependency (may require cycle detection)
@@ -80,6 +83,7 @@ Negative fixtures expect these error types from the validator:
 - `missing_required_field` - Required field is missing
 - `empty_required_field` - Required array/list is empty
 - `invalid_enum_value` - Enum field has invalid value
+- `unsupported_field` - Field is obsolete or not accepted by the current Invoker CLI
 - `command_prompt_exclusive` - Task has both command and prompt
 - `missing_command_or_prompt` - Task has neither command nor prompt
 - `banned_pattern` - Command contains banned pattern (e.g., `npx vitest run`)

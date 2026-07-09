@@ -14,11 +14,17 @@ import {
  * Terminal launcher adapter - launches external OS terminal for a task.
  * Platform-specific implementation (macOS Terminal.app / Linux x-terminal-emulator).
  */
+export type ResumeCommandResolver = (
+  agentName: string,
+  sessionId: string,
+) => { command: string; args: string[] };
+
 export class TerminalLauncherAdapter implements TerminalLauncher {
   constructor(
     private options: {
       platform?: NodeJS.Platform;
       onTerminalClose?: (taskId: string) => void;
+      resumeCommandResolver?: ResumeCommandResolver;
     } = {},
   ) {}
 
@@ -38,8 +44,12 @@ export class TerminalLauncherAdapter implements TerminalLauncher {
 
     // Build command spec for agent resume if session available
     if (sessionId && agentName) {
-      spec.command = agentName;
-      spec.args = ['--resume', sessionId];
+      const resume = this.options.resumeCommandResolver?.(agentName, sessionId) ?? {
+        command: agentName,
+        args: ['--resume', sessionId],
+      };
+      spec.command = resume.command;
+      spec.args = resume.args;
     }
 
     const onClose = () => {

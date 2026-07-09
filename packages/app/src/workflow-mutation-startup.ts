@@ -2,9 +2,12 @@ import type { Logger } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 
+type RecoveryPersistence = Pick<SQLiteAdapter, 'requeueExpiredWorkflowMutationLeases'>
+  & Partial<Pick<SQLiteAdapter, 'requeueOrphanedWorkflowMutationIntents'>>;
+
 type RecoveryDeps = {
   ownerMode: boolean;
-  persistence: Pick<SQLiteAdapter, 'requeueExpiredWorkflowMutationLeases'>;
+  persistence: RecoveryPersistence;
   workflowMutationCoordinator?: Pick<PersistedWorkflowMutationCoordinator, 'resumePending'>;
   logger: Logger;
   maybeDelayResume?: () => Promise<void>;
@@ -22,8 +25,13 @@ export async function recoverWorkflowMutationsOnStartup({
   }
 
   try {
-    persistence.requeueExpiredWorkflowMutationLeases();
-    logger.info('requeued expired workflow mutation leases on startup', { module: 'init' });
+    const expired = persistence.requeueExpiredWorkflowMutationLeases();
+    const orphaned = persistence.requeueOrphanedWorkflowMutationIntents?.() ?? 0;
+    logger.info('requeued expired workflow mutation leases on startup', {
+      module: 'init',
+      expired,
+      orphaned,
+    });
   } catch (err) {
     logger.error(
       `requeueExpiredWorkflowMutationLeases failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,

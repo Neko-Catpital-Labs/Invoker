@@ -1,8 +1,18 @@
+/**
+ * Post-mutation scheduler refill helpers.
+ *
+ * The durable launch outbox is now the only task launch path. These
+ * helpers still call `orchestrator.startExecution()` so ready tasks are
+ * claimed and written to `task_launch_dispatch`; the LaunchDispatcher
+ * poll loop owns the actual `TaskRunner.executeTask(...)` handoff.
+ */
+
 import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { createExecutionBench } from '@invoker/execution-engine';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
+
 
 type GlobalTopupParams = {
   orchestrator: Orchestrator;
@@ -64,60 +74,37 @@ function matchesScope(
 }
 
 function dispatchTasks({
-  taskExecutor,
   logger,
   context,
   runnable,
-  mutationTiming,
   bench,
-  spanName,
   beforeMark,
   afterMark,
-  dispatchMode,
 }: {
-  taskExecutor: TaskRunner;
   logger?: Logger;
   context: string;
   runnable: TaskState[];
-  mutationTiming?: WorkflowMutationTiming;
   bench: (phase: string, metadata?: Record<string, unknown>) => void;
-  spanName: string;
   beforeMark: string;
   afterMark: string;
-  dispatchMode: 'await' | 'fire-and-forget';
 }): Promise<void> {
   bench(beforeMark);
-  const run = () => taskExecutor.executeTasks(runnable);
-  if (dispatchMode === 'await') {
-    return mutationTiming
-      ? mutationTiming.span(spanName, { context, runnableCount: runnable.length }, run)
-        .then(() => bench(afterMark))
-      : Promise.resolve().then(run).then(() => bench(afterMark));
-  }
-
-  // TODO: replace app-level workflow mutation leases with atomic DB state transitions plus an outbox for launch/cancel side effects.
-  const dispatchPromise = mutationTiming
-    ? mutationTiming.span(spanName, { context, runnableCount: runnable.length }, run)
-    : Promise.resolve().then(run);
-  void dispatchPromise
-    .then(() => bench(afterMark))
-    .catch((err) => {
-      const message = err instanceof Error ? err.stack ?? err.message : String(err);
-      logger?.error(`[global-topup] ${context}: asynchronous task dispatch failed: ${message}`);
-  });
-  bench(`${afterMark}.accepted`);
+  // The durable launch outbox owns dispatch. The orchestrator has
+  // already enqueued each runnable task into task_launch_dispatch.
+  // Calling taskExecutor.executeTasks(runnable) here would race the
+  // dispatcher.
+  logger?.debug?.(
+    `[global-topup] ${context}: launch outbox owns launch (skipping in-process executeTasks)`,
+  );
+  bench(`${afterMark}.skippedForOutbox`, { runnableCount: runnable.length });
   return Promise.resolve();
 }
 
 function executeRunnableTasks({
-  taskExecutor,
   logger,
   context,
   runnable,
   dispatchKind,
-  mutationTiming,
-  spanName,
-  dispatchMode,
 }: {
   taskExecutor: TaskRunner;
   logger?: Logger;
@@ -133,16 +120,12 @@ function executeRunnableTasks({
     ? 'dispatchStartedTasksWithGlobalTopup.scopedExecuteTasks'
     : 'dispatchStartedTasksWithGlobalTopup.prestartedTopupExecuteTasks';
   return dispatchTasks({
-    taskExecutor,
     logger,
     context,
     runnable,
-    mutationTiming,
     bench,
-    spanName,
     beforeMark: `${phasePrefix}.before`,
     afterMark: `${phasePrefix}.after`,
-    dispatchMode,
   });
 }
 
@@ -202,16 +185,12 @@ export async function executeGlobalTopup({
     `[global-topup] ${context}: dispatching ${runnable.length} additional task(s): [${runnable.map((task) => task.id).join(', ')}]`,
   );
   await dispatchTasks({
-    taskExecutor,
     logger,
     context,
     runnable,
-    mutationTiming,
     bench,
-    spanName: 'executeGlobalTopup.taskExecutor.executeTasks',
     beforeMark: 'executeGlobalTopup.taskExecutor.executeTasks.before',
     afterMark: 'executeGlobalTopup.taskExecutor.executeTasks.after',
-    dispatchMode,
   });
   return runnable;
 }

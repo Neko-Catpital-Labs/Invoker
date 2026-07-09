@@ -5,7 +5,7 @@
  * window.invoker.replaceTask() to splice the replacement into the graph.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { TaskState, TaskReplacementDef } from '../types.js';
 
 interface ReplaceTaskModalProps {
@@ -54,6 +54,17 @@ export function ReplaceTaskModal({ task, onSubmit, onClose }: ReplaceTaskModalPr
     `- id: ${task.id}-fix\n  description: Fix for ${task.id}\n  command: echo "fix"`,
   );
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleGlobalKeyDown);
+    return () => document.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [onClose]);
 
   const handleSubmit = () => {
     setError(null);

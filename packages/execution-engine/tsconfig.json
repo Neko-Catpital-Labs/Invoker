@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "composite": false,
     "outDir": "dist",
     "rootDir": "src"
   },
@@ -16,6 +17,9 @@
     },
     {
       "path": "../data-store"
+    },
+    {
+      "path": "../transport"
     }
   ]
 }

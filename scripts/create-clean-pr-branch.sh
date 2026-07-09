@@ -84,9 +84,12 @@ if [[ $# -gt 0 ]]; then
 fi
 
 echo ""
+echo ""
 echo "Branch ready: ${BRANCH_NAME}"
 echo "Next:"
 echo "  git push -u ${PUBLISH_REMOTE} ${BRANCH_NAME}"
+echo "  # If this branch is part of a Mergify stack, restore its target before stack push:"
+echo "  git branch --set-upstream-to=${BASE_REMOTE}/${BASE_REF} ${BRANCH_NAME}"
 echo "  cp scripts/pr-body-template.md /tmp/my-pr.md"
 echo "  \$EDITOR /tmp/my-pr.md"
 echo "  node scripts/validate-pr-body.mjs --body-file /tmp/my-pr.md"

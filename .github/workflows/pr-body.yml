@@ -1,0 +1,93 @@
+name: PR Body
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.head_ref) || format('pr-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  NODE_VERSION: '26'
+  PR_BODY_ENFORCE_ALL: ${{ vars.PR_BODY_ENFORCE_ALL || 'false' }}
+  PR_BODY_ENFORCED_AUTHORS: ${{ vars.PR_BODY_ENFORCED_AUTHORS || 'EdbertChan' }}
+
+jobs:
+  validate:
+    name: PR Body
+    runs-on:
+      labels: Github_Runner
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout trusted base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Decide selective rollout
+        id: rollout
+        env:
+          PR_BODY_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: node scripts/pr-body-rollout.mjs
+
+      - name: Skip unenforced author
+        if: steps.rollout.outputs.enabled != 'true'
+        run: echo "PR body validation is not enforced for ${{ github.event.pull_request.user.login }} yet."
+
+      - name: Install pnpm
+        if: steps.rollout.outputs.enabled == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        if: steps.rollout.outputs.enabled == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install validator dependencies
+        if: steps.rollout.outputs.enabled == 'true'
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Fetch live PR body
+        if: steps.rollout.outputs.enabled == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number });
+            fs.writeFileSync('pr-body.md', pull.body || '', 'utf8');
+
+      - name: Fetch PR diff metadata
+        if: steps.rollout.outputs.enabled == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git fetch --no-tags --depth=1 origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+          fetched_head_sha="$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/head^{commit}")"
+          if [ "$fetched_head_sha" != "$HEAD_SHA" ]; then
+            echo "Fetched PR head ${fetched_head_sha} did not match event head ${HEAD_SHA}." >&2
+            exit 1
+          fi
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > changed-files.txt
+          git diff --find-renames --unified=200000 --diff-filter=ACMRTD "$BASE_SHA" "$HEAD_SHA" -- > pr.diff
+
+      - name: Validate PR body
+        if: steps.rollout.outputs.enabled == 'true'
+        run: node scripts/validate-pr-body.mjs --body-file pr-body.md --changed-files-file changed-files.txt --diff-file pr.diff

@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import type { ActionGraphResponse } from '@invoker/contracts';
 import { ActionGraphView } from '../components/ActionGraphView.js';
 
@@ -35,17 +35,10 @@ const graph: ActionGraphResponse = {
 };
 
 describe('ActionGraphView', () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-    window.invoker = {
-      getActionGraph: vi.fn().mockResolvedValue(graph),
-    } as any;
-  });
+  it('renders action graph nodes with duration badges', () => {
+    render(<ActionGraphView graph={graph} error={null} selectedNodeId={null} onSelectNode={() => {}} />);
 
-  it('renders action graph nodes with duration badges', async () => {
-    render(<ActionGraphView selectedNodeId={null} onSelectNode={() => {}} />);
-
-    expect(await screen.findByTestId('action-graph-view')).toBeInTheDocument();
+    expect(screen.getByTestId('action-graph-view')).toBeInTheDocument();
     expect(screen.getByText('invoker:retry-workflow')).toBeInTheDocument();
     expect(screen.getByText('queued 14m')).toBeInTheDocument();
     expect(screen.getByText('heartbeat 8s ago')).toBeInTheDocument();
@@ -55,9 +48,9 @@ describe('ActionGraphView', () => {
 
   it('selecting a node notifies the inspector owner', async () => {
     const onSelectNode = vi.fn();
-    render(<ActionGraphView selectedNodeId={null} onSelectNode={onSelectNode} />);
+    render(<ActionGraphView graph={graph} error={null} selectedNodeId={null} onSelectNode={onSelectNode} />);
 
-    await waitFor(() => expect(screen.getByTestId('rf__node-intent:1')).toBeInTheDocument());
+    expect(screen.getByTestId('rf__node-intent:1')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('rf__node-intent:1'));
 
     expect(onSelectNode).toHaveBeenCalledWith(expect.objectContaining({ id: 'intent:1' }));

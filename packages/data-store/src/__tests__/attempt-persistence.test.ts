@@ -8,10 +8,7 @@ describe('Attempt persistence', () => {
   beforeEach(async () => {
     adapter = await SQLiteAdapter.create(':memory:');
     // Create a workflow and task so FK constraints pass
-    adapter.saveWorkflow({
-      id: 'wf-1', name: 'Test', status: 'running',
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1', name: 'Test', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), });
     const task = createTaskState('taskA', 'Task A', [], { workflowId: 'wf-1' });
     adapter.saveTask('wf-1', task);
   });
@@ -156,7 +153,7 @@ describe('Attempt persistence', () => {
     const attempt = createAttempt('taskA', { status: 'completed' });
     adapter.saveAttempt(attempt);
 
-    // Access the raw db to verify column exists (sql.js API)
+    // Access the raw db to verify column exists.
     const db = (adapter as any).db;
     db.run('UPDATE tasks SET selected_attempt_id = ? WHERE id = ?', [attempt.id, 'taskA']);
     const stmt = db.prepare('SELECT selected_attempt_id FROM tasks WHERE id = ?');

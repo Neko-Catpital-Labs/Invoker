@@ -13,6 +13,7 @@ export type TaskStatus =
   | 'fixing_with_ai'
   | 'completed'
   | 'failed'
+  | 'closed'
   | 'needs_input'
   | 'blocked'
   | 'review_ready'
@@ -40,6 +41,26 @@ export interface ExternalDependency {
   readonly taskId?: string;
   readonly requiredStatus: 'completed';
   readonly gatePolicy?: 'completed' | 'review_ready';
+}
+
+export interface ExternalDependencyChange {
+  readonly before?: ExternalDependency;
+  readonly after?: ExternalDependency;
+  readonly changedAt: string;
+  readonly changedBy?: string;
+}
+
+/**
+ * Read-only provenance for an external dependency removed by `detachWorkflow`.
+ * Lets the UI distinguish a genuinely-independent workflow from one explicitly
+ * detached from an upstream stack edge. Not used for scheduling.
+ */
+export interface DetachedExternalDependency {
+  readonly workflowId: string;
+  readonly taskId?: string;
+  readonly requiredStatus: 'completed';
+  readonly gatePolicy?: 'completed' | 'review_ready';
+  readonly detachedAt: string;
 }
 
 export interface ExternalGatePolicyUpdate {
@@ -114,7 +135,6 @@ export interface TaskExecution {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
-  readonly autoFixAttempts?: number;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -143,9 +163,9 @@ export interface TaskStateChanges {
 // ── Task Delta ──────────────────────────────────────────────
 
 export type TaskDelta =
-  | { readonly type: 'created'; readonly task: TaskState }
-  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly taskStateVersion: number; readonly previousTaskStateVersion: number }
-  | { readonly type: 'removed'; readonly taskId: string; readonly previousTaskStateVersion: number };
+  | { readonly type: 'created'; readonly task: TaskState; readonly streamSequence?: number }
+  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly taskStateVersion: number; readonly previousTaskStateVersion: number; readonly streamSequence?: number }
+  | { readonly type: 'removed'; readonly taskId: string; readonly previousTaskStateVersion: number; readonly streamSequence?: number };
 
 // ── Workflow Metadata ────────────────────────────────────────
 
@@ -161,9 +181,35 @@ export interface WorkflowMeta {
   repoUrl?: string;
   intermediateRepoUrl?: string;
   reviewProvider?: string;
+  externalDependencies?: readonly ExternalDependency[];
+  externalDependencyChanges?: readonly ExternalDependencyChange[];
+  detachedExternalDependencies?: readonly DetachedExternalDependency[];
   createdAt?: string;
   updatedAt?: string;
 }
+export interface WorkflowRollupPatch {
+  readonly workflowId: string;
+  readonly status: WorkflowStatus;
+  readonly rollup: WorkflowRollup;
+  /** True when the workflow no longer has any tasks (e.g. it was deleted); the entry must be dropped, not patched. */
+  readonly removed?: boolean;
+}
+
+
+export type TaskGraphEvent =
+  | {
+      readonly type: 'delta';
+      readonly delta: TaskDelta;
+      readonly workflowRollups: readonly WorkflowRollupPatch[];
+    }
+  | {
+      readonly type: 'snapshot';
+      readonly tasks: readonly TaskState[];
+      readonly workflows: readonly WorkflowMeta[];
+      readonly reason: string;
+      readonly streamSequence: number;
+    };
+
 
 export type WorkflowStatus =
   | 'pending'
@@ -171,6 +217,7 @@ export type WorkflowStatus =
   | 'fixing_with_ai'
   | 'completed'
   | 'failed'
+  | 'closed'
   | 'blocked'
   | 'review_ready'
   | 'awaiting_approval'
@@ -182,6 +229,7 @@ export interface WorkflowStatusCounts {
   total: number;
   completed: number;
   failed: number;
+  closed: number;
   running: number;
   pending: number;
 }
@@ -248,6 +296,7 @@ export interface PlanDefinition {
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
+  externalDependencies?: ExternalDependency[];
 }
 
 // ── Task Replacement ────────────────────────────────────────
@@ -266,10 +315,26 @@ export interface TaskReplacementDef {
 // ── IPC Bridge API ──────────────────────────────────────────
 // InvokerAPI is derived from the IPC channel registry in @invoker/contracts.
 
-export type { InvokerAPI, ClaudeMessage, AgentSessionData } from '@invoker/contracts';
+export type { ReviewGateArtifact, ReviewGateState } from '@invoker/workflow-graph';
+export type {
+  InvokerAPI,
+  ClaudeMessage,
+  AgentSessionData,
+  QueueStatus,
+  ReviewGateQueryResponse,
+  WorkerActionSummary,
+  WorkerDecisionsRequest,
+  WorkerDecisionsResponse,
+  WorkerActionStatus,
+  WorkerControlAction,
+  WorkerLifecycleStatus,
+  WorkerPolicyStatus,
+  WorkerRecoverySummary,
+  WorkerStatusEntry,
+  WorkerStatusSnapshot,
+} from '@invoker/contracts';
 
-import type { InvokerAPI } from '@invoker/contracts';
-
+import type { InvokerAPI, RuntimeStatus, TerminalOutputEvent } from '@invoker/contracts';
 // ── Augment global Window ───────────────────────────────────
 
 declare global {
@@ -279,7 +344,11 @@ declare global {
       tasks?: TaskState[];
       workflows?: WorkflowMeta[];
       initialWorkflowId?: string | null;
+      runtimeStatus?: RuntimeStatus | null;
       appStartedAtEpochMs?: number;
+      streamSequence?: number;
     };
+    __INVOKER_TEST_OPEN_TERMINAL__?: (taskId: string) => ReturnType<InvokerAPI['openTerminal']>;
+    __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: (cb: (event: TerminalOutputEvent) => void) => () => void;
   }
 }

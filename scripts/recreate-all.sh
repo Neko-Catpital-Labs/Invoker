@@ -23,6 +23,7 @@ DRY_RUN=false
 STATUS_FILTER=""
 PARALLELISM=""
 FOLLOW=false
+DEFAULT_PARALLELISM=4
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -57,14 +58,11 @@ fi
 
 TOTAL=$(echo "$WORKFLOWS" | wc -l | tr -d ' ')
 if [[ -z "$PARALLELISM" ]]; then
-  PARALLELISM="$TOTAL"
+  PARALLELISM="$DEFAULT_PARALLELISM"
 fi
 echo "Found $TOTAL workflow(s) to recreate."
 echo "Parallelism: $PARALLELISM"
 echo "Follow mode: $FOLLOW"
-if ! $FOLLOW; then
-  echo "Note: fire-and-forget dispatches all workflows immediately; --parallel is enforced with --follow."
-fi
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -136,7 +134,7 @@ elif $FOLLOW; then
   rm -f "$RESULTS_FILE"
 
 # ---------------------------------------------------------------------------
-# Fire-and-forget mode — batch dispatch
+# Fire-and-forget mode — bounded batch dispatch
 # ---------------------------------------------------------------------------
 
 else
@@ -171,9 +169,9 @@ elif $FOLLOW; then
     exit 1
   fi
 else
-  echo "Dispatched $DISPATCHED workflow(s) (fire-and-forget). Logs: $LOG_DIR"
+  echo "Queued $DISPATCHED workflow mutation intent(s) (fire-and-forget). Logs: $LOG_DIR"
   if [[ "$LAUNCH_FAILED" -ne 0 ]]; then
-    echo "$LAUNCH_FAILED workflow(s) failed to launch."
+    echo "$LAUNCH_FAILED workflow(s) were not acknowledged as queued."
     exit 1
   fi
 fi

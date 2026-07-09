@@ -98,7 +98,7 @@ describe('ContextMenu getMenuItems', () => {
       const taskWithWorkflow = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const itemsWithWorkflow = getMenuItems(taskWithWorkflow);
 
-      const workflowItemIds = ['rebase-retry', 'recreate-rebase', 'retry-workflow', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
+      const workflowItemIds = ['rebase-retry', 'rebase-recreate', 'retry-workflow', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
       workflowItemIds.forEach((id) => {
         expect(itemsWithWorkflow.find((i) => i.id === id)).toBeUndefined();
       });
@@ -121,6 +121,36 @@ describe('ContextMenu getMenuItems', () => {
       const recreateTask = items.find((item) => item.id === 'recreate-task');
       expect(recreateTask).toBeDefined();
       expect(recreateTask?.action).toBe('onRecreateTask');
+    });
+
+    it('shows Recreate Downstream for workflow-owned tasks', () => {
+      const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const recreateDownstream = items.find((item) => item.id === 'recreate-downstream');
+      expect(recreateDownstream).toBeDefined();
+      expect(recreateDownstream).toMatchObject({
+        label: 'Recreate Downstream',
+        enabled: true,
+        action: 'onRecreateDownstream',
+        variant: 'danger',
+      });
+    });
+
+    it('hides Recreate Downstream for non-workflow tasks', () => {
+      const task = makeTask({ status: 'failed' });
+      const items = getMenuItems(task);
+
+      expect(items.find((item) => item.id === 'recreate-downstream')).toBeUndefined();
+    });
+
+    it('disables Recreate Downstream while the task is running', () => {
+      const task = makeTask({ status: 'running', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const recreateDownstream = items.find((item) => item.id === 'recreate-downstream');
+      expect(recreateDownstream).toBeDefined();
+      expect(recreateDownstream?.enabled).toBe(false);
     });
   });
 
@@ -226,7 +256,7 @@ describe('ContextMenu getMenuItems', () => {
       const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const items = getMenuItems(task);
 
-      const dangerIds = ['cancel-task', 'recreate-task'];
+      const dangerIds = ['cancel-task', 'recreate-task', 'recreate-downstream', 'delete-task'];
       dangerIds.forEach((id) => {
         const item = items.find((i) => i.id === id);
         expect(item?.variant).toBe('danger');
