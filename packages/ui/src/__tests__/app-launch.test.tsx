@@ -46,8 +46,7 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
-    const runningItem = screen.queryByTestId('sidebar-running');
-    if (runningItem) expect(runningItem).toHaveTextContent('Running');
+    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
   });
   it('opens worker status from the left panel', async () => {
@@ -85,8 +84,7 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
-    const runningItem = screen.queryByTestId('sidebar-running');
-    if (runningItem) expect(runningItem).toHaveTextContent('Running');
+    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
   });
