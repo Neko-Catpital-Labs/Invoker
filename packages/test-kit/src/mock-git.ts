@@ -21,6 +21,7 @@ export class MockGit {
   private scripts: ScriptedResponse[] = [];
   private defaultBranch = 'master';
   private hasStagedChanges = false;
+  private remoteRefs = new Map<string, string>();
 
   /** Script a response for calls matching a predicate. */
   on(match: (args: string[]) => boolean, response: string | Error, once = false): this {
@@ -66,6 +67,7 @@ export class MockGit {
     this.scripts = [];
     this.calls = [];
     this.hasStagedChanges = false;
+    this.remoteRefs.clear();
     return this;
   }
 
@@ -105,34 +107,22 @@ export class MockGit {
       if (script.match(args)) {
         script.used = true;
         if (script.response instanceof Error) throw script.response;
+        this.applySuccessfulCommandSideEffects(args);
         return script.response;
       }
     }
 
     // Default responses for common commands
     if (args[0] === 'branch' && args[1] === '--show-current') return this.defaultBranch;
-    if (args[0] === 'checkout') {
-      // Reset staged changes on checkout
-      this.hasStagedChanges = false;
-      return '';
-    }
-    if (args[0] === 'merge') {
-      // Squash merge stages changes
-      if (args.includes('--squash')) {
-        this.hasStagedChanges = true;
-      }
-      return '';
-    }
+    if (args[0] === 'checkout') return this.returnSuccess(args);
+    if (args[0] === 'merge') return this.returnSuccess(args);
     if (args[0] === 'rebase') return '';
-    if (args[0] === 'commit') {
-      // Commit clears staged changes
-      this.hasStagedChanges = false;
-      return '';
-    }
+    if (args[0] === 'commit') return this.returnSuccess(args);
     if (args[0] === 'branch') return '';
     if (args[0] === 'symbolic-ref') return `refs/remotes/origin/${this.defaultBranch}`;
     if (args[0] === 'rev-parse') return 'abc123';
-    if (args[0] === 'push') return '';
+    if (args[0] === 'push') return this.returnSuccess(args);
+    if (args[0] === 'ls-remote') return this.lsRemote(args);
     // diff --cached --quiet exits non-zero when there are staged changes
     if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) {
       if (this.hasStagedChanges) {
@@ -141,5 +131,47 @@ export class MockGit {
       return '';
     }
     return '';
+  }
+
+  private returnSuccess(args: string[]): string {
+    this.applySuccessfulCommandSideEffects(args);
+    return '';
+  }
+
+  private applySuccessfulCommandSideEffects(args: string[]): void {
+    if (args[0] === 'checkout') {
+      this.hasStagedChanges = false;
+    } else if (args[0] === 'merge' && args.includes('--squash')) {
+      this.hasStagedChanges = true;
+    } else if (args[0] === 'commit') {
+      this.hasStagedChanges = false;
+    } else if (args[0] === 'push') {
+      this.recordPushedRefs(args);
+    }
+  }
+
+  private recordPushedRefs(args: string[]): void {
+    for (const spec of args.slice(1)) {
+      const separator = spec.indexOf(':');
+      if (separator <= 0) continue;
+      const source = spec.slice(0, separator);
+      const destination = spec.slice(separator + 1);
+      if (!destination.startsWith('refs/heads/')) continue;
+      this.remoteRefs.set(destination, this.shaForRef(source));
+    }
+  }
+
+  private shaForRef(ref: string): string {
+    return ref === 'HEAD' ? 'abc123' : 'abc123';
+  }
+
+  private lsRemote(args: string[]): string {
+    if (!args.includes('--heads')) return '';
+    const remote = args.find((arg, index) => index > 0 && args[index - 1] !== 'ls-remote' && !arg.startsWith('-'));
+    if (remote !== 'origin') return '';
+    const branch = args[args.length - 1];
+    const ref = `refs/heads/${branch}`;
+    const sha = this.remoteRefs.get(ref);
+    return sha ? `${sha}\t${ref}` : '';
   }
 }
