@@ -120,6 +120,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return orchestrator.getTask(String(args[0])) ?? null;
       case 'invoker:get-all-completed-tasks':
         return persistence.loadAllCompletedTasks();
+      case 'invoker:get-history-tasks':
+        return persistence.loadAllHistoryTasks();
       case 'invoker:get-review-gate':
         return reviewGate(String(args[0]));
       case 'invoker:get-claude-session':
