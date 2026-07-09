@@ -152,16 +152,16 @@ function planningStatusLabel(status: InAppPlanningSessionStatus): string {
   }
 }
 
-function planningStatusClass(status: InAppPlanningSessionStatus): string {
+function planningStatusDotClass(status: InAppPlanningSessionStatus): string {
   switch (status) {
     case 'waiting_for_answer':
-      return 'bg-amber-950/70 text-amber-100';
+      return 'bg-amber-400';
     case 'draft_ready':
-      return 'bg-emerald-950/70 text-emerald-100';
+      return 'bg-emerald-400';
     case 'submitted':
-      return 'bg-secondary text-foreground';
+      return 'bg-muted-foreground';
     case 'still_discussing':
-      return 'bg-secondary text-secondary-foreground';
+      return 'bg-border-strong';
   }
 }
 
@@ -2808,8 +2808,8 @@ export function App() {
 
 
   const renderPlanningSessionList = (): JSX.Element => (
-    <div className="overflow-y-auto p-3">
-      <div className="space-y-1">
+    <div className="overflow-y-auto py-1">
+      <div className="space-y-0.5">
         {planningSessions.map((session) => {
           const selected = session.id === activePlanningSession.id;
           return (
@@ -2817,15 +2817,16 @@ export function App() {
               key={session.id}
               type="button"
               onClick={() => setActivePlanningSessionId(session.id)}
-              className={`block w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${selected ? 'bg-accent/60 text-accent-foreground ring-1 ring-border-strong' : 'text-foreground hover:bg-accent/30'}`}
+              className={`block w-full border-l-2 px-3 py-2 text-left transition-colors ${selected ? 'border-l-foreground bg-accent/40 text-accent-foreground' : 'border-l-transparent text-foreground hover:bg-accent/20'}`}
             >
-              <div className="truncate text-body font-medium">{session.title}</div>
-              <div className="mt-0.5 truncate text-caption text-muted-foreground">{previewPlanningMessage(session)}</div>
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <span className={`rounded-full px-2 py-0.5 text-[11px] ${planningStatusClass(session.status)}`}>
+              <div className="truncate text-sm font-medium">{session.title}</div>
+              <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{previewPlanningMessage(session)}</div>
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+                  <span className={`h-1.5 w-1.5 rounded-full ${planningStatusDotClass(session.status)}`} aria-hidden="true" />
                   {planningStatusLabel(session.status)}
                 </span>
-                <span className="shrink-0 text-[11px] text-muted-foreground">{relativePlanningUpdatedAt(session.updatedAt)}</span>
+                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{relativePlanningUpdatedAt(session.updatedAt)}</span>
               </div>
             </button>
           );
@@ -2838,11 +2839,11 @@ export function App() {
 
   const renderPlanningTerminalSurface = (): JSX.Element => (
     <div className="flex-1 flex overflow-hidden">
-      <div data-testid="planning-session-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-card/45">
-        <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-4">
-          <div>
-            <h2 className="text-sm font-semibold text-foreground">Planning Terminal</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
+      <div data-testid="planning-session-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-card">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5">
+          <div className="min-w-0">
+            <h2 className="text-sm font-medium text-foreground">Planning Terminal</h2>
+            <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
               {planningSessions.length} chat{planningSessions.length === 1 ? '' : 's'}
               {planningReadyCount > 0 ? ` · ${planningReadyCount} ready` : ''}
             </p>
@@ -2852,32 +2853,30 @@ export function App() {
             size="sm"
             onClick={handleCreatePlanningSession}
           >
-            New chat
+            New
           </Button>
         </div>
         <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
       </div>
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="border-b border-border bg-card/50 px-4 py-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">{activePlanningSession.title}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">Planning chat window</p>
-              <div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${planningStatusClass(activePlanningSession.status)}`}>
-                {planningStatusLabel(activePlanningSession.status)}
-              </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2.5">
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-medium text-foreground">{activePlanningSession.title}</h2>
+            <div className="mt-1 inline-flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+              <span className={`h-1.5 w-1.5 rounded-full ${planningStatusDotClass(activePlanningSession.status)}`} aria-hidden="true" />
+              {planningStatusLabel(activePlanningSession.status)}
             </div>
-            <button
-              type="button"
-              aria-label="Return home"
-              onClick={handleDismissBrowserSurface}
-              className="rounded border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary"
-            >
-              Home
-            </button>
           </div>
+          <button
+            type="button"
+            aria-label="Return home"
+            onClick={handleDismissBrowserSurface}
+            className="rounded-sm border border-border px-2.5 py-1 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
+          >
+            Home
+          </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto bg-background p-4">
+        <div className="min-h-0 flex-1 overflow-hidden bg-background">
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}

@@ -288,7 +288,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('hello');
     await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
 
     expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('');
     expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('I can help draft that.');
@@ -320,7 +320,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('first session request');
     await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
 
     const secondInput = screen.getByTestId('invoker-terminal-input');
     expect(secondInput).not.toBeDisabled();
