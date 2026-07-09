@@ -25,6 +25,8 @@ export interface RegisterReadOnlyIpcHandlersContext {
   ) => Promise<unknown>;
   getOwnerMode?: () => boolean;
   getMessageBus?: () => Pick<MessageBus, 'request'>;
+  /** Called when owner query delegation finds no reachable mutation owner. */
+  onMutationOwnerUnavailable?: (reason: string) => void;
   recordStartupDuration: (label: string, startedAtMs: number, fields?: Record<string, unknown>) => void;
   getTaskDeltaStreamSequence: () => number;
 }
@@ -61,6 +63,7 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     resolveAgentSession,
     getOwnerMode,
     getMessageBus,
+    onMutationOwnerUnavailable,
     recordStartupDuration,
     getTaskDeltaStreamSequence,
   } = context;
@@ -83,6 +86,7 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
       if (code !== 'NO_HANDLER' && !message.includes('No request handler registered')) {
         throw err;
       }
+      onMutationOwnerUnavailable?.(message);
       logger.warn(
         `${kind} owner delegation found no owner handler; falling back to local read-only snapshot: ${message}`,
         { module: 'ipc' },
