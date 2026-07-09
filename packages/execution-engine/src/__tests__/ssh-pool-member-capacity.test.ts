@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TaskRunner, type ExecutionPoolMember } from '../task-runner.js';
+import { TaskRunner } from '../task-runner.js';
+import type { ExecutionPoolMember } from '../task-runner-pool.js';
 import { ResourceLimitError } from '../repo-pool.js';
 import { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
