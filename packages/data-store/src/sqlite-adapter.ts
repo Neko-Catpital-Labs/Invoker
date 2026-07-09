@@ -145,6 +145,19 @@ interface SQLiteAdapterOptions {
    * opener of the database file — a concurrent open is rejected with SQLITE_BUSY.
    */
   exclusiveLocking?: boolean;
+  /**
+   * Log SELECT/DML statements slower than this many milliseconds.
+   * Defaults to 25ms. Set 0 to disable.
+   */
+  slowQueryThresholdMs?: number;
+  /** Optional sink for slow-query warnings (defaults to console.warn). */
+  onSlowQuery?: (info: SlowQueryInfo) => void;
+}
+
+export interface SlowQueryInfo {
+  durationMs: number;
+  sql: string;
+  rowCount?: number;
 }
 
 export type EphemeralSQLiteAdapterOptions = Pick<
@@ -531,6 +544,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private activityLogWritesSincePrune = 0;
   private readonly exclusiveLocking: boolean;
   private readonly taskAttemptRepo: SqliteTaskAttemptRepository;
+  private readonly slowQueryThresholdMs: number;
+  private readonly onSlowQuery: ((info: SlowQueryInfo) => void) | null;
 
   /**
    * Non-null only when this adapter was opened via the corruption-recovery
@@ -555,6 +570,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.exclusiveLocking = options?.exclusiveLocking === true;
+    this.slowQueryThresholdMs = options?.slowQueryThresholdMs ?? 25;
+    this.onSlowQuery = options?.onSlowQuery
+      ?? (this.slowQueryThresholdMs > 0
+        ? (info) => {
+            console.warn(
+              `[SQLiteAdapter] slow query ${info.durationMs.toFixed(1)}ms` +
+                (info.rowCount === undefined ? '' : ` rows=${info.rowCount}`) +
+                `: ${info.sql.slice(0, 200)}`,
+            );
+          }
+        : null);
     this.corruptionRecovery = corruptionRecovery;
     this.taskAttemptRepo = new SqliteTaskAttemptRepository(this.executor, {
       updateTask: (taskId, changes) => this.updateTask(taskId, changes),
@@ -725,11 +751,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   // ── SQLite Helpers ───────────────────────────────────────
 
+  private noteSlowQuery(startedAt: number, sql: string, rowCount?: number): void {
+    if (this.slowQueryThresholdMs <= 0 || !this.onSlowQuery) return;
+    const durationMs = performance.now() - startedAt;
+    if (durationMs < this.slowQueryThresholdMs) return;
+    this.onSlowQuery({ durationMs, sql, ...(rowCount === undefined ? {} : { rowCount }) });
+  }
+
   /** Run a single-row SELECT, returning the row as an object or undefined. */
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
+    const startedAt = performance.now();
     const stmt = this.db.prepare(sql);
     try {
-      return stmt.get(...(paramsToArgs(params) as any[])) as Record<string, unknown> | undefined;
+      const row = stmt.get(...(paramsToArgs(params) as any[])) as Record<string, unknown> | undefined;
+      this.noteSlowQuery(startedAt, sql, row === undefined ? 0 : 1);
+      return row;
     } finally {
       stmt.free();
     }
@@ -737,9 +773,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   /** Run a multi-row SELECT, returning an array of row objects. */
   private queryAll(sql: string, params: unknown[] = []): Record<string, unknown>[] {
+    const startedAt = performance.now();
     const stmt = this.db.prepare(sql);
     try {
-      return stmt.all(...(paramsToArgs(params) as any[])) as Record<string, unknown>[];
+      const rows = stmt.all(...(paramsToArgs(params) as any[])) as Record<string, unknown>[];
+      this.noteSlowQuery(startedAt, sql, rows.length);
+      return rows;
     } finally {
       stmt.free();
     }
@@ -754,7 +793,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
   /** Run an INSERT/UPDATE/DELETE. File-backed durability is handled by SQLite/WAL. */
   private execRun(sql: string, params: unknown[] = []): void {
     this.ensureWritable();
+    const startedAt = performance.now();
     this.db.run(sql, params as any[]);
+    this.noteSlowQuery(startedAt, sql);
     this.dirty = true;
   }
 

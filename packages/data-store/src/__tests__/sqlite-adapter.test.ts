@@ -5373,6 +5373,42 @@ describe('SQLiteAdapter', () => {
       }
     });
 
+    it('reports queries slower than the configured threshold', async () => {
+      const onSlowQuery = vi.fn();
+      const timed = await SQLiteAdapter.create(':memory:', {
+        slowQueryThresholdMs: 0.0001,
+        onSlowQuery,
+      });
+      try {
+        onSlowQuery.mockClear();
+        timed.listWorkflows();
+        expect(onSlowQuery).toHaveBeenCalled();
+        expect(onSlowQuery.mock.calls.some(([info]) => /SELECT/i.test(String(info.sql)))).toBe(true);
+        expect(onSlowQuery.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({
+            durationMs: expect.any(Number),
+            sql: expect.any(String),
+          }),
+        );
+      } finally {
+        timed.close();
+      }
+    });
+
+    it('does not report slow queries when the threshold is disabled', async () => {
+      const onSlowQuery = vi.fn();
+      const timed = await SQLiteAdapter.create(':memory:', {
+        slowQueryThresholdMs: 0,
+        onSlowQuery,
+      });
+      try {
+        timed.listWorkflows();
+        expect(onSlowQuery).not.toHaveBeenCalled();
+      } finally {
+        timed.close();
+      }
+    });
+
     it('frees the prepared statement when stmt.all throws with params inside queryAll', () => {
       let captured: any;
       const handle = instrumentPrepare(adapter, (stmt) => {
