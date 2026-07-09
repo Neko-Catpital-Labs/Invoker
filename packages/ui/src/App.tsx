@@ -725,6 +725,13 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const unsubscribe = window.invoker?.onRuntimeStatus?.((status) => {
+      setRuntimeStatus(status);
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
 
     const shouldEmit = (key: string, minIntervalMs: number): boolean => {
@@ -3056,7 +3063,17 @@ export function App() {
           </div>
         </div>
       )}
-      {runtimeStatus?.readOnly && (
+      {runtimeStatus?.mode === 'connection-lost' ? (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="connection-lost-banner"
+          className="border-b border-border-strong bg-secondary px-4 py-2 text-sm text-foreground"
+        >
+          <span className="font-semibold text-foreground">Connection lost.</span>{' '}
+          This window lost contact with the write owner and cannot make changes until the connection is restored.
+        </div>
+      ) : runtimeStatus?.readOnly ? (
         <div
           role="status"
           aria-live="polite"
@@ -3066,7 +3083,7 @@ export function App() {
           <span className="font-semibold text-foreground">Read-only mode.</span>{' '}
           This window can browse workflows, but it cannot make changes until the write owner is available.
         </div>
-      )}
+      ) : null}
       {mutationFailure && (
         <div
           role="alert"
