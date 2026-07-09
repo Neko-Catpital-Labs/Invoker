@@ -88,6 +88,7 @@ import type {
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
   Logger,
+  PlanningTerminalOpenRequest,
   WorkflowMeta,
   WorkflowMutationAcceptedResult,
   WorkResponse,
@@ -1996,6 +1997,7 @@ function createEmbeddedTerminalBackendFromConfig(
   });
   const terminalRowToDescriptor = (row: ReturnType<SQLiteAdapter['listTerminalSessions']>[number]): TerminalSessionDescriptor => ({
     sessionId: row.sessionId,
+    scope: 'task',
     taskId: row.taskId,
     status: row.status,
     exitCode: row.exitCode,
@@ -2043,6 +2045,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
   const registerTerminalSessionPersistence = (): void => {
     embeddedTerminalManager.on('session-updated', (record) => {
+      if (record.scope === 'planning') return;
       persistence.upsertTerminalSession({
         sessionId: record.sessionId,
         taskId: record.taskId,
@@ -5304,7 +5307,8 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     ipcMain.handle('invoker:terminal-list', async () => {
-      const live = new Map(embeddedTerminalManager.list().map((session) => [session.sessionId, session]));
+      const liveTaskSessions = embeddedTerminalManager.list().filter((session) => session.scope !== 'planning');
+      const live = new Map(liveTaskSessions.map((session) => [session.sessionId, session]));
       const merged = persistence.listTerminalSessions().map((row) => live.get(row.sessionId) ?? terminalRowToDescriptor(row));
       const persistedIds = new Set(merged.map((session) => session.sessionId));
       for (const session of live.values()) {
@@ -5316,17 +5320,81 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     ipcMain.handle('invoker:terminal-write', async (_event, sessionId: string, data: string) => {
+      const session = embeddedTerminalManager.get(sessionId);
+      if (session?.scope === 'planning') {
+        return { ok: false, reason: `Session "${sessionId}" is not a task terminal.` };
+      }
       return embeddedTerminalManager.write(sessionId, data);
     });
 
     ipcMain.handle('invoker:terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
+      const session = embeddedTerminalManager.get(sessionId);
+      if (session?.scope === 'planning') {
+        return { ok: false, reason: `Session "${sessionId}" is not a task terminal.` };
+      }
       return embeddedTerminalManager.resize(sessionId, cols, rows);
     });
 
     ipcMain.handle('invoker:terminal-close', async (_event, sessionId: string) => {
+      const session = embeddedTerminalManager.get(sessionId);
+      if (session?.scope === 'planning') {
+        return { ok: false, reason: `Session "${sessionId}" is not a task terminal.` };
+      }
       const result = embeddedTerminalManager.close(sessionId);
       persistence.deleteTerminalSession(sessionId);
       return result.ok ? result : { ok: true };
+    });
+
+    ipcMain.handle('invoker:planning-terminal-open', async (_event, request: PlanningTerminalOpenRequest) => {
+      const planningSessionId = typeof request?.planningSessionId === 'string'
+        ? request.planningSessionId.trim()
+        : '';
+      if (!planningSessionId) {
+        return { opened: false, reason: 'Missing planning session id.' };
+      }
+      logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
+      try {
+        const session = embeddedTerminalManager.openOrReusePlanningShell({
+          planningSessionId,
+          cwd: repoRoot,
+        });
+        return { opened: true, session };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn(`planning terminal spawn failed for session="${planningSessionId}": ${reason}`, { module: 'planning-terminal' });
+        return { opened: false, reason: `Failed to start planning terminal session: ${reason}` };
+      }
+    });
+
+    ipcMain.handle('invoker:planning-terminal-list', async () => {
+      return embeddedTerminalManager.list().filter((session) => session.scope === 'planning');
+    });
+
+    ipcMain.handle('invoker:planning-terminal-write', async (_event, sessionId: string, data: string) => {
+      const session = embeddedTerminalManager.get(sessionId);
+      if (!session) return { ok: false, reason: `Unknown session "${sessionId}".` };
+      if (session.scope !== 'planning') {
+        return { ok: false, reason: `Session "${sessionId}" is not a planning terminal.` };
+      }
+      return embeddedTerminalManager.write(sessionId, data);
+    });
+
+    ipcMain.handle('invoker:planning-terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
+      const session = embeddedTerminalManager.get(sessionId);
+      if (!session) return { ok: false, reason: `Unknown session "${sessionId}".` };
+      if (session.scope !== 'planning') {
+        return { ok: false, reason: `Session "${sessionId}" is not a planning terminal.` };
+      }
+      return embeddedTerminalManager.resize(sessionId, cols, rows);
+    });
+
+    ipcMain.handle('invoker:planning-terminal-close', async (_event, sessionId: string) => {
+      const session = embeddedTerminalManager.get(sessionId);
+      if (!session) return { ok: false, reason: `Unknown session "${sessionId}".` };
+      if (session.scope !== 'planning') {
+        return { ok: false, reason: `Session "${sessionId}" is not a planning terminal.` };
+      }
+      return embeddedTerminalManager.close(sessionId);
     });
 
     Menu.setApplicationMenu(
