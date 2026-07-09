@@ -237,6 +237,32 @@ describe('createWorkerRuntimeController', () => {
     expect(worker?.recentActions).toHaveLength(5);
   });
 
+  it('caches worker status snapshots briefly so UI polls do not re-query SQLite every tick', () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registry.register({
+      kind: 'history',
+      note: 'History worker.',
+      factory: () => runtime('history'),
+    });
+    const listWorkerActions = vi.fn(() => []);
+
+    const controller = createWorkerRuntimeController({
+      registry,
+      deps: deps(),
+      autoStartKinds: [],
+      persistence: { ...persistence(), listWorkerActions } as never,
+      canControl: () => true,
+    });
+
+    const first = controller.snapshot();
+    const second = controller.snapshot();
+    expect(second).toBe(first);
+    expect(listWorkerActions).toHaveBeenCalledTimes(1);
+
+    controller.start('history');
+    expect(controller.snapshot()).not.toBe(first);
+  });
+
   it('returns worker action history with paging metadata', () => {
     const listWorkerActions = vi.fn(() => Array.from({ length: 3 }, (_value, index) => ({
       id: `wa-${index}`,

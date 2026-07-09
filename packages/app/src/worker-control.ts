@@ -48,7 +48,10 @@ export interface WorkerRuntimeController {
   snapshot(): WorkerStatusSnapshot;
 }
 
-type WorkerStatusPersistence = Pick<SQLiteAdapter, 'listWorkerActions' | 'listWorkflows' | 'loadTasks' | 'getEvents'>;
+type WorkerStatusPersistence = Pick<
+  SQLiteAdapter,
+  'listWorkerActions' | 'listWorkflows' | 'loadTasks' | 'getEvents' | 'getEventsByTypes' | 'countEventsByTypes'
+>;
 
 const DEFAULT_WORKER_ACTION_HISTORY_LIMIT = 20;
 const MAX_WORKER_ACTION_HISTORY_LIMIT = 100;
@@ -164,6 +167,9 @@ const BUILT_IN_WORKER_KINDS = new Set<string>([
   PR_CONFLICT_REBASE_WORKER_KIND,
 ]);
 
+/** UI polls worker status every 2s; TTL must exceed that so polls hit cache. */
+const WORKER_STATUS_SNAPSHOT_TTL_MS = 3000;
+
 export function createWorkerRuntimeController(options: {
   registry: WorkerRegistry<WorkerRuntimeDependencies>;
   deps: WorkerRuntimeDependencies;
@@ -175,6 +181,17 @@ export function createWorkerRuntimeController(options: {
 }): WorkerRuntimeController {
   const handles = new Map<string, RuntimeHandle>();
   const stoppedAtByKind = new Map<string, string>();
+  let cachedSnapshot: WorkerStatusSnapshot | null = null;
+  let cachedSnapshotAt = 0;
+  let cachedRecovery: WorkerRecoverySummary | null = null;
+  let cachedRecoveryAt = 0;
+
+  const invalidateSnapshotCache = (): void => {
+    cachedSnapshot = null;
+    cachedSnapshotAt = 0;
+    cachedRecovery = null;
+    cachedRecoveryAt = 0;
+  };
 
   const requireDefinition = (kind: string) => {
     const definition = options.registry.get(kind);
@@ -184,6 +201,15 @@ export function createWorkerRuntimeController(options: {
     return definition;
   };
 
+  const recoverySummary = (): WorkerRecoverySummary => {
+    const now = Date.now();
+    if (cachedRecovery && now - cachedRecoveryAt < WORKER_STATUS_SNAPSHOT_TTL_MS) {
+      return cachedRecovery;
+    }
+    cachedRecovery = toWorkerRecoverySummary(options.persistence);
+    cachedRecoveryAt = now;
+    return cachedRecovery;
+  };
 
   const rowForKind = (kind: string): WorkerStatusEntry => {
     const definition = options.registry.get(kind);
@@ -199,6 +225,7 @@ export function createWorkerRuntimeController(options: {
       policy: policyForKind(kind),
       persistence: options.persistence,
       canControl: options.canControl(),
+      recovery: definition.kind === AUTO_FIX_WORKER_KIND ? recoverySummary() : undefined,
     });
   };
 
@@ -207,6 +234,7 @@ export function createWorkerRuntimeController(options: {
     const stoppedAt = new Date().toISOString();
     stoppedAtByKind.set(kind, stoppedAt);
     handles.delete(kind);
+    invalidateSnapshotCache();
   };
 
   return {
@@ -236,6 +264,7 @@ export function createWorkerRuntimeController(options: {
         startedAt: new Date().toISOString(),
       });
       stoppedAtByKind.delete(kind);
+      invalidateSnapshotCache();
       return rowForKind(kind);
     },
     async stop(kind: string): Promise<WorkerStatusEntry> {
@@ -254,10 +283,16 @@ export function createWorkerRuntimeController(options: {
     },
 
     snapshot(): WorkerStatusSnapshot {
-      return {
+      const now = Date.now();
+      if (cachedSnapshot && now - cachedSnapshotAt < WORKER_STATUS_SNAPSHOT_TTL_MS) {
+        return cachedSnapshot;
+      }
+      cachedSnapshot = {
         generatedAt: new Date().toISOString(),
         workers: options.registry.list().map((definition) => rowForKind(definition.kind)),
       };
+      cachedSnapshotAt = now;
+      return cachedSnapshot;
     },
   };
 }
@@ -266,6 +301,9 @@ export function createLocalWorkerStatusSnapshot(options: {
   persistence: WorkerStatusPersistence;
   autoStartKinds: readonly string[];
 }): WorkerStatusSnapshot {
+  const recovery = options.registry.list().some((definition) => definition.kind === AUTO_FIX_WORKER_KIND)
+    ? toWorkerRecoverySummary(options.persistence)
+    : undefined;
   return {
     generatedAt: new Date().toISOString(),
     workers: options.registry.list().map((definition) => buildWorkerStatusEntry({
@@ -275,6 +313,7 @@ export function createLocalWorkerStatusSnapshot(options: {
       policy: 'unknown',
       persistence: options.persistence,
       canControl: false,
+      recovery: definition.kind === AUTO_FIX_WORKER_KIND ? recovery : undefined,
     })),
   };
 }
@@ -289,6 +328,7 @@ function buildWorkerStatusEntry(args: {
   policy: WorkerPolicyStatus;
   persistence: WorkerStatusPersistence;
   canControl: boolean;
+  recovery?: WorkerRecoverySummary;
 }): WorkerStatusEntry {
   const lifecycle = args.handle
     ? args.handle.runtime.isRunning() ? 'running' : 'exited'
@@ -308,7 +348,7 @@ function buildWorkerStatusEntry(args: {
     ...(args.handle?.startedAt ? { startedAt: args.handle.startedAt } : {}),
     ...(args.stoppedAt ? { stoppedAt: args.stoppedAt } : {}),
     recentActions: args.persistence.listWorkerActions({ workerKind: args.definitionKind, limit: 5 }).slice(0, 5).map(toWorkerActionSummary),
-    ...(args.definitionKind === AUTO_FIX_WORKER_KIND ? { recovery: toWorkerRecoverySummary(args.persistence) } : {}),
+    ...(args.recovery ? { recovery: args.recovery } : {}),
   };
 }
 
