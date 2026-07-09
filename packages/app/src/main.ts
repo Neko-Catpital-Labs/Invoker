@@ -137,6 +137,10 @@ import {
   type InvokerConfig,
 } from './config.js';
 import {
+  resolveAutoApproveAIFixes,
+  resolveAutoFixRetries,
+} from './autofix-defaults.js';
+import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   assertExecutionCapacityInvariant,
   resolveEffectiveMaxConcurrency,
@@ -349,7 +353,7 @@ function buildRegisteredOwnerWorkerDeps(
       checkMergeGateStatuses,
     },
     autoFix: {
-      defaultAutoFixRetries: invokerConfig.autoFixRetries,
+      defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
       attemptLedger: autoFixAttemptLedger,
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
@@ -364,7 +368,7 @@ function buildRegisteredOwnerWorkerDeps(
       remoteTargets,
     },
     autoApprove: {
-      enabled: invokerConfig.autoApproveAIFixes === true,
+      enabled: resolveAutoApproveAIFixes(invokerConfig),
     },
   };
 }
@@ -906,7 +910,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     persistence, messageBus,
     taskRepository,
     maxConcurrency: effectiveMaxConcurrency,
-    defaultAutoFixRetries: invokerConfig.autoFixRetries,
+    defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
@@ -1186,7 +1190,7 @@ function startHeadlessMode(): void {
               messageBus,
               taskRepository: new SqliteTaskRepository(persistence),
               maxConcurrency: effectiveMaxConcurrency,
-              defaultAutoFixRetries: invokerConfig.autoFixRetries,
+              defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
               executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
               defaultPoolId: invokerConfig.defaultPoolId,
               availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
@@ -1866,7 +1870,7 @@ function startHeadlessMode(): void {
           ),
           autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
           persistence,
-          autoFixRetries: invokerConfig.autoFixRetries,
+          autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
         });
         workerRuntimeController.startAutoStartedWorkers();
@@ -2379,7 +2383,7 @@ function createEmbeddedTerminalBackendFromConfig(
         commandService,
         taskExecutor: requireTaskExecutor(),
         mutationTiming: activeMutationContext?.mutationTiming,
-        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+        autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
       },
       {
         agentName,
@@ -3233,7 +3237,7 @@ function createEmbeddedTerminalBackendFromConfig(
         persistence,
         commandService,
         taskExecutor: requireTaskExecutor(),
-        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+        autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
         killRunningTask,
       });
       apiServer = startApiServer({
@@ -3750,7 +3754,7 @@ function createEmbeddedTerminalBackendFromConfig(
         ),
         autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
         persistence,
-        autoFixRetries: invokerConfig.autoFixRetries,
+        autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
       });
       workerRuntimeController.startAutoStartedWorkers();
@@ -4098,7 +4102,7 @@ function createEmbeddedTerminalBackendFromConfig(
         messageBus,
         taskRepository: new SqliteTaskRepository(persistence),
         maxConcurrency: effectiveMaxConcurrency,
-        defaultAutoFixRetries: invokerConfig.autoFixRetries,
+        defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
         executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
         defaultPoolId: invokerConfig.defaultPoolId,
         availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
@@ -4894,7 +4898,7 @@ function createEmbeddedTerminalBackendFromConfig(
           orchestrator,
           persistence,
           taskExecutor: requireTaskExecutor(),
-          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+          autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
         }, agentName, activeMutationContext?.signal);
         await finalizeMutationWithGlobalTopup({
           orchestrator,
