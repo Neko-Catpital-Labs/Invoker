@@ -582,8 +582,9 @@ export function selectExecutor(
         return { executor: cached, resolvedExecution, selectedPoolMemberId: targetId };
       }
 
-      for (const key of host.sshExecutorCache.keys()) {
+      for (const [key, executor] of host.sshExecutorCache.entries()) {
         if (key.startsWith(`${targetId}|`)) {
+          void executor.destroyAll().catch(() => {});
           host.sshExecutorCache.delete(key);
         }
       }
