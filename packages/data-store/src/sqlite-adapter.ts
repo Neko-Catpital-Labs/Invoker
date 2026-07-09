@@ -1725,20 +1725,34 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   getEvents(taskId: string): TaskEvent[];
-  getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
-  getEvents(taskId: string, sortBy: 'asc' | 'desc' = 'asc', limit?: number): TaskEvent[] {
+  getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number, beforeId?: number): TaskEvent[];
+  getEvents(
+    taskId: string,
+    sortBy: 'asc' | 'desc' = 'asc',
+    limit?: number,
+    beforeId?: number,
+  ): TaskEvent[] {
     const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
-    const rows = limit === undefined
-      ? this.queryAll(
+    if (limit === undefined) {
+      const rows = this.queryAll(
         `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy}`,
         [taskId],
-      )
-      : limit <= 0
-        ? []
-        : this.queryAll(
-          `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy} LIMIT ?`,
-          [taskId, Math.floor(limit)],
-        );
+      );
+      return rows.map((row: any) => this.rowToTaskEvent(row));
+    }
+    if (limit <= 0) return [];
+    const pageLimit = Math.floor(limit);
+    if (beforeId !== undefined) {
+      const rows = this.queryAll(
+        `SELECT * FROM events WHERE task_id = ? AND id < ? ORDER BY id ${orderBy} LIMIT ?`,
+        [taskId, Math.floor(beforeId), pageLimit],
+      );
+      return rows.map((row: any) => this.rowToTaskEvent(row));
+    }
+    const rows = this.queryAll(
+      `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy} LIMIT ?`,
+      [taskId, pageLimit],
+    );
     return rows.map((row: any) => this.rowToTaskEvent(row));
   }
 
