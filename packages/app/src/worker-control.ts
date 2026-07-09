@@ -46,6 +46,8 @@ export interface WorkerRuntimeController {
   stop(kind: string): Promise<WorkerStatusEntry>;
   stopAll(): Promise<void>;
   snapshot(): WorkerStatusSnapshot;
+  /** Drop cached snapshot/recovery so the next poll rebuilds against current DB. */
+  invalidateSnapshotCache(): void;
 }
 
 type WorkerStatusPersistence = Pick<
@@ -294,6 +296,8 @@ export function createWorkerRuntimeController(options: {
       cachedSnapshotAt = now;
       return cachedSnapshot;
     },
+
+    invalidateSnapshotCache,
   };
 }
 export function createLocalWorkerStatusSnapshot(options: {

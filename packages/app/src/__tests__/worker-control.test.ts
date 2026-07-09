@@ -259,6 +259,11 @@ describe('createWorkerRuntimeController', () => {
     expect(second).toBe(first);
     expect(listWorkerActions).toHaveBeenCalledTimes(1);
 
+    controller.invalidateSnapshotCache();
+    listWorkerActions.mockClear();
+    expect(controller.snapshot()).not.toBe(first);
+    expect(listWorkerActions).toHaveBeenCalledTimes(1);
+
     controller.start('history');
     expect(controller.snapshot()).not.toBe(first);
   });
