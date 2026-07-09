@@ -223,3 +223,65 @@ describe('terminateChildProcessGroup', () => {
     await expect(killed).resolves.toBeUndefined();
   });
 });
+
+describe('buildAgentExitFailureDetail', () => {
+  it('surfaces the codex --json stdout error instead of the benign stdin noise', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const stdout = [
+      JSON.stringify({ type: 'thread.started', thread_id: 't1' }),
+      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Model refused: quota exceeded' } }),
+    ].join('\n');
+    const displayStdout = '[assistant] Model refused: quota exceeded';
+    const detail = processUtils.buildAgentExitFailureDetail(
+      stdout,
+      'Reading additional input from stdin...\n',
+      displayStdout,
+    );
+    expect(detail).toBe('[assistant] Model refused: quota exceeded');
+    expect(detail).not.toContain('Reading additional input from stdin');
+  });
+
+  it('prefers meaningful stderr with the benign stdin noise stripped', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const detail = processUtils.buildAgentExitFailureDetail(
+      'stdout should be ignored when stderr has signal',
+      'Reading additional input from stdin...\npanic: boom at line 5\n',
+      'display',
+    );
+    expect(detail).toBe('panic: boom at line 5');
+  });
+
+  it('falls back to raw stdout when no driver-processed output is available', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const detail = processUtils.buildAgentExitFailureDetail(
+      'raw json line',
+      'Reading additional input from stdin...',
+      undefined,
+    );
+    expect(detail).toBe('raw json line');
+  });
+
+  it('returns an actionable hint when only the codex stdin/TTY noise was emitted', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const detail = processUtils.buildAgentExitFailureDetail(
+      '',
+      'Reading additional input from stdin...\n',
+      '',
+    );
+    expect(detail).toContain('without a controlling TTY');
+    expect(detail).toContain('openai/codex#19945');
+  });
+
+  it('returns (no output) when the process emitted nothing at all', async () => {
+    const { processUtils } = await loadProcessUtils();
+    expect(processUtils.buildAgentExitFailureDetail('', '', '')).toBe('(no output)');
+  });
+
+  it('tail-limits very long output to keep messages bounded', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const huge = 'x'.repeat(5000);
+    const detail = processUtils.buildAgentExitFailureDetail(huge, '', huge);
+    expect(detail.length).toBe(2000);
+    expect(detail).toBe(huge.slice(-2000));
+  });
+});

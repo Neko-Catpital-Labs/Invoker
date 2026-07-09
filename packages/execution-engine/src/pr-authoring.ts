@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
-import { cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { buildAgentExitFailureDetail, cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
 export interface MakePrStackArtifactOutput {
   readonly id: string;
@@ -680,7 +680,7 @@ export function spawnAgentPrAuthorViaRegistry(
             resolve({ body, stdout: displayStdout, sessionId: effectiveSessionId });
             return;
           }
-          reject(new Error(`${agent.name} PR authoring exited with code ${code}: ${stderr.trim()}`));
+          reject(new Error(`${agent.name} PR authoring exited with code ${code}: ${buildAgentExitFailureDetail(stdout, stderr, displayStdout)}`));
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
         }
