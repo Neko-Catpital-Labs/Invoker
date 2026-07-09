@@ -153,8 +153,30 @@ function makeAutoFixHarness(options: {
 const tickCtx = { identity: { kind: 'recovery', instanceId: 'test' }, reason: 'poll' as const, tickNumber: 1 };
 
 describe('autofix decision ledger', () => {
-  it('records a queued decision row when it submits an auto-fix', async () => {
+  it('records a queued decision row when it escalates to an auto-fix on the second tick', async () => {
     const { store, submit } = makeAutoFixHarness();
+    const upserts: WorkerActionWrite[] = [];
+    store.upsertWorkerAction = vi.fn((write: WorkerActionWrite) => {
+      upserts.push(write);
+      return {
+        ...write,
+        attemptCount: write.attemptCount ?? 0,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      } as WorkerActionRecord;
+    });
+    store.getWorkerAction = vi.fn((kind: string, externalKey: string) => {
+      if (kind !== 'autofix') return undefined;
+      if (!externalKey.startsWith('autofix:retry:')) return undefined;
+      const retryUpsert = upserts.find((w) => w.workerKind === 'autofix' && w.externalKey === externalKey);
+      if (!retryUpsert) return undefined;
+      return {
+        ...retryUpsert,
+        attemptCount: retryUpsert.attemptCount ?? 0,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      } as WorkerActionRecord;
+    });
     const tick = createAutoFixRecoveryTick({
       store,
       submitter: { submit },
@@ -165,10 +187,13 @@ describe('autofix decision ledger', () => {
     });
 
     await tick(tickCtx);
+    await tick(tickCtx);
 
-    expect(submit).toHaveBeenCalledTimes(1);
-    const write = store.upsertWorkerAction.mock.calls.at(-1)?.[0];
-    expect(write).toMatchObject({
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit.mock.calls[0]?.[2]).toBe('invoker:restart-task');
+    expect(submit.mock.calls[1]?.[2]).toBe('invoker:fix-with-agent');
+    const autoFixWrite = upserts.find((w) => w.actionType === 'auto-fix');
+    expect(autoFixWrite).toMatchObject({
       workerKind: 'autofix',
       actionType: 'auto-fix',
       status: 'queued',
@@ -178,7 +203,7 @@ describe('autofix decision ledger', () => {
       intentId: '42',
       agentName: 'claude',
     });
-    expect(write?.externalKey).toBe('autofix:wf-1/task-a:1:a1');
+    expect(autoFixWrite?.externalKey).toBe('autofix:wf-1/task-a:1:a1');
   });
 
   it('records a skipped decision row for a meaningful skip (budget disabled)', async () => {
