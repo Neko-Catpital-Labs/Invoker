@@ -12,6 +12,9 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     getUiPerfStats: vi.fn(() => ({})),
     resetUiPerfStats: vi.fn(),
     getQueueStatus: vi.fn(() => ({ runningCount: 3 })),
+    listWorkerActionHistory: vi.fn((request) => ({ workerKind: request.workerKind, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
+    listWorkerDecisions: vi.fn((request) => ({ decision: request.decision, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
+    getWorkerStatus: vi.fn(() => ({ generatedAt: 'now', workers: [] })),
     getWorkflowStatus: vi.fn(() => ({})),
     getTasksSnapshot: vi.fn(() => ({ tasks: [], workflows: [] })),
     getActionGraphSnapshot: vi.fn(() => ({ nodes: [] })),
@@ -25,6 +28,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     getOutputTail: vi.fn(() => null),
     replayOutput: vi.fn(() => []),
     getAllCompletedTasks: vi.fn(() => []),
+    getHistoryTasks: vi.fn(() => []),
     ...over,
   };
 }

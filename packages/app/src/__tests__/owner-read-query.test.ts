@@ -13,6 +13,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     resetUiPerfStats: vi.fn(),
     getQueueStatus: vi.fn(() => ({ runningCount: 2 })),
     listWorkerActionHistory: vi.fn((request) => ({ workerKind: request.workerKind, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
+    listWorkerDecisions: vi.fn((request) => ({ decision: request.decision, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
     getWorkerStatus: vi.fn(() => ({ generatedAt: 'now', workers: [] })),
     getWorkflowStatus: vi.fn(() => ({ 'wf-1': 'running' })),
     getTasksSnapshot: vi.fn(({ refresh }) => ({ tasks: [], workflows: [], refreshed: refresh })),
@@ -27,6 +28,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     getOutputTail: vi.fn(() => ({ tail: 1 })),
     replayOutput: vi.fn((id: string, off: number) => [{ id, off }]),
     getAllCompletedTasks: vi.fn(() => [{ id: 'done' }]),
+    getHistoryTasks: vi.fn(() => [{ id: 'hist-1', workflowName: 'Plan', lastEventAt: '2026-07-01T00:00:00Z', eventCount: 2 }]),
     ...over,
   };
 }
@@ -74,6 +76,10 @@ describe('answerOwnerReadQuery', () => {
     expect(answerOwnerReadQuery({ kind: 'replay-output', taskId: 't-1', fromOffset: 42 }, h)).toEqual({ chunks: [{ id: 't-1', off: 42 }] });
     expect(h.replayOutput).toHaveBeenCalledWith('t-1', 42);
     expect(answerOwnerReadQuery({ kind: 'all-completed-tasks' }, h)).toEqual({ tasks: [{ id: 'done' }] });
+    expect(answerOwnerReadQuery({ kind: 'history-tasks' }, h)).toEqual({
+      tasks: [{ id: 'hist-1', workflowName: 'Plan', lastEventAt: '2026-07-01T00:00:00Z', eventCount: 2 }],
+    });
+    expect(h.getHistoryTasks).toHaveBeenCalledTimes(1);
   });
 
   it('null-coalesces task-by-id, review-gate, and output-tail', () => {
@@ -134,6 +140,7 @@ describe('buildOwnerReadQueryHandlers', () => {
         getOutputTail: () => ({ t: 1 }),
         replayOutputFrom: (id: string, off: number) => [{ id, off }],
         loadAllCompletedTasks: () => [{ id: 'done' }],
+        loadAllHistoryTasks: () => [{ id: 'hist-1', workflowName: 'Plan', lastEventAt: null, eventCount: 0 }],
         listWorkerActions: vi.fn(() => []),
       },
     };
@@ -162,6 +169,7 @@ describe('buildOwnerReadQueryHandlers', () => {
     expect(h.getOutputChunks('t1')).toEqual([{ c: 1 }]);
     expect(h.replayOutput('t1', 9)).toEqual([{ id: 't1', off: 9 }]);
     expect(h.getAllCompletedTasks()).toEqual([{ id: 'done' }]);
+    expect(h.getHistoryTasks()).toEqual([{ id: 'hist-1', workflowName: 'Plan', lastEventAt: null, eventCount: 0 }]);
     expect(h.getWorkerStatus()).toEqual({ generatedAt: 'now', workers: [] });
     expect(h.listWorkerActionHistory({ workerKind: 'autofix', limit: 1, offset: 2 })).toEqual({
       workerKind: 'autofix',

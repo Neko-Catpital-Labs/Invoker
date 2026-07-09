@@ -268,6 +268,10 @@ export interface PersistenceAdapter {
   deleteAllTasks(workflowId: string): void;
   deleteAllWorkflows(): void;
   deleteWorkflow(workflowId: string): void;
+  /** All non-pending tasks (or pending with events), with workflow name and event aggregates. */
+  loadAllHistoryTasks(): Array<TaskState & { workflowName: string; lastEventAt: string | null; eventCount: number }>;
+  /** Legacy completed-only history list. Prefer loadAllHistoryTasks for the History view. */
+  loadAllCompletedTasks(): Array<TaskState & { workflowName: string }>;
 
   // Events (audit trail)
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
