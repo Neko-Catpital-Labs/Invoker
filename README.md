@@ -150,7 +150,7 @@ INVOKER_REPO_CONFIG_PATH=$PWD/.invoker.local.json ./run.sh
 
 The config loader does not automatically read `<repo>/.invoker.json`.
 
-Minimal example:
+Minimal owner-host example:
 
 ```json
 {
@@ -159,11 +159,19 @@ Minimal example:
   "autoFixRetries": 3,
   "autoFixAgent": "claude",
   "autoFixCi": false,
+  "webToken": "change-me-to-a-long-random-secret",
+  "webHost": "0.0.0.0",
+  "webPort": 4200,
+  "prMaintenance": {
+    "enabled": true,
+    "repoRoot": "/srv/invoker",
+    "intervalMs": 300000
+  },
   "remoteTargets": {
     "staging-a": {
       "host": "203.0.113.10",
       "user": "invoker",
-      "sshKeyPath": "/home/you/.ssh/invoker_staging_a",
+      "sshKeyPath": "/home/invoker/.ssh/invoker_staging_a",
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile"
@@ -171,22 +179,41 @@ Minimal example:
     "staging-b": {
       "host": "203.0.113.11",
       "user": "invoker",
-      "sshKeyPath": "/home/you/.ssh/invoker_staging_b",
+      "sshKeyPath": "/home/invoker/.ssh/invoker_staging_b",
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile"
     }
-  }
+  },
+  "executionPools": {
+    "owner-host-ssh": {
+      "members": [
+        { "type": "ssh", "id": "staging-a" },
+        { "type": "ssh", "id": "staging-b" }
+      ],
+      "selectionStrategy": "roundRobin",
+      "maxConcurrentTasksPerMember": 1
+    }
+  },
+  "defaultPoolId": "owner-host-ssh"
 }
 ```
 
-`autoFixRetries` is a finite per-task cap. `3` means the worker keeps consumed attempts in process memory and can submit at most three auto-fix attempts for the same failed task lineage; `0` disables auto-fix workers.
+Run one long-lived owner on the host that owns `~/.invoker`:
+
+```bash
+INVOKER_REPO_CONFIG_PATH=/srv/invoker/config.json \
+INVOKER_HEADLESS_STANDALONE=1 \
+./run.sh --headless owner-serve
+```
+
+`autoFixRetries` is a finite per-task cap for the built-in auto-fix worker; `0` disables auto-fix recovery. `prMaintenance.enabled` supplies launch configuration to the built-in `coderabbit-address` and `pr-conflict-rebase` owner workers. Operator recovery and PR maintenance should run through these workers, not through separate cron schedules.
 
 More examples: [docs/invoker-config-example.json](docs/invoker-config-example.json), [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md), [docs/docker-executor.md](docs/docker-executor.md).
 
-### Multiple SSH Executors
+### Multiple SSH targets
 
-Define multiple entries under `remoteTargets`, then select them per task with `poolId`.
+Define multiple entries under `remoteTargets`, group them into `executionPools`, then select the pool per task with `poolId`.
 
 ```yaml
 name: multi-remote-example
@@ -196,15 +223,15 @@ tasks:
   - id: test-a
     description: Run checks on remote target A
     command: pnpm test
-    poolId: staging-a
+    poolId: owner-host-ssh
 
   - id: test-b
     description: Run checks on remote target B
     command: pnpm test
-    poolId: staging-b
+    poolId: owner-host-ssh
 ```
 
-Use this when you want Invoker to spread work across machines you already manage. The SSH executor does not provision the hosts for you; it connects to the target you name and runs there.
+Use this when you want the owner host to spread work across machines you already manage. The SSH executor does not provision hosts for you; it connects to configured targets and runs there.
 
 ## Quick start
 
@@ -216,12 +243,13 @@ For day-to-day use, start the desktop app:
 ./run.sh
 ```
 
-Or run a plan through the headless surface:
+Or run a plan through the headless surface, or keep a remote owner host alive:
 
 ```bash
 ./run.sh --headless --help
 ./run.sh --headless query workflows
 ./run.sh --headless run /path/to/plan.yaml
+INVOKER_HEADLESS_STANDALONE=1 ./run.sh --headless owner-serve
 ```
 
 For app development with hot reload:
@@ -266,9 +294,9 @@ tasks:
     dependencies: [plan]
 
   - id: tests
-    description: Run the final regression suite on a configured SSH executor
+    description: Run the final regression suite on the owner-host SSH pool
     command: pnpm run test:all
-    poolId: staging-a
+    poolId: owner-host-ssh
     dependencies: [api, ui]
 ```
 
@@ -276,11 +304,11 @@ If you need to turn a product or implementation plan into an Invoker workflow, i
 
 If you need to operate existing workflows or tasks, use the `invoker-ops` skill.
 
-Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Inspect recovery ownership and decisions with `./run.sh --headless worker status --output text|json|jsonl`. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
+Use `--output text|label|json|jsonl` on headless `query` commands. Use `./run.sh --headless retry-tasks --status pending|failed --parallel 8` for bulk safe retries. Inspect owner-worker fleet state and decisions with `./run.sh --headless query workers --output text` and `./run.sh --headless query worker-decisions --output text`. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
 
-### Auto-fix worker (single shared engine)
+### Owner workers (built-in recovery and maintenance)
 
-Auto-fix recovery runs through **one** shared worker engine in `@invoker/execution-engine`. Owner processes auto-start that worker when `autoFixRetries > 0`; failure lifecycle events wake it, and its periodic scan covers missed wakeups. The manual dev door `./run.sh --headless worker autofix` runs the same engine for an explicit one-shot scan. `autoFixRetries` is enforced from a worker-local in-memory ledger before the worker submits another fix intent. A sweep-and-assert guard test fails the build if auto-fix is ever triggered outside this shared worker engine. See [docs/architecture/recovery-lifecycle-workers.md](docs/architecture/recovery-lifecycle-workers.md).
+Recovery and maintenance run through built-in owner workers in `@invoker/execution-engine`. Owner processes start the auto-start worker fleet, lifecycle events wake workers, and periodic scans cover missed wakeups. Auto-fix uses the same shared worker implementation when invoked manually with `./run.sh --headless worker autofix`; that command is a deliberate one-shot scan, not a separate scheduler. A sweep-and-assert guard test fails the build if auto-fix is triggered outside the shared worker engine. See [docs/architecture/recovery-lifecycle-workers.md](docs/architecture/recovery-lifecycle-workers.md).
 
 ## Architecture (at a glance)
 
@@ -332,15 +360,15 @@ Layer rules: [ARCHITECTURE.md](ARCHITECTURE.md). Agent/repo conventions: [CLAUDE
 | [docs/invoker-medium-article.md](docs/invoker-medium-article.md) | Product story, glossary, mapping tables |
 | [docs/local-macos-release-build.md](docs/local-macos-release-build.md) | Local Apple Silicon `.dmg` build, commit-named copies, and quarantine removal |
 | [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md) | SQLite / sql.js single writer |
-| [docs/invoker-config-example.json](docs/invoker-config-example.json) | Example `config.json` with local and remote executor settings |
-| [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md) | SSH executor setup, target fields, and plan examples |
+| [docs/invoker-config-example.json](docs/invoker-config-example.json) | Example `config.json` for owner-host SSH pools and built-in workers |
+| [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md) | Worker-based owner-host SSH setup, target fields, pools, and plan examples |
 | [docs/docker-executor.md](docs/docker-executor.md) | Docker executor configuration and runtime notes |
 | [docs/slack-native-workflows.md](docs/slack-native-workflows.md) | Plan & drive workflows from Slack: lobby mentions, harness presets, per-workflow channels |
 | [docs/web-surface.md](docs/web-surface.md) | Watch & drive workflows from a browser (HTTP+SSE) and the Slack live status card; enabling `INVOKER_WEB_TOKEN` |
 
 ## Troubleshooting
 
-- **DB conflicts** — Do not run two writers on the same DB; headless CLI mutations use a standalone owner, while GUI-started workflows stay owned by the desktop app process.
+- **DB conflicts** — Do not run two writers on the same DB; use one desktop owner or one headless owner host, then delegate headless CLI mutations to that owner.
 - **`pnpm` or `git` not found from the desktop app** — On macOS this is often a Finder/GUI `PATH` issue. Launch Invoker from a terminal with `./run.sh`, or make the required binaries available to GUI-launched apps.
 - **Missing bundled agent skills** — `bash scripts/setup-agent-skills.sh`
 - **Install failures** — Use Node 26 as per `engines`
