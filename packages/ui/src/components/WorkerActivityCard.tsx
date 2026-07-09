@@ -53,11 +53,6 @@ export function WorkerActivityCard({
 }: WorkerActivityCardProps) {
   return (
     <div data-testid="worker-activity-card">
-      <div className="mb-4">
-        <h3 className="text-lg font-semibold text-gray-100">Worker processes ({snapshot?.workers.length ?? 0})</h3>
-        <div className="mt-1 text-sm text-gray-400">Process status is separate from queue work. A running process can be idle.</div>
-      </div>
-
       {!snapshot ? (
         <div className="rounded border border-gray-800 bg-gray-950/60 px-3 py-2 text-sm text-gray-400">Worker status unavailable</div>
       ) : (

@@ -3047,7 +3047,6 @@ export function App() {
         <LeftStatusColumn
           workflows={workflows}
           tasks={tasks}
-          queueStatus={queueStatus}
           workerStatus={workerStatus}
           planningSessionCount={planningSessions.length}
           selectedSurface={sidebarSurface}
@@ -3360,4 +3359,3 @@ export function App() {
     </div>
   );
 }
-
