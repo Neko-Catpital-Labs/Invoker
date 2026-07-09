@@ -130,7 +130,7 @@ exit 64
         INVOKER_E2E_ENABLE_COMPOSITOR: '1',
         INVOKER_REPO_CONFIG_PATH: configPath,
         INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:
-          process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '10000',
+          process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '60000',
         INVOKER_EMBEDDED_TERMINAL_BACKEND:
           process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND ?? 'pty',
         INVOKER_E2E_MARKER_ROOT: markerRoot,
@@ -366,12 +366,12 @@ async function ensureScreenshotViewport(page: Page): Promise<void> {
  * the Playwright config's toHaveScreenshot defaults.
  */
 export async function assertPageScreenshot(page: Page, name: string): Promise<void> {
-  // Skip pixel-level screenshot comparison on CI (no Linux baselines committed).
+  // Skip pixel-level screenshot comparison in Linux automation (no Linux baselines committed).
   // DOM assertions in the calling test still run.
-  if (process.env.CI) return;
+  if (process.env.CI || (process.platform === 'linux' && process.env.INVOKER_E2E_COMPARE_SCREENSHOTS !== '1')) return;
   await ensureScreenshotViewport(page);
   await waitForStableUI(page);
-  await expect(page).toHaveScreenshot(`${name}.png`, { timeout: 0 });
+  await expect(page).toHaveScreenshot(`${name}.png`, { timeout: 15000 });
 }
 
 /**
