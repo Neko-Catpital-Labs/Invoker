@@ -11,7 +11,6 @@
 import type { TaskState, TaskStateChanges, Attempt } from '@invoker/workflow-core';
 import {
   assertTaskConsistent,
-  isActiveAttempt,
   isDiscardedAttempt,
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
@@ -778,17 +777,18 @@ export class SqliteTaskAttemptRepository {
   }
 
   private findNewerActiveAttempt(nodeId: string, selected: Attempt): Attempt | undefined {
-    const attempts = this.loadAttempts(nodeId);
-    const selectedTs = selected.createdAt.getTime();
-    let newest: Attempt | undefined;
-    for (const candidate of attempts) {
-      if (candidate.id === selected.id) continue;
-      if (!isActiveAttempt(candidate)) continue;
-      if (candidate.createdAt.getTime() <= selectedTs) continue;
-      if (!newest || candidate.createdAt.getTime() > newest.createdAt.getTime()) {
-        newest = candidate;
-      }
-    }
-    return newest;
+    // Index-backed LIMIT 1 — never loadAttempts(nodeId): attempt.error can be multi-MB
+    // and this runs on every loadTasks via the main-process DB poll.
+    // created_at is ISO-8601, so lexical `>` matches getTime() ordering.
+    const row = this.exec.queryOne(
+      `SELECT * FROM attempts
+       WHERE node_id = ?
+         AND created_at > ?
+         AND status IN ('pending', 'claimed', 'running', 'needs_input')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [nodeId, selected.createdAt.toISOString()],
+    );
+    return row ? mapRowToAttempt(row) : undefined;
   }
 }
