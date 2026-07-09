@@ -272,6 +272,23 @@ describe('buildAgentExitFailureDetail', () => {
     expect(detail).toContain('openai/codex#19945');
   });
 
+  it('returns the actionable hint when the stdin/TTY noise landed on stdout, not stderr', async () => {
+    // Regression: codex can print "Reading additional input from stdin..." to STDOUT
+    // and die before emitting any JSONL. The readable output is empty (no messages
+    // parsed) and stderr is empty, so the old raw-stdout fallback echoed the noise
+    // verbatim as "codex fix exited with code 1: Reading additional input from stdin...".
+    const { processUtils } = await loadProcessUtils();
+    const detail = processUtils.buildAgentExitFailureDetail(
+      'Reading additional input from stdin...\n',
+      '',
+      '',
+    );
+    expect(detail).toContain('without a controlling TTY');
+    expect(detail).toContain('openai/codex#19945');
+    // The raw noise must not leak through as the whole detail.
+    expect(detail).not.toBe('Reading additional input from stdin...');
+  });
+
   it('returns (no output) when the process emitted nothing at all', async () => {
     const { processUtils } = await loadProcessUtils();
     expect(processUtils.buildAgentExitFailureDetail('', '', '')).toBe('(no output)');
