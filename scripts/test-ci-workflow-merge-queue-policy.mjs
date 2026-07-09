@@ -21,6 +21,9 @@ function jobForCheck(checkName) {
   if (checkName === 'PR Body' || checkName.startsWith('quality / ')) {
     return null;
   }
+  if (checkName === 'UI Vitest') {
+    return 'ui-vitest';
+  }
   if (checkName.startsWith('optional / ')) {
     return 'optional-other';
   }
@@ -56,7 +59,11 @@ for (const checkName of requiredChecks) {
     continue;
   }
   assert(jobs[jobName], `Mergify requires missing CI job ${jobName} for ${checkName}`);
-  assert(jobs[jobName].if === FULL_CI_GATE, `Mergify-required job ${jobName} must run on merge queue refs`);
+  const jobIf = jobs[jobName].if;
+  assert(
+    jobIf === undefined || jobIf === FULL_CI_GATE,
+    `Mergify-required job ${jobName} must run on merge queue refs`,
+  );
 }
 
 console.log('CI merge-queue policy is valid.');
