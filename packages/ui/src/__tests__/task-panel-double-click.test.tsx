@@ -269,7 +269,7 @@ describe('TaskPanel double-click editing', () => {
       );
 
       const commandDisplay = screen.getByTestId('command-display');
-      expect(commandDisplay).toHaveClass('hover:border-gray-600');
+      expect(commandDisplay).toHaveClass('hover:border-border-strong');
       expect(commandDisplay).toHaveClass('transition-colors');
     });
   });

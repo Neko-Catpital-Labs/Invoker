@@ -130,7 +130,7 @@ export function CommandPalette({
                       value={`running ${task.id} ${task.description ?? ''}`}
                       onSelect={closeAnd(() => onSelectTask(task.id))}
                     >
-                      <Clock strokeWidth={1.75} className="text-blue-300" />
+                      <Clock strokeWidth={1.75} className="text-foreground" />
                       <span className="truncate">{task.description ?? task.id}</span>
                     </CommandItem>
                   ))}

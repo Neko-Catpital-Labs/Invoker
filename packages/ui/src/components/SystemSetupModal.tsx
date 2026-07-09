@@ -219,10 +219,10 @@ export function SystemSetupModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-700">
+      <div className="bg-secondary rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-border">
         <div className="p-6 pb-3 shrink-0">
-          <h2 className="text-lg font-semibold text-gray-100">System Setup</h2>
-          <p className="text-sm text-gray-400 mt-1">
+          <h2 className="text-lg font-semibold text-foreground">System Setup</h2>
+          <p className="text-sm text-muted-foreground mt-1">
             {diagnostics
               ? `Invoker ${diagnostics.appVersion} on ${diagnostics.platform}/${diagnostics.arch}${diagnostics.isPackaged ? ' (packaged app)' : ' (repo/dev mode)'}`
               : 'Loading system diagnostics...'}
@@ -231,38 +231,38 @@ export function SystemSetupModal({
 
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
           {onRunSetup && (
-            <div className="rounded border border-blue-700/60 bg-blue-950/30 px-4 py-4 space-y-4">
+            <div className="rounded border border-border-strong/60 bg-secondary/70 px-4 py-4 space-y-4">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-sm font-medium text-blue-100">Set up Invoker</div>
-                  <div className="text-sm text-blue-200/80 mt-1">
+                  <div className="text-sm font-medium text-foreground">Set up Invoker</div>
+                  <div className="text-sm text-muted-foreground/80 mt-1">
                     Pick what to configure. Invoker runs the safe parts and asks only for what it cannot do alone.
                   </div>
                 </div>
-                <div className="shrink-0 rounded bg-blue-900/70 px-2 py-1 text-xs text-blue-100">
+                <div className="shrink-0 rounded bg-secondary px-2 py-1 text-xs text-foreground">
                   {setupStepLabels[currentSetupStep]}
                 </div>
               </div>
 
-              <div className="rounded border border-blue-800/70 bg-gray-950/40">
-                <div className="border-b border-blue-900 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-blue-200">
+              <div className="rounded border border-border-strong/70 bg-card/40">
+                <div className="border-b border-border px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Choose setup items
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-blue-900/70">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-secondary">
                   {guidedSetupSteps.map((step) => (
-                    <label key={step.checkId} className="flex gap-3 bg-gray-950/70 px-3 py-3 text-sm text-blue-100">
+                    <label key={step.checkId} className="flex gap-3 bg-card/70 px-3 py-3 text-sm text-foreground">
                       <input
                         type="checkbox"
                         checked={setupChecks[step.checkId]}
                         onChange={() => toggleSetupCheck(step.checkId)}
-                        className="mt-1 h-4 w-4 rounded border-blue-600 bg-gray-900"
+                        className="mt-1 h-4 w-4 rounded border-border-strong bg-background"
                       />
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center justify-between gap-3">
                           <span className="font-medium">{step.title}</span>
-                          <span className="shrink-0 rounded bg-blue-900/70 px-2 py-0.5 text-xs text-blue-100">{step.status}</span>
+                          <span className="shrink-0 rounded bg-secondary px-2 py-0.5 text-xs text-foreground">{step.status}</span>
                         </span>
-                        <span className="mt-1 block truncate text-xs text-blue-200/80">{step.detail}</span>
+                        <span className="mt-1 block truncate text-xs text-muted-foreground/80">{step.detail}</span>
                       </span>
                     </label>
                   ))}
@@ -273,27 +273,27 @@ export function SystemSetupModal({
                 <button
                   onClick={() => setReviewOpen(true)}
                   disabled={!anySetupSelected}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:text-blue-200 text-white rounded text-sm font-medium transition-colors"
+                  className="px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-secondary disabled:text-muted-foreground text-white rounded text-sm font-medium transition-colors"
                 >
                   Set it up for me
                 </button>
               )}
 
               {reviewOpen && (
-                <div className="rounded border border-blue-800/70 bg-gray-950/50 px-3 py-3 text-sm text-blue-100 space-y-3">
+                <div className="rounded border border-border-strong/70 bg-card/50 px-3 py-3 text-sm text-foreground space-y-3">
                   <div>
                     <div className="font-medium">Review setup plan</div>
-                    <div className="mt-1 text-xs text-blue-200/80">
+                    <div className="mt-1 text-xs text-muted-foreground/80">
                       Approve the safe setup run. Any missing Slack value stays here as the next step.
                     </div>
                   </div>
 
                   {runnableSetupSteps.length > 0 && (
                     <div>
-                      <div className="text-xs font-semibold uppercase tracking-wide text-blue-200">Will run now</div>
+                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Will run now</div>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {runnableSetupSteps.map((step) => (
-                          <span key={step.checkId} className="rounded bg-blue-900/60 px-2 py-1 text-xs text-blue-100">
+                          <span key={step.checkId} className="rounded bg-secondary/90 px-2 py-1 text-xs text-foreground">
                             {step.title}
                           </span>
                         ))}
@@ -311,14 +311,14 @@ export function SystemSetupModal({
                     <button
                       onClick={runSelectedSetup}
                       disabled={setupPending || !hasRunnableSetup}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:text-blue-200 text-white rounded text-sm font-medium transition-colors"
+                      className="px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-secondary disabled:text-muted-foreground text-white rounded text-sm font-medium transition-colors"
                     >
                       {setupPending ? 'Setting up…' : hasRunnableSetup ? 'Approve and run setup' : 'Add the missing info first'}
                     </button>
                     <button
                       onClick={() => setReviewOpen(false)}
                       disabled={setupPending}
-                      className="px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 text-white rounded text-sm transition-colors"
+                      className="px-3 py-2 bg-muted hover:bg-accent disabled:bg-secondary disabled:text-muted-foreground text-white rounded text-sm transition-colors"
                     >
                       Change selection
                     </button>
@@ -344,7 +344,7 @@ export function SystemSetupModal({
                         setSlackFields((prev) => ({ ...prev, [firstMissingSlackField.id]: event.target.value }));
                       }}
                       type={firstMissingSlackField.id === 'channelId' ? 'text' : 'password'}
-                      className="mt-1 w-full rounded border border-amber-700 bg-gray-950 px-2 py-1.5 text-sm text-gray-100"
+                      className="mt-1 w-full rounded border border-amber-700 bg-card px-2 py-1.5 text-sm text-foreground"
                     />
                   </label>
                 </div>
@@ -354,10 +354,10 @@ export function SystemSetupModal({
                   <div className="font-medium">{setupResult.ok ? 'Setup completed' : 'Setup completed with failures'}</div>
                   <div className="mt-2 space-y-2">
                     {setupResult.steps.map((step) => (
-                      <div key={step.id} className="rounded bg-gray-950/50 px-2 py-2">
+                      <div key={step.id} className="rounded bg-card/50 px-2 py-2">
                         <div className={step.ok ? 'text-green-200' : 'text-red-200'}>{step.ok ? 'ok' : 'failed'} — {step.name}</div>
                         {step.error && <div className="mt-1 text-xs text-red-200">{step.error}</div>}
-                        {step.output && <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-gray-200">{step.output}</pre>}
+                        {step.output && <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-foreground">{step.output}</pre>}
                       </div>
                     ))}
                   </div>
@@ -381,11 +381,11 @@ export function SystemSetupModal({
                 </div>
               </div>
 
-              <div className="rounded bg-gray-950/60 border border-gray-700 px-3 py-2 text-sm text-gray-100 font-mono">
+              <div className="rounded bg-card/60 border border-border px-3 py-2 text-sm text-foreground font-mono">
                 <code>/invoker-plan-to-invoker &quot;help me plan &lt;change&gt;&quot;</code>
               </div>
 
-              <div className="text-sm text-gray-300">
+              <div className="text-sm text-muted-foreground">
                 Bundled skills: {bundledSkills.bundledSkillNames.length > 0
                   ? bundledSkills.bundledSkillNames.map((name) => `${bundledSkills.managedPrefix}${name}`).join(', ')
                   : 'none'}
@@ -393,10 +393,10 @@ export function SystemSetupModal({
 
               {bundledSkills.targets.length > 0 && (
                 <div className="space-y-2">
-                  <div className="text-xs uppercase tracking-wide text-gray-400">Skills</div>
-                  <div className="rounded border border-gray-700 overflow-hidden">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Skills</div>
+                  <div className="rounded border border-border overflow-hidden">
                     <table className="w-full text-sm">
-                      <thead className="bg-gray-900 text-gray-300">
+                      <thead className="bg-background text-muted-foreground">
                         <tr>
                           <th className="text-left px-4 py-2 font-medium">Target</th>
                           <th className="text-left px-4 py-2 font-medium">Path</th>
@@ -405,15 +405,15 @@ export function SystemSetupModal({
                       </thead>
                       <tbody>
                         {bundledSkills.targets.map((target) => (
-                          <tr key={target.id} className="border-t border-gray-700">
-                            <td className="px-4 py-3 text-gray-100">{target.name}</td>
-                            <td className="px-4 py-3 text-gray-400 font-mono text-xs break-all">{target.path}</td>
+                          <tr key={target.id} className="border-t border-border">
+                            <td className="px-4 py-3 text-foreground">{target.name}</td>
+                            <td className="px-4 py-3 text-muted-foreground font-mono text-xs break-all">{target.path}</td>
                             <td className="px-4 py-3">
                               <div className={target.upToDate ? 'text-green-400' : target.installed ? 'text-yellow-300' : 'text-amber-300'}>
                                 {target.upToDate ? 'Installed and up to date' : target.installed ? 'Installed, update available' : 'Not installed'}
                               </div>
                               {target.diagnostic && (
-                                <div className="mt-1 text-xs text-gray-400">
+                                <div className="mt-1 text-xs text-muted-foreground">
                                   {target.diagnostic}
                                 </div>
                               )}
@@ -428,10 +428,10 @@ export function SystemSetupModal({
 
               {bundledSkills.commandTargets.length > 0 && (
                 <div className="space-y-2">
-                  <div className="text-xs uppercase tracking-wide text-gray-400">Commands</div>
-                  <div className="rounded border border-gray-700 overflow-hidden">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Commands</div>
+                  <div className="rounded border border-border overflow-hidden">
                     <table className="w-full text-sm">
-                      <thead className="bg-gray-900 text-gray-300">
+                      <thead className="bg-background text-muted-foreground">
                         <tr>
                           <th className="text-left px-4 py-2 font-medium">Target</th>
                           <th className="text-left px-4 py-2 font-medium">Path</th>
@@ -440,9 +440,9 @@ export function SystemSetupModal({
                       </thead>
                       <tbody>
                         {bundledSkills.commandTargets.map((target) => (
-                          <tr key={target.id} className="border-t border-gray-700">
-                            <td className="px-4 py-3 text-gray-100">{target.name}</td>
-                            <td className="px-4 py-3 text-gray-400 font-mono text-xs break-all">{target.path}</td>
+                          <tr key={target.id} className="border-t border-border">
+                            <td className="px-4 py-3 text-foreground">{target.name}</td>
+                            <td className="px-4 py-3 text-muted-foreground font-mono text-xs break-all">{target.path}</td>
                             <td className="px-4 py-3">
                               <span className={target.upToDate ? 'text-green-400' : target.installed ? 'text-yellow-300' : 'text-amber-300'}>
                                 {target.upToDate ? 'Installed and up to date' : target.installed ? 'Installed, update available' : 'Not installed'}
@@ -458,10 +458,10 @@ export function SystemSetupModal({
 
               {bundledSkills.mcpTargets.length > 0 && (
                 <div className="space-y-2">
-                  <div className="text-xs uppercase tracking-wide text-gray-400">MCP</div>
-                  <div className="rounded border border-gray-700 overflow-hidden">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">MCP</div>
+                  <div className="rounded border border-border overflow-hidden">
                     <table className="w-full text-sm">
-                      <thead className="bg-gray-900 text-gray-300">
+                      <thead className="bg-background text-muted-foreground">
                         <tr>
                           <th className="text-left px-4 py-2 font-medium">Target</th>
                           <th className="text-left px-4 py-2 font-medium">Path</th>
@@ -470,9 +470,9 @@ export function SystemSetupModal({
                       </thead>
                       <tbody>
                         {bundledSkills.mcpTargets.map((target) => (
-                          <tr key={target.id} className="border-t border-gray-700">
-                            <td className="px-4 py-3 text-gray-100">{target.name}</td>
-                            <td className="px-4 py-3 text-gray-400 font-mono text-xs break-all">{target.path}</td>
+                          <tr key={target.id} className="border-t border-border">
+                            <td className="px-4 py-3 text-foreground">{target.name}</td>
+                            <td className="px-4 py-3 text-muted-foreground font-mono text-xs break-all">{target.path}</td>
                             <td className="px-4 py-3">
                               <span className={target.upToDate ? 'text-green-400' : target.installed ? 'text-yellow-300' : 'text-amber-300'}>
                                 {target.upToDate ? 'Installed and up to date' : target.installed ? 'Installed, update available' : 'Not installed'}
@@ -510,7 +510,7 @@ export function SystemSetupModal({
                     <button
                       onClick={() => onInstallBundledSkills?.('reinstall')}
                       disabled={installPending}
-                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 text-white rounded text-sm font-medium transition-colors"
+                      className="px-4 py-2 bg-muted hover:bg-accent disabled:bg-secondary disabled:text-muted-foreground text-white rounded text-sm font-medium transition-colors"
                     >
                       Reinstall Helpers
                     </button>
@@ -529,7 +529,7 @@ export function SystemSetupModal({
                 </div>
               </div>
 
-              <div className="text-sm text-gray-300">
+              <div className="text-sm text-muted-foreground">
                 {cliInstaller.installedVersion
                   ? `Installed ${cliInstaller.installedVersion} at ${cliInstaller.installedPath} — app version ${cliInstaller.bundledVersion}`
                   : 'Not installed'}
@@ -564,9 +564,9 @@ export function SystemSetupModal({
           )}
 
           {readinessChecks?.length ? (
-            <div className="rounded border border-gray-700 bg-gray-950/20 overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-700 bg-gray-900">
-                <div className="text-sm font-medium text-gray-100">Readiness</div>
+            <div className="rounded border border-border bg-card/20 overflow-hidden">
+              <div className="px-4 py-3 border-b border-border bg-background">
+                <div className="text-sm font-medium text-foreground">Readiness</div>
               </div>
               <div className="divide-y divide-gray-700">
                 {readinessChecks.map((check) => {
@@ -577,12 +577,12 @@ export function SystemSetupModal({
                         <span className={`mt-1.5 h-2.5 w-2.5 rounded-full ${statusClasses.dot}`} aria-hidden="true" />
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <div className="text-sm font-medium text-gray-100">{check.name}</div>
+                            <div className="text-sm font-medium text-foreground">{check.name}</div>
                             <span className={`rounded border px-2 py-0.5 text-xs font-medium uppercase ${statusClasses.badge}`}>
                               {check.status}
                             </span>
                           </div>
-                          <div className="mt-1 text-sm text-gray-400">{check.detail}</div>
+                          <div className="mt-1 text-sm text-muted-foreground">{check.detail}</div>
                           {check.status !== 'ok' && check.remediation && (
                             <div className={`mt-2 text-sm ${statusClasses.text}`}>
                               {check.remediation}
@@ -596,23 +596,23 @@ export function SystemSetupModal({
               </div>
             </div>
           ) : null}
-          <div className="rounded border border-gray-700 overflow-hidden">
+          <div className="rounded border border-border overflow-hidden">
             <button
               type="button"
               onClick={() => setSystemDetailsOpen((open) => !open)}
-              className="flex w-full items-center justify-between gap-4 border-b border-gray-700 bg-gray-900 px-4 py-3 text-left"
+              className="flex w-full items-center justify-between gap-4 border-b border-border bg-background px-4 py-3 text-left"
             >
               <span>
-                <span className="block text-sm font-medium text-gray-100">System check details</span>
-                <span className="mt-1 block text-xs text-gray-400">
+                <span className="block text-sm font-medium text-foreground">System check details</span>
+                <span className="mt-1 block text-xs text-muted-foreground">
                   Full diagnostic table. Open only when you need the raw checks.
                 </span>
               </span>
-              <span className="shrink-0 text-xs text-gray-300">{systemDetailsOpen ? 'Hide' : 'Show'}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{systemDetailsOpen ? 'Hide' : 'Show'}</span>
             </button>
             {systemDetailsOpen && (
               <table className="w-full text-sm">
-                <thead className="bg-gray-900 text-gray-300">
+                <thead className="bg-background text-muted-foreground">
                   <tr>
                     <th className="text-left px-4 py-2 font-medium">Tool</th>
                     <th className="text-left px-4 py-2 font-medium">Status</th>
@@ -622,8 +622,8 @@ export function SystemSetupModal({
                 </thead>
                 <tbody>
                   {diagnostics?.tools.map((tool) => (
-                    <tr key={tool.id} className="border-t border-gray-700">
-                      <td className="px-4 py-3 text-gray-100">
+                    <tr key={tool.id} className="border-t border-border">
+                      <td className="px-4 py-3 text-foreground">
                         {tool.name}
                         {tool.required && <span className="ml-2 text-xs text-red-300">required</span>}
                       </td>
@@ -632,8 +632,8 @@ export function SystemSetupModal({
                           {tool.installed ? 'Installed' : tool.required ? 'Missing' : 'Optional'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-400 font-mono text-xs">{tool.version ?? '—'}</td>
-                      <td className="px-4 py-3 text-gray-400">{tool.installHint}</td>
+                      <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{tool.version ?? '—'}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{tool.installHint}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -642,10 +642,10 @@ export function SystemSetupModal({
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-gray-700 flex justify-end">
+        <div className="px-6 py-4 border-t border-border flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm font-medium transition-colors"
+            className="px-4 py-2 bg-muted hover:bg-accent text-white rounded text-sm font-medium transition-colors"
           >
             Close
           </button>

@@ -104,7 +104,7 @@ describe('Context menu (component)', () => {
 
   async function expectHighlightedMenuItem(name: RegExp | string) {
     await waitFor(() => {
-      expect(screen.getByRole('menuitem', { name })).toHaveClass('bg-gray-700');
+      expect(screen.getByRole('menuitem', { name })).toHaveClass('bg-muted');
     });
   }
 

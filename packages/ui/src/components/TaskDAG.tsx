@@ -624,7 +624,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
 
   if (tasks.size === 0) {
     return (
-      <div className="h-full w-full flex items-center justify-center text-gray-500">
+      <div className="h-full w-full flex items-center justify-center text-muted-foreground">
         <div className="text-center">
           <p>Your plan will appear here.</p>
         </div>
@@ -662,12 +662,12 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
         elementsSelectable
         proOptions={{ hideAttribution: true }}
       >
-        <Background color="#374151" gap={20} />
+        <Background color="var(--graph-grid)" gap={20} />
         <Controls
           style={{
-            background: '#1f2937',
+            background: 'var(--graph-controls)',
             borderRadius: '8px',
-            border: '1px solid #374151',
+            border: '1px solid var(--graph-controls-border)',
           }}
         />
       </ReactFlow>

@@ -229,25 +229,25 @@ export function TerminalDrawer({
       data-state={state}
       className={
         isMaximized
-          ? 'fixed inset-0 z-40 flex min-h-0 flex-col overflow-hidden border-t border-gray-800 bg-gray-950'
-          : 'border-t border-gray-800 bg-gray-950'
+          ? 'fixed inset-0 z-40 flex min-h-0 flex-col overflow-hidden border-t border-border bg-card'
+          : 'border-t border-border bg-card'
       }
     >
-      <div className="flex items-center gap-2 border-b border-gray-800 px-3 py-2">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <div
           role="tablist"
           data-testid="terminal-tab-strip"
           className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
         >
           {sessions.length === 0 ? (
-            <span className="text-xs text-gray-500">No terminal sessions</span>
+            <span className="text-xs text-muted-foreground">No terminal sessions</span>
           ) : (
             sessions.map((session) => {
               const isActive = session.sessionId === activeSessionId;
               const label = taskLabels?.get(session.taskId) ?? session.taskId;
               const tabClass = isActive
-                ? 'border-gray-500 bg-gray-800 text-white'
-                : 'border-transparent text-gray-300 hover:bg-gray-800/60';
+                ? 'border-border-strong bg-secondary text-white'
+                : 'border-transparent text-muted-foreground hover:bg-secondary/60';
               return (
                 <div
                   key={session.sessionId}
@@ -275,7 +275,7 @@ export function TerminalDrawer({
                       event.stopPropagation();
                       onCloseSession(session.sessionId);
                     }}
-                    className="px-1 text-xs text-gray-400 hover:text-white"
+                    className="px-1 text-xs text-muted-foreground hover:text-white"
                   >
                     ×
                   </button>
@@ -288,7 +288,7 @@ export function TerminalDrawer({
           type="button"
           onClick={onCycle}
           aria-label={`${cycleLabel} terminal drawer`}
-          className="shrink-0 rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800"
+          className="shrink-0 rounded border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-secondary"
         >
           {cycleLabel}
         </button>
@@ -300,16 +300,16 @@ export function TerminalDrawer({
           style={isMaximized ? undefined : { height: DRAWER_BODY_HEIGHT_PX }}
         >
           {sessions.length === 0 && (
-            <div className="absolute inset-0 flex items-center justify-center px-3 text-xs text-gray-500">
+            <div className="absolute inset-0 flex items-center justify-center px-3 text-xs text-muted-foreground">
               Open a terminal from a task to attach.
             </div>
           )}
           {activeSession && activeCommand && (
             <div
               data-testid="terminal-session-command"
-              className="absolute left-0 right-0 top-0 z-10 flex h-9 items-center gap-2 border-b border-gray-800 bg-gray-950 px-3 text-[11px]"
+              className="absolute left-0 right-0 top-0 z-10 flex h-9 items-center gap-2 border-b border-border bg-card px-3 text-[11px]"
             >
-              <span className="text-gray-500">SSH</span>
+              <span className="text-muted-foreground">SSH</span>
               <span className="min-w-0 flex-1 truncate font-mono text-emerald-200">
                 {activeCommand}
               </span>

@@ -28,12 +28,12 @@ const EDGE_SPACING = 18;
 
 const statusClasses: Record<ActionGraphNode['status'], string> = {
   queued: 'border-amber-500/70 bg-amber-950/35 text-amber-100',
-  pending: 'border-gray-600 bg-gray-800 text-gray-200',
-  running: 'border-blue-500/70 bg-blue-950/35 text-blue-100',
+  pending: 'border-border-strong bg-secondary text-foreground',
+  running: 'border-border-strong/70 bg-secondary/80 text-foreground',
   waiting: 'border-violet-500/70 bg-violet-950/35 text-violet-100',
   stalled: 'border-orange-500/80 bg-orange-950/45 text-orange-100',
   failed: 'border-red-500/80 bg-red-950/45 text-red-100',
-  cancelled: 'border-gray-600 bg-gray-800/60 text-gray-400',
+  cancelled: 'border-border-strong bg-secondary/60 text-muted-foreground',
   completed: 'border-green-500/70 bg-green-950/35 text-green-100',
 };
 
@@ -80,7 +80,7 @@ function ActionNode({ data }: { data: { node: ActionGraphNode; selected: boolean
       <Handle
         type="target"
         position={Position.Left}
-        className="!h-2.5 !w-2.5 !border !border-gray-950 !bg-slate-300"
+        className="!h-2.5 !w-2.5 !border !border-background !bg-muted-foreground/40"
       />
       <div className="flex items-center justify-between gap-2">
         <div className="truncate text-xs font-semibold">{node.label}</div>
@@ -98,7 +98,7 @@ function ActionNode({ data }: { data: { node: ActionGraphNode; selected: boolean
       <Handle
         type="source"
         position={Position.Right}
-        className="!h-2.5 !w-2.5 !border !border-gray-950 !bg-slate-300"
+        className="!h-2.5 !w-2.5 !border !border-background !bg-muted-foreground/40"
       />
     </div>
   );
@@ -186,10 +186,10 @@ function ActionGraphInner({ graph, error, selectedNodeId, onSelectNode }: Action
     return <div className="h-full p-4 text-sm text-red-300">Action Graph failed to load: {error}</div>;
   }
   if (!graph) {
-    return <div className="h-full flex items-center justify-center text-sm text-gray-500">Loading Action Graph</div>;
+    return <div className="h-full flex items-center justify-center text-sm text-muted-foreground">Loading Action Graph</div>;
   }
   if (graph.nodes.length === 0) {
-    return <div className="h-full flex items-center justify-center text-sm text-gray-500">No actions recorded</div>;
+    return <div className="h-full flex items-center justify-center text-sm text-muted-foreground">No actions recorded</div>;
   }
 
   return (

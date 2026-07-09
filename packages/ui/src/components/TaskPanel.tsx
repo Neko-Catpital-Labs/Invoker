@@ -168,43 +168,43 @@ function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState
   return (
     <div className="space-y-1 text-sm">
       <div className="flex justify-between">
-        <span className="text-gray-400">Created</span>
-        <span className="text-gray-200">{fmtDate(task.createdAt)}</span>
+        <span className="text-muted-foreground">Created</span>
+        <span className="text-foreground">{fmtDate(task.createdAt)}</span>
       </div>
       {task.execution.startedAt && (
         <div className="flex justify-between">
-          <span className="text-gray-400">Started</span>
-          <span className="text-gray-200">{fmtDate(task.execution.startedAt)}</span>
+          <span className="text-muted-foreground">Started</span>
+          <span className="text-foreground">{fmtDate(task.execution.startedAt)}</span>
         </div>
       )}
       {task.execution.completedAt && (
         <div className="flex justify-between">
-          <span className="text-gray-400">Completed</span>
-          <span className="text-gray-200">{fmtDate(task.execution.completedAt)}</span>
+          <span className="text-muted-foreground">Completed</span>
+          <span className="text-foreground">{fmtDate(task.execution.completedAt)}</span>
         </div>
       )}
       {task.execution.launchStartedAt && (
         <div className="flex justify-between">
-          <span className="text-gray-400">Launch started</span>
-          <span className="text-gray-200">{fmtDate(task.execution.launchStartedAt)}</span>
+          <span className="text-muted-foreground">Launch started</span>
+          <span className="text-foreground">{fmtDate(task.execution.launchStartedAt)}</span>
         </div>
       )}
       {task.execution.launchCompletedAt && (
         <div className="flex justify-between">
-          <span className="text-gray-400">Launch completed</span>
-          <span className="text-gray-200">{fmtDate(task.execution.launchCompletedAt)}</span>
+          <span className="text-muted-foreground">Launch completed</span>
+          <span className="text-foreground">{fmtDate(task.execution.launchCompletedAt)}</span>
         </div>
       )}
       {task.status === 'running' && task.execution.phase && (
         <div className="flex justify-between">
-          <span className="text-gray-400">Running phase</span>
-          <span className="text-gray-200">{getRunningPhaseLabel(task.execution.phase)}</span>
+          <span className="text-muted-foreground">Running phase</span>
+          <span className="text-foreground">{getRunningPhaseLabel(task.execution.phase)}</span>
         </div>
       )}
       {task.status === 'running' && task.execution.lastHeartbeatAt && (
         <div className="flex justify-between">
-          <span className="text-gray-400">Last heartbeat</span>
-          <span className={isHeartbeatStale ? 'text-red-400 font-medium' : 'text-gray-200'}>
+          <span className="text-muted-foreground">Last heartbeat</span>
+          <span className={isHeartbeatStale ? 'text-red-400 font-medium' : 'text-foreground'}>
             {formatElapsed(task.execution.lastHeartbeatAt)}
           </span>
         </div>
@@ -286,7 +286,7 @@ export function TaskPanel({
 
   if (!task) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-500 p-4">
+      <div className="h-full flex items-center justify-center text-muted-foreground p-4">
         <p>Select a task from the graph to view details</p>
       </div>
     );
@@ -381,15 +381,15 @@ export function TaskPanel({
     <div className="h-full overflow-y-auto p-4 space-y-4">
       {/* Header */}
       <div>
-        <h2 className="text-lg font-semibold text-gray-100 truncate">
+        <h2 className="text-lg font-semibold text-foreground truncate">
           {mergeGateDisplayTitle}
         </h2>
-        <p className="text-xs font-mono text-gray-400 mt-1">{task.id}</p>
+        <p className="text-xs font-mono text-muted-foreground mt-1">{task.id}</p>
       </div>
 
       {/* Status badge */}
       <div className="flex items-center gap-2">
-        <span className="text-sm text-gray-400">Task Status</span>
+        <span className="text-sm text-muted-foreground">Task Status</span>
         <span
           className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium ${colors.bg} ${colors.text}`}
         >
@@ -412,7 +412,7 @@ export function TaskPanel({
       {/* Target branch (merge gates only) */}
       {task.config.isMergeNode && onSetMergeBranch && task.config.workflowId && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Target Branch</span>
+          <span className="text-sm text-muted-foreground">Target Branch</span>
           <input
             data-testid="target-branch-input"
             value={branchValue}
@@ -431,7 +431,7 @@ export function TaskPanel({
                 setBranchValue(baseBranch ?? '');
               }
             }}
-            className="bg-gray-700 text-gray-200 text-xs font-mono rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 w-28 text-right"
+            className="bg-muted text-foreground text-xs font-mono rounded px-2 py-1 border border-border-strong focus:outline-none focus:border-border-strong w-28 text-right"
           />
         </div>
       )}
@@ -439,12 +439,12 @@ export function TaskPanel({
       {/* Review link (merge gates only) */}
       {task.config.isMergeNode && task.execution?.reviewUrl && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Review link</span>
+          <span className="text-sm text-muted-foreground">Review link</span>
           <a
             href={task.execution.reviewUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs font-mono text-blue-400 hover:text-blue-300 underline break-all whitespace-normal text-right max-w-[260px]"
+            className="text-xs font-mono text-foreground hover:text-foreground/80 underline-offset-2 hover:underline underline break-all whitespace-normal text-right max-w-[260px]"
             title={task.execution.reviewUrl}
             data-testid="pr-url-link"
           >
@@ -454,8 +454,8 @@ export function TaskPanel({
       )}
       {task.config.isMergeNode && task.execution?.reviewStatus && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Review Status</span>
-          <span className="text-xs text-gray-200" data-testid="pr-status-text">
+          <span className="text-sm text-muted-foreground">Review Status</span>
+          <span className="text-xs text-foreground" data-testid="pr-status-text">
             {task.execution.reviewStatus}
           </span>
         </div>
@@ -464,8 +464,8 @@ export function TaskPanel({
       {/* PR target repo (pending merge gates without a review URL yet) */}
       {task.config.isMergeNode && task.status === 'pending' && !task.execution?.reviewUrl && workflowRepoUrl && (
         <div className="flex items-center justify-between" data-testid="pr-target-repo">
-          <span className="text-sm text-gray-400">PR target repo</span>
-          <span className="text-xs font-mono text-gray-200 break-all whitespace-normal text-right max-w-[260px]" title={workflowRepoUrl}>
+          <span className="text-sm text-muted-foreground">PR target repo</span>
+          <span className="text-xs font-mono text-foreground break-all whitespace-normal text-right max-w-[260px]" title={workflowRepoUrl}>
             {formatRepoUrl(workflowRepoUrl)}
           </span>
         </div>
@@ -474,7 +474,7 @@ export function TaskPanel({
       {/* Primary execution controls */}
       {onEditType && !task.config.isMergeNode && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Run on</span>
+          <span className="text-sm text-muted-foreground">Run on</span>
           <select
             value={executorSelectValue}
             onChange={(e) => {
@@ -486,7 +486,7 @@ export function TaskPanel({
               }
             }}
             disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
-            className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="bg-muted text-foreground text-xs rounded px-2 py-1 border border-border-strong focus:outline-none focus:border-border-strong disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="runner-kind-select"
           >
             <option value="worktree">Worktree</option>
@@ -502,12 +502,12 @@ export function TaskPanel({
 
       {task.config.prompt && onEditAgent && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Agent</span>
+          <span className="text-sm text-muted-foreground">Agent</span>
           <select
             value={task.config.executionAgent ?? 'claude'}
             onChange={(e) => onEditAgent(task.id, e.target.value)}
             disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
-            className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="bg-muted text-foreground text-xs rounded px-2 py-1 border border-border-strong focus:outline-none focus:border-border-strong disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="execution-agent-select"
           >
             {(executionAgents ?? []).map(name => (
@@ -521,13 +521,13 @@ export function TaskPanel({
       {(
         (task.config.isMergeNode && onSetMergeMode && task.config.workflowId)
       ) && (
-        <div className="border-t border-gray-700 pt-3">
+        <div className="border-t border-border pt-3">
           <button
             onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-2 text-sm text-gray-300 hover:text-gray-100 transition-colors w-full"
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full"
             data-testid="advanced-toggle"
           >
-            <span className="text-gray-500">{showAdvanced ? '▼' : '▶'}</span>
+            <span className="text-muted-foreground">{showAdvanced ? '▼' : '▶'}</span>
             <span>Advanced</span>
           </button>
 
@@ -536,12 +536,12 @@ export function TaskPanel({
               {/* Merge mode selector (merge gates only) */}
               {task.config.isMergeNode && onSetMergeMode && task.config.workflowId && (
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-400">Merge mode</span>
+                  <span className="text-sm text-muted-foreground">Merge mode</span>
                   <select
                     value={mergeMode ?? 'manual'}
                     onChange={(e) => onSetMergeMode(task.config.workflowId!, e.target.value)}
                     disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
-                    className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="bg-muted text-foreground text-xs rounded px-2 py-1 border border-border-strong focus:outline-none focus:border-border-strong disabled:opacity-50 disabled:cursor-not-allowed"
                     data-testid="merge-mode-select"
                   >
                     <option value="manual">Manual</option>
@@ -561,8 +561,8 @@ export function TaskPanel({
           <div className="flex items-center justify-between">
             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
               task.config.prompt
-                ? 'bg-blue-900/40 text-blue-300'
-                : 'bg-gray-700 text-gray-300'
+                ? 'bg-secondary/80 text-foreground'
+                : 'bg-muted text-muted-foreground'
             }`}>
               {task.config.prompt
                 ? capitalize(task.config.executionAgent ?? 'claude') + ' Task'
@@ -575,21 +575,21 @@ export function TaskPanel({
               <textarea
                 value={editCommandValue}
                 onChange={(e) => setEditCommandValue(e.target.value)}
-                className="w-full rounded p-3 text-xs font-mono text-green-300 bg-gray-800 border border-blue-500 focus:outline-none focus:border-blue-400 resize-y"
+                className="w-full rounded p-3 text-xs font-mono text-green-300 bg-secondary border border-border-strong focus:outline-none focus:border-ring resize-y"
                 rows={3}
                 data-testid="edit-command-input"
               />
               <div className="flex gap-2">
                 <button
                   onClick={handleSaveCommand}
-                  className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium transition-colors"
+                  className="flex-1 px-3 py-1.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded text-xs font-medium transition-colors"
                   data-testid="save-command-btn"
                 >
                   Save & Re-run
                 </button>
                 <button
                   onClick={handleCancelEdit}
-                  className="flex-1 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white rounded text-xs font-medium transition-colors"
+                  className="flex-1 px-3 py-1.5 bg-muted hover:bg-accent text-foreground text-white rounded text-xs font-medium transition-colors"
                   data-testid="cancel-edit-btn"
                 >
                   Cancel
@@ -601,21 +601,21 @@ export function TaskPanel({
               <textarea
                 value={editPromptValue}
                 onChange={(e) => setEditPromptValue(e.target.value)}
-                className="w-full rounded p-3 text-xs text-gray-300 bg-blue-900/20 border border-blue-500 focus:outline-none focus:border-blue-400 resize-y"
+                className="w-full rounded p-3 text-xs text-muted-foreground bg-secondary/60 border border-border-strong focus:outline-none focus:border-ring resize-y"
                 rows={3}
                 data-testid="edit-prompt-input"
               />
               <div className="flex gap-2">
                 <button
                   onClick={handleSavePrompt}
-                  className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium transition-colors"
+                  className="flex-1 px-3 py-1.5 bg-primary text-primary-foreground hover:bg-primary/90 rounded text-xs font-medium transition-colors"
                   data-testid="save-prompt-btn"
                 >
                   Save & Re-run
                 </button>
                 <button
                   onClick={handleCancelPromptEdit}
-                  className="flex-1 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white rounded text-xs font-medium transition-colors"
+                  className="flex-1 px-3 py-1.5 bg-muted hover:bg-accent text-foreground text-white rounded text-xs font-medium transition-colors"
                   data-testid="cancel-prompt-edit-btn"
                 >
                   Cancel
@@ -627,11 +627,11 @@ export function TaskPanel({
               className={`mt-2 rounded p-3 text-xs select-text ${
                 task.config.prompt
                   ? canEditPrompt
-                    ? 'bg-blue-900/20 border border-blue-800 cursor-pointer hover:border-blue-600 transition-colors'
-                    : 'bg-blue-900/20 border border-blue-800 cursor-text'
+                    ? 'bg-secondary/60 border border-border-strong cursor-pointer hover:border-border-strong transition-colors'
+                    : 'bg-secondary/60 border border-border-strong cursor-text'
                   : canEditCommand
-                    ? 'bg-gray-800 border border-gray-700 cursor-pointer hover:border-gray-600 transition-colors'
-                    : 'bg-gray-800 border border-gray-700 cursor-text'
+                    ? 'bg-secondary border border-border cursor-pointer hover:border-border-strong transition-colors'
+                    : 'bg-secondary border border-border cursor-text'
               }`}
               onDoubleClick={() => {
                 if (task.config.prompt && canEditPrompt) {
@@ -646,7 +646,7 @@ export function TaskPanel({
             >
               <div data-testid="prompt-command-display">
                 {task.config.prompt ? (
-                  <p className="text-gray-300 whitespace-pre-wrap">{task.config.prompt}</p>
+                  <p className="text-muted-foreground whitespace-pre-wrap">{task.config.prompt}</p>
                 ) : (
                   <code className="text-green-300 font-mono whitespace-pre-wrap">{task.config.command}</code>
                 )}
@@ -662,12 +662,12 @@ export function TaskPanel({
       {/* Dependencies */}
       {task.dependencies.length > 0 && (
         <div>
-          <h3 className="text-sm font-medium text-gray-300 mb-1">Dependencies</h3>
+          <h3 className="text-sm font-medium text-muted-foreground mb-1">Dependencies</h3>
           <div className="flex flex-wrap gap-1">
             {task.dependencies.map((depId) => (
               <span
                 key={depId}
-                className="text-xs bg-gray-700 text-gray-300 px-2 py-0.5 rounded"
+                className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded"
               >
                 {depId.length > 15 ? depId.slice(0, 15) + '...' : depId}
               </span>
@@ -711,9 +711,9 @@ export function TaskPanel({
 
       {/* Blocked info */}
       {task.execution.blockedBy && (
-        <div className="bg-gray-700/50 border border-gray-600 rounded p-3">
-          <h3 className="text-sm font-medium text-gray-400 mb-1">Blocked By</h3>
-          <p className="text-xs text-gray-300">{task.execution.blockedBy}</p>
+        <div className="bg-muted/50 border border-border-strong rounded p-3">
+          <h3 className="text-sm font-medium text-muted-foreground mb-1">Blocked By</h3>
+          <p className="text-xs text-muted-foreground">{task.execution.blockedBy}</p>
         </div>
       )}
 
@@ -783,16 +783,16 @@ export function TaskPanel({
         const effectiveExpanded = isEditingGatePolicies || isSatisfiedListExpanded;
 
         return (
-          <div className="space-y-3 border border-gray-700 rounded p-3">
+          <div className="space-y-3 border border-border rounded p-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium text-gray-200">Gate Policy</h3>
+              <h3 className="text-sm font-medium text-foreground">Gate Policy</h3>
               {canEditGatePolicies && !isEditingGatePolicies && (
                 <button
                   onClick={() => {
                     setIsEditingGatePolicies(true);
                     setIsSatisfiedListExpanded(true);
                   }}
-                  className="text-xs text-blue-400 hover:text-blue-300"
+                  className="text-xs text-foreground hover:text-foreground/80 underline-offset-2 hover:underline"
                   data-testid="gate-policy-edit-btn"
                 >
                   Edit
@@ -859,7 +859,7 @@ export function TaskPanel({
                   const dotColor = status !== 'missing' ? getStatusColor(status as TaskStatus).dot : 'bg-slate-500';
 
                   return (
-                    <div key={key} className="rounded border border-gray-700 bg-gray-800/40 p-2 space-y-1" data-testid={`gate-policy-offender-${key}`}>
+                    <div key={key} className="rounded border border-border bg-secondary/40 p-2 space-y-1" data-testid={`gate-policy-offender-${key}`}>
                       <div className="flex items-start gap-1">
                         <span className="text-amber-400 flex-shrink-0">⚠</span>
                         <div className="flex-1 min-w-0">
@@ -870,7 +870,7 @@ export function TaskPanel({
                                 href={reviewUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="ml-2 text-blue-400 hover:text-blue-300"
+                                className="ml-2 text-foreground hover:text-foreground/80 underline-offset-2 hover:underline"
                               >
                                 PR #{reviewUrl.split('/').pop()} ↗
                               </a>
@@ -880,20 +880,20 @@ export function TaskPanel({
                       </div>
 
                       {hasMixedPolicy ? (
-                        <div className="text-xs text-gray-400 ml-4" data-testid={`gate-policy-offender-${key}-mixed-threshold`}>
+                        <div className="text-xs text-muted-foreground ml-4" data-testid={`gate-policy-offender-${key}-mixed-threshold`}>
                           <div>Mixed thresholds across {group.length} dep{group.length === 1 ? '' : 's'}</div>
                           {!isEditingGatePolicies && <div className="mt-0.5">Unblock at <span className="text-amber-400">⚠ mixed</span></div>}
                         </div>
                       ) : (
                         <div className="text-xs ml-4 space-y-0.5">
-                          <div className="flex items-center gap-1.5 text-gray-300">
-                            <span className="text-gray-400">Currently</span>
+                          <div className="flex items-center gap-1.5 text-muted-foreground">
+                            <span className="text-muted-foreground">Currently</span>
                             <span className={`inline-block w-1.5 h-1.5 rounded-full ${status !== 'missing' ? dotColor : 'bg-slate-500'}`} />
                             <span>{status !== 'missing' ? formatStatusLabel(status as TaskStatus) : 'Missing'}</span>
                           </div>
 
                           <div className="flex items-center gap-1.5">
-                            <span className="text-gray-400">Unblock at</span>
+                            <span className="text-muted-foreground">Unblock at</span>
                             {isEditingGatePolicies ? (
                               <select
                                 value={draftPolicy}
@@ -901,7 +901,7 @@ export function TaskPanel({
                                   const next = e.target.value as 'completed' | 'review_ready';
                                   setGatePolicyDraft((prev) => ({ ...prev, [key]: next }));
                                 }}
-                                className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-0.5 border border-gray-600 focus:outline-none focus:border-blue-500"
+                                className="bg-muted text-foreground text-xs rounded px-2 py-0.5 border border-border-strong focus:outline-none focus:border-border-strong"
                                 data-testid={`gate-policy-select-${index}`}
                               >
                                 <option value="review_ready">Review Ready</option>
@@ -910,11 +910,11 @@ export function TaskPanel({
                             ) : (
                               <>
                                 <span className={`inline-block w-1.5 h-1.5 rounded-full ${getStatusColor(draftPolicy as TaskStatus).dot}`} />
-                                <span className="text-gray-300">{formatStatusLabel(draftPolicy as TaskStatus)}</span>
+                                <span className="text-muted-foreground">{formatStatusLabel(draftPolicy as TaskStatus)}</span>
                               </>
                             )}
                             {impactText && (
-                              <span className="text-gray-400 ml-1" data-testid={`gate-policy-offender-${key}-impact`}>
+                              <span className="text-muted-foreground ml-1" data-testid={`gate-policy-offender-${key}-impact`}>
                                 {impactText}
                               </span>
                             )}
@@ -932,7 +932,7 @@ export function TaskPanel({
               <div className="space-y-1">
                 <button
                   onClick={() => setIsSatisfiedListExpanded(!isSatisfiedListExpanded)}
-                  className="text-xs text-gray-400 hover:text-gray-300 w-full text-left"
+                  className="text-xs text-muted-foreground hover:text-muted-foreground w-full text-left"
                   data-testid="gate-policy-satisfied-toggle"
                 >
                   {effectiveExpanded ? '▾' : '▸'} {satisfied.length} satisfied gate{satisfied.length === 1 ? '' : 's'}
@@ -967,7 +967,7 @@ export function TaskPanel({
                                   const next = e.target.value as 'completed' | 'review_ready';
                                   setGatePolicyDraft((prev) => ({ ...prev, [key]: next }));
                                 }}
-                                className="ml-auto bg-gray-700 text-gray-200 text-xs rounded px-2 py-0.5 border border-gray-600 focus:outline-none focus:border-blue-500"
+                                className="ml-auto bg-muted text-foreground text-xs rounded px-2 py-0.5 border border-border-strong focus:outline-none focus:border-border-strong"
                                 data-testid={`gate-policy-select-${externalDeps.indexOf(dep)}`}
                               >
                                 <option value="review_ready">Review Ready</option>
@@ -978,7 +978,7 @@ export function TaskPanel({
                                   href={reviewUrl}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="ml-1 text-blue-400 hover:text-blue-300"
+                                  className="ml-1 text-foreground hover:text-foreground/80 underline-offset-2 hover:underline"
                                 >
                                   PR#{reviewUrl.split('/').pop()} ↗
                                 </a>
@@ -995,7 +995,7 @@ export function TaskPanel({
                                   href={reviewUrl}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="ml-1 text-blue-400 hover:text-blue-300"
+                                  className="ml-1 text-foreground hover:text-foreground/80 underline-offset-2 hover:underline"
                                 >
                                   PR#{reviewUrl.split('/').pop()}
                                 </a>
@@ -1013,7 +1013,7 @@ export function TaskPanel({
             {/* Edit mode controls */}
             {isEditingGatePolicies && (
               <div className="space-y-2">
-                <div className="text-xs text-gray-400" data-testid="gate-policy-impact-text">
+                <div className="text-xs text-muted-foreground" data-testid="gate-policy-impact-text">
                   {changedGatePolicyCount > 0
                     ? `${changedGatePolicyCount} change${changedGatePolicyCount === 1 ? '' : 's'} pending. Apply to re-evaluate immediately.`
                     : 'No changes yet.'}
@@ -1022,7 +1022,7 @@ export function TaskPanel({
                   <button
                     onClick={handleSaveGatePolicies}
                     disabled={isSavingGatePolicies || changedGatePolicyCount === 0}
-                    className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900/40 disabled:text-gray-400 text-white rounded text-xs font-medium transition-colors"
+                    className="flex-1 px-3 py-1.5 bg-primary hover:bg-primary/90 disabled:bg-secondary/80 disabled:text-muted-foreground text-white rounded text-xs font-medium transition-colors"
                     data-testid="gate-policy-apply-btn"
                   >
                     {isSavingGatePolicies ? 'Applying...' : 'Apply & Re-evaluate'}
@@ -1037,7 +1037,7 @@ export function TaskPanel({
                       setIsEditingGatePolicies(false);
                     }}
                     disabled={isSavingGatePolicies}
-                    className="flex-1 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white rounded text-xs font-medium transition-colors"
+                    className="flex-1 px-3 py-1.5 bg-muted hover:bg-accent text-foreground disabled:opacity-50 text-white rounded text-xs font-medium transition-colors"
                     data-testid="gate-policy-cancel-btn"
                   >
                     Cancel
@@ -1054,14 +1054,14 @@ export function TaskPanel({
         <div className="space-y-1 text-sm">
           {task.execution.branch && (
             <div className="flex justify-between">
-              <span className="text-gray-400">Branch</span>
-              <span className="text-gray-200 font-mono text-xs">{task.execution.branch}</span>
+              <span className="text-muted-foreground">Branch</span>
+              <span className="text-foreground font-mono text-xs">{task.execution.branch}</span>
             </div>
           )}
           {task.execution.commit && (
             <div className="flex justify-between">
-              <span className="text-gray-400">Commit</span>
-              <span className="text-gray-200 font-mono text-xs">
+              <span className="text-muted-foreground">Commit</span>
+              <span className="text-foreground font-mono text-xs">
                 {task.execution.commit.slice(0, 8)}
               </span>
             </div>
@@ -1072,15 +1072,15 @@ export function TaskPanel({
       {/* Summary */}
       {task.config.summary && (
         <div>
-          <h3 className="text-sm font-medium text-gray-300 mb-1">Summary</h3>
-          <p className="text-xs text-gray-400 whitespace-pre-wrap">{task.config.summary}</p>
+          <h3 className="text-sm font-medium text-muted-foreground mb-1">Summary</h3>
+          <p className="text-xs text-muted-foreground whitespace-pre-wrap">{task.config.summary}</p>
         </div>
       )}
 
       {/* Experiment results */}
       {task.execution.experimentResults && task.execution.experimentResults.length > 0 && (
         <div>
-          <h3 className="text-sm font-medium text-gray-300 mb-1">Experiment Results</h3>
+          <h3 className="text-sm font-medium text-muted-foreground mb-1">Experiment Results</h3>
           <div className="space-y-1">
             {task.execution.experimentResults.map((result) => (
               <div
