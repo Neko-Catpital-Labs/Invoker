@@ -261,6 +261,7 @@ export function createMockInvoker(
     replaceTask: vi.fn(async () => accepted('invoker:replace-task')),
     getActivityLogs: vi.fn(async () => []),
     getEvents: vi.fn(async () => []),
+    getHistoryTasks: vi.fn(async () => []),
     openTerminal: vi.fn(async (taskId: string) => ({
       opened: true,
       session: {

@@ -557,6 +557,43 @@ test.describe('Read-only mode visual proof', () => {
 });
 
 test.describe('Visual proof capture', () => {
+  test('history view — task state timeline', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    const earlier = new Date(Date.now() - 60_000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now, exitCode: 0 },
+        },
+      },
+      {
+        taskId: 'task-beta',
+        changes: {
+          status: 'failed',
+          execution: {
+            startedAt: earlier,
+            completedAt: now,
+            exitCode: 1,
+            error: 'Command exited non-zero',
+          },
+        },
+      },
+      {
+        taskId: 'task-gamma',
+        changes: {
+          status: 'fixing_with_ai',
+          execution: { startedAt: earlier },
+        },
+      },
+    ]);
+    await page.getByTestId('graph-more-button').click();
+    await page.getByTestId('rail-history').click();
+    await captureScreenshot(page, 'history-view-task-state-timeline');
+  });
+
   test('empty state', async ({ page }) => {
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 5000 });
     await expect(page.getByText('What do you want to build?')).toHaveCount(0);
