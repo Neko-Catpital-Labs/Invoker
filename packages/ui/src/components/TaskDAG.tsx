@@ -157,7 +157,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const { fitView, setCenter, getZoom } = useReactFlow();
   const graphRootRef = useRef<HTMLDivElement>(null);
   const prevNodeCount = useRef(0);
-  const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
   const reportedGraphVisibleRef = useRef(false);
   const watchdogMissCountRef = useRef(0);
   const watchdogRecoveryAttemptedRef = useRef(false);
@@ -333,7 +332,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
             dimmed,
             selected: selectedTaskId === task.id,
             runningLike,
-            ...(onTaskDoubleClick ? { onDoubleClick: onTaskDoubleClick } : {}),
           },
         });
       }
@@ -415,7 +413,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [activeLayout.positions, onTaskDoubleClick, rawGraph, routedEdgePoints, runningTaskIds, selectedTaskId, statusFilters, tasks, workflows]);
+  }, [activeLayout.positions, rawGraph, routedEdgePoints, runningTaskIds, selectedTaskId, statusFilters, tasks, workflows]);
 
   // Merge task-derived nodes with React Flow's internal dimension state.
   // Without this, each task-delta re-render creates new node objects that discard
@@ -599,18 +597,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       if (task && onTaskClick) {
         onTaskClick(task);
       }
-      if (task && onTaskDoubleClick) {
-        const now = Date.now();
-        const lastClick = lastNodeClickRef.current;
-        if (lastClick?.id === node.id && now - lastClick.at <= 500) {
-          lastNodeClickRef.current = null;
-          onTaskDoubleClick(task);
-        } else {
-          lastNodeClickRef.current = { id: node.id, at: now };
-        }
-      }
     },
-    [tasks, onTaskClick, onTaskDoubleClick],
+    [tasks, onTaskClick],
   );
 
   const onNodeDoubleClick = useCallback(
