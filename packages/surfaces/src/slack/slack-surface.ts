@@ -13,7 +13,15 @@ import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus } from './slack-formatter.js';
 import { splitForSlack, sanitizeSlashCommands } from './slack-message-helpers.js';
 import type { SlackMessage } from './slack-formatter.js';
-import { PlanConversation, buildEmptyPlannerOutputError, defaultPlanningCommand, isConfirmation, isNegation } from './plan-conversation.js';
+import {
+  DEFAULT_PLANNER_RETRY_BASE_DELAY_MS,
+  DEFAULT_PLANNER_RETRY_LIMIT,
+  PlanConversation,
+  buildEmptyPlannerOutputError,
+  defaultPlanningCommand,
+  isConfirmation,
+  isNegation,
+} from './plan-conversation.js';
 import type { ConversationMode, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
@@ -70,6 +78,10 @@ export interface SlackSurfaceConfig {
   planningTimeoutSeconds?: number;
   /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */
   planningHeartbeatIntervalSeconds?: number;
+  /** How many extra planner attempts to make when the CLI exits 0 with empty stdout. Default: 2 (3 total attempts). */
+  plannerRetryLimit?: number;
+  /** Base delay in milliseconds between empty-output retry attempts (doubles per retry). Default: 500. */
+  plannerRetryBaseDelayMs?: number;
 
   // ── Slack-native workflow extensions ──────────────────────
   /** Lobby channel where `@Invoker` starts planning. Defaults to channelId. */
@@ -134,6 +146,20 @@ export type ThreadRequest =
  * `formatLocalCommandResult` shows the last chars anyway.
  */
 const MAX_LOCAL_CAPTURE_CHARS = 65_536;
+
+// Internal marker for the "success with empty stdout" case so the runOneShotPlanner
+// retry wrapper can distinguish transient silent-success from user-actionable
+// failures (non-zero exit, spawn error, timeout) that must not be retried.
+class EmptyOutputAttemptError extends Error {
+  constructor(public readonly stderrTail: string) {
+    super('planner exited 0 with no output');
+    this.name = 'EmptyOutputAttemptError';
+  }
+}
+
+function isEmptyOutputAttemptError(err: unknown): err is EmptyOutputAttemptError {
+  return err instanceof EmptyOutputAttemptError;
+}
 
 /** Keep only the last `max` chars of a growing buffer. */
 function capTailChars(value: string, max: number): string {
@@ -404,6 +430,8 @@ export class SlackSurface implements Surface {
   private model?: string;
   private planningTimeoutSeconds?: number;
   private planningHeartbeatIntervalSeconds?: number;
+  private plannerRetryLimit: number;
+  private plannerRetryBaseDelayMs: number;
   /** Minimum spacing between thread message posts to avoid Slack burst limits. */
   private readonly messagePacingMs = 1_100;
   /** Session lifecycle metrics */
@@ -455,6 +483,8 @@ export class SlackSurface implements Surface {
     this.useTypingIndicator = config.useTypingIndicator ?? false;
     this.planningTimeoutSeconds = config.planningTimeoutSeconds;
     this.planningHeartbeatIntervalSeconds = config.planningHeartbeatIntervalSeconds;
+    this.plannerRetryLimit = Math.max(0, config.plannerRetryLimit ?? DEFAULT_PLANNER_RETRY_LIMIT);
+    this.plannerRetryBaseDelayMs = Math.max(0, config.plannerRetryBaseDelayMs ?? DEFAULT_PLANNER_RETRY_BASE_DELAY_MS);
     this.lobbyChannelId = config.lobbyChannelId ?? config.channelId;
     this.planningCommandBuilder = config.planningCommandBuilder;
     this.prepareRepoCheckout = config.prepareRepoCheckout;
@@ -483,6 +513,8 @@ export class SlackSurface implements Surface {
         log: this.log,
         timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
         planningCommandBuilder: config.planningCommandBuilder,
+        plannerRetryLimit: this.plannerRetryLimit,
+        plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
       });
     }
   }
@@ -1443,18 +1475,55 @@ ${text}`;
     }
   }
 
-  private runOneShotPlanner(harness: HarnessPreset, prompt: string): Promise<string> {
+  private async runOneShotPlanner(harness: HarnessPreset, prompt: string): Promise<string> {
     const { command, args } = this.planningCommandBuilder
       ? this.planningCommandBuilder({ tool: harness.tool, model: harness.model, prompt })
       : defaultPlanningCommand(this.cursorCommand, { model: harness.model, prompt });
     const plannerLabel = harness.tool ?? command;
     const timeoutMs = (this.planningTimeoutSeconds ?? 7_200) * 1_000;
+    const totalAttempts = this.plannerRetryLimit + 1;
+    let lastStderrTail = '';
+
+    for (let attempt = 0; attempt < totalAttempts; attempt++) {
+      if (attempt > 0) {
+        const backoffMs = this.plannerRetryBaseDelayMs * (2 ** (attempt - 1));
+        this.log?.('slack-surface', 'warn',
+          `[PLANNER_RETRY] backing off ${backoffMs}ms before attempt=${attempt + 1}/${totalAttempts} (planner=${plannerLabel})`);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+      try {
+        return await this.runOneShotPlannerAttempt(command, args, plannerLabel, timeoutMs, attempt + 1, totalAttempts);
+      } catch (err) {
+        if (isEmptyOutputAttemptError(err)) {
+          lastStderrTail = err.stderrTail;
+          const isLast = attempt >= totalAttempts - 1;
+          this.log?.('slack-surface', 'warn',
+            `[PLANNER_RETRY] attempt=${attempt + 1}/${totalAttempts} produced no output (planner=${plannerLabel}, willRetry=${!isLast}, stderrBytes=${err.stderrTail.length}, stderrTail="${err.stderrTail.slice(-200).replace(/\n/g, '\\n')}")`);
+          if (!isLast) continue;
+          throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
+        }
+        throw err;
+      }
+    }
+    throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
+  }
+
+  private runOneShotPlannerAttempt(
+    command: string,
+    args: string[],
+    plannerLabel: string,
+    timeoutMs: number,
+    attemptNumber: number,
+    totalAttempts: number,
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, {
         cwd: this.workingDir ?? process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
       });
+      this.log?.('slack-surface', 'info',
+        `[PERF] one_shot_spawn: pid=${child.pid ?? 'none'}, planner=${plannerLabel}, attempt=${attemptNumber}/${totalAttempts}`);
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -1470,7 +1539,7 @@ ${text}`;
           if (trimmed) {
             resolve(trimmed);
           } else {
-            reject(buildEmptyPlannerOutputError(plannerLabel, stderr));
+            reject(new EmptyOutputAttemptError(stderr));
           }
         } else {
           reject(new Error(stderr.trim() || stdout.trim() || `Planner exited with code ${code}`));
@@ -1958,6 +2027,8 @@ ${text}`;
         defaultBranch: this.defaultBranch,
         repoUrl: this.repoUrl,
         timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
+        plannerRetryLimit: this.plannerRetryLimit,
+        plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
       });
       this.planConversations.set(threadTs, conversation);
     }
@@ -2023,6 +2094,8 @@ ${text}`;
             conversationRepo: this.conversationRepo,
             defaultBranch: this.defaultBranch,
             repoUrl: this.repoUrl,
+            plannerRetryLimit: this.plannerRetryLimit,
+            plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
           });
           await conversation.init();
           this.planConversations.set(entry.threadTs, conversation);
