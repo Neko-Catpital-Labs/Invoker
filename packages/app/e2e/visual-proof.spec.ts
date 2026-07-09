@@ -393,6 +393,14 @@ async function minimizeInspectorIfVisible(page: Page) {
   }
 }
 
+async function submitPlanningPrompt(page: Page, prompt: string): Promise<void> {
+  const input = page.getByTestId('invoker-terminal-input');
+  await input.click();
+  await input.pressSequentially(prompt);
+  await expect(input).toHaveValue(prompt);
+  await input.press('Enter');
+}
+
 async function expandSelectedWorkflowMiniDagForProof(page: Page) {
   const panel = page.getByTestId('selected-workflow-mini-dag');
   await expect(panel).toBeVisible({ timeout: 10000 });
@@ -596,11 +604,10 @@ test.describe('Visual proof capture', () => {
     }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow', reply: fullPlanReply });
 
     await page.getByTestId('sidebar-planning').click();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
     await expect(page.getByTestId('planning-session-rail')).toHaveClass(/w-64/);
     await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
-    await page.getByTestId('invoker-terminal-input').fill('Add README');
-    await page.getByRole('button', { name: 'Send' }).click();
+    await submitPlanningPrompt(page, 'Add README');
 
     // The conversation renders in the terminal transcript: the user message,
     // the assistant prose, and the drafted plan YAML from first to last line.
@@ -703,8 +710,7 @@ test.describe('Visual proof capture', () => {
 
     await expect(page.getByRole('heading', { name: 'What do you want to build?' })).toBeVisible();
     await expect(page.getByTestId('invoker-terminal-input')).toBeVisible();
-    await page.getByTestId('invoker-terminal-input').fill('Build the Workers Surface');
-    await page.getByRole('button', { name: 'Send' }).click();
+    await submitPlanningPrompt(page, 'Build the Workers Surface');
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
     await page.getByRole('button', { name: 'Submit to Invoker' }).click();
 
