@@ -2792,10 +2792,10 @@ export function App() {
               key={session.id}
               type="button"
               onClick={() => setActivePlanningSessionId(session.id)}
-              className={`block w-full rounded-xl px-3 py-2 text-left transition-colors ${selected ? 'bg-secondary text-white ring-1 ring-border' : 'text-foreground hover:bg-background/80'}`}
+              className={`block w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${selected ? 'bg-accent/60 text-accent-foreground ring-1 ring-border-strong' : 'text-foreground hover:bg-accent/30'}`}
             >
-              <div className="truncate font-medium">{session.title}</div>
-              <div className="mt-1 truncate text-xs text-muted-foreground">{previewPlanningMessage(session)}</div>
+              <div className="truncate text-body font-medium">{session.title}</div>
+              <div className="mt-0.5 truncate text-caption text-muted-foreground">{previewPlanningMessage(session)}</div>
               <div className="mt-2 flex items-center justify-between gap-2">
                 <span className={`rounded-full px-2 py-0.5 text-[11px] ${planningStatusClass(session.status)}`}>
                   {planningStatusLabel(session.status)}
