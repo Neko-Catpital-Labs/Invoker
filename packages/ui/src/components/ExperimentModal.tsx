@@ -5,7 +5,7 @@
  * Used for reconciliation tasks.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { TaskState } from '../types.js';
 
 interface ExperimentModalProps {
@@ -20,6 +20,17 @@ export function ExperimentModal({
   onClose,
 }: ExperimentModalProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   const results = task.execution.experimentResults ?? [];
 

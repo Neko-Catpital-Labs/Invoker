@@ -12,25 +12,27 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { scopePlanTaskId } from '@invoker/workflow-core';
-import type { Orchestrator, TaskState, ExperimentVariant, RunnerKind } from '@invoker/workflow-core';
+import type { Orchestrator, TaskState, ExperimentVariant } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType, Logger } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
+import type { MachineCapabilities } from './harness-capabilities.js';
+import { resolveHarnessSelection } from './harness-capabilities.js';
 import { BaseExecutor } from './base-executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { createExecutionBench } from './execution-bench.js';
 import { ResourceLimitError, type RepoPoolTiming } from './repo-pool.js';
 import type { ExecutorRegistry } from './registry.js';
 import type { AgentRegistry } from './agent-registry.js';
-import type { MergeGateProvider } from './merge-gate-provider.js';
+import type { MergeGateProvider, MergeGateApprovalStatus } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { DockerExecutor } from './docker-executor.js';
 import { WorktreeExecutor } from './worktree-executor.js';
 import { MergeGateExecutor } from './merge-gate-executor.js';
 import { isInvokerManagedPoolBranch } from './plan-base-remote.js';
-import { formatLifecycleTag, extractAttemptSuffix } from './branch-utils.js';
 import { SshExecutor } from './ssh-executor.js';
+
 import {
   executeMergeNodeImpl,
   approveMergeImpl,
@@ -40,60 +42,82 @@ import {
   ensureLocalBranchForMerge,
   collectTransitiveNonMergeTaskIds,
 } from './merge-runner.js';
-import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import {
   resolveConflictImpl,
   fixWithAgentImpl,
   spawnAgentFixViaRegistry,
+  resolveRemoteBranchOwnerPath,
+  resolveSelectedRemoteTargetId,
 } from './conflict-resolver.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import {
   buildCanonicalPrBody,
+  isInvokerRepoUrl,
+  buildMakePrStackPublishPrompt,
   buildMakePrPrompt,
+  parseMakePrStackPublishResult,
   resolveSkillPathViaAgent,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
+  validateReviewStackPrBody,
   type PrAuthoringContext,
 } from './pr-authoring.js';
+import { ensureRemoteUrl } from './git-config-mutation.js';
+import * as gitPlumbing from './task-runner-git.js';
+import { PRE_START_HEARTBEAT_INTERVAL_MS, nextLeaseExpiry } from './task-runner-launch-support.js';
+import { buildWorkRequest } from './task-runner-prepare.js';
+import { dispatchExecutor } from './task-runner-dispatch.js';
+import { wireCompletion } from './task-runner-finalize.js';
 
-export type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
+export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
+type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
+type ReviewGateArtifact = ReviewGateState['artifacts'][number];
+type ReviewGateArtifactStatus = ReviewGateArtifact['status'];
 
-/** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
-const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
-const ATTEMPT_LEASE_MS = 20 * 60 * 1000;
-const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
-
-type StartupFailureMetadata = {
-  workspacePath?: string;
-  branch?: string;
-  agentSessionId?: string;
-  containerId?: string;
-};
-
-type ActiveExecutionHandle = ExecutorHandle & { attemptId?: string };
-type ActiveExecutionEntry = {
+export type ActiveExecutionHandle = ExecutorHandle & { attemptId?: string };
+export type ActiveExecutionEntry = {
   handle: ActiveExecutionHandle;
   executor: Executor;
   taskId: string;
   poolId?: string;
   poolMemberKey?: string;
+  leaseResourceKey?: string;
+  leaseHolderId?: string;
 };
 
-type ExecutionPoolMember =
-  | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
-  | { type: 'worktree'; id: string; maxConcurrentTasks?: number };
+export type ExecutionPoolMember =
+  | { type: 'ssh'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
+  | { type: 'worktree'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities };
 
-type ExecutionPoolConfig = {
+export type ExecutionPoolConfig = {
   members: ExecutionPoolMember[];
   selectionStrategy?: 'roundRobin' | 'leastLoaded';
   maxConcurrentTasksPerMember?: number;
 };
 
-type PoolSelection = {
+type ResolvedExecutionSelection = {
+  executionAgent: string;
+  executionModel?: string;
+};
+
+
+type SelectedExecutor = {
+  executor: Executor;
+  resolvedExecution: ResolvedExecutionSelection;
+  selectedPoolMemberId?: string;
+};
+export type PoolSelection = {
   poolId: string;
   member: ExecutionPoolMember;
   memberKey: string;
   selectionStrategy: 'roundRobin' | 'leastLoaded';
+  resolvedExecution?: ResolvedExecutionSelection;
+  leaseResourceKey?: string;
+  leaseHolderId?: string;
+};
+export type FreshBaseCommit = {
+  branch: string;
+  commit: string;
 };
 
 type RemoteTargetDisplay = {
@@ -104,19 +128,29 @@ type RemoteTargetDisplay = {
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
   provisionCommand?: string;
+  use_api_key?: boolean;
+  secretsFile?: string;
   remoteHeartbeatIntervalSeconds?: number;
+  maxConcurrentTasks?: number;
+  capabilities?: MachineCapabilities;
 };
 
-function nextLeaseExpiry(from: Date): Date {
-  return new Date(from.getTime() + ATTEMPT_LEASE_MS);
+export interface ReviewGateCiFailureTrigger {
+  taskId: string;
+  workflowId: string;
+  reviewId: string;
+  reviewUrl: string;
+  headSha?: string;
+  headRef?: string;
+  branch?: string;
+  selectedAttemptId?: string;
+  generation: number;
+  failedChecks: NonNullable<MergeGateApprovalStatus['checks']>['failed'];
+  statusText: string;
 }
 
-function getExecutorStartTimeoutMs(): number {
-  const raw = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS?.trim();
-  if (!raw) return DEFAULT_EXECUTOR_START_TIMEOUT_MS;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_EXECUTOR_START_TIMEOUT_MS;
-  return parsed;
+export interface ReviewGateCiFailureLifecyclePublisher {
+  publish(trigger: ReviewGateCiFailureTrigger): void | Promise<void>;
 }
 
 const NOOP_LOGGER: Logger = {
@@ -126,6 +160,30 @@ const NOOP_LOGGER: Logger = {
   error: () => {},
   child: () => NOOP_LOGGER,
 };
+
+// ── Launch outbox ─────────────────────────────────────────
+
+/**
+ * Narrow interface for the launch-handoff outbox surface that
+ * `executeTask` calls into. Defined here (rather than imported from
+ * `@invoker/app`) to avoid a layering cycle: the execution engine
+ * never depends on the app shell, the app provides this implementation
+ * via the LaunchDispatcher.
+ *
+ * Each method MUST be safe to call even if the dispatch row was
+ * reaped between the dispatcher's lease and the runner's call — the
+ * persistence layer returns false in that case and the runner treats
+ * it as a benign race.
+ */
+export interface LaunchOutboxAck {
+  completeDispatch(dispatchId: number): boolean;
+  failDispatch(dispatchId: number, error: unknown): boolean;
+}
+
+export interface LaunchDispatchOptions {
+  dispatchId: number;
+  launchOutbox: LaunchOutboxAck;
+}
 
 // ── Config ────────────────────────────────────────────────
 
@@ -142,6 +200,7 @@ export interface TaskRunnerConfig {
   callbacks?: TaskRunnerCallbacks;
   mergeGateProvider?: MergeGateProvider;
   reviewProviderRegistry?: ReviewProviderRegistry;
+  reviewGateCiFailurePublisher?: ReviewGateCiFailureLifecyclePublisher;
   /**
    * Provider that returns remote SSH targets keyed by target ID.
    * Called at task-execution time so config file changes take effect on retry.
@@ -154,16 +213,24 @@ export interface TaskRunnerConfig {
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
     provisionCommand?: string;
+    use_api_key?: boolean;
+    secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
+    maxConcurrentTasks?: number;
+    capabilities?: MachineCapabilities;
   }>;
   executionPoolsProvider?: () => Record<string, {
     members: Array<
-      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
-      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
+      | { type: 'ssh'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
     >;
     selectionStrategy?: 'roundRobin' | 'leastLoaded';
     maxConcurrentTasksPerMember?: number;
   }>;
+  executionDefaultsProvider?: () => {
+    executionAgent?: string;
+    executionModel?: string;
+  };
   /** Docker execution environment configuration from .invoker.json. */
   dockerConfig?: {
     imageName?: string;
@@ -187,19 +254,23 @@ export class TaskRunner {
   /** @internal */ callbacks: TaskRunnerCallbacks;
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
-  private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
+  private reviewGateCiFailurePublisher?: ReviewGateCiFailureLifecyclePublisher;
+  private reviewGateCiFailureInFlight = new Set<string>();
   private getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
-  private getExecutionPools: () => Record<string, ExecutionPoolConfig>;
+  /** @internal */ getExecutionPools: () => Record<string, ExecutionPoolConfig>;
+  private getExecutionDefaults: () => { executionAgent?: string; executionModel?: string };
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
-  private logger: Logger;
+  /** @internal */ logger: Logger;
+  private readonly runnerInstanceId = randomUUID();
   /** Cache for SSH executors, keyed by poolMemberId. One instance per target for correct git locking. */
   private sshExecutorCache = new Map<string, SshExecutor>();
   private poolRoundRobinCursor = new Map<string, number>();
-  private pendingPoolSelections = new Map<string, PoolSelection>();
+  /** @internal */ readonly pendingPoolSelections = new Map<string, PoolSelection>();
+  /** @internal */ readonly freshBaseCommits = new Map<string, FreshBaseCommit>();
 
-  /** In-flight executions keyed by attemptId (with taskId retained for external kill resolution). */
-  private activeExecutions = new Map<string, ActiveExecutionEntry>();
+  /** In-flight executions keyed by attemptId (with taskId retained for external kill resolution). @internal */
+  readonly activeExecutions = new Map<string, ActiveExecutionEntry>();
   private launchingAttemptIds = new Set<string>();
 
   /** Serializes async onComplete handlers so orchestrator mutations never overlap. */
@@ -210,6 +281,16 @@ export class TaskRunner {
     return this.defaultBranch;
   }
 
+  /** @internal */ getDefaultExecutionAgent(): string {
+    const configured = this.getExecutionDefaults().executionAgent?.trim();
+    return configured && configured.length > 0 ? configured : DEFAULT_EXECUTION_AGENT;
+  }
+
+  /** @internal */ getDefaultExecutionModel(): string | undefined {
+    const configured = this.getExecutionDefaults().executionModel?.trim();
+    return configured && configured.length > 0 ? configured : undefined;
+  }
+
   /**
    * Before rebase-and-retry: refresh pool mirror + origin base, remove managed branches for this workflow.
    */
@@ -218,13 +299,15 @@ export class TaskRunner {
     repoUrl: string | undefined,
     baseBranchHint: string | undefined,
     timing?: RepoPoolTiming,
-  ): Promise<void> {
-    if (!repoUrl) return;
+  ): Promise<{ branch: string; commit: string } | undefined> {
+    if (!repoUrl) return undefined;
     const executor = this.executorRegistry.get('worktree');
-    if (!(executor instanceof WorktreeExecutor)) return;
+    if (!(executor instanceof WorktreeExecutor)) return undefined;
     const pool = executor.getRepoPool();
     const baseBranch = baseBranchHint?.trim() || this.defaultBranch || 'master';
     await pool.refreshMirrorForRebase(repoUrl, baseBranch, timing);
+    const commit = await pool.resolveBaseCommit(repoUrl, baseBranch, timing);
+    this.freshBaseCommits.set(workflowId, { branch: baseBranch, commit });
     const collectStartedAtMs = Date.now();
     timing?.mark('TaskRunner.preparePoolForRebaseRetry.collectManagedWorkflowBranches', 'started', {
       workflowId,
@@ -236,6 +319,7 @@ export class TaskRunner {
       durationMs: Date.now() - collectStartedAtMs,
     });
     await pool.removeManagedBranchesInMirror(repoUrl, branches, timing);
+    return { branch: baseBranch, commit };
   }
 
   /**
@@ -247,7 +331,7 @@ export class TaskRunner {
     const executor = this.executorRegistry.get('worktree');
     if (!(executor instanceof WorktreeExecutor)) return undefined;
     try {
-      return await executor.getRepoPool().ensureClone(trimmed);
+      return await executor.getRepoPool().ensureCloneThroughRepoQueue(trimmed);
     } catch (err) {
       this.logger.warn(`[merge] ensureRepoMirrorPath failed for ${trimmed}`, { err });
       return undefined;
@@ -255,11 +339,24 @@ export class TaskRunner {
   }
 
   private collectManagedWorkflowBranches(workflowId: string): string[] {
-    return this.orchestrator
-      .getAllTasks()
-      .filter((t) => t.config.workflowId === workflowId && !t.config.isMergeNode)
-      .map((t) => t.execution.branch ?? `invoker/${t.id}`)
-      .filter((b) => isInvokerManagedPoolBranch(b));
+    const branches: string[] = [];
+    const seen = new Set<string>();
+    const addBranch = (branch: string | undefined): void => {
+      const trimmed = branch?.trim();
+      if (!trimmed || !isInvokerManagedPoolBranch(trimmed) || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      branches.push(trimmed);
+    };
+
+    for (const task of this.orchestrator.getAllTasks()) {
+      if (task.config.workflowId !== workflowId || task.config.isMergeNode) continue;
+      addBranch(task.execution.branch);
+      for (const attempt of this.persistence.loadAttempts?.(task.id) ?? []) {
+        addBranch(attempt.branch);
+      }
+    }
+
+    return branches;
   }
 
   constructor(config: TaskRunnerConfig) {
@@ -272,25 +369,72 @@ export class TaskRunner {
     this.callbacks = config.callbacks ?? {};
     this.mergeGateProvider = config.mergeGateProvider;
     this.reviewProviderRegistry = config.reviewProviderRegistry;
+    this.reviewGateCiFailurePublisher = config.reviewGateCiFailurePublisher;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
+    this.getExecutionDefaults = config.executionDefaultsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
     this.logger = config.logger ?? NOOP_LOGGER;
   }
 
+  resolveExecutionAgent(task: Pick<TaskState, 'config'>): string {
+    return task.config.executionAgent?.trim() || this.getDefaultExecutionAgent();
+  }
+
+  resolveExecutionModel(task: Pick<TaskState, 'config'>): string | undefined {
+    const explicitModel = task.config.executionModel?.trim();
+    if (explicitModel) return explicitModel;
+    const defaults = this.getExecutionDefaults();
+    const defaultAgent = this.getDefaultExecutionAgent();
+    const defaultModel = defaults.executionModel?.trim();
+    if (!defaultModel) return undefined;
+    return this.resolveExecutionAgent(task) === defaultAgent ? defaultModel : undefined;
+  }
+
+  private executionRequirementLabel(task: Pick<TaskState, 'config'>): string {
+    const executionAgent = this.resolveExecutionAgent(task);
+    const executionModel = this.resolveExecutionModel(task);
+    return executionModel ? `${executionAgent}/${executionModel}` : executionAgent;
+  }
+
+  private resolveExecutionForMember(
+    task: Pick<TaskState, 'config'>,
+    memberCapabilities: MachineCapabilities | undefined,
+  ): { ok: true; selection: ResolvedExecutionSelection } | { ok: false; reason: string } {
+    const resolvedAgent = this.resolveExecutionAgent(task);
+    const requestedModel = this.resolveExecutionModel(task);
+    const result = resolveHarnessSelection(memberCapabilities, {
+      role: 'execution',
+      harness: resolvedAgent,
+      model: requestedModel,
+    });
+    if (!result.ok) return result;
+    return {
+      ok: true,
+      selection: {
+        executionAgent: result.selection.harness,
+        executionModel: result.selection.model,
+      },
+    };
+  }
+
   /**
    * Stop the executor child for a task that is currently in-flight (after orchestrator.cancelTask).
    */
-  async killActiveExecution(taskId: string): Promise<void> {
+  async killActiveExecution(taskId: string): Promise<boolean> {
     const resolved = this.resolveActiveExecution(taskId);
-    if (!resolved) return;
+    if (!resolved) return false;
     this.activeExecutions.delete(resolved.attemptId);
+    if (resolved.entry.leaseResourceKey && resolved.entry.leaseHolderId) {
+      this.persistence.releaseExecutionResourceLease?.(resolved.entry.leaseResourceKey, resolved.entry.leaseHolderId);
+    }
     try {
       await resolved.entry.executor.kill(resolved.entry.handle);
-    } catch {
-      /* process may already have exited */
+    } catch (killErr) {
+      this.logger.warn(`[TaskRunner] killActiveExecution failed for task=${taskId}`, { err: killErr });
     }
+    return true;
   }
 
   private loadLatestAttemptId(taskId: string): string | undefined {
@@ -309,12 +453,6 @@ export class TaskRunner {
   }
 
   private resolveActiveExecution(taskId: string): { attemptId: string; entry: ActiveExecutionEntry } | undefined {
-    for (const [attemptId, entry] of this.activeExecutions) {
-      if (entry.taskId === taskId || entry.handle.taskId === taskId) {
-        return { attemptId, entry };
-      }
-    }
-
     const selectedAttemptId = this.orchestrator.getTask(taskId)?.execution.selectedAttemptId;
     if (selectedAttemptId) {
       const entry = this.activeExecutions.get(selectedAttemptId);
@@ -325,6 +463,12 @@ export class TaskRunner {
     if (latestAttemptId) {
       const entry = this.activeExecutions.get(latestAttemptId);
       if (entry) return { attemptId: latestAttemptId, entry };
+    }
+
+    for (const [attemptId, entry] of this.activeExecutions) {
+      if (entry.taskId === taskId || entry.handle.taskId === taskId) {
+        return { attemptId, entry };
+      }
     }
 
     return undefined;
@@ -353,6 +497,20 @@ export class TaskRunner {
     await Promise.all(tasks.map((task) => this.executeTask(task)));
   }
 
+  /** @internal */ executeNewlyStartedTasks(
+    tasks: TaskState[],
+    dispatchOpts?: LaunchDispatchOptions,
+  ): void {
+    if (tasks.length === 0) return;
+    if (dispatchOpts) {
+      this.logger.debug(
+        `[TaskRunner] durable launch outbox owns ${tasks.length} newly-started task(s); skipping recursive executeTasks`,
+      );
+      return;
+    }
+    void this.executeTasks(tasks);
+  }
+
   /**
    * Execute a single task through the executor pipeline.
    *
@@ -369,7 +527,7 @@ export class TaskRunner {
    * `selectedAttemptId` or `generation` no longer matches, meaning any
    * persistence from this launch would overwrite a newer attempt's data.
    */
-  private isLaunchStale(
+  /** @internal */ isLaunchStale(
     taskId: string,
     attemptId: string,
     startGeneration: number,
@@ -386,7 +544,7 @@ export class TaskRunner {
     return false;
   }
 
-  async executeTask(task: TaskState): Promise<void> {
+  async executeTask(task: TaskState, dispatchOpts?: LaunchDispatchOptions): Promise<void> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
     );
@@ -403,11 +561,25 @@ export class TaskRunner {
         `[TaskRunner] executeTask skipping duplicate launch for task=${task.id} attempt=${attemptId}`,
       );
       bench('executeTask.duplicateSkipped');
+      if (dispatchOpts) {
+        // Another runner already owns this attempt — release the dispatch
+        // row so the dispatcher can re-queue if needed instead of orphaning.
+        dispatchOpts.launchOutbox.failDispatch(
+          dispatchOpts.dispatchId,
+          new Error('Duplicate launch suppressed in TaskRunner'),
+        );
+      }
       return;
     }
+    this.logger.info(
+      `[TaskRunner] launch accepted task=${task.id} attempt=${attemptId} status=${task.status} ` +
+        `phase=${task.execution.phase ?? 'none'} generation=${startGeneration} ` +
+        `dispatchId=${dispatchOpts?.dispatchId ?? 'none'}`,
+    );
     this.launchingAttemptIds.add(attemptId);
+    this.callbacks.onLaunchAccepted?.(task.id);
     try {
-      await this.executeTaskInner(task, attemptId, bench);
+      await this.executeTaskInner(task, attemptId, bench, dispatchOpts);
       bench('executeTask.innerReturned');
     } catch (err) {
       bench('executeTask.failed', {
@@ -417,7 +589,31 @@ export class TaskRunner {
       const cause = err instanceof Error ? err.cause : undefined;
       if (cause instanceof ResourceLimitError) {
         traceExecution(`[TaskRunner] executeTask deferred for task=${task.id}: ${cause.message}`);
-        this.orchestrator.deferTask(task.id);
+        this.logger.info(
+          `[TaskRunner] launch deferred task=${task.id} attempt=${attemptId}; task remains pending and will retry when capacity is available: ${cause.message}`,
+          {
+            taskId: task.id,
+            attemptId,
+            reason: 'resource-limit',
+            message: cause.message,
+            phase: task.execution.phase ?? 'none',
+          },
+        );
+        this.orchestrator.deferTask(task.id, {
+          reason: 'resource-limit',
+          message: cause.message,
+          attemptId,
+          phase: task.execution.phase ?? 'none',
+        });
+        if (dispatchOpts) {
+          const completed = dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
+          bench('executeTask.dispatchCompletedAfterDeferral', { accepted: completed });
+          if (!completed) {
+            this.logger.warn(
+              `[TaskRunner] launch dispatch complete rejected after resource-limit defer for task=${task.id} attempt=${attemptId} dispatchId=${dispatchOpts.dispatchId}`,
+            );
+          }
+        }
         return;
       }
 
@@ -434,6 +630,9 @@ export class TaskRunner {
       }
 
       this.logger.error(`[TaskRunner] executeTask failed for task=${task.id}`, { err });
+      if (dispatchOpts) {
+        dispatchOpts.launchOutbox.failDispatch(dispatchOpts.dispatchId, err);
+      }
       const launchFailedAt = new Date();
       try {
         const latest = this.orchestrator.getTask(task.id);
@@ -470,11 +669,13 @@ export class TaskRunner {
           error: err instanceof Error ? (err.stack ?? err.message) : String(err),
         },
       };
-      this.callbacks.onComplete?.(task.id, response);
       const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
-      if (newlyStarted.length > 0) {
-        this.executeTasks(newlyStarted);
+      try {
+        this.callbacks.onComplete?.(task.id, response);
+      } catch (callbackErr) {
+        this.logger.error(`[TaskRunner] completion callback observer failed for task=${task.id}`, { err: callbackErr });
       }
+      this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
     } finally {
       this.launchingAttemptIds.delete(attemptId);
       bench('executeTask.settled');
@@ -485,6 +686,7 @@ export class TaskRunner {
     task: TaskState,
     attemptId: string,
     bench: (phase: string, metadata?: Record<string, unknown>) => void = () => {},
+    dispatchOpts?: LaunchDispatchOptions,
   ): Promise<void> {
     bench('executeTaskInner.begin', {
       dependencyCount: task.dependencies.length,
@@ -517,8 +719,27 @@ export class TaskRunner {
         },
       };
       const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
-      if (newlyStarted.length > 0) {
-        this.executeTasks(newlyStarted);
+      this.executeNewlyStartedTasks(newlyStarted, dispatchOpts);
+      // CD.1 / Issue 13: terminate the parent pivot task's outbox row.
+      // Without this, drainScheduler enqueued a launch-dispatch row for
+      // the pivot, but executeTaskInner returns here without ever
+      // calling completeDispatch, so the row stays leased and is retried
+      // or abandoned. The spawn_experiments path is the terminal state
+      // for the pivot itself; only the spawned variants should continue
+      // through the outbox.
+      if (dispatchOpts) {
+        try {
+          dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
+        } catch (err) {
+          // completeDispatch is best-effort here — if the row has
+          // already been failed or completed by another path the
+          // failure is benign. Log and continue so the pivot's
+          // observable behaviour (spawning variants) is unaffected.
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[task-runner] pivot completeDispatch failed for dispatchId=${dispatchOpts.dispatchId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
       bench('executeTaskInner.pivotReturned', {
         newlyStartedCount: newlyStarted.length,
@@ -526,388 +747,37 @@ export class TaskRunner {
       return;
     }
 
-    traceExecution(
-      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} (past pivot check) → gather upstreams + build WorkRequest`,
-    );
+    const request = await buildWorkRequest(this, { task, attemptId, bench });
 
-    // Gather upstream context from completed dependencies
-    bench('buildUpstreamContext.start');
-    const upstreamContext = await this.buildUpstreamContext(task);
-    bench('buildUpstreamContext.end', {
-      upstreamContextCount: upstreamContext.length,
-    });
-    bench('collectUpstreamBranches.start');
-    const upstreamBranches = this.collectUpstreamBranches(task);
-    bench('collectUpstreamBranches.end', {
-      upstreamBranchCount: upstreamBranches.length,
-    });
-    bench('buildAlternatives.start');
-    const alternatives = this.buildAlternatives(task);
-    bench('buildAlternatives.end', {
-      alternativeCount: alternatives.length,
-    });
-
-    // Guard: every completed dependency (local or external) must have branch metadata.
-    // Without it the downstream worktree would run against bare base branch,
-    // silently dropping all upstream implementation changes.
-    // Skip for merge nodes: they collect branches from the full workflow, not just direct deps.
-    if (!task.config.isMergeNode) {
-      for (const depId of task.dependencies) {
-        const dep = this.orchestrator.getTask(depId);
-        if (dep && dep.status === 'completed' && !dep.execution.branch) {
-          throw new Error(
-            `Task "${task.id}": dependency "${depId}" completed without branch metadata` +
-            ` — upstream changes would be silently dropped. The plan may need to be restarted.`,
-          );
-        }
-      }
-      for (const depRef of task.config.externalDependencies ?? []) {
-        const dep = this.resolveExternalDependencyTask(depRef.workflowId, depRef.taskId);
-        if (dep && dep.status === 'completed' && !dep.execution.branch) {
-          throw new Error(
-            `Task "${task.id}": external dependency "${depRef.workflowId}/${depRef.taskId}" completed without branch metadata` +
-            ` — upstream changes would be silently dropped. The plan may need to be restarted.`,
-          );
-        }
-      }
-    }
-    bench('dependencyBranchGuard.end');
-
-    // Read workflow + task generations to build the visible lifecycle tag that
-    // is appended to every experiment branch name. Lifecycle uniqueness lives
-    // in the branch *name* (via `formatLifecycleTag`), not in the content hash
-    // — so two recreates of the same spec produce the same content fingerprint
-    // (cache-equivalent) but distinct branch names (collision-free).
-    const workflow = task.config.workflowId ? this.persistence.loadWorkflow?.(task.config.workflowId) : undefined;
-    const workflowGeneration = (workflow as any)?.generation ?? 0;
-    const taskExecutionGeneration = task.execution.generation ?? 0;
-    const lifecycleTag = formatLifecycleTag({
-      wfGen: workflowGeneration,
-      taskGen: taskExecutionGeneration,
-      attemptShort: extractAttemptSuffix(attemptId, task.id),
-    });
-    const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
-    const repoUrl = workflow?.repoUrl;
-    const branchRepoUrl = workflow?.intermediateRepoUrl?.trim() || undefined;
-
-    // Persist the experiment branch as soon as the executor knows it — well
-    // before `git worktree add` could leak a worktree without a recorded branch
-    // on the attempt row. Reconciliation paths can then observe the branch
-    // even if the executor crashes mid-startup.
-    let branchPersistedEarly = false;
-    const startGeneration = task.execution.generation ?? 0;
-    const onBranchResolved = (branch: string): void => {
-      if (!branch || branchPersistedEarly) return;
-      // Skip if the task has moved to a newer attempt/generation.
-      if (this.isLaunchStale(task.id, attemptId, startGeneration)) return;
-      branchPersistedEarly = true;
-      try {
-        this.persistence.updateAttempt?.(attemptId, { branch } as any);
-        this.persistence.updateTask(task.id, {
-          execution: { branch } as any,
-        });
-        traceExecution(
-          `${RESTART_TO_BRANCH_TRACE} task=${task.id} attempt=${attemptId} branch persisted early branch=${branch}`,
-        );
-      } catch (err) {
-        // Early persistence is best-effort: the post-start path persists the
-        // same field again, so a transient failure here is not fatal.
-        traceExecution(
-          `${RESTART_TO_BRANCH_TRACE} task=${task.id} attempt=${attemptId} early branch persist failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    };
-
-    const request: WorkRequest = {
-      requestId: randomUUID(),
-      actionId: task.id,
+    const dispatched = await dispatchExecutor(this, {
+      task,
       attemptId,
-      executionGeneration: task.execution.generation ?? 0,
-      actionType: this.determineActionType(task),
-      inputs: {
-        description: task.description,
-        command: task.config.command,
-        prompt: task.config.prompt,
-        executionAgent: task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT,
-        repoUrl,
-        branchRepoUrl,
-        featureBranch: task.config.featureBranch,
-        upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
-        alternatives: alternatives.length > 0 ? alternatives : undefined,
-        upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
-        lifecycleTag,
-        baseBranch,
-        freshWorkspace: this.shouldUseFreshWorkspace(task),
-      },
-      callbackUrl: '',
-      timestamps: {
-        createdAt: new Date().toISOString(),
-      },
-      onBranchResolved,
-    };
-    bench('workRequest.built', {
-      actionType: request.actionType,
-      hasRepoUrl: Boolean(request.inputs.repoUrl),
-      upstreamBranchCount: upstreamBranches.length,
+      request,
+      bench,
+      dispatchOpts,
     });
-
-    traceExecution(
-      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} WorkRequest built actionType=${request.actionType} repoUrl=${request.inputs.repoUrl ?? '(none)'} upstreamBranches=${JSON.stringify(request.inputs.upstreamBranches ?? [])}`,
-    );
-    bench('selectExecutor.start');
-    const executor = this.selectExecutor(task);
-    bench('selectExecutor.end', {
-      executorType: executor.type,
+    // Launch was rejected as stale/non-executable after executor start;
+    // dispatch already cleaned up and acked the dispatch row.
+    if (!dispatched) return;
+    return wireCompletion(this, {
+      task,
+      attemptId,
+      executor: dispatched.executor,
+      handle: dispatched.handle,
+      dispatchOpts,
     });
-    traceExecution(
-      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
-    );
-    traceExecution(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
-    bench('onLaunchStart.before', {
-      executorType: executor.type,
-    });
-    this.callbacks.onLaunchStart?.(task.id, executor);
-    bench('executor.start.before', {
-      executorType: executor.type,
-    });
-    const startT0 = Date.now();
-    const startTimeoutMs = getExecutorStartTimeoutMs();
-    const preStartHeartbeatTimer = setInterval(() => {
-      const now = new Date();
-      this.persistence.updateAttempt?.(attemptId, {
-        lastHeartbeatAt: now,
-        leaseExpiresAt: nextLeaseExpiry(now),
-      } as any);
-      this.callbacks.onHeartbeat?.(task.id);
-    }, PRE_START_HEARTBEAT_INTERVAL_MS);
-    let preStartTimeout: ReturnType<typeof setTimeout> | undefined;
-    let handle: ExecutorHandle;
-    try {
-      handle = await Promise.race<ExecutorHandle>([
-        executor.start(request),
-        new Promise<ExecutorHandle>((_resolve, reject) => {
-          preStartTimeout = setTimeout(() => {
-            reject(new Error(`Executor startup timed out after ${startTimeoutMs}ms (${executor.type})`));
-          }, startTimeoutMs);
-        }),
-      ]);
-    } catch (err) {
-      this.pendingPoolSelections.delete(task.id);
-      const meta = err as StartupFailureMetadata;
-      const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
-      this.callbacks.onOutput?.(task.id, startupErrorMessage);
-      try {
-        this.persistence.appendTaskOutput(task.id, startupErrorMessage);
-      } catch {
-        // Preserve the original startup failure if output persistence also fails.
-      }
-      // Only persist startup-failure metadata when the launch is still
-      // current.  If the task has moved to a newer attempt or generation
-      // (e.g. via recreate-task), writing old workspace/branch metadata
-      // would corrupt the live attempt's state.
-      if (
-        (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId)
-        && !this.isLaunchStale(task.id, attemptId, task.execution.generation ?? 0)
-      ) {
-        const execution: Record<string, string> = {};
-        if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
-        if (meta.branch) execution.branch = meta.branch;
-        if (meta.agentSessionId) {
-          execution.agentSessionId = meta.agentSessionId;
-          execution.lastAgentSessionId = meta.agentSessionId;
-        }
-        if (meta.containerId) execution.containerId = meta.containerId;
-        this.persistence.updateTask(task.id, {
-          config: { runnerKind: executor.type as RunnerKind },
-          execution: execution as any,
-        });
-      }
-      const wrapped = new Error(
-        `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
-        { cause: err },
-      );
-      this.callbacks.onLaunchFailed?.(task.id, wrapped, executor);
-      throw wrapped;
-    } finally {
-      clearInterval(preStartHeartbeatTimer);
-      if (preStartTimeout) clearTimeout(preStartTimeout);
-    }
-    traceExecution(`[trace] TaskRunner: task=${task.id} executor.start() returned after ${Date.now() - startT0}ms executor=${executor.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
-    bench('executor.start.after', {
-      executorType: executor.type,
-      executorStartMs: Date.now() - startT0,
-      hasWorkspacePath: Boolean(handle.workspacePath),
-      hasAgentSessionId: Boolean(handle.agentSessionId),
-    });
-    const launchAccepted =
-      this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
-    if (!launchAccepted) {
-      this.logger.warn(
-        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId}; killing spawned process`,
-      );
-      try {
-        await executor.kill(handle);
-      } catch (killErr) {
-        this.logger.warn(`[TaskRunner] failed to kill rejected launch for task=${task.id}`, { killErr });
-      }
-      this.pendingPoolSelections.delete(task.id);
-      await this.cleanupPerTaskDockerExecutor(task);
-      bench('markTaskRunningAfterLaunch.rejected');
-      return;
-    }
-    bench('markTaskRunningAfterLaunch.accepted');
+  }
 
-    // Persist execution metadata immediately at task start — all fields explicit
-    {
-      // Fail-fast: workspacePath must be provided by all executors
-      if (!handle.workspacePath) {
-        throw new Error(
-          `Executor "${executor.type}" did not provide workspacePath for task "${task.id}". ` +
-          `All executors must set workspacePath; refusing to fall back to host repo.`,
-        );
-      }
-
-      this.logExecutorSelected(
-        task,
-        executor,
-        handle,
-        attemptId,
-        this.pendingPoolSelections.get(task.id),
-      );
-
-      const changes = {
-        config: { runnerKind: executor.type as RunnerKind },
-        execution: {
-          workspacePath: handle.workspacePath,
-          branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
-          agentSessionId: handle.agentSessionId ?? undefined,
-          lastAgentSessionId: handle.agentSessionId ?? undefined,
-          lastAgentName: task.execution.agentName ?? undefined,
-          containerId: handle.containerId ?? undefined,
-        },
-      };
-      this.persistence.updateTask(task.id, changes);
-      // Mirror branch + workspacePath onto the attempt row so reconciliation
-      // and post-mortem flows can recover provenance from the attempt without
-      // joining back to the task. Pairs with the early `onBranchResolved`
-      // persistence; this is the authoritative success-path write.
-      try {
-        this.persistence.updateAttempt?.(attemptId, {
-          branch: handle.branch ?? undefined,
-          workspacePath: handle.workspacePath,
-        } as any);
-      } catch (err) {
-        traceExecution(
-          `${RESTART_TO_BRANCH_TRACE} task=${task.id} attempt=${attemptId} post-start attempt persist failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      traceExecution(
-        `[agent-session-trace] TaskRunner.persistStartMetadata task=${task.id} agentSessionId=${handle.agentSessionId ?? 'null'}`,
-      );
-      if (task.config.isMergeNode) {
-        traceExecution(
-          `[merge-gate-workspace] persistStartMetadata mergeNode=${task.id} ` +
-            `executor workspacePath=${changes.execution.workspacePath} ` +
-            '(gate clone path is written later in executeMergeNode)',
-        );
-      }
-      traceExecution(`[trace] TaskRunner: persisted metadata for task=${task.id} workspacePath=${handle.workspacePath} branch=${handle.branch ?? 'null'}`);
-      bench('persistStartMetadata.end', {
-        workspacePath: handle.workspacePath,
-        branch: handle.branch ?? undefined,
-      });
-    }
-
-    // Notify consumer about the spawned handle
-    const activeHandle = handle as ActiveExecutionHandle;
-    activeHandle.attemptId = attemptId;
-    const poolSelection = this.pendingPoolSelections.get(task.id);
-    this.pendingPoolSelections.delete(task.id);
-    this.activeExecutions.set(attemptId, {
-      handle: activeHandle,
-      executor,
-      taskId: task.id,
-      poolId: poolSelection?.poolId,
-      poolMemberKey: poolSelection?.memberKey,
-    });
-    bench('onSpawned.before');
-    this.callbacks.onSpawned?.(task.id, handle, executor);
-    bench('onSpawned.after');
-
-    // Wire output
-    executor.onOutput(handle, (data) => {
-      this.callbacks.onOutput?.(task.id, data);
-    });
-
-    // Wire heartbeat
-    executor.onHeartbeat(handle, () => {
-      const now = new Date();
-      const isRemoteWorkloadHeartbeat = executor.type === 'ssh';
-      this.persistence.updateAttempt?.(attemptId, {
-        lastHeartbeatAt: now,
-        leaseExpiresAt: nextLeaseExpiry(now),
-      } as any);
-      this.persistence.updateTask(task.id, {
-        execution: {
-          lastHeartbeatAt: now,
-          ...(isRemoteWorkloadHeartbeat
-            ? { remoteHeartbeatAt: now, heartbeatSource: 'remote_workload' as const }
-            : { heartbeatSource: 'executor' as const }),
-        },
-      } as any);
-      this.callbacks.onHeartbeat?.(task.id);
-    });
-
-    // Wait for completion and feed response to orchestrator.
-    // The callback is serialized through completionChain so that concurrent
-    // onComplete firings never overlap inside orchestrator mutations.
-    return new Promise<void>((resolvePromise) => {
-      executor.onComplete(handle, async (response: WorkResponse) => {
-        const work = async () => {
-          const normalizedResponse = response.attemptId ? response : { ...response, attemptId };
-          this.activeExecutions.delete(normalizedResponse.attemptId ?? attemptId);
-          try {
-            traceExecution(
-              `[task-runner] onComplete taskId=${task.id} responseStatus=${response.status} ` +
-                `responseAttemptId=${normalizedResponse.attemptId ?? attemptId} responseGeneration=${response.executionGeneration} executionId=${handle.executionId}`,
-            );
-            traceExecution(
-              `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
-            );
-            this.callbacks.onComplete?.(task.id, normalizedResponse);
-
-            const newlyStarted = this.orchestrator.handleWorkerResponse(normalizedResponse) ?? [];
-
-            if (newlyStarted.length > 0) {
-              this.executeTasks(newlyStarted);
-            }
-          } catch (err) {
-            this.logger.error(`[TaskRunner] onComplete handler failed for task=${task.id}`, { err });
-            const errResponse: WorkResponse = {
-              requestId: response.requestId,
-              actionId: task.id,
-              attemptId,
-              executionGeneration: task.execution.generation ?? 0,
-              status: 'failed',
-              outputs: {
-                exitCode: 1,
-                error: err instanceof Error ? (err.stack ?? err.message) : String(err),
-              },
-            };
-            this.callbacks.onComplete?.(task.id, errResponse);
-            this.orchestrator.handleWorkerResponse(errResponse);
-          } finally {
-            // Clean up per-task Docker executor to avoid resource leaks
-            await this.cleanupPerTaskDockerExecutor(task);
-          }
-        };
-
-        const prev = this.completionChain;
-        this.completionChain = prev.then(work, work);
-        await this.completionChain;
-        resolvePromise();
-      });
-    });
+  /**
+   * Serialize completion `work` through {@link completionChain} so concurrent
+   * onComplete firings never overlap inside orchestrator mutations. Used by the
+   * finalize phase.
+   * @internal
+   */
+  async runSerializedCompletion(work: () => Promise<void>): Promise<void> {
+    const prev = this.completionChain;
+    this.completionChain = prev.then(work, work);
+    await this.completionChain;
   }
 
   /**
@@ -915,18 +785,13 @@ export class TaskRunner {
    * Restarts preserve them, so this is the executor-facing signal to bypass
    * same-action worktree reuse only for semantically fresh recreates.
    */
-  private shouldUseFreshWorkspace(task: TaskState): boolean {
+  /** @internal */ shouldUseFreshWorkspace(task: TaskState): boolean {
     return (task.execution.generation ?? 0) > 0
       && task.execution.branch === undefined
       && task.execution.workspacePath === undefined;
   }
 
-  /**
-   * Select the executor to use for a given task.
-   * Uses task.runnerKind to look up in the registry; falls back to default.
-   * Merge gate tasks use the dedicated merge executor.
-   */
-  private poolMemberKey(member: ExecutionPoolMember): string {
+  /** @internal */ poolMemberKey(member: ExecutionPoolMember): string {
     return `${member.type}:${member.id}`;
   }
 
@@ -941,30 +806,188 @@ export class TaskRunner {
     return load;
   }
 
-  private selectPoolMember(poolId: string, pool: ExecutionPoolConfig): ExecutionPoolMember | undefined {
+  private poolMemberLimit(pool: ExecutionPoolConfig, member: ExecutionPoolMember): number | undefined {
+    return member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
+  }
+
+  private poolMemberHasCapacity(poolId: string, pool: ExecutionPoolConfig, member: ExecutionPoolMember): boolean {
+    const limit = this.poolMemberLimit(pool, member);
+    return limit === undefined || this.poolMemberLoad(poolId, this.poolMemberKey(member)) < limit;
+  }
+  private memberCapabilities(member: ExecutionPoolMember): MachineCapabilities | undefined {
+    if (member.capabilities) return member.capabilities;
+    return member.type === 'ssh' ? this.getRemoteTargets()[member.id]?.capabilities : undefined;
+  }
+
+  private memberCapabilityMismatch(member: ExecutionPoolMember, task: Pick<TaskState, 'config'>): string | undefined {
+    const match = this.resolveExecutionForMember(task, this.memberCapabilities(member));
+    return match.ok ? undefined : match.reason;
+  }
+
+  private selectPoolMember(
+    task: Pick<TaskState, 'config'>,
+    poolId: string,
+    pool: ExecutionPoolConfig,
+    excludedMemberKeys: Set<string> = new Set(),
+  ): ExecutionPoolMember | undefined {
     if (pool.members.length === 0) return undefined;
 
     if (pool.selectionStrategy === 'roundRobin') {
       const cursor = this.poolRoundRobinCursor.get(poolId) ?? 0;
-      const member = pool.members[cursor % pool.members.length];
-      this.poolRoundRobinCursor.set(poolId, (cursor + 1) % pool.members.length);
-      return member;
+      for (let offset = 0; offset < pool.members.length; offset += 1) {
+        const index = (cursor + offset) % pool.members.length;
+        const member = pool.members[index];
+        if (excludedMemberKeys.has(this.poolMemberKey(member))) continue;
+        if (this.memberCapabilityMismatch(member, task)) continue;
+        if (!this.poolMemberHasCapacity(poolId, pool, member)) continue;
+        this.poolRoundRobinCursor.set(poolId, (index + 1) % pool.members.length);
+        return member;
+      }
+      return undefined;
     }
 
-    const scored = pool.members.map((member, index) => {
-      const memberKey = this.poolMemberKey(member);
-      const load = this.poolMemberLoad(poolId, memberKey);
-      const limit = member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
-      return { member, index, load, hasCapacity: limit === undefined || load < limit };
-    });
-    const candidates = scored.some((entry) => entry.hasCapacity)
-      ? scored.filter((entry) => entry.hasCapacity)
-      : scored;
+    const scored = pool.members
+      .filter((member) => !excludedMemberKeys.has(this.poolMemberKey(member)))
+      .map((member, index) => {
+        const memberKey = this.poolMemberKey(member);
+        const load = this.poolMemberLoad(poolId, memberKey);
+        const limit = this.poolMemberLimit(pool, member);
+        return {
+          member,
+          index,
+          load,
+          hasCapacity: limit === undefined || load < limit,
+          capabilityMismatch: this.memberCapabilityMismatch(member, task),
+        };
+      });
+    const candidates = scored.filter((entry) => entry.hasCapacity && !entry.capabilityMismatch);
     candidates.sort((a, b) => a.load - b.load || a.index - b.index);
     return candidates[0]?.member;
   }
 
-  private logExecutorSelected(
+  private poolCapacitySnapshot(
+    task: Pick<TaskState, 'config'>,
+    poolId: string,
+    pool: ExecutionPoolConfig,
+    excludedMemberKeys: Set<string>,
+  ): Array<{
+    memberId: string;
+    memberType: string;
+    load: number;
+    limit: number | undefined;
+    excluded: boolean;
+    capabilityMismatch?: string;
+  }> {
+    return pool.members.map((member) => {
+      const memberKey = this.poolMemberKey(member);
+      return {
+        memberId: member.id,
+        memberType: member.type,
+        load: this.poolMemberLoad(poolId, memberKey),
+        limit: this.poolMemberLimit(pool, member),
+        excluded: excludedMemberKeys.has(memberKey),
+        capabilityMismatch: this.memberCapabilityMismatch(member, task),
+      };
+    });
+  }
+
+  private poolCapacityError(
+    task: Pick<TaskState, 'id' | 'config'>,
+    poolId: string,
+    pool: ExecutionPoolConfig,
+    excludedMemberKeys: Set<string>,
+  ): Error {
+    const snapshot = this.poolCapacitySnapshot(task, poolId, pool, excludedMemberKeys);
+    const requirementAgent = this.resolveExecutionAgent(task);
+    const requirementModel = this.resolveExecutionModel(task);
+    const requirementLabel = requirementModel ? `${requirementAgent}/${requirementModel}` : requirementAgent;
+    const reasonSuffix = snapshot
+      .map((member) => {
+        const reasons = [
+          member.excluded ? 'excluded' : undefined,
+          member.capabilityMismatch,
+          member.limit !== undefined && member.load >= member.limit ? `capacity ${member.load}/${member.limit}` : undefined,
+        ].filter((reason): reason is string => Boolean(reason));
+        return `${member.memberType}:${member.memberId}${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}`;
+      })
+      .join('; ');
+    const message = `Execution pool "${poolId}" has no member capacity available for ${requirementLabel}${reasonSuffix ? `: ${reasonSuffix}` : ''}`;
+    const resourceLimit = new ResourceLimitError(message);
+    this.persistence.logEvent?.(task.id, 'task.executor.deferred', {
+      reason: 'execution-pool-capacity',
+      poolId,
+      excludedMemberKeys: [...excludedMemberKeys],
+      requirement: {
+        executionAgent: requirementAgent,
+        executionModel: requirementModel,
+      },
+      members: snapshot,
+    });
+    this.logger.info(`[TaskRunner] deferring task: ${message}`, {
+      poolId,
+      excludedMemberKeys: [...excludedMemberKeys],
+      requirement: {
+        executionAgent: requirementAgent,
+        executionModel: requirementModel,
+      },
+      members: snapshot,
+    });
+    return new Error(message, { cause: resourceLimit });
+  }
+
+  private sshResourceKey(target: RemoteTargetDisplay): string {
+    return `ssh:${target.user}@${target.host}:${target.port ?? 22}`;
+  }
+
+  private leaseHolderId(taskId: string, attemptId: string): string {
+    return `${this.runnerInstanceId}:${process.pid}:${taskId}:${attemptId}`;
+  }
+
+  /** @internal */ acquirePoolSelectionLease(task: TaskState, attemptId: string, selection: PoolSelection | undefined): boolean {
+    if (!selection || selection.member.type !== 'ssh') return true;
+    const target = this.getRemoteTargets()[selection.member.id];
+    if (!target) return true;
+    const resourceKey = this.sshResourceKey(target);
+    const holderId = this.leaseHolderId(task.id, attemptId);
+    const acquired = this.persistence.claimExecutionResourceLease?.({
+      resourceKey,
+      resourceType: 'ssh',
+      holderId,
+      taskId: task.id,
+      poolId: selection.poolId,
+      poolMemberId: selection.member.id,
+      metadata: {
+        runnerInstanceId: this.runnerInstanceId,
+        pid: process.pid,
+      },
+    }) ?? true;
+    if (!acquired) {
+      this.persistence.logEvent?.(task.id, 'task.executor.deferred', {
+        reason: 'ssh-resource-lease-held',
+        poolId: selection.poolId,
+        poolMemberId: selection.member.id,
+        resourceKey,
+      });
+      return false;
+    }
+    selection.leaseResourceKey = resourceKey;
+    selection.leaseHolderId = holderId;
+    return true;
+  }
+
+  /** @internal */ renewPoolSelectionLease(selection: PoolSelection | undefined): void {
+    if (!selection?.leaseResourceKey || !selection.leaseHolderId) return;
+    this.persistence.renewExecutionResourceLease?.(selection.leaseResourceKey, selection.leaseHolderId);
+  }
+
+  /** @internal */ releasePoolSelectionLease(selection: PoolSelection | undefined): void {
+    if (!selection?.leaseResourceKey || !selection.leaseHolderId) return;
+    this.persistence.releaseExecutionResourceLease?.(selection.leaseResourceKey, selection.leaseHolderId);
+    selection.leaseResourceKey = undefined;
+    selection.leaseHolderId = undefined;
+  }
+
+  /** @internal */ logExecutorSelected(
     task: TaskState,
     executor: Executor,
     handle: ExecutorHandle,
@@ -1032,36 +1055,89 @@ export class TaskRunner {
     return { type: 'configuredRunnerKind', runnerKind: executor.type };
   }
 
-  private selectedRemoteTargetId(task: TaskState, poolSelection: PoolSelection | undefined): string | undefined {
+  /** @internal */ selectedRemoteTargetId(task: TaskState, poolSelection: PoolSelection | undefined): string | undefined {
     if (poolSelection?.member.type === 'ssh') return poolSelection.member.id;
     return (task.config as { poolMemberId?: string }).poolMemberId
       ?? (task.config.poolId && this.getRemoteTargets()[task.config.poolId] ? task.config.poolId : undefined);
   }
 
-  selectExecutor(task: TaskState): Executor {
+  takeResolvedExecutionSelection(taskId: string): ResolvedExecutionSelection | undefined {
+    const selection = this.pendingPoolSelections.get(taskId);
+    const resolvedExecution = selection?.resolvedExecution;
+    if (selection) {
+      selection.resolvedExecution = undefined;
+    }
+    return resolvedExecution;
+  }
+
+  selectExecutor(task: TaskState, excludedPoolMemberKeys: Set<string> = new Set()): SelectedExecutor {
     let effectiveType = task.config.runnerKind ?? (task.config.isMergeNode ? 'merge' : undefined);
     let selectedPoolMemberId: string | undefined;
+    const explicitPoolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
+    let resolvedExecution: ResolvedExecutionSelection = {
+      executionAgent: this.resolveExecutionAgent(task),
+      executionModel: this.resolveExecutionModel(task),
+    };
     this.pendingPoolSelections.delete(task.id);
 
-    if (task.config.poolId) {
+    if (task.config.poolId && explicitPoolMemberId) {
       const pool = this.getExecutionPools()[task.config.poolId];
-      const member = pool ? this.selectPoolMember(task.config.poolId, pool) : undefined;
-      if (member) {
+      const member = pool?.members.find((candidate) => candidate.type === 'ssh' && candidate.id === explicitPoolMemberId);
+      if (pool && member) {
+        const memberExecution = this.resolveExecutionForMember(task, this.memberCapabilities(member));
+        if (!memberExecution.ok) {
+          throw new Error(
+            `Execution pool "${task.config.poolId}" member "${explicitPoolMemberId}" cannot run ` +
+            `${this.executionRequirementLabel(task)}: ${memberExecution.reason}`,
+          );
+        }
+        if (
+          excludedPoolMemberKeys.has(this.poolMemberKey(member))
+          || !this.poolMemberHasCapacity(task.config.poolId, pool, member)
+        ) {
+          throw this.poolCapacityError(task, task.config.poolId, pool, excludedPoolMemberKeys);
+        }
         effectiveType = member.type;
-        selectedPoolMemberId = member.type === 'ssh' ? member.id : undefined;
+        selectedPoolMemberId = member.id;
+        resolvedExecution = memberExecution.selection;
         this.pendingPoolSelections.set(task.id, {
           poolId: task.config.poolId,
           member,
           memberKey: this.poolMemberKey(member),
           selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
+          resolvedExecution,
         });
+      }
+    } else if (task.config.poolId) {
+      const pool = this.getExecutionPools()[task.config.poolId];
+      const member = pool ? this.selectPoolMember(task, task.config.poolId, pool, excludedPoolMemberKeys) : undefined;
+      if (member) {
+        const memberExecution = this.resolveExecutionForMember(task, this.memberCapabilities(member));
+        if (!memberExecution.ok) {
+          throw new Error(
+            `Execution pool "${task.config.poolId}" member "${member.id}" cannot run ` +
+            `${this.executionRequirementLabel(task)}: ${memberExecution.reason}`,
+          );
+        }
+        effectiveType = member.type;
+        selectedPoolMemberId = member.type === 'ssh' ? member.id : undefined;
+        resolvedExecution = memberExecution.selection;
+        this.pendingPoolSelections.set(task.id, {
+          poolId: task.config.poolId,
+          member,
+          memberKey: this.poolMemberKey(member),
+          selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
+          resolvedExecution,
+        });
+      } else if (pool) {
+        throw this.poolCapacityError(task, task.config.poolId, pool, excludedPoolMemberKeys);
       }
     }
     if (
       effectiveType === 'ssh'
       && task.config.poolId
       && !selectedPoolMemberId
-      && !(task.config as { poolMemberId?: string }).poolMemberId
+      && !explicitPoolMemberId
       && !this.getRemoteTargets()[task.config.poolId]
     ) {
       effectiveType = 'worktree';
@@ -1071,10 +1147,9 @@ export class TaskRunner {
       const registered = this.executorRegistry.get(effectiveType);
       if (registered && (effectiveType !== 'merge' || registered.type === 'merge')) {
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
-        return registered;
+        return { executor: registered, resolvedExecution, selectedPoolMemberId };
       }
 
-      // Per-task Docker instance (each task gets its own container + execGitSimple routing)
       if (effectiveType === 'docker') {
         const docker = new DockerExecutor({
           imageName: task.config.dockerImage || this.dockerConfig.imageName,
@@ -1083,10 +1158,9 @@ export class TaskRunner {
         });
         this.executorRegistry.register(`docker:${task.id}`, docker);
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=docker → docker (per-task)`);
-        return docker;
+        return { executor: docker, resolvedExecution, selectedPoolMemberId };
       }
 
-      // Lazy registration for Worktree
       if (effectiveType === 'worktree') {
         const invokerHome = resolve(homedir(), '.invoker');
         const worktree = new WorktreeExecutor({
@@ -1097,20 +1171,16 @@ export class TaskRunner {
         });
         this.executorRegistry.register('worktree', worktree);
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
-        return worktree;
+        return { executor: worktree, resolvedExecution, selectedPoolMemberId };
       }
 
       if (effectiveType === 'merge') {
         const merge = new MergeGateExecutor(this);
         this.executorRegistry.register?.('merge', merge);
         traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=merge → merge (lazy registered)`);
-        return merge;
+        return { executor: merge, resolvedExecution, selectedPoolMemberId };
       }
 
-      // Lazy registration for SSH — resolve poolMemberId from config and cache by targetId.
-      // The cache is config-aware: if the underlying remote target config changes (e.g. via
-      // remoteTargetsProvider returning new values), we replace the cached executor so the
-      // new config takes effect immediately.
       if (effectiveType === 'ssh') {
         const remoteTargets = this.getRemoteTargets();
         const targetId =
@@ -1121,7 +1191,6 @@ export class TaskRunner {
           throw new Error(`Task ${task.id} has runnerKind=ssh but no poolMemberId`);
         }
 
-        // Always re-read targets so dynamic provider updates are picked up.
         const target = remoteTargets[targetId];
         if (!target) {
           throw new Error(
@@ -1129,8 +1198,14 @@ export class TaskRunner {
             `entry exists in remoteTargets config. Available: [${Object.keys(remoteTargets).join(', ')}]`,
           );
         }
+        const directExecution = this.resolveExecutionForMember(task, target.capabilities);
+        if (!directExecution.ok) {
+          throw new Error(
+            `SSH target "${targetId}" cannot run ${this.executionRequirementLabel(task)}: ${directExecution.reason}`,
+          );
+        }
+        resolvedExecution = directExecution.selection;
 
-        // Build a config fingerprint so cache invalidates when target config changes.
         const configFingerprint = JSON.stringify({
           host: target.host,
           user: target.user,
@@ -1139,18 +1214,18 @@ export class TaskRunner {
           managedWorkspaces: target.managedWorkspaces,
           remoteInvokerHome: target.remoteInvokerHome,
           provisionCommand: target.provisionCommand,
+          use_api_key: target.use_api_key === true,
+          secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
           remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
         });
         const cacheKey = `${targetId}|${configFingerprint}`;
 
-        // Return cached executor if it exists for this target+config combo
         const cached = this.sshExecutorCache.get(cacheKey);
         if (cached) {
           traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
-          return cached;
+          return { executor: cached, resolvedExecution, selectedPoolMemberId: targetId };
         }
 
-        // Drop any stale entries for this targetId so we don't accumulate dead caches.
         for (const key of this.sshExecutorCache.keys()) {
           if (key.startsWith(`${targetId}|`)) {
             this.sshExecutorCache.delete(key);
@@ -1164,20 +1239,21 @@ export class TaskRunner {
           port: target.port,
           agentRegistry: this.executionAgentRegistry,
           managedWorkspaces: target.managedWorkspaces,
-          remoteInvokerHome: target.remoteInvokerHome,
           provisionCommand: target.provisionCommand,
+          useApiKey: target.use_api_key,
+          secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
           remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
         });
-
+        this.executorRegistry.register(`ssh:${targetId}`, ssh);
         this.sshExecutorCache.set(cacheKey, ssh);
-        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (new, cached)`);
-        return ssh;
+        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (lazy registered)`);
+        return { executor: ssh, resolvedExecution, selectedPoolMemberId: targetId };
       }
     }
 
-    const defaultExecutor = this.executorRegistry.getDefault();
-    traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType ?? 'none'} → ${defaultExecutor.type} (default)`);
-    return defaultExecutor;
+    const executor = this.executorRegistry.getDefault();
+    traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=(default) → ${executor.type}`);
+    return { executor, resolvedExecution, selectedPoolMemberId };
   }
 
   /**
@@ -1204,7 +1280,10 @@ export class TaskRunner {
   }
 
   async publishAfterFix(task: TaskState): Promise<void> {
-    return publishAfterFixImpl(this, task);
+    // Pump the attempt heartbeat/lease while the make-pr publisher runs, exactly
+    // as executeMergeNode does. A slow publish (large stack, loaded machine) must
+    // not be misread as a liveness stall by the executing-stall watchdog.
+    return this.withAttemptHeartbeat(task.id, () => publishAfterFixImpl(this, task));
   }
 
   async commitApprovedFix(task: TaskState): Promise<void> {
@@ -1244,12 +1323,35 @@ export class TaskRunner {
       },
     };
 
-    const executor = this.selectExecutor(task);
+    let publishWorkspacePath = workspacePath;
+    if (task.config.runnerKind === 'ssh') {
+      const poolMemberId = resolveSelectedRemoteTargetId(this, task.id, task);
+      const target = poolMemberId ? this.getRemoteTargetConfig(poolMemberId) : undefined;
+      if (target) {
+        const repairedWorkspacePath = await resolveRemoteBranchOwnerPath(branch, workspacePath, target);
+        if (repairedWorkspacePath && repairedWorkspacePath !== workspacePath) {
+          publishWorkspacePath = repairedWorkspacePath;
+          this.persistence.updateTask(task.id, {
+            execution: {
+              workspacePath: repairedWorkspacePath,
+            },
+          });
+          this.persistence.logEvent?.(task.id, 'debug.approved-fix', {
+            phase: 'publish-approved-fix-remote-path-repaired',
+            previousWorkspacePath: workspacePath,
+            repairedWorkspacePath,
+          });
+        }
+      }
+    }
+
+    const selectedExecutor = this.selectExecutor(task);
+    const executor = selectedExecutor.executor;
     let result: { commitHash?: string; error?: string };
     if (executor instanceof SshExecutor) {
-      result = await executor.publishApprovedFix(workspacePath, request, branch);
+      result = await executor.publishApprovedFix(publishWorkspacePath, request, branch);
     } else if (executor instanceof BaseExecutor) {
-      result = await executor.publishApprovedFix(workspacePath, request, branch);
+      result = await executor.publishApprovedFix(publishWorkspacePath, request, branch);
     } else {
       throw new Error(
         `Executor ${executor.type} does not support approved-fix publish for task ${task.id}`,
@@ -1446,255 +1548,50 @@ export class TaskRunner {
   }
 
   /**
-   * @internal Read-only git queries only. For mutations, use execGitIn.
+   * @internal Read-only git queries only. Config mutations must use git-config-mutation helpers.
    */
   execGitReadonly(args: string[], cwd?: string): Promise<string> {
-    return new Promise((resolvePromise, reject) => {
-      const child = spawn('git', args, {
-        cwd: cwd ?? this.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-      child.on('error', (err) => {
-        reject(new Error(`Failed to spawn git: ${err.message}`));
-      });
-      child.on('close', (code) => {
-        if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(
-          `git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}${stdout.trim() ? '\n' + stdout.trim() : ''}`
-        ));
-      });
-    });
+    return gitPlumbing.execGitReadonly(args, cwd ?? this.cwd);
   }
 
   /** @internal */ execGitIn(args: string[], dir: string): Promise<string> {
-    return new Promise((resolvePromise, reject) => {
-      const child = spawn('git', args, {
-        cwd: dir,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-      child.on('error', (err) => {
-        reject(new Error(`Failed to spawn git: ${err.message}`));
-      });
-      child.on('close', (code) => {
-        if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(
-          `git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}${stdout.trim() ? '\n' + stdout.trim() : ''}`
-        ));
-      });
+    return gitPlumbing.execGitIn(args, dir);
+  }
+
+  /** @internal */ createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string> {
+    return gitPlumbing.createMergeWorktree(ref, label, repoUrl, {
+      cwd: this.cwd,
+      logger: this.logger,
+      ensureRepoMirrorPath: (url) => this.ensureRepoMirrorPath(url),
     });
   }
 
-  /** @internal */ async createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string> {
-    const invokerHomeRoot = process.env.INVOKER_DB_DIR
-      ? resolve(process.env.INVOKER_DB_DIR)
-      : resolve(homedir(), '.invoker');
-    const mergeCloneRoot = resolve(invokerHomeRoot, 'merge-clones');
-    const clonePath = resolve(mergeCloneRoot, `${label}-${Date.now()}`);
-    mkdirSync(mergeCloneRoot, { recursive: true });
-
-    // Determine clone source: prefer pool mirror (has latest remote refs), fall back to host repo
-    let cloneSource: string = this.cwd;
-    let originUrl: string | undefined;
-    if (repoUrl) {
-      const mirrorPath = await this.ensureRepoMirrorPath(repoUrl);
-      if (mirrorPath) {
-        cloneSource = mirrorPath;
-        originUrl = repoUrl;
-      } else {
-        this.logger.warn(`[createMergeWorktree] Pool mirror unavailable for ${repoUrl}, falling back to host repo`);
-      }
-    }
-
-    // Clone with hard-linked objects — near-instant, fully isolated refs
-    await this.execGitReadonly(['clone', '--local', '--no-checkout', cloneSource, clonePath]);
-    // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
-    const headSha = (await this.execGitIn(['rev-parse', 'HEAD'], clonePath)).trim();
-    await this.execGitIn(['update-ref', '--no-deref', 'HEAD', headSha], clonePath);
-    // Mirror all branches as local refs so bare branch names resolve.
-    await this.execGitIn(['fetch', 'origin', '+refs/heads/*:refs/heads/*'], clonePath);
-
-    // Reconfigure origin to the real remote URL (GitHub) so subsequent push/fetch
-    // operations go directly to GitHub, bypassing any intermediate clone.
-    if (!originUrl) {
-      // Fallback: read origin from the host repo (old behavior)
-      originUrl = (await this.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
-    }
-    await this.execGitIn(['remote', 'set-url', 'origin', originUrl], clonePath);
-
-    // Refresh the requested base branch from the real remote. The pool mirror's
-    // local refs/heads/* can go stale after force-pushes or history rewrites,
-    // causing merge conflicts when experiment branches are based on the new
-    // history but the clone got the old branch tip from the pool.
-    const normalizedRef = ref.trim();
-    const strippedRemoteRef = normalizeBranchForGithubCli(normalizedRef);
-    const remoteName = 'origin';
-    const baseRef = normalizedRef.startsWith('origin/')
-      ? normalizedRef.slice('origin/'.length)
-      : strippedRemoteRef;
-    try {
-      await this.execGitIn(
-        ['fetch', remoteName, `+refs/heads/${baseRef}:refs/remotes/${remoteName}/${baseRef}`],
-        clonePath,
-      );
-    } catch {
-      // Non-critical: pool's ref may still be valid
-    }
-
-    // Resolve ref in the clone (not in host repo — the clone has mirrored branches).
-    // Accept both "feature/x" and "origin/feature/x" forms, and tolerate missing
-    // origin tracking refs for local-only stacked branches.
-    const tryResolve = async (expr: string): Promise<string | undefined> => {
-      try {
-        return (await this.execGitIn(['rev-parse', '--verify', `${expr}^{commit}`], clonePath)).trim();
-      } catch {
-        return undefined;
-      }
-    };
-
-    const candidates = Array.from(new Set([
-      `refs/remotes/${remoteName}/${baseRef}`,
-      `${remoteName}/${baseRef}`,
-      normalizedRef,
-      strippedRemoteRef,
-      `refs/heads/${strippedRemoteRef}`,
-    ]));
-
-    let refSha: string | undefined;
-    for (const candidate of candidates) {
-      refSha = await tryResolve(candidate);
-      if (refSha) break;
-    }
-
-    if (!refSha) {
-      // Last chance: fetch only the requested branch from origin, then retry.
-      // This can happen if clone source had stale refs at submit time.
-      try {
-        await this.execGitIn(
-          ['fetch', remoteName, `+refs/heads/${strippedRemoteRef}:refs/remotes/${remoteName}/${strippedRemoteRef}`],
-          clonePath,
-        );
-      } catch {
-        // Best-effort; keep error message from final resolve below.
-      }
-      for (const candidate of candidates) {
-        refSha = await tryResolve(candidate);
-        if (refSha) break;
-      }
-    }
-
-    // Fallback: if the requested ref is one of the common default branch names
-    // and it doesn't exist, try the alternate (main↔master). Plan YAML files
-    // sometimes specify "main" for repos whose default branch is "master" or
-    // vice versa.
-    if (!refSha) {
-      const alternates: Record<string, string> = { main: 'master', master: 'main' };
-      const alt = alternates[strippedRemoteRef];
-      if (alt) {
-        try {
-          await this.execGitIn(
-            ['fetch', remoteName, `+refs/heads/${alt}:refs/remotes/${remoteName}/${alt}`],
-            clonePath,
-          );
-        } catch {
-          // Best-effort
-        }
-        const altCandidates = [
-          `refs/remotes/${remoteName}/${alt}`,
-          `${remoteName}/${alt}`,
-          alt,
-          `refs/heads/${alt}`,
-        ];
-        for (const candidate of altCandidates) {
-          refSha = await tryResolve(candidate);
-          if (refSha) break;
-        }
-      }
-    }
-
-    if (!refSha) {
-      throw new Error(
-        `Unable to resolve merge worktree ref "${ref}" in clone ${clonePath}. ` +
-        `Tried: ${candidates.join(', ')}`,
-      );
-    }
-    await this.execGitIn(['checkout', '--detach', refSha], clonePath);
-    return clonePath;
+  /** @internal */ cloneMergeWorktree(cloneSource: string, clonePath: string): Promise<void> {
+    return gitPlumbing.cloneMergeWorktree(cloneSource, clonePath, (args) => this.execGitReadonly(args), this.logger);
   }
 
-  /** @internal */ async removeMergeWorktree(dir: string): Promise<void> {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch (err) {
-      this.logger.warn('[TaskRunner] removeMergeWorktree failed (best-effort)', {
-        dir,
-        error: err instanceof Error ? err.message : String(err),
-        err,
-      });
-    }
+  /** @internal */ removeMergeWorktree(dir: string): Promise<void> {
+    return gitPlumbing.removeMergeWorktree(dir, this.logger);
   }
 
-  async detectDefaultBranch(): Promise<string> {
-    try {
-      const ref = await this.execGitReadonly(['symbolic-ref', 'refs/remotes/origin/HEAD']);
-      return ref.replace('refs/remotes/origin/', '');
-    } catch {
-      try {
-        await this.execGitReadonly(['rev-parse', '--verify', 'main']);
-        return 'main';
-      } catch {
-        return 'master';
-      }
-    }
+  detectDefaultBranch(): Promise<string> {
+    return gitPlumbing.detectDefaultBranch((args) => this.execGitReadonly(args));
   }
 
   /** @internal */ execGh(args: string[], cwd?: string): Promise<string> {
-    const effectiveCwd = cwd ?? this.cwd;
-    return new Promise((resolvePromise, reject) => {
-      const child = spawn('gh', args, {
-        cwd: effectiveCwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-      child.on('close', (code) => {
-        if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(`gh ${args[0]} ${args[1]} failed (code ${code}): ${stderr.trim()}`));
-      });
-    });
+    return gitPlumbing.execGh(args, cwd ?? this.cwd);
   }
 
-  /** @internal */ async execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string> {
-    const ghBase = normalizeBranchForGithubCli(baseBranch);
-    const ghHead = normalizeBranchForGithubCli(featureBranch);
-
-    const listOutput = await this.execGh([
-      'pr', 'list', '--head', ghHead, '--base', ghBase,
-      '--state', 'open', '--json', 'url,number', '--limit', '1',
-    ], cwd);
-
-    const existing: Array<{ url: string; number: number }> = JSON.parse(listOutput || '[]');
-    if (existing.length > 0) {
-      const pr = existing[0];
-      const editArgs = ['pr', 'edit', String(pr.number), '--title', title];
-      if (body) editArgs.push('--body', body);
-      await this.execGh(editArgs, cwd);
-      return pr.url;
-    }
-
-    return this.execGh([
-      'pr', 'create', '--base', ghBase,
-      '--head', ghHead, '--title', title, '--body', body ?? '',
-    ], cwd);
+  /** @internal */ execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string> {
+    return gitPlumbing.execPr(
+      baseBranch,
+      featureBranch,
+      title,
+      body,
+      cwd ?? this.cwd,
+      (args, ghCwd) => this.execGh(args, ghCwd),
+      (args, dir) => this.execGitIn(args, dir),
+    );
   }
 
   // ── Experiment Branch Merging ────────────────────────────
@@ -1769,15 +1666,26 @@ export class TaskRunner {
    * After resolution, the task is restarted so it can proceed normally.
    */
   async resolveConflict(taskId: string, savedError?: string, agentName?: string): Promise<void> {
-    return this.withAttemptHeartbeat(taskId, () => resolveConflictImpl(this, taskId, savedError, agentName));
+    const task = this.orchestrator.getTask(taskId);
+    const executionModel = task ? this.resolveExecutionModel(task) : undefined;
+    return this.withAttemptHeartbeat(taskId, () => resolveConflictImpl(this, taskId, savedError, agentName, executionModel));
   }
 
   /**
    * Fix a failed task by spawning an agent with the error output.
    * The agent's output is captured and appended to the task's output stream for auditing.
    */
-  async fixWithAgent(taskId: string, taskOutput: string, agentName?: string, savedError?: string): Promise<void> {
-    return this.withAttemptHeartbeat(taskId, () => fixWithAgentImpl(this, taskId, taskOutput, agentName, savedError));
+  async fixWithAgent(
+    taskId: string,
+    taskOutput: string,
+    agentName?: string,
+    savedError?: string,
+    fixContext?: string,
+  ): Promise<void> {
+    return this.withAttemptHeartbeat(
+      taskId,
+      () => fixWithAgentImpl(this, taskId, taskOutput, agentName, savedError, fixContext),
+    );
   }
 
   private async withAttemptHeartbeat<T>(taskId: string, work: () => Promise<T>): Promise<T> {
@@ -1792,7 +1700,7 @@ export class TaskRunner {
         lastHeartbeatAt: now,
         leaseExpiresAt: nextLeaseExpiry(now),
       } as any);
-      this.callbacks.onHeartbeat?.(taskId);
+      this.callbacks.onHeartbeat?.(taskId, { at: now, source: 'executor' });
     };
 
     const heartbeatTimer = setInterval(heartbeat, PRE_START_HEARTBEAT_INTERVAL_MS);
@@ -1803,20 +1711,136 @@ export class TaskRunner {
     }
   }
 
-  resumeMergeGatePolling(): void {
-    if (!this.mergeGateProvider) return;
-    for (const task of this.orchestrator.getAllTasks()) {
-      if (
-        task.config.isMergeNode &&
-        (task.status === 'review_ready' || task.status === 'awaiting_approval') &&
-        task.execution.reviewId &&
-        !this.activePrPollers.has(task.id)
-      ) {
-        this.logger.info(`[merge-gate] Resuming PR polling for ${task.id} (PR ${task.execution.reviewId})`);
-        this.startPrPolling(task.id, task.execution.reviewId, task.config.workflowId!);
+  async closeWorkflowReview(workflowId: string): Promise<void> {
+    const closeReview = this.mergeGateProvider?.closeReview?.bind(this.mergeGateProvider);
+    if (!closeReview) return;
+    const getAllTasks = this.orchestrator.getAllTasks?.bind(this.orchestrator);
+    if (!getAllTasks) return;
+    const mergeTask = getAllTasks().find((task) =>
+      task.config.workflowId === workflowId
+      && task.config.isMergeNode
+      && (!!task.execution.reviewGate || !!task.execution.reviewId)
+    );
+    if (!mergeTask) return;
+
+    const identifiers = this.getCurrentClosableReviewIdentifiers(mergeTask);
+    const cwd = mergeTask.execution.workspacePath ?? this.cwd;
+    for (const identifier of identifiers) {
+      try {
+        await closeReview({ identifier, cwd });
+      } catch (err) {
+        this.logger.error(`[merge-gate] Failed to close review ${identifier}`, { err });
       }
     }
   }
+  private isCurrentReviewGateArtifact(gate: ReviewGateState, artifact: ReviewGateArtifact): boolean {
+    return artifact.generation === gate.activeGeneration
+      && artifact.status !== 'discarded'
+      && !artifact.discardedAt;
+  }
+
+
+  private getCurrentReviewArtifacts(task: TaskState): ReviewGateArtifact[] {
+    const gate = task.execution.reviewGate;
+    if (!gate) {
+      if (!task.execution.reviewId) {
+        return [];
+      }
+      return [{
+        id: task.execution.reviewId,
+        providerId: task.execution.reviewId,
+        required: true,
+        status: 'open',
+        generation: task.execution.generation ?? 0,
+      }];
+    }
+
+    return gate.artifacts.filter((artifact) => this.isCurrentReviewGateArtifact(gate, artifact));
+  }
+
+  private getCurrentRequiredReviewArtifacts(task: TaskState): ReviewGateArtifact[] {
+    return this.getCurrentReviewArtifacts(task).filter((artifact) => artifact.required && !!artifact.providerId);
+  }
+
+  private getCurrentClosableReviewIdentifiers(task: TaskState): string[] {
+    return this.getCurrentReviewArtifacts(task)
+      .flatMap((artifact) => (artifact.providerId ? [artifact.providerId] : []));
+  }
+
+  private mapReviewGateArtifactStatus(status: MergeGateApprovalStatus): ReviewGateArtifactStatus {
+    if (status.lifecycle === 'closed') return 'closed';
+    if (status.lifecycle === 'merged') return 'approved';
+    if (status.rejected) return 'changes_requested';
+    return 'open';
+  }
+
+  private reviewPollStillMatches(
+    before: TaskState,
+    current: TaskState | undefined,
+    providerId: string,
+  ): boolean {
+    if (!current) return false;
+    // Stale-write guard: a late poll must not write after the task already left
+    // the approval state (e.g. completed/closed/retried by another poll).
+    if (current.status !== 'review_ready' && current.status !== 'awaiting_approval') return false;
+    if (current.execution.selectedAttemptId !== before.execution.selectedAttemptId) return false;
+    if ((current.execution.generation ?? 0) !== (before.execution.generation ?? 0)) return false;
+
+    const beforeGate = before.execution.reviewGate;
+    if (!beforeGate) {
+      return !current.execution.reviewGate && current.execution.reviewId === providerId;
+    }
+
+    const currentGate = current.execution.reviewGate;
+    if (!currentGate || currentGate.activeGeneration !== beforeGate.activeGeneration) {
+      return false;
+    }
+    return currentGate.artifacts.some((artifact) =>
+      this.isCurrentReviewGateArtifact(currentGate, artifact)
+      && artifact.required
+      && artifact.providerId === providerId,
+    );
+  }
+
+  private updateReviewGateArtifact(
+    gate: ReviewGateState,
+    providerId: string,
+    status: MergeGateApprovalStatus,
+  ): ReviewGateState {
+    const mappedStatus = this.mapReviewGateArtifactStatus(status);
+    return {
+      ...gate,
+      artifacts: gate.artifacts.map((artifact) => {
+        if (
+          !this.isCurrentReviewGateArtifact(gate, artifact)
+          || artifact.providerId !== providerId
+        ) {
+          return artifact;
+        }
+        const next: ReviewGateArtifact = {
+          ...artifact,
+          status: mappedStatus,
+          ...(status.headSha ? { headSha: status.headSha } : {}),
+          ...(status.headRef ? { headRef: status.headRef } : {}),
+          updatedAt: new Date().toISOString(),
+        };
+        if (mappedStatus === 'open') {
+          return { ...next, rawStatus: status.statusText };
+        }
+        return next;
+      }),
+    };
+  }
+
+  private reviewGateIsApproved(gate: ReviewGateState): boolean {
+    const currentRequired = gate.artifacts.filter((artifact) =>
+      this.isCurrentReviewGateArtifact(gate, artifact) && artifact.required,
+    );
+    return currentRequired.length > 0
+      && currentRequired.every((artifact) => artifact.status === 'approved');
+  }
+
+
 
   private async handleApprovedMergeGate(
     taskId: string,
@@ -1825,10 +1849,69 @@ export class TaskRunner {
   ): Promise<void> {
     const sourceSuffix = source ? ` (${source})` : '';
     this.logger.info(`[merge-gate] PR ${reviewId} approved${sourceSuffix}, completing merge gate`);
-    this.stopPrPolling(taskId);
     const newlyStarted = await this.orchestrator.approve(taskId);
     if (newlyStarted.length > 0) {
       await this.executeTasks(newlyStarted);
+    }
+  }
+
+  private async pollMergeGateTask(
+    task: TaskState,
+    source: 'refresh' | 'manual check',
+  ): Promise<void> {
+    const artifacts = this.getCurrentRequiredReviewArtifacts(task);
+    if (artifacts.length === 0) return;
+
+    this.orchestrator.recordTaskHeartbeat?.(task.id, { at: new Date(), source: 'executor' });
+
+    let latestGate = task.execution.reviewGate;
+    let approvedGate = false;
+    for (const artifact of artifacts) {
+      const providerId = artifact.providerId;
+      if (!providerId) continue;
+      const gateCwd = task.execution.workspacePath ?? this.cwd;
+      const status = await this.mergeGateProvider!.checkApproval({
+        identifier: providerId,
+        cwd: gateCwd,
+      });
+
+      const current = this.orchestrator.getTask(task.id);
+      if (!this.reviewPollStillMatches(task, current, providerId)) {
+        continue;
+      }
+
+      // Rebase each provider update on the freshest persisted gate so concurrent
+      // polls don't clobber each other's artifact statuses with a stale snapshot.
+      const currentGate = current!.execution.reviewGate ?? latestGate;
+      if (currentGate) {
+        latestGate = this.updateReviewGateArtifact(currentGate, providerId, status);
+        this.persistence.updateTask(task.id, {
+          ...(status.lifecycle === 'closed' ? { status: 'closed' as const } : {}),
+          execution: { reviewGate: latestGate, reviewStatus: status.statusText },
+        });
+        if (!approvedGate && this.reviewGateIsApproved(latestGate)) {
+          approvedGate = true;
+          await this.handleApprovedMergeGate(task.id, providerId, source);
+        } else if (status.rejected) {
+          this.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
+        } else if (status.lifecycle === 'open') {
+          await this.maybePublishReviewGateCiFailure(current!, status, providerId);
+        }
+        continue;
+      }
+
+      this.persistence.updateTask(task.id, {
+        ...(status.lifecycle === 'closed' ? { status: 'closed' as const } : {}),
+        execution: { reviewStatus: status.statusText },
+      });
+      if (!approvedGate && status.lifecycle === 'merged') {
+        approvedGate = true;
+        await this.handleApprovedMergeGate(task.id, providerId, source);
+      } else if (status.rejected) {
+        this.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
+      } else if (status.lifecycle === 'open') {
+        await this.maybePublishReviewGateCiFailure(current!, status, providerId);
+      }
     }
   }
 
@@ -1838,23 +1921,10 @@ export class TaskRunner {
       if (
         task.config.isMergeNode &&
         (task.status === 'review_ready' || task.status === 'awaiting_approval') &&
-        task.execution.reviewId
+        this.getCurrentRequiredReviewArtifacts(task).length > 0
       ) {
         try {
-          const gateCwd = task.execution.workspacePath ?? this.cwd;
-          const status = await this.mergeGateProvider.checkApproval({
-            identifier: task.execution.reviewId,
-            cwd: gateCwd,
-          });
-          this.persistence.updateTask(task.id, {
-            execution: { reviewStatus: status.statusText },
-          });
-          if (status.approved) {
-            await this.handleApprovedMergeGate(task.id, task.execution.reviewId, 'refresh');
-          } else if (status.rejected) {
-            this.logger.info(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
-            this.stopPrPolling(task.id);
-          }
+          await this.pollMergeGateTask(task, 'refresh');
         } catch (err) {
           this.logger.error(`[merge-gate] PR status check error for ${task.id}`, { err });
         }
@@ -1862,72 +1932,53 @@ export class TaskRunner {
     }
   }
 
-  /** @internal */ startPrPolling(taskId: string, reviewId: string, workflowId: string): void {
-    const pollIntervalMs = 30_000;
-    const interval = setInterval(async () => {
-      try {
-        if (!this.mergeGateProvider) return;
-        const pollTask = this.orchestrator.getTask(taskId);
-        const pollCwd = pollTask?.execution.workspacePath ?? this.cwd;
-        const status = await this.mergeGateProvider.checkApproval({
-          identifier: reviewId,
-          cwd: pollCwd,
-        });
-
-        // Update PR status on task
-        this.persistence.updateTask(taskId, {
-          execution: { reviewStatus: status.statusText },
-        });
-
-        if (status.approved) {
-          await this.handleApprovedMergeGate(taskId, reviewId);
-        } else if (status.rejected) {
-          this.logger.info(`[merge-gate] PR ${reviewId} rejected: ${status.statusText}`);
-          this.stopPrPolling(taskId);
-          // Leave in review_ready/awaiting_approval — user can retry
-        }
-      } catch (err) {
-        this.logger.error(`[merge-gate] PR poll error for ${taskId}`, { err });
-        // Continue polling on transient errors
-      }
-    }, pollIntervalMs);
-    this.activePrPollers.set(taskId, interval);
-  }
-
-  private stopPrPolling(taskId: string): void {
-    const interval = this.activePrPollers.get(taskId);
-    if (interval) {
-      clearInterval(interval);
-      this.activePrPollers.delete(taskId);
-    }
-  }
-
   async checkPrApprovalNow(taskId: string): Promise<void> {
     if (!this.mergeGateProvider) return;
 
     const task = this.orchestrator.getTask(taskId);
-    const reviewId = task?.execution.reviewId;
-    if (!task || !reviewId) return;
+    if (!task) return;
 
     try {
-      const manualCwd = task.execution.workspacePath ?? this.cwd;
-      const status = await this.mergeGateProvider.checkApproval({
-        identifier: reviewId,
-        cwd: manualCwd,
-      });
-
-      this.persistence.updateTask(taskId, {
-        execution: { reviewStatus: status.statusText },
-      });
-
-      if (status.approved) {
-        await this.handleApprovedMergeGate(taskId, reviewId, 'manual check');
-      } else if (status.rejected) {
-        this.logger.info(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
-        this.stopPrPolling(taskId);
-      }
+      await this.pollMergeGateTask(task, 'manual check');
     } catch (err) {
       this.logger.error(`[merge-gate] Manual PR check error for ${taskId}`, { err });
+    }
+  }
+
+  private async maybePublishReviewGateCiFailure(
+    task: TaskState,
+    status: MergeGateApprovalStatus,
+    reviewId: string = task.execution.reviewId ?? '',
+  ): Promise<void> {
+    if (!this.reviewGateCiFailurePublisher) return;
+    if (!task.config.workflowId || !reviewId) return;
+    if (status.checks?.state !== 'failure' || status.checks.failed.length === 0) return;
+
+    const key = [
+      task.id,
+      task.execution.selectedAttemptId ?? 'no-attempt',
+      task.execution.generation ?? 0,
+      status.headSha ?? 'no-head-sha',
+    ].join(':');
+    if (this.reviewGateCiFailureInFlight.has(key)) return;
+
+    this.reviewGateCiFailureInFlight.add(key);
+    try {
+      await this.reviewGateCiFailurePublisher.publish({
+        taskId: task.id,
+        workflowId: task.config.workflowId,
+        reviewId,
+        reviewUrl: status.url,
+        headSha: status.headSha,
+        headRef: status.headRef,
+        branch: task.execution.branch,
+        selectedAttemptId: task.execution.selectedAttemptId,
+        generation: task.execution.generation ?? 0,
+        failedChecks: status.checks.failed,
+        statusText: status.statusText,
+      });
+    } finally {
+      this.reviewGateCiFailureInFlight.delete(key);
     }
   }
 
@@ -1935,6 +1986,7 @@ export class TaskRunner {
     prompt: string,
     cwd: string,
     agentName: string = DEFAULT_EXECUTION_AGENT,
+    executionModel?: string,
   ): Promise<{ stdout: string; sessionId: string }> {
     if (!this.executionAgentRegistry) {
       throw new Error('executionAgentRegistry is required for spawnAgentFix');
@@ -1944,7 +1996,7 @@ export class TaskRunner {
       throw new Error(`Agent "${agentName}" does not support fix commands`);
     }
     const driver = this.executionAgentRegistry.getSessionDriver(agentName);
-    return spawnAgentFixViaRegistry(prompt, cwd, agent, driver);
+    return spawnAgentFixViaRegistry(prompt, cwd, agent, driver, executionModel);
   }
 
   async authorPrBodyWithSkill(args: {
@@ -1956,8 +2008,16 @@ export class TaskRunner {
     workflowSummary: string;
     structuredContext?: PrAuthoringContext;
     cwd: string;
+    repoUrl?: string;
   }): Promise<{ body: string; sessionId: string; agentName: string }> {
+    const strictReviewStack = isInvokerRepoUrl(args.repoUrl);
     if (!this.executionAgentRegistry) {
+      if (strictReviewStack) {
+        throw new Error(
+          '[pr-authoring] executionAgentRegistry missing and target is the Invoker repo; '
+            + 'refusing canonical fallback PR body (it cannot pass scripts/validate-pr-body.mjs).',
+        );
+      }
       this.logger.warn(
         '[pr-authoring] executionAgentRegistry missing, using canonical fallback PR body.',
       );
@@ -1992,23 +2052,43 @@ export class TaskRunner {
         featureBranch: args.featureBranch,
         workflowSummary: args.workflowSummary,
         structuredContext: args.structuredContext,
+        strictReviewStack,
       });
 
       try {
+        this.logger.info(
+          `[pr-authoring] body authoring starting agent=${agent.name} `
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr`
+            + (strictReviewStack ? ' schema=review-stack' : ''),
+        );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
-        const validationErrors = validateCanonicalPrBody(result.body);
+        const validationErrors = strictReviewStack
+          ? validateReviewStackPrBody(result.body)
+          : validateCanonicalPrBody(result.body);
         if (validationErrors.length > 0) {
+          this.logger.warn(
+            `[pr-authoring] body validation failed agent=${agent.name} `
+              + `errors=${validationErrors.join('; ')}`,
+          );
           errors.push(
             `${agent.name}: invalid PR body — ${validationErrors.join('; ')}`,
           );
           continue;
         }
+        this.logger.info(`[pr-authoring] body authored agent=${agent.name} validated`);
         return { body: result.body, sessionId: result.sessionId, agentName: agent.name };
       } catch (err) {
         errors.push(
           `${agent.name}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    }
+
+    if (strictReviewStack) {
+      throw new Error(
+        '[pr-authoring] All AI agents failed to author a review-stack PR body for the Invoker repo; '
+          + `refusing canonical fallback (it cannot pass scripts/validate-pr-body.mjs). Errors: ${errors.join(' | ')}`,
+      );
     }
 
     // No AI agent succeeded — emit deterministic canonical PR body
@@ -2021,6 +2101,163 @@ export class TaskRunner {
       structuredContext: args.structuredContext,
     });
     return { body: canonicalBody, sessionId: 'canonical-fallback', agentName: 'canonical' };
+  }
+
+  async publishReviewStackWithMakePrSkill(args: {
+    workflowId?: string;
+    mergeNodeTaskId?: string;
+    title: string;
+    baseBranch: string;
+    featureBranch: string;
+    workflowSummary: string;
+    cwd: string;
+    reviewGate?: ReviewGateState;
+  }): Promise<{ artifacts: ReviewGateArtifact[]; sessionId: string; agentName: string }> {
+    if (!this.executionAgentRegistry) {
+      throw new Error('make-pr skill is required to publish Invoker review stacks');
+    }
+
+    const preferredName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
+    const prCapableAgents = this.executionAgentRegistry.listWithCapability('make-pr');
+    const orderedAgents = this.buildAgentFallbackOrder(preferredName, prCapableAgents);
+    const logProgress = (
+      level: 'debug' | 'info' | 'warn' | 'error',
+      message: string,
+      detail: Record<string, unknown> = {},
+    ) => {
+      if (!args.mergeNodeTaskId) return;
+      try {
+        const persistence = this.persistence as { logEvent?: (taskId: string, eventType: string, payload?: unknown) => void };
+        persistence.logEvent?.(args.mergeNodeTaskId, 'task.log', {
+          level,
+          message,
+          ...detail,
+        });
+      } catch (error) {
+        this.logger.warn('[pr-authoring] failed to persist task progress event', {
+          taskId: args.mergeNodeTaskId,
+          error,
+        });
+      }
+    };
+
+    logProgress('info', 'Preparing make-pr review stack publisher', {
+      featureBranch: args.featureBranch,
+      baseBranch: args.baseBranch,
+      agentCount: orderedAgents.length,
+    });
+
+    const errors: string[] = [];
+
+    for (const agent of orderedAgents) {
+      const skillPath = resolveSkillPathViaAgent(agent, 'make-pr');
+      if (!skillPath) {
+        errors.push(`${agent.name}: skill "invoker-make-pr" not installed`);
+        continue;
+      }
+
+      const driver = this.executionAgentRegistry.getSessionDriver(agent.name);
+      const prompt = buildMakePrStackPublishPrompt({
+        skillPath,
+        title: args.title,
+        baseBranch: args.baseBranch,
+        featureBranch: args.featureBranch,
+        workflowSummary: args.workflowSummary,
+        cwd: args.cwd,
+        reviewGate: args.reviewGate,
+      });
+
+      try {
+        logProgress('info', `Starting ${agent.name} make-pr agent`, {
+          agentName: agent.name,
+          cwd: args.cwd,
+        });
+        this.logger.info(
+          `[pr-authoring] review-stack publish starting agent=${agent.name} `
+            + `workflow=${args.workflowId ?? 'unknown'} skill=invoker-make-pr cwd=${args.cwd}`,
+        );
+        const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
+        logProgress('info', `${agent.name} make-pr agent finished; validating output`, {
+          agentName: agent.name,
+          sessionId: result.sessionId,
+        });
+        const parsedArtifacts = parseMakePrStackPublishResult(result.body);
+
+        // Enforce the make-pr review-stack schema on every published body. Prefer
+        // the body actually published on the provider: a lazy agent could report a
+        // compliant body in JSON while letting Mergify default the real PR to the
+        // commit message — the exact PR #2170 failure. Fall back to the
+        // agent-reported body only when the live body cannot be read.
+        const bodyErrors: string[] = [];
+        for (let index = 0; index < parsedArtifacts.length; index += 1) {
+          const artifact = parsedArtifacts[index];
+          let bodyToCheck = artifact.body ?? '';
+          let bodySource = 'agent-reported';
+          if (this.mergeGateProvider?.getReviewBody && artifact.providerId) {
+            try {
+              bodyToCheck = await this.mergeGateProvider.getReviewBody({
+                identifier: artifact.providerId,
+                cwd: args.cwd,
+              });
+              bodySource = 'published';
+            } catch (fetchErr) {
+              this.logger.warn(
+                `[pr-authoring] could not read published body for PR ${artifact.providerId}; `
+                  + `validating agent-reported body instead: `
+                  + `${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`,
+              );
+            }
+          }
+          for (const error of validateReviewStackPrBody(bodyToCheck)) {
+            bodyErrors.push(`artifact[${index}] (${artifact.url}) [${bodySource}]: ${error}`);
+          }
+        }
+        if (bodyErrors.length > 0) {
+          this.logger.warn(
+            `[pr-authoring] review-stack body validation failed agent=${agent.name} `
+              + `errors=${bodyErrors.join('; ')}`,
+          );
+          logProgress('warn', `${agent.name} published review stack failed validation`, {
+            agentName: agent.name,
+            errors: bodyErrors,
+          });
+          errors.push(`${agent.name}: invalid PR body — ${bodyErrors.join('; ')}`);
+          continue;
+        }
+
+        const nowIso = new Date().toISOString();
+        const generation = args.reviewGate?.activeGeneration ?? 0;
+        const artifacts: ReviewGateArtifact[] = parsedArtifacts.map(({ body: _body, ...artifact }) => ({
+          ...artifact,
+          provider: 'github',
+          baseBranch: artifact.baseBranch ?? args.baseBranch,
+          required: true,
+          status: 'open',
+          generation,
+          createdAt: nowIso,
+        }));
+        logProgress('info', 'Review stack body validated', {
+          agentName: agent.name,
+          artifactCount: artifacts.length,
+        });
+        this.logger.info(
+          `[pr-authoring] review-stack published agent=${agent.name} artifacts=${artifacts.length} `
+            + 'bodies validated against make-pr schema',
+        );
+        return { artifacts, sessionId: result.sessionId, agentName: agent.name };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logProgress('warn', `${agent.name} make-pr agent failed`, {
+          agentName: agent.name,
+          error: message,
+        });
+        errors.push(`${agent.name}: ${message}`);
+      }
+    }
+
+    throw new Error(
+      `make-pr skill is required to publish Invoker review stacks${errors.length > 0 ? `: ${errors.join(' | ')}` : ''}`,
+    );
   }
 
   /**
@@ -2075,7 +2312,7 @@ export class TaskRunner {
         .filter((agent): agent is string => Boolean(agent)),
     )];
     if (distinctAgents.length === 0) {
-      return DEFAULT_EXECUTION_AGENT;
+      return this.getDefaultExecutionAgent();
     }
     if (distinctAgents.length > 1) {
       console.warn(
@@ -2097,9 +2334,16 @@ export class TaskRunner {
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
     provisionCommand?: string;
+    use_api_key?: boolean;
+    secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
   } | undefined {
-    return this.getRemoteTargets()[targetId];
+    const target = this.getRemoteTargets()[targetId];
+    if (!target) return undefined;
+    return {
+      ...target,
+      secretsFile: target.secretsFile ?? this.dockerConfig.secretsFile,
+    };
   }
 
   /**
@@ -2117,7 +2361,7 @@ export class TaskRunner {
   /**
    * Destroy and deregister a per-task Docker executor if one was created for this task.
    */
-  private async cleanupPerTaskDockerExecutor(task: TaskState): Promise<void> {
+  /** @internal */ async cleanupPerTaskDockerExecutor(task: TaskState): Promise<void> {
     if (task.config.runnerKind !== 'docker') return;
     const dockerKey = `docker:${task.id}`;
     const dockerExec = this.executorRegistry.get(dockerKey);
@@ -2186,7 +2430,7 @@ export class TaskRunner {
     return branches;
   }
 
-  private buildAlternatives(
+  /** @internal */ buildAlternatives(
     task: TaskState,
   ): Array<{taskId: string; description: string; branch?: string; commitHash?: string; status: 'completed' | 'failed'; exitCode?: number; summary?: string; selected?: boolean}> {
     const alternatives: Array<{taskId: string; description: string; branch?: string; commitHash?: string; status: 'completed' | 'failed'; exitCode?: number; summary?: string; selected?: boolean}> = [];
@@ -2215,7 +2459,7 @@ export class TaskRunner {
     return alternatives;
   }
 
-  private async buildUpstreamContext(
+  /** @internal */ async buildUpstreamContext(
     task: TaskState,
   ): Promise<Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}>> {
     const context: Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}> = [];
@@ -2262,7 +2506,7 @@ export class TaskRunner {
     return context;
   }
 
-  private resolveExternalDependencyTask(workflowId: string, taskId?: string): TaskState | undefined {
+  /** @internal */ resolveExternalDependencyTask(workflowId: string, taskId?: string): TaskState | undefined {
     const normalizedTaskId = taskId?.trim() || '__merge__';
     if (normalizedTaskId === '__merge__') {
       return this.orchestrator.getTask(`__merge__${workflowId}`);
@@ -2292,10 +2536,7 @@ export class TaskRunner {
     workflowId: string,
     baseBranch: string,
   ): Promise<{ success: boolean; rebasedBranches: string[]; errors: string[] }> {
-    const allTasks = this.orchestrator.getAllTasks();
-    const taskBranches = allTasks
-      .filter((t) => t.config.workflowId === workflowId && t.status === 'completed' && t.execution.branch && !t.config.isMergeNode)
-      .map((t) => t.execution.branch!);
+    const taskBranches = this.collectManagedWorkflowBranches(workflowId);
 
     const rebaseWorkflow = this.persistence.loadWorkflow?.(workflowId);
     const rebaseRepoUrl = rebaseWorkflow?.repoUrl;
@@ -2338,17 +2579,12 @@ export class TaskRunner {
   ): Promise<void> {
     const trimmedBranchRepoUrl = branchRepoUrl?.trim();
     if (trimmedBranchRepoUrl) {
-      try {
-        await this.execGitIn(
-          ['remote', 'set-url', TaskRunner.BRANCH_REMOTE_NAME, trimmedBranchRepoUrl],
-          worktreeDir,
-        );
-      } catch {
-        await this.execGitIn(
-          ['remote', 'add', TaskRunner.BRANCH_REMOTE_NAME, trimmedBranchRepoUrl],
-          worktreeDir,
-        );
-      }
+      await ensureRemoteUrl({
+        cwd: worktreeDir,
+        remote: TaskRunner.BRANCH_REMOTE_NAME,
+        url: trimmedBranchRepoUrl,
+        context: { caller: 'TaskRunner.pushBranchFromMergeWorktree', detail: branch },
+      });
       await this.execGitIn(
         ['push', '--force', TaskRunner.BRANCH_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
         worktreeDir,
@@ -2360,39 +2596,10 @@ export class TaskRunner {
   }
 
   /** @internal */ gitLogMessage(commitHash: string, cwd?: string): Promise<string> {
-    return new Promise((resolvePromise, reject) => {
-      const child = spawn('git', ['log', '-1', '--format=%B', commitHash], {
-        cwd: cwd ?? this.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.on('error', (err) => {
-        reject(new Error(`Failed to spawn git: ${err.message}`));
-      });
-      child.on('close', (code) => {
-        if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(`git log failed (code ${code})`));
-      });
-    });
+    return gitPlumbing.gitLogMessage(commitHash, cwd ?? this.cwd);
   }
 
   /** @internal */ gitDiffStat(branch: string, cwd?: string): Promise<string> {
-    return new Promise((resolvePromise, reject) => {
-      const baseBranch = this.defaultBranch ?? 'master';
-      const child = spawn('git', ['diff', '--stat', '--stat-count=20', `${baseBranch}...${branch}`], {
-        cwd: cwd ?? this.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.on('error', (err) => {
-        reject(new Error(`Failed to spawn git: ${err.message}`));
-      });
-      child.on('close', (code) => {
-        if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(`git diff --stat failed (code ${code})`));
-      });
-    });
+    return gitPlumbing.gitDiffStat(branch, this.defaultBranch, cwd ?? this.cwd);
   }
 }

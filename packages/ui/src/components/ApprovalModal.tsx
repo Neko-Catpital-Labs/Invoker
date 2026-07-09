@@ -88,6 +88,18 @@ export function ApprovalModal({
   const [sessionReason, setSessionReason] = useState<string | undefined>(undefined);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   useEffect(() => {
     if (task.execution.agentSessionId || task.execution.lastAgentSessionId || fallbackSessionId) return;
@@ -148,6 +160,8 @@ export function ApprovalModal({
   }, [sessionId, effectiveAgentName]);
 
   const handleApprove = () => {
+    if (submitting) return;
+    setSubmitting(true);
     onApprove(task.id);
     onClose();
   };
@@ -157,6 +171,8 @@ export function ApprovalModal({
       setShowRejectInput(true);
       return;
     }
+    if (submitting) return;
+    setSubmitting(true);
     onReject(task.id, reason || undefined);
     onClose();
   };
@@ -167,38 +183,45 @@ export function ApprovalModal({
       ? onFinish === 'merge'
         ? 'Confirm Merge'
         : onFinish === 'pull_request'
-          ? 'Confirm Pull Request'
+          ? 'Confirm Create PR'
           : 'Approve Merge'
       : 'Manual Approval Required';
 
   const approveButtonLabel = isFixApproval
     ? 'Approve Fix'
     : isMergeNode
-      ? onFinish === 'pull_request'
-        ? 'Confirm Create PR'
-        : 'Approve Merge'
+      ? onFinish === 'merge'
+        ? 'Confirm Merge'
+        : onFinish === 'pull_request'
+          ? 'Confirm Create PR'
+          : 'Approve Merge'
       : 'Approve';
 
+  const mergeRejectLabel = onFinish === 'pull_request' ? 'Reject PR' : 'Reject Merge';
+  const mergeConfirmRejectLabel =
+    onFinish === 'pull_request' ? 'Confirm Reject PR' : 'Confirm Reject Merge';
   const rejectButtonLabel = showRejectInput
-    ? (isFixApproval ? 'Confirm Reject Fix' : isMergeNode ? 'Confirm Reject Merge' : 'Confirm Reject')
-    : (isFixApproval ? 'Reject Fix' : isMergeNode ? 'Reject Merge' : 'Reject');
+    ? (isFixApproval ? 'Confirm Reject Fix' : isMergeNode ? mergeConfirmRejectLabel : 'Confirm Reject')
+    : (isFixApproval ? 'Reject Fix' : isMergeNode ? mergeRejectLabel : 'Reject');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-700">
         {/* Header */}
         <div className="p-6 pb-0 shrink-0">
-          <h2 className="text-lg font-semibold text-gray-100 mb-2 shrink-0">
+          <h2 className="text-lg font-semibold text-gray-100">
             {heading}
           </h2>
-          <p className="text-sm text-gray-300 mb-1">
-            Task: <span className="font-mono text-gray-200">{task.id}</span>
-          </p>
-          <p className="text-sm text-gray-400">{task.description}</p>
         </div>
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
+          <div>
+            <p className="text-sm text-gray-300 mb-1">
+              Task: <span className="font-mono text-gray-200">{task.id}</span>
+            </p>
+            <p className="text-sm text-gray-400 break-words">{task.description}</p>
+          </div>
           {sessionId && (
             <div className="bg-gray-700/50 rounded p-3" data-testid="claude-session-context">
               <h3 className="text-sm font-medium text-gray-300 mb-2">{agentLabel} Session</h3>
@@ -269,14 +292,16 @@ export function ApprovalModal({
             </button>
             <button
               onClick={handleReject}
-              className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded text-sm font-medium transition-colors"
+              disabled={submitting}
+              className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
             >
               {rejectButtonLabel}
             </button>
             {!showRejectInput && (
               <button
                 onClick={handleApprove}
-                className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors"
+                disabled={submitting}
+                className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
               >
                 {approveButtonLabel}
               </button>

@@ -7,8 +7,8 @@
  *
  * Pattern: bare remote + working clone + TaskRunner with real git.
  */
-import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -46,7 +46,7 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
-  function buildExecutor(cwd: string) {
+  function buildExecutor(cwd: string, logger?: any) {
     const registry = new ExecutorRegistry();
     return new TaskRunner({
       orchestrator: { getAllTasks: () => [] } as any,
@@ -54,7 +54,20 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
       executorRegistry: registry,
       cwd,
       defaultBranch: 'master',
+      logger,
     });
+  }
+
+  function createMockLogger() {
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: vi.fn(),
+    };
+    logger.child.mockReturnValue(logger);
+    return logger;
   }
 
   it('clone origin points to real remote, not host cwd', async () => {
@@ -168,6 +181,27 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     await executor.removeMergeWorktree(clonePath);
   });
 
+  it('allocates unique clone directories for duplicate labels in the same timestamp', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(123456789);
+
+    const executor = buildExecutor(sandbox.host);
+    const firstClonePath = await executor.createMergeWorktree('master', 'test-concurrent');
+    const secondClonePath = await executor.createMergeWorktree('master', 'test-concurrent');
+
+    try {
+      expect(firstClonePath).not.toBe(secondClonePath);
+      expect(existsSync(firstClonePath)).toBe(true);
+      expect(existsSync(secondClonePath)).toBe(true);
+      expect(git(firstClonePath, 'rev-parse HEAD')).toBe(git(secondClonePath, 'rev-parse HEAD'));
+    } finally {
+      dateNow.mockRestore();
+      await executor.removeMergeWorktree(firstClonePath);
+      await executor.removeMergeWorktree(secondClonePath);
+    }
+  });
+
   it('prefers freshly fetched origin base over stale local base branch', async () => {
     const sandbox = createSandbox();
     root = sandbox.root;
@@ -209,6 +243,74 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     expect(cloneHeadSha).not.toBe(hostMasterSha);
 
     await executor.removeMergeWorktree(clonePath);
+  });
+
+  it('retries clone without local hardlinks when local clone crosses filesystems', async () => {
+    root = mkdtempSync(join(tmpdir(), 'merge-wt-exdev-'));
+    const cloneSource = join(root, 'source');
+    const clonePath = join(root, 'clone');
+    const logger = createMockLogger();
+    const executor = buildExecutor(root, logger);
+    const calls: string[][] = [];
+
+    (executor as any).execGitReadonly = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args.includes('--local')) {
+        mkdirSync(clonePath, { recursive: true });
+        throw new Error('fatal: failed to create link: Invalid cross-device link');
+      }
+      expect(existsSync(clonePath)).toBe(false);
+      mkdirSync(clonePath, { recursive: true });
+      return '';
+    });
+
+    await (executor as any).cloneMergeWorktree(cloneSource, clonePath);
+
+    expect(calls).toEqual([
+      ['clone', '--local', '--no-checkout', '--', cloneSource, clonePath],
+      ['clone', '--no-local', '--no-checkout', '--', cloneSource, clonePath],
+    ]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('retrying without hardlinks'));
+  });
+
+  it('does not retry other local clone failures', async () => {
+    root = mkdtempSync(join(tmpdir(), 'merge-wt-clone-fail-'));
+    const cloneSource = join(root, 'source');
+    const clonePath = join(root, 'clone');
+    const executor = buildExecutor(root);
+    const err = new Error('fatal: authentication failed');
+
+    (executor as any).execGitReadonly = vi.fn(async () => {
+      throw err;
+    });
+
+    await expect((executor as any).cloneMergeWorktree(cloneSource, clonePath)).rejects.toThrow(err);
+    expect((executor as any).execGitReadonly).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws an explicit, actionable error when the requested branch is not on origin', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+    // Keep the throw-path clone (never returned, so it can't be removed by hand)
+    // under the sandbox root instead of ~/.invoker, so afterEach cleans it up.
+    const prevDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = sandbox.root;
+
+    const executor = buildExecutor(sandbox.host);
+    let message = '';
+    try {
+      await executor.createMergeWorktree('plan/never-pushed', 'test-missing-base');
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (prevDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = prevDbDir;
+    }
+
+    expect(message).toContain('Branch "plan/never-pushed" required by the merge/gate step was not found on the remote');
+    expect(message).toContain('rerun the gate');
+    // Names the misleading "just recreate the task" path as insufficient.
+    expect(message).toContain('Recreating the task alone will not help');
   });
 
 });

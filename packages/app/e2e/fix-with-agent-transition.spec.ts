@@ -7,8 +7,8 @@
  * The underlying bug: when the setFixAwaitingApproval delta is missed by the
  * renderer (e.g. webContents.send silently fails for an unresponsive window),
  * the node stays stuck on "FIXING WITH AI" until a full app restart. The fix
- * adds a refreshTasks() call after the fixWithAgent IPC resolves as a safety
- * net, and uses isFixingWithAI: false (instead of undefined) so the value
+ * now relies on the graph refresh event path after the fixWithAgent IPC resolves,
+ * and uses isFixingWithAI: false (instead of undefined) so the value
  * survives IPC serialization.
  *
  * This test exercises the real UI action path to verify the end-to-end

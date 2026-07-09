@@ -5,14 +5,22 @@
 ### Slash commands and agent skills
 
 - **Precedence:** When a Cursor slash command or an **attached skill** says to follow a skill (e.g. `/plan-to-invoker`), that workflow **overrides** a bare “implement this” sentence in the same message. Complete the skill steps (including `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` and user confirmation) before editing product code for that request.
-- **Bootstrap after clone:** Run `bash scripts/setup-agent-skills.sh` so `.cursor/skills/plan-to-invoker` exists (and Codex symlink if used). Optional: `bash scripts/test-plan-to-invoker-skill.sh` when changing skill layout.
+- **Bootstrap after clone:** Run `bash scripts/setup-agent-skills.sh` to build the CLI/app artifacts and install bundled `invoker-*` skills into Codex, Claude, and Cursor. Optional: `bash scripts/test-plan-to-invoker-skill.sh` when changing skill layout.
 - **Repo rule:** See `.cursor/rules/skill-command-precedence.mdc` for the always-on summary.
+- **Benchmark direct output:** If a `/plan-to-invoker` request says `For this benchmark`, `Required output path:`, `Write the final YAML plan to`, or `Do not submit the plan`, write a complete command-only YAML plan directly to the literal required path. The first top-level keys must be `name:`, `onFinish:`, `mergeMode:`, `repoUrl:`, and `tasks:`. Do not write `version:` or `metadata:` wrappers. Do not run `git remote`, `env`, `printenv`, `set`, schema scans, validation loops, submit commands, prompt tasks, nested `steps:`, or anything that can trigger an agent/autofix. If no repo URL is provided, use `https://github.com/Neko-Catpital-Labs/Invoker.git`.
 
 - Every step in a plan MUST be testable. Each implementation step must have a corresponding verification with a concrete, executable command that produces a clear pass/fail exit code (e.g. `pnpm test`, `git diff --name-only`). Do not use AI prompts for test tasks — use commands only.
 - Bug fix plans MUST follow a three-phase approach before any implementation:
   1. **Reproduce** -- Find or write a concrete reproduction case (a failing test or a command that demonstrates the bug). Report back the exact repro steps and observed vs. expected behavior. Do not proceed until the bug is reliably reproducible.
   2. **Debug and report** -- Investigate and report: (a) the root cause — why the code is in the buggy state, and (b) the test gap — how the bug escaped existing tests (missing coverage, wrong assumptions, untested edge case, etc.).
   3. **Plan the fix** -- Only after completing steps 1 and 2, create the implementation plan. The plan must include a verification step that re-runs the reproduction case to confirm the fix.
+
+## Landing PR Stacks
+
+- When asked to **land / merge / ship / queue** a PR or PR stack, follow `skills/land-stack/SKILL.md`.
+- Never choose a PR by branch-name lookup (`gh pr list --head <branch>`). Two PRs can share a branch name (a raw workflow branch PR vs the intended `stack/...` PR). If PR numbers are missing, broadly list open PRs, filter to `stack/` heads, verify local head SHAs, order by base/head links, and suggest bottom-up numbers for confirmation. Land by confirmed PR number only.
+- Verify before any write: `node scripts/land-stack.mjs <pr> [<pr> ...]` must exit 0 (checks head SHA is in the local clone, head branch is a real `stack/` branch, the PRs form a proper stack, all OPEN). Land via `node scripts/land-stack.mjs <pr> ... --execute`. Do not hand-add `admin-bypass` or `gh pr merge` to bypass the guard.
+- See `.cursor/rules/land-stack-precedence.mdc` for the always-on summary.
 
 ## SQLite Command Policy
 
@@ -61,6 +69,22 @@ Tests that create real `WorktreeExecutor`/`DockerExecutor` and call `.start()` r
 ## File Editing Discipline
 
 After making a change with any edit tool, **read the file back from disk** (using the Read tool or `rg` in the Shell) and verify the edit persisted before proceeding. Cursor's in-memory state can silently revert writes. If the change is missing on disk, re-apply it using the Shell tool (e.g. `python3 -c "..."` or `sed`) and verify again. When committing, always `git diff --stat` immediately before `git add` to confirm the working tree contains the expected modifications.
+
+## Comment Policy
+
+Do not add explanatory comments to product code by default.
+
+Prefer clearer names, smaller functions, or simpler control flow.
+
+Allowed comments only:
+
+- legal or license headers
+- generated-code markers
+- `eslint`, `ts-expect-error`, `ts-ignore`, `shellcheck`, or tool directives
+- non-obvious safety invariants where removing the comment would make the code risky
+- public API docs when that area already uses them
+
+Before finishing a PR, remove any comment you added unless it matches one of the allowed cases.
 
 ## Code Navigation
 

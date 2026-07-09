@@ -21,12 +21,6 @@ function makeTask(
   } as TaskState;
 }
 
-async function waitForCondition(condition: () => boolean): Promise<void> {
-  for (let i = 0; i < 20; i += 1) {
-    if (condition()) return;
-    await Promise.resolve();
-  }
-}
 
 describe('global-topup helpers', () => {
   it('keeps cross-workflow prestarted tasks in top-up when a workflow scope is explicit', async () => {
@@ -47,9 +41,7 @@ describe('global-topup helpers', () => {
       scopedWorkflowId: 'wf-1',
     });
 
-    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
-    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
-    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
     expect(result.runnable).toEqual([scoped]);
     expect(result.topup).toEqual([crossWorkflow]);
@@ -74,15 +66,12 @@ describe('global-topup helpers', () => {
       scopedWorkflowId: 'wf-1',
     });
 
-    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(3);
-    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
-    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [crossWorkflow]);
-    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(3, [extraTopup]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(result.runnable).toEqual([scoped]);
     expect(result.topup).toEqual([crossWorkflow, extraTopup]);
   });
 
-  it('dispatches scoped started tasks before running global top-up', async () => {
+  it('returns scoped started tasks before running global top-up', async () => {
     const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
     const topupTask = makeTask('topup-task', 'running', 'attempt-topup');
     const orchestrator = {
@@ -99,45 +88,13 @@ describe('global-topup helpers', () => {
       started: [scoped],
     });
 
-    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
-    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
-    expect(taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [topupTask]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
     expect(result.runnable).toEqual([scoped]);
     expect(result.topup).toEqual([topupTask]);
   });
 
-  it('awaited dispatch waits for executeTasks to finish', async () => {
-    const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
-    const release = vi.fn();
-    let resolveDispatch!: () => void;
-    const taskExecutor = {
-      executeTasks: vi.fn(() => new Promise<void>((resolve) => {
-        resolveDispatch = () => {
-          release();
-          resolve();
-        };
-      })),
-    };
-    const dispatch = dispatchStartedTasksWithGlobalTopup({
-      orchestrator: { startExecution: vi.fn().mockReturnValue([]) } as any,
-      taskExecutor: taskExecutor as any,
-      context: 'test.awaited-dispatch',
-      started: [scoped],
-    });
-
-    await Promise.resolve();
-    let completed = false;
-    void dispatch.then(() => { completed = true; });
-    await Promise.resolve();
-
-    expect(completed).toBe(false);
-    resolveDispatch();
-    await dispatch;
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it('fire-and-forget dispatch returns before executeTasks finishes', async () => {
+  it('fire-and-forget mode still returns the runnable set without in-process dispatch', async () => {
     const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
     const taskExecutor = {
       executeTasks: vi.fn(() => new Promise<void>(() => {})),
@@ -151,31 +108,9 @@ describe('global-topup helpers', () => {
       dispatchMode: 'fire-and-forget',
     });
 
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([scoped]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(result.runnable).toEqual([scoped]);
     expect(result.topup).toEqual([]);
-  });
-
-  it('fire-and-forget dispatch logs asynchronous executeTasks rejection', async () => {
-    const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
-    const logger = { error: vi.fn(), info: vi.fn() };
-    const taskExecutor = {
-      executeTasks: vi.fn().mockRejectedValue(new Error('dispatch failed')),
-    };
-
-    await dispatchStartedTasksWithGlobalTopup({
-      orchestrator: { startExecution: vi.fn().mockReturnValue([]) } as any,
-      taskExecutor: taskExecutor as any,
-      logger: logger as any,
-      context: 'test.fire-and-forget-rejection',
-      started: [scoped],
-      dispatchMode: 'fire-and-forget',
-    });
-
-    await waitForCondition(() => logger.error.mock.calls.length > 0);
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining('asynchronous task dispatch failed'),
-    );
   });
 
   it('executeGlobalTopup skips tasks already marked as dispatched', async () => {
@@ -195,12 +130,11 @@ describe('global-topup helpers', () => {
       alreadyDispatched: [scoped],
     });
 
-    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([topupTask]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(topup).toEqual([topupTask]);
   });
 
-  it('finalizeMutationWithGlobalTopup dispatches started runnable work', async () => {
+  it('finalizeMutationWithGlobalTopup returns started runnable work', async () => {
     const scoped = makeTask('scoped-task', 'running', 'attempt-scoped');
     const orchestrator = {
       startExecution: vi.fn().mockReturnValue([]),
@@ -216,7 +150,7 @@ describe('global-topup helpers', () => {
       started: [scoped],
     });
 
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([scoped]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(result.started).toEqual([scoped]);
     expect(result.topup).toEqual([]);
   });

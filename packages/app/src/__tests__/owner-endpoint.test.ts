@@ -30,7 +30,7 @@ describe('owner-endpoint contract', () => {
       expect(result!.canAcceptStandaloneMutations).toBe(true);
     });
 
-    it('returns OwnerEndpointInfo with canAcceptStandaloneMutations=false for non-standalone owners', async () => {
+    it('returns OwnerEndpointInfo with canAcceptStandaloneMutations=true for GUI owners', async () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
@@ -41,7 +41,7 @@ describe('owner-endpoint contract', () => {
       const result = await discoverOwner(bus);
       expect(result).not.toBeNull();
       expect(result!.ownerId).toBe('owner-456');
-      expect(result!.canAcceptStandaloneMutations).toBe(false);
+      expect(result!.canAcceptStandaloneMutations).toBe(true);
     });
 
     it('does not expose the raw mode string in the returned contract', async () => {
@@ -81,7 +81,7 @@ describe('owner-endpoint contract', () => {
       expect(isStandaloneCapable(owner)).toBe(true);
     });
 
-    it('returns false for non-standalone owners', () => {
+    it('returns false for owners that cannot serve delegated mutations', () => {
       const owner: OwnerEndpointInfo = {
         ownerId: 'owner-2',
         canAcceptStandaloneMutations: false,
@@ -114,9 +114,8 @@ describe('owner-endpoint contract', () => {
   });
 
   describe('surface neutrality', () => {
-    it('treats any owner with mode !== standalone as non-standalone-capable', async () => {
+    it('treats unknown owner modes as non-standalone-capable', async () => {
       const bus = new LocalBus();
-      // Hypothetical future mode — the contract should not care
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
         ownerId: 'owner-future',

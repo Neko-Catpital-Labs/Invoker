@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { sid } from './scoped-test-helpers.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { OrchestratorPersistence, OrchestratorMessageBus, GraphMutation } from '../orchestrator.js';
-import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
+import { computeWorkflowRollup, type TaskState, type TaskDelta, type TaskStateChanges, type Attempt } from '../task-types.js';
 
 // ── Mocks ────────────────────────────────────────────────────
 
@@ -19,18 +19,15 @@ class InMemoryPersistence implements OrchestratorPersistence {
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
 
-  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
+  saveWorkflow(workflow: { id: string; name: string }): void {
     const now = new Date().toISOString();
-    this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
+    this.workflows.set(workflow.id, { ...workflow, status: 'pending', createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
   }
 
-  updateWorkflow(workflowId: string, changes: { status?: string }): void {
-    const wf = this.workflows.get(workflowId);
-    if (wf && changes.status) wf.status = changes.status;
-  }
+  updateWorkflow(_workflowId: string, _changes: { updatedAt?: string }): void {}
 
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
-    return Array.from(this.workflows.values());
+    return Array.from(this.workflows.values()).map((workflow) => ({ ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status }));
   }
 
   saveTask(workflowId: string, task: TaskState): void {
@@ -234,7 +231,7 @@ describe('applyGraphMutation', () => {
     expect(orchestrator.getTask('B-v2')).toBeUndefined();
   });
 
-  it('no downstream: fork is a no-op', () => {
+  it('no downstream: fork is a no-op and merge gate is reconciled', () => {
     orchestrator.loadPlan({
       name: 'test',
       tasks: [
@@ -247,6 +244,8 @@ describe('applyGraphMutation', () => {
     completeTask(orchestrator, 'B');
 
     const s = (l: string) => sid(orchestrator, 0, l);
+    const wfId = orchestrator.getTask('B')!.config.workflowId!;
+    const mergeId = `__merge__${wfId}`;
     const deltas = applyMutation(orchestrator, {
       sourceNodeId: s('B'),
       sourceDisposition: 'stale',
@@ -255,7 +254,7 @@ describe('applyGraphMutation', () => {
           id: s('fix'),
           description: 'Fix',
           dependencies: [s('A')],
-          workflowId: orchestrator.getTask('B')!.config.workflowId!,
+          workflowId: wfId,
         },
       ],
       outputNodeId: s('fix'),
@@ -268,6 +267,18 @@ describe('applyGraphMutation', () => {
 
     expect(orchestrator.getTask(s('B'))!.status).toBe('stale');
     expect(orchestrator.getTask(s('fix'))).toBeDefined();
+    expect(orchestrator.getTask(mergeId)!.dependencies).toEqual([s('fix')]);
+
+    const mergeDelta = deltas.find((d) => d.type === 'updated' && d.taskId === mergeId);
+    expect(mergeDelta).toMatchObject({
+      type: 'updated',
+      taskId: mergeId,
+      changes: {
+        dependencies: [s('fix')],
+        status: 'pending',
+        execution: {},
+      },
+    });
   });
 
   it('emits deltas in correct order: fork, source, new nodes', () => {

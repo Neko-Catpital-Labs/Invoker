@@ -12,7 +12,8 @@ function makeLogger() {
 describe('recoverWorkflowMutationsOnStartup', () => {
   it('requeues and resumes pending mutations for owner startup without env gating', async () => {
     const persistence = {
-      requeueExpiredWorkflowMutationLeases: vi.fn(),
+      requeueExpiredWorkflowMutationLeases: vi.fn(() => 0),
+      requeueOrphanedWorkflowMutationIntents: vi.fn(() => 0),
     };
     const workflowMutationCoordinator = {
       resumePending: vi.fn(async () => {}),
@@ -29,9 +30,14 @@ describe('recoverWorkflowMutationsOnStartup', () => {
     });
 
     expect(persistence.requeueExpiredWorkflowMutationLeases).toHaveBeenCalledTimes(1);
+    expect(persistence.requeueOrphanedWorkflowMutationIntents).toHaveBeenCalledTimes(1);
     expect(maybeDelayResume).toHaveBeenCalledTimes(1);
     expect(workflowMutationCoordinator.resumePending).toHaveBeenCalledTimes(1);
-    expect(logger.info).toHaveBeenCalledWith('requeued expired workflow mutation leases on startup', { module: 'init' });
+    expect(logger.info).toHaveBeenCalledWith('requeued expired workflow mutation leases on startup', {
+      module: 'init',
+      expired: 0,
+      orphaned: 0,
+    });
     expect(logger.info).toHaveBeenCalledWith('resuming pending workflow mutations on startup', { module: 'init' });
     expect(logger.info).toHaveBeenCalledWith('workflow mutation recovery finished on startup', { module: 'init' });
   });

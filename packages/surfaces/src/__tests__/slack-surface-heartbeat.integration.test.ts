@@ -70,6 +70,7 @@ const mockPlanConversation = {
   sendMessage: mockSendMessage,
   submittedPlanText: null as any,
   planSubmitted: false,
+  conversationMode: 'plan' as const,
   init: vi.fn().mockResolvedValue(undefined),
 };
 

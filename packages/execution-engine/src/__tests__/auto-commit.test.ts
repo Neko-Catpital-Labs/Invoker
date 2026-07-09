@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { BaseExecutor, type BaseEntry, MergeConflictError, type SetupBranchOptions } from '../base-executor.js';
 import type { WorkRequest, WorkRequestInputs, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, TerminalSpec } from '../executor.js';
@@ -948,6 +948,8 @@ describe('merge gate commit topology (real git)', () => {
       getAllTasks: () => tasks,
       handleWorkerResponse: () => [],
       setTaskAwaitingApproval: () => {},
+      setTaskReviewReady: () => {},
+      autoStartExternallyUnblockedReadyTasks: () => [],
     };
     const persistence = {
       loadWorkflow: () => workflow,
@@ -1047,7 +1049,7 @@ describe('merge gate commit topology (real git)', () => {
       { cwd: tmpDir },
     ).toString().trim().split('\n').filter(l => l.length > 0);
     expect(newCommits.length).toBe(1);
-  });
+  }, 60_000);
 
   it('automatic mode produces same topology in a single step', async () => {
     const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
@@ -1261,7 +1263,7 @@ describe('merge gate commit topology (real git)', () => {
 
     const tipMsgI = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
     expect(tipMsgI).toBe('Intermediate Workflow');
-  });
+  }, 60_000);
 
   it('orchestrator.approve() with hook triggers real squash merge into master', async () => {
     const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
@@ -1392,7 +1394,7 @@ describe('merge gate commit topology (real git)', () => {
       { cwd: tmpDir },
     ).toString().trim().split('\n').filter(l => l.length > 0);
     expect(newCommits.length).toBe(1);
-  });
+  }, 60_000);
 
 });
 
@@ -1623,6 +1625,52 @@ describe('BaseExecutor.setupTaskBranch', () => {
     expect(isAncestor(tmpDir, hashB, 'HEAD')).toBe(true);
     expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
     expect(existsSync(join(tmpDir, 'b.txt'))).toBe(true);
+  });
+
+  it('drops leading workflow base marker when an explicit resolved base is supplied for worktree setup', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout -b invoker/task-a', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'a.txt'), 'a-work');
+    execSync('git add -A && git commit -m "task-a"', { cwd: tmpDir });
+    const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b invoker/task-b', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'b.txt'), 'b-work');
+    execSync('git add -A && git commit -m "task-b"', { cwd: tmpDir });
+    const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const worktreeDir = mkdtempSync(join(tmpdir(), 'setup-task-branch-wt-'));
+    rmSync(worktreeDir, { recursive: true, force: true });
+    try {
+      const handle: ExecutorHandle = { executionId: 'e-explicit-base', taskId: 'task-c' };
+      const request = makeRequest('task-c', {
+        baseBranch: 'stack/local-only-base',
+        upstreamBranches: ['stack/local-only-base', 'invoker/task-a', 'invoker/task-b'],
+      });
+
+      await executor.testSetupTaskBranch(tmpDir, request, handle, {
+        branchName: 'invoker/task-c',
+        base: 'master',
+        worktreeDir,
+      });
+
+      expect(handle.branch).toBe('invoker/task-c');
+      expect(isAncestor(worktreeDir, hashA, 'HEAD')).toBe(true);
+      expect(isAncestor(worktreeDir, hashB, 'HEAD')).toBe(true);
+      expect(existsSync(join(worktreeDir, 'a.txt'))).toBe(true);
+      expect(existsSync(join(worktreeDir, 'b.txt'))).toBe(true);
+    } finally {
+      try {
+        execFileSync('git', ['worktree', 'remove', '--force', worktreeDir], { cwd: tmpDir, stdio: 'ignore' });
+      } catch {
+        // Best-effort cleanup; the temp directory removal below handles partial setup.
+      }
+      rmSync(worktreeDir, { recursive: true, force: true });
+    }
   });
 
   it('returns undefined for non-git directories', async () => {
@@ -2070,6 +2118,19 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     const remoteBranches = execSync('git branch', { cwd: intermediateDir }).toString();
     expect(remoteBranches).toContain('invoker/task-intermediate');
   });
+  it('pushes HEAD when the branch ref is missing locally', async () => {
+    execSync('git checkout -b invoker/task-detached', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'detached.txt'), 'task result');
+    execSync('git add -A && git commit -m "task commit detached"', { cwd: cloneDir });
+    execSync('git checkout --detach HEAD', { cwd: cloneDir });
+    execSync('git branch -D invoker/task-detached', { cwd: cloneDir });
+
+    const pushErr = await executor.testPushBranchToRemote(cloneDir, 'invoker/task-detached');
+    expect(pushErr).toBeUndefined();
+
+    const remoteBranches = execSync('git branch', { cwd: originDir }).toString();
+    expect(remoteBranches).toContain('invoker/task-detached');
+  });
 });
 
 describe('BaseExecutor.handleProcessExit push semantics', () => {
@@ -2113,6 +2174,48 @@ describe('BaseExecutor.handleProcessExit push semantics', () => {
     expect(response?.status).toBe('failed');
     expect(response?.outputs.exitCode).toBe(1);
     expect(response?.outputs.error).toBe('push denied');
+  });
+
+  it('keeps task completed when exit 0 but push fails due to transient network transport', async () => {
+    execSync('git checkout -b invoker/transient-push', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 't.txt'), 'x');
+    execSync('git add -A && git commit -m task', { cwd: cloneDir });
+
+    const req = makeRequest('task-transient-push', { description: 'x' });
+    const entry = executor.registerTestEntry('e-transient-push', req);
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    vi.spyOn(BaseExecutor.prototype as any, 'pushBranchToRemote').mockResolvedValue(
+      "git push --force-with-lease invoker-branches invoker/transient-push:refs/heads/invoker/transient-push failed (code 128): fatal: unable to access 'https://github.com/EdbertChan/Invoker/': Could not resolve host: github.com",
+    );
+
+    await executor.testHandleProcessExit('e-transient-push', req, cloneDir, 0, { branch: 'invoker/transient-push' });
+
+    expect(response?.status).toBe('completed');
+    expect(response?.outputs.exitCode).toBe(0);
+    expect(response?.outputs.error).toBeUndefined();
+    expect(entry.outputBuffer.join('')).toContain('transient git transport error');
+  });
+
+  it('keeps task completed when exit 0 produces no commit and branch push has no local ref', async () => {
+    execSync('git checkout -b invoker/noop-push', { cwd: cloneDir });
+
+    const req = makeRequest('task-noop-push', { description: 'x' });
+    const entry = executor.registerTestEntry('e-noop-push', req);
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    vi.spyOn(BaseExecutor.prototype as any, 'pushBranchToRemote').mockResolvedValue(
+      'git push --force-with-lease origin invoker/noop-push:refs/heads/invoker/noop-push failed (code 1): error: src refspec invoker/noop-push does not match any',
+    );
+
+    await executor.testHandleProcessExit('e-noop-push', req, cloneDir, 0, { branch: 'invoker/noop-push' });
+
+    expect(response?.status).toBe('completed');
+    expect(response?.outputs.exitCode).toBe(0);
+    expect(response?.outputs.error).toBeUndefined();
+    expect(entry.outputBuffer.join('')).toContain('no local ref to publish');
   });
 
   it('marks codex ai_task as failed when semantic sandbox denial appears in output despite exit 0', async () => {

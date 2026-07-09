@@ -35,6 +35,14 @@ const beta = makeUITask({
   command: 'echo hello-beta',
 });
 const workflows: WorkflowMeta[] = [{ id: 'wf-timeline', name: 'Timeline WF', status: 'running' }];
+async function chooseGraphMenuItem(testId: string): Promise<void> {
+  fireEvent.click(screen.getByTestId('graph-more-button'));
+  await waitFor(() => {
+    expect(screen.getByTestId('graph-more-menu')).toBeInTheDocument();
+  });
+  fireEvent.click(screen.getByTestId(testId));
+}
+
 
 describe('Timeline view (component)', () => {
   let mock: MockInvoker;
@@ -52,7 +60,7 @@ describe('Timeline view (component)', () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
 
-    fireEvent.click(screen.getByTestId('rail-timeline'));
+    await chooseGraphMenuItem('rail-timeline');
 
     await waitFor(() => {
       expect(screen.getByTestId('timeline-view')).toBeInTheDocument();
@@ -63,7 +71,7 @@ describe('Timeline view (component)', () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
 
-    fireEvent.click(screen.getByTestId('rail-timeline'));
+    await chooseGraphMenuItem('rail-timeline');
 
     await waitFor(() => {
       expect(screen.getByTestId('timeline-bar-task-alpha')).toBeInTheDocument();
@@ -88,7 +96,7 @@ describe('Timeline view (component)', () => {
     render(<App />);
     act(() => mock.setTasks([completedAlpha, beta], workflows));
 
-    fireEvent.click(screen.getByTestId('rail-timeline'));
+    await chooseGraphMenuItem('rail-timeline');
 
     await waitFor(() => {
       const bar = screen.getByTestId('timeline-bar-task-alpha');
@@ -96,17 +104,65 @@ describe('Timeline view (component)', () => {
     });
   });
 
-  it('switching back to Home workflow graph works', async () => {
-    render(<App />);
-    act(() => mock.setTasks([alpha, beta], workflows));
+  it('clicking a timeline row updates the inspector to the selected task', async () => {
+    const now = Date.now();
+    const startedAlpha = makeUITask({
+      id: 'task-alpha',
+      description: 'First test task',
+      status: 'completed',
+      workflowId: 'wf-timeline',
+      command: 'echo hello-alpha',
+      execution: {
+        startedAt: new Date(now - 5000),
+        completedAt: new Date(now),
+      },
+    } as any);
 
-    fireEvent.click(screen.getByTestId('rail-timeline'));
+    render(<App />);
+    act(() => mock.setTasks([startedAlpha, beta], workflows));
+
+    await chooseGraphMenuItem('rail-timeline');
 
     await waitFor(() => {
       expect(screen.getByTestId('timeline-bar-task-alpha')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('rail-home'));
+    fireEvent.click(screen.getByTestId('timeline-bar-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('First test task');
+    });
+  });
+
+  it('timeline row text has selectable text styling', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await chooseGraphMenuItem('rail-timeline');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('timeline-bar-task-alpha')).toBeInTheDocument();
+    });
+
+    const row = screen.getByTestId('timeline-bar-task-alpha');
+    expect(row.getAttribute('role')).toBe('button');
+
+    const taskLabel = row.querySelector('.select-text');
+    expect(taskLabel).not.toBeNull();
+    expect(taskLabel!.classList.contains('cursor-text')).toBe(true);
+  });
+
+  it('switching back to Home workflow graph works', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await chooseGraphMenuItem('rail-timeline');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('timeline-bar-task-alpha')).toBeInTheDocument();
+    });
+
+    await chooseGraphMenuItem('rail-home');
 
     await waitFor(() => {
       expect(screen.queryByTestId('timeline-view')).not.toBeInTheDocument();

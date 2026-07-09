@@ -41,25 +41,34 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
     };
   }
 
+  function seedLegacyTaskExternalDependencies(
+    adapter: SQLiteAdapter,
+    taskId: string,
+    deps: Array<Record<string, unknown>>,
+  ): void {
+    adapter['execRun']('UPDATE tasks SET external_dependencies = ? WHERE id = ?', [
+      JSON.stringify(deps),
+      taskId,
+    ]);
+  }
+
   it('migrates gatePolicy from approved to completed', async () => {
     // Create adapter and seed with older data
     let adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
     adapter.saveWorkflow(testWorkflow);
 
-    const taskWithLegacyGatePolicy = makeTask('t1', {
-      config: {
-        externalDependencies: [
-          {
-            workflowId: 'wf-x',
-            taskId: '__merge__',
-            requiredStatus: 'completed',
-            gatePolicy: 'approved' as any, // Legacy value
-          },
-        ],
+    const legacyDeps = [
+      {
+        workflowId: 'wf-x',
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'approved' as any, // Legacy value
       },
-    });
+    ];
+    const taskWithLegacyGatePolicy = makeTask('t1');
 
     adapter.saveTask(testWorkflow.id, taskWithLegacyGatePolicy);
+    seedLegacyTaskExternalDependencies(adapter, 't1', legacyDeps);
 
     // Close and re-open to trigger migration
     adapter.close();
@@ -69,16 +78,28 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
     // Verify migration occurred
     const tasks = adapter.loadTasks(testWorkflow.id);
     expect(tasks).toHaveLength(1);
-    expect(tasks[0].config.externalDependencies).toHaveLength(1);
-    expect(tasks[0].config.externalDependencies![0].gatePolicy).toBe('completed');
+    expect(tasks[0].config.externalDependencies).toBeUndefined();
+    expect(adapter.loadWorkflow(testWorkflow.id)!.externalDependencies).toEqual([
+      {
+        workflowId: 'wf-x',
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'completed',
+      },
+    ]);
 
     // Verify no 'approved' values remain in JSON
-    const raw = adapter['queryAll'](
+    const rawTask = adapter['queryAll'](
       'SELECT external_dependencies FROM tasks WHERE id = ?',
       ['t1'],
+    ) as Array<{ external_dependencies: string | null }>;
+    expect(rawTask[0].external_dependencies).toBeNull();
+    const rawWorkflow = adapter['queryAll'](
+      'SELECT external_dependencies FROM workflows WHERE id = ?',
+      [testWorkflow.id],
     ) as Array<{ external_dependencies: string }>;
-    expect(raw[0].external_dependencies).not.toContain('"gatePolicy":"approved"');
-    expect(raw[0].external_dependencies).toContain('"gatePolicy":"completed"');
+    expect(rawWorkflow[0].external_dependencies).not.toContain('"gatePolicy":"approved"');
+    expect(rawWorkflow[0].external_dependencies).toContain('"gatePolicy":"completed"');
 
     adapter.close();
   });
@@ -88,39 +109,39 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
     let adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
     adapter.saveWorkflow(testWorkflow);
 
-    const taskWithLegacyGatePolicy = makeTask('t2', {
-      config: {
-        externalDependencies: [
-          {
-            workflowId: 'wf-y',
-            taskId: '__merge__',
-            requiredStatus: 'completed',
-            gatePolicy: 'approved' as any,
-          },
-        ],
+    const legacyDeps = [
+      {
+        workflowId: 'wf-y',
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'approved' as any,
       },
-    });
+    ];
+    const taskWithLegacyGatePolicy = makeTask('t2');
 
     adapter.saveTask(testWorkflow.id, taskWithLegacyGatePolicy);
+    seedLegacyTaskExternalDependencies(adapter, 't2', legacyDeps);
 
     // First migration
     adapter.close();
     adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
 
     const afterFirstMigration = adapter.loadTasks(testWorkflow.id);
-    expect(afterFirstMigration[0].config.externalDependencies![0].gatePolicy).toBe('completed');
+    expect(afterFirstMigration[0].config.externalDependencies).toBeUndefined();
+    expect(adapter.loadWorkflow(testWorkflow.id)!.externalDependencies![0].gatePolicy).toBe('completed');
 
     // Second migration (should be no-op)
     adapter.close();
     adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
 
     const afterSecondMigration = adapter.loadTasks(testWorkflow.id);
-    expect(afterSecondMigration[0].config.externalDependencies![0].gatePolicy).toBe('completed');
+    expect(afterSecondMigration[0].config.externalDependencies).toBeUndefined();
+    expect(adapter.loadWorkflow(testWorkflow.id)!.externalDependencies![0].gatePolicy).toBe('completed');
 
     // Verify JSON is identical
     const raw = adapter['queryAll'](
-      'SELECT external_dependencies FROM tasks WHERE id = ?',
-      ['t2'],
+      'SELECT external_dependencies FROM workflows WHERE id = ?',
+      [testWorkflow.id],
     ) as Array<{ external_dependencies: string }>;
     expect(raw[0].external_dependencies).toContain('"gatePolicy":"completed"');
 
@@ -132,20 +153,18 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
     let adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
     adapter.saveWorkflow(testWorkflow);
 
-    const taskWithReviewReadyPolicy = makeTask('t3', {
-      config: {
-        externalDependencies: [
-          {
-            workflowId: 'wf-z',
-            taskId: '__merge__',
-            requiredStatus: 'completed',
-            gatePolicy: 'review_ready',
-          },
-        ],
+    const reviewReadyDeps = [
+      {
+        workflowId: 'wf-z',
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'review_ready',
       },
-    });
+    ];
+    const taskWithReviewReadyPolicy = makeTask('t3');
 
     adapter.saveTask(testWorkflow.id, taskWithReviewReadyPolicy);
+    seedLegacyTaskExternalDependencies(adapter, 't3', reviewReadyDeps);
 
     // Trigger migration
     adapter.close();
@@ -153,7 +172,8 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
 
     // Verify review_ready is unchanged
     const tasks = adapter.loadTasks(testWorkflow.id);
-    expect(tasks[0].config.externalDependencies![0].gatePolicy).toBe('review_ready');
+    expect(tasks[0].config.externalDependencies).toBeUndefined();
+    expect(adapter.loadWorkflow(testWorkflow.id)!.externalDependencies![0].gatePolicy).toBe('review_ready');
 
     adapter.close();
   });
@@ -163,32 +183,30 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
     let adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
     adapter.saveWorkflow(testWorkflow);
 
-    const taskWithMixedDeps = makeTask('t4', {
-      config: {
-        externalDependencies: [
-          {
-            workflowId: 'wf-a',
-            taskId: '__merge__',
-            requiredStatus: 'completed',
-            gatePolicy: 'approved' as any, // Legacy
-          },
-          {
-            workflowId: 'wf-b',
-            taskId: '__merge__',
-            requiredStatus: 'completed',
-            gatePolicy: 'review_ready', // Current
-          },
-          {
-            workflowId: 'wf-c',
-            taskId: '__merge__',
-            requiredStatus: 'completed',
-            gatePolicy: 'approved' as any, // Legacy
-          },
-        ],
+    const mixedDeps = [
+      {
+        workflowId: 'wf-a',
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'approved' as any, // Legacy
       },
-    });
+      {
+        workflowId: 'wf-b',
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'review_ready', // Current
+      },
+      {
+        workflowId: 'wf-c',
+        taskId: '__merge__',
+        requiredStatus: 'completed',
+        gatePolicy: 'approved' as any, // Legacy
+      },
+    ];
+    const taskWithMixedDeps = makeTask('t4');
 
     adapter.saveTask(testWorkflow.id, taskWithMixedDeps);
+    seedLegacyTaskExternalDependencies(adapter, 't4', mixedDeps);
 
     // Trigger migration
     adapter.close();
@@ -196,10 +214,12 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
 
     // Verify all approved values migrated, review_ready untouched
     const tasks = adapter.loadTasks(testWorkflow.id);
-    expect(tasks[0].config.externalDependencies).toHaveLength(3);
-    expect(tasks[0].config.externalDependencies![0].gatePolicy).toBe('completed');
-    expect(tasks[0].config.externalDependencies![1].gatePolicy).toBe('review_ready');
-    expect(tasks[0].config.externalDependencies![2].gatePolicy).toBe('completed');
+    expect(tasks[0].config.externalDependencies).toBeUndefined();
+    const workflowDeps = adapter.loadWorkflow(testWorkflow.id)!.externalDependencies!;
+    expect(workflowDeps).toHaveLength(3);
+    expect(workflowDeps[0].gatePolicy).toBe('completed');
+    expect(workflowDeps[1].gatePolicy).toBe('review_ready');
+    expect(workflowDeps[2].gatePolicy).toBe('completed');
 
     adapter.close();
   });

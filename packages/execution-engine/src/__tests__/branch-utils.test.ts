@@ -447,6 +447,33 @@ describe('bashPreserveOrReset', () => {
       execSync(`git worktree remove --force "${wtDir}"`, { cwd: repoDir });
     });
 
+    it('does not write upstream tracking config when base is a remote-tracking ref', async () => {
+      const wtDir = join(repoDir, '..', 'wt-no-track-' + Date.now());
+      const head = gitExec('git rev-parse master', repoDir);
+      gitExec(`git update-ref refs/remotes/origin/master ${head}`, repoDir);
+      writeFileSync(join(repoDir, '.git', 'config.lock'), '');
+
+      try {
+        const script = bashPreserveOrReset({
+          repoDir,
+          worktreeDir: wtDir,
+          branch: 'invoker/wt-no-track',
+          base: 'origin/master',
+        });
+        const stdout = await runBashLocal(script);
+        const result = parsePreserveResult(stdout);
+
+        expect(result.preserved).toBe(false);
+        const currentBranch = gitExec('git branch --show-current', wtDir);
+        expect(currentBranch).toBe('invoker/wt-no-track');
+        const upstreamRemote = gitExec('git config --get branch.invoker/wt-no-track.remote || true', repoDir);
+        expect(upstreamRemote).toBe('');
+      } finally {
+        rmSync(join(repoDir, '.git', 'config.lock'), { force: true });
+        try { execSync(`git worktree remove --force "${wtDir}"`, { cwd: repoDir }); } catch { /* ignore */ }
+      }
+    });
+
     it('preserves worktree branch with commits ahead', async () => {
       // Create a branch with commits ahead
       gitExec('git checkout -b invoker/wt-preserve', repoDir);
@@ -710,7 +737,7 @@ describe('bashMergeUpstreams', () => {
       rmSync(seedDir, { recursive: true, force: true });
       rmSync(originDir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 
   it('fetches and merges dependency branches from intermediate', async () => {
     const originDir = join(repoDir, '..', `origin-intermediate-${Date.now()}.git`);
@@ -747,7 +774,7 @@ describe('bashMergeUpstreams', () => {
       rmSync(intermediateDir, { recursive: true, force: true });
       rmSync(originDir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------

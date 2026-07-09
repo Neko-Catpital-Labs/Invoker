@@ -6,6 +6,14 @@ repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-runtime-flow
     description: |
+      Review claim:
+      - This task makes one locally reviewable implementation claim.
+      Safety invariant:
+      - The slice is safe because its verification remains local and explicit.
+      Slice rationale:
+      - This work is isolated from neighboring behavior or cleanup changes.
+      Architectural effect:
+      - The affected boundary and data or control flow remain explicit.
       Goal:
       - Implement deterministic runtime flow updates.
       Motivation:
@@ -32,6 +40,14 @@ tasks:
     dependencies: []
   - id: final-regression
     description: |
+      Review claim:
+      - This task makes one locally reviewable implementation claim.
+      Safety invariant:
+      - The slice is safe because its verification remains local and explicit.
+      Slice rationale:
+      - This work is isolated from neighboring behavior or cleanup changes.
+      Architectural effect:
+      - The affected boundary and data or control flow remain explicit.
       Goal:
       - Run final full-suite regression gate.
       Motivation:

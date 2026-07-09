@@ -16,8 +16,10 @@ import type {
   WorkflowDerivedStatus,
   WorkflowRollup,
 } from '@invoker/workflow-graph';
+import type { PrerequisiteCheck, PrerequisiteReport } from './prerequisites.js';
 
 export type { WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-graph';
+import type { ReviewGateQueryResponse } from './types.js';
 
 // ── Types used by IPC channels ──────────────────────────────
 // These were previously in packages/app/src/types.ts.
@@ -32,6 +34,21 @@ export interface TaskReplacementDef {
   runnerKind?: string;
   executionAgent?: string;
 }
+export interface ExecutionModelOption {
+  id: string;
+  label: string;
+}
+
+export interface ExecutionHarnessOption {
+  name: string;
+  supportedModels: ExecutionModelOption[];
+}
+
+export interface ExecutionDefaults {
+  executionAgent: string;
+  executionModel?: string;
+}
+
 
 export interface WorkflowMeta {
   id: string;
@@ -47,11 +64,34 @@ export interface WorkflowMeta {
   createdAt?: string;
   updatedAt?: string;
 }
+export interface WorkflowRollupPatch {
+  workflowId: string;
+  status: WorkflowDerivedStatus;
+  rollup: WorkflowRollup;
+  /** True when the workflow no longer has any tasks (e.g. it was deleted); consumers must drop the workflow instead of patching it. */
+  removed?: boolean;
+}
+
+export type TaskGraphEvent =
+  | {
+      type: 'delta';
+      delta: TaskDelta;
+      workflowRollups: WorkflowRollupPatch[];
+    }
+  | {
+      type: 'snapshot';
+      tasks: TaskState[];
+      workflows: WorkflowMeta[];
+      reason: string;
+      streamSequence: number;
+    };
+
 
 export interface WorkflowStatus {
   total: number;
   completed: number;
   failed: number;
+  closed: number;
   running: number;
   pending: number;
 }
@@ -106,11 +146,121 @@ export interface QueueStatus {
   running: Array<{ taskId: string; description: string }>;
   queued: Array<{ taskId: string; priority: number; description: string }>;
 }
+export type WorkerLifecycleStatus = 'running' | 'stopped' | 'exited';
+export type WorkerPolicyStatus = 'enabled' | 'disabled' | 'unknown';
+export type WorkerControlAction = 'start' | 'stop';
+export type WorkerActionStatus =
+  | 'queued'
+  | 'pending'
+  | 'running'
+  | 'needs_input'
+  | 'review_ready'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'abandoned'
+  | 'cancelled';
 
-export type ActionGraphNodeType =
+export interface WorkerActionSummary {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary?: string;
+  reason?: string;
+  decision?: 'act' | 'skip';
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface WorkerRecoverySummary {
+  workerId: string;
+  owner: string;
+  lastWakeupAt?: string;
+  lastScanAt?: string;
+  lastSubmitAt?: string;
+  lastSkipAt?: string;
+  lastSkipReason?: string;
+  lastSkipTaskId?: string;
+  wakeups: number;
+  scans: number;
+  submissions: number;
+  skips: number;
+}
+
+export interface WorkerStatusEntry {
+  kind: string;
+  note: string;
+  runtimeKind?: string;
+  instanceId?: string;
+  lifecycle: WorkerLifecycleStatus;
+  policy: WorkerPolicyStatus;
+  policyReason?: string;
+  autoStarts: boolean;
+  startable: boolean;
+  stoppable: boolean;
+  controlDisabledReason?: string;
+  startedAt?: string;
+  stoppedAt?: string;
+  lastError?: string;
+  recentActions: WorkerActionSummary[];
+  recovery?: WorkerRecoverySummary;
+}
+
+export interface WorkerStatusSnapshot {
+  generatedAt: string;
+  workers: WorkerStatusEntry[];
+}
+
+export interface WorkerActionHistoryRequest {
+  workerKind: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface WorkerActionHistoryResponse {
+  workerKind: string;
+  actions: WorkerActionSummary[];
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  nextOffset?: number;
+}
+export interface WorkerDecisionsRequest {
+  workflowId?: string;
+  workerKind?: string;
+  decision?: 'act' | 'skip';
+  reason?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface WorkerDecisionsResponse {
+  workflowId?: string;
+  actions: WorkerActionSummary[];
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  nextOffset?: number;
+}
+
+
+export type UIActionGraphNodeType =
   | 'user-action'
   | 'mutation-intent'
   | 'mutation-lease'
+  | 'launch-dispatch'
   | 'scheduler-job'
   | 'task-attempt'
   | 'blocker';
@@ -145,7 +295,7 @@ export interface ActionGraphNodeDurations {
 
 export interface ActionGraphNode {
   id: string;
-  type: ActionGraphNodeType;
+  type: UIActionGraphNodeType;
   label: string;
   status: ActionGraphNodeStatus;
   workflowId?: string;
@@ -186,6 +336,131 @@ export interface ResumeWorkflowResult {
   taskCount: number;
   startedCount: number;
 }
+export interface InAppPlanRequest {
+  goal: string;
+  presetKey?: string;
+}
+
+export type InAppPlanResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+      workflowIds?: string[];
+      workflowCount?: number;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export interface PlanningPresetOption {
+  key: string;
+  label: string;
+  tool: string;
+  model?: string;
+  isDefault: boolean;
+}
+
+export interface InAppPlanningPlanSummary {
+  name: string;
+  taskCount: number;
+  workflowCount?: number;
+  steps: string[];
+}
+export type InAppPlanningSessionStatus =
+  | 'still_discussing'
+  | 'waiting_for_answer'
+  | 'draft_ready'
+  | 'submitted';
+
+export interface InAppPlanningChatLine {
+  id: number;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  tone?: 'muted' | 'error' | 'success';
+  createdAt: string;
+}
+
+export interface InAppPlanningSessionSummary {
+  id: string;
+  title: string;
+  status: InAppPlanningSessionStatus;
+  presetKey: string;
+  messages: InAppPlanningChatLine[];
+  draftPlanAvailable: boolean;
+  draftPlanSummary?: InAppPlanningPlanSummary;
+  submittedWorkflowId?: string;
+  submittedPlanName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InAppPlanningCreateSessionRequest {
+  presetKey?: string;
+  title?: string;
+}
+
+export type InAppPlanningCreateSessionResponse =
+  | {
+      ok: true;
+      session: InAppPlanningSessionSummary;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export type InAppPlanningListSessionsResponse = {
+  ok: true;
+  sessions: InAppPlanningSessionSummary[];
+};
+
+
+export interface InAppPlanningChatRequest {
+  sessionId?: string;
+  message: string;
+  presetKey?: string;
+}
+
+export type InAppPlanningChatResponse =
+  | {
+      ok: true;
+      sessionId: string;
+      reply: string;
+      draftPlanAvailable: boolean;
+      draftPlanSummary?: InAppPlanningPlanSummary;
+    }
+  | {
+      ok: false;
+      sessionId?: string;
+      error: string;
+    };
+
+export interface InAppPlanningSubmitRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningSubmitResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+      workflowIds?: string[];
+      workflowCount?: number;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export interface InAppPlanningResetRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningResetResponse = { ok: true };
+
+
 
 export interface WorkflowListEntry {
   id: string;
@@ -200,6 +475,23 @@ export interface RebaseAndRetryResult {
   success: boolean;
   rebasedBranches: string[];
   errors: string[];
+}
+
+export interface WorkflowMutationAcceptedResult {
+  ok: true;
+  accepted: true;
+  intentId: number;
+  workflowId: string;
+  channel: string;
+}
+
+export interface WorkflowMutationFailedEvent {
+  intentId: number;
+  workflowId: string;
+  channel: string;
+  taskId?: string;
+  message: string;
+  failedAt: string;
 }
 
 export interface CancelResult {
@@ -229,6 +521,29 @@ export interface BundledSkillTargetStatus {
   installed: boolean;
   upToDate: boolean;
   installedSkillNames: string[];
+  missingSkillNames?: string[];
+  staleReason?: 'not-installed' | 'manifest-missing' | 'manifest-target-missing' | 'target-path-changed' | 'bundle-updated' | 'manifest-skill-list-changed';
+  diagnostic?: string;
+}
+
+export interface HarnessConfigState {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  installed: boolean;
+  upToDate: boolean;
+  installedCommandNames: string[];
+}
+
+export interface HarnessMcpConfigState {
+  id: string;
+  name: string;
+  path: string;
+  available: boolean;
+  installed: boolean;
+  upToDate: boolean;
+  serverName: string;
 }
 
 export interface BundledSkillsStatus {
@@ -240,9 +555,56 @@ export interface BundledSkillsStatus {
   lastInstallAt?: string;
   lastInstallError?: string;
   targets: BundledSkillTargetStatus[];
+  commandTargets: HarnessConfigState[];
+  mcpTargets: HarnessMcpConfigState[];
 }
 
 export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
+
+export interface CliInstallerStatus {
+  /** Packaged app + bundled binary present + darwin/linux. */
+  supported: boolean;
+  bundledVersion: string;
+  installedVersion?: string;
+  installedPath?: string;
+  upToDate: boolean;
+  /** e.g. the chosen install dir is not on the user's PATH. */
+  warning?: string;
+  lastInstallError?: string;
+}
+
+export interface CliInstallResult {
+  ok: boolean;
+  updated: boolean;
+  installedTo?: string;
+  error?: string;
+  status: CliInstallerStatus;
+}
+export interface InvokerSetupRequest {
+  updateCli: boolean;
+  installHelpers: boolean;
+  fixTools: boolean;
+  slack: false | {
+    botToken: string;
+    appToken: string;
+    signingSecret: string;
+    channelId: string;
+  };
+}
+
+export interface InvokerSetupStepResult {
+  id: 'invoker-cli' | 'helpers' | 'tools' | 'slack';
+  name: string;
+  ok: boolean;
+  output: string;
+  error?: string;
+}
+
+export interface InvokerSetupResult {
+  ok: boolean;
+  steps: InvokerSetupStepResult[];
+}
+
 
 export interface SystemDiagnostics {
   platform: string;
@@ -251,6 +613,81 @@ export interface SystemDiagnostics {
   isPackaged: boolean;
   tools: SystemToolStatus[];
   bundledSkills?: BundledSkillsStatus;
+  cliInstaller?: CliInstallerStatus;
+  readiness?: PrerequisiteReport | PrerequisiteCheck[];
+}
+
+export type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only';
+
+export interface RuntimeStatus {
+  ownerMode: boolean;
+  readOnly: boolean;
+  mode: RuntimeMode;
+}
+
+
+// ── Embedded terminal session types ─────────────────────────
+
+/**
+ * Describes an embedded terminal session managed by the main process.
+ *
+ * `mode` distinguishes how the session is backed:
+ *   - `spawn`    — main process spawned a fresh child shell for the task
+ *                  (typical for completed/failed tasks restoring a workspace).
+ *   - `attached` — the session is wired to a live executor handle; output is
+ *                  fanned in from `executor.onOutput` and input flows through
+ *                  `executor.sendInput` (used for tasks still running).
+ */
+export interface TerminalSessionDescriptor {
+  sessionId: string;
+  taskId: string;
+  status: 'running' | 'exited';
+  exitCode?: number;
+  cwd?: string;
+  command?: string;
+  args?: string[];
+  mode: 'spawn' | 'attached';
+  attached: boolean;
+  createdAt: string;
+  /** Bounded recent terminal output snapshot used to seed newly mounted panes. */
+  outputSnapshot?: string;
+}
+
+export interface TerminalOutputEvent {
+  sessionId: string;
+  taskId: string;
+  data: string;
+}
+
+export interface TerminalExitEvent {
+  sessionId: string;
+  taskId: string;
+  exitCode?: number;
+}
+
+export interface OpenTerminalResponse {
+  opened: boolean;
+  reason?: string;
+  /** Present when the GUI main process opened an embedded session. */
+  session?: TerminalSessionDescriptor;
+}
+
+// ── Search types ────────────────────────────────────────────
+
+export interface SearchResultItem {
+  kind: 'workflow' | 'task';
+  id: string;
+  workflowId?: string;      // populated for task results
+  title: string;            // workflow name or task description
+  subtitle: string;         // "Workflow · <status>" or "Task · <workflowName>"
+  status: string;
+  createdAt: string;
+}
+
+export interface SearchOptions {
+  type?: 'workflows' | 'tasks' | 'all';
+  limit?: number;
+  offset?: number;
 }
 
 // ── Invoke Channel Registry ─────────────────────────────────
@@ -259,6 +696,34 @@ export interface SystemDiagnostics {
 
 export const IpcChannels = {
   // Plan & Workflow Management
+  'invoker:plan-from-goal': {} as {
+    request: [request: InAppPlanRequest];
+    response: InAppPlanResponse;
+  },
+  'invoker:planning-chat-create': {} as {
+    request: [request?: InAppPlanningCreateSessionRequest];
+    response: InAppPlanningCreateSessionResponse;
+  },
+  'invoker:planning-chat-list': {} as {
+    request: [];
+    response: InAppPlanningListSessionsResponse;
+  },
+  'invoker:planning-chat-send': {} as {
+    request: [request: InAppPlanningChatRequest];
+    response: InAppPlanningChatResponse;
+  },
+  'invoker:planning-chat-submit': {} as {
+    request: [request: InAppPlanningSubmitRequest];
+    response: InAppPlanningSubmitResponse;
+  },
+  'invoker:planning-chat-reset': {} as {
+    request: [request: InAppPlanningResetRequest];
+    response: InAppPlanningResetResponse;
+  },
+  'invoker:get-planning-presets': {} as {
+    request: [];
+    response: PlanningPresetOption[];
+  },
   'invoker:load-plan': {} as {
     request: [planText: string];
     response: void;
@@ -293,7 +758,11 @@ export const IpcChannels = {
   },
   'invoker:delete-workflow': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:detach-workflow': {} as {
+    request: [workflowId: string, upstreamWorkflowId: string];
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:load-workflow': {} as {
     request: [workflowId: string];
@@ -302,8 +771,12 @@ export const IpcChannels = {
 
   // Task Queries
   'invoker:get-tasks': {} as {
-    request: [forceRefresh?: boolean];
-    response: { tasks: TaskState[]; workflows: WorkflowMeta[] };
+    request: [];
+    response: { tasks: TaskState[]; workflows: WorkflowMeta[]; streamSequence: number };
+  },
+  'invoker:refresh-task-graph': {} as {
+    request: [];
+    response: void;
   },
   'invoker:get-events': {} as {
     request: [taskId: string];
@@ -329,19 +802,19 @@ export const IpcChannels = {
   // Task Actions
   'invoker:provide-input': {} as {
     request: [taskId: string, input: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:approve': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:reject': {} as {
     request: [taskId: string, reason?: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:select-experiment': {} as {
     request: [taskId: string, experimentId: string | string[]];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   /**
    * @deprecated Step 13 (`docs/architecture/task-invalidation-roadmap.md`):
@@ -358,45 +831,53 @@ export const IpcChannels = {
    */
   'invoker:restart-task': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:cancel-task': {} as {
     request: [taskId: string];
-    response: CancelResult;
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:delete-task': {} as {
+    request: [taskId: string];
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:cancel-workflow': {} as {
     request: [workflowId: string];
-    response: CancelResult;
+    response: WorkflowMutationAcceptedResult;
   },
 
   // Task Editing
   'invoker:edit-task-command': {} as {
     request: [taskId: string, newCommand: string];
-    response: void;
-  },
-  'invoker:edit-task-type': {} as {
-    request: [taskId: string, runnerKind: string, poolMemberId?: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:edit-task-pool': {} as {
     request: [taskId: string, poolId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:edit-task-type': {} as {
+    request: [taskId: string, runnerKind: string, poolMemberId?: string];
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:edit-task-agent': {} as {
     request: [taskId: string, agentName: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:edit-task-model': {} as {
+    request: [taskId: string, executionModel: string | null];
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:edit-task-prompt': {} as {
     request: [taskId: string, newPrompt: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-task-external-gate-policies': {} as {
     request: [taskId: string, updates: ExternalGatePolicyUpdate[]];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:replace-task': {} as {
     request: [taskId: string, replacementTasks: TaskReplacementDef[]];
-    response: TaskState[];
+    response: WorkflowMutationAcceptedResult;
   },
 
   // Session & Agent Access
@@ -412,35 +893,44 @@ export const IpcChannels = {
   // Workflow Mutation & Merge
   'invoker:recreate-workflow': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:recreate-task': {} as {
     request: [taskId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
+  },
+  'invoker:recreate-downstream': {} as {
+    request: [taskId: string];
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:retry-workflow': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
-  'invoker:rebase-and-retry': {} as {
-    request: [mergeTaskId: string];
-    response: RebaseAndRetryResult;
+  'invoker:rebase-retry': {} as {
+    request: [target: string];
+    response: WorkflowMutationAcceptedResult;
   },
-  'invoker:recreate-with-rebase': {} as {
-    request: [workflowId: string];
-    response: RebaseAndRetryResult;
+  'invoker:rebase-recreate': {} as {
+    request: [target: string];
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-merge-branch': {} as {
     request: [workflowId: string, baseBranch: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-merge-mode': {} as {
     request: [workflowId: string, mergeMode: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:approve-merge': {} as {
     request: [workflowId: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
+  },
+
+  'invoker:get-review-gate': {} as {
+    request: [workflowId: string];
+    response: ReviewGateQueryResponse | null;
   },
 
   // PR & Conflict Resolution
@@ -454,17 +944,37 @@ export const IpcChannels = {
   },
   'invoker:resolve-conflict': {} as {
     request: [taskId: string, agentName?: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
   'invoker:fix-with-agent': {} as {
     request: [taskId: string, agentName?: string];
-    response: void;
+    response: WorkflowMutationAcceptedResult;
   },
 
   // Queue & Configuration
   'invoker:get-queue-status': {} as {
     request: [];
     response: QueueStatus;
+  },
+  'invoker:get-worker-status': {} as {
+    request: [];
+    response: WorkerStatusSnapshot;
+  },
+  'invoker:get-worker-action-history': {} as {
+    request: [request: WorkerActionHistoryRequest];
+    response: WorkerActionHistoryResponse;
+  },
+  'invoker:get-worker-decisions': {} as {
+    request: [request: WorkerDecisionsRequest];
+    response: WorkerDecisionsResponse;
+  },
+  'invoker:start-worker': {} as {
+    request: [kind: string];
+    response: WorkerStatusEntry;
+  },
+  'invoker:stop-worker': {} as {
+    request: [kind: string];
+    response: WorkerStatusEntry;
   },
   'invoker:get-action-graph': {} as {
     request: [];
@@ -478,9 +988,18 @@ export const IpcChannels = {
     request: [];
     response: string[];
   },
-  'invoker:get-execution-agents': {} as {
+  'invoker:get-execution-harnesses': {} as {
     request: [];
-    response: string[];
+    response: ExecutionHarnessOption[];
+  },
+  'invoker:get-execution-defaults': {} as {
+    request: [];
+    response: ExecutionDefaults;
+  },
+
+  'invoker:get-runtime-status': {} as {
+    request: [];
+    response: RuntimeStatus;
   },
 
   // Performance & Activity
@@ -493,14 +1012,30 @@ export const IpcChannels = {
     response: Record<string, unknown>;
   },
   'invoker:get-activity-logs': {} as {
-    request: [];
+    request: [sinceId?: number, limit?: number];
     response: ActivityLogEntry[];
   },
 
   // Terminal
   'invoker:open-terminal': {} as {
     request: [taskId: string];
-    response: { opened: boolean; reason?: string };
+    response: OpenTerminalResponse;
+  },
+  'invoker:terminal-list': {} as {
+    request: [];
+    response: TerminalSessionDescriptor[];
+  },
+  'invoker:terminal-write': {} as {
+    request: [sessionId: string, data: string];
+    response: { ok: boolean; reason?: string };
+  },
+  'invoker:terminal-resize': {} as {
+    request: [sessionId: string, cols: number, rows: number];
+    response: { ok: boolean; reason?: string };
+  },
+  'invoker:terminal-close': {} as {
+    request: [sessionId: string];
+    response: { ok: boolean; reason?: string };
   },
 
   // Worktree Cleanup
@@ -516,9 +1051,21 @@ export const IpcChannels = {
     request: [];
     response: BundledSkillsStatus;
   },
+  'invoker:search': {} as {
+    request: [query: string, options?: SearchOptions];
+    response: SearchResultItem[];
+  },
   'invoker:install-bundled-skills': {} as {
     request: [mode?: BundledSkillsInstallMode];
     response: BundledSkillsStatus;
+  },
+  'invoker:update-invoker-cli': {} as {
+    request: [];
+    response: CliInstallResult;
+  },
+  'invoker:run-invoker-cli-setup': {} as {
+    request: [request: InvokerSetupRequest];
+    response: InvokerSetupResult;
   },
 
 } as const;
@@ -532,14 +1079,22 @@ export const IpcTestOnlyChannels = {
     request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
     response: void;
   },
+  'invoker:set-test-plan-from-goal-response': {} as {
+    request: [response: { planYaml: string; planName: string } | null];
+    response: void;
+  },
+  'invoker:set-test-planning-chat-response': {} as {
+    request: [response: { planYaml: string; planName: string; reply?: string } | null];
+    response: void;
+  },
 } as const;
 
 // ── Event Channel Registry ──────────────────────────────────
 // Pushed from main → renderer via webContents.send.
 
 export const IpcEventChannels = {
-  'invoker:task-delta': {} as {
-    payload: TaskDelta;
+  'invoker:task-graph-event': {} as {
+    payload: TaskGraphEvent;
   },
   'invoker:task-output': {} as {
     payload: TaskOutputData;
@@ -549,6 +1104,15 @@ export const IpcEventChannels = {
   },
   'invoker:workflows-changed': {} as {
     payload: unknown[];
+  },
+  'invoker:terminal-output': {} as {
+    payload: TerminalOutputEvent;
+  },
+  'invoker:terminal-exit': {} as {
+    payload: TerminalExitEvent;
+  },
+  'invoker:workflow-mutation-failed': {} as {
+    payload: WorkflowMutationFailedEvent;
   },
 } as const;
 
@@ -566,6 +1130,18 @@ type KebabToCamel<S extends string> =
 
 /** Convert an IPC channel name to its API method name. e.g. 'invoker:load-plan' → 'loadPlan' */
 type ChannelToMethod<S extends string> = KebabToCamel<StripPrefix<S>>;
+
+/** Convert an IPC channel name to its API method name. e.g. 'invoker:get-tasks' → 'getTasks'. */
+export function channelToMethod(channel: string): string {
+  const stripped = channel.startsWith('invoker:') ? channel.slice(8) : channel;
+  return stripped.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
+/** Convert an event channel name to its `on*` subscription method. e.g. 'invoker:task-graph-event' → 'onTaskGraphEvent'. */
+export function channelToEventMethod(channel: string): string {
+  const base = channelToMethod(channel);
+  return `on${base.charAt(0).toUpperCase()}${base.slice(1)}`;
+}
 
 // ── Derived InvokerAPI ──────────────────────────────────────
 

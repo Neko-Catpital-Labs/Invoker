@@ -15,7 +15,16 @@ export interface AgentCommandSpec {
   fullPrompt?: string;
 }
 
-export const DEFAULT_EXECUTION_AGENT = 'claude';
+export interface AgentCommandBuildOptions {
+  executionModel?: string;
+}
+export interface ExecutionModelOption {
+  id: string;
+  label: string;
+}
+
+
+export const DEFAULT_EXECUTION_AGENT = 'codex';
 
 export interface ExecutionAgent {
   readonly name: string;
@@ -36,11 +45,13 @@ export interface ExecutionAgent {
    * Each name corresponds to a subdirectory `invoker-{name}` under bundledSkillRoot.
    */
   readonly bundledSkills?: readonly string[];
+  /** Curated built-in model choices for this harness. Values must be CLI-compatible. */
+  readonly supportedModels?: readonly ExecutionModelOption[];
 
-  buildCommand(fullPrompt: string): AgentCommandSpec;
+  buildCommand(fullPrompt: string, options?: AgentCommandBuildOptions): AgentCommandSpec;
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] };
   /** Build a command spec for a fix/conflict-resolution prompt. */
-  buildFixCommand?(prompt: string): AgentCommandSpec;
+  buildFixCommand?(prompt: string, options?: AgentCommandBuildOptions): AgentCommandSpec;
   getContainerRequirements?(): {
     mounts: Array<{ hostPath: string; containerPath: string; readonly?: boolean }>;
     env: Record<string, string>;
@@ -51,5 +62,8 @@ export interface ExecutionAgent {
 
 export interface PlanningAgent {
   readonly name: string;
-  buildPlanningCommand(prompt: string): { command: string; args: string[] };
+  buildPlanningCommand(
+    prompt: string,
+    options?: { model?: string },
+  ): { command: string; args: string[] };
 }

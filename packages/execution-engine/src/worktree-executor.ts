@@ -6,7 +6,7 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, MergeConflictError, type BaseEntry } from './base-executor.js';
 import { RepoPool } from './repo-pool.js';
-import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { killProcessGroup, cleanElectronEnv, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import {
   computeContentHash,
@@ -22,6 +22,7 @@ import {
   shouldResolveViaOriginTracking,
 } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
+import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { sanitizeBranchForPath } from './git-utils.js';
 
 // Re-export for backward compatibility
@@ -153,25 +154,35 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const t0 = Date.now();
     const log = (step: string) => traceExecution(`[WorktreeExecutor] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
 
-    bench('RepoPool.ensureClone.before');
-    const clonePath = await this.pool.ensureClone(repoUrl);
-    bench('RepoPool.ensureClone.after', { clonePath });
+    bench('RepoPool.ensureCloneThroughRepoQueue.before');
+    const clonePath = await this.pool.ensureCloneThroughRepoQueue(repoUrl);
+    bench('RepoPool.ensureCloneThroughRepoQueue.after', { clonePath });
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
-    log(`resolve base ${baseRef} begin`);
     const runGit = (args: string[]) => this.execGitSimple(args, clonePath);
-    bench('WorktreeExecutor.resolveBase.before', { baseRef });
-    if (remoteFetchForPool.enabled && shouldResolveViaOriginTracking(baseRef)) {
-      const preferredRemote = await resolvePreferredTrackingRemote(runGit, baseRef.trim());
-      bench('WorktreeExecutor.resolvePreferredTrackingRemote.done', { baseRef, preferredRemote });
-      await syncPlanBaseRemote(runGit, baseRef.trim(), preferredRemote);
-      bench('WorktreeExecutor.syncPlanBaseRemote.done', { baseRef, preferredRemote });
-    } else if (remoteFetchForPool.enabled) {
-      await syncPlanBaseRemoteForRef(runGit, baseRef.trim());
-      bench('WorktreeExecutor.syncPlanBaseRemoteForRef.done', { baseRef });
+    let baseHead = request.inputs.baseCommit?.trim();
+    if (baseHead) {
+      bench('WorktreeExecutor.resolveBase.skipped', {
+        baseRef,
+        baseHead,
+        reason: 'base-commit-provided',
+      });
+      log(`resolve base ${baseRef} skipped → ${baseHead}`);
+    } else {
+      log(`resolve base ${baseRef} begin`);
+      bench('WorktreeExecutor.resolveBase.before', { baseRef });
+      if (remoteFetchForPool.enabled && shouldResolveViaOriginTracking(baseRef)) {
+        const preferredRemote = await resolvePreferredTrackingRemote(runGit, baseRef.trim());
+        bench('WorktreeExecutor.resolvePreferredTrackingRemote.done', { baseRef, preferredRemote });
+        await syncPlanBaseRemote(runGit, baseRef.trim(), preferredRemote);
+        bench('WorktreeExecutor.syncPlanBaseRemote.done', { baseRef, preferredRemote });
+      } else if (remoteFetchForPool.enabled) {
+        await syncPlanBaseRemoteForRef(runGit, baseRef.trim());
+        bench('WorktreeExecutor.syncPlanBaseRemoteForRef.done', { baseRef });
+      }
+      baseHead = await resolvePlanBaseRevision(runGit, baseRef);
+      bench('WorktreeExecutor.resolveBase.after', { baseRef, baseHead });
+      log(`resolve base ${baseRef} done → ${baseHead}`);
     }
-    const baseHead = await resolvePlanBaseRevision(runGit, baseRef);
-    bench('WorktreeExecutor.resolveBase.after', { baseRef, baseHead });
-    log(`resolve base ${baseRef} done → ${baseHead}`);
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
       .filter((h): h is string => !!h);
@@ -215,7 +226,12 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         branch,
         baseHead,
         request.actionId,
-        { forceFresh: request.inputs.freshWorkspace === true },
+        {
+          forceFresh: request.inputs.freshWorkspace === true,
+          ...(request.inputs.reusableWorktree
+            ? { reusableWorktree: request.inputs.reusableWorktree }
+            : {}),
+        },
       );
       bench('RepoPool.acquireWorktree.reconciliation.after', {
         branch: acquired.branch,
@@ -278,7 +294,12 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       branch,
       baseHead,
       request.actionId,
-      { forceFresh: request.inputs.freshWorkspace === true },
+      {
+        forceFresh: request.inputs.freshWorkspace === true,
+        ...(request.inputs.reusableWorktree
+          ? { reusableWorktree: request.inputs.reusableWorktree }
+          : {}),
+      },
     );
     bench('RepoPool.acquireWorktree.after', {
       branch: acquired.branch,
@@ -423,12 +444,14 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       hasAgentSessionId: !!agentSessionId,
     });
 
-    const executionAgent = request.inputs.executionAgent ?? 'claude';
-    const stdinMode = this.agentRegistry && executionAgent
+    const usesAgent = request.actionType === 'ai_task';
+    const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+    const stdinMode = usesAgent && this.agentRegistry
       ? this.agentRegistry.getOrThrow(executionAgent).stdinMode
-      : (request.actionType === 'ai_task' ? 'ignore' : 'pipe');
-    bench('WorktreeExecutor.spawn.before', { cmd, argCount: args.length, cwd: acquired.worktreePath });
-    const child = spawn(cmd, args, {
+      : (usesAgent ? 'ignore' : 'pipe');
+    const spawnCmd = request.actionType === 'ai_task' ? (resolveExecutableOnCurrentPath(cmd) ?? cmd) : cmd;
+    bench('WorktreeExecutor.spawn.before', { cmd: spawnCmd, argCount: args.length, cwd: acquired.worktreePath });
+    const child = spawn(spawnCmd, args, {
       stdio: [stdinMode, 'pipe', 'pipe'],
       cwd: acquired.worktreePath,
       detached: true,
@@ -447,6 +470,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         outputs: {
           exitCode: 1,
           error: `Failed to spawn command: ${err.message}`,
+          agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
         },
       };
       this.emitComplete(executionId, response);
@@ -460,7 +484,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       handle.agentSessionId = agentSessionId;
     }
 
-    const driver = this.agentRegistry?.getSessionDriver(executionAgent);
+    const driver = usesAgent ? this.agentRegistry?.getSessionDriver(executionAgent) : undefined;
     child.stdout?.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
       if (driver) {
@@ -475,6 +499,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
     child.on('close', async (code, signal) => {
       const exitCode = code ?? (signal ? 1 : 0);
+      entry.finalizingAfterClose = true;
       try {
         if (driver && entry.rawStdout) {
           // Extract real backend session/thread ID BEFORE writing the file,
@@ -490,6 +515,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
           signal,
           branch,
           agentSessionId: entry.agentSessionId,
+          agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
         });
       } catch (err) {
         const ent = this.entries.get(executionId);
@@ -508,6 +534,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
               exitCode: exitCode === 0 ? 1 : exitCode,
               error: `Invoker finalization failed after agent exited: ${reason}`,
               agentSessionId: entry.agentSessionId,
+              agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
               branch,
             },
           });
@@ -515,6 +542,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       } finally {
         const ent = this.entries.get(executionId);
         if (ent) {
+          ent.finalizingAfterClose = false;
           ent.process = null;
           ent.phase = 'completed';
           this.softReleasePoolSlot(ent);
@@ -533,33 +561,9 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
   async kill(handle: ExecutorHandle): Promise<void> {
     const entry = this.entries.get(handle.executionId);
-    if (!entry || entry.completed) return;
+    if (!entry || entry.completed || !entry.process) return;
 
-    if (!entry.process) return;
-
-    await new Promise<void>((resolve) => {
-      const child = entry.process!;
-
-      const killTimer = setTimeout(() => {
-        if (!entry.completed) {
-          killProcessGroup(child, 'SIGKILL');
-        }
-      }, SIGKILL_TIMEOUT_MS);
-
-      child.on('close', () => {
-        clearTimeout(killTimer);
-        resolve();
-      });
-
-      if (entry.completed) {
-        clearTimeout(killTimer);
-        this.softReleasePoolSlot(entry);
-        resolve();
-        return;
-      }
-
-      killProcessGroup(child, 'SIGTERM');
-    });
+    await super.kill(handle);
 
     this.softReleasePoolSlot(entry);
   }
@@ -574,7 +578,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return null;
     if (entry.agentSessionId) {
-      const agentName = entry.request.inputs.executionAgent ?? 'claude';
+      const agentName = entry.request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
@@ -603,7 +607,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
     if (meta.agentSessionId) {
       const resume = this.agentRegistry
-        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? 'claude').buildResumeArgs(meta.agentSessionId)
+        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? DEFAULT_EXECUTION_AGENT).buildResumeArgs(meta.agentSessionId)
         : { cmd: 'claude', args: ['--resume', meta.agentSessionId, '--dangerously-skip-permissions'] };
       const spec = {
         command: resume.cmd,
