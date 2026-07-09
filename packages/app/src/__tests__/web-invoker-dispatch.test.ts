@@ -108,7 +108,7 @@ describe('buildWebInvokerDispatch', () => {
     expect(await dispatch('invoker:get-history-tasks', [])).toEqual(historyRows);
   });
 
-  it('get-events returns persistence events for a task', async () => {
+  it('get-events returns a paginated page for a task', async () => {
     const events = [{ id: 1, taskId: 't1', eventType: 'task.running', createdAt: '2026-07-01T00:00:00Z' }];
     const getEvents = vi.fn(() => events);
     const { dispatch } = makeDispatch({
@@ -117,8 +117,18 @@ describe('buildWebInvokerDispatch', () => {
         getEvents,
       },
     });
-    expect(await dispatch('invoker:get-events', ['t1'])).toEqual(events);
-    expect(getEvents).toHaveBeenCalledWith('t1');
+    expect(await dispatch('invoker:get-events', ['t1', { limit: 50, sortBy: 'desc' }])).toEqual(events);
+    expect(getEvents).toHaveBeenCalledWith('t1', 'desc', 50, undefined);
+  });
+
+  it('get-events rejects missing limit', async () => {
+    const { dispatch } = makeDispatch({
+      persistence: {
+        listWorkflows: () => [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
+        getEvents: vi.fn(() => []),
+      },
+    });
+    await expect(dispatch('invoker:get-events', ['t1'])).rejects.toThrow(/limit/i);
   });
 
   it('approve routes to the mutation facade', async () => {

@@ -271,7 +271,7 @@ export function TaskPanel({
 
     let cancelled = false;
     setWorkspaceSetupFailures([]);
-    window.invoker?.getEvents(task.id)
+    window.invoker?.getEvents(task.id, { limit: 50, sortBy: 'desc' })
       .then((events) => {
         const failures = extractWorkspaceSetupFailures(events);
         if (!cancelled && failures.length > 0) {

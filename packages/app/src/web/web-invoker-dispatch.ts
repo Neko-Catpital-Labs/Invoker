@@ -24,6 +24,7 @@ import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-c
 import { resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
 import { listInAppPlanningPresets } from '../in-app-planner.js';
 import type { ApiMutationFacade } from '../api-server.js';
+import { getEventsPage } from '../get-events-page.js';
 import { buildReviewGateQueryResponse } from '../review-gate-query.js';
 import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
 import { collectSystemDiagnostics } from '../system-diagnostics.js';
@@ -113,7 +114,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           invokerConfig: deps.loadConfig(),
         });
       case 'invoker:get-events':
-        return persistence.getEvents(String(args[0]));
+        return getEventsPage(persistence, String(args[0]), args[1]);
       case 'invoker:get-task-output':
         return persistence.getTaskOutput(String(args[0]));
       case 'invoker:get-task-by-id':

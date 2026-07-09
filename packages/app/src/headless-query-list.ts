@@ -25,6 +25,7 @@ import {
   restoreWorkflowForTask,
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
+import { loadAllEventsPaged } from './load-all-events-paged.js';
 import { listWorkerDecisions } from './worker-control.js';
 import {
   collectRecoveryWorkerStatus,
@@ -234,7 +235,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
     case 'audit': {
       const taskId = flags.positional[0];
       if (!taskId) throw new Error('Usage: --headless query audit <taskId>');
-      const events = deps.persistence.getEvents(taskId);
+      const events = loadAllEventsPaged(deps.persistence, taskId);
 
       switch (flags.output) {
         case 'label': writeOut(events.map(e => `${e.taskId}:${e.eventType}`).join('\n') + '\n'); break;
@@ -719,7 +720,7 @@ export async function headlessSession(taskId: string | undefined, deps: Pick<Hea
   // Fallback: if current execution dropped agentSessionId, recover the most
   // recent session from task event payloads.
   if (!sessionId) {
-    const events = deps.persistence.getEvents(taskId) ?? [];
+    const events = loadAllEventsPaged(deps.persistence, taskId);
     for (let i = events.length - 1; i >= 0; i -= 1) {
       const payload = events[i].payload;
       if (!payload) continue;

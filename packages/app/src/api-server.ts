@@ -61,6 +61,7 @@ import type {
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { parseMetadataPatchBody, type MetadataSetResult } from './metadata-setter.js';
+import { getEventsPage } from './get-events-page.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 
 export interface ApiMutationFacade {
@@ -560,12 +561,22 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // GET /api/tasks/:id/events
+      // GET /api/tasks/:id/events?limit=&sortBy=&beforeId=
       const eventsMatch = path.match(/^\/api\/tasks\/([^/]+)\/events$/);
       if (method === 'GET' && eventsMatch) {
         const taskId = decodeURIComponent(eventsMatch[1]);
-        const events = persistence.getEvents(taskId);
-        json(res, 200, events);
+        try {
+          const limit = query.limit !== undefined ? Number(query.limit) : NaN;
+          const beforeId = query.beforeId !== undefined ? Number(query.beforeId) : undefined;
+          const events = getEventsPage(persistence, taskId, {
+            limit,
+            ...(query.sortBy === 'asc' || query.sortBy === 'desc' ? { sortBy: query.sortBy } : {}),
+            ...(beforeId !== undefined ? { beforeId } : {}),
+          });
+          json(res, 200, events);
+        } catch (err) {
+          json(res, 400, { error: errorMessage(err) });
+        }
         return;
       }
 
