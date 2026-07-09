@@ -124,6 +124,18 @@ The executor uses these SSH options by default:
 - `-o StrictHostKeyChecking=accept-new` — auto-accept new host keys (TOFU), reject changed keys
 - `-o BatchMode=yes` — fail immediately if interactive auth is needed (no password prompts)
 
+## Member Health & Circuit Breaker
+
+When an SSH pool member fails to *start* a task with a transport-level error — connection timed out, connection reset, `exit=255`, broken pipe, banner-exchange / `kex_exchange_identification` failure, or an operation timeout — the runner takes that member **out of rotation** instead of offering it to the next task and eating another connection-timeout stall.
+
+- **Eviction.** The failing member is marked down for a cooldown window and skipped during pool selection (`roundRobin` and `leastLoaded` both honor it). The window backs off exponentially per consecutive failure — 30s, 60s, 120s, … capped at 5 minutes — so a machine that stays offline is retried less and less often.
+- **Failover.** Within the same dispatch, the task immediately retries another healthy SSH member if one exists; the down member simply stops being a candidate for subsequent tasks.
+- **Automatic re-admission.** A member returns to rotation on the first successful start on it, or once its cooldown elapses (a half-open probe attempt). No operator action is required when the machine comes back.
+- **All members down.** If every member is in cooldown, the task defers with a `down <n>s` reason in the pool-capacity message and is retried later — it is never hard-failed for a transient outage. A mixed pool degrades to its local `worktree` member, which is never subject to transport eviction.
+- **Observability.** Each transition emits a `task.executor.member-evicted` / `task.executor.member-readmitted` lifecycle event on the task, and `TaskRunner.getPoolMemberHealthSnapshot()` lists the currently-down members.
+
+Health is in-memory and ephemeral by design: a process restart clears it and re-probes every member. It applies only to SSH members (transport errors are SSH-specific).
+
 ## Terminal Restore
 
 When opening a terminal for a completed SSH task (via the UI "Open Terminal" button), the runner produces a `TerminalSpec` with `command: 'ssh'` and the target's connection args. This opens an interactive SSH session to the remote host.

@@ -30,6 +30,10 @@ export type {
   ExecutionPoolConfig,
   PoolSelection,
 } from './task-runner-pool.js';
+export type {
+  ReviewGateCiFailureTrigger,
+  ReviewGateCiFailureLifecyclePublisher,
+} from './task-runner-review-gate.js';
 export * from './merge-runner.js';
 export * from './conflict-resolver.js';
 export * from './merge-gate-provider.js';
@@ -58,6 +62,7 @@ export * from './workers/disk-headroom-worker.js';
 export * from './workers/disk-headroom-monitor.js';
 export * from './workers/disk-headroom.js';
 export * from './workers/pr-maintenance-workers.js';
+export * from './workers/e2e-autofix-worker.js';
 export * from './workers/requeue-worker.js';
 export * from './workers/workflow-resume-worker.js';
 export * from './requeue-attempt-ledger.js';
