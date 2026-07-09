@@ -2423,7 +2423,7 @@ describe('TaskRunner', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => undefined } as any,
         persistence: {} as any,
-        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: provider,
       });
@@ -2434,11 +2434,11 @@ describe('TaskRunner', () => {
       });
 
       const executor1 = executor.selectExecutor(task);
-      expect(executor1.type).toBe('ssh');
-      expect((executor1 as any).sshKeyPath).toBe('/old/key');
+      expect(executor1.executor.type).toBe('ssh');
+      expect((executor1.executor as any).sshKeyPath).toBe('/old/key');
 
       const executor2 = executor.selectExecutor(task);
-      expect((executor2 as any).sshKeyPath).toBe('/new/key');
+      expect((executor2.executor as any).sshKeyPath).toBe('/new/key');
 
       expect(provider).toHaveBeenCalledTimes(2);
     });
@@ -2866,7 +2866,7 @@ describe('TaskRunner', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
-        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => remoteTargets,
       });
@@ -2889,10 +2889,10 @@ describe('TaskRunner', () => {
       const executor3 = executor.selectExecutor(task3);
 
       // task1 and task2 share the same poolMemberId → same executor instance
-      expect(executor1).toBe(executor2);
+      expect(executor1.executor).toBe(executor2.executor);
       // task3 has a different poolMemberId → different executor instance
-      expect(executor1).not.toBe(executor3);
-      expect(executor2).not.toBe(executor3);
+      expect(executor1.executor).not.toBe(executor3.executor);
+      expect(executor2.executor).not.toBe(executor3.executor);
     });
 
     it('does not cache non-SSH executors', () => {
@@ -2922,8 +2922,8 @@ describe('TaskRunner', () => {
 
       // Worktree executors are created fresh each time (lazy registration creates new instances)
       // Both should be worktree type but may be different instances
-      expect(executor1.type).toBe('worktree');
-      expect(executor2.type).toBe('worktree');
+      expect(executor1.executor.type).toBe('worktree');
+      expect(executor2.executor.type).toBe('worktree');
     });
 
     it('clearSshExecutorCache removes all cached SSH executors', async () => {
@@ -2939,7 +2939,7 @@ describe('TaskRunner', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
-        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
         remoteTargetsProvider: () => remoteTargets,
       });
@@ -2958,7 +2958,7 @@ describe('TaskRunner', () => {
       const executor2 = executor.selectExecutor(task2);
 
       // After clearing cache, a new executor instance should be created
-      expect(executor1).not.toBe(executor2);
+      expect(executor1.executor).not.toBe(executor2.executor);
     });
 
     it('throws when SSH task has no poolMemberId', () => {
@@ -3089,7 +3089,7 @@ describe('TaskRunner', () => {
       expect(JSON.stringify(selectedPayload)).not.toContain('sshKeyPath');
       expect(JSON.stringify(selectedPayload)).not.toContain('/secret/key');
       expect(updateTask).toHaveBeenCalledWith('task-1', {
-        config: { runnerKind: 'ssh', poolMemberId: 'remote-a' },
+        config: { runnerKind: 'ssh', executionAgent: 'codex', executionModel: undefined, poolMemberId: 'remote-a' },
         execution: expect.objectContaining({
           workspacePath: '/remote/worktrees/task-1',
           branch: 'experiment/task-1',
@@ -3165,7 +3165,7 @@ describe('TaskRunner', () => {
         remoteHost: 'b.example.com',
       }));
       expect(updateTask).toHaveBeenCalledWith('task-retry', {
-        config: { runnerKind: 'ssh', poolMemberId: 'remote-b' },
+        config: { runnerKind: 'ssh', executionAgent: 'codex', executionModel: undefined, poolMemberId: 'remote-b' },
         execution: expect.objectContaining({
           workspacePath: '/remote/worktrees/task-retry',
           branch: 'experiment/task-retry',
@@ -3392,12 +3392,13 @@ describe('TaskRunner', () => {
 
       // Check that metadata was persisted immediately after start
       expect(updateSpy).toHaveBeenCalledWith('ssh-task-1', {
-        config: { runnerKind: 'ssh', poolMemberId: 'remote-1' },
+        config: { runnerKind: 'ssh', executionAgent: 'codex', executionModel: undefined, poolMemberId: 'remote-1' },
         execution: {
           workspacePath: '~/.invoker/worktrees/abc123/experiment-ssh-task-1-def456',
           branch: 'experiment/ssh-task-1-def456',
           agentSessionId: 'session-123',
           lastAgentSessionId: 'session-123',
+          agentName: undefined,
           lastAgentName: undefined,
           containerId: undefined,
         },
@@ -3644,12 +3645,13 @@ describe('TaskRunner', () => {
 
       // Check that metadata was persisted with workspacePath and branch=undefined
       expect(updateSpy).toHaveBeenCalledWith('byo-task-1', {
-        config: { runnerKind: 'ssh' },
+        config: { runnerKind: 'ssh', executionAgent: 'codex', executionModel: undefined },
         execution: {
           workspacePath: '/remote/user-provided/workspace',
           branch: undefined,
           agentSessionId: undefined,
           lastAgentSessionId: undefined,
+          agentName: undefined,
           lastAgentName: undefined,
           containerId: undefined,
         },
