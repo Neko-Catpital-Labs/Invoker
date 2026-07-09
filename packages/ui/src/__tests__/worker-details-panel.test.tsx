@@ -112,6 +112,23 @@ describe('WorkerDetailsPanel', () => {
     expect(screen.getByText('No persisted PR status actions. This worker updates review gates directly.')).toBeInTheDocument();
   });
 
+  it('shows a PR-maintenance worker as a first-class built-in worker', () => {
+    renderPanel(makeWorker({
+      kind: 'coderabbit-address',
+      note: 'Runs the CodeRabbit review-address cron entrypoint under worker scheduling.',
+      lifecycle: 'stopped',
+      policy: 'enabled',
+      autoStarts: false,
+      startable: true,
+      stoppable: false,
+      recentActions: [],
+    }));
+
+    expect(screen.getByTestId('worker-details-title')).toHaveTextContent('Coderabbit Address');
+    expect(screen.getByText('Kind: coderabbit-address')).toBeInTheDocument();
+    expect(screen.getByText('Process: Stopped')).toBeInTheDocument();
+  });
+
   it('uses the same collapsed show control as the inspector', () => {
     renderPanel(makeWorker(), new Map(), true);
 

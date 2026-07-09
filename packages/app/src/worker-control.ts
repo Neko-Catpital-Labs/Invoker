@@ -11,7 +11,9 @@ import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
+  PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   type WorkerRegistry,
   type WorkerRuntime,
@@ -91,6 +93,8 @@ const BUILT_IN_WORKER_KINDS = new Set<string>([
   PR_STATUS_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
+  PR_CONFLICT_REBASE_WORKER_KIND,
 ]);
 
 export function createWorkerRuntimeController(options: {

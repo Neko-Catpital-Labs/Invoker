@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  CODERABBIT_ADDRESS_WORKER_KIND,
   createWorkerRegistry,
+  PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
@@ -84,6 +86,8 @@ function controller() {
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
   register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
+  register(CODERABBIT_ADDRESS_WORKER_KIND, 'Runs the CodeRabbit review-address cron entrypoint under worker scheduling.');
+  register(PR_CONFLICT_REBASE_WORKER_KIND, 'Runs the PR conflict rebase-recreate cron entrypoint under worker scheduling.');
   register('external-preview', 'External preview worker.');
 
   return {
@@ -109,6 +113,27 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
+    expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('stopped');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('stopped');
+  });
+
+  it('classifies PR-maintenance workers as built-in participants that do not auto-start', () => {
+    const setup = controller();
+
+    setup.controller.startAutoStartedWorkers();
+    const snapshot = setup.controller.snapshot();
+
+    for (const kind of [CODERABBIT_ADDRESS_WORKER_KIND, PR_CONFLICT_REBASE_WORKER_KIND]) {
+      expect(snapshot.workers.find((worker) => worker.kind === kind)).toMatchObject({
+        policy: 'enabled',
+        autoStarts: false,
+        lifecycle: 'stopped',
+        startable: true,
+      });
+    }
+
+    // Contrast with a non-built-in worker, which reports an unknown policy.
+    expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.policy).toBe('unknown');
   });
 
   it('autofix remains stopped until explicitly started', () => {
