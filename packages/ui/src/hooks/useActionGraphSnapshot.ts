@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ActionGraphResponse } from '@invoker/contracts';
+import { areStructurallyEqual } from './useDedupedState.js';
 
 export function useActionGraphSnapshot(pollMs = 2000, enabled = true): {
   graph: ActionGraphResponse | null;
@@ -14,7 +15,9 @@ export function useActionGraphSnapshot(pollMs = 2000, enabled = true): {
     try {
       const response = await window.invoker?.getActionGraph?.();
       if (response) {
-        setGraph(response);
+        setGraph((previous) =>
+          areStructurallyEqual(previous, response) ? previous : response,
+        );
         setError(null);
       }
     } catch (err) {
@@ -33,7 +36,9 @@ export function useActionGraphSnapshot(pollMs = 2000, enabled = true): {
       try {
         const response = await window.invoker?.getActionGraph?.();
         if (!cancelled && response) {
-          setGraph(response);
+          setGraph((previous) =>
+            areStructurallyEqual(previous, response) ? previous : response,
+          );
           setError(null);
         }
       } catch (err) {

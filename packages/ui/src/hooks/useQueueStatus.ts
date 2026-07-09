@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { QueueStatus } from '../types.js';
+import { areStructurallyEqual } from './useDedupedState.js';
 
 export function useQueueStatus(pollMs = 2000): QueueStatus | null {
   const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
@@ -11,7 +12,9 @@ export function useQueueStatus(pollMs = 2000): QueueStatus | null {
       try {
         const status = await window.invoker?.getQueueStatus();
         if (!cancelled && status) {
-          setQueueStatus(status);
+          setQueueStatus((previous) =>
+            areStructurallyEqual(previous, status) ? previous : status,
+          );
         }
       } catch {
         // ignore polling errors
