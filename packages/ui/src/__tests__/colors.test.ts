@@ -50,18 +50,18 @@ describe('getStatusColor', () => {
     }
   });
 
-  it('returns unique colors for distinguishable statuses', () => {
+  it('returns unique dots for distinguishable statuses', () => {
     const running = getStatusColor('running');
     const completed = getStatusColor('completed');
     const failed = getStatusColor('failed');
 
-    // In dark card mode, background can be shared; accents must still be distinct
-    expect(running.border).not.toBe(completed.border);
-    expect(completed.border).not.toBe(failed.border);
-    expect(running.border).not.toBe(failed.border);
+    // The dot is the accent that carries status identity; surfaces stay uniform
+    // (border-border, bg-card) to match a sleek neutral chrome.
     expect(running.dot).not.toBe(completed.dot);
     expect(completed.dot).not.toBe(failed.dot);
     expect(running.dot).not.toBe(failed.dot);
+    expect(running.text).not.toBe(completed.text);
+    expect(completed.text).not.toBe(failed.text);
   });
 
   it('returns default for unknown status', () => {
@@ -97,10 +97,10 @@ describe('getStatusColor', () => {
     const failed = getStatusColor('failed');
     const reviewReady = getStatusColor('review_ready');
 
-    expect(closed.border).not.toBe(failed.border);
     expect(closed.dot).not.toBe(failed.dot);
-    expect(closed.border).not.toBe(reviewReady.border);
+    expect(closed.text).not.toBe(failed.text);
     expect(closed.dot).not.toBe(reviewReady.dot);
+    expect(closed.text).not.toBe(reviewReady.text);
   });
 
   it('uses shared urgency color for fix and input states while keeping approval distinct', () => {
@@ -109,9 +109,9 @@ describe('getStatusColor', () => {
     const awaitingApproval = getStatusColor('awaiting_approval');
 
     expect(fixingWithAI.dot).toBe(needsInput.dot);
-    expect(fixingWithAI.border).toBe(needsInput.border);
+    expect(fixingWithAI.text).toBe(needsInput.text);
     expect(awaitingApproval.dot).not.toBe(needsInput.dot);
-    expect(awaitingApproval.border).not.toBe(needsInput.border);
+    expect(awaitingApproval.text).not.toBe(needsInput.text);
   });
 });
 

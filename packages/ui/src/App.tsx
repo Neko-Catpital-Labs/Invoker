@@ -39,6 +39,7 @@ import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
 import { LeftStatusColumn } from './components/LeftStatusColumn.js';
 import { InvokerTerminal, type InvokerTerminalLine } from './components/InvokerTerminal.js';
+import { Toaster, toast } from 'sonner';
 import {
   getAttentionTaskEntries,
   getRunningTaskEntries,
@@ -99,6 +100,13 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] textarea',
 ].join(',');
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
+
+function notifyMutationError(rawTitle: string, err: unknown): void {
+  console.error(rawTitle, err);
+  const title = rawTitle.replace(/[:\s]+$/, '');
+  const description = err instanceof Error ? err.message : typeof err === 'string' ? err : undefined;
+  toast.error(title, description ? { description } : undefined);
+}
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
@@ -498,9 +506,8 @@ export function App() {
     [actionGraph],
   );
   const invoker = useInvoker();
-  const pollingRelevant = tasks.size > 0 || viewMode === 'queue';
-  const queueStatus = useQueueStatus(2000, pollingRelevant);
-  const [workerStatus, refreshWorkerStatus] = useWorkerStatus(2000, pollingRelevant);
+  const queueStatus = useQueueStatus();
+  const [workerStatus, refreshWorkerStatus] = useWorkerStatus();
   const handleStartWorker = useCallback(async (kind: string) => {
     await invoker.startWorker(kind);
     await refreshWorkerStatus();
@@ -1536,7 +1543,7 @@ export function App() {
       const result = await invoker.restartTask(taskId);
       trackAcceptedMutation(result);
     } catch (err) {
-      console.error('Failed to restart task:', err);
+      notifyMutationError('Failed to restart task', err);
     }
   }, [invoker, trackAcceptedMutation]);
 
@@ -1581,7 +1588,7 @@ export function App() {
       const result = await window.invoker?.replaceTask(taskId, replacements);
       trackAcceptedMutation(result);
     } catch (err) {
-      console.error('Failed to replace task:', err);
+      notifyMutationError('Failed to replace task:', err);
     }
   }, [trackAcceptedMutation]);
 
@@ -1591,7 +1598,7 @@ export function App() {
       const result = await window.invoker?.rebaseRetry(workflowId);
       trackAcceptedMutation(result);
     } catch (err) {
-      console.error('Rebase and Retry failed:', err);
+      notifyMutationError('Rebase and Retry failed:', err);
     }
   }, [trackAcceptedMutation]);
 
@@ -1601,7 +1608,7 @@ export function App() {
       const result = await window.invoker?.rebaseRecreate(workflowId);
       trackAcceptedMutation(result);
     } catch (err) {
-      console.error('Rebase and Recreate failed:', err);
+      notifyMutationError('Rebase and Recreate failed:', err);
     }
   }, [trackAcceptedMutation]);
 
@@ -1611,7 +1618,7 @@ export function App() {
       const result = await window.invoker?.retryWorkflow(workflowId);
       trackAcceptedMutation(result);
     } catch (err) {
-      console.error('Retry Workflow failed:', err);
+      notifyMutationError('Retry Workflow failed:', err);
     }
   }, [trackAcceptedMutation]);
 
@@ -1621,7 +1628,7 @@ export function App() {
       const result = await window.invoker?.recreateWorkflow(workflowId);
       trackAcceptedMutation(result);
     } catch (err) {
-      console.error('Recreate Workflow failed:', err);
+      notifyMutationError('Recreate Workflow failed:', err);
     }
   }, [trackAcceptedMutation]);
 
@@ -1631,7 +1638,7 @@ export function App() {
       const result = await window.invoker?.recreateTask(taskId);
       trackAcceptedMutation(result);
     } catch (err) {
-      console.error('Recreate from Task failed:', err);
+      notifyMutationError('Recreate from Task failed:', err);
     }
   }, [trackAcceptedMutation]);
 
@@ -1641,7 +1648,7 @@ export function App() {
       const result = await window.invoker?.recreateDownstream(taskId);
       trackAcceptedMutation(result);
     } catch (err) {
-      console.error('Recreate Downstream failed:', err);
+      notifyMutationError('Recreate Downstream failed:', err);
     }
   }, [trackAcceptedMutation]);
 
@@ -1659,7 +1666,7 @@ export function App() {
       }
       refreshTaskGraph();
     } catch (err) {
-      console.error('Delete Task failed:', err);
+      notifyMutationError('Delete Task failed:', err);
     }
   }, [refreshTaskGraph, selectedTaskId, trackAcceptedMutation]);
 
@@ -1678,7 +1685,7 @@ export function App() {
       }
       refreshTaskGraph();
     } catch (err) {
-      console.error('Delete Workflow failed:', err);
+      notifyMutationError('Delete Workflow failed:', err);
     }
   }, [refreshTaskGraph, selectedWorkflowId, trackAcceptedMutation]);
 
@@ -1705,7 +1712,7 @@ export function App() {
       );
       refreshTaskGraph();
     } catch (err) {
-      console.error('Detach Workflow failed:', err);
+      notifyMutationError('Detach Workflow failed:', err);
     }
   }, [workflows, refreshTaskGraph]);
 
@@ -1735,7 +1742,7 @@ export function App() {
       trackAcceptedMutation(result);
       refreshTaskGraph();
     } catch (err) {
-      console.error('Fix failed:', err);
+      notifyMutationError('Fix failed:', err);
     }
   }, [tasks, trackAcceptedMutation]);
 
@@ -1749,7 +1756,7 @@ export function App() {
       const result = await window.invoker?.cancelTask(taskId);
       trackAcceptedMutation(result);
     } catch (err) {
-      console.error('Failed to cancel task:', err);
+      notifyMutationError('Failed to cancel task:', err);
     }
   }, [trackAcceptedMutation]);
 
@@ -1763,7 +1770,7 @@ export function App() {
       const result = await window.invoker?.cancelWorkflow(workflowId);
       trackAcceptedMutation(result);
     } catch (err) {
-      console.error('Failed to cancel workflow:', err);
+      notifyMutationError('Failed to cancel workflow:', err);
     }
   }, [trackAcceptedMutation]);
 
@@ -1833,7 +1840,7 @@ export function App() {
       setHasStarted(true);
       return true;
     } catch (err) {
-      console.error('Failed to start:', err);
+      notifyMutationError('Failed to start:', err);
       return false;
     }
   }, [invoker]);
@@ -2013,7 +2020,7 @@ export function App() {
     try {
       await invoker.stop();
     } catch (err) {
-      console.error('Failed to stop:', err);
+      notifyMutationError('Failed to stop:', err);
     }
   }, [invoker]);
 
@@ -2034,7 +2041,7 @@ export function App() {
       setModal({ type: 'none' });
       setStatusFilters(new Set<WorkflowStatus>());
     } catch (err) {
-      console.error('Failed to clear:', err);
+      notifyMutationError('Failed to clear:', err);
     }
   }, [clearTasks, invoker]);
 
@@ -2059,7 +2066,7 @@ export function App() {
       setModal({ type: 'none' });
       setStatusFilters(new Set<WorkflowStatus>());
     } catch (err) {
-      console.error('Failed to delete workflows:', err);
+      notifyMutationError('Failed to delete workflows:', err);
     }
   }, [clearTasks, invoker]);
   const allSettled = useMemo(() => {
@@ -2215,7 +2222,7 @@ export function App() {
         const result = await invoker.editTaskCommand(taskId, newCommand);
         trackAcceptedMutation(result);
       } catch (err) {
-        console.error('Failed to edit task command:', err);
+        notifyMutationError('Failed to edit task command:', err);
       }
     },
     [invoker, trackAcceptedMutation],
@@ -2229,7 +2236,7 @@ export function App() {
         const result = await invoker.editTaskPrompt(taskId, newPrompt);
         trackAcceptedMutation(result);
       } catch (err) {
-        console.error('Failed to edit task prompt:', err);
+        notifyMutationError('Failed to edit task prompt:', err);
       }
     },
     [invoker, trackAcceptedMutation],
@@ -2243,7 +2250,7 @@ export function App() {
         const result = await invoker.editTaskType(taskId, runnerKind, poolMemberId);
         trackAcceptedMutation(result);
       } catch (err) {
-        console.error('Failed to edit task type:', err);
+        notifyMutationError('Failed to edit task type:', err);
       }
     },
     [invoker, trackAcceptedMutation],
@@ -2257,7 +2264,7 @@ export function App() {
         const result = await invoker.editTaskPool(taskId, poolId);
         trackAcceptedMutation(result);
       } catch (err) {
-        console.error('Failed to edit task pool:', err);
+        notifyMutationError('Failed to edit task pool:', err);
       }
     },
     [invoker, trackAcceptedMutation],
@@ -2271,7 +2278,7 @@ export function App() {
         const result = await invoker.editTaskAgent(taskId, agentName);
         trackAcceptedMutation(result);
       } catch (err) {
-        console.error('Failed to edit task agent:', err);
+        notifyMutationError('Failed to edit task agent:', err);
       }
     },
     [invoker, trackAcceptedMutation],
@@ -2284,7 +2291,7 @@ export function App() {
         const result = await invoker.setTaskExternalGatePolicies(taskId, updates);
         trackAcceptedMutation(result);
       } catch (err) {
-        console.error('Failed to set external gate policies:', err);
+        notifyMutationError('Failed to set external gate policies:', err);
       }
     },
     [invoker, trackAcceptedMutation],
@@ -2297,7 +2304,7 @@ export function App() {
         const result = await invoker.setMergeBranch(workflowId, baseBranch);
         trackAcceptedMutation(result);
       } catch (err) {
-        console.error('Failed to set merge branch:', err);
+        notifyMutationError('Failed to set merge branch:', err);
       }
     },
     [invoker, trackAcceptedMutation],
@@ -2310,7 +2317,7 @@ export function App() {
         const result = await invoker.setMergeMode(workflowId, mergeMode);
         trackAcceptedMutation(result);
       } catch (err) {
-        console.error('Failed to set merge mode:', err);
+        notifyMutationError('Failed to set merge mode:', err);
       }
     },
     [invoker, trackAcceptedMutation],
@@ -2952,7 +2959,22 @@ export function App() {
       ? `${selectedWorkflow.name} · ${formatWorkflowStatus(selectedWorkflow.status)}`
       : `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'} ready`;
   return (
-    <div className="h-screen flex flex-col bg-gray-900 text-gray-100" onClick={() => closeContextMenu()}>
+    <div className="h-screen flex flex-col bg-background text-foreground font-sans" onClick={() => closeContextMenu()}>
+      <Toaster
+        theme="dark"
+        position="bottom-right"
+        richColors
+        closeButton
+        toastOptions={{
+          className: 'font-sans',
+          style: {
+            background: 'rgb(23 23 23)',
+            border: '1px solid var(--border-color)',
+            color: 'rgb(250 250 250)',
+            fontSize: '13px',
+          },
+        }}
+      />
       {showSystemBanner && (
         <div className="px-4 py-3 border-b border-amber-700 bg-amber-950/50 flex items-center justify-between gap-4">
           <div className="text-sm text-amber-100">

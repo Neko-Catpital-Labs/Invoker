@@ -106,9 +106,9 @@ describe('workflow / task-graph status divergence', () => {
 
     await waitFor(() => {
       expect(miniDag).toHaveTextContent('Still running task');
-      expect(miniDag).toHaveTextContent('RUNNING · EXECUTING');
+      expect(miniDag).toHaveTextContent('Running · Executing');
       expect(miniDag).toHaveTextContent('Already failed task');
-      expect(miniDag).toHaveTextContent('FAILED');
+      expect(miniDag).toHaveTextContent('Failed');
     });
   });
 
@@ -126,7 +126,7 @@ describe('workflow / task-graph status divergence', () => {
 
     expect(screen.getByTestId('workflow-node-wf-diverge')).toHaveTextContent('failed');
     await waitFor(() => {
-      expect(miniDag).toHaveTextContent('FAILED');
+      expect(miniDag).toHaveTextContent('Failed');
     });
 
     // Task delta restarts the task — the task graph updates ahead of metadata.
@@ -142,7 +142,7 @@ describe('workflow / task-graph status divergence', () => {
     );
 
     await waitFor(() => {
-      expect(miniDag).toHaveTextContent('RUNNING · EXECUTING');
+      expect(miniDag).toHaveTextContent('Running · Executing');
     });
 
     // Label still reads the older failed metadata: separate renderer channels.

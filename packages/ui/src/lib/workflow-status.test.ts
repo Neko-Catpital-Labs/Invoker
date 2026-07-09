@@ -54,10 +54,11 @@ describe('workflow-status', () => {
     const reviewReady = workflowStatusVisual('review_ready');
 
     expect(closed.pulse).toBe(false);
-    expect(closed.borderClass).not.toBe(failed.borderClass);
+    // Surfaces (border) stay uniform; identity lives in the rail dot and label text.
     expect(closed.railClass).not.toBe(failed.railClass);
-    expect(closed.borderClass).not.toBe(reviewReady.borderClass);
+    expect(closed.textClass).not.toBe(failed.textClass);
     expect(closed.railClass).not.toBe(reviewReady.railClass);
+    expect(closed.textClass).not.toBe(reviewReady.textClass);
   });
 
 });
