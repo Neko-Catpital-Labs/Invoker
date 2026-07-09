@@ -48,12 +48,11 @@
   },
 
   "executionPools": {
-    "mixed-local-ssh": {
-      "comment": "Pool routes tasks across mixed SSH/local members with shared queue/drain semantics",
+    "owner-host-ssh": {
+      "comment": "Owner-host pool routes workflow tasks to managed SSH targets",
       "members": [
         { "type": "ssh", "id": "staging-server" },
-        { "type": "ssh", "id": "build-server-b" },
-        { "type": "worktree", "id": "local-fallback", "maxConcurrentTasks": 2 }
+        { "type": "ssh", "id": "build-server-b" }
       ],
       "selectionStrategy": "roundRobin",
       "maxConcurrentTasksPerMember": 1
@@ -68,7 +67,7 @@
       "maxConcurrentTasksPerMember": 1
     }
   },
-  "defaultPoolId": "mixed-local-ssh",
+  "defaultPoolId": "owner-host-ssh",
 
   "executorRoutingRules": [
     {
@@ -97,21 +96,34 @@
   "autoApproveAIFixes": true,
   "autoFixCi": false,
 
+  "prMaintenance": {
+    "comment": "Enable built-in owner workers for PR maintenance on the owner host",
+    "enabled": true,
+    "repoRoot": "/srv/invoker",
+    "intervalMs": 300000
+  },
+
   "webToken": "change-me-to-a-long-random-secret",
-  "webHost": "127.0.0.1",
+  "webHost": "0.0.0.0",
   "webPort": 4200,
 
   "notes": {
-    "web_surface": "webToken enables the browser UI + Slack live status card surfaces. Env vars INVOKER_WEB_TOKEN / INVOKER_WEB_HOST / INVOKER_WEB_PORT override these. Set webHost to 0.0.0.0 to reach it from another machine (e.g. the DigitalOcean host); open http://<host>:<webPort>/?token=<webToken>.",
+    "owner_host": "Run one owner process on the host that owns ~/.invoker: INVOKER_HEADLESS_STANDALONE=1 ./run.sh --headless owner-serve. Submit workflows to that owner; do not schedule separate cron entrypoints.",
+    "web_surface": "webToken enables the browser UI + Slack live status card surfaces. Env vars INVOKER_WEB_TOKEN / INVOKER_WEB_HOST / INVOKER_WEB_PORT override these. Set webHost to 0.0.0.0 to reach it from another machine; open http://<host>:<webPort>/?token=<webToken>.",
     "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
     "config_locations": [
       "~/.invoker/config.json - Default user-level settings",
       "INVOKER_REPO_CONFIG_PATH=/path/to/config.json - Explicit override for repo/test-specific config"
     ],
-    "runner_kinds": [
-      "worktree - Git worktree isolation (default)",
-      "docker - Docker container execution",
-      "ssh - Remote SSH execution"
+    "owner_workers": [
+      "autofix - performs deliberate one-shot auto-fix recovery scans through the worker engine",
+      "pr-status - tracks pull request status",
+      "ci-failure - repairs failed review-gate CI",
+      "disk-headroom - monitors local disk pressure",
+      "requeue - retries bounded liveness-stall failures",
+      "auto-approve - applies configured AI-fix approvals",
+      "coderabbit-address - addresses CodeRabbit review comments through the worker scheduler",
+      "pr-conflict-rebase - rebases conflicted pull requests through the worker scheduler"
     ]
   }
 }

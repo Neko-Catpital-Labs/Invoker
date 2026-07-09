@@ -1,146 +1,196 @@
 # Remote SSH Targets
 
-Execute Invoker tasks on remote machines via SSH key-based authentication.
+Run Invoker from one owner host and let its built-in workers coordinate remote SSH execution.
 
-## Overview
+## Supported operator model
 
-The SSH executor (`runnerKind: ssh`) runs task commands on remote hosts over SSH. Authentication is exclusively key-based — no password auth or `sshpass` dependency is required.
+The supported remote setup is:
 
-Each remote target is defined in the Invoker config with a host, user, and path to an SSH private key. Tasks reference targets by ID.
+1. Start exactly one Invoker owner process on the machine that owns `~/.invoker`.
+2. Configure SSH targets and execution pools in that owner's config.
+3. Submit plans to the owner and select remote capacity with `poolId`.
+4. Inspect workers and worker decisions from the owner; do not schedule separate cron entrypoints.
 
-## Configuration
+The SSH executor still runs task commands on remote hosts over key-based SSH. The owner remains the control plane: it owns the workflow database, worker fleet, task scheduling, retries, and worker decision ledger.
 
-Add remote targets to `~/.invoker/config.json`.
+## Owner-host configuration
 
-If you want to use a repo-specific config file, launch Invoker with `INVOKER_REPO_CONFIG_PATH=/path/to/config.json`.
+Add remote targets and pools to the owner host's `~/.invoker/config.json`. For a repo-specific config, launch the owner with `INVOKER_REPO_CONFIG_PATH=/path/to/config.json`.
 
 ```json
 {
+  "maxConcurrency": 6,
   "remoteTargets": {
-    "staging-server": {
+    "staging-a": {
       "host": "192.168.1.100",
       "user": "deploy",
-      "sshKeyPath": "/home/user/.ssh/id_staging",
+      "sshKeyPath": "/home/invoker/.ssh/id_staging_a",
+      "port": 22,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile",
       "remoteHeartbeatIntervalSeconds": 30
     },
-    "staging-server-b": {
+    "staging-b": {
       "host": "192.168.1.101",
       "user": "deploy",
-      "sshKeyPath": "/home/user/.ssh/id_staging_b",
+      "sshKeyPath": "/home/invoker/.ssh/id_staging_b",
       "port": 22,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
       "provisionCommand": "pnpm install --frozen-lockfile",
       "remoteHeartbeatIntervalSeconds": 30
     }
-  }
+  },
+  "executionPools": {
+    "owner-host-ssh": {
+      "members": [
+        { "type": "ssh", "id": "staging-a" },
+        { "type": "ssh", "id": "staging-b" }
+      ],
+      "selectionStrategy": "roundRobin",
+      "maxConcurrentTasksPerMember": 1
+    }
+  },
+  "defaultPoolId": "owner-host-ssh",
+  "autoFixRetries": 3,
+  "prMaintenance": {
+    "enabled": true,
+    "repoRoot": "/srv/invoker",
+    "intervalMs": 300000
+  },
+  "webToken": "change-me-to-a-long-random-secret",
+  "webHost": "0.0.0.0",
+  "webPort": 4200
 }
 ```
 
-### Fields
+### Remote target fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `host` | string | yes | Remote host IP or hostname |
 | `user` | string | yes | SSH username |
-| `sshKeyPath` | string | yes | Absolute path to SSH private key file |
-| `port` | number | no | SSH port (default: 22) |
+| `sshKeyPath` | string | yes | Absolute path to the owner's SSH private key file |
+| `port` | number | no | SSH port (default: `22`) |
+| `maxConcurrentTasks` | number | no | Per-target concurrency cap |
 | `managedWorkspaces` | boolean | no | When true, Invoker clones/fetches the repo and manages per-task worktrees on the remote host |
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
 | `provisionCommand` | string | no | Command run after worktree creation in managed mode |
-| `remoteHeartbeatIntervalSeconds` | number | no | Interval (seconds) for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
+| `remoteHeartbeatIntervalSeconds` | number | no | Interval in seconds for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
 
-## Multiple SSH Targets
+## Start the owner host
 
-You can configure as many remote targets as you want under `remoteTargets`. Each task picks one by `poolMemberId`.
+Run one long-lived owner process from the Invoker checkout on the owner host:
+
+```bash
+INVOKER_REPO_CONFIG_PATH=/srv/invoker/config.json \
+INVOKER_HEADLESS_STANDALONE=1 \
+./run.sh --headless owner-serve
+```
+
+If the web surface is enabled, open `http://<owner-host>:4200/?token=<webToken>`. Keep TLS or a trusted tunnel in front of any non-local exposure.
+
+## Usage in plans
+
+Plans should select configured owner pools with `poolId`. They should not embed hostnames, keys, or direct recovery scripts.
 
 ```yaml
-name: "Run tasks on multiple remotes"
+name: "Run checks on the owner-host SSH pool"
 repoUrl: git@github.com:your-org/your-repo.git
 baseBranch: master
 tasks:
   - id: check-a
-    description: "Run tests on remote A"
+    description: "Run checks on remote capacity"
     command: "pnpm test"
-    runnerKind: ssh
-    poolMemberId: staging-server
-
-  - id: check-b
-    description: "Run tests on remote B"
-    command: "pnpm test"
-    runnerKind: ssh
-    poolMemberId: staging-server-b
-```
-
-This is the supported way to run multiple SSH executors in one workflow: define multiple targets, then attach different tasks to different target IDs.
-
-## Usage in Plans
-
-Reference a remote target in a plan YAML task:
-
-```yaml
-name: "Deploy to staging"
-onFinish: none
-baseBranch: master
-tasks:
-  - id: health-check
-    description: "Verify staging server is reachable"
-    command: "echo 'OK'; uptime; df -h"
-    runnerKind: ssh
-    poolMemberId: staging-server
+    poolId: owner-host-ssh
     dependencies: []
 
-  - id: run-migrations
-    description: "Run database migrations on staging"
-    command: "cd /opt/app && ./migrate.sh"
-    runnerKind: ssh
-    poolMemberId: staging-server
-    dependencies:
-      - health-check
+  - id: check-b
+    description: "Run another check on remote capacity"
+    command: "pnpm test"
+    poolId: owner-host-ssh
+    dependencies: []
 ```
 
-### Task fields
+Use multiple pools when tasks need different remote capacity classes:
 
-- `runnerKind: ssh` — selects the SSH executor
-- `poolMemberId: <id>` — references a key in `remoteTargets` config
+```json
+{
+  "executionPools": {
+    "pnpm-ssh": {
+      "members": [
+        { "type": "ssh", "id": "staging-a" },
+        { "type": "ssh", "id": "staging-b" }
+      ],
+      "selectionStrategy": "roundRobin",
+      "maxConcurrentTasksPerMember": 1
+    }
+  }
+}
+```
 
-Both fields are required for SSH tasks. The executor validates at runtime that the `poolMemberId` exists in config and throws a clear error if it's missing.
+```yaml
+tasks:
+  - id: install-and-test
+    description: "Run package checks"
+    command: "pnpm test"
+    poolId: pnpm-ssh
+    dependencies: []
+```
 
-## How It Works
+## Built-in owner workers
 
-1. The plan parser reads `runnerKind` and `poolMemberId` from YAML and carries them through to `TaskConfig`.
-2. When `TaskRunner.selectExecutor()` sees `runnerKind: ssh`, it looks up the `poolMemberId` in the `remoteTargets` config map.
-3. An `SshExecutor` instance is created with the target's connection details.
-4. The runner spawns: `ssh -i <keyPath> -p <port> -o StrictHostKeyChecking=accept-new -o BatchMode=yes user@host <command>`
-5. For `claude` action types, the Claude CLI command is shell-quoted and executed remotely.
+Owner workers run inside the owner process and coordinate recovery or maintenance through the normal command routes. Operators should use these built-in workers instead of separate cron entrypoints:
+
+- `autofix` (manual one-shot recovery scan)
+- `pr-status`
+- `ci-failure`
+- `disk-headroom`
+- `requeue`
+- `auto-approve`
+- `coderabbit-address`
+- `pr-conflict-rebase`
+
+`autoFixRetries` controls the auto-fix worker retry budget. `prMaintenance.enabled` supplies launch configuration to the built-in `coderabbit-address` and `pr-conflict-rebase` workers.
+
+Inspect the worker fleet and durable decisions from the owner:
+
+```bash
+./run.sh --headless query workers --output text
+./run.sh --headless query worker-decisions --output text
+./run.sh --headless query worker-actions --output text
+```
+
+For a deliberate one-shot recovery scan, use the worker command. This invokes the same worker implementation; it is not a separate scheduler:
+
+```bash
+./run.sh --headless worker autofix
+```
+
+## How SSH execution works
+
+1. The owner parses the plan and stores workflow state in its single writable database.
+2. The scheduler picks a ready task and resolves its `poolId` to an SSH pool member.
+3. `SshExecutor` creates or updates the managed remote workspace.
+4. The executor runs the task command over SSH using `BatchMode=yes`.
+5. Remote heartbeat markers feed executing-stall detection.
+6. Built-in workers observe durable state and submit normal commands when recovery or maintenance is needed.
 
 ### SSH options
 
 The executor uses these SSH options by default:
 
 - `-o StrictHostKeyChecking=accept-new` — auto-accept new host keys (TOFU), reject changed keys
-- `-o BatchMode=yes` — fail immediately if interactive auth is needed (no password prompts)
+- `-o BatchMode=yes` — fail immediately if interactive auth is needed; no password prompts
 
-## Terminal Restore
+## Terminal restore
 
-When opening a terminal for a completed SSH task (via the UI "Open Terminal" button), the runner produces a `TerminalSpec` with `command: 'ssh'` and the target's connection args. This opens an interactive SSH session to the remote host.
+When opening a terminal for a completed SSH task from the desktop UI, the runner produces a `TerminalSpec` with `command: 'ssh'` and the target's connection args. This opens an interactive SSH session to the remote host.
 
-## E2E Verification
+## Security notes
 
-A verification script is provided for testing SSH connectivity to a DigitalOcean droplet:
-
-```bash
-INVOKER_DO_HOST="178.128.181.133" \
-INVOKER_DO_USER="root" \
-INVOKER_DO_SSH_KEY="$HOME/.ssh/id_do" \
-bash scripts/verify-digitalocean-e2e.sh
-```
-
-## Security Notes
-
-- SSH keys must never be committed to the repository. The `sshKeyPath` field is a local filesystem path, not the key content.
-- The `poolMemberId` stored in the task config and SQLite database is a non-secret alias — it contains no credentials.
+- SSH keys must never be committed to the repository. `sshKeyPath` is a local filesystem path on the owner host, not key content.
+- `poolId` and SSH target IDs are non-secret aliases; they contain no credentials.
 - `BatchMode=yes` ensures SSH never falls back to interactive password prompts.
+- The owner host is the control plane. Protect its database, config, web token, and SSH private keys as operator credentials.
