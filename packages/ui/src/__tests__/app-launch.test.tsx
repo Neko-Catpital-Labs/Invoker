@@ -121,6 +121,43 @@ describe('App launch (component)', () => {
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
+  it('keeps the currently visible app sidebar width when moving between Home and Library', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+
+    render(<App />);
+    await screen.findByTestId('sidebar-workflows');
+    act(() => window.dispatchEvent(new Event('resize')));
+
+    const sidebar = screen.getByTestId('app-sidebar');
+    const visibleWidth = sidebar.className.includes('w-16') ? 'w-16' : 'w-60';
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    expect(sidebar.className).toContain(visibleWidth);
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain(visibleWidth);
+
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+  });
+  it('keeps the expanded app sidebar width when switching Home and Library on wide windows', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+
+    render(<App />);
+    await screen.findByTestId('sidebar-workflows');
+
+    const sidebar = screen.getByTestId('app-sidebar');
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+  });
   it('keeps the manual app sidebar width while switching left rail surfaces', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
 

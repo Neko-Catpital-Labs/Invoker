@@ -2075,7 +2075,7 @@ export function App() {
   const showStart = hasLoadedPlan && !hasStarted;
   const showStop = hasStarted && !allSettled;
   const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
-  const autoCollapseSidebar = sidebarSurface !== 'home' && sidebarSurface !== 'planning' && viewportWidth < 1440;
+  const autoCollapseSidebar = viewportWidth < 1440;
   const effectiveSidebarCollapsed = sidebarCollapsed ?? autoCollapseSidebar;
   const autoCollapseInspector = sidebarSurface !== 'home' && viewportWidth < 1440;
   const effectiveInspectorCollapsed = inspectorCollapsed || (autoCollapseInspector && !inspectorManualOpen);
@@ -3360,4 +3360,3 @@ export function App() {
     </div>
   );
 }
-
