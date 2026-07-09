@@ -14,8 +14,9 @@ Earlier, auto-fix ran from more than one place: a producer could schedule auto-f
 
 That overlap is now resolved. There is exactly **one** shared auto-fix worker engine, and it lives in `@invoker/execution-engine`.
 
-Two properties keep the single engine truly single:
+These properties define when the single engine runs and keep it truly single:
 
+- **Scan on start.** Starting the worker (the Workers-tab off→on toggle) runs a full scan immediately (`tickOnStart`), so every task that is already failed gets a fix-with-agent intent submitted the moment the worker comes up, not one poll interval later.
 - **Owner auto-start.** Owner processes start the auto-fix worker automatically when `autoFixRetries > 0`, so normal task failures do not need an external bash loop.
 - **Manual one-shot scan.** `./run.sh --headless worker autofix` drives the same engine for an explicit operator scan.
 
