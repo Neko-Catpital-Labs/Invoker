@@ -133,8 +133,6 @@ function poolMemberHasCapacity(host: TaskRunnerPoolHost, poolId: string, pool: E
   return limit === undefined || poolMemberLoad(host, poolId, poolMemberKey(member)) < limit;
 }
 
-// ── Member health / circuit breaker ──────────────────────
-
 function isPoolMemberDown(host: TaskRunnerPoolHost, memberKey: string, now: number = Date.now()): boolean {
   const health = host.poolMemberHealth.get(memberKey);
   return health !== undefined && health.downUntil > now;
