@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -260,6 +260,38 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
     lines.push(
       `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Format the worker fleet snapshot as a human-readable roster: one line per
+ * worker with its lifecycle, policy, and auto-start posture. Mirrors the
+ * structured shape returned by `--output json`.
+ */
+export function formatWorkerStatus(snapshot: WorkerStatusSnapshot): string {
+  if (snapshot.workers.length === 0) {
+    return `${DIM}No workers registered.${RESET}`;
+  }
+
+  const lifecycleColor = (lifecycle: string): string => {
+    switch (lifecycle) {
+      case 'running': return GREEN;
+      case 'exited': return RED;
+      default: return YELLOW;
+    }
+  };
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Workers (${snapshot.workers.length})${RESET}`);
+  for (const worker of snapshot.workers) {
+    const kind = escapeTerminalText(worker.kind);
+    const color = lifecycleColor(worker.lifecycle);
+    const autoStarts = worker.autoStarts ? ' auto-start' : '';
+    const note = worker.note ? ` — ${escapeTerminalText(worker.note)}` : '';
+    lines.push(
+      `  ${color}●${RESET} ${BOLD}${kind}${RESET} [${worker.lifecycle}] policy=${worker.policy}${autoStarts}${note}`,
     );
   }
   return lines.join('\n');
