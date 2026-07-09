@@ -19,3 +19,13 @@ export {
   TooltipTrigger,
   TooltipContent,
 } from './Tooltip.js';
+export {
+  Command,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+  CommandSeparator,
+  CommandShortcut,
+} from './Command.js';
