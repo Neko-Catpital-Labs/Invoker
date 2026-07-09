@@ -1,8 +1,7 @@
-import type { QueueStatus } from '@invoker/contracts';
 import type { JSX } from 'react';
 import type { TaskState, WorkflowMeta, WorkerStatusSnapshot } from '../types.js';
 import type { SidebarSurface } from '../lib/workflow-progress-surfaces.js';
-import { getAttentionTaskEntries, getRunningTaskEntries, getSortedWorkflows } from '../lib/workflow-progress-surfaces.js';
+import { getAttentionTaskEntries, getSortedWorkflows } from '../lib/workflow-progress-surfaces.js';
 import { countActiveWorkerActions } from '../lib/worker-display.js';
 import {
   AttentionIcon,
@@ -11,7 +10,6 @@ import {
   InvokerIcon,
   MoonIcon,
   PlanningTerminalIcon,
-  RunningIcon,
   SettingsIcon,
   SunIcon,
   WorkerIcon,
@@ -22,7 +20,6 @@ import type { ThemeMode } from '../lib/theme.js';
 interface LeftStatusColumnProps {
   workflows: Map<string, WorkflowMeta>;
   tasks: Map<string, TaskState>;
-  queueStatus: QueueStatus | null;
   workerStatus: WorkerStatusSnapshot | null;
   selectedSurface: SidebarSurface;
   collapsed: boolean;
@@ -35,7 +32,7 @@ interface LeftStatusColumnProps {
 }
 
 interface SourceItem {
-  key: Exclude<SidebarSurface, 'home'>;
+  key: Exclude<SidebarSurface, 'home' | 'planning' | 'running'>;
   label: string;
   count: number;
   tone: 'neutral' | 'attention' | 'running';
@@ -68,7 +65,6 @@ function countClass(tone: SourceItem['tone']): string {
 export function LeftStatusColumn({
   workflows,
   tasks,
-  queueStatus,
   workerStatus,
   selectedSurface,
   collapsed,
@@ -81,14 +77,12 @@ export function LeftStatusColumn({
 }: LeftStatusColumnProps): JSX.Element {
   const workflowEntries = getSortedWorkflows(workflows, tasks);
   const attentionEntries = getAttentionTaskEntries(tasks, workflows);
-  const runningEntries = getRunningTaskEntries(tasks, workflows, queueStatus);
   const runningWorkers = workerStatus?.workers.filter((worker) => worker.lifecycle === 'running').length ?? 0;
   const registeredWorkers = workerStatus?.workers.length ?? 0;
   const activeWorkerActions = workerStatus ? countActiveWorkerActions(workerStatus.workers) : 0;
 
   const sources: SourceItem[] = [
     { key: 'attention', label: 'Needs Attention', count: attentionEntries.length, tone: 'attention', icon: <AttentionIcon className={ICON_CLASS} /> },
-    { key: 'running', label: 'Running', count: runningEntries.length, tone: 'running', icon: <RunningIcon className={ICON_CLASS} /> },
     { key: 'workers', label: 'Workers', count: registeredWorkers, tone: activeWorkerActions > 0 ? 'running' : 'neutral', icon: <WorkerIcon className={ICON_CLASS} /> },
     { key: 'workflows', label: 'Workflows', count: workflowEntries.length, tone: 'neutral', icon: <WorkflowsIcon className={ICON_CLASS} /> },
   ];
@@ -170,7 +164,7 @@ export function LeftStatusColumn({
 
       {!collapsed && <div className="mt-6 px-2.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">Library</div>}
       <nav className={collapsed ? 'mt-4 space-y-1' : 'mt-2 space-y-0.5'}>
-        {sources.map((source, index) => {
+        {sources.map((source) => {
           const selected = selectedSurface === source.key;
           return (
             <button
@@ -221,11 +215,6 @@ export function LeftStatusColumn({
             attentionEntries.length === 0
               ? 'Nothing needs a decision right now.'
               : `${attentionEntries.length} item${attentionEntries.length === 1 ? ' needs' : 's need'} attention.`
-          )}
-          {selectedSurface === 'running' && (
-            runningEntries.length === 0
-              ? 'No tasks are running right now.'
-              : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`
           )}
           {selectedSurface === 'workers' && (
             workerStatus === null
