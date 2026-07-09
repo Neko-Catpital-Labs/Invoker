@@ -1798,6 +1798,84 @@ describe('SQLiteAdapter', () => {
       const [task] = adapter.loadTasks('wf-1');
       expect(task.status).toBe('fixing_with_ai');
     });
+
+    it('projects from the newest active attempt when selected_attempt_id lags behind a failed attempt with a newer pending replacement', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const olderCreatedAt = new Date('2026-07-09T05:38:02.000Z');
+      const newerCreatedAt = new Date('2026-07-09T05:51:12.808Z');
+      const failed: Attempt = {
+        ...createAttempt('t1', { status: 'failed' }),
+        id: 't1-aOLD',
+        createdAt: olderCreatedAt,
+        error: 'Cancelled by user (workflow)',
+        completedAt: new Date('2026-07-09T05:51:12.761Z'),
+      };
+      const newerPending: Attempt = {
+        ...createAttempt('t1', { status: 'pending' }),
+        id: 't1-aNEW',
+        createdAt: newerCreatedAt,
+        supersedesAttemptId: failed.id,
+      };
+      adapter.saveTask('wf-1', makeTask('t1', {
+        status: 'running',
+        execution: { startedAt: new Date('2026-07-09T05:43:54.107Z') },
+      }));
+      adapter.saveAttempt(failed);
+      adapter.saveAttempt(newerPending);
+      // Production shape: selected_attempt_id lags on the FAILED attempt even
+      // though a newer pending replacement exists.
+      adapter.updateTask('t1', { execution: { selectedAttemptId: failed.id } });
+
+      const [task] = adapter.loadTasks('wf-1');
+      expect(task.status).toBe('running');
+      expect(task.execution.error).toBeUndefined();
+      expect(task.execution.completedAt).toBeUndefined();
+      // Pointer stays as-persisted; the projection does not rewrite the row.
+      expect(task.execution.selectedAttemptId).toBe(failed.id);
+    });
+
+    it('projects from the newest active attempt when selected_attempt_id lags behind a superseded attempt', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const olderCreatedAt = new Date('2026-07-09T05:38:02.000Z');
+      const newerCreatedAt = new Date('2026-07-09T05:51:12.808Z');
+      const superseded: Attempt = {
+        ...createAttempt('t1', { status: 'superseded' }),
+        id: 't1-aOLD',
+        createdAt: olderCreatedAt,
+      };
+      const newerRunning: Attempt = {
+        ...createAttempt('t1', { status: 'running' }),
+        id: 't1-aNEW',
+        createdAt: newerCreatedAt,
+        supersedesAttemptId: superseded.id,
+      };
+      adapter.saveTask('wf-1', makeTask('t1', {
+        status: 'running',
+        execution: { startedAt: newerCreatedAt },
+      }));
+      adapter.saveAttempt(superseded);
+      adapter.saveAttempt(newerRunning);
+      adapter.updateTask('t1', { execution: { selectedAttemptId: superseded.id } });
+
+      const [task] = adapter.loadTasks('wf-1');
+      // Without the fix this would project `stale`; the newer active attempt
+      // wins and keeps the task as running.
+      expect(task.status).toBe('running');
+    });
+
+    it('keeps projecting `stale` when selected_attempt_id targets a superseded attempt with no newer active replacement', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const attempt: Attempt = {
+        ...createAttempt('t1', { status: 'superseded' }),
+        id: 't1-aOLD',
+      };
+      adapter.saveTask('wf-1', makeTask('t1', { status: 'running' }));
+      adapter.saveAttempt(attempt);
+      adapter.updateTask('t1', { execution: { selectedAttemptId: attempt.id } });
+
+      const [task] = adapter.loadTasks('wf-1');
+      expect(task.status).toBe('stale');
+    });
   });
 
   describe('loadActionGraphAttempts', () => {
