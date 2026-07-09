@@ -30,6 +30,10 @@ export type {
   ExecutionPoolConfig,
   PoolSelection,
 } from './task-runner-pool.js';
+export type {
+  ReviewGateCiFailureTrigger,
+  ReviewGateCiFailureLifecyclePublisher,
+} from './task-runner-review-gate.js';
 export * from './harness-capabilities.js';
 export * from './merge-runner.js';
 export * from './conflict-resolver.js';
