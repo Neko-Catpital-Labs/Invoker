@@ -1877,7 +1877,7 @@ function startHeadlessMode(): void {
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
         });
-        workerRuntimeController.startAutoStartedWorkers();
+        workerRuntimeController.restoreDesiredWorkers();
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
@@ -3763,7 +3763,7 @@ function createEmbeddedTerminalBackendFromConfig(
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
       });
-      workerRuntimeController.startAutoStartedWorkers();
+      workerRuntimeController.restoreDesiredWorkers();
     }
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.

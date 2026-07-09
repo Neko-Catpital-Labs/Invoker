@@ -50,12 +50,28 @@ function runtime(kind: string): TestWorkerRuntime {
   };
 }
 
-function persistence() {
+function persistence(initialDesiredStates: Record<string, unknown> = {}) {
+  const desiredStates = new Map<string, unknown>(Object.entries(initialDesiredStates));
+  const now = '2026-01-01T00:00:00.000Z';
   return {
     listWorkerActions: vi.fn(() => []),
     listWorkflows: vi.fn(() => []),
     loadTasks: vi.fn(() => []),
     getEvents: vi.fn(() => []),
+    loadWorkerDesiredState: vi.fn((workerKind: string) => (
+      desiredStates.has(workerKind)
+        ? {
+            workerKind,
+            desiredState: desiredStates.get(workerKind),
+            createdAt: now,
+            updatedAt: now,
+          }
+        : undefined
+    )),
+    saveWorkerDesiredState: vi.fn((workerKind: string, desiredState: unknown) => {
+      desiredStates.set(workerKind, desiredState);
+    }),
+    desiredStates,
   };
 }
 
@@ -72,7 +88,10 @@ function deps(): WorkerRuntimeDependencies {
   } as WorkerRuntimeDependencies;
 }
 
-function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKER_KINDS) {
+function controller(
+  autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKER_KINDS,
+  persistenceStore = persistence(),
+) {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
   const runtimes = new Map<string, TestWorkerRuntime[]>();
   const register = (kind: string, note: string, runtimeKind = kind) => {
@@ -103,9 +122,10 @@ function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKE
       registry,
       deps: deps(),
       autoStartKinds,
-      persistence: persistence() as never,
+      persistence: persistenceStore as never,
       canControl: () => true,
     }),
+    persistence: persistenceStore,
   };
 }
 
@@ -113,7 +133,7 @@ describe('createWorkerRuntimeController', () => {
   it('auto-start starts every built-in owner worker except autofix', () => {
     const setup = controller();
 
-    setup.controller.startAutoStartedWorkers();
+    setup.controller.restoreDesiredWorkers();
     const snapshot = setup.controller.snapshot();
 
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
@@ -127,12 +147,12 @@ describe('createWorkerRuntimeController', () => {
 
   it('auto-starts e2e-autofix only when its kind is in autoStartKinds', () => {
     const gated = controller([...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]);
-    gated.controller.startAutoStartedWorkers();
+    gated.controller.restoreDesiredWorkers();
     const gatedRow = gated.controller.snapshot().workers.find((worker) => worker.kind === E2E_AUTOFIX_WORKER_KIND);
     expect(gatedRow?.lifecycle).toBe('running');
 
     const ungated = controller();
-    ungated.controller.startAutoStartedWorkers();
+    ungated.controller.restoreDesiredWorkers();
     const ungatedRow = ungated.controller.snapshot().workers.find((worker) => worker.kind === E2E_AUTOFIX_WORKER_KIND);
     expect(ungatedRow?.lifecycle).toBe('stopped');
     expect(ungatedRow?.startable).toBe(true);
@@ -141,13 +161,74 @@ describe('createWorkerRuntimeController', () => {
   it('autofix remains stopped until explicitly started', () => {
     const setup = controller();
 
-    setup.controller.startAutoStartedWorkers();
+    setup.controller.restoreDesiredWorkers();
     expect(setup.runtimes.get(AUTO_FIX_WORKER_KIND)).toBeUndefined();
 
     const row = setup.controller.start(AUTO_FIX_WORKER_KIND);
 
     expect(row.lifecycle).toBe('running');
     expect(row.runtimeKind).toBe('recovery');
+  });
+
+  it('uses persisted desired false instead of auto-start defaults', () => {
+    const persistenceStore = persistence({
+      [PR_STATUS_WORKER_KIND]: { enabled: false },
+    });
+    const setup = controller(AUTO_STARTED_OWNER_WORKER_KINDS, persistenceStore);
+
+    setup.controller.restoreDesiredWorkers();
+
+    expect(setup.controller.snapshot().workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('stopped');
+    expect(setup.runtimes.get(PR_STATUS_WORKER_KIND)).toBeUndefined();
+    expect(persistenceStore.saveWorkerDesiredState).not.toHaveBeenCalled();
+  });
+
+  it('restores persisted desired true for non-default and external workers', () => {
+    const persistenceStore = persistence({
+      [AUTO_FIX_WORKER_KIND]: { enabled: true },
+      'external-preview': { enabled: true },
+    });
+    const setup = controller(AUTO_STARTED_OWNER_WORKER_KINDS, persistenceStore);
+
+    setup.controller.restoreDesiredWorkers();
+    const snapshot = setup.controller.snapshot();
+
+    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('running');
+    expect(persistenceStore.saveWorkerDesiredState).not.toHaveBeenCalled();
+  });
+
+  it('ignores missing startup definitions during restore', () => {
+    const setup = controller([...AUTO_STARTED_OWNER_WORKER_KINDS, 'removed-worker']);
+
+    expect(() => setup.controller.restoreDesiredWorkers()).not.toThrow();
+    expect(setup.controller.snapshot().workers.some((worker) => worker.kind === 'removed-worker')).toBe(false);
+  });
+
+  it('persists explicit start and stop desired state', async () => {
+    const persistenceStore = persistence();
+    const setup = controller(AUTO_STARTED_OWNER_WORKER_KINDS, persistenceStore);
+
+    setup.controller.start(AUTO_FIX_WORKER_KIND);
+    expect(persistenceStore.saveWorkerDesiredState).toHaveBeenLastCalledWith(AUTO_FIX_WORKER_KIND, { enabled: true });
+
+    await setup.controller.stop(AUTO_FIX_WORKER_KIND);
+    expect(persistenceStore.saveWorkerDesiredState).toHaveBeenLastCalledWith(AUTO_FIX_WORKER_KIND, { enabled: false });
+
+    await setup.controller.stop(PR_STATUS_WORKER_KIND);
+    expect(persistenceStore.saveWorkerDesiredState).toHaveBeenLastCalledWith(PR_STATUS_WORKER_KIND, { enabled: false });
+  });
+
+  it('does not persist stopAll shutdown state', async () => {
+    const persistenceStore = persistence();
+    const setup = controller(AUTO_STARTED_OWNER_WORKER_KINDS, persistenceStore);
+    setup.controller.start(PR_STATUS_WORKER_KIND);
+    persistenceStore.saveWorkerDesiredState.mockClear();
+
+    await setup.controller.stopAll();
+
+    expect(setup.controller.snapshot().workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('stopped');
+    expect(persistenceStore.saveWorkerDesiredState).not.toHaveBeenCalled();
   });
 
   it('duplicate start is idempotent', () => {
