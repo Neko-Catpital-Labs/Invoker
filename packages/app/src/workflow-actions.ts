@@ -22,7 +22,7 @@ import {
   parseMergeConflictError,
 } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import { DEFAULT_EXECUTION_AGENT, type TaskRunner, type ReviewGateCiFailureTrigger } from '@invoker/execution-engine';
+import { DEFAULT_EXECUTION_AGENT, type TaskRunner, type ReviewGateCiFailureTrigger, formatAgentFailureForTask } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
   isReviewGateCiContextStale,
@@ -845,7 +845,7 @@ export async function resolveConflictAction(
     return await finalizeAppliedFix(taskId, savedError, deps, signal, lineage);
   } catch (err) {
     if (err instanceof StaleLineageError) throw err;
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatAgentFailureForTask(err);
     assertLineageCurrent(lineage, orchestrator, signal);
     persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);
     assertLineageCurrent(lineage, orchestrator, signal);
@@ -950,7 +950,7 @@ export async function fixWithAgentAction(
     };
   } catch (err) {
     if (err instanceof StaleLineageError) throw err;
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatAgentFailureForTask(err);
     const errorLabel = options.failureOutputLabel
       ?? (recoveryRoute.kind === 'resolveConflict' ? 'Resolve Conflict' : `Fix with ${effectiveAgentName}`);
     assertLineageCurrent(lineage, orchestrator, options.signal);
@@ -1343,7 +1343,7 @@ export async function autoFixOnFailure(
     if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
   } catch (err) {
     if (err instanceof StaleLineageError) throw err;
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatAgentFailureForTask(err);
     const diagnostics = formatAutoFixDiagnostics(err);
     if (lineage) assertLineageCurrent(lineage, orchestrator, deps.signal);
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
