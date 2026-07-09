@@ -7,6 +7,7 @@ import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
 import { registerPrMaintenanceWorkers } from './workers/pr-maintenance-workers.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
 import { registerRequeueWorker } from './workers/requeue-worker.js';
+import { registerWorkflowResumeWorker } from './workers/workflow-resume-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
 export function registerBuiltinWorkers(
@@ -14,6 +15,7 @@ export function registerBuiltinWorkers(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registerAutoFixWorker(registry);
   registerRequeueWorker(registry);
+  registerWorkflowResumeWorker(registry);
   registerPrStatusWorker(registry);
   registerCiFailureWorker(registry);
   registerDiskHeadroomWorker(registry);
