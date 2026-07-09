@@ -38,6 +38,7 @@ import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
 import { LeftStatusColumn } from './components/LeftStatusColumn.js';
+import { useTheme } from './lib/theme.js';
 import { InvokerTerminal, type InvokerTerminalLine } from './components/InvokerTerminal.js';
 import { Toaster, toast } from 'sonner';
 import { Button } from './components/primitives/index.js';
@@ -558,6 +559,7 @@ export function App() {
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
   const [graphMaximized, setGraphMaximized] = useState(false);
+  const { theme, toggleTheme } = useTheme();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
   const selectedActionNode = useMemo(
@@ -2735,11 +2737,13 @@ export function App() {
                 key={entry.workflow.id}
                 type="button"
                 onClick={() => selectWorkflowById(entry.workflow.id)}
-                className={`block w-full rounded-xl px-3 py-2 text-left transition-colors ${selected ? 'bg-gray-800 text-white ring-1 ring-gray-700' : 'text-gray-200 hover:bg-gray-900/80'}`}
+                className={`block w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${selected ? 'bg-accent/60 text-accent-foreground ring-1 ring-border-strong' : 'text-foreground hover:bg-accent/30'}`}
               >
-                <div className="truncate font-medium">{entry.workflow.name}</div>
-                <div className="mt-1 text-xs text-gray-500">{entry.taskCount} task{entry.taskCount === 1 ? '' : 's'}</div>
-                <div className="mt-1 text-xs text-gray-400">{formatWorkflowStatus(entry.workflow.status)}</div>
+                <div className="truncate text-body font-medium">{entry.workflow.name}</div>
+                <div className="mt-0.5 truncate text-caption text-muted-foreground">
+                  {formatWorkflowStatus(entry.workflow.status)}
+                  {entry.taskCount > 0 && ` · ${entry.taskCount} task${entry.taskCount === 1 ? '' : 's'}`}
+                </div>
               </button>
             );
           })}
@@ -2755,18 +2759,20 @@ export function App() {
           {entries.map((entry) => {
             const selected = selectedTask?.id === entry.task.id;
             const accent = tone === 'attention'
-              ? selected ? 'bg-amber-950/50 text-amber-50 ring-1 ring-amber-800/60' : 'text-gray-200 hover:bg-gray-900/80'
-              : selected ? 'bg-blue-950/50 text-blue-50 ring-1 ring-blue-800/60' : 'text-gray-200 hover:bg-gray-900/80';
+              ? selected ? 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/40' : 'text-foreground hover:bg-accent/30'
+              : selected ? 'bg-blue-500/15 text-blue-100 ring-1 ring-blue-500/40' : 'text-foreground hover:bg-accent/30';
             return (
               <button
                 key={entry.task.id}
                 type="button"
                 onClick={() => selectTaskById(entry.task.id)}
-                className={`block w-full rounded-xl px-3 py-2 text-left transition-colors ${accent}`}
+                className={`block w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${accent}`}
               >
-                <div className="truncate font-medium">{entry.task.description || entry.task.id}</div>
-                <div className="mt-1 text-xs text-gray-500">{entry.workflow?.name ?? 'No workflow'}</div>
-                <div className="mt-1 text-xs text-gray-400">{formatTaskStatus(entry.task.status)}</div>
+                <div className="truncate text-body font-medium">{entry.task.description || entry.task.id}</div>
+                <div className="mt-0.5 truncate text-caption text-muted-foreground">
+                  {formatTaskStatus(entry.task.status)}
+                  {entry.workflow?.name && ` · ${entry.workflow.name}`}
+                </div>
               </button>
             );
           })}
@@ -3111,6 +3117,8 @@ export function App() {
             cancelPendingSystemSetupAutoOpen();
             setShowSystemSetup(true);
           }}
+          theme={theme}
+          onToggleTheme={toggleTheme}
         />
 
         <div className="flex-1 flex overflow-hidden">
