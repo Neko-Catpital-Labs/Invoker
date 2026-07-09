@@ -8,6 +8,9 @@ The producer of a persisted workflow or task state change is responsible for pub
 
 This note describes the runtime contract.
 
+Worker-status and other main-process poll paths must stay bounded — see
+[Main-Process Read Hot Paths](./main-process-read-hot-paths.md).
+
 ## Resolved Overlap (Single Engine)
 
 Earlier, auto-fix ran from more than one place: a producer could schedule auto-fix directly from failure handling, and a separate worker loop could also act on the same failed state. Two engines could observe the same failure and compete over what recovery meant.
