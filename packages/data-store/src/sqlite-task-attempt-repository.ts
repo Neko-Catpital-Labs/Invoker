@@ -672,13 +672,6 @@ export class SqliteTaskAttemptRepository {
     const attempt = this.loadAttempt(attemptId);
     if (!attempt) return task;
 
-    // The pointer becomes advisory once the workflow has moved on. If the
-    // selected attempt is outcome-terminal (`failed`) or discarded
-    // (`superseded`) AND a strictly newer active attempt exists for the same
-    // task, project from the newer active attempt instead. Otherwise a task
-    // whose selected_attempt_id lags behind a fresh pending/running attempt
-    // renders as `failed` in the UI even though the workflow has already
-    // queued a replacement.
     if (attempt.status === 'failed' || isDiscardedAttempt(attempt)) {
       const newer = this.findNewerActiveAttempt(task.id, attempt);
       if (newer) {
