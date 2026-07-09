@@ -83,7 +83,7 @@ describe('publishApprovedFix pool member mismatch', () => {
         // poolMemberId NOT yet set — first run populates it
       },
     });
-    const execExecutor = runner.selectExecutor(execTask);
+    const execExecutor = runner.selectExecutor(execTask).executor;
     expect((execExecutor as any).host).toBe('alpha.example.com'); // RR cursor=0 → alpha
 
     // Step 2: Now simulate another task execution — round-rotates to beta
@@ -94,7 +94,7 @@ describe('publishApprovedFix pool member mismatch', () => {
         poolId: 'ssh-pool',
       },
     });
-    const otherExecutor = runner.selectExecutor(otherTask);
+    const otherExecutor = runner.selectExecutor(otherTask).executor;
     expect((otherExecutor as any).host).toBe('beta.example.com'); // RR cursor=1 → beta
 
     // Advance the round-robin cursor so a fresh pool selection would choose beta.
@@ -124,7 +124,7 @@ describe('publishApprovedFix pool member mismatch', () => {
     selectPoolMemberSpy.mockClear();
 
     // Call selectExecutor exactly as publishApprovedFix does.
-    const publishExecutor = runner.selectExecutor(publishTask);
+    const publishExecutor = runner.selectExecutor(publishTask).executor;
 
     expect(selectPoolMemberSpy).not.toHaveBeenCalled();
     expect((publishExecutor as any).host).toBe('alpha.example.com');
