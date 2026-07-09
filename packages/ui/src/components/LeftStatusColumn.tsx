@@ -207,6 +207,7 @@ export function LeftStatusColumn({
         {collapsed ? (
           <div className={`inline-flex text-gray-100 ${selectedSurface === 'home' ? 'text-white' : 'text-gray-100'}`}>
             <InvokerIcon />
+            <span className="sr-only">Invoker</span>
           </div>
         ) : (
           <div className="flex items-center gap-3">
@@ -237,6 +238,7 @@ export function LeftStatusColumn({
         {collapsed ? (
           <div className="relative inline-flex h-9 w-9 items-center justify-center">
             <span><PlanningTerminalIcon /></span>
+            <span className="sr-only">Planning Terminal</span>
             {planningSessionCount > 0 && (
               <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none ${countClass('neutral')}`}>
                 {planningSessionCount}
@@ -276,6 +278,7 @@ export function LeftStatusColumn({
               {collapsed ? (
                 <div className="relative inline-flex h-9 w-9 items-center justify-center">
                   <span>{source.icon}</span>
+                  <span className="sr-only">{source.label}</span>
                   {source.count > 0 && (
                     <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none ${countClass(source.tone)}`}>
                       {source.count}

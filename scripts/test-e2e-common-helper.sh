@@ -92,6 +92,50 @@ test_waits_for_owned_process_exit() {
   rm -f "$calls_file"
 }
 
+test_detects_stale_app_ui_build_artifacts() {
+  local tmp repo
+  tmp="$(mktemp -d)"
+  repo="$tmp/repo"
+  mkdir -p \
+    "$repo/packages/app/dist" \
+    "$repo/packages/app/src" \
+    "$repo/packages/ui/dist" \
+    "$repo/packages/ui/src"
+  : > "$repo/package.json"
+  : > "$repo/pnpm-lock.yaml"
+  : > "$repo/packages/app/package.json"
+  : > "$repo/packages/app/src/headless-client.ts"
+  : > "$repo/packages/ui/package.json"
+  : > "$repo/packages/ui/src/App.tsx"
+  : > "$repo/packages/app/dist/main.js"
+  : > "$repo/packages/app/dist/headless-client.js"
+  : > "$repo/packages/ui/dist/index.html"
+
+  touch -t 202001010100 "$repo/package.json" "$repo/pnpm-lock.yaml"
+  touch -t 202001010100 "$repo/packages/app/package.json" "$repo/packages/app/src/headless-client.ts"
+  touch -t 202001010100 "$repo/packages/ui/package.json" "$repo/packages/ui/src/App.tsx"
+  touch -t 202001010101 "$repo/packages/app/dist/main.js"
+  touch -t 202001010101 "$repo/packages/app/dist/headless-client.js"
+  touch -t 202001010101 "$repo/packages/ui/dist/index.html"
+
+  (
+    INVOKER_E2E_REPO_ROOT="$repo"
+    export INVOKER_E2E_REPO_ROOT
+    invoker_e2e_app_ui_build_is_fresh
+  ) || fail "expected fresh build artifacts to be accepted"
+
+  touch -t 202001010102 "$repo/packages/app/src/headless-client.ts"
+  if (
+    INVOKER_E2E_REPO_ROOT="$repo"
+    export INVOKER_E2E_REPO_ROOT
+    invoker_e2e_app_ui_build_is_fresh
+  ); then
+    fail "expected newer app source to stale app/ui build artifacts"
+  fi
+
+  rm -rf "$tmp"
+}
+
 run_case() {
   case "${1:-all}" in
     wal-guard)
@@ -103,10 +147,14 @@ run_case() {
     wait-exit)
       test_waits_for_owned_process_exit
       ;;
+    build-freshness)
+      test_detects_stale_app_ui_build_artifacts
+      ;;
     all)
       test_retries_wal_guard_once
       test_ignores_electron_helper_processes
       test_waits_for_owned_process_exit
+      test_detects_stale_app_ui_build_artifacts
       ;;
     *)
       fail "unknown test case: ${1:-}"
@@ -116,4 +164,4 @@ run_case() {
 
 run_case "${1:-all}"
 
-echo 'PASS: headless e2e helper retries WAL guard and ignores Electron helpers'
+echo 'PASS: headless e2e helper retries WAL guard, ignores Electron helpers, and detects stale builds'

@@ -6,8 +6,7 @@ import {
   type PlanningPresetSpec,
   type PrerequisiteCheck,
 } from '@invoker/contracts';
-import { resolveHarnessSelection, type MachineCapabilities } from '@invoker/execution-engine';
-import { resolvePlanningPreset, BUILTIN_PLANNING_PRESETS } from './planning-presets.js';
+import { BUILTIN_PLANNING_PRESETS } from './planning-presets.js';
 
 /** True when `command` resolves on PATH. */
 export function commandExists(command: string): boolean {
@@ -17,35 +16,20 @@ export function commandExists(command: string): boolean {
 /**
  * Config-aware launch checks: is the effective default planning preset's tool installed, and is
  * any planning tool present. Returns only failing checks so callers can warn (never block) on launch.
+ *
+ * Invoker never declares what a host has installed — it only probes PATH here. Whether a chosen
+ * harness can actually run is the host's provisioning responsibility; a missing binary surfaces as
+ * a runtime failure from the tool itself, not a pre-declared capability gate.
  */
 export function runStartupPrerequisites(
   presets: Record<string, PlanningPresetSpec>,
   defaultPreset: string,
-  capabilities?: MachineCapabilities,
   isInstalled: IsInstalled = commandExists,
 ): PrerequisiteCheck[] {
   const availablePresets = { ...BUILTIN_PLANNING_PRESETS, ...presets };
-  const defaultPresetCheck = checkDefaultPresetTool(availablePresets, defaultPreset, isInstalled);
   const checks = [
     checkPlanningToolsPresent(availablePresets, isInstalled),
-    defaultPresetCheck,
+    checkDefaultPresetTool(availablePresets, defaultPreset, isInstalled),
   ];
-  if (capabilities && defaultPresetCheck.status === 'ok') {
-    const resolvedPreset = resolvePlanningPreset(undefined, presets, defaultPreset);
-    const match = resolveHarnessSelection(capabilities, {
-      role: 'planning',
-      harness: resolvedPreset.tool,
-      model: resolvedPreset.model,
-    });
-    if (!match.ok) {
-      checks.push({
-        id: 'default-preset-capability',
-        name: 'Default planning preset',
-        status: 'error',
-        detail: `Default preset "${resolvedPreset.presetKey}" is unsupported by this host: ${match.reason}`,
-        remediation: 'Change defaultSlackHarnessPreset or update capabilities.planning on this host.',
-      });
-    }
-  }
   return checks.filter((c) => c.status !== 'ok');
 }

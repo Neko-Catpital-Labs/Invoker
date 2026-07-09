@@ -12,19 +12,6 @@ import { resolveInvokerConfigPath } from '@invoker/contracts';
 import { validateInvokerConfig } from './config-validation.js';
 import type { PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
 
-export type HarnessModelPolicy =
-  | { kind: 'implicit' }
-  | { kind: 'fixed'; model: string }
-  | { kind: 'select'; models: string[]; defaultModel: string };
-
-export interface HarnessCapability {
-  modelPolicy: HarnessModelPolicy;
-}
-
-export interface MachineCapabilities {
-  planning?: Record<string, HarnessCapability>;
-  execution?: Record<string, HarnessCapability>;
-}
 const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
 
 export interface ExternalWorkerLaunchConfig {
@@ -255,7 +242,6 @@ export interface InvokerConfig {
      * Default for pooled SSH members: 1.
      */
     maxConcurrentTasks?: number;
-    capabilities?: MachineCapabilities;
   }>;
   /**
    * Named execution pools used by routing rules.
@@ -264,8 +250,8 @@ export interface InvokerConfig {
   executionPools?: Record<string, {
     /** Pool members can mix substrates under one shared queue. */
     members: Array<
-      | { type: 'ssh'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
-      | { type: 'worktree'; id: string; maxConcurrentTasks?: number; capabilities?: MachineCapabilities }
+      | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
     >;
     /** Member selection strategy for available capacity. Default: roundRobin */
     selectionStrategy?: 'roundRobin' | 'leastLoaded';
