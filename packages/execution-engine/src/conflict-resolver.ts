@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode, parseMergeConflictError } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import { cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
+import { buildAgentExitFailureDetail, cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
 import { DEFAULT_EXECUTION_AGENT, type ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -786,7 +786,7 @@ export function spawnAgentFixViaRegistry(
       } else {
         promptTransport.cleanup();
         reject(Object.assign(
-          new Error(`${agent.name} fix exited with code ${code}: ${stderr.trim()}`),
+          new Error(`${agent.name} fix exited with code ${code}: ${buildAgentExitFailureDetail(stdout, stderr, displayStdout)}`),
           {
             sessionId: effectiveSessionId,
             exitCode: code,
