@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
-import { PersistedWorkflowMutationCoordinator, type WorkflowMutationContext } from '../persisted-workflow-mutation-coordinator.js';
+import type { TaskState } from '@invoker/workflow-core';
+import {
+  PersistedWorkflowMutationCoordinator,
+  type WorkflowMutationContext,
+  type WorkflowMutationFailedEvent,
+} from '../persisted-workflow-mutation-coordinator.js';
 import { dispatchStartedTasksWithGlobalTopup } from '../global-topup.js';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -15,6 +20,19 @@ async function waitFor(condition: () => boolean, attempts: number = 20): Promise
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
+}
+
+function makeTask(id: string, workflowId: string = 'wf-1'): TaskState {
+  return {
+    id,
+    description: id,
+    status: 'pending',
+    dependencies: [],
+    createdAt: new Date(),
+    config: { workflowId },
+    execution: {},
+    taskStateVersion: 1,
+  };
 }
 
 describe('PersistedWorkflowMutationCoordinator', () => {
@@ -113,6 +131,133 @@ describe('PersistedWorkflowMutationCoordinator', () => {
 
     expect(order).toEqual(['first', 'second']);
     expect(adapter.listWorkflowMutationLeases()).toHaveLength(0);
+  });
+
+  it('emits taskId for task-targeted headless.exec failures', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-a'));
+
+    const failedEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        throw new Error('task mutation failed');
+      },
+      { onIntentFailed: (event) => failedEvents.push(event) },
+    );
+
+    await expect(coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'headless.exec',
+      [{ args: ['set', 'command', 'wf-1/task-a', 'echo hi'] }],
+    )).rejects.toThrow('task mutation failed');
+
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]).toMatchObject({
+      workflowId: 'wf-1',
+      channel: 'headless.exec',
+      taskId: 'wf-1/task-a',
+    });
+    const failureAuditEvents = adapter.getEvents('wf-1/task-a')
+      .filter((event) => event.eventType === 'workflow.mutation.failed');
+    expect(failureAuditEvents).toHaveLength(1);
+    expect(JSON.parse(failureAuditEvents[0]!.payload ?? '{}')).toMatchObject({
+      channel: 'headless.exec',
+      taskId: 'wf-1/task-a',
+    });
+  });
+
+  it('does not emit taskId for workflow-targeted headless.exec failures', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-a'));
+
+    const failedEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        throw new Error('workflow mutation failed');
+      },
+      { onIntentFailed: (event) => failedEvents.push(event) },
+    );
+
+    await expect(coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'headless.exec',
+      [{ args: ['recreate', 'wf-1'] }],
+    )).rejects.toThrow('workflow mutation failed');
+
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]).toMatchObject({
+      workflowId: 'wf-1',
+      channel: 'headless.exec',
+    });
+    expect(failedEvents[0]).not.toHaveProperty('taskId');
+    expect(adapter.getEvents('wf-1/task-a')
+      .filter((event) => event.eventType === 'workflow.mutation.failed')).toEqual([]);
+  });
+
+  it('keeps invoker channel failure taskId behavior unchanged', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-a'));
+
+    const failedEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        throw new Error('invoker mutation failed');
+      },
+      { onIntentFailed: (event) => failedEvents.push(event) },
+    );
+
+    await expect(coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      ['wf-1/task-a', 'codex'],
+    )).rejects.toThrow('invoker mutation failed');
+
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]).toMatchObject({
+      workflowId: 'wf-1',
+      channel: 'invoker:fix-with-agent',
+      taskId: 'wf-1/task-a',
+    });
+    const failureAuditEvents = adapter.getEvents('wf-1/task-a')
+      .filter((event) => event.eventType === 'workflow.mutation.failed');
+    expect(failureAuditEvents).toHaveLength(1);
+    expect(JSON.parse(failureAuditEvents[0]!.payload ?? '{}')).toMatchObject({
+      channel: 'invoker:fix-with-agent',
+      taskId: 'wf-1/task-a',
+    });
   });
 
   it('evicts older queued workflow intents when a delegated recreate fence starts', async () => {
