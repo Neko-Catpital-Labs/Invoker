@@ -1,5 +1,6 @@
 import type { QueueStatus } from '@invoker/contracts';
 import type { JSX } from 'react';
+import { useMemo } from 'react';
 import type { TaskState, WorkflowMeta, WorkerStatusSnapshot } from '../types.js';
 import type { SidebarSurface } from '../lib/workflow-progress-surfaces.js';
 import { getAttentionTaskEntries, getRunningTaskEntries, getSortedWorkflows } from '../lib/workflow-progress-surfaces.js';
@@ -165,9 +166,12 @@ export function LeftStatusColumn({
   planningSessionCount,
   onOpenSettings,
 }: LeftStatusColumnProps): JSX.Element {
-  const workflowEntries = getSortedWorkflows(workflows, tasks);
-  const attentionEntries = getAttentionTaskEntries(tasks, workflows);
-  const runningEntries = getRunningTaskEntries(tasks, workflows, queueStatus);
+  const workflowEntries = useMemo(() => getSortedWorkflows(workflows, tasks), [workflows, tasks]);
+  const attentionEntries = useMemo(() => getAttentionTaskEntries(tasks, workflows), [tasks, workflows]);
+  const runningEntries = useMemo(
+    () => getRunningTaskEntries(tasks, workflows, queueStatus),
+    [tasks, workflows, queueStatus],
+  );
   const runningWorkers = workerStatus?.workers.filter((worker) => worker.lifecycle === 'running').length ?? 0;
   const registeredWorkers = workerStatus?.workers.length ?? 0;
   const activeWorkerActions = workerStatus ? countActiveWorkerActions(workerStatus.workers) : 0;
