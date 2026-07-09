@@ -57,7 +57,9 @@ matching index.
 - Main-process hitch e2e (`packages/app/e2e/main-process-hitch-responsiveness.spec.ts`):
   while worker-status polls against a seeded fat DB, cheap IPC RTT must stay
   under budget (window-drag stickiness maps to main-loop stalls, not renderer
-  frame gaps alone).
+  frame gaps alone). Included in GitHub Playwright shards (merge-queue / master).
 - Slow-query telemetry: `SQLiteAdapter` logs statements slower than 25ms
   (`slowQueryThresholdMs` / `onSlowQuery`) so the next spike shows up without
   attaching a sampler. Set `slowQueryThresholdMs: 0` to disable.
+
+See also: [CI duration invariant](./ci-duration-invariant.md).
