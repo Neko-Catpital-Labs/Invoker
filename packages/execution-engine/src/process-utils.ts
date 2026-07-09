@@ -270,6 +270,15 @@ function nonEmptyTrimmedLines(text: string): string[] {
   return text.split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
+/** Drop the benign "Reading additional input from stdin..." lines codex emits when it
+ * runs without a controlling TTY. This noise can land on either stdout or stderr
+ * depending on the codex version, so every candidate stream is filtered through here. */
+function stripCodexStdinNoise(text: string): string {
+  return nonEmptyTrimmedLines(text)
+    .filter((line) => !CODEX_STDIN_NOISE.test(line))
+    .join('\n');
+}
+
 function tailChars(text: string): string {
   return text.length <= AGENT_OUTPUT_DETAIL_MAX_CHARS
     ? text
@@ -281,16 +290,17 @@ export function buildAgentExitFailureDetail(
   stderr: string,
   displayStdout?: string,
 ): string {
-  const meaningfulStderr = nonEmptyTrimmedLines(stderr)
-    .filter((line) => !CODEX_STDIN_NOISE.test(line))
-    .join('\n');
-  const candidate = meaningfulStderr
-    || (displayStdout ?? '').trim()
-    || rawStdout.trim();
+  const meaningfulStderr = stripCodexStdinNoise(stderr);
+  const meaningfulDisplay = stripCodexStdinNoise(displayStdout ?? '');
+  const meaningfulStdout = stripCodexStdinNoise(rawStdout);
+  const candidate = meaningfulStderr || meaningfulDisplay || meaningfulStdout;
   if (candidate) return tailChars(candidate);
 
-  const stderrLines = nonEmptyTrimmedLines(stderr);
-  if (stderrLines.length > 0 && stderrLines.every((line) => CODEX_STDIN_NOISE.test(line))) {
+  // Nothing meaningful survived. If the only thing either stream emitted was the
+  // benign codex stdin/TTY noise, return an actionable hint instead of echoing it
+  // back verbatim (which reads as a pointless error to the user).
+  const emittedLines = [...nonEmptyTrimmedLines(stderr), ...nonEmptyTrimmedLines(rawStdout)];
+  if (emittedLines.length > 0 && emittedLines.every((line) => CODEX_STDIN_NOISE.test(line))) {
     return 'agent exited non-zero with no captured output, emitting only '
       + '"Reading additional input from stdin..." — a known codex CLI failure when it '
       + 'runs without a controlling TTY (see openai/codex#19945 and #20919). '
