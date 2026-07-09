@@ -105,6 +105,14 @@ export interface InvokerConfig {
    * Default: 0 (disabled).
    */
   autoFixRetries?: number;
+  /**
+   * When true, the owner process auto-starts the e2e-autofix worker (runs the
+   * extended battery on a schedule and opens one fix PR per failing suite).
+   * Default: false.
+   */
+  e2eAutoFixEnabled?: boolean;
+  /** Cadence for the e2e-autofix worker in milliseconds. Default: 43_200_000 (12h). */
+  e2eAutoFixIntervalMs?: number;
   stallRequeueRetries?: number;
   stallRequeueBackoffMs?: number;
   /**
