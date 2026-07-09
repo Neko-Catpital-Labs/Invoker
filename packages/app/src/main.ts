@@ -38,9 +38,11 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { config as loadDotenv } from 'dotenv';
 import {
+  computeGuiRuntimeStatus,
   configureEarlyElectronApp,
   formatGuiOwnerBootstrapFallbackMessage,
   guiOwnerBootstrapTimeoutMs,
+  isMutationOwnerUnavailableError,
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
   runElectronReadyBootstrap,
@@ -452,6 +454,7 @@ let commandService: CommandService;
 // resolve via this getter at cancel-in-flight time.
 let latestTaskExecutor: TaskRunner | null = null;
 let guiUsingDaemonOwner = false;
+let guiDaemonOwnerConnectionLost = false;
 
 function buildCommandServiceInvalidationDeps() {
   return buildWorkflowInvalidationDeps({
@@ -660,22 +663,47 @@ async function ensureStandaloneOwnerForGui(): Promise<void> {
 }
 
 let guiOwnerRouteRefreshPromise: Promise<void> | null = null;
+let notifyRuntimeStatusChanged: (() => void) | null = null;
+
+/**
+ * Daemon-backed GUI clients stay writable only while the owner answers IPC.
+ * When the owner disappears, drop the daemon-owner flag and mark connection
+ * lost so the UI can show a connection-lost banner instead of read-only mode.
+ */
+function markDaemonOwnerUnavailable(reason: string): void {
+  if (!guiUsingDaemonOwner && !guiDaemonOwnerConnectionLost) return;
+  guiUsingDaemonOwner = false;
+  guiDaemonOwnerConnectionLost = true;
+  logger.warn(`daemon mutation owner unavailable; connection lost: ${reason}`, { module: 'ipc' });
+  notifyRuntimeStatusChanged?.();
+}
 
 async function refreshGuiMutationOwnerRoute(): Promise<void> {
   const ownerPreference = resolveGuiOwnerPreference();
   if (!shouldRefreshGuiOwnerRoute(ownerPreference, guiUsingDaemonOwner)) return;
   if (!guiOwnerRouteRefreshPromise) {
     guiOwnerRouteRefreshPromise = (async () => {
-      if (ownerPreference === 'daemon') {
-        await ensureStandaloneOwnerForGui();
-      } else if (!await discoverStandaloneOwnerForGui(2_000)) {
-        throw new Error('No mutation owner is available');
+      try {
+        if (ownerPreference === 'daemon') {
+          await ensureStandaloneOwnerForGui();
+        } else if (!await discoverStandaloneOwnerForGui(2_000)) {
+          markDaemonOwnerUnavailable('daemon owner discovery timed out');
+          throw new Error('No mutation owner is available');
+        }
+      } catch (err) {
+        if (isMutationOwnerUnavailableError(err) || (err instanceof Error && /Timed out after .* waiting for daemon owner/.test(err.message))) {
+          markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
+        }
+        throw err;
       }
       const previousMessageBus = typeof messageBus === 'undefined' ? null : messageBus;
       const refreshedMessageBus = new IpcBus(undefined, { allowServe: false });
       await refreshedMessageBus.ready();
       messageBus = refreshedMessageBus;
       previousMessageBus?.disconnect();
+      guiUsingDaemonOwner = true;
+      guiDaemonOwnerConnectionLost = false;
+      notifyRuntimeStatusChanged?.();
       logger.info('refreshed daemon owner IPC route for GUI mutation', { module: 'ipc-delegate' });
     })().finally(() => {
       guiOwnerRouteRefreshPromise = null;
@@ -3003,6 +3031,7 @@ function createEmbeddedTerminalBackendFromConfig(
     getOwnerMode: () => ownerMode,
     getMessageBus: () => messageBus,
     refreshOwnerRoute: refreshGuiMutationOwnerRoute,
+    onMutationOwnerUnavailable: markDaemonOwnerUnavailable,
     translateGuiMutationToHeadless,
     guiMutationHandlers,
   };
@@ -3541,6 +3570,7 @@ function createEmbeddedTerminalBackendFromConfig(
     if (daemonGuiOwner) {
       ownerMode = false;
       guiUsingDaemonOwner = true;
+      guiDaemonOwnerConnectionLost = false;
       try {
         recordStartupMark('initServices.readOnly.start');
         await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
@@ -3554,6 +3584,7 @@ function createEmbeddedTerminalBackendFromConfig(
     } else {
       ownerMode = true;
       guiUsingDaemonOwner = false;
+      guiDaemonOwnerConnectionLost = false;
       try {
         recordStartupMark('initServices.start');
         await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
@@ -3576,6 +3607,7 @@ function createEmbeddedTerminalBackendFromConfig(
         await initServices({ detachedViewer: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
         ownerMode = false;
         guiUsingDaemonOwner = false;
+        guiDaemonOwnerConnectionLost = false;
         recordStartupMark('initServices.readOnly.end', { ownerMode: false, ownerId: owner.ownerId });
       }
     }
@@ -3828,15 +3860,23 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     // Register IPC handlers
-    const computeRuntimeStatus = () => (
-      process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_READ_ONLY_STATUS === '1'
-        ? { ownerMode: false, readOnly: true, mode: 'read-only' as const }
-        : {
-            ownerMode,
-            readOnly: !ownerMode && !guiUsingDaemonOwner,
-            mode: ownerMode ? 'local-owner' as const : guiUsingDaemonOwner ? 'daemon-owner' as const : 'read-only' as const,
-          }
-    );
+    const computeRuntimeStatus = () => {
+      if (process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_CONNECTION_LOST_STATUS === '1') {
+        return { ownerMode: false, readOnly: true, mode: 'connection-lost' as const };
+      }
+      if (process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_FORCE_READ_ONLY_STATUS === '1') {
+        return { ownerMode: false, readOnly: true, mode: 'read-only' as const };
+      }
+      return computeGuiRuntimeStatus({
+        ownerMode,
+        guiUsingDaemonOwner,
+        connectionLost: guiDaemonOwnerConnectionLost,
+      });
+    };
+    notifyRuntimeStatusChanged = () => {
+      if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) return;
+      mainWindow.webContents.send('invoker:runtime-status', computeRuntimeStatus());
+    };
 
     registerBootstrapStateIpc({
       ipcMain,
@@ -4197,6 +4237,7 @@ function createEmbeddedTerminalBackendFromConfig(
       resolveAgentSession,
       getOwnerMode: () => ownerMode,
       getMessageBus: () => messageBus,
+      onMutationOwnerUnavailable: markDaemonOwnerUnavailable,
       recordStartupDuration,
       getTaskDeltaStreamSequence,
     });
@@ -4471,6 +4512,9 @@ function createEmbeddedTerminalBackendFromConfig(
             return delegated.workerStatus;
           }
         } catch (err) {
+          if (isMutationOwnerUnavailableError(err)) {
+            markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
+          }
           logger.warn(
             `get-worker-status owner delegation failed; falling back to local read-only snapshot: ${
               err instanceof Error ? err.message : String(err)
@@ -4497,6 +4541,9 @@ function createEmbeddedTerminalBackendFromConfig(
         try {
           return await messageBus.request('headless.query', { kind: 'action-graph' });
         } catch (err) {
+          if (isMutationOwnerUnavailableError(err)) {
+            markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
+          }
           logger.warn(
             `get-action-graph owner delegation failed; falling back to local read-only snapshot: ${
               err instanceof Error ? err.message : String(err)
