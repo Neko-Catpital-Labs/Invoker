@@ -596,7 +596,8 @@ test.describe('Visual proof capture', () => {
     }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow', reply: fullPlanReply });
 
     await page.getByTestId('sidebar-planning').click();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    // Surface navigation never changes the sidebar width; only the toggle does.
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
     await expect(page.getByTestId('planning-session-rail')).toHaveClass(/w-64/);
     await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Add README');
@@ -752,7 +753,8 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
     await expect(page.getByRole('button', { name: /Menu Proof Workflow/ }).first()).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    // Surface navigation never changes the sidebar width; only the toggle does.
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
     await expect(page.getByText('Invoker Terminal')).toHaveCount(0);
     await captureScreenshot(page, 'workflows-browser');
 
@@ -782,7 +784,8 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-attention').click();
     await expect(page.getByTestId('browser-rail')).toHaveClass(/w-64/);
     await expect(page.getByTestId('browser-rail').getByRole('heading', { name: 'Needs Attention' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    // Surface navigation never changes the sidebar width; only the toggle does.
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
     await expect(page.getByRole('heading', { name: 'First test task' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Partial terminal drawer' })).toBeVisible();
     await expect(page.getByText('More needs attention')).toHaveCount(0);
@@ -817,23 +820,23 @@ test.describe('Visual proof capture', () => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
+    // Navigation leaves the sidebar at its default (expanded) width.
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
+
+    // The explicit toggle is the only control that collapses it.
+    await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
     await captureScreenshot(page, 'collapsed-workflow-browsers');
-
-    await page.getByTestId('sidebar-collapse-toggle').click();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
 
   test('sidebar-collapse-state — manual sidebar width survives left rail navigation', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     const sidebar = page.getByTestId('app-sidebar');
 
+    // Default is expanded, and surface navigation never changes the width.
     await page.getByTestId('sidebar-workflows').click();
-    await expect(sidebar).toHaveClass(/w-16/);
-
-    await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(sidebar).toHaveClass(/w-60/);
-    await captureScreenshot(page, 'sidebar-collapse-state-1-workflows-manually-expanded');
+    await captureScreenshot(page, 'sidebar-collapse-state-1-workflows-default-expanded');
 
     // Screenshots precede the width assertions so a buggy build still records
     // the snap-back frame (regression: navigation overwrote the manual choice).
@@ -846,10 +849,12 @@ test.describe('Visual proof capture', () => {
       await expect(sidebar).toHaveClass(/w-60/);
     }
 
+    // The explicit toggle is the only control that collapses the sidebar.
     await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(sidebar).toHaveClass(/w-16/);
     await captureScreenshot(page, 'sidebar-collapse-state-3-workflows-manually-collapsed');
 
+    // The manual collapse survives navigation across every surface.
     await page.getByTestId('sidebar-home').click();
     await captureScreenshot(page, 'sidebar-collapse-state-4-home-still-collapsed');
     await expect(sidebar).toHaveClass(/w-16/);
@@ -858,6 +863,12 @@ test.describe('Visual proof capture', () => {
       await page.getByTestId(`sidebar-${surface}`).click();
       await expect(sidebar).toHaveClass(/w-16/);
     }
+
+    // Toggling again restores the expanded width, and that also survives navigation.
+    await page.getByTestId('sidebar-collapse-toggle').click();
+    await expect(sidebar).toHaveClass(/w-60/);
+    await page.getByTestId('sidebar-running').click();
+    await expect(sidebar).toHaveClass(/w-60/);
   });
   test('dag loaded', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
