@@ -6,8 +6,8 @@
  * long and understanding execution parallelism.
  */
 
-import { useState, useEffect } from 'react';
 import type { TaskState } from '../types.js';
+import { useNow } from '../hooks/useNow.js';
 import {
   getStatusInlineColors,
   getEffectiveVisualStatus,
@@ -110,14 +110,8 @@ interface TimelineViewProps {
 }
 
 export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineViewProps) {
-  const [now, setNow] = useState(Date.now());
-
   const hasRunning = Array.from(tasks.values()).some((t) => t.status === 'running');
-  useEffect(() => {
-    if (!hasRunning) return;
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, [hasRunning]);
+  const now = useNow(1000, hasRunning);
 
   const taskList = sortTasksForTimeline(Array.from(tasks.values()));
   const bars = computeBarWidths(taskList, now);
