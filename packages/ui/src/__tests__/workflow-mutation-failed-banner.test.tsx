@@ -67,8 +67,32 @@ describe('Workflow mutation failed banner', () => {
     expect(banner).toHaveAttribute('role', 'alert');
     expect(banner).toHaveTextContent('Approve failed');
     expect(screen.getByTestId('workflow-mutation-failed-message')).toHaveTextContent(
-      /missing execution harness "codex"/,
+      /See the task panel for details/,
     );
+  });
+
+  it('does not dump verbose SSH output into the banner for headless fix failures', async () => {
+    render(<App />);
+    act(() => mock.setTasks([targetTask], [workflow]));
+
+    act(() => {
+      mock.fireWorkflowMutationFailed({
+        intentId: 46,
+        workflowId: 'wf-1',
+        channel: 'headless.exec',
+        headlessCommand: 'fix',
+        taskId: 'wf-1/verify-worker-summary-surface',
+        message: 'SSH remote script failed (exit=1, phase=remote_agent_fix)\nSTDOUT:\n{"type":"thread.started"}\n{"type":"error","message":"model unsupported"}',
+        failedAt: '2026-07-08T10:00:00.000Z',
+      });
+    });
+
+    const banner = await screen.findByTestId('workflow-mutation-failed-banner');
+    expect(banner).toHaveTextContent('Fix failed');
+    expect(screen.getByTestId('workflow-mutation-failed-message')).toHaveTextContent(
+      /See the task panel for details/,
+    );
+    expect(banner).not.toHaveTextContent('thread.started');
   });
 
   it('clears the banner when Dismiss is clicked', async () => {

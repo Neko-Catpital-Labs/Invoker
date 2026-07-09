@@ -14,6 +14,11 @@ import yaml from 'js-yaml';
 import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
+import {
+  mutationFailureBannerMessage,
+  mutationFailureHasTaskTarget,
+  mutationFailureTitle,
+} from './lib/mutation-failure-display.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
 import { useWorkerStatus } from './hooks/useWorkerStatus.js';
@@ -3049,7 +3054,9 @@ export function App() {
           This window can browse workflows, but it cannot make changes until the write owner is available.
         </div>
       )}
-      {mutationFailure && (
+      {mutationFailure && (() => {
+        const taskLoaded = Boolean(mutationFailure.taskId && tasks.get(mutationFailure.taskId));
+        return (
         <div
           role="alert"
           aria-live="assertive"
@@ -3058,21 +3065,17 @@ export function App() {
         >
           <div className="text-sm text-amber-100 min-w-0">
             <div className="font-semibold text-amber-50">
-              {mutationFailure.channel === 'invoker:approve'
-                ? 'Approve failed'
-                : mutationFailure.channel === 'invoker:reject'
-                  ? 'Reject failed'
-                  : `Mutation failed (${mutationFailure.channel})`}
+              {mutationFailureTitle(mutationFailure)}
             </div>
             <div
               data-testid="workflow-mutation-failed-message"
-              className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100/90"
+              className={`mt-1 whitespace-pre-wrap break-words text-xs text-amber-100/90${mutationFailureHasTaskTarget(mutationFailure) ? '' : ' font-mono'}`}
             >
-              {mutationFailure.message}
+              {mutationFailureBannerMessage(mutationFailure)}
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {mutationFailure.taskId && tasks.get(mutationFailure.taskId) && (
+            {mutationFailure.taskId && taskLoaded && (
               <Button
                 size="sm"
                 data-testid="workflow-mutation-failed-open-task"
@@ -3098,7 +3101,8 @@ export function App() {
             </Button>
           </div>
         </div>
-      )}
+        );
+      })()}
 
 
       {/* Main content */}
