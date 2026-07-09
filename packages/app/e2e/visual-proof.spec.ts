@@ -589,8 +589,14 @@ test.describe('Visual proof capture', () => {
         },
       },
     ]);
-    await page.getByTestId('graph-more-button').click();
-    await page.getByTestId('rail-history').click();
+    await selectGraphMenuItem(page, 'rail-history');
+    await expect(page.getByTestId('history-view')).toBeVisible();
+    await expect(page.getByRole('searchbox', { name: 'Search history' })).toBeVisible();
+    await expect(page.getByText('First test task')).toBeVisible();
+    await expect(page.getByText('Second test task depending on alpha')).toBeVisible();
+    await expect(page.getByText('Completed').first()).toBeVisible();
+    await expect(page.getByText('Failed').first()).toBeVisible();
+    await expect(page.getByText('Autofixing').first()).toBeVisible();
     await captureScreenshot(page, 'history-view-task-state-timeline');
   });
 
