@@ -22,6 +22,7 @@ import { WorktreeExecutor } from './worktree-executor.js';
 import { MergeGateExecutor } from './merge-gate-executor.js';
 import { SshExecutor } from './ssh-executor.js';
 import type { MergeRunnerHost } from './merge-runner.js';
+import { computePoolMemberCooldownMs } from './task-runner-launch-support.js';
 import type { TaskRunner } from './task-runner.js';
 
 // ── Types ────────────────────────────────────────────────
@@ -57,6 +58,14 @@ export type PoolSelection = {
   leaseHolderId?: string;
 };
 
+export type PoolMemberHealth = {
+  consecutiveFailures: number;
+  downUntil: number;
+  cooldownMs: number;
+  lastError?: string;
+  lastEvictedAt: number;
+};
+
 export type RemoteTargetDisplay = {
   host: string;
   user: string;
@@ -85,6 +94,7 @@ export type TaskRunnerPoolHost = Pick<
   | 'pendingPoolSelections'
   | 'activeExecutions'
   | 'poolRoundRobinCursor'
+  | 'poolMemberHealth'
   | 'sshExecutorCache'
   | 'runnerInstanceId'
   | 'getRemoteTargets'
@@ -123,6 +133,66 @@ function poolMemberHasCapacity(host: TaskRunnerPoolHost, poolId: string, pool: E
   return limit === undefined || poolMemberLoad(host, poolId, poolMemberKey(member)) < limit;
 }
 
+// ── Member health / circuit breaker ──────────────────────
+
+function isPoolMemberDown(host: TaskRunnerPoolHost, memberKey: string, now: number = Date.now()): boolean {
+  const health = host.poolMemberHealth.get(memberKey);
+  return health !== undefined && health.downUntil > now;
+}
+
+export function recordPoolMemberTransportFailure(
+  host: TaskRunnerPoolHost,
+  memberKey: string,
+  error: unknown,
+): PoolMemberHealth {
+  const now = Date.now();
+  const consecutiveFailures = (host.poolMemberHealth.get(memberKey)?.consecutiveFailures ?? 0) + 1;
+  const cooldownMs = computePoolMemberCooldownMs(consecutiveFailures);
+  const health: PoolMemberHealth = {
+    consecutiveFailures,
+    cooldownMs,
+    downUntil: now + cooldownMs,
+    lastError: error instanceof Error ? error.message : String(error),
+    lastEvictedAt: now,
+  };
+  host.poolMemberHealth.set(memberKey, health);
+  return health;
+}
+
+export function recordPoolMemberStartSuccess(host: TaskRunnerPoolHost, memberKey: string): boolean {
+  return host.poolMemberHealth.delete(memberKey);
+}
+
+export function getPoolMemberHealthSnapshot(
+  host: TaskRunnerPoolHost,
+  now: number = Date.now(),
+): Array<{
+  memberKey: string;
+  consecutiveFailures: number;
+  downUntil: number;
+  downForMs: number;
+  lastError?: string;
+}> {
+  const snapshot: Array<{
+    memberKey: string;
+    consecutiveFailures: number;
+    downUntil: number;
+    downForMs: number;
+    lastError?: string;
+  }> = [];
+  for (const [memberKey, health] of host.poolMemberHealth) {
+    if (health.downUntil <= now) continue;
+    snapshot.push({
+      memberKey,
+      consecutiveFailures: health.consecutiveFailures,
+      downUntil: health.downUntil,
+      downForMs: health.downUntil - now,
+      lastError: health.lastError,
+    });
+  }
+  return snapshot;
+}
+
 // ── Pool-member selection ────────────────────────────────
 
 export function selectPoolMember(
@@ -139,6 +209,7 @@ export function selectPoolMember(
       const index = (cursor + offset) % pool.members.length;
       const member = pool.members[index];
       if (excludedMemberKeys.has(poolMemberKey(member))) continue;
+      if (isPoolMemberDown(host, poolMemberKey(member))) continue;
       if (!poolMemberHasCapacity(host, poolId, pool, member)) continue;
       host.poolRoundRobinCursor.set(poolId, (index + 1) % pool.members.length);
       return member;
@@ -148,6 +219,7 @@ export function selectPoolMember(
 
   const scored = pool.members
     .filter((member) => !excludedMemberKeys.has(poolMemberKey(member)))
+    .filter((member) => !isPoolMemberDown(host, poolMemberKey(member)))
     .map((member, index) => {
       const memberKey = poolMemberKey(member);
       const load = poolMemberLoad(host, poolId, memberKey);
@@ -175,15 +247,22 @@ function poolCapacitySnapshot(
   load: number;
   limit: number | undefined;
   excluded: boolean;
+  down: boolean;
+  downForMs?: number;
 }> {
+  const now = Date.now();
   return pool.members.map((member) => {
     const memberKey = poolMemberKey(member);
+    const health = host.poolMemberHealth.get(memberKey);
+    const down = health !== undefined && health.downUntil > now;
     return {
       memberId: member.id,
       memberType: member.type,
       load: poolMemberLoad(host, poolId, memberKey),
       limit: poolMemberLimit(pool, member),
       excluded: excludedMemberKeys.has(memberKey),
+      down,
+      downForMs: down ? health!.downUntil - now : undefined,
     };
   });
 }
@@ -203,6 +282,7 @@ function poolCapacityError(
     .map((member) => {
       const reasons = [
         member.excluded ? 'excluded' : undefined,
+        member.down ? `down ${Math.ceil((member.downForMs ?? 0) / 1000)}s` : undefined,
         member.limit !== undefined && member.load >= member.limit ? `capacity ${member.load}/${member.limit}` : undefined,
       ].filter((reason): reason is string => Boolean(reason));
       return `${member.memberType}:${member.memberId}${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}`;

@@ -43,6 +43,8 @@ export type TaskRunnerPhaseHost = Pick<
   | 'logExecutorSelected'
   | 'selectedRemoteTargetId'
   | 'poolMemberKey'
+  | 'recordPoolMemberTransportFailure'
+  | 'recordPoolMemberStartSuccess'
   // Shared lifecycle helpers
   | 'isLaunchStale'
   | 'executeNewlyStartedTasks'
