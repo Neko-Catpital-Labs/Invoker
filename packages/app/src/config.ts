@@ -156,6 +156,18 @@ export interface InvokerConfig {
   planningTimeoutSeconds?: number;
   /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */
   planningHeartbeatIntervalSeconds?: number;
+  /**
+   * How many additional attempts to make when the planner CLI exits 0 with
+   * empty stdout (typically an auth-token refresh window or a one-off rate
+   * limit). Only retries the silent-success case; non-zero exits and spawn
+   * errors are not retried. Default: 2 (3 attempts total).
+   */
+  plannerRetryLimit?: number;
+  /**
+   * Base delay in milliseconds between planner empty-output retry attempts.
+   * Each subsequent retry doubles this value. Default: 500ms.
+   */
+  plannerRetryBaseDelayMs?: number;
   /** Named Slack planning harness presets: preset key → {tool, model}; built-ins apply when omitted. */
   slackHarnessPresets?: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }>;
   /** Default harness preset key when the message carries no `[preset]` tag. Default: 'cursor+claude'. */
