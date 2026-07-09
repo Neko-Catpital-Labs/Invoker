@@ -9,7 +9,9 @@ import {
   GitMerge,
   GitPullRequest,
   Layers,
+  Moon,
   Settings,
+  Sun,
   TerminalSquare,
   type LucideProps,
 } from 'lucide-react';
@@ -40,3 +42,5 @@ export const ChevronLeftIcon = withDefaults(ChevronLeft);
 export const ChevronRightIcon = withDefaults(ChevronRight);
 export const GitPullRequestIcon = withDefaults(GitPullRequest);
 export const GitMergeIcon = withDefaults(GitMerge);
+export const SunIcon = withDefaults(Sun);
+export const MoonIcon = withDefaults(Moon);
