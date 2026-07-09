@@ -556,6 +556,16 @@ test.describe('Read-only mode visual proof', () => {
   });
 });
 
+test.describe('Connection lost visual proof', () => {
+  test.use({ guiOwnerMode: 'connection-lost-status' });
+
+  test('connection lost banner', async ({ page }) => {
+    await expect(page.getByTestId('connection-lost-banner')).toContainText('Connection lost.', { timeout: 5000 });
+    await expect(page.getByTestId('connection-lost-banner')).toContainText('lost contact with the write owner');
+    await captureScreenshot(page, 'connection-lost-banner');
+  });
+});
+
 test.describe('Visual proof capture', () => {
   test('history view — task state timeline', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
