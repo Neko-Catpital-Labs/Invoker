@@ -19,8 +19,17 @@ export interface GuiMutationRegistrationContext {
   getOwnerMode: () => boolean;
   getMessageBus: () => Pick<MessageBus, 'request'>;
   refreshOwnerRoute?: () => Promise<void>;
+  onMutationOwnerUnavailable?: (reason: string) => void;
   translateGuiMutationToHeadless: (payload: GuiMutationPayload) => TranslatedGuiMutation;
   guiMutationHandlers?: Map<string, (...args: unknown[]) => Promise<unknown>>;
+}
+
+function throwMutationOwnerUnavailable(
+  context: GuiMutationRegistrationContext,
+  reason: string,
+): never {
+  context.onMutationOwnerUnavailable?.(reason);
+  throw new Error('No mutation owner is available');
 }
 
 export function registerGuiMutationHandler<TResult = unknown>(
@@ -59,7 +68,7 @@ export function registerGuiMutationHandler<TResult = unknown>(
           );
         } catch (retryErr) {
           if (retryErr instanceof TransportError && retryErr.code === TransportErrorCode.NO_HANDLER) {
-            throw new Error('No mutation owner is available');
+            throwMutationOwnerUnavailable(context, String(retryErr.message ?? retryErr.code));
           }
           throw retryErr;
         }
@@ -71,7 +80,7 @@ export function registerGuiMutationHandler<TResult = unknown>(
           || err.code === TransportErrorCode.DISCONNECTED
         )
       ) {
-        throw new Error('No mutation owner is available');
+        throwMutationOwnerUnavailable(context, String(err.message ?? err.code));
       }
       throw err;
     }
