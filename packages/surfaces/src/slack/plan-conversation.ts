@@ -605,13 +605,13 @@ export function extractYamlPlan(text: string): string | null {
   }
   const contentStart = fenceStart + '```yaml\n'.length;
   const rest = text.slice(contentStart);
-  // Find closing ``` at start of a line (not indented = not inside YAML block scalar)
+  // Find closing ``` at start of a line (not indented = not inside YAML block scalar).
+  // If the message ends before the closing fence, still try the rest of the
+  // message: the parse/shape checks below keep malformed and partial plans out.
   const closeMatch = rest.match(/^```\s*$/m);
-  if (!closeMatch || closeMatch.index === undefined) {
-    console.warn('extractYamlPlan: no closing fence found for ```yaml block');
-    return null;
-  }
-  const yamlContent = rest.slice(0, closeMatch.index);
+  const yamlContent = closeMatch && closeMatch.index !== undefined
+    ? rest.slice(0, closeMatch.index)
+    : rest;
 
   try {
     const raw = parseYaml(yamlContent);

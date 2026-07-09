@@ -28,6 +28,20 @@ tasks:
     command: echo second
 \`\`\``;
 
+const VALID_PLAN_WITHOUT_CLOSING_FENCE = `Here is the plan.
+
+\`\`\`yaml
+name: Mock Plan
+onFinish: none
+tasks:
+  - id: first
+    description: First task
+    command: echo first
+  - id: second
+    description: Second task
+    dependencies: [first]
+    command: echo second`;
+
 const WORKERS_SURFACE_STACKED_PLAN = `Here is the plan.
 
 \`\`\`yaml
@@ -340,6 +354,42 @@ describe('planning chat', () => {
     });
     expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
   });
+
+  it('submits a valid final draft plan without a closing YAML fence', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN_WITHOUT_CLOSING_FENCE);
+    const sessions = createInAppPlanningChatSessions();
+    const sent = await sendPlanningChatMessage({
+      message: 'draft',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    if (!sent.ok) throw new Error(sent.error);
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+      workflowIds: ['wf-1'],
+      workflowCount: 1,
+    });
+
+    await expect(submitPlanningChatDraft({
+      sessionId: sent.sessionId,
+    }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({
+      ok: true,
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+      workflowIds: ['wf-1'],
+      workflowCount: 1,
+    });
+    expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
+  });
+
   it('coalesces concurrent submit requests for one session', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
