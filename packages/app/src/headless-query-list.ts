@@ -19,11 +19,17 @@ import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import {
   type HeadlessDeps,
   type QueryFlags,
+  BOLD,
+  RESET,
   parseQueryFlags,
   restoreWorkflowForTask,
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
 import { listWorkerDecisions } from './worker-control.js';
+import {
+  collectRecoveryWorkerStatus,
+  type RecoveryWorkerStatus,
+} from './recovery-worker-observability.js';
 
 /**
  * The read-query family writes its formatted output through {@link writeOut}.
@@ -756,6 +762,53 @@ export async function headlessSession(taskId: string | undefined, deps: Pick<Hea
   }
 }
 
+function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
+  const lines = [
+    `${BOLD}Recovery worker${RESET}`,
+    `  kind: ${status.kind}`,
+    `  workerId: ${status.workerId}`,
+    `  owner: ${status.owner}`,
+    `  lastWakeupAt: ${status.lastWakeupAt ?? 'never'}`,
+    `  lastScanAt: ${status.lastScanAt ?? 'never'}`,
+    `  lastSubmitAt: ${status.lastSubmitAt ?? 'never'}`,
+    `  lastSkip: ${status.lastSkipAt ?? 'never'}${status.lastSkipReason ? ` (${status.lastSkipReason} task=${status.lastSkipTaskId})` : ''}`,
+    `  counts: wakeups=${status.wakeups} scans=${status.scans} submissions=${status.submissions} skips=${status.skips}`,
+  ];
+  if (status.recent.length > 0) {
+    lines.push('');
+    lines.push(`${BOLD}Recent recovery decisions${RESET}`);
+    for (const event of status.recent) {
+      const reason = event.reason ? ` reason=${event.reason}` : '';
+      const phase = event.phase ? ` phase=${event.phase}` : '';
+      lines.push(`  ${event.at} ${event.taskId} ${event.action}${phase}${reason}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+export async function renderWorkerStatus(
+  flagArgs: string[],
+  deps: Pick<HeadlessQueryDeps, 'persistence'>,
+): Promise<void> {
+  const flags = parseQueryFlags(flagArgs);
+  const status = collectRecoveryWorkerStatus(deps.persistence);
+  const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+  switch (flags.output) {
+    case 'label':
+      writeOut(`${status.workerId}\n`);
+      break;
+    case 'json':
+      writeOut(formatAsJson(status) + '\n');
+      break;
+    case 'jsonl':
+      writeOut(formatAsJsonl([status]) + '\n');
+      break;
+    default:
+      writeOut(formatRecoveryWorkerStatus(status) + '\n');
+      break;
+  }
+}
+
 /**
  * Top-level read-only headless commands that the writable owner can answer on
  * behalf of a non-owner caller. Mirrors the read-command routing in
@@ -786,6 +839,13 @@ async function dispatchReadOnlyHeadlessQuery(args: string[], deps: HeadlessQuery
       return headlessQuery(['audit', ...args.slice(1)], deps);
     case 'session':
       return headlessQuery(['session', ...args.slice(1)], deps);
+    case 'worker': {
+      const workerSub = args[1] ?? 'list';
+      if (workerSub === 'status') {
+        return renderWorkerStatus(args.slice(2), deps);
+      }
+      throw new Error(`worker ${workerSub} is not a delegatable read-only query`);
+    }
     default:
       throw new Error(`Command "${String(command)}" is not a delegatable read-only query`);
   }
