@@ -273,6 +273,7 @@ import {
   classifyAutoFixRecoveryPhase,
   recoveryWorkerEventType,
 } from './recovery-worker-observability.js';
+import { seedMainProcessHitchFixture } from './main-process-hitch-fixture.js';
 import {
   executeNoTrackHeadlessBatch,
   type HeadlessBatchExecRequest,
@@ -1302,6 +1303,14 @@ function startHeadlessMode(): void {
             }
             orchestrator.syncAllFromDb();
             return undefined;
+          }
+          case 'invoker:seed-main-process-hitch-fixture': {
+            if (process.env.NODE_ENV !== 'test') {
+              throw new Error('seed-main-process-hitch-fixture is only available in tests');
+            }
+            const seeded = seedMainProcessHitchFixture(persistence);
+            orchestrator.syncAllFromDb();
+            return seeded;
           }
           case 'invoker:set-merge-branch': {
             const workflowId = String(payload.args[0]);
@@ -4044,6 +4053,17 @@ function createEmbeddedTerminalBackendFromConfig(
           testPlanningChatResponse = response;
         },
       );
+      ipcMain.handle('invoker:seed-main-process-hitch-fixture', async () => {
+        if (!ownerMode) {
+          return await messageBus.request('headless.gui-mutation', {
+            channel: 'invoker:seed-main-process-hitch-fixture',
+            args: [],
+          } satisfies GuiMutationPayload);
+        }
+        const seeded = seedMainProcessHitchFixture(persistence);
+        orchestrator.syncAllFromDb();
+        return seeded;
+      });
     }
 
     registerGuiMutationHandler('invoker:start', async () => {
