@@ -40,6 +40,7 @@ import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalD
 import { LeftStatusColumn } from './components/LeftStatusColumn.js';
 import { InvokerTerminal, type InvokerTerminalLine } from './components/InvokerTerminal.js';
 import { Toaster, toast } from 'sonner';
+import { Button } from './components/primitives/index.js';
 import {
   getAttentionTaskEntries,
   getRunningTaskEntries,
@@ -2431,13 +2432,13 @@ export function App() {
       >
         Refresh
       </button>
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="sm"
         onClick={() => setGraphMaximized(true)}
-        className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
       >
         Full graph ⤢
-      </button>
+      </Button>
       {showMoreMenu && (
         <div ref={graphActionsMenuRef} className="relative">
           <button
@@ -2805,13 +2806,13 @@ export function App() {
               {planningReadyCount > 0 ? ` · ${planningReadyCount} ready` : ''}
             </p>
           </div>
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={handleCreatePlanningSession}
-            className="rounded-lg border border-gray-700 px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
           >
             New chat
-          </button>
+          </Button>
         </div>
         <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
       </div>
@@ -2987,18 +2988,21 @@ export function App() {
                 : 'Review local prerequisites before running packaged workflows.'}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button
+            <Button
+              size="sm"
               onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemSetup(true); }}
-              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium transition-colors"
+              className="bg-amber-600 text-white hover:bg-amber-500"
             >
               Open Setup
-            </button>
-            <button
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               onClick={() => { cancelPendingSystemSetupAutoOpen(); setShowSystemBanner(false); }}
-              className="px-2 py-1 text-amber-200 hover:text-white text-xs"
+              className="text-amber-200 hover:text-white"
             >
               Dismiss
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -3037,28 +3041,29 @@ export function App() {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {mutationFailure.taskId && tasks.get(mutationFailure.taskId) && (
-              <button
-                type="button"
+              <Button
+                size="sm"
+                data-testid="workflow-mutation-failed-open-task"
+                className="bg-amber-600 text-white hover:bg-amber-500"
                 onClick={() => {
                   const targetTaskId = mutationFailure.taskId;
                   if (!targetTaskId) return;
                   selectTaskById(targetTaskId);
                   setMutationFailure(null);
                 }}
-                data-testid="workflow-mutation-failed-open-task"
-                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium transition-colors"
               >
                 Open task
-              </button>
+              </Button>
             )}
-            <button
-              type="button"
-              onClick={() => setMutationFailure(null)}
+            <Button
+              size="sm"
+              variant="ghost"
               data-testid="workflow-mutation-failed-dismiss"
-              className="px-2 py-1 text-amber-200 hover:text-white text-xs"
+              className="text-amber-200 hover:text-white"
+              onClick={() => setMutationFailure(null)}
             >
               Dismiss
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -3187,13 +3192,13 @@ export function App() {
               <h2 className="text-sm font-semibold text-gray-100">Full graph</h2>
               <p className="text-xs text-gray-500">Press Escape to return.</p>
             </div>
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setGraphMaximized(false)}
-              className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
             >
               Close
-            </button>
+            </Button>
           </div>
           <div className="min-h-0 flex-1">
             {displayedSelectedWorkflowGraph !== null ? (
