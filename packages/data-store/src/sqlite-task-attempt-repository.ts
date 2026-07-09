@@ -11,6 +11,7 @@
 import type { TaskState, TaskStateChanges, Attempt } from '@invoker/workflow-core';
 import {
   assertTaskConsistent,
+  isActiveAttempt,
   isDiscardedAttempt,
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
@@ -671,6 +672,32 @@ export class SqliteTaskAttemptRepository {
     const attempt = this.loadAttempt(attemptId);
     if (!attempt) return task;
 
+    // The pointer becomes advisory once the workflow has moved on. If the
+    // selected attempt is outcome-terminal (`failed`) or discarded
+    // (`superseded`) AND a strictly newer active attempt exists for the same
+    // task, project from the newer active attempt instead. Otherwise a task
+    // whose selected_attempt_id lags behind a fresh pending/running attempt
+    // renders as `failed` in the UI even though the workflow has already
+    // queued a replacement.
+    if (attempt.status === 'failed' || isDiscardedAttempt(attempt)) {
+      const newer = this.findNewerActiveAttempt(task.id, attempt);
+      if (newer) {
+        const cleaned: TaskState = {
+          ...task,
+          execution: {
+            ...task.execution,
+            error: undefined,
+            exitCode: undefined,
+            completedAt: undefined,
+          },
+        };
+        if (newer.status === 'needs_input') {
+          return { ...cleaned, status: 'needs_input' };
+        }
+        return cleaned;
+      }
+    }
+
     if (isDiscardedAttempt(attempt)) {
       return {
         ...task,
@@ -728,5 +755,20 @@ export class SqliteTaskAttemptRepository {
     }
 
     return task;
+  }
+
+  private findNewerActiveAttempt(nodeId: string, selected: Attempt): Attempt | undefined {
+    const attempts = this.loadAttempts(nodeId);
+    const selectedTs = selected.createdAt.getTime();
+    let newest: Attempt | undefined;
+    for (const candidate of attempts) {
+      if (candidate.id === selected.id) continue;
+      if (!isActiveAttempt(candidate)) continue;
+      if (candidate.createdAt.getTime() <= selectedTs) continue;
+      if (!newest || candidate.createdAt.getTime() > newest.createdAt.getTime()) {
+        newest = candidate;
+      }
+    }
+    return newest;
   }
 }
