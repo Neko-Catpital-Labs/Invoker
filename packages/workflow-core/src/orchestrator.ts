@@ -104,6 +104,14 @@ import {
 } from './orchestrator/transitions.js';
 import type { TransitionHost } from './orchestrator/transitions.js';
 import {
+  cancelActiveBeforeInvalidationImpl,
+  cancelActiveCandidatesImpl,
+  cancelTaskImpl,
+  cancelWorkflowImpl,
+  deferTaskImpl,
+} from './orchestrator/cancellation.js';
+import type { CancellationHost } from './orchestrator/cancellation.js';
+import {
   editTaskCommandImpl,
   editTaskPromptImpl,
   editTaskTypeImpl,
@@ -940,91 +948,16 @@ export class Orchestrator {
   }
 
   /**
-   * Cancel-first invariant defense-in-depth (Step 18 of
-   * `docs/architecture/task-invalidation-roadmap.md`, Hard Invariant
-   * from `docs/architecture/task-invalidation-chart.md`).
-   *
-   * Marks any actively-running task in the targeted scope as `failed`
-   * with an explicit cancel marker BEFORE the caller resets state.
-   * This guarantees the chart's "interrupt and cancel all in-flight
-   * work in the affected scope" rule for direct callers of the
-   * orchestrator primitives — notably the `commandService.retryTask`
-   * / `recreateTask` / `retryWorkflow` / `recreateWorkflow` /
-   * `recreateWorkflowFromFreshBase` lifecycle commands wired in
-   * Step 17, which bypass the upstream `applyInvalidation` cancel.
-   *
-   * Calls via `applyInvalidation` already cancel via `cancelInFlight`
-   * (executor kill + orchestrator-side `cancelTask`/`cancelWorkflow`),
-   * so this helper is a defense-in-depth no-op there: by the time the
-   * primitive runs the targeted scope has no active tasks and the
-   * `isActive` filter below skips them all.
-   *
-   * Implementation notes:
-   *   - Only `running` / `fixing_with_ai` tasks are touched. Pending /
-   *     blocked / failed / completed / etc. tasks are left alone so
-   *     the subsequent reset path (`resetSubgraphToPending` /
-   *     `recreateWorkflow` / `replaceSelectedAttempt`) sees the
-   *     expected lineage.
-   *   - The selected attempt's status is intentionally NOT mutated
-   *     here — the subsequent reset's `replaceSelectedAttempt` sees
-   *     it as still `running` and marks it `superseded`, preserving
-   *     the existing attempt-supersession contract that retry/recreate
-   *     primitives (and their tests) rely on.
-   *   - Deferred-set / queued scheduler entries are cleared per
-   *     cancelled task so the slot frees up for the upcoming reset.
+   * Cancel-first invariant defense-in-depth: cancel any actively-running task
+   * in the targeted scope before an invalidation reset. Full contract and
+   * implementation notes live in `orchestrator/cancellation.ts`.
    */
-  private cancelActiveBeforeInvalidation(
-    scope: 'task' | 'workflow',
-    id: string,
-  ): string[] {
-    let candidates: TaskState[];
-    if (scope === 'task') {
-      const root = this.stateGetTask(id);
-      if (!root) return [];
-      const allTasks = this.stateMachine.getAllTasks();
-      const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-      const descendantIds = getTransitiveDependents(
-        id,
-        taskMap,
-        (t) => t.status === 'completed' || t.status === 'stale',
-      );
-      candidates = [
-        root,
-        ...descendantIds
-          .map((d) => taskMap.get(d))
-          .filter((t): t is TaskState => !!t),
-      ];
-    } else {
-      candidates = this.stateMachine
-        .getAllTasks()
-        .filter((t) => t.config.workflowId === id);
-    }
-
-    return this.cancelActiveCandidates(candidates, scope);
+  private cancelActiveBeforeInvalidation(scope: 'task' | 'workflow', id: string): string[] {
+    return cancelActiveBeforeInvalidationImpl(this as unknown as CancellationHost, scope, id);
   }
 
-  /** Mark every actively-running task in `candidates` as `failed` with a cancel marker, freeing its scheduler slot. */
-  private cancelActiveCandidates(
-    candidates: readonly TaskState[],
-    scope: 'task' | 'workflow',
-  ): string[] {
-    const cancelled: string[] = [];
-    for (const t of candidates) {
-      if (!isActiveForInvalidation(t.status)) continue;
-      const error = `Cancelled before ${scope}-scope invalidation`;
-      const completedAt = new Date();
-      const changes: TaskStateChanges = {
-        status: 'failed',
-        execution: { error, completedAt },
-      };
-      const updated = this.writeAndSync(t.id, changes);
-      this.persistence.logEvent?.(t.id, 'task.cancelled', changes);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(t, updated, changes));
-      this.deferredTaskIds.delete(t.id);
-      this.clearQueuedSchedulerEntries(t.id, t.execution.selectedAttemptId);
-      cancelled.push(t.id);
-    }
-    return cancelled;
+  private cancelActiveCandidates(candidates: readonly TaskState[], scope: 'task' | 'workflow'): string[] {
+    return cancelActiveCandidatesImpl(this as unknown as CancellationHost, candidates, scope);
   }
 
   private getExecutionGeneration(task: TaskState | undefined): number {
@@ -3619,99 +3552,7 @@ export class Orchestrator {
    * Returns cancelled task IDs and which were running (need process kill by caller).
    */
   cancelTask(taskId: string): { cancelled: string[]; runningCancelled: string[] } {
-    this.refreshFromDb();
-
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError('TASK_NOT_FOUND', `Task "${taskId}" not found`);
-
-    const terminal = new Set(['completed', 'closed', 'stale']);
-    if (terminal.has(task.status)) {
-      throw new OrchestratorError('TASK_ALREADY_TERMINAL', `Task "${taskId}" is already ${task.status}`);
-    }
-
-    // Find all transitive dependents, skipping completed/stale
-    const rootId = task.id;
-    const upstreamLabel =
-      rootId.includes('/') && !rootId.startsWith('__merge__')
-        ? rootId.slice(rootId.indexOf('/') + 1)
-        : rootId;
-
-    const allTasks = this.stateMachine.getAllTasks();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const descendantIds = getTransitiveDependents(
-      rootId,
-      taskMap,
-      (t) => t.status === 'completed' || t.status === 'stale',
-    );
-
-    const toCancelIds = [rootId, ...descendantIds];
-    const cancelled: string[] = [];
-    const runningCancelled: string[] = [];
-    this.invalidateLaunchArtifactsForTasks(toCancelIds, 'task cancellation');
-
-    for (const id of toCancelIds) {
-      const t = this.stateGetTask(id);
-      if (!t || t.status === 'completed' || t.status === 'stale') continue;
-
-      const wasRunning = t.status === 'running' || t.status === 'fixing_with_ai';
-
-      // Free scheduler slot and deferred set
-      this.deferredTaskIds.delete(id);
-      if (wasRunning) {
-        runningCancelled.push(id);
-      }
-      this.clearQueuedSchedulerEntries(id, t.execution.selectedAttemptId);
-
-      // A downstream dependent that never started running was not itself
-      // cancelled or failed — it was only ever waiting on the now-terminated
-      // upstream. Mark it `blocked` (honest, retryable, and self-clearing:
-      // when the upstream is retried to completion the scheduler unblocks it
-      // via getReadyNodes/autoStartReadyTasks) instead of `failed`, so its
-      // badge does not masquerade as a real run failure. The cancel root, and
-      // any dependent that was actually executing when the cascade reached it,
-      // stay `failed`.
-      const neverStarted =
-        id !== rootId &&
-        !t.execution.startedAt &&
-        (t.status === 'pending' || t.status === 'blocked');
-
-      if (neverStarted) {
-        const blockedChanges: TaskStateChanges = {
-          status: 'blocked',
-          execution: { blockedBy: `upstream task "${upstreamLabel}" was terminated` },
-        };
-        const blockedUpdated = this.writeAndSync(id, blockedChanges);
-        const blockedDelta: TaskDelta = this.buildUpdateDelta(t, blockedUpdated, blockedChanges);
-        this.persistence.logEvent?.(id, 'task.blocked', blockedChanges);
-        this.messageBus.publish(TASK_DELTA_CHANNEL, blockedDelta);
-        cancelled.push(id);
-        continue;
-      }
-
-      // Mark as failed
-      const errorMsg =
-        id === rootId
-          ? 'Terminated by user'
-          : `Terminated: upstream task "${upstreamLabel}" was terminated`;
-      const changes: TaskStateChanges = {
-        status: 'failed',
-        execution: { error: errorMsg, completedAt: new Date() },
-      };
-      const cancelUpdated = this.writeAndSync(id, changes);
-      this.updateSelectedAttempt(id, {
-        status: 'failed',
-        error: errorMsg,
-        completedAt: changes.execution?.completedAt,
-      });
-      const delta: TaskDelta = this.buildUpdateDelta(t, cancelUpdated, changes);
-      this.persistence.logEvent?.(id, 'task.cancelled', changes);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-
-      cancelled.push(id);
-    }
-
-    this.checkWorkflowCompletion();
-    return { cancelled, runningCancelled };
+    return cancelTaskImpl(this as unknown as CancellationHost, taskId);
   }
 
   /**
@@ -3719,64 +3560,7 @@ export class Orchestrator {
    * Terminal tasks (completed/stale) are preserved as-is.
    */
   cancelWorkflow(workflowId: string): { cancelled: string[]; runningCancelled: string[] } {
-    this.refreshWorkflowFromDb(workflowId);
-
-    const allTasks = this.stateMachine.getAllTasks().filter(
-      (t) => t.config.workflowId === workflowId,
-    );
-    if (allTasks.length === 0) {
-      throw new OrchestratorError('WORKFLOW_NOT_FOUND', `No tasks found for workflow ${workflowId}`);
-    }
-
-    const cancellable = new Set([
-      'pending',
-      'running',
-      'fixing_with_ai',
-      'blocked',
-      'needs_input',
-      'review_ready',
-      'awaiting_approval',
-    ]);
-
-    const cancelled: string[] = [];
-    const runningCancelled: string[] = [];
-    this.invalidateLaunchArtifactsForTasks(
-      allTasks.filter((task) => cancellable.has(task.status)).map((task) => task.id),
-      'workflow cancellation',
-    );
-
-    for (const task of allTasks) {
-      if (!cancellable.has(task.status)) continue;
-
-      const id = task.id;
-      const wasRunning = task.status === 'running' || task.status === 'fixing_with_ai';
-
-      this.deferredTaskIds.delete(id);
-      if (wasRunning) {
-        runningCancelled.push(id);
-      }
-      this.clearQueuedSchedulerEntries(id, task.execution.selectedAttemptId);
-
-      const changes: TaskStateChanges = {
-        status: 'failed',
-        execution: {
-          error: 'Cancelled by user (workflow)',
-          completedAt: new Date(),
-        },
-      };
-      const wfCancelUpdated = this.writeAndSync(id, changes);
-      this.updateSelectedAttempt(id, {
-        status: 'failed',
-        error: 'Cancelled by user (workflow)',
-        completedAt: changes.execution?.completedAt,
-      });
-      this.persistence.logEvent?.(id, 'task.cancelled', changes);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, wfCancelUpdated, changes));
-      cancelled.push(id);
-    }
-
-    this.checkWorkflowCompletion();
-    return { cancelled, runningCancelled };
+    return cancelWorkflowImpl(this as unknown as CancellationHost, workflowId);
   }
 
   /**
@@ -3792,39 +3576,7 @@ export class Orchestrator {
       phase?: string;
     },
   ): void {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) return;
-    const id = task.id;
-    this.invalidateLaunchArtifactsForTasks([id], 'task deferred');
-
-    // Transition running → pending. A deferred launch must not retain the
-    // launch-claimed phase; otherwise it can be mistaken for an actively
-    // dispatchable launch with no executor owner.
-    const changes: TaskStateChanges = buildTaskResetChanges('defer');
-    const deferUpdated = this.writeResetAndSync(task, 'defer', changes);
-    const delta: TaskDelta = this.buildUpdateDelta(task, deferUpdated, changes);
-    this.persistence.logEvent?.(id, 'task.deferred', {
-      ...changes,
-      deferredAt: new Date(),
-      reason: reason?.reason,
-      message: reason?.message,
-      attemptId: reason?.attemptId,
-      phase: reason?.phase,
-    });
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-
-    // Remove any queued re-dispatch for this task; persisted attempt state now
-    // owns active-slot truth.
-    this.clearQueuedSchedulerEntries(id, task.execution.selectedAttemptId);
-
-    this.replaceSelectedAttempt(task);
-
-    // Park in deferred set — re-enqueued when a task completes
-    this.deferredTaskIds.add(id);
-
-    // Let other ready tasks fill the freed slot
-    this.drainScheduler();
+    deferTaskImpl(this as unknown as CancellationHost, taskId, reason);
   }
 
   /**
