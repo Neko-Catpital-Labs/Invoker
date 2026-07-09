@@ -1547,6 +1547,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.taskAttemptRepo.loadAllCompletedTasks();
   }
 
+  loadAllHistoryTasks(): Array<TaskState & { workflowName: string; lastEventAt: string | null; eventCount: number }> {
+    return this.taskAttemptRepo.loadAllHistoryTasks();
+  }
+
   deleteTask(taskId: string): void {
     this.runTransaction(() => {
       this.db.run('DELETE FROM task_launch_dispatch WHERE task_id = ?', [taskId]);
