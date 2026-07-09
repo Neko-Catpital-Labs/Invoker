@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { validatePrBody } from './validate-pr-body.mjs';
 
 function assert(condition, message) {
@@ -114,5 +119,31 @@ graph TD
 - Data migration? No
 `);
 assert(malformedArchitectureErrors.some((error) => error.includes('Architecture section is missing required subsection: ### After')), 'missing architecture after section should fail');
+
+const tmp = mkdtempSync(join(tmpdir(), 'invoker-pr-body-'));
+try {
+  const bodyFile = join(tmp, 'body.md');
+  const changedFilesFile = join(tmp, 'changed-files.txt');
+  const diffFile = join(tmp, 'pr.diff');
+  writeFileSync(bodyFile, validMinimal, 'utf8');
+  writeFileSync(changedFilesFile, 'scripts/validate-pr-body.mjs\n', 'utf8');
+  writeFileSync(diffFile, '', 'utf8');
+
+  execFileSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL('validate-pr-body.mjs', import.meta.url)),
+      '--body-file',
+      bodyFile,
+      '--changed-files-file',
+      changedFilesFile,
+      '--diff-file',
+      diffFile,
+    ],
+    { stdio: 'pipe' },
+  );
+} finally {
+  rmSync(tmp, { force: true, recursive: true });
+}
 
 console.log('OK: PR body validator checks passed');
