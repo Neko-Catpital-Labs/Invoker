@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -415,5 +416,66 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+});
+
+describe('Left rail scroll containers (layout)', () => {
+  let mock: MockInvoker;
+
+  beforeEach(() => {
+    mock = createMockInvoker();
+    mock.install();
+  });
+
+  afterEach(() => {
+    mock.cleanup();
+  });
+
+  // Regression: rail list bodies used to be plain blocks (`overflow-y-auto p-3`)
+  // that grew their parent panel with content instead of scrolling. The contract
+  // is now: the scroll container is a shrinkable flex child
+  // (`min-h-0 flex-1 overflow-y-auto`) nested inside a bounded flex-col shell body
+  // (`flex min-h-0 flex-1 flex-col`), so overflow scrolls in place within the rail.
+  function expectScrollableRailList(rail: HTMLElement) {
+    const listBody = rail.querySelector('.overflow-y-auto');
+    expect(listBody, 'rail should own a single scroll container').not.toBeNull();
+    const bodyClass = listBody!.className;
+    expect(bodyClass).toContain('min-h-0');
+    expect(bodyClass).toContain('flex-1');
+
+    const shellBody = listBody!.parentElement!;
+    const shellClass = shellBody.className;
+    expect(shellClass).toContain('flex');
+    expect(shellClass).toContain('flex-col');
+    expect(shellClass).toContain('min-h-0');
+    expect(shellClass).toContain('flex-1');
+  }
+
+  it('keeps the planning session list scrollable inside the rail', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    const rail = await screen.findByTestId('planning-session-rail');
+    expectScrollableRailList(rail);
+  });
+
+  // The `browser-rail` list wrapper is the SAME element for the workflows,
+  // attention, and running surfaces (only the inner list function differs), and
+  // all three list bodies share RAIL_LIST_BODY_CLASS. Asserting the workflows
+  // surface therefore also proves the shell-wrapper + list-body contract the
+  // attention and running lists reuse. Those two surfaces cannot be mounted
+  // directly here: selecting a live task auto-mounts the xterm terminal, which
+  // hangs under jsdom's canvas-less renderer — the same pre-existing harness
+  // limitation documented in browser-surface-camera-resnap.test.tsx, which also
+  // drives the shared browser-surface mechanism through the Workflows surface.
+  it('keeps the workflows list scrollable inside the shared browser rail', async () => {
+    render(<App />);
+    act(() => mock.setTasks(
+      [makeUITask({ id: 'task-wf', description: 'WF task', status: 'running', workflowId: 'wf-1' })],
+      [{ id: 'wf-1', name: 'Alpha', status: 'running' }] satisfies WorkflowMeta[],
+    ));
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    const rail = await screen.findByTestId('browser-rail');
+    await within(rail).findByText('Alpha');
+    expectScrollableRailList(rail);
   });
 });
