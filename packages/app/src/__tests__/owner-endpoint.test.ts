@@ -58,7 +58,7 @@ describe('owner-endpoint contract', () => {
       expect('mode' in result!).toBe(false);
     });
 
-    it('defaults ownerId to empty string when the ping response omits it', async () => {
+    it('ignores malformed ping responses that omit the owner identity', async () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
@@ -66,9 +66,18 @@ describe('owner-endpoint contract', () => {
       }));
 
       const result = await discoverOwner(bus);
-      expect(result).not.toBeNull();
-      expect(result!.ownerId).toBe('');
-      expect(result!.canAcceptStandaloneMutations).toBe(true);
+      expect(result).toBeNull();
+    });
+
+    it('ignores malformed ping responses that omit the owner mode', async () => {
+      const bus = new LocalBus();
+      bus.onRequest('headless.owner-ping', async () => ({
+        ok: true,
+        ownerId: 'owner-123',
+      }));
+
+      const result = await discoverOwner(bus);
+      expect(result).toBeNull();
     });
   });
 
