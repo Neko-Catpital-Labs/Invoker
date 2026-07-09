@@ -4,6 +4,7 @@ import {
   runReadOnlyHeadlessQueryToString,
   type HeadlessQueryDeps,
 } from '../headless-query-list.js';
+import { AUTO_STARTED_OWNER_WORKER_KINDS } from '../worker-control.js';
 
 const workerActions: WorkerActionRecord[] = [
   {
@@ -145,5 +146,79 @@ describe('headless query worker-decisions', () => {
         makeDecisionDeps(),
       ),
     ).rejects.toThrow('Invalid --decision');
+  });
+});
+
+function makeWorkersDeps(): HeadlessQueryDeps {
+  return {
+    persistence: {
+      // Snapshot construction reads recent actions per worker and walks
+      // workflow events for the auto-fix recovery summary; empty results keep
+      // the fleet shape deterministic.
+      listWorkerActions: () => [],
+      listWorkflows: () => [],
+      loadTasks: () => [],
+      getEvents: () => [],
+    } as unknown as HeadlessQueryDeps['persistence'],
+    orchestrator: {} as unknown as HeadlessQueryDeps['orchestrator'],
+    executionAgentRegistry: undefined,
+    invokerConfig: {} as unknown as HeadlessQueryDeps['invokerConfig'],
+    getUiPerfStats: () => ({}),
+    resetUiPerfStats: () => {},
+  };
+}
+
+type WorkerSnapshotEntry = {
+  kind: string;
+  lifecycle: string;
+  policy: string;
+  autoStarts: boolean;
+  recentActions: unknown[];
+};
+
+describe('headless query workers', () => {
+  it('returns the worker fleet snapshot as JSON', async () => {
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'workers', '--output', 'json'],
+      makeWorkersDeps(),
+    );
+    const snapshot = JSON.parse(output) as { generatedAt: string; workers: WorkerSnapshotEntry[] };
+
+    expect(typeof snapshot.generatedAt).toBe('string');
+    expect(snapshot.workers.length).toBeGreaterThan(0);
+
+    // Every auto-started owner worker must appear in the fleet and be flagged
+    // as auto-starting; the local snapshot cannot control workers, so each is
+    // reported stopped with an empty action history.
+    for (const autoKind of AUTO_STARTED_OWNER_WORKER_KINDS) {
+      const entry = snapshot.workers.find(worker => worker.kind === autoKind);
+      expect(entry, `missing worker ${autoKind}`).toBeDefined();
+      expect(entry!.autoStarts).toBe(true);
+      expect(entry!.lifecycle).toBe('stopped');
+      expect(Array.isArray(entry!.recentActions)).toBe(true);
+    }
+  });
+
+  it('lists worker kinds one per line in label output', async () => {
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'workers', '--output', 'label'],
+      makeWorkersDeps(),
+    );
+    const lines = output.trim().split('\n');
+    for (const autoKind of AUTO_STARTED_OWNER_WORKER_KINDS) {
+      expect(lines).toContain(autoKind);
+    }
+  });
+
+  it('emits one worker per line in jsonl output', async () => {
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'workers', '--output', 'jsonl'],
+      makeWorkersDeps(),
+    );
+    const lines = output.trim().split('\n').filter(Boolean);
+    const jsonKinds = new Set(lines.map(line => (JSON.parse(line) as WorkerSnapshotEntry).kind));
+    for (const autoKind of AUTO_STARTED_OWNER_WORKER_KINDS) {
+      expect(jsonKinds.has(autoKind)).toBe(true);
+    }
   });
 });
