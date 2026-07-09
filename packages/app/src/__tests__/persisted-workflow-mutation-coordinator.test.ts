@@ -1738,6 +1738,52 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(Number.isFinite(Date.parse(event.failedAt))).toBe(true);
   });
 
+  it('emits headless.exec task metadata and banner-safe messages without stack traces', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-alpha'));
+
+    const failureEvents: Array<{
+      taskId?: string;
+      headlessCommand?: string;
+      message: string;
+    }> = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        const err = new Error('SSH remote script failed (exit=1, phase=remote_agent_fix)\nSTDOUT:\n{"type":"error"}');
+        err.stack = `${err.message}\n    at createSshRemoteScriptError (/tmp/main.js:1:1)`;
+        throw err;
+      },
+      {
+        onIntentFailed: (event) => {
+          failureEvents.push(event);
+        },
+      },
+    );
+
+    const attempt = coordinator.enqueue<void>('wf-1', 'normal', 'headless.exec', [{
+      args: ['fix', 'wf-1/task-alpha', 'codex'],
+      noTrack: true,
+    }]);
+    await expect(attempt).rejects.toThrow(/SSH remote script failed/);
+
+    expect(failureEvents).toHaveLength(1);
+    const [event] = failureEvents;
+    expect(event.taskId).toBe('wf-1/task-alpha');
+    expect(event.headlessCommand).toBe('fix');
+    expect(event.message).toContain('SSH remote script failed');
+    expect(event.message).not.toContain('createSshRemoteScriptError');
+  });
+
   it('leaves onIntentFailed out of the successful-completion path', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
