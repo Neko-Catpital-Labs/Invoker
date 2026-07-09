@@ -181,6 +181,26 @@ describe('App launch (component)', () => {
     expect(screen.queryByTestId('read-only-mode-banner')).not.toBeInTheDocument();
   });
 
+  it('shows the read-only banner when runtime status flips after owner loss', async () => {
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId('read-only-mode-banner')).not.toBeInTheDocument();
+
+    await act(async () => {
+      mock.fireRuntimeStatus({
+        ownerMode: false,
+        readOnly: true,
+        mode: 'read-only',
+      });
+    });
+
+    expect(screen.getByTestId('read-only-mode-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('read-only-mode-banner')).toHaveTextContent('Read-only mode.');
+  });
+
   it('warns when no Claude or Codex CLI is installed', async () => {
     mock.api.getSystemDiagnostics = vi.fn(async () => ({
       platform: 'darwin',

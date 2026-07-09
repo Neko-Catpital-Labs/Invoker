@@ -727,6 +727,13 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const unsubscribe = window.invoker?.onRuntimeStatus?.((status) => {
+      setRuntimeStatus(status);
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
 
     const shouldEmit = (key: string, minIntervalMs: number): boolean => {
