@@ -208,6 +208,29 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByTestId('invoker-terminal-submit-error')).not.toBeInTheDocument();
   });
 
+  it('surfaces a planner failure on the first message even before a draft exists', async () => {
+    // Regression: the "Planner could not respond" error card used to be nested
+    // inside the draft-ready branch, so a first-message failure (the common
+    // case) hid the raw error message behind only a red transcript line. The
+    // card must now render as soon as the send fails, even when no draft plan
+    // exists yet, so users see the full stderr tail and the Copy error button.
+    const plannerError = 'agent exited 0 but produced no output after 3 attempts — stderr tail: cursor: session expired; run `cursor login` to re-authenticate';
+    mock.api.planningChatSend = vi.fn(async () => ({ ok: false, sessionId: 'session-1', error: plannerError })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('Draft me an Invoker plan');
+
+    const errorPanel = await screen.findByTestId('invoker-terminal-submit-error');
+    expect(errorPanel).toHaveTextContent('Planner could not respond');
+    expect(errorPanel).toHaveTextContent(plannerError);
+    expect(within(errorPanel).getByRole('button', { name: 'Keep chatting' })).toBeInTheDocument();
+    expect(within(errorPanel).getByRole('button', { name: 'Copy error' })).toBeInTheDocument();
+    expect(within(errorPanel).queryByRole('button', { name: 'Retry submit' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+  });
+
   it('explains that run needs a submitted plan first', async () => {
     render(<App />);
     await openPlanningTerminal();
