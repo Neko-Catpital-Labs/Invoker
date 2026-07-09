@@ -304,5 +304,69 @@ describe('spawn errors during agent fix surface diagnostic info', () => {
     expect(caught!.message).toContain('137');
     expect(caught!.message).toContain('Killed');
   });
+
+  it('surfaces the codex --json stdout error, not the benign stdin noise, on non-zero exit', async () => {
+    const { spawn } = await import('node:child_process');
+    const agent = makeExecutionAgent((prompt) => ({
+      cmd: 'codex',
+      args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', prompt],
+      sessionId: 'sess-codex-fail',
+    }));
+    const driver = {
+      processOutput: () => '[assistant] Model refused: usage limit reached',
+      extractSessionId: () => undefined,
+      loadSession: () => null,
+      parseSession: () => [],
+      inspectSession: () => ({ state: 'error' as const }),
+    };
+
+    const { EventEmitter } = require('events');
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const child = new EventEmitter();
+    (child as any).stdout = stdout;
+    (child as any).stderr = stderr;
+    (child as any).stdin = { write: vi.fn(), end: vi.fn() };
+    setTimeout(() => {
+      stdout.emit('data', Buffer.from('{"type":"error","message":"usage limit reached"}\n'));
+      stderr.emit('data', Buffer.from('Reading additional input from stdin...\n'));
+      child.emit('close', 1);
+    }, 0);
+    vi.mocked(spawn).mockReturnValueOnce(child as any);
+
+    let caught: Error | undefined;
+    try {
+      await spawnAgentFixViaRegistry('small prompt', '/tmp', agent, driver as any);
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toContain('codex fix exited with code 1');
+    expect(caught!.message).toContain('Model refused: usage limit reached');
+    expect(caught!.message).not.toContain('Reading additional input from stdin');
+  });
+
+  it('gives an actionable hint when codex exits non-zero emitting only the stdin/TTY noise', async () => {
+    const { spawn } = await import('node:child_process');
+    const agent = makeExecutionAgent((prompt) => ({
+      cmd: 'codex',
+      args: ['exec', '--json', prompt],
+      sessionId: 'sess-codex-notty',
+    }));
+
+    vi.mocked(spawn).mockReturnValueOnce(
+      mockSpawnChildExit(1, 'Reading additional input from stdin...\n') as any,
+    );
+
+    let caught: Error | undefined;
+    try {
+      await spawnAgentFixViaRegistry('small prompt', '/tmp', agent, undefined);
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toContain('without a controlling TTY');
+    expect(caught!.message).toContain('openai/codex#19945');
+  });
 });
 
