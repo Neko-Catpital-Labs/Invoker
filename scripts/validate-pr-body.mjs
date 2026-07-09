@@ -41,7 +41,7 @@ export function validatePrBody(body) {
 }
 
 function usage() {
-  console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>)
+  console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>) [--changed-files-file <file>] [--diff-file <file>]
 
 Validates the canonical PR schema:
   Required: ## Summary, ## Test Plan, ## Revert Plan
@@ -52,6 +52,8 @@ Validates the canonical PR schema:
 function parseArgs(argv) {
   let body = '';
   let bodyFile = '';
+  let changedFilesFile = '';
+  let diffFile = '';
 
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
@@ -60,6 +62,12 @@ function parseArgs(argv) {
         break;
       case '--body-file':
         bodyFile = argv[++i] || '';
+        break;
+      case '--changed-files-file':
+        changedFilesFile = argv[++i] || '';
+        break;
+      case '--diff-file':
+        diffFile = argv[++i] || '';
         break;
       case '--help':
         usage();
@@ -75,7 +83,7 @@ function parseArgs(argv) {
     usage();
   }
 
-  return { body, bodyFile };
+  return { body, bodyFile, changedFilesFile, diffFile };
 }
 
 function main() {
