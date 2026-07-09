@@ -1,7 +1,8 @@
 /**
  * Headless "query" command family: the read-only `query <sub>` router
  * (workflows · tasks · task · queue · review-gate · action-graph · audit ·
- * session · worker-actions · cost · cost-events · costs · ui-perf · stats), the cost-event
+ * session · worker-actions · worker-decisions · workers · cost · cost-events · costs ·
+ * ui-perf · stats), the cost-event
  * collection/rollup
  * helpers, agent session resolution, and `query-select`.
  *
@@ -13,7 +14,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import type { AgentRegistry, WorkerRuntimeDependencies } from '@invoker/execution-engine';
+import { createWorkerRegistry, registerBuiltinWorkers } from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import {
@@ -23,7 +25,12 @@ import {
   restoreWorkflowForTask,
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
-import { listWorkerDecisions } from './worker-control.js';
+import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import {
+  AUTO_STARTED_OWNER_WORKER_KINDS,
+  createLocalWorkerStatusSnapshot,
+  listWorkerDecisions,
+} from './worker-control.js';
 
 /**
  * The read-query family writes its formatted output through {@link writeOut}.
@@ -55,13 +62,13 @@ export type HeadlessQueryDeps = Pick<
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|worker-actions|worker-decisions|workers|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
   const {
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
-    formatEventLog, formatQueueStatus, formatWorkflowStats, formatWorkerActions, formatWorkerDecisions,
+    formatEventLog, formatQueueStatus, formatWorkflowStats, formatWorkerActions, formatWorkerDecisions, formatWorkerStatus,
     serializeWorkflow, serializeTask, serializeEvent, serializeWorkerAction,
     formatAsLabel, formatAsJson, formatAsJsonl,
   } = await import('./formatter.js');
@@ -276,6 +283,27 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       }
       break;
     }
+    case 'workers': {
+      const registry = registerExternalWorkersFromConfig(
+        deps.invokerConfig?.externalWorkers,
+        registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+      );
+      const snapshot = createLocalWorkerStatusSnapshot({
+        registry,
+        persistence: deps.persistence,
+        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      });
+      switch (flags.output) {
+        case 'label': writeOut(snapshot.workers.map(worker => worker.kind).join('\n') + '\n'); break;
+        case 'json':  writeOut(formatAsJson(snapshot) + '\n'); break;
+        case 'jsonl': {
+          for (const worker of snapshot.workers) writeOut(JSON.stringify(worker) + '\n');
+          break;
+        }
+        default: writeOut(formatWorkerStatus(snapshot) + '\n'); break;
+      }
+      break;
+    }
     case 'ui-perf': {
       if (flags.reset) {
         deps.resetUiPerfStats?.();
@@ -373,7 +401,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, queue, review-gate, action-graph, audit, session, worker-actions, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, queue, review-gate, action-graph, audit, session, worker-actions, worker-decisions, workers, cost, cost-events, costs, ui-perf, stats`);
   }
 }
 
