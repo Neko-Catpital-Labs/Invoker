@@ -357,28 +357,36 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
-  it('does not duplicate the replay snapshot when the same session re-renders', async () => {
-    const session = makeTerminalSession('task-alpha', {
-      outputSnapshot: 'replayed once\n',
-    });
-    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValue({
+  it('focuses an existing running task tab on re-double-click without opening another terminal', async () => {
+    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockImplementation(async (taskId: string) => ({
       opened: true,
-      session,
-    });
+      session: makeTerminalSession(taskId, {
+        outputSnapshot: taskId === 'task-alpha' ? 'replayed once\n' : undefined,
+      }),
+    }));
 
     render(<App />);
-    act(() => mock.setTasks([taskAlpha], workflows));
+    act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
     await selectWorkflow();
 
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
     await waitFor(() => {
       expect(xtermMock.writeLog).toEqual(['replayed once\n']);
     });
+    expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
+    expect(mock.api.openTerminal).toHaveBeenCalledTimes(1);
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-beta'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'true');
+    });
+    expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
 
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
     await waitFor(() => {
-      expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
     });
+    expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
 
     expect(xtermMock.writeLog).toEqual(['replayed once\n']);
   });

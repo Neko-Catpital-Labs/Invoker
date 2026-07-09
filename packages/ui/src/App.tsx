@@ -429,6 +429,7 @@ function WorkflowContextMenu({
   );
 }
 
+
 function EmptyGraphTutorial(): JSX.Element {
   return (
     <aside className="h-full w-full border-l border-gray-800 bg-gray-900/90 p-4">
@@ -1363,10 +1364,22 @@ export function App() {
     recenterForSelection('task', task.id);
   }, [recenterForSelection]);
 
-  const openTerminalForTaskId = useCallback(async (taskId: string) => {
+  const openTerminalForTaskId = useCallback(async (
+    taskId: string,
+    options: { focusExistingSession?: boolean } = {},
+  ) => {
     const task = tasks.get(taskId);
     if (task && isExperimentSpawnPivotTask(task)) {
       window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
+      return;
+    }
+    const focusExistingSession = options.focusExistingSession ?? true;
+    const existingRunningSession = focusExistingSession
+      ? terminalSessions.find((session) => session.taskId === taskId && session.status === 'running')
+      : undefined;
+    if (existingRunningSession) {
+      setTerminalDrawerState('partial');
+      setActiveTerminalSessionId(existingRunningSession.sessionId);
       return;
     }
     setTerminalDrawerState('partial');
@@ -1389,7 +1402,7 @@ export function App() {
       });
       setActiveTerminalSessionId(session.sessionId);
     }
-  }, [tasks]);
+  }, [tasks, terminalSessions]);
 
   const handleTaskDoubleClick = useCallback(async (task: TaskState) => {
     setSelectedTaskId(task.id);
@@ -1563,7 +1576,7 @@ export function App() {
   const handleOpenTerminal = useCallback(
     (taskId: string) => {
       setContextMenu(null);
-      void openTerminalForTaskId(taskId);
+      void openTerminalForTaskId(taskId, { focusExistingSession: false });
     },
     [openTerminalForTaskId],
   );
@@ -3421,4 +3434,3 @@ export function App() {
     </div>
   );
 }
-
