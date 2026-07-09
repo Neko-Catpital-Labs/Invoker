@@ -40,6 +40,7 @@ const STATUS_OPTIONS: readonly TaskStatus[] = [
   'pending',
   'review_ready',
   'stale',
+  'closed',
 ] as const;
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -48,6 +49,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   fixing_with_ai: 'Autofixing',
   completed: 'Completed',
   failed: 'Failed',
+  closed: 'Closed',
   needs_input: 'Needs input',
   blocked: 'Blocked',
   review_ready: 'Review ready',
@@ -61,6 +63,7 @@ const STATUS_STYLE: Record<TaskStatus, string> = {
   fixing_with_ai: 'bg-amber-700 text-amber-100',
   completed: 'bg-emerald-700 text-emerald-100',
   failed: 'bg-red-700 text-red-100',
+  closed: 'bg-gray-600 text-gray-200',
   needs_input: 'bg-purple-700 text-purple-100',
   blocked: 'bg-red-900 text-red-100',
   review_ready: 'bg-teal-700 text-teal-100',
@@ -241,7 +244,11 @@ function Timeline({
   // getEvents() returns oldest-first; the timeline UI shows newest-first.
   const newestFirst = [...events].reverse();
   return (
-    <ol className="mt-1 pl-1" aria-label={`Timeline for task ${taskId}`}>
+    <ol
+      className="mt-1 pl-1"
+      aria-label={`Timeline for task ${taskId}`}
+      data-testid={`history-timeline-${taskId}`}
+    >
       {newestFirst.map((event, idxFromTop) => {
         // The chronologically-previous event sits BELOW the current one in a
         // newest-first list, i.e. at index+1.
@@ -279,7 +286,10 @@ function HistoryRow({
     ? 'bg-indigo-900/60 border-indigo-600'
     : 'bg-gray-800 border-gray-800 hover:border-gray-600';
   return (
-    <li className={`border rounded-md ${rowClass} transition-colors`}>
+    <li
+      className={`border rounded-md ${rowClass} transition-colors`}
+      data-testid={`history-row-${entry.id}`}
+    >
       <div className="flex items-start gap-2 px-3 py-2">
         <button
           type="button"
@@ -287,6 +297,7 @@ function HistoryRow({
           className="mt-0.5 text-gray-400 hover:text-gray-100 w-4 shrink-0"
           aria-expanded={expanded}
           aria-label={expanded ? 'Collapse timeline' : 'Expand timeline'}
+          data-testid={`history-expand-${entry.id}`}
         >
           {expanded ? '▾' : '▸'}
         </button>
@@ -604,7 +615,7 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col" data-testid="history-view">
       <FilterBar
         filter={filter}
         onChange={setFilter}
@@ -621,7 +632,7 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
           No tasks match the current filters
         </div>
       ) : (
-        <ul className="flex-1 overflow-y-auto p-3 space-y-1.5" aria-label="Task history">
+        <ul className="flex-1 overflow-y-auto p-3 space-y-1.5" aria-label="Task history" data-testid="history-task-list">
           {filtered.map((entry) => (
             <HistoryRow
               key={entry.id}
