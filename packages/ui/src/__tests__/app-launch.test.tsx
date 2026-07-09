@@ -24,7 +24,12 @@ const { App } = await import('../App.js');
 describe('App launch (component)', () => {
   let mock: MockInvoker;
 
+  const setViewportWidth = (width: number) => {
+    Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+  };
+
   beforeEach(() => {
+    setViewportWidth(1600);
     mock = createMockInvoker();
     mock.install();
   });
@@ -105,12 +110,13 @@ describe('App launch (component)', () => {
     expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(screen.getByText('Alpha · running')).toBeInTheDocument();
   });
-  it('auto-collapses the app sidebar for browser views on narrow windows', async () => {
-    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+  it('keeps the narrow app sidebar width when opening Library browser views', async () => {
+    setViewportWidth(1280);
 
     render(<App />);
     await screen.findByTestId('sidebar-workflows');
     act(() => window.dispatchEvent(new Event('resize')));
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
 
     fireEvent.click(screen.getByTestId('sidebar-workflows'));
     expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
@@ -119,10 +125,10 @@ describe('App launch (component)', () => {
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
 
-    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    setViewportWidth(1600);
   });
   it('keeps the currently visible app sidebar width when moving between Home and Library', async () => {
-    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+    setViewportWidth(1280);
 
     render(<App />);
     await screen.findByTestId('sidebar-workflows');
@@ -139,10 +145,10 @@ describe('App launch (component)', () => {
     expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(sidebar.className).toContain(visibleWidth);
 
-    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    setViewportWidth(1600);
   });
   it('keeps the expanded app sidebar width when switching Home and Library on wide windows', async () => {
-    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    setViewportWidth(1600);
 
     render(<App />);
     await screen.findByTestId('sidebar-workflows');
@@ -159,7 +165,7 @@ describe('App launch (component)', () => {
     expect(sidebar.className).toContain('w-60');
   });
   it('keeps the manual app sidebar width while switching left rail surfaces', async () => {
-    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    setViewportWidth(1600);
 
     render(<App />);
     await screen.findByTestId('sidebar-workflows');
