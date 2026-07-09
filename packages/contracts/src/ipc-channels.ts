@@ -1131,6 +1131,9 @@ export const IpcEventChannels = {
   'invoker:workflow-mutation-failed': {} as {
     payload: WorkflowMutationFailedEvent;
   },
+  'invoker:runtime-status': {} as {
+    payload: RuntimeStatus;
+  },
 } as const;
 
 // ── Type Utilities ──────────────────────────────────────────
