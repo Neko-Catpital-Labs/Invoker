@@ -39,6 +39,8 @@ export interface MockInvoker {
   fireTerminalOutput: (event: TerminalOutputEvent) => void;
   /** Fire a workflow-mutation-failed event to subscribers. */
   fireWorkflowMutationFailed: (event: WorkflowMutationFailedEvent) => void;
+  /** Fire a runtime-status event to subscribers. */
+  fireRuntimeStatus: (status: RuntimeStatus) => void;
   /** Replace the action graph snapshot returned by getActionGraph. */
   setActionGraph: (response: ActionGraphResponse) => void;
   /** Replace the runtime status returned by getRuntimeStatus. */
@@ -100,6 +102,7 @@ export function createMockInvoker(
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
   const workflowMutationFailedCallbacks = new Set<(event: WorkflowMutationFailedEvent) => void>();
+  const runtimeStatusCallbacks = new Set<(status: RuntimeStatus) => void>();
   let actionGraphSnapshot: ActionGraphResponse = {
     generatedAt: '2026-01-01T00:00:00.000Z',
     stallThresholdMs: 60_000,
@@ -294,6 +297,10 @@ export function createMockInvoker(
       workflowMutationFailedCallbacks.add(cb);
       return () => { workflowMutationFailedCallbacks.delete(cb); };
     }),
+    onRuntimeStatus: vi.fn((cb: (status: RuntimeStatus) => void) => {
+      runtimeStatusCallbacks.add(cb);
+      return () => { runtimeStatusCallbacks.delete(cb); };
+    }),
     resumeWorkflow: vi.fn(async () => null),
     listWorkflows: vi.fn(async () => workflowSnapshot),
     loadWorkflow: vi.fn(async () => ({ workflow: {}, tasks: [] })),
@@ -401,6 +408,13 @@ export function createMockInvoker(
     }
   }
 
+  function fireRuntimeStatus(status: RuntimeStatus) {
+    runtimeStatus = status;
+    for (const callback of runtimeStatusCallbacks) {
+      callback(status);
+    }
+  }
+
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[]; runtimeStatus?: RuntimeStatus } }).__INVOKER_BOOTSTRAP__ = {
@@ -415,6 +429,7 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
     terminalOutputCallbacks.clear();
     workflowMutationFailedCallbacks.clear();
+    runtimeStatusCallbacks.clear();
     eventsByTask.clear();
     historySnapshot = [];
   }
@@ -432,6 +447,7 @@ export function createMockInvoker(
     fireWorkflowsChanged,
     fireTerminalOutput,
     fireWorkflowMutationFailed,
+    fireRuntimeStatus,
     install,
     cleanup,
   };

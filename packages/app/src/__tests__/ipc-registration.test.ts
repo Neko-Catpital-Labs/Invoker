@@ -84,6 +84,7 @@ describe('ipc-registration', () => {
 
   it('preserves the no-owner error when follower delegation has no handler', async () => {
     const { ipcMain, handleHandlers } = createFakeIpcMain();
+    const onMutationOwnerUnavailable = vi.fn();
 
     registerGuiMutationHandler(
       {
@@ -94,6 +95,7 @@ describe('ipc-registration', () => {
             throw new TransportError(TransportErrorCode.NO_HANDLER, 'missing');
           },
         }),
+        onMutationOwnerUnavailable,
         translateGuiMutationToHeadless: () => ({ channel: 'headless.exec', request: {} }),
       },
       'invoker:cancel-task',
@@ -103,6 +105,7 @@ describe('ipc-registration', () => {
     await expect(handleHandlers.get('invoker:cancel-task')?.({}, 'task-1')).rejects.toThrow(
       'No mutation owner is available',
     );
+    expect(onMutationOwnerUnavailable).toHaveBeenCalledWith('missing');
   });
 
   it('refreshes and retries follower delegation when the owner route is gone', async () => {
