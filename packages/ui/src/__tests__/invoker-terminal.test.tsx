@@ -109,7 +109,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('draft the full plan');
 
     await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft plan ready: "Mock Plan" (2 steps).');
+      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('draft ready · "Mock Plan" · 2 steps');
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
@@ -151,7 +151,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('draft the Workers Surface plan');
 
     await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft plan ready: "Workers Surface" (2 workflows).');
+      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('draft ready · "Workers Surface" · 2 workflows');
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
@@ -193,7 +193,7 @@ describe('Invoker terminal (component)', () => {
     expect(errorPanel).toHaveTextContent('Plan could not be submitted');
     expect(errorPanel).toHaveTextContent(submitError);
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(`Plan could not be submitted: ${submitError}`);
-    expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft plan ready: "Selected lists scroll" (4 steps).');
+    expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('draft ready · "Selected lists scroll" · 4 steps');
     expect(mock.api.refreshTaskGraph).not.toHaveBeenCalled();
 
     fireEvent.click(within(errorPanel).getByRole('button', { name: 'Retry submit' }));
@@ -260,7 +260,7 @@ describe('Invoker terminal (component)', () => {
     fireEvent.click(screen.getByTestId('sidebar-planning'));
 
     expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
-    expect(screen.getAllByText('Submitted').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/submitted/i).length).toBeGreaterThan(0);
   });
 
   it('opens the expanded planning chat and Escape closes it without clearing transcript', async () => {
