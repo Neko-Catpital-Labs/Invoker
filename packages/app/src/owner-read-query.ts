@@ -45,6 +45,7 @@ export interface OwnerReadQueryHandlers {
   getOutputTail: (taskId: string) => unknown;
   replayOutput: (taskId: string, fromOffset: number) => unknown;
   getAllCompletedTasks: () => unknown[];
+  getHistoryTasks: () => unknown[];
 }
 
 export function answerOwnerReadQuery(
@@ -133,6 +134,8 @@ export function answerOwnerReadQuery(
       return { chunks: handlers.replayOutput(requiredString(body.taskId, 'taskId'), replayOffset(body.fromOffset)) };
     case 'all-completed-tasks':
       return { tasks: handlers.getAllCompletedTasks() };
+    case 'history-tasks':
+      return { tasks: handlers.getHistoryTasks() };
     default:
       throw new Error(`Unsupported headless query: ${String(kind)}`);
   }
@@ -178,6 +181,7 @@ type ReadPersistence = Pick<
   | 'getOutputTail'
   | 'replayOutputFrom'
   | 'loadAllCompletedTasks'
+  | 'loadAllHistoryTasks'
   | 'listWorkerActions'
 >;
 
@@ -238,5 +242,6 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     getOutputTail: (taskId: string) => persistence.getOutputTail(taskId),
     replayOutput: (taskId: string, fromOffset: number) => persistence.replayOutputFrom(taskId, fromOffset),
     getAllCompletedTasks: () => persistence.loadAllCompletedTasks(),
+    getHistoryTasks: () => persistence.loadAllHistoryTasks(),
   };
 }
