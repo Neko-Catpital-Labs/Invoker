@@ -292,6 +292,8 @@ function planConversationConfig(
     experimentalPlanner: deps.config.experimentalPlanner,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
+    plannerRetryLimit: deps.config.plannerRetryLimit,
+    plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
   };
 }
 

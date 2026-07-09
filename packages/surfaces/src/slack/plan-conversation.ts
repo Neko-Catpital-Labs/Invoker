@@ -43,15 +43,40 @@ export function defaultPlanningCommand(
 
 const EMPTY_PLANNER_STDERR_TAIL_LIMIT = 500;
 
+export const DEFAULT_PLANNER_RETRY_LIMIT = 2;
+export const DEFAULT_PLANNER_RETRY_BASE_DELAY_MS = 500;
+
 // Shared with slack-surface.ts so both planner spawn paths surface the same
 // actionable error when the CLI exits 0 but writes nothing to stdout. The
 // stderr tail is preserved because Cursor/Codex/OMP often log the real reason
 // (auth expiry, permission denial, context overflow) to stderr while still
-// reporting a successful exit.
-export function buildEmptyPlannerOutputError(plannerLabel: string, stderr: string): Error {
+// reporting a successful exit. `attemptCount` is included when the caller
+// exhausted its retry budget so the error message credits the retry loop.
+export function buildEmptyPlannerOutputError(
+  plannerLabel: string,
+  stderr: string,
+  options: { attemptCount?: number } = {},
+): Error {
   const trimmed = stderr.trim();
   const tail = trimmed ? ` — stderr tail: ${trimmed.slice(-EMPTY_PLANNER_STDERR_TAIL_LIMIT)}` : '';
-  return new Error(`${plannerLabel} exited 0 but produced no output${tail}`);
+  const attemptSuffix = options.attemptCount && options.attemptCount > 1
+    ? ` after ${options.attemptCount} attempts`
+    : '';
+  return new Error(`${plannerLabel} exited 0 but produced no output${attemptSuffix}${tail}`);
+}
+
+// Internal marker for the specific "success with empty stdout" case so the
+// retry wrapper can distinguish transient silent-success from user-actionable
+// failures (non-zero exit, spawn error, timeout) that must not be retried.
+class RetryableEmptyPlannerOutputError extends Error {
+  constructor(public readonly stderrTail: string) {
+    super('planner exited 0 with no output');
+    this.name = 'RetryableEmptyPlannerOutputError';
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export interface PlanConversationConfig {
@@ -86,6 +111,18 @@ export interface PlanConversationConfig {
   onRawPlannerOutput?: RawPlannerOutputHandler;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
+  /**
+   * How many additional attempts to make when the planner exits 0 with empty
+   * stdout. Only retries the empty-output case; non-zero exit, spawn error,
+   * and timeout are not retried. Default: 2 (so 3 attempts total).
+   */
+  plannerRetryLimit?: number;
+  /**
+   * Base delay in milliseconds between empty-output retry attempts. Each
+   * subsequent retry doubles this value. Default: 500ms (waits 500ms before
+   * attempt 2, 1000ms before attempt 3, and so on).
+   */
+  plannerRetryBaseDelayMs?: number;
 }
 
 // ── Confirmation Detection ──────────────────────────────────
@@ -285,6 +322,8 @@ export class PlanConversation {
   private preferStackedWorkflows?: boolean;
   private log: LogFn;
   private onRawPlannerOutput?: RawPlannerOutputHandler;
+  private plannerRetryLimit: number;
+  private plannerRetryBaseDelayMs: number;
   private _initialized = false;
 
   constructor(config: PlanConversationConfig) {
@@ -302,6 +341,8 @@ export class PlanConversation {
     this.experimentalPlanner = config.experimentalPlanner;
     this.preferStackedWorkflows = config.preferStackedWorkflows;
     this.onRawPlannerOutput = config.onRawPlannerOutput;
+    this.plannerRetryLimit = Math.max(0, config.plannerRetryLimit ?? DEFAULT_PLANNER_RETRY_LIMIT);
+    this.plannerRetryBaseDelayMs = Math.max(0, config.plannerRetryBaseDelayMs ?? DEFAULT_PLANNER_RETRY_BASE_DELAY_MS);
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -452,12 +493,48 @@ export class PlanConversation {
 
   // ── Planner CLI Subprocess ─────────────────────────────
 
-  spawnPlanner(prompt: string): Promise<string> {
-    const spawnStart = Date.now();
+  async spawnPlanner(prompt: string): Promise<string> {
     const { command, args } = this.planningCommandBuilder
       ? this.planningCommandBuilder({ tool: this.tool ?? 'cursor', model: this.model, prompt })
       : defaultPlanningCommand(this.cursorCommand, { model: this.model, prompt });
     const plannerLabel = this.tool ?? command;
+    const totalAttempts = this.plannerRetryLimit + 1;
+    let lastStderrTail = '';
+
+    for (let attempt = 0; attempt < totalAttempts; attempt++) {
+      if (attempt > 0) {
+        const backoffMs = this.plannerRetryBaseDelayMs * (2 ** (attempt - 1));
+        this.log('plan-conversation', 'warn',
+          `[PLANNER_RETRY] backing off ${backoffMs}ms before attempt=${attempt + 1}/${totalAttempts} (planner=${plannerLabel})`);
+        await delay(backoffMs);
+      }
+      try {
+        return await this.spawnPlannerAttempt(prompt, command, args, plannerLabel, attempt + 1, totalAttempts);
+      } catch (err) {
+        if (err instanceof RetryableEmptyPlannerOutputError) {
+          lastStderrTail = err.stderrTail;
+          const isLast = attempt >= totalAttempts - 1;
+          this.log('plan-conversation', 'warn',
+            `[PLANNER_RETRY] attempt=${attempt + 1}/${totalAttempts} produced no output (planner=${plannerLabel}, willRetry=${!isLast}, stderrBytes=${err.stderrTail.length}, stderrTail="${err.stderrTail.slice(-200).replace(/\n/g, '\\n')}")`);
+          if (!isLast) continue;
+          throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
+        }
+        throw err;
+      }
+    }
+    // Unreachable: the loop either returns, continues, or throws on every path above.
+    throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
+  }
+
+  private spawnPlannerAttempt(
+    prompt: string,
+    command: string,
+    args: string[],
+    plannerLabel: string,
+    attemptNumber: number,
+    totalAttempts: number,
+  ): Promise<string> {
+    const spawnStart = Date.now();
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, {
         cwd: this.workingDir ?? process.cwd(),
@@ -470,7 +547,7 @@ export class PlanConversation {
       let stdoutChunks = 0;
       let stderrChunks = 0;
 
-      this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, cmd="${command} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}`);
+      this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, cmd="${command} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}, attempt=${attemptNumber}/${totalAttempts}`);
 
       child.stdout?.on('data', (chunk: Buffer) => {
         const chunkStr = chunk.toString();
@@ -501,13 +578,13 @@ export class PlanConversation {
 
       child.on('close', (code) => {
         clearTimeout(timer);
-        this.log('plan-conversation', 'info', `[PERF] cursor_exit: code=${code}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms`);
+        this.log('plan-conversation', 'info', `[PERF] cursor_exit: code=${code}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, attempt=${attemptNumber}/${totalAttempts}`);
         if (code === 0) {
           const trimmed = stdout.trim();
           if (trimmed) {
             resolve(trimmed);
           } else {
-            reject(buildEmptyPlannerOutputError(plannerLabel, stderr));
+            reject(new RetryableEmptyPlannerOutputError(stderr));
           }
         } else {
           const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';

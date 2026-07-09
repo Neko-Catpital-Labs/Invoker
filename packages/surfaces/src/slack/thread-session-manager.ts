@@ -175,6 +175,10 @@ export interface SessionManagerConfig {
   timeoutMs?: number;
   planningCommandBuilder?: PlanningCommandBuilder;
   mode?: ConversationMode;
+  /** Forwarded to PlanConversation for silent-success retries. */
+  plannerRetryLimit?: number;
+  /** Forwarded to PlanConversation for silent-success retries. */
+  plannerRetryBaseDelayMs?: number;
 }
 
 export interface SessionMetrics {
@@ -213,6 +217,8 @@ export class SessionManager {
   private readonly timeoutMs?: number;
   private readonly planningCommandBuilder?: PlanningCommandBuilder;
   private readonly mode: ConversationMode;
+  private readonly plannerRetryLimit?: number;
+  private readonly plannerRetryBaseDelayMs?: number;
 
   constructor(config: SessionManagerConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -228,6 +234,8 @@ export class SessionManager {
     this.timeoutMs = config.timeoutMs;
     this.planningCommandBuilder = config.planningCommandBuilder;
     this.mode = config.mode ?? 'agent';
+    this.plannerRetryLimit = config.plannerRetryLimit;
+    this.plannerRetryBaseDelayMs = config.plannerRetryBaseDelayMs;
   }
 
   /**
@@ -317,6 +325,8 @@ export class SessionManager {
         repoUrl: this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
+        plannerRetryLimit: this.plannerRetryLimit,
+        plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
       });
       await conversation.init(); // Load state from database
       this.log('session-manager', 'info', `[TRACE] Recovery init() done (threadTs=${id.threadTs})`);
@@ -348,6 +358,8 @@ export class SessionManager {
         repoUrl: this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
+        plannerRetryLimit: this.plannerRetryLimit,
+        plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
       });
       // Don't call init() for new sessions — nothing to load
 
