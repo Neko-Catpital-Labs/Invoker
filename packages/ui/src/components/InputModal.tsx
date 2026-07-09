@@ -1,11 +1,17 @@
 /**
  * InputModal — Modal for providing input to a task that needs it.
- *
- * Shows the task's input prompt and a text area for the response.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { TaskState } from '../types.js';
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './primitives/index.js';
 
 interface InputModalProps {
   task: TaskState;
@@ -16,17 +22,6 @@ interface InputModalProps {
 export function InputModal({ task, onSubmit, onClose }: InputModalProps) {
   const [input, setInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    const handleGlobalKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', handleGlobalKeyDown);
-    return () => document.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [onClose]);
 
   const handleSubmit = () => {
     if (submitting) return;
@@ -43,13 +38,13 @@ export function InputModal({ task, onSubmit, onClose }: InputModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-secondary rounded-lg shadow-xl w-full max-w-md p-6 border border-border">
-        <h2 className="text-lg font-semibold text-foreground mb-2">
-          Input Required
-        </h2>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Input Required</DialogTitle>
+        </DialogHeader>
 
-        <div className="mb-4">
+        <div>
           <p className="text-sm text-muted-foreground mb-1">
             Task: <span className="font-mono text-foreground">{task.id}</span>
           </p>
@@ -60,7 +55,7 @@ export function InputModal({ task, onSubmit, onClose }: InputModalProps) {
           )}
         </div>
 
-        <div className="mb-4">
+        <div>
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -73,22 +68,20 @@ export function InputModal({ task, onSubmit, onClose }: InputModalProps) {
           <p className="text-xs text-muted-foreground mt-1">Ctrl+Enter to submit</p>
         </div>
 
-        <div className="flex gap-3 justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
+          </Button>
+          <Button
+            type="button"
             disabled={!input.trim() || submitting}
-            className="px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-muted disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
+            className="bg-amber-600 text-white hover:bg-amber-500"
+            onClick={handleSubmit}
           >
             Submit
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
