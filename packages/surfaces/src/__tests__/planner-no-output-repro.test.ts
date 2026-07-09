@@ -51,7 +51,10 @@ describe('planner exit=0 with no stdout — repro for hidden "(no output)" place
 
   beforeEach(() => {
     mockSpawn.mockReset();
-    conversation = new PlanConversation({});
+    // Pin retries off so this suite isolates the single-attempt semantics that
+    // the "(no output)" placeholder fix targets; retry behavior is covered by
+    // planner-retry-repro.test.ts.
+    conversation = new PlanConversation({ plannerRetryLimit: 0 });
   });
 
   it('rejects instead of resolving with the "(no output)" placeholder when planner exits 0 with empty stdout', async () => {
