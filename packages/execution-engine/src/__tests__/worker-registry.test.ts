@@ -20,6 +20,7 @@ import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
 import { DISK_HEADROOM_WORKER_KIND } from '../workers/disk-headroom-worker.js';
 import { REQUEUE_WORKER_KIND } from '../workers/requeue-worker.js';
 import { WORKFLOW_RESUME_WORKER_KIND } from '../workers/workflow-resume-worker.js';
+import { E2E_AUTOFIX_WORKER_KIND } from '../workers/e2e-autofix-worker.js';
 
 const silentLogger = {
   debug: () => {},
@@ -75,6 +76,7 @@ describe('worker registry', () => {
       AUTO_APPROVE_WORKER_KIND,
       CODERABBIT_ADDRESS_WORKER_KIND,
       PR_CONFLICT_REBASE_WORKER_KIND,
+      E2E_AUTOFIX_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(REQUEUE_WORKER_KIND)).toBeDefined();
@@ -85,6 +87,7 @@ describe('worker registry', () => {
     expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
     expect(registry.get(CODERABBIT_ADDRESS_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_CONFLICT_REBASE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(E2E_AUTOFIX_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>());

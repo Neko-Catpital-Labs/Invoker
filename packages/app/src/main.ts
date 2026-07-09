@@ -113,6 +113,7 @@ import {
   createAutoFixAttemptLedger,
   createWorkerRegistry,
   PR_STATUS_WORKER_KIND,
+  E2E_AUTOFIX_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   DEFAULT_EXECUTION_AGENT,
@@ -367,6 +368,7 @@ function buildRegisteredOwnerWorkerDeps(
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,
     },
+    e2eAutoFix: { intervalMs: invokerConfig.e2eAutoFixIntervalMs },
     autoApprove: {
       enabled: resolveAutoApproveAIFixes(invokerConfig),
     },
@@ -1868,7 +1870,9 @@ function startHeadlessMode(): void {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
           ),
-          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          autoStartKinds: invokerConfig.e2eAutoFixEnabled
+            ? [...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]
+            : AUTO_STARTED_OWNER_WORKER_KINDS,
           persistence,
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
@@ -3752,7 +3756,9 @@ function createEmbeddedTerminalBackendFromConfig(
             await requireTaskExecutor().checkMergeGateStatuses();
           },
         ),
-        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: invokerConfig.e2eAutoFixEnabled
+          ? [...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]
+          : AUTO_STARTED_OWNER_WORKER_KINDS,
         persistence,
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
