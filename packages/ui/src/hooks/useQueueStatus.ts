@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import type { QueueStatus } from '../types.js';
 import { areStructurallyEqual } from './useDedupedState.js';
 
-export function useQueueStatus(pollMs = 2000): QueueStatus | null {
+export function useQueueStatus(pollMs = 2000, enabled = true): QueueStatus | null {
   const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
 
     const poll = async () => {
@@ -29,7 +30,7 @@ export function useQueueStatus(pollMs = 2000): QueueStatus | null {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [pollMs]);
+  }, [enabled, pollMs]);
 
   return queueStatus;
 }
