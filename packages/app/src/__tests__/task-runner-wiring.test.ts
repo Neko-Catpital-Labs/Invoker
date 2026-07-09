@@ -52,11 +52,6 @@ vi.mock('../config.js', () => ({
     remoteTargets: {
       remote: {
         host: 'host',
-        capabilities: {
-          execution: {
-            claude: { modelPolicy: { kind: 'implicit' } },
-          },
-        },
       },
     },
     executionPools: {
@@ -65,11 +60,6 @@ vi.mock('../config.js', () => ({
           {
             type: 'worktree',
             id: 'local',
-            capabilities: {
-              planning: {
-                cursor: { modelPolicy: { kind: 'fixed', model: 'claude' } },
-              },
-            },
           },
         ],
       },
@@ -153,11 +143,6 @@ describe('task-runner-wiring', () => {
     expect(config.remoteTargetsProvider()).toEqual({
       remote: {
         host: 'host',
-        capabilities: {
-          execution: {
-            claude: { modelPolicy: { kind: 'implicit' } },
-          },
-        },
       },
     });
     expect(config.executionPoolsProvider()).toEqual({
@@ -166,11 +151,6 @@ describe('task-runner-wiring', () => {
           {
             type: 'worktree',
             id: 'local',
-            capabilities: {
-              planning: {
-                cursor: { modelPolicy: { kind: 'fixed', model: 'claude' } },
-              },
-            },
           },
         ],
       },
