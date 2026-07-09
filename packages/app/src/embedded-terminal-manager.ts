@@ -92,17 +92,27 @@ export interface AttachContext {
 
 export interface TerminalSessionPersistenceRecord extends TerminalSessionRecord {
   spec: TerminalSpec;
+  scope?: 'task' | 'planning';
+  planningSessionId?: string;
 }
 export interface OpenSessionOptions {
   taskId: string;
   spec: TerminalSpec;
   cwd: string;
+  scope?: 'task' | 'planning';
+  planningSessionId?: string;
   /** When provided, the session attaches to the running executor rather than spawning a child. */
   attach?: AttachContext;
+}
+export interface OpenPlanningShellOptions {
+  planningSessionId: string;
+  cwd: string;
 }
 interface BaseSessionState {
   sessionId: string;
   taskId: string;
+  scope: 'task' | 'planning';
+  planningSessionId?: string;
   targetKey: string;
   spec: TerminalSpec;
   cwd: string;
@@ -139,6 +149,8 @@ function describePersistenceRecord(state: SessionState): TerminalSessionPersiste
   return {
     sessionId: state.sessionId,
     taskId: state.taskId,
+    scope: state.scope,
+    planningSessionId: state.planningSessionId,
     targetKey: state.targetKey,
     status: state.status,
     exitCode: state.exitCode,
@@ -158,6 +170,8 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
   return {
     sessionId: state.sessionId,
     taskId: state.taskId,
+    scope: state.scope,
+    planningSessionId: state.planningSessionId,
     status: state.status,
     exitCode: state.exitCode,
     cwd: state.cwd,
@@ -296,9 +310,12 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     const sessionId = randomUUID();
     const createdAt = new Date().toISOString();
+    const scope = opts.scope ?? 'task';
     const base = {
       sessionId,
       taskId: opts.taskId,
+      scope,
+      planningSessionId: scope === 'planning' ? opts.planningSessionId : undefined,
       targetKey,
       spec: opts.spec,
       cwd: opts.cwd,
@@ -341,6 +358,16 @@ export class EmbeddedTerminalManager extends EventEmitter {
     return this.registerSpawnSession(base);
   }
 
+  openOrReusePlanningShell(opts: OpenPlanningShellOptions): TerminalSessionDescriptor {
+    return this.openOrReuse({
+      taskId: buildPlanningTaskId(opts.planningSessionId),
+      scope: 'planning',
+      planningSessionId: opts.planningSessionId,
+      spec: {},
+      cwd: opts.cwd,
+    });
+  }
+
   restoreSpawnSession(seed: {
     sessionId: string;
     taskId: string;
@@ -368,6 +395,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
     return this.registerSpawnSession({
       sessionId: seed.sessionId,
       taskId: seed.taskId,
+      scope: 'task',
       targetKey: seed.targetKey,
       spec: seed.spec,
       cwd: seed.cwd,
@@ -607,7 +635,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
 
     const payload: TerminalExitEvent = {
       sessionId: state.sessionId,
+      scope: state.scope,
       taskId: state.taskId,
+      planningSessionId: state.planningSessionId,
       exitCode,
     };
     this.emit('exit', payload);
@@ -618,7 +648,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
     state.updatedAt = new Date().toISOString();
     const payload: TerminalOutputEvent = {
       sessionId: state.sessionId,
+      scope: state.scope,
       taskId: state.taskId,
+      planningSessionId: state.planningSessionId,
       data,
     };
     this.emit('output', payload);
@@ -657,6 +689,17 @@ function loadNodePtySpawn(): PtySpawnFn {
 }
 
 function buildTargetKey(opts: OpenSessionOptions): string {
+  if (opts.scope === 'planning') {
+    return JSON.stringify({
+      scope: 'planning',
+      planningSessionId: opts.planningSessionId ?? null,
+      cwd: opts.cwd,
+      command: opts.spec.command ?? null,
+      args: opts.spec.args ?? [],
+      linuxTerminalTail: opts.spec.linuxTerminalTail ?? null,
+    });
+  }
+
   return JSON.stringify({
     taskId: opts.taskId,
     cwd: opts.cwd,
@@ -673,4 +716,8 @@ function buildTargetKey(opts: OpenSessionOptions): string {
         }
       : null,
   });
+}
+
+function buildPlanningTaskId(planningSessionId: string): string {
+  return `planning:${planningSessionId}`;
 }
