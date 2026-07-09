@@ -3905,7 +3905,14 @@ function createEmbeddedTerminalBackendFromConfig(
       planningSessionStore: ownerMode ? persistence : undefined,
     });
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
-    let testPlanningChatResponse: { planYaml: string; planName: string; reply?: string } | null = null;
+    // Two variants: (1) a successful override that returns a canned reply +
+    // plan YAML, or (2) an error injection that makes the wrapper throw the
+    // given message. The error variant lets visual-proof specs render the
+    // exhausted-retry error path without spawning a real planner subprocess.
+    let testPlanningChatResponse:
+      | { planYaml: string; planName: string; reply?: string }
+      | { throwError: string }
+      | null = null;
 
 
     registerGuiMutationHandler('invoker:plan-from-goal', async (...args: unknown[]) => {
@@ -3938,7 +3945,12 @@ function createEmbeddedTerminalBackendFromConfig(
     registerGuiMutationHandler('invoker:planning-chat-send', async (request: unknown) => {
       const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;
       const plannerReplyOverride = planningChatResponseOverride
-        ? async (): Promise<string> => `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``
+        ? async (): Promise<string> => {
+          if ('throwError' in planningChatResponseOverride) {
+            throw new Error(planningChatResponseOverride.throwError);
+          }
+          return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
+        }
         : undefined;
       return sendPlanningChatMessage(request as InAppPlanningChatRequest, {
         config: invokerConfig,
@@ -4016,7 +4028,13 @@ function createEmbeddedTerminalBackendFromConfig(
       );
       ipcMain.handle(
         'invoker:set-test-planning-chat-response',
-        async (_event, response: { planYaml: string; planName: string; reply?: string } | null) => {
+        async (
+          _event,
+          response:
+            | { planYaml: string; planName: string; reply?: string }
+            | { throwError: string }
+            | null,
+        ) => {
           testPlanningChatResponse = response;
         },
       );
