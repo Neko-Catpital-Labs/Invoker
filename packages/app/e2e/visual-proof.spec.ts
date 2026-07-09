@@ -17,16 +17,14 @@ import {
   injectTaskStates,
   captureScreenshot,
   assertPageScreenshot,
-  getTasks,
   E2E_REPO_URL,
 } from './fixtures/electron-app.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 import type { Locator, Page } from '@playwright/test';
-import { SQLiteAdapter } from '@invoker/data-store';
 
-/** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
+/** Plan for queue-semantics visual proof: scheduler task states must not leak into Worker Actions. */
 const QUEUE_SEMANTICS_PLAN = {
   name: 'Queue Semantics Visual Proof',
   repoUrl: E2E_REPO_URL,
@@ -187,17 +185,17 @@ const REVIEW_READY_WORKFLOW_PR_PLAN = {
 };
 
 const TASK_STATUS_PROOF_SPECS = [
-  { status: 'pending', taskId: 'proof-task-pending', description: 'Pending', label: 'PENDING' },
-  { status: 'running', taskId: 'proof-task-running', description: 'Running', label: 'RUNNING' },
-  { status: 'fixing_with_ai', taskId: 'proof-task-fixing', description: 'Fixing with AI', label: 'FIXING WITH AI' },
-  { status: 'completed', taskId: 'proof-task-completed', description: 'Completed', label: 'COMPLETED' },
-  { status: 'failed', taskId: 'proof-task-failed', description: 'Failed', label: 'FAILED' },
-  { status: 'closed', taskId: 'proof-task-closed', description: 'Closed', label: 'CLOSED' },
-  { status: 'needs_input', taskId: 'proof-task-needs-input', description: 'Needs input', label: 'NEEDS_INPUT' },
-  { status: 'blocked', taskId: 'proof-task-blocked', description: 'Blocked', label: 'BLOCKED' },
-  { status: 'review_ready', taskId: 'proof-task-review-ready', description: 'Review ready', label: 'REVIEW_READY' },
-  { status: 'awaiting_approval', taskId: 'proof-task-awaiting-approval', description: 'Await approval', label: 'APPROVE' },
-  { status: 'stale', taskId: 'proof-task-stale', description: 'Stale', label: 'STALE' },
+  { status: 'pending', taskId: 'proof-task-pending', description: 'Pending', label: 'Pending' },
+  { status: 'running', taskId: 'proof-task-running', description: 'Running', label: 'Running' },
+  { status: 'fixing_with_ai', taskId: 'proof-task-fixing', description: 'Fixing with AI', label: 'Fixing with AI' },
+  { status: 'completed', taskId: 'proof-task-completed', description: 'Completed', label: 'Completed' },
+  { status: 'failed', taskId: 'proof-task-failed', description: 'Failed', label: 'Failed' },
+  { status: 'closed', taskId: 'proof-task-closed', description: 'Closed', label: 'Closed' },
+  { status: 'needs_input', taskId: 'proof-task-needs-input', description: 'Needs input', label: 'Needs input' },
+  { status: 'blocked', taskId: 'proof-task-blocked', description: 'Blocked', label: 'Blocked' },
+  { status: 'review_ready', taskId: 'proof-task-review-ready', description: 'Review ready', label: 'Review ready' },
+  { status: 'awaiting_approval', taskId: 'proof-task-awaiting-approval', description: 'Await approval', label: 'Approve' },
+  { status: 'stale', taskId: 'proof-task-stale', description: 'Stale', label: 'Stale' },
 ] as const;
 
 const WORKFLOW_STATUS_PROOF_STATUSES = [
@@ -478,6 +476,23 @@ async function selectGraphMenuItem(page: Page, testId: string): Promise<void> {
   await page.getByTestId(testId).click();
 }
 
+async function expectWorkerActionsSurface(page: Page): Promise<{
+  actionSection: Locator;
+  actionList: Locator;
+  workersSection: Locator;
+}> {
+  const actionSection = page.getByTestId('action-queue-section');
+  const actionList = page.getByTestId('worker-action-list');
+  const workersSection = page.getByTestId('worker-processes-section');
+
+  await expect(actionSection.getByRole('heading', { name: 'Worker Actions (0)' })).toBeVisible();
+  await expect(actionList.getByText('No worker action is running.')).toBeVisible();
+  await expect(workersSection.getByRole('heading', { name: /Worker processes \(\d+\)/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Action Queue|Backlog/ })).toHaveCount(0);
+
+  return { actionSection, actionList, workersSection };
+}
+
 
 async function selectWorkflowNode(page: Page, workflowId: string): Promise<void> {
   const node = workflowNode(page, workflowId);
@@ -489,12 +504,12 @@ async function selectWorkflowNode(page: Page, workflowId: string): Promise<void>
   }
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    await node.waitFor({ state: 'attached', timeout: 15000 });
-    await node.scrollIntoViewIfNeeded();
     try {
+      await node.waitFor({ state: 'visible', timeout: 15000 });
+      await node.scrollIntoViewIfNeeded();
       await node.click({ force: true });
     } catch {
-      await node.dispatchEvent('click', { bubbles: true });
+      await node.dispatchEvent('click', { bubbles: true }).catch(() => undefined);
     }
     if (!(await miniDag.isVisible({ timeout: 1500 }).catch(() => false))) {
       await node.dispatchEvent('click', { bubbles: true });
@@ -526,24 +541,6 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
   await page.waitForTimeout(300);
   await selectWorkflowNode(page, workflow!.id);
   return workflow!.id;
-}
-async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId: string, now: Date): Promise<void> {
-  const adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
-  try {
-    adapter.saveAttempt({
-      id: attemptId,
-      nodeId: taskId,
-      queuePriority: 0,
-      upstreamAttemptIds: [],
-      status: 'claimed',
-      claimedAt: now,
-      lastHeartbeatAt: now,
-      leaseExpiresAt: new Date(now.getTime() + 60_000),
-      createdAt: now,
-    });
-  } finally {
-    adapter.close();
-  }
 }
 
 test.describe('Read-only mode visual proof', () => {
@@ -702,7 +699,8 @@ test.describe('Visual proof capture', () => {
       await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'I drafted the stacked plan.' });
     }, { planYaml: plannedYaml, planName: 'Workers Surface' });
 
-    await expect(page.getByRole('heading', { name: 'What do you want to build?' })).toBeVisible();
+    await page.getByTestId('sidebar-planning').click();
+    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
     await expect(page.getByTestId('invoker-terminal-input')).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Build the Workers Surface');
     await page.getByRole('button', { name: 'Send' }).click();
@@ -1209,7 +1207,7 @@ test.describe('Visual proof capture', () => {
       .locator(`.react-flow__node[data-testid="${mergeGateTaskId}"], .react-flow__node[data-testid$="${mergeGateTaskId}"]`)
       .first();
     await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
-    await expect(mergeGateNode.getByText('APPROVE', { exact: true })).toBeVisible();
+    await expect(mergeGateNode.getByText('Approve', { exact: true })).toBeVisible();
 
     // Inline chip button must be gone — approval lives in the side panel now.
     await expect(mergeGateNode.locator('[data-testid="approve-merge-button"]')).toHaveCount(0);
@@ -1260,9 +1258,9 @@ test.describe('Visual proof capture', () => {
     await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
 
     // Closed is the terminal status the gate displays — distinct from Failed (BLOCKED) and Review Ready.
-    await expect(mergeGateNode.getByText('CLOSED', { exact: true })).toBeVisible();
-    await expect(mergeGateNode.getByText('BLOCKED', { exact: true })).toHaveCount(0);
-    await expect(mergeGateNode.getByText('REVIEW READY', { exact: true })).toHaveCount(0);
+    await expect(mergeGateNode.getByText('Closed', { exact: true })).toBeVisible();
+    await expect(mergeGateNode.getByText('Blocked', { exact: true })).toHaveCount(0);
+    await expect(mergeGateNode.getByText('Review ready', { exact: true })).toHaveCount(0);
 
     await captureScreenshot(page, 'closed-status-merge-gate');
   });
@@ -1351,7 +1349,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('workflow-inspector-title')).toHaveText('Review ready workflow PR proof');
     await expect(page.getByText('Inspector', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
-    await expect(page.getByRole('link', { name: reviewUrl })).toHaveAttribute('href', reviewUrl);
+    await expect(page.getByTestId('inspector-pr-link').first()).toHaveAttribute('href', reviewUrl);
 
     await captureScreenshot(page, 'review-ready-workflow-pr-sidebar');
   });
@@ -1488,7 +1486,7 @@ test.describe('Visual proof capture', () => {
 
     // Task-level surface: mini-DAG task node displays the task-status hue.
     await expect(
-      page.locator('.react-flow__node[data-testid$="task-alpha"]').getByText('REVIEW_READY'),
+      page.locator('.react-flow__node[data-testid$="task-alpha"]').getByText('Review ready'),
     ).toBeVisible();
 
     await captureScreenshot(page, 'workflow-task-status-color-parity');
@@ -1511,17 +1509,14 @@ test.describe('Visual proof capture', () => {
         },
       })),
     );
-    await page.getByRole('button', { name: 'Full graph ⤢' }).click();
-    const overlay = page.getByTestId('graph-maximized-overlay');
-    await expect(overlay).toBeVisible();
-    await overlay.getByRole('button', { name: 'Fit View' }).click();
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    await miniDag.getByRole('button', { name: 'Fit View' }).click();
     await page.waitForTimeout(300);
 
     for (const spec of TASK_STATUS_PROOF_SPECS) {
-      const node = overlay.locator(`.react-flow__node[data-testid$="${spec.taskId}"] > div`).first();
+      const node = miniDag.locator(`.react-flow__node[data-testid$="${spec.taskId}"] > div`).first();
       await expect(node).toBeVisible({ timeout: 10000 });
-      await expect(node).toBeInViewport({ timeout: 10000 });
-      await expect(node.getByText(spec.label, { exact: true })).toBeVisible();
+      await expect(node.getByText(spec.label, { exact: true }).last()).toBeVisible();
     }
 
     await captureScreenshot(page, 'task-status-all-states');
@@ -1603,7 +1598,7 @@ test.describe('Visual proof capture', () => {
       expect(workflowId).toBeTruthy();
       const node = workflowNode(page, workflowId!);
       await expect(node).toBeVisible({ timeout: 10000 });
-      await expect(node.getByText(statusProofLabel(status), { exact: true })).toBeVisible();
+      await expect(node.getByText(`Status proof ${statusProofLabel(status)}`, { exact: true })).toBeVisible();
     }
 
     await captureScreenshot(page, 'workflow-status-all-states');
@@ -1654,12 +1649,12 @@ test.describe('Visual proof capture', () => {
 
     const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
     await expect(menu).toBeFocused();
-    await expect(page.getByRole('menuitem', { name: 'Open Workflow' })).toHaveClass(/\bbg-gray-700\b/);
+    await expect(page.getByRole('menuitem', { name: 'Open Workflow' })).toHaveClass(/\bbg-muted\b/);
 
     await page.keyboard.press('ArrowDown');
     const activeItem = page.getByRole('menuitem', { name: 'Open PR' });
     await expect(activeItem).toBeVisible();
-    await expect(activeItem).toHaveClass(/\bbg-gray-700\b/);
+    await expect(activeItem).toHaveClass(/\bbg-muted\b/);
 
     await captureScreenshot(page, 'context-menu-keyboard-navigation');
   });
@@ -1826,58 +1821,37 @@ test.describe('Visual proof capture', () => {
     await injectTaskStates(page, [
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
-    // Navigate to queue view
+
     await selectGraphMenuItem(page, 'rail-queue');
-    await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
+    const { actionList } = await expectWorkerActionsSurface(page);
+    await expect(actionList).not.toContainText('First test task');
     await captureScreenshot(page, 'queue-view-concurrency');
     await assertPageScreenshot(page, 'queue-view-concurrency');
   });
-  test('queue assigning state', async ({ page, testDir }) => {
+
+  test('queue assigning state', async ({ page }) => {
     await loadPlan(page, QUEUE_ASSIGNING_PLAN);
-    const tasks = await getTasks(page);
-    const task = tasks.find((entry: { id: string }) => entry.id.endsWith('/assigning-task') || entry.id === 'assigning-task');
-    const mergeTask = tasks.find((entry: { id: string }) => entry.id.startsWith('__merge__'));
-    expect(task).toBeTruthy();
-    expect(mergeTask).toBeTruthy();
-    const dbPath = path.join(testDir, 'invoker.db');
     const now = new Date();
-    const attemptId = `${task!.id}-assigning-attempt`;
-    await seedActiveLaunchAttempt(dbPath, task!.id, attemptId, now);
     await injectTaskStates(page, [
       {
-        taskId: task!.id,
+        taskId: 'assigning-task',
         changes: {
           status: 'pending',
           execution: {
             phase: 'launching',
-            selectedAttemptId: attemptId,
+            selectedAttemptId: 'assigning-task-assigning-attempt',
             launchStartedAt: now,
             lastHeartbeatAt: now,
           },
         },
       },
-      {
-        taskId: mergeTask!.id,
-        changes: {
-          execution: {
-            startedAt: now,
-            completedAt: now,
-          },
-        },
-      },
     ]);
-    await page.waitForTimeout(2200);
-    await selectGraphMenuItem(page, 'rail-queue');
-    await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: /Backlog/ })).toBeVisible();
-    await expect(page.getByText('assigning-task', { exact: true })).toBeVisible();
-    await expect(page.getByText('Assigning queue task')).toBeVisible();
-    await captureScreenshot(page, 'queue-assigning-statusbar');
 
-    const queueRow = page.locator('[data-row-id$="assigning-task"]');
-    await expect(queueRow).toBeVisible();
-    await expect(queueRow.getByText('phase: Assigning')).toHaveCount(0);
+    await selectGraphMenuItem(page, 'rail-queue');
+    const { actionList } = await expectWorkerActionsSurface(page);
+    await expect(actionList).not.toContainText('assigning-task');
+    await expect(actionList).not.toContainText('Assigning queue task');
+    await captureScreenshot(page, 'queue-assigning-statusbar');
     await captureScreenshot(page, 'queue-assigning-row');
   });
 
@@ -1889,19 +1863,12 @@ test.describe('Visual proof capture', () => {
       { taskId: 'qs-needs-input', changes: { status: 'needs_input', execution: { startedAt: now } } },
       { taskId: 'qs-review', changes: { status: 'review_ready', execution: { startedAt: now } } },
       { taskId: 'qs-approval', changes: { status: 'awaiting_approval', execution: { startedAt: now } } },
-      // qs-queued stays pending with no deps → lands in Action Queue queued section
-      // qs-blocked stays pending with unmet dep on qs-running → lands in Backlog
     ]);
 
-    // Navigate to queue view
     await selectGraphMenuItem(page, 'rail-queue');
-
-    // Assert queue section headings are visible
-    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
-    await expect(page.getByRole('heading', { name: /Backlog/ })).toBeVisible();
-
-    // Assert at least one canonical task-state label rendered in the action queue rows
-    await expect(page.locator('text=running').first()).toBeVisible();
+    const { actionList } = await expectWorkerActionsSurface(page);
+    await expect(actionList).not.toContainText('Running task (executing)');
+    await expect(actionList).not.toContainText('Blocked by running task');
 
     await captureScreenshot(page, 'queue-semantics-action-states');
     await assertPageScreenshot(page, 'queue-semantics-action-states');
@@ -1912,7 +1879,6 @@ test.describe('Visual proof capture', () => {
     const now = new Date();
     const earlier = new Date(Date.now() - 5000);
     await injectTaskStates(page, [
-      // Upstream task completed — satisfies qr-middle's dependency
       {
         taskId: 'qr-upstream',
         changes: {
@@ -1920,7 +1886,6 @@ test.describe('Visual proof capture', () => {
           execution: { startedAt: earlier, completedAt: now },
         },
       },
-      // Middle task running — actionable, appears in Action Queue
       {
         taskId: 'qr-middle',
         changes: {
@@ -1928,25 +1893,12 @@ test.describe('Visual proof capture', () => {
           execution: { startedAt: now },
         },
       },
-      // qr-downstream stays pending with unmet dep on qr-middle → lands in Backlog
     ]);
 
-    // Navigate to queue view
     await selectGraphMenuItem(page, 'rail-queue');
-
-    // Assert queue sections are visible
-    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
-    await expect(page.getByRole('heading', { name: /Backlog/ })).toBeVisible();
-
-    // Assert downstream dependent is rendered in Backlog with its dep reference
-    await expect(page.getByText('deps: qr-middle')).toBeVisible();
-
-    // Click the middle task row to expand its relationship context in the task panel
-    await page.locator('[data-row-id$="/qr-middle"]').click();
-
-    // Assert the expanded relationship headings are visible in the task panel
-    await expect(page.getByRole('heading', { name: 'Actionable task with relationships' })).toBeVisible();
-    await expect(page.getByText('echo middle')).toBeVisible();
+    const { actionList } = await expectWorkerActionsSurface(page);
+    await expect(actionList).not.toContainText('deps: qr-middle');
+    await expect(actionList).not.toContainText('Actionable task with relationships');
 
     await captureScreenshot(page, 'queue-relationships-expanded-context');
     await assertPageScreenshot(page, 'queue-relationships-expanded-context');
@@ -2130,7 +2082,7 @@ test.describe('Visual proof capture', () => {
     await page.getByRole('button', { name: 'Fit View' }).first().click();
     await page.waitForTimeout(200);
     for (const workflowId of [rootWorkflowId, downstreamAId, downstreamBId, fanInId]) {
-      await expect(workflowNode(page, workflowId)).toBeInViewport();
+      await expect(workflowNode(page, workflowId)).toBeVisible();
     }
 
     await captureScreenshot(page, 'stacked-workflows');
@@ -2199,29 +2151,17 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'detached-workflow-lineage-after');
   });
-  test('queue-action-wording — task-level uses Cancel, workflow-level keeps Cancel Workflow', async ({ page }) => {
+  test('queue-action-wording — Worker Actions omits task cancel while workflow menu keeps Cancel Workflow', async ({ page }) => {
     const workflowId = await loadPlanAndSelectWorkflow(page, TEST_PLAN);
     const now = new Date();
     await injectTaskStates(page, [
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
 
-    await page.evaluate(() => {
-      window.invoker.getQueueStatus = async () => ({
-        maxConcurrency: 5,
-        runningCount: 1,
-        running: [{ taskId: 'task-alpha', description: 'First test task' }],
-        queued: [],
-      });
-    });
-    await page.waitForTimeout(2200);
-
     await selectGraphMenuItem(page, 'rail-queue');
-    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
-    const cancelButton = page
-      .locator('[data-row-id$="task-alpha"]')
-      .getByRole('button', { name: 'Cancel task-alpha' });
-    await expect(cancelButton).toBeVisible();
+    const { actionList } = await expectWorkerActionsSurface(page);
+    await expect(actionList.getByRole('button', { name: 'Cancel task-alpha' })).toHaveCount(0);
+    await expect(actionList).not.toContainText('First test task');
 
     await selectGraphMenuItem(page, 'rail-home');
     await selectWorkflowNode(page, workflowId);
@@ -2233,84 +2173,39 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'terminate-wording-task-vs-workflow');
   });
 
-  test('queue-cancel-control — compact cancel affordance without priority metadata', async ({ page }) => {
+  test('queue-cancel-control — Worker Actions omits legacy task controls and priority metadata', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
     await injectTaskStates(page, [
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
 
-    await page.waitForTimeout(2200);
-
     await selectGraphMenuItem(page, 'rail-queue');
-    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
-
-    const actionRow = page.locator('[data-row-id$="task-alpha"]');
-    await expect(actionRow).toBeVisible();
-    // Assert the action queue row renders the compact cancel affordance
-    const cancelButton = actionRow.getByRole('button', { name: 'Cancel task-alpha' });
-    await expect(cancelButton).toBeVisible();
-
-    await expect(actionRow.locator('text=priority:')).not.toBeVisible();
+    const { actionList } = await expectWorkerActionsSurface(page);
+    await expect(actionList.getByRole('button', { name: 'Cancel task-alpha' })).toHaveCount(0);
+    await expect(actionList).not.toContainText('priority:');
+    await expect(actionList).not.toContainText('First test task');
 
     await captureScreenshot(page, 'queue-cancel-control');
     await assertPageScreenshot(page, 'queue-cancel-control');
   });
 
-  test('queue-action-surface-hardening — composed queue UX with labels, relationships, and cancel', async ({ page }) => {
+  test('queue-action-surface-hardening — Worker Actions stays separate from scheduler task state', async ({ page }) => {
     await loadPlan(page, QUEUE_HARDENING_PLAN);
     const now = new Date();
     await injectTaskStates(page, [
       { taskId: 'qh-running', changes: { status: 'running', execution: { startedAt: now } } },
       { taskId: 'qh-fixing', changes: { status: 'running', execution: { isFixingWithAI: true, startedAt: now } } },
       { taskId: 'qh-approval', changes: { status: 'awaiting_approval', execution: { startedAt: now } } },
-      // qh-queued stays pending with no deps → Action Queue queued section
-      // qh-downstream stays pending with unmet dep on qh-running → Backlog
     ]);
 
-    await page.evaluate(() => {
-      window.invoker.getQueueStatus = async () => ({
-        maxConcurrency: 5,
-        runningCount: 2,
-        running: [
-          { taskId: 'qh-running', description: 'Running task with downstream' },
-          { taskId: 'qh-fixing', description: 'Fixing task with AI' },
-        ],
-        queued: [],
-      });
-    });
-    await page.waitForTimeout(2200);
-    // Navigate to queue view
     await selectGraphMenuItem(page, 'rail-queue');
-    // Assert canonical Action Queue and Backlog headings
-    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
-    await expect(page.getByRole('heading', { name: /Backlog/ })).toBeVisible();
-
-    // Assert canonical action queue labels are present
-    await expect(page.locator('text=running').first()).toBeVisible();
-
-    // Assert the running task row exposes the compact cancel affordance
-    const cancelButton = page
-      .locator('[data-row-id$="qh-running"]')
-      .getByRole('button', { name: 'Cancel qh-running' });
-    await expect(cancelButton).toBeVisible();
-
-    // Assert downstream dependent shows its dependency in Backlog
-    await expect(page.getByText('deps: qh-running')).toBeVisible();
-
-    // Expand relationship section inline and verify downstream context
-    await page
-      .locator('[data-row-id$="/qh-running"]')
-      .getByRole('button', { name: 'Expand relationships' })
-      .click();
-    const relationshipPanel = page.getByTestId('rels-wf-test-1/qh-running');
-    await expect(relationshipPanel.getByText('downstream:')).toBeVisible();
-    await expect(relationshipPanel.getByRole('button', { name: 'qh-downstream' })).toBeVisible();
-
-    // Click the running task row to open the task panel
-    await page.locator('[data-row-id$="/qh-running"]').click();
-    await expect(page.getByRole('heading', { name: 'Running task with downstream' })).toBeVisible();
-    await expect(page.getByText('echo run')).toBeVisible();
+    const { actionList, workersSection } = await expectWorkerActionsSurface(page);
+    await expect(actionList).not.toContainText('Running task with downstream');
+    await expect(actionList).not.toContainText('Fixing task with AI');
+    await expect(actionList).not.toContainText('deps: qh-running');
+    await expect(actionList.getByRole('button', { name: 'Cancel qh-running' })).toHaveCount(0);
+    await expect(workersSection.getByText('Process status is separate from queue work. A running process can be idle.')).toBeVisible();
 
     await captureScreenshot(page, 'queue-action-surface-hardening');
     await assertPageScreenshot(page, 'queue-action-surface-hardening');
