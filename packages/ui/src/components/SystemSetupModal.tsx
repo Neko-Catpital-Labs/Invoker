@@ -6,6 +6,14 @@ import type {
   PrerequisiteStatus,
   SystemDiagnostics,
 } from '@invoker/contracts';
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './primitives/index.js';
 
 const readinessStatusClasses: Record<PrerequisiteStatus, { dot: string; text: string; badge: string }> = {
   ok: {
@@ -218,16 +226,16 @@ export function SystemSetupModal({
 
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-secondary rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-border">
-        <div className="p-6 pb-3 shrink-0">
-          <h2 className="text-lg font-semibold text-foreground">System Setup</h2>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col gap-0 p-0 overflow-hidden" hideCloseButton>
+        <DialogHeader className="p-6 pb-3 shrink-0">
+          <DialogTitle>System Setup</DialogTitle>
           <p className="text-sm text-muted-foreground mt-1">
             {diagnostics
               ? `Invoker ${diagnostics.appVersion} on ${diagnostics.platform}/${diagnostics.arch}${diagnostics.isPackaged ? ' (packaged app)' : ' (repo/dev mode)'}`
               : 'Loading system diagnostics...'}
           </p>
-        </div>
+        </DialogHeader>
 
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
           {onRunSetup && (
@@ -642,15 +650,12 @@ export function SystemSetupModal({
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-border flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-muted hover:bg-accent text-white rounded text-sm font-medium transition-colors"
-          >
+        <DialogFooter className="px-6 py-4 border-t border-border sm:justify-end">
+          <Button type="button" onClick={onClose}>
             Close
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
