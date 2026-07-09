@@ -1,5 +1,4 @@
-import type { TaskEvent, Workflow } from '@invoker/data-store';
-import type { TaskState } from '@invoker/workflow-core';
+import type { TaskEvent } from '@invoker/data-store';
 
 import { RECOVERY_WORKER_KIND } from './workers/auto-fix-recovery.js';
 
@@ -50,9 +49,19 @@ export interface RecoveryWorkerStatusEvent {
 }
 
 export interface RecoveryWorkerStatusPersistence {
-  listWorkflows(): Workflow[];
-  loadTasks(workflowId: string): TaskState[];
-  getEvents(taskId: string): TaskEvent[];
+  getEventsByTypes?(
+    eventTypes: readonly string[],
+    sortBy: 'asc' | 'desc',
+    limit: number,
+  ): TaskEvent[];
+  countEventsByTypes?(eventTypes: readonly string[]): Array<{
+    eventType: string;
+    count: number;
+    lastCreatedAt: string | null;
+  }>;
+  listWorkflows?(): Array<{ id: string }>;
+  loadTasks?(workflowId: string): Array<{ id: string }>;
+  getEvents?(taskId: string): TaskEvent[];
 }
 
 const RECOVERY_EVENT_TYPES: Record<RecoveryWorkerAuditAction, RecoveryWorkerAuditEventType> = {
@@ -61,6 +70,8 @@ const RECOVERY_EVENT_TYPES: Record<RecoveryWorkerAuditAction, RecoveryWorkerAudi
   submit: 'recovery.worker.submit',
   skip: 'recovery.worker.skip',
 };
+
+const ALL_RECOVERY_EVENT_TYPES = Object.values(RECOVERY_EVENT_TYPES);
 
 export function recoveryWorkerEventType(action: RecoveryWorkerAuditAction): RecoveryWorkerAuditEventType {
   return RECOVERY_EVENT_TYPES[action];
@@ -112,23 +123,70 @@ export function collectRecoveryWorkerStatus(
   persistence: RecoveryWorkerStatusPersistence,
 ): RecoveryWorkerStatus {
   const status = emptyRecoveryWorkerStatus();
+
+  if (typeof persistence.countEventsByTypes === 'function'
+    && typeof persistence.getEventsByTypes === 'function') {
+    return collectFromAggregates(persistence, status);
+  }
+
+  return collectFromLegacyScan(persistence, status);
+}
+
+function collectFromAggregates(
+  persistence: RecoveryWorkerStatusPersistence,
+  status: RecoveryWorkerStatus,
+): RecoveryWorkerStatus {
+  const counts = persistence.countEventsByTypes!(ALL_RECOVERY_EVENT_TYPES);
+  const countByType = new Map(counts.map((row) => [row.eventType, row]));
+
+  const wakeups = countByType.get(RECOVERY_EVENT_TYPES.wakeup)?.count ?? 0;
+  const scans = countByType.get(RECOVERY_EVENT_TYPES.scan)?.count ?? 0;
+  const submissions = countByType.get(RECOVERY_EVENT_TYPES.submit)?.count ?? 0;
+  const skips = countByType.get(RECOVERY_EVENT_TYPES.skip)?.count ?? 0;
+
+  const lastWakeupAt = countByType.get(RECOVERY_EVENT_TYPES.wakeup)?.lastCreatedAt ?? undefined;
+  const lastScanAt = countByType.get(RECOVERY_EVENT_TYPES.scan)?.lastCreatedAt ?? undefined;
+  const lastSubmitAt = countByType.get(RECOVERY_EVENT_TYPES.submit)?.lastCreatedAt ?? undefined;
+
+  const recentEvents = persistence.getEventsByTypes!(ALL_RECOVERY_EVENT_TYPES, 'desc', 50)
+    .filter((event): event is TaskEvent & { eventType: RecoveryWorkerAuditEventType } =>
+      isRecoveryWorkerAuditEventType(event.eventType))
+    .map((event) => toStatusEvent(event));
+
+  const lastSkipEvent = persistence.getEventsByTypes!([RECOVERY_EVENT_TYPES.skip], 'desc', 1)[0];
+  const lastSkip = lastSkipEvent && isRecoveryWorkerAuditEventType(lastSkipEvent.eventType)
+    ? toStatusEvent(lastSkipEvent as TaskEvent & { eventType: RecoveryWorkerAuditEventType })
+    : undefined;
+
+  return {
+    ...status,
+    ...(lastWakeupAt ? { lastWakeupAt } : {}),
+    ...(lastScanAt ? { lastScanAt } : {}),
+    ...(lastSubmitAt ? { lastSubmitAt } : {}),
+    ...(lastSkip ? {
+      lastSkipAt: lastSkip.at,
+      lastSkipReason: lastSkip.reason ?? 'unknown',
+      lastSkipTaskId: lastSkip.taskId,
+    } : {}),
+    wakeups,
+    scans,
+    submissions,
+    skips,
+    recent: recentEvents.slice(0, 10),
+  };
+}
+
+function collectFromLegacyScan(
+  persistence: RecoveryWorkerStatusPersistence,
+  status: RecoveryWorkerStatus,
+): RecoveryWorkerStatus {
   const events: RecoveryWorkerStatusEvent[] = [];
 
-  for (const workflow of persistence.listWorkflows()) {
-    for (const task of persistence.loadTasks(workflow.id)) {
-      for (const event of persistence.getEvents(task.id)) {
+  for (const workflow of persistence.listWorkflows?.() ?? []) {
+    for (const task of persistence.loadTasks?.(workflow.id) ?? []) {
+      for (const event of persistence.getEvents?.(task.id) ?? []) {
         if (!isRecoveryWorkerAuditEventType(event.eventType)) continue;
-        const payload = parsePayload(event.payload);
-        const action = actionForEventType(event.eventType);
-        events.push({
-          at: event.createdAt,
-          taskId: event.taskId,
-          eventType: event.eventType,
-          action,
-          ...(typeof payload.phase === 'string' ? { phase: payload.phase } : {}),
-          ...(typeof payload.reason === 'string' ? { reason: payload.reason } : {}),
-          ...(typeof payload.workflowId === 'string' || payload.workflowId === null ? { workflowId: payload.workflowId } : {}),
-        });
+        events.push(toStatusEvent(event as TaskEvent & { eventType: RecoveryWorkerAuditEventType }));
       }
     }
   }
@@ -175,6 +233,24 @@ export function collectRecoveryWorkerStatus(
     submissions,
     skips,
     recent: events.slice(-10).reverse(),
+  };
+}
+
+function toStatusEvent(
+  event: TaskEvent & { eventType: RecoveryWorkerAuditEventType },
+): RecoveryWorkerStatusEvent {
+  const payload = parsePayload(event.payload);
+  const action = actionForEventType(event.eventType);
+  return {
+    at: event.createdAt,
+    taskId: event.taskId,
+    eventType: event.eventType,
+    action,
+    ...(typeof payload.phase === 'string' ? { phase: payload.phase } : {}),
+    ...(typeof payload.reason === 'string' ? { reason: payload.reason } : {}),
+    ...(typeof payload.workflowId === 'string' || payload.workflowId === null
+      ? { workflowId: payload.workflowId }
+      : {}),
   };
 }
 
