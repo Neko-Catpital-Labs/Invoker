@@ -276,6 +276,23 @@ export function createMockInvoker(
     terminalWrite: vi.fn(async () => ({ ok: true })),
     terminalResize: vi.fn(async () => ({ ok: true })),
     terminalClose: vi.fn(async () => ({ ok: true })),
+    planningTerminalOpen: vi.fn(async ({ planningSessionId }: { planningSessionId: string }) => ({
+      opened: true,
+      session: {
+        sessionId: `mock-planning-terminal-${planningSessionId}`,
+        scope: 'planning' as const,
+        taskId: `planning:${planningSessionId}`,
+        planningSessionId,
+        status: 'running' as const,
+        mode: 'spawn' as const,
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+      },
+    })),
+    planningTerminalList: vi.fn(async () => []),
+    planningTerminalWrite: vi.fn(async () => ({ ok: true })),
+    planningTerminalResize: vi.fn(async () => ({ ok: true })),
+    planningTerminalClose: vi.fn(async () => ({ ok: true })),
     onTerminalOutput: vi.fn((cb: (event: TerminalOutputEvent) => void) => {
       terminalOutputCallbacks.add(cb);
       return () => { terminalOutputCallbacks.delete(cb); };
