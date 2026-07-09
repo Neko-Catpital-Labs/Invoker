@@ -277,6 +277,14 @@ export interface PersistenceAdapter {
   logEvent(taskId: string, eventType: string, payload?: unknown): void;
   getEvents(taskId: string): TaskEvent[];
   getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
+  /** Bounded cross-task event read filtered by event_type (avoids full per-task scans). */
+  getEventsByTypes?(eventTypes: readonly string[], sortBy: 'asc' | 'desc', limit: number): TaskEvent[];
+  /** Aggregate counts + latest timestamp per event_type. */
+  countEventsByTypes?(eventTypes: readonly string[]): Array<{
+    eventType: string;
+    count: number;
+    lastCreatedAt: string | null;
+  }>;
 
   // Worker actions (durable worker-owned action state/history)
   getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
