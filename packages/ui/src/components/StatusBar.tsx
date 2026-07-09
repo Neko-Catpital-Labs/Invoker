@@ -89,8 +89,8 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
 
   const hasFilters = activeFilters && activeFilters.size > 0;
   const filterClass = (key: string) => {
-    const baseClasses = 'px-2 py-0.5 text-xs rounded-full cursor-pointer select-none transition-opacity duration-75';
-    const keyboardClass = keyboardActiveKey === key ? ' ring-2 ring-blue-300/90 ring-offset-1 ring-offset-gray-800' : '';
+    const baseClasses = 'px-1.5 py-0.5 text-xs rounded-md cursor-pointer select-none transition-opacity duration-100';
+    const keyboardClass = keyboardActiveKey === key ? ' ring-1 ring-ring/70' : '';
     if (!hasFilters) return `${baseClasses}${keyboardClass} hover:brightness-125`;
     const isActive = activeFilters!.has(key);
     return `${baseClasses} ${
@@ -100,9 +100,9 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
   const statusTextClass = (key: string) => getStatusVisual(key).text;
 
   return (
-    <div className="flex items-center gap-6 px-4 py-2 bg-gray-800 border-t border-gray-700 text-sm">
-      <span className="text-gray-400">
-        Total: <span className="text-gray-100 font-medium">{total}</span>
+    <div className="flex items-center gap-4 px-4 py-1.5 bg-card border-t border-border text-xs font-medium">
+      <span className="text-muted-foreground">
+        Total <span className="text-foreground font-semibold">{total}</span>
       </span>
       <span
         data-testid="status-bar-pill-completed"
@@ -211,7 +211,7 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
         </span>
       )}
       {queueStatus && (
-        <span className="text-xs text-gray-400">
+        <span className="text-[11px] text-muted-foreground">
           Queue capacity includes assigning and AI-fix work.
         </span>
       )}
