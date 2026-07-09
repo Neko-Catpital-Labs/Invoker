@@ -10,7 +10,7 @@ import { BUILTIN_PLANNING_PRESETS } from './planning-presets.js';
 
 /** True when `command` resolves on PATH. */
 export function commandExists(command: string): boolean {
-  return spawnSync('sh', ['-c', `command -v ${command} >/dev/null 2>&1`], { stdio: 'ignore' }).status === 0;
+  return spawnSync('sh', ['-c', 'command -v "$1" >/dev/null 2>&1', 'sh', command], { stdio: 'ignore' }).status === 0;
 }
 
 /**
