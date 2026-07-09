@@ -72,6 +72,15 @@ export function getExecutorStartTimeoutMs(): number {
   return parsed;
 }
 
+export const POOL_MEMBER_COOLDOWN_BASE_MS = 30_000;
+export const POOL_MEMBER_COOLDOWN_MAX_MS = 5 * 60_000;
+
+export function computePoolMemberCooldownMs(consecutiveFailures: number): number {
+  const n = Math.max(1, Math.floor(consecutiveFailures));
+  const raw = POOL_MEMBER_COOLDOWN_BASE_MS * 2 ** (n - 1);
+  return Math.min(raw, POOL_MEMBER_COOLDOWN_MAX_MS);
+}
+
 export function isRetryableSshStartupTransportError(err: unknown): boolean {
   const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
   const lower = message.toLowerCase();
