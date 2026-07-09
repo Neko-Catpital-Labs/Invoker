@@ -237,7 +237,7 @@ describe('createWorkerRuntimeController', () => {
     expect(worker?.recentActions).toHaveLength(5);
   });
 
-  it('returns worker action history with paging metadata', () => {
+it('returns worker action history with paging metadata', () => {
     const listWorkerActions = vi.fn(() => Array.from({ length: 3 }, (_value, index) => ({
       id: `wa-${index}`,
       workerKind: 'history',
