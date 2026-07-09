@@ -6,6 +6,9 @@ const FULL_CI_GATE = "${{ github.event_name != 'pull_request' || startsWith(gith
 const NON_PR_GATE = "${{ github.event_name != 'pull_request' }}";
 const ORDINARY_PR_GATE = "${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}";
 const FULL_CI_JOBS = new Set(['build-artifacts', 'e2e-proof', 'e2e-proof-aggregate', 'required-fast', 'playwright', 'ssh', 'optional-other']);
+const CHECK_JOB_OVERRIDES = new Map([
+  ['UI Vitest', 'ui-vitest'],
+]);
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const mergify = YAML.parse(readFileSync('.mergify.yml', 'utf8'));
@@ -24,7 +27,14 @@ function jobForCheck(checkName) {
   if (checkName.startsWith('optional / ')) {
     return 'optional-other';
   }
+  if (CHECK_JOB_OVERRIDES.has(checkName)) {
+    return CHECK_JOB_OVERRIDES.get(checkName);
+  }
   return checkName.split(' / ')[0];
+}
+
+function jobRunsOnMergeQueue(job) {
+  return !job.if || job.if === FULL_CI_GATE;
 }
 
 for (const jobName of FULL_CI_JOBS) {
@@ -56,7 +66,7 @@ for (const checkName of requiredChecks) {
     continue;
   }
   assert(jobs[jobName], `Mergify requires missing CI job ${jobName} for ${checkName}`);
-  assert(jobs[jobName].if === FULL_CI_GATE, `Mergify-required job ${jobName} must run on merge queue refs`);
+  assert(jobRunsOnMergeQueue(jobs[jobName]), `Mergify-required job ${jobName} must run on merge queue refs`);
 }
 
 console.log('CI merge-queue policy is valid.');
