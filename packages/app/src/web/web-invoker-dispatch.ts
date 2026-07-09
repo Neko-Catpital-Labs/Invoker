@@ -230,12 +230,17 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
 
       // ── Terminals: no pty over HTTP — degrade gracefully ──
       case 'invoker:open-terminal':
+      case 'invoker:planning-terminal-open':
         return { opened: false, reason: 'Terminals are not available in the web UI' };
       case 'invoker:terminal-list':
+      case 'invoker:planning-terminal-list':
         return [];
       case 'invoker:terminal-write':
       case 'invoker:terminal-resize':
       case 'invoker:terminal-close':
+      case 'invoker:planning-terminal-write':
+      case 'invoker:planning-terminal-resize':
+      case 'invoker:planning-terminal-close':
         return { ok: false, reason: 'unsupported' };
 
       // ── Mutations not exposed on the facade / global lifecycle ──
