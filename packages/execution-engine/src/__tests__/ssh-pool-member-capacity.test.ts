@@ -3,7 +3,6 @@ import { TaskRunner, type ExecutionPoolMember } from '../task-runner.js';
 import { ResourceLimitError } from '../repo-pool.js';
 import { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
-import type { MachineCapabilities } from '../harness-capabilities.js';
 
 function makeTask(id: string): TaskState {
   return {
@@ -21,7 +20,6 @@ type RemoteTargetTestConfig = {
   host: string;
   user: string;
   sshKeyPath: string;
-  capabilities?: MachineCapabilities;
 };
 
 function makeRunner(overrides: {
@@ -122,131 +120,21 @@ describe('SSH pool member capacity', () => {
     expect(selections.map((selection: any) => selection.member.id)).toEqual(['remote-a']);
   });
 
-  it('rejects explicit models for implicit codex execution members', () => {
+  it('routes any requested harness to a pool member without capability gating', () => {
     const task = makeTask('wf-1/task-codex');
     task.config = {
       ...task.config,
       executionAgent: 'codex',
-      executionModel: 'anthropic/claude-opus-4',
+      executionModel: 'gpt-5-codex',
     };
     const runner = makeRunner({
-      members: [
-        {
-          id: 'remote-a',
-          type: 'ssh',
-          maxConcurrentTasks: 1,
-          capabilities: {
-            execution: {
-              codex: { modelPolicy: { kind: 'implicit' } },
-            },
-          },
-        },
-      ],
-    });
-
-    expect(() => runner.selectExecutor(task)).toThrow('does not accept an explicit model');
-  });
-
-  it('fills fixed OMP models from member policy when the task omits one', () => {
-    const task = makeTask('wf-1/task-omp-fixed');
-    task.config = {
-      ...task.config,
-      executionAgent: 'omp',
-    };
-    const runner = makeRunner({
-      members: [
-        {
-          id: 'remote-a',
-          type: 'ssh',
-          maxConcurrentTasks: 1,
-          capabilities: {
-            execution: {
-              omp: {
-                modelPolicy: { kind: 'fixed', model: 'anthropic/claude-opus-4' },
-              },
-            },
-          },
-        },
-      ],
+      members: [{ id: 'remote-a', type: 'ssh', maxConcurrentTasks: 1 }],
     });
 
     runner.selectExecutor(task);
     expect(getPendingSelection(runner, task.id).resolvedExecution).toEqual({
-      executionAgent: 'omp',
-      executionModel: 'anthropic/claude-opus-4',
-    });
-  });
-
-  it('rejects OMP models that are not advertised by the member', () => {
-    const task = makeTask('wf-1/task-omp-select');
-    task.config = {
-      ...task.config,
-      executionAgent: 'omp',
-      executionModel: 'openai/gpt-5',
-    };
-    const runner = makeRunner({
-      members: [
-        {
-          id: 'remote-a',
-          type: 'ssh',
-          maxConcurrentTasks: 1,
-          capabilities: {
-            execution: {
-              omp: {
-                modelPolicy: {
-                  kind: 'select',
-                  models: ['anthropic/claude-opus-4'],
-                  defaultModel: 'anthropic/claude-opus-4',
-                },
-              },
-            },
-          },
-        },
-      ],
-    });
-
-    expect(() => runner.selectExecutor(task)).toThrow('does not advertise model "openai/gpt-5"');
-  });
-
-  it('picks the pool member whose execution policy matches the task', () => {
-    const task = makeTask('wf-1/task-omp-member');
-    task.config = {
-      ...task.config,
-      executionAgent: 'omp',
-    };
-    const runner = makeRunner({
-      members: [
-        {
-          id: 'remote-a',
-          type: 'ssh',
-          maxConcurrentTasks: 1,
-          capabilities: {
-            execution: {
-              codex: { modelPolicy: { kind: 'implicit' } },
-            },
-          },
-        },
-        {
-          id: 'remote-b',
-          type: 'ssh',
-          maxConcurrentTasks: 1,
-          capabilities: {
-            execution: {
-              omp: {
-                modelPolicy: { kind: 'fixed', model: 'anthropic/claude-opus-4' },
-              },
-            },
-          },
-        },
-      ],
-    });
-
-    runner.selectExecutor(task);
-    const selection = getPendingSelection(runner, task.id);
-    expect(selection.member.id).toBe('remote-b');
-    expect(selection.resolvedExecution).toEqual({
-      executionAgent: 'omp',
-      executionModel: 'anthropic/claude-opus-4',
+      executionAgent: 'codex',
+      executionModel: 'gpt-5-codex',
     });
   });
 
