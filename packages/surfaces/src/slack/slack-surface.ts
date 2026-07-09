@@ -13,7 +13,7 @@ import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus } from './slack-formatter.js';
 import { splitForSlack, sanitizeSlashCommands } from './slack-message-helpers.js';
 import type { SlackMessage } from './slack-formatter.js';
-import { PlanConversation, defaultPlanningCommand, isConfirmation, isNegation } from './plan-conversation.js';
+import { PlanConversation, buildEmptyPlannerOutputError, defaultPlanningCommand, isConfirmation, isNegation } from './plan-conversation.js';
 import type { ConversationMode, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
@@ -1447,6 +1447,7 @@ ${text}`;
     const { command, args } = this.planningCommandBuilder
       ? this.planningCommandBuilder({ tool: harness.tool, model: harness.model, prompt })
       : defaultPlanningCommand(this.cursorCommand, { model: harness.model, prompt });
+    const plannerLabel = harness.tool ?? command;
     const timeoutMs = (this.planningTimeoutSeconds ?? 7_200) * 1_000;
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, {
@@ -1464,8 +1465,16 @@ ${text}`;
       }, timeoutMs);
       child.on('close', (code) => {
         clearTimeout(timer);
-        if (code === 0) resolve(stdout.trim() || '(no output)');
-        else reject(new Error(stderr.trim() || stdout.trim() || `Planner exited with code ${code}`));
+        if (code === 0) {
+          const trimmed = stdout.trim();
+          if (trimmed) {
+            resolve(trimmed);
+          } else {
+            reject(buildEmptyPlannerOutputError(plannerLabel, stderr));
+          }
+        } else {
+          reject(new Error(stderr.trim() || stdout.trim() || `Planner exited with code ${code}`));
+        }
       });
       child.on('error', (err) => {
         clearTimeout(timer);
