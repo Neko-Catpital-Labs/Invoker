@@ -78,6 +78,10 @@ type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegio
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
+// Shared left-rail list body: a shrinkable flex child (`min-h-0 flex-1`) that owns
+// vertical overflow and scrolls inside the rail shell's `min-h-0 flex-1 flex-col`
+// body wrapper, instead of a plain block that grows the parent panel with content.
+const RAIL_LIST_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto p-3';
 const STATUS_KEY_ORDER: readonly WorkflowStatus[] = [
   'completed',
   'running',
@@ -2715,7 +2719,7 @@ export function App() {
 
   const renderWorkflowsList = (): JSX.Element => (
     workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
-      <div className="overflow-y-auto p-3">
+      <div className={RAIL_LIST_BODY_CLASS}>
         <div className="space-y-1">
           {workflowEntries.map((entry) => {
             const selected = selectedWorkflow?.id === entry.workflow.id;
@@ -2739,7 +2743,7 @@ export function App() {
 
   const renderTaskList = (entries: typeof attentionEntries, emptyTitle: string, emptyCopy: string, tone: 'attention' | 'running'): JSX.Element => (
     entries.length === 0 ? renderBrowserEmptyState(emptyTitle, emptyCopy) : (
-      <div className="overflow-y-auto p-3">
+      <div className={RAIL_LIST_BODY_CLASS}>
         <div className="space-y-1">
           {entries.map((entry) => {
             const selected = selectedTask?.id === entry.task.id;
@@ -2766,7 +2770,7 @@ export function App() {
 
 
   const renderPlanningSessionList = (): JSX.Element => (
-    <div className="overflow-y-auto p-3">
+    <div className={RAIL_LIST_BODY_CLASS}>
       <div className="space-y-1">
         {planningSessions.map((session) => {
           const selected = session.id === activePlanningSession.id;
@@ -2813,7 +2817,7 @@ export function App() {
             New chat
           </button>
         </div>
-        <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
+        <div className="flex min-h-0 flex-1 flex-col">{renderPlanningSessionList()}</div>
       </div>
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
@@ -2874,7 +2878,7 @@ export function App() {
           Close
         </button>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col">
         {sidebarSurface === 'workflows'
           ? renderWorkflowsList()
           : sidebarSurface === 'attention'
