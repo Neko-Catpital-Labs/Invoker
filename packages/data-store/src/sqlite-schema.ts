@@ -6,6 +6,8 @@
  * has, so migration sequencing and query semantics are unchanged.
  */
 
+export const WORKER_DESIRED_STATE_TABLE = 'worker_desired_state';
+
 /** Full schema definition, executed once on `initSchema()`. */
 export const SCHEMA_DDL = `
       CREATE TABLE IF NOT EXISTS workflows (
@@ -341,6 +343,13 @@ export const SCHEMA_DDL = `
 
       CREATE INDEX IF NOT EXISTS idx_worker_actions_workflow_status
         ON worker_actions(workflow_id, worker_kind, status);
+
+      CREATE TABLE IF NOT EXISTS worker_desired_state (
+        worker_kind TEXT PRIMARY KEY,
+        desired_state TEXT NOT NULL CHECK (json_valid(desired_state)),
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
 
       CREATE TABLE IF NOT EXISTS execution_resource_leases (
         resource_key TEXT NOT NULL,

@@ -56,12 +56,14 @@ import type {
   WorkerActionListFilters,
   WorkerActionRecord,
   WorkerActionWrite,
+  WorkerDesiredState,
+  WorkerDesiredStateInput,
   TerminalSessionPatch,
   TerminalSessionRecord,
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
 } from './adapter.js';
-import { SCHEMA_DDL } from './sqlite-schema.js';
+import { SCHEMA_DDL, WORKER_DESIRED_STATE_TABLE } from './sqlite-schema.js';
 import {
   mapRowToWorkflow,
   mapRowToTask,
@@ -1885,6 +1887,76 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.taskAttemptRepo.getPoolMemberId(taskId);
   }
 
+  // ── Worker Desired State ─────────────────────────────────
+
+  saveWorkerDesiredState<TDesiredState = unknown>(state: WorkerDesiredStateInput<TDesiredState>): void;
+  saveWorkerDesiredState<TDesiredState = unknown>(workerKind: string, desiredState: TDesiredState): void;
+  saveWorkerDesiredState<TDesiredState = unknown>(
+    stateOrWorkerKind: WorkerDesiredStateInput<TDesiredState> | string,
+    desiredState?: TDesiredState,
+  ): void {
+    const state = typeof stateOrWorkerKind === 'string'
+      ? { workerKind: stateOrWorkerKind, desiredState: desiredState as TDesiredState }
+      : stateOrWorkerKind;
+    const workerKind = state.workerKind.trim();
+    if (!workerKind) {
+      throw new Error('workerKind is required');
+    }
+    const desiredStateJson = JSON.stringify(state.desiredState);
+    if (desiredStateJson === undefined) {
+      throw new Error('Worker desired state must be JSON-serializable');
+    }
+    const updatedAt = state.updatedAt ?? new Date().toISOString();
+
+    this.execRun(
+      `INSERT INTO ${WORKER_DESIRED_STATE_TABLE} (
+         worker_kind, desired_state, created_at, updated_at
+       ) VALUES (?, ?, ?, ?)
+       ON CONFLICT(worker_kind) DO UPDATE SET
+         desired_state = excluded.desired_state,
+         updated_at = excluded.updated_at`,
+      [workerKind, desiredStateJson, updatedAt, updatedAt],
+    );
+  }
+
+  writeWorkerDesiredState<TDesiredState = unknown>(workerKind: string, desiredState: TDesiredState): void {
+    this.saveWorkerDesiredState(workerKind, desiredState);
+  }
+
+  setWorkerDesiredState<TDesiredState = unknown>(workerKind: string, desiredState: TDesiredState): void {
+    this.saveWorkerDesiredState(workerKind, desiredState);
+  }
+
+  loadWorkerDesiredState<TDesiredState = unknown>(workerKind: string): WorkerDesiredState<TDesiredState> | undefined {
+    const row = this.queryOne(
+      `SELECT * FROM ${WORKER_DESIRED_STATE_TABLE} WHERE worker_kind = ?`,
+      [workerKind],
+    );
+    return row ? this.rowToWorkerDesiredState<TDesiredState>(row) : undefined;
+  }
+
+  readWorkerDesiredState<TDesiredState = unknown>(workerKind: string): WorkerDesiredState<TDesiredState> | undefined {
+    return this.loadWorkerDesiredState<TDesiredState>(workerKind);
+  }
+
+  getWorkerDesiredState<TDesiredState = unknown>(workerKind: string): TDesiredState | undefined {
+    return this.loadWorkerDesiredState<TDesiredState>(workerKind)?.desiredState;
+  }
+
+  listWorkerDesiredStates<TDesiredState = unknown>(): Array<WorkerDesiredState<TDesiredState>> {
+    const rows = this.queryAll(
+      `SELECT * FROM ${WORKER_DESIRED_STATE_TABLE} ORDER BY worker_kind ASC`,
+    );
+    return rows.map((row) => this.rowToWorkerDesiredState<TDesiredState>(row));
+  }
+
+  deleteWorkerDesiredState(workerKind: string): void {
+    this.execRun(
+      `DELETE FROM ${WORKER_DESIRED_STATE_TABLE} WHERE worker_kind = ?`,
+      [workerKind],
+    );
+  }
+
   // ── Conversations ───────────────────────────────────────
 
   saveConversation(conversation: Conversation): void {
@@ -3359,6 +3431,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private rowToWorkerAction(row: Record<string, unknown>): WorkerActionRecord {
     return mapRowToWorkerAction(row);
+  }
+
+  private rowToWorkerDesiredState<TDesiredState = unknown>(
+    row: Record<string, unknown>,
+  ): WorkerDesiredState<TDesiredState> {
+    return {
+      workerKind: String(row.worker_kind),
+      desiredState: JSON.parse(String(row.desired_state)) as TDesiredState,
+      createdAt: String(row.created_at ?? ''),
+      updatedAt: String(row.updated_at ?? ''),
+    };
   }
 
   private requeueWorkflowMutationLease(workflowId: string): void {
