@@ -12,25 +12,34 @@ thousands of event rows. After that scan was fixed, the same poll still hitching
 window drag via per-kind `listWorkerActions` (~30ms × N workers) without a
 matching index.
 
+A follow-on beachball class was DAG task selection: the inspector called
+unbounded `getEvents` on click, stalling main while marshaling full task
+history even though the UI only rendered 20 log rows.
+
 ## Rules
 
-1. **No unbounded reads on timer or status IPC paths.**
+1. **No unbounded reads on timer, status, or user-gesture IPC paths.**
    Prefer `LIMIT`, type filters, or aggregates (`COUNT` / `MAX`). Never
    `SELECT * FROM events WHERE task_id = ?` (or equivalent full-history loads)
-   from a poll.
+   from a poll or a click handler.
 
-2. **Poll cost must be O(1) or O(workers), not O(tasks × events).**
+2. **`invoker:get-events` is always paginated.**
+   Callers must pass `{ limit }` (1..`MAX_EVENTS_PAGE`, currently 100). Optional
+   `beforeId` loads older pages. Missing or oversized limits are rejected at the
+   IPC / API boundary (`normalizeGetEventsOptions` / `getEventsPage`).
+
+3. **Poll cost must be O(1) or O(workers), not O(tasks × events).**
    If a status endpoint walks every workflow and every task, it is wrong for a
    1–2s UI poll.
 
-3. **No intentional poll staleness on status IPC.**
+4. **No intentional poll staleness on status IPC.**
    Prefer indexed bounded reads on every poll over TTL caches that hide
    freshness. Moving sync SQLite off the Electron main thread is INV-265.
 
-4. **Index every `WHERE` + `ORDER BY` used by polls.**
+5. **Index every `WHERE` + `ORDER BY` used by polls.**
    Missing indexes turn "LIMIT 5" into a multi-ten-ms scan on large tables.
 
-5. **Large text columns stay off hot paths.**
+6. **Large text columns stay off hot paths.**
    Attempt `error` blobs can be multi-MB. Projection helpers must not load every
    attempt row for a node just to pick the newest active one.
 
@@ -40,12 +49,16 @@ matching index.
 | --- | --- | --- |
 | `useWorkerStatus` → `getWorkerStatus` → `snapshot()` | ~2s | Recovery via aggregates; indexed `listWorkerActions` (no TTL cache) |
 | Main `dbPollInterval` → `loadTasks` | ~2s | Projection must not unbounded-scan attempts |
-| Task inspector `getEvents(taskId)` | on demand | Prefer bounded reads when only recent audit is needed |
+| Task inspector / History / Approval `getEvents` | on demand | Always paginated (`limit` required; History uses `beforeId` for Load more) |
 
 ## Preferred APIs
 
-- Events: `countEventsByTypes`, `getEventsByTypes(..., limit)` — not full
-  per-task history for status summaries.
+- Events (UI/IPC): `getEvents(taskId, { limit, sortBy?, beforeId? })` via
+  `getEventsPage` — never the 1-arg unbounded adapter overload.
+- Events (status): `countEventsByTypes`, `getEventsByTypes(..., limit)` — not
+  full per-task history for status summaries.
+- Events (headless full audit): loop pages server-side (`loadAllEventsPaged`) —
+  never one giant IPC payload.
 - Attempts: indexed `LIMIT 1` for "newest active" — not `loadAttempts(nodeId)`
   on every projection.
 - Worker actions: `listWorkerActions({ workerKind, limit })` backed by
@@ -53,11 +66,16 @@ matching index.
 
 ## How to catch regressions
 
-- Unit cost guards under fat fixtures (many events / large attempt errors).
+- Unit cost guards under fat fixtures (many events / large attempt errors),
+  including `packages/app/src/__tests__/dag-click-get-events-cost.test.ts`
+  (unbounded vs page cost + reject missing limit).
 - Main-process hitch e2e (`packages/app/e2e/main-process-hitch-responsiveness.spec.ts`):
   while worker-status polls against a seeded fat DB, cheap IPC RTT must stay
   under budget (window-drag stickiness maps to main-loop stalls, not renderer
   frame gaps alone). Included in GitHub Playwright shards (merge-queue / master).
+- DAG-click hitch e2e (`packages/app/e2e/dag-click-hitch-responsiveness.spec.ts`):
+  seed fat events, click task nodes, assert `listWorkflows` RTT stays under the
+  same hitch budget.
 - Slow-query telemetry: `SQLiteAdapter` logs statements slower than 25ms
   (`slowQueryThresholdMs` / `onSlowQuery`) so the next spike shows up without
   attaching a sampler. Set `slowQueryThresholdMs: 0` to disable.

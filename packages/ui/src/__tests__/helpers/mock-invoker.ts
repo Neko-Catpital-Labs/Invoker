@@ -271,7 +271,8 @@ export function createMockInvoker(
     runInvokerCliSetup: vi.fn(async () => ({ ok: true, steps: [{ id: 'tools', name: 'Run setup', ok: true, output: 'setup ok' }] })),
     replaceTask: vi.fn(async () => accepted('invoker:replace-task')),
     getActivityLogs: vi.fn(async () => []),
-    getEvents: vi.fn(async (taskId: string) => eventsByTask.get(taskId) ?? []),
+    getEvents: vi.fn(async (taskId: string, _options?: { limit: number; sortBy?: 'asc' | 'desc'; beforeId?: number }) =>
+      eventsByTask.get(taskId) ?? []),
     getHistoryTasks: vi.fn(async () => historySnapshot),
     openTerminal: vi.fn(async (taskId: string) => ({
       opened: true,

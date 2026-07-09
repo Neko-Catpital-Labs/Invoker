@@ -40,7 +40,7 @@ test('worker-triggered autofix reaches approval UI with mocked Claude', async ({
         return payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
       };
 
-      const events = await window.invoker.getEvents(taskId);
+      const events = await window.invoker.getEvents(taskId, { limit: 100, sortBy: 'desc' });
       return events.some((event: { eventType: string }) => event.eventType === 'task.failed')
         && events.some((event: { eventType: string; payload?: unknown }) => {
           const payload = parsePayload(event.payload);

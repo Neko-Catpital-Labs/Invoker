@@ -692,7 +692,7 @@ describe('ApprovalModal', () => {
     );
 
     await waitFor(() => {
-      expect(mockGetEvents).toHaveBeenCalledWith('task-1');
+      expect(mockGetEvents).toHaveBeenCalledWith('task-1', { limit: 50, sortBy: 'desc' });
     });
 
     expect(mockGetAgentSession).not.toHaveBeenCalled();

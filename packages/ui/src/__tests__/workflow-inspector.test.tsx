@@ -697,14 +697,14 @@ describe('WorkflowInspector', () => {
 
   it('shows task logs and filters by minimum level', async () => {
     (window as unknown as {
-      invoker: { getEvents: (taskId: string) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
+      invoker: { getEvents: (taskId: string, options: { limit: number }) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
     }).invoker = {
       getEvents: vi.fn(async () => [
         {
-          id: 1,
-          eventType: 'debug.auto-fix',
-          payload: JSON.stringify({ message: 'debug detail', attempt: 1, value: 'secret' }),
-          createdAt: '2025-01-01T00:00:01.000Z',
+          id: 3,
+          eventType: 'task.failed',
+          payload: JSON.stringify({ message: 'Merge gate failed' }),
+          createdAt: '2025-01-01T00:00:03.000Z',
         },
         {
           id: 2,
@@ -713,10 +713,10 @@ describe('WorkflowInspector', () => {
           createdAt: '2025-01-01T00:00:02.000Z',
         },
         {
-          id: 3,
-          eventType: 'task.failed',
-          payload: JSON.stringify({ message: 'Merge gate failed' }),
-          createdAt: '2025-01-01T00:00:03.000Z',
+          id: 1,
+          eventType: 'debug.auto-fix',
+          payload: JSON.stringify({ message: 'debug detail', attempt: 1, value: 'secret' }),
+          createdAt: '2025-01-01T00:00:01.000Z',
         },
       ]),
     };
@@ -749,7 +749,7 @@ describe('WorkflowInspector', () => {
 
   it('shows a visible notice when fix recreated the workflow because workspace was missing', async () => {
     (window as unknown as {
-      invoker: { getEvents: (taskId: string) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
+      invoker: { getEvents: (taskId: string, options: { limit: number }) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
     }).invoker = {
       getEvents: vi.fn(async () => [
         {
@@ -789,7 +789,7 @@ describe('WorkflowInspector', () => {
 
   it('shows a retrying log error when task events fail to load', async () => {
     (window as unknown as {
-      invoker: { getEvents: (taskId: string) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
+      invoker: { getEvents: (taskId: string, options: { limit: number }) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
     }).invoker = {
       getEvents: vi.fn(async () => {
         throw new Error('offline');
