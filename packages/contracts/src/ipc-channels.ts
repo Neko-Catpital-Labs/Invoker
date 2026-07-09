@@ -1104,6 +1104,15 @@ export const IpcTestOnlyChannels = {
     ];
     response: void;
   },
+  'invoker:seed-main-process-hitch-fixture': {} as {
+    request: [];
+    response: {
+      workflowId: string;
+      taskCount: number;
+      eventCount: number;
+      workerActionCount: number;
+    };
+  },
 } as const;
 
 // ── Event Channel Registry ──────────────────────────────────
