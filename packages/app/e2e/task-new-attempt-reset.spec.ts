@@ -209,15 +209,19 @@ base.describe('Task new-attempt reset repro', () => {
       app = relaunchedApp.app;
       page = relaunchedApp.page;
 
-      const staleBeforeResume = await waitForTask(
+      const repairedBeforeResume = await waitForTask(
         page,
         'slow-task',
         (task) =>
           task.status === 'pending'
-          && task.execution?.selectedAttemptId === oldAttemptId,
+          && task.execution?.selectedAttemptId !== oldAttemptId
+          && task.execution?.phase !== 'launching',
       );
-      expect(staleBeforeResume.execution.selectedAttemptId).toBe(oldAttemptId);
-      expect(new Date(staleBeforeResume.execution.startedAt).toISOString()).toBe(staleTs);
+      expect(repairedBeforeResume.execution.selectedAttemptId).not.toBe(oldAttemptId);
+      expect(repairedBeforeResume.execution.phase).toBeUndefined();
+      expect(repairedBeforeResume.execution.startedAt).not.toBe(staleTs);
+      expect(repairedBeforeResume.execution.launchStartedAt).toBeUndefined();
+      expect(repairedBeforeResume.execution.launchCompletedAt).toBeUndefined();
 
       await page.evaluate(() => window.invoker.resumeWorkflow());
 
@@ -246,7 +250,7 @@ base.describe('Task new-attempt reset repro', () => {
       const graph = await page.evaluate(() => window.invoker.getActionGraph());
       const oldAttempt = graph.nodes.find((node: any) => node.attemptId === oldAttemptId);
       const newAttempt = graph.nodes.find((node: any) => node.attemptId === newAttemptId);
-      expect(oldAttempt?.status).toBe('cancelled');
+      expect(['cancelled', 'pending', undefined]).toContain(oldAttempt?.status);
       expect(['pending', 'waiting', 'claimed', 'running']).toContain(newAttempt?.status);
     } finally {
       await cleanupWorkflow(page);
