@@ -1798,6 +1798,40 @@ describe('SQLiteAdapter', () => {
       const [task] = adapter.loadTasks('wf-1');
       expect(task.status).toBe('fixing_with_ai');
     });
+
+    it('projects the underlying task row when selected_attempt_id points at a newer active attempt (no stale failed projection)', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const olderCreatedAt = new Date('2026-07-09T05:38:02.000Z');
+      const newerCreatedAt = new Date('2026-07-09T05:51:12.808Z');
+      const failed: Attempt = {
+        ...createAttempt('t1', { status: 'failed' }),
+        id: 't1-aOLD',
+        createdAt: olderCreatedAt,
+        error: 'Cancelled by user (workflow)',
+        completedAt: new Date('2026-07-09T05:51:12.761Z'),
+      };
+      const newerPending: Attempt = {
+        ...createAttempt('t1', { status: 'pending' }),
+        id: 't1-aNEW',
+        createdAt: newerCreatedAt,
+        supersedesAttemptId: failed.id,
+      };
+      adapter.saveTask('wf-1', makeTask('t1', {
+        status: 'running',
+        execution: {
+          startedAt: new Date('2026-07-09T05:43:54.107Z'),
+        },
+      }));
+      adapter.saveAttempt(failed);
+      adapter.saveAttempt(newerPending);
+      // saveTask does not persist selected_attempt_id; set it explicitly.
+      adapter.updateTask('t1', { execution: { selectedAttemptId: newerPending.id } });
+
+      const [task] = adapter.loadTasks('wf-1');
+      expect(task.status).toBe('running');
+      expect(task.execution.error).toBeUndefined();
+      expect(task.execution.selectedAttemptId).toBe(newerPending.id);
+    });
   });
 
   describe('loadActionGraphAttempts', () => {

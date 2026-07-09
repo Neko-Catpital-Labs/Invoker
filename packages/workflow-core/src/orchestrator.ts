@@ -1112,6 +1112,82 @@ export class Orchestrator {
     return active;
   }
 
+  /**
+   * Self-heal `selectedAttemptId` drift after DB hydration.
+   *
+   * A task's `selectedAttemptId` can end up pointing at an outcome-terminal
+   * (failed/completed) or discarded (superseded) attempt while a newer active
+   * attempt exists for the same task — e.g. a workflow cancellation invalidates
+   * a leased launch dispatch, a fresh attempt is created, but the pointer
+   * doesn't get swapped forward before the next UI read. The
+   * `SQLiteAdapter.reconcileTaskFromSelectedAttempt` projection then upgrades
+   * the loaded task to `failed`, which causes `buildActionGraphDiagnostics` to
+   * emit a `blocker:{taskId}:error` node and the workflow card to render the
+   * red "Failed: see details" pill even though the workflow has already moved
+   * on to a fresh attempt.
+   *
+   * Called at the end of `syncAllFromDb` / `syncFromDb` so every UI refresh
+   * clears drift by advancing the pointer to the newest active attempt and
+   * clearing the terminal fields the stale projection injected.
+   */
+  private reconcileStaleSelectedAttempts(): void {
+    const loadAttempts = (this.persistence as Partial<OrchestratorPersistence>).loadAttempts;
+    if (typeof loadAttempts !== 'function') return;
+
+    for (const task of this.stateMachine.getAllTasks()) {
+      const selected = this.getSelectedAttempt(task);
+      if (!selected) continue;
+      // Only heal drift caused by outcome-terminal (`failed`) or discarded
+      // (`superseded`) pointers where a strictly newer active attempt already
+      // exists. A `completed` selected attempt is left alone — that's a
+      // legitimate hand-off state (merge / fix flows). We intentionally do
+      // NOT guard on `task.status` here, because
+      // `SQLiteAdapter.reconcileTaskFromSelectedAttempt` may have already
+      // projected the failed attempt onto the task's in-memory status; the
+      // whole point of this pass is to undo that projection by advancing the
+      // pointer.
+      if (selected.status !== 'failed' && selected.status !== 'superseded') continue;
+
+      const attempts = loadAttempts.call(this.persistence, task.id);
+      let newer: Attempt | undefined;
+      for (const attempt of attempts) {
+        if (attempt.id === selected.id) continue;
+        if (!isActiveAttempt(attempt)) continue;
+        if (attempt.createdAt.getTime() <= selected.createdAt.getTime()) continue;
+        if (!newer || attempt.createdAt.getTime() > newer.createdAt.getTime()) {
+          newer = attempt;
+        }
+      }
+      if (!newer) continue;
+
+      this.writeAndSync(
+        task.id,
+        {
+          execution: {
+            selectedAttemptId: newer.id,
+            error: undefined,
+            exitCode: undefined,
+            completedAt: undefined,
+            lastHeartbeatAt: undefined,
+            branch: undefined,
+            commit: undefined,
+            workspacePath: undefined,
+            agentSessionId: undefined,
+            containerId: undefined,
+          },
+        },
+        { skipWorkflowStatusSync: true },
+      );
+      this.persistence.logEvent?.(task.id, 'task.selected_attempt_advanced', {
+        previousAttemptId: selected.id,
+        previousStatus: selected.status,
+        newAttemptId: newer.id,
+        newStatus: newer.status,
+        reason: 'stale selected pointer superseded by newer active attempt',
+      });
+    }
+  }
+
   private ensureCurrentPendingAttempt(task: TaskState): string {
     const selected = this.getSelectedAttempt(task);
     if (selected && isActiveAttempt(selected)) {
@@ -3230,6 +3306,7 @@ export class Orchestrator {
         this.stateMachine.restoreTask(task);
       }
     }
+    this.reconcileStaleSelectedAttempts();
     for (const wf of workflows) {
       this.assertMergeLeavesInvariant(wf.id);
     }
@@ -3248,6 +3325,7 @@ export class Orchestrator {
         this.stateMachine.restoreTask(task);
       }
     }
+    this.reconcileStaleSelectedAttempts();
     this.assertMergeLeavesInvariant(workflowId);
   }
 

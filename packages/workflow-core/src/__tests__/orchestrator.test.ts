@@ -3114,6 +3114,73 @@ describe('Orchestrator', () => {
 
       expect(hydrateOrchestrator.getTask('t1')!.status).toBe('completed');
     });
+
+    it('advances stale selectedAttemptId and clears projected error when a newer active attempt exists', () => {
+      const hydratePersistence = new InMemoryPersistence();
+      hydratePersistence.saveWorkflow({ id: 'wf-stale', name: 'wf-stale' } as any);
+
+      const olderCreatedAt = new Date('2026-07-09T05:38:02.000Z');
+      const newerCreatedAt = new Date('2026-07-09T05:51:12.808Z');
+
+      const failedAttempt: Attempt = {
+        id: 't1-aOLD',
+        nodeId: 't1',
+        queuePriority: 0,
+        status: 'failed',
+        upstreamAttemptIds: [],
+        error: 'Cancelled by user (workflow)',
+        completedAt: new Date('2026-07-09T05:51:12.761Z'),
+        startedAt: new Date('2026-07-09T05:43:54.107Z'),
+        lastHeartbeatAt: new Date('2026-07-09T05:43:54.107Z'),
+        createdAt: olderCreatedAt,
+      };
+      const newerPending: Attempt = {
+        id: 't1-aNEW',
+        nodeId: 't1',
+        queuePriority: 0,
+        status: 'pending',
+        upstreamAttemptIds: [],
+        supersedesAttemptId: failedAttempt.id,
+        createdAt: newerCreatedAt,
+      };
+
+      hydratePersistence.saveAttempt(failedAttempt);
+      hydratePersistence.saveAttempt(newerPending);
+
+      hydratePersistence.saveTask('wf-stale', {
+        id: 't1',
+        description: 'Verify sidebar and workers title removal',
+        status: 'running',
+        dependencies: [],
+        createdAt: olderCreatedAt,
+        config: { workflowId: 'wf-stale' },
+        execution: {
+          selectedAttemptId: failedAttempt.id,
+          error: failedAttempt.error,
+          completedAt: failedAttempt.completedAt,
+          startedAt: failedAttempt.startedAt,
+          lastHeartbeatAt: failedAttempt.lastHeartbeatAt,
+        },
+      });
+
+      const hydrateOrchestrator = new Orchestrator({
+        persistence: hydratePersistence,
+        messageBus: new InMemoryBus(),
+        maxConcurrency: 3,
+      });
+
+      hydrateOrchestrator.syncFromDb('wf-stale');
+
+      const restored = hydrateOrchestrator.getTask('t1')!;
+      expect(restored.execution.selectedAttemptId).toBe(newerPending.id);
+      expect(restored.execution.error).toBeUndefined();
+      expect(restored.execution.completedAt).toBeUndefined();
+      expect(restored.execution.lastHeartbeatAt).toBeUndefined();
+
+      const persisted = hydratePersistence.getTaskEntry('t1')!.task;
+      expect(persisted.execution.selectedAttemptId).toBe(newerPending.id);
+      expect(persisted.execution.error).toBeUndefined();
+    });
   });
 
   // ── resumeWorkflow ──────────────────────────────────────
