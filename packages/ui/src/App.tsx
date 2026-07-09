@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { ActionGraphNode } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -44,6 +44,76 @@ type ModalState =
   | { type: 'approval'; task: TaskState; action: 'approve' | 'reject' }
   | { type: 'experiment'; task: TaskState }
   | { type: 'replace'; task: TaskState };
+
+const PLANNING_TYPING_LAG_BASELINE_VERSION = 1;
+const PLANNING_TYPING_LAG_BASELINE_SESSION_COUNT = 24;
+const PLANNING_TYPING_LAG_BASELINE_MESSAGES_PER_SESSION = 48;
+const PLANNING_TYPING_LAG_BASELINE_CHARS_PER_MESSAGE = 120;
+const PLANNING_TYPING_LAG_BASELINE_TYPED_CHARS = 160;
+
+type PlanningTypingLagBaselineActiveSurface = 'home' | 'history' | 'timeline' | 'queue' | 'actionGraph';
+
+interface PlanningTypingLagBaselineInput {
+  tasks: Map<string, TaskState>;
+  workflows: Map<string, WorkflowMeta>;
+  activeSurface: PlanningTypingLagBaselineActiveSurface;
+  selectedWorkflow: WorkflowMeta | null;
+  selectedWorkflowId: string | null;
+  selectedTask: TaskState | null;
+  terminalCollapsed: boolean;
+  hasLoadedPlan: boolean;
+  hasStarted: boolean;
+  commitMs: number;
+  frameDelayMs: number;
+}
+
+export function buildPlanningTypingLagBaselinePayload({
+  tasks,
+  workflows,
+  activeSurface,
+  selectedWorkflow,
+  selectedWorkflowId,
+  selectedTask,
+  terminalCollapsed,
+  hasLoadedPlan,
+  hasStarted,
+  commitMs,
+  frameDelayMs,
+}: PlanningTypingLagBaselineInput): Record<string, unknown> {
+  const transcriptMessageCount = PLANNING_TYPING_LAG_BASELINE_SESSION_COUNT
+    * PLANNING_TYPING_LAG_BASELINE_MESSAGES_PER_SESSION;
+  const transcriptCharCount = transcriptMessageCount * PLANNING_TYPING_LAG_BASELINE_CHARS_PER_MESSAGE;
+  const activeState = selectedTask?.status ?? selectedWorkflow?.status ?? 'none';
+
+  return {
+    baselineVersion: PLANNING_TYPING_LAG_BASELINE_VERSION,
+    scenario: 'planning_many_chats_many_messages_typing',
+    sessionCount: PLANNING_TYPING_LAG_BASELINE_SESSION_COUNT,
+    planningSessionCount: PLANNING_TYPING_LAG_BASELINE_SESSION_COUNT,
+    messagesPerSession: PLANNING_TYPING_LAG_BASELINE_MESSAGES_PER_SESSION,
+    transcriptMessageCount,
+    transcriptSizeMessages: transcriptMessageCount,
+    transcriptCharCount,
+    transcriptSizeChars: transcriptCharCount,
+    typedInputCharCount: PLANNING_TYPING_LAG_BASELINE_TYPED_CHARS,
+    activeComposerState: 'typing',
+    busy: false,
+    readOnly: false,
+    activeSurface,
+    activeState,
+    selectedWorkflowId: selectedWorkflow?.id ?? selectedWorkflowId ?? null,
+    selectedTaskId: selectedTask?.id ?? null,
+    workflowCount: workflows.size,
+    taskCount: tasks.size,
+    terminalState: terminalCollapsed ? 'collapsed' : 'expanded',
+    hasLoadedPlan,
+    hasStarted,
+    renderCommitMs: Math.round(commitMs * 100) / 100,
+    frameDelayMs: Math.round(frameDelayMs * 100) / 100,
+    visibilityState: typeof document === 'undefined' ? 'unknown' : document.visibilityState,
+    hasFocus: typeof document === 'undefined' ? undefined : document.hasFocus(),
+  };
+}
 
 interface WorkflowContextMenuProps {
   x: number;
@@ -219,6 +289,7 @@ export function hasMergeConflictExecution(task: TaskState | undefined): boolean 
 }
 
 export function App() {
+  const renderStartedAt = typeof performance === 'undefined' ? 0 : performance.now();
   const { tasks, workflows, clearTasks, refreshTasks } = useTasks();
   const invoker = useInvoker();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -248,6 +319,7 @@ export function App() {
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
+  const planningTypingBaselineReportedRef = useRef<Record<string, boolean>>({});
 
   const refreshSystemDiagnostics = useCallback(() => {
     window.invoker?.getSystemDiagnostics?.().then((diagnostics) => {
@@ -348,6 +420,7 @@ export function App() {
     }
     return null;
   }, [selectedWorkflowId, selectedTask, workflows]);
+  const planningTypingBaselineActiveSurface: PlanningTypingLagBaselineActiveSurface = viewMode === 'dag' ? 'home' : viewMode;
   const miniDagTasks = useMemo(() => {
     const activeWorkflowId = selectedWorkflow?.id ?? selectedWorkflowId;
     if (!activeWorkflowId) return new Map<string, TaskState>();
@@ -359,6 +432,56 @@ export function App() {
     }
     return next;
   }, [selectedWorkflow, selectedWorkflowId, tasks]);
+
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined' || !window.invoker?.reportUiPerf) return;
+    if (tasks.size === 0 || workflows.size === 0 || !selectedWorkflow) return;
+
+    const signature = [
+      planningTypingBaselineActiveSurface,
+      selectedWorkflow.id,
+      selectedTask?.id ?? 'none',
+      tasks.size,
+      workflows.size,
+      terminalCollapsed ? 'collapsed' : 'expanded',
+      hasLoadedPlan ? 'loaded' : 'not-loaded',
+      hasStarted ? 'started' : 'not-started',
+    ].join(':');
+    if (planningTypingBaselineReportedRef.current[signature]) return;
+
+    const commitMs = performance.now() - renderStartedAt;
+    const frame = requestAnimationFrame(() => {
+      if (planningTypingBaselineReportedRef.current[signature]) return;
+      planningTypingBaselineReportedRef.current[signature] = true;
+      void window.invoker?.reportUiPerf?.(
+        'planning_typing_lag_baseline',
+        buildPlanningTypingLagBaselinePayload({
+          tasks,
+          workflows,
+          activeSurface: planningTypingBaselineActiveSurface,
+          selectedWorkflow,
+          selectedWorkflowId,
+          selectedTask,
+          terminalCollapsed,
+          hasLoadedPlan,
+          hasStarted,
+          commitMs,
+          frameDelayMs: performance.now() - renderStartedAt,
+        }),
+      );
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    hasLoadedPlan,
+    hasStarted,
+    planningTypingBaselineActiveSurface,
+    selectedTask,
+    selectedWorkflow,
+    selectedWorkflowId,
+    tasks,
+    terminalCollapsed,
+    workflows,
+  ]);
 
   useEffect(() => {
     if (selectedTask?.config.workflowId) {
