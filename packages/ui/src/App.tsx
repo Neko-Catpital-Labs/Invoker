@@ -30,7 +30,11 @@ import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { StatusBar } from './components/StatusBar.js';
-import { TerminalDrawer } from './components/TerminalDrawer.js';
+import {
+  TerminalDrawer,
+  type TerminalDrawerState,
+  type TerminalSessionDescriptor,
+} from './components/TerminalDrawer.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
@@ -44,6 +48,20 @@ type ModalState =
   | { type: 'approval'; task: TaskState; action: 'approve' | 'reject' }
   | { type: 'experiment'; task: TaskState }
   | { type: 'replace'; task: TaskState };
+
+interface OpenTerminalResult {
+  opened: boolean;
+  reason?: string;
+  session?: TerminalSessionDescriptor;
+}
+
+interface AppTerminalTestWindow {
+  __INVOKER_TEST_OPEN_TERMINAL__?: (taskId: string) => Promise<OpenTerminalResult>;
+}
+
+interface AppTerminalInvokerMethods {
+  terminalClose?: (sessionId: string) => Promise<void>;
+}
 
 interface WorkflowContextMenuProps {
   x: number;
@@ -246,6 +264,9 @@ export function App() {
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const [terminalDrawerState, setTerminalDrawerState] = useState<TerminalDrawerState>('minimized');
+  const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
+  const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
@@ -359,6 +380,13 @@ export function App() {
     }
     return next;
   }, [selectedWorkflow, selectedWorkflowId, tasks]);
+  const terminalTaskLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const task of tasks.values()) {
+      labels.set(task.id, task.description);
+    }
+    return labels;
+  }, [tasks]);
 
   useEffect(() => {
     if (selectedTask?.config.workflowId) {
@@ -396,6 +424,53 @@ export function App() {
       }
     });
   }, []);
+  const openTaskTerminal = useCallback(async (taskId: string) => {
+    const testOpenTerminal = (window as typeof window & AppTerminalTestWindow).__INVOKER_TEST_OPEN_TERMINAL__;
+    const result = await (
+      testOpenTerminal
+        ? testOpenTerminal(taskId)
+        : (window.invoker?.openTerminal(taskId) as Promise<OpenTerminalResult> | undefined)
+    );
+
+    if (!result) return;
+    if (!result.opened) {
+      window.alert(result.reason ?? 'Cannot open terminal for this task.');
+      return;
+    }
+    if (!result.session) return;
+    const terminalSession = result.session;
+
+    setTerminalSessions((previous) => {
+      const withoutCurrent = previous.filter((session) =>
+        session.sessionId !== terminalSession.sessionId &&
+        session.taskId !== terminalSession.taskId
+      );
+      return [...withoutCurrent, terminalSession];
+    });
+    setActiveTerminalSessionId(terminalSession.sessionId);
+    setTerminalDrawerState('partial');
+    setTerminalCollapsed(false);
+  }, []);
+  const handleCloseTerminalSession = useCallback((sessionId: string) => {
+    const remaining = terminalSessions.filter((session) => session.sessionId !== sessionId);
+    setTerminalSessions(remaining);
+    setActiveTerminalSessionId((current) => {
+      if (current !== sessionId) return current;
+      return remaining.at(-1)?.sessionId ?? null;
+    });
+    if (remaining.length === 0) {
+      setTerminalDrawerState('minimized');
+    }
+    const invoker = window.invoker as (typeof window.invoker & AppTerminalInvokerMethods) | undefined;
+    void invoker?.terminalClose?.(sessionId);
+  }, [terminalSessions]);
+  const cycleTerminalDrawerState = useCallback(() => {
+    setTerminalDrawerState((current) => {
+      if (current === 'minimized') return 'partial';
+      if (current === 'partial') return 'maximized';
+      return 'minimized';
+    });
+  }, []);
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
   const needsBundledSkillsPrompt = Boolean(systemDiagnostics?.isPackaged && systemDiagnostics?.bundledSkills?.promptRecommended);
@@ -416,11 +491,8 @@ export function App() {
       window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
       return;
     }
-    const result = await window.invoker?.openTerminal(task.id);
-    if (result && !result.opened) {
-      window.alert(result.reason ?? 'Cannot open terminal for this task.');
-    }
-  }, []);
+    await openTaskTerminal(task.id);
+  }, [openTaskTerminal]);
 
   const handleTaskContextMenu = useCallback((task: TaskState, event: React.MouseEvent) => {
     setSelectedTaskId(task.id);
@@ -489,9 +561,9 @@ export function App() {
         window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
         return;
       }
-      void window.invoker?.openTerminal(taskId);
+      void openTaskTerminal(taskId);
     },
-    [tasks],
+    [openTaskTerminal, tasks],
   );
 
   const handleReplaceTask = useCallback((taskId: string) => {
@@ -1140,10 +1212,22 @@ export function App() {
                   activeFilters={statusFilters}
                   onStatusClick={(filterKey, event) => handleStatusClick(filterKey as WorkflowStatus, event)}
                 />
-                <TerminalDrawer
-                  collapsed={terminalCollapsed}
-                  onToggle={() => setTerminalCollapsed((prev) => !prev)}
-                />
+                {terminalSessions.length > 0 ? (
+                  <TerminalDrawer
+                    state={terminalDrawerState}
+                    onCycle={cycleTerminalDrawerState}
+                    sessions={terminalSessions}
+                    activeSessionId={activeTerminalSessionId}
+                    onSelectSession={setActiveTerminalSessionId}
+                    onCloseSession={handleCloseTerminalSession}
+                    taskLabels={terminalTaskLabels}
+                  />
+                ) : (
+                  <TerminalDrawer
+                    collapsed={terminalCollapsed}
+                    onToggle={() => setTerminalCollapsed((prev) => !prev)}
+                  />
+                )}
               </>
             )}
           </div>

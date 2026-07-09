@@ -185,6 +185,33 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
   return workflowId!;
 }
 
+async function expectSingleVisibleTerminalPane(page: Page, expectedTabText: string) {
+  const activeTabs = page.locator('[data-testid^="terminal-tab-"][data-active="true"]');
+  await expect(activeTabs).toHaveCount(1);
+  await expect(activeTabs.first()).toContainText(expectedTabText);
+
+  const panes = await page.locator('[data-testid^="terminal-pane-"]').evaluateAll((elements) =>
+    elements.map((element) => {
+      const htmlElement = element as HTMLElement;
+      const style = getComputedStyle(htmlElement);
+      const rect = htmlElement.getBoundingClientRect();
+      return {
+        testId: htmlElement.dataset.testid ?? '',
+        sessionId: htmlElement.dataset.sessionId ?? '',
+        display: style.display,
+        childCount: htmlElement.children.length,
+        hasBox: rect.width > 0 && rect.height > 0,
+      };
+    }),
+  );
+  const visiblePanes = panes.filter((pane) => pane.display !== 'none');
+  expect(visiblePanes).toHaveLength(1);
+  expect(visiblePanes[0]?.childCount).toBeGreaterThan(0);
+  expect(visiblePanes[0]?.hasBox).toBe(true);
+  await expect(page.getByTestId(visiblePanes[0]!.testId)).toBeVisible();
+  return visiblePanes[0]!;
+}
+
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
     await expect(page.getByText('Load a plan to render workflow graph')).toBeVisible({ timeout: 5000 });
@@ -249,6 +276,74 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByText('sleep 5 && echo hello-alpha')).toBeVisible();
     await captureScreenshot(page, 'task-panel');
     await assertPageScreenshot(page, 'task-panel');
+  });
+
+  test('embedded terminal active pane stays visible across drawer state and tab return', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await page.evaluate(() => {
+      type TerminalSession = {
+        sessionId: string;
+        taskId: string;
+        status: 'running';
+        mode: string;
+        attached: boolean;
+        createdAt: string;
+        command: string;
+        args: string[];
+        outputSnapshot: string;
+      };
+      const testWindow = window as unknown as {
+        __INVOKER_TEST_OPEN_TERMINAL__?: (taskId: string) => Promise<{ opened: boolean; session: TerminalSession }>;
+      };
+      testWindow.__INVOKER_TEST_OPEN_TERMINAL__ = async (taskId: string) => ({
+        opened: true,
+        session: {
+          sessionId: `visual-${taskId.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
+          taskId,
+          status: 'running',
+          mode: 'spawn',
+          attached: false,
+          createdAt: '2025-01-01T00:00:00.000Z',
+          command: 'sh',
+          args: ['-lc', `echo ${taskId}`],
+          outputSnapshot: `${taskId} terminal output\n`,
+        },
+      });
+    });
+
+    const alphaNode = page.locator('.react-flow__node[data-testid$="task-alpha"]').first();
+    await expect(alphaNode).toBeVisible({ timeout: 10000 });
+    await alphaNode.dispatchEvent('dblclick', { bubbles: true });
+
+    await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
+    await expect(page.getByTestId('terminal-drawer-body')).toBeVisible();
+    const alphaPane = await expectSingleVisibleTerminalPane(page, 'First test task');
+
+    await page.getByRole('button', { name: 'Maximize terminal drawer' }).click();
+    await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'maximized');
+    expect((await expectSingleVisibleTerminalPane(page, 'First test task')).sessionId).toBe(alphaPane.sessionId);
+
+    await page.getByRole('button', { name: 'Minimize terminal drawer' }).click();
+    await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
+    await expect(page.getByTestId('terminal-drawer-body')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Partial terminal drawer' }).click();
+    await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
+    await expectSingleVisibleTerminalPane(page, 'First test task');
+
+    const betaNode = page.locator('.react-flow__node[data-testid$="task-beta"]').first();
+    await expect(betaNode).toBeVisible({ timeout: 10000 });
+    await betaNode.dispatchEvent('dblclick', { bubbles: true });
+    await expectSingleVisibleTerminalPane(page, 'Second test task depending on alpha');
+
+    const inactiveAlphaTab = page
+      .locator('[data-testid^="terminal-tab-"][data-active="false"]')
+      .filter({ hasText: 'First test task' })
+      .getByRole('tab');
+    await inactiveAlphaTab.click();
+    await expectSingleVisibleTerminalPane(page, 'First test task');
+
+    await captureScreenshot(page, 'embedded-terminal-active-pane-regression');
   });
 
   test('task panel setup failure renders in Error panel', async ({ page }) => {
