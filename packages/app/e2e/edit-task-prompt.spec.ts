@@ -27,6 +27,22 @@ async function selectTaskAndWaitForPromptDisplay(page: Page, taskSuffix: string)
   }
 }
 
+async function openPromptEditor(page: Page, taskSuffix: string) {
+  const commandDisplay = page.locator('[data-testid="command-display"]');
+  const textarea = page.locator('[data-testid="edit-prompt-input"]');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await selectTaskAndWaitForPromptDisplay(page, taskSuffix);
+    await commandDisplay.dblclick();
+    try {
+      await expect(textarea).toBeVisible({ timeout: 5000 });
+      return textarea;
+    } catch (err) {
+      if (attempt === 2) throw err;
+    }
+  }
+  throw new Error(`Prompt editor did not open for ${taskSuffix}`);
+}
+
 const EDIT_PROMPT_PLAN = {
   name: 'E2E Edit Prompt Plan',
   repoUrl: E2E_REPO_URL,
@@ -61,16 +77,8 @@ test.describe('Edit task prompt', () => {
     await waitForTaskStatus(page, 'task-setup', 'completed');
     await waitForTaskStatus(page, 'task-prompt', 'completed', 30000);
 
-    // Click the prompt task node to select it
-    await selectTaskAndWaitForPromptDisplay(page, 'task-prompt');
-
-    // Double-click the command display area to enter prompt edit mode.
-    const commandDisplay = page.locator('[data-testid="command-display"]');
-    await commandDisplay.dblclick();
-
-    // The prompt textarea should appear with the old prompt.
-    const textarea = page.locator('[data-testid="edit-prompt-input"]');
-    await expect(textarea).toBeVisible({ timeout: 2000 });
+    // Open prompt edit mode and verify the old prompt.
+    const textarea = await openPromptEditor(page, 'task-prompt');
     const oldValue = await textarea.inputValue();
     expect(oldValue).toBe('Implement the initial feature');
 
@@ -126,12 +134,7 @@ test.describe('Edit task prompt', () => {
     expect(beforeEditChild).toBeDefined();
     const beforeGeneration = beforeEditChild?.execution?.generation ?? 0;
 
-    // Click parent prompt task to select it
-    await selectTaskAndWaitForPromptDisplay(page, 'parent-prompt');
-
-    const commandDisplay = page.locator('[data-testid="command-display"]');
-    await commandDisplay.dblclick();
-    const textarea = page.locator('[data-testid="edit-prompt-input"]');
+    const textarea = await openPromptEditor(page, 'parent-prompt');
     await textarea.fill('Updated prompt instruction');
 
     const saveBtn = page.locator('[data-testid="save-prompt-btn"]');

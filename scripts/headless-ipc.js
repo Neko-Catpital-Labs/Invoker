@@ -106,6 +106,23 @@ function withTimeout(promise, timeoutMs) {
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableDispatchError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /database is locked|SQLITE_BUSY|Timed out after/i.test(message);
+}
+
+function isNoHandlerError(error) {
+  if (error && typeof error === 'object' && error.code === 'NO_HANDLER') {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /NO_HANDLER|No request handler registered|No handler registered/i.test(message);
+}
+
 // ---------------------------------------------------------------------------
 // Stdin reader (for batch-exec)
 // ---------------------------------------------------------------------------
@@ -130,9 +147,14 @@ async function loadTransport() {
   return mod;
 }
 
-async function createBus(transport) {
+async function createBus(transport, timeoutMs) {
   const bus = new transport.IpcBus(undefined, { allowServe: false });
-  await bus.ready();
+  try {
+    await withTimeout(bus.ready(), timeoutMs);
+  } catch (error) {
+    bus.disconnect();
+    throw error;
+  }
   return bus;
 }
 
@@ -168,11 +190,79 @@ async function requestExec(bus, item, options) {
     waitForApproval: options.waitForApproval,
   };
   const response = await withTimeout(bus.request('headless.exec', payload), options.timeoutMs);
+  if (options.noTrack) {
+    const acknowledged =
+      response &&
+      typeof response === 'object' &&
+      response.ok === true &&
+      (typeof response.intentId === 'number' || typeof response.intentId === 'string');
+    if (!acknowledged) {
+      throw new Error(
+        `Fire-and-forget dispatch was not queued for args "${item.args.join(' ')}"; ` +
+        `expected owner response { ok: true, intentId }, got ${JSON.stringify(response)}`,
+      );
+    }
+  }
   return {
     ...item,
     ok: true,
     response,
   };
+}
+
+async function requestExecWithRetry(bus, item, options) {
+  const maxAttempts = Number.parseInt(process.env.INVOKER_HEADLESS_IPC_DISPATCH_ATTEMPTS ?? '8', 10);
+  const attempts = Number.isFinite(maxAttempts) && maxAttempts > 0 ? maxAttempts : 8;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await requestExec(bus, item, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isRetryableDispatchError(error)) {
+        throw error;
+      }
+      const delayMs = Math.min(5_000, 250 * attempt * attempt);
+      process.stderr.write(
+        `headless.exec dispatch attempt ${attempt}/${attempts} failed for "${item.args.join(' ')}"; ` +
+        `retrying in ${delayMs}ms: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
+}
+
+async function requestBatchExec(bus, items, options) {
+  const payload = {
+    items,
+    noTrack: options.noTrack,
+    waitForApproval: options.waitForApproval,
+  };
+  const response = await withTimeout(bus.request('headless.batch-exec', payload), options.timeoutMs);
+  if (!Array.isArray(response)) {
+    throw new Error(`headless.batch-exec returned non-array response: ${JSON.stringify(response)}`);
+  }
+  return response;
+}
+
+async function requestBatchExecWithRetry(bus, items, options) {
+  const maxAttempts = Number.parseInt(process.env.INVOKER_HEADLESS_IPC_DISPATCH_ATTEMPTS ?? '8', 10);
+  const attempts = Number.isFinite(maxAttempts) && maxAttempts > 0 ? maxAttempts : 8;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await requestBatchExec(bus, items, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || isNoHandlerError(error) || !isRetryableDispatchError(error)) {
+        throw error;
+      }
+      const delayMs = Math.min(5_000, 250 * attempt * attempt);
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,14 +291,14 @@ async function main() {
   }
 
   // Create a client-only IPC bus (no server election).
-  const bus = await createBus(transport);
+  const bus = await createBus(transport, options.timeoutMs);
 
   try {
     if (options.mode === 'exec') {
       if (options.args.length === 0) {
         throw new Error('Missing headless args for exec');
       }
-      const result = await requestExec(bus, { args: options.args }, options);
+      const result = await requestExecWithRetry(bus, { args: options.args }, options);
       process.stdout.write(`${JSON.stringify(result)}\n`);
       return;
     }
@@ -226,6 +316,21 @@ async function main() {
       return parsed;
     });
 
+    if (options.noTrack) {
+      try {
+        const results = await requestBatchExecWithRetry(bus, items, options);
+        for (const result of results) {
+          process.stdout.write(`${JSON.stringify(result)}\n`);
+        }
+        return;
+      } catch (error) {
+        if (!isNoHandlerError(error)) {
+          throw error;
+        }
+        process.stderr.write('headless.batch-exec handler unavailable; falling back to per-item headless.exec dispatch\n');
+      }
+    }
+
     let nextIndex = 0;
     const parallel = Math.max(1, Number.isFinite(options.parallel) ? options.parallel : 1);
 
@@ -238,7 +343,7 @@ async function main() {
         }
         const item = items[index];
         try {
-          const result = await requestExec(bus, item, options);
+          const result = await requestExecWithRetry(bus, item, options);
           process.stdout.write(`${JSON.stringify(result)}\n`);
         } catch (error) {
           process.stdout.write(`${JSON.stringify({

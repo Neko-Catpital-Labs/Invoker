@@ -51,6 +51,22 @@ describe('evaluateExecutingStall', () => {
     expect(result.staleReason).toBe('executor heartbeat stale');
   });
 
+  it('does not terminally stall a worktree task on heartbeat gap alone while the attempt lease is still valid', () => {
+    const result = evaluateExecutingStall({
+      now,
+      phase: 'executing',
+      runnerKind: 'worktree',
+      executingStartedAt: startedAt,
+      executorHeartbeatAt: new Date(now.getTime() - 4 * 60_000),
+      leaseExpiresAt: new Date(now.getTime() + 10 * 60_000),
+      executingStallTimeoutMs: timeoutMs,
+    });
+
+    expect(result.heartbeatStale).toBe(true);
+    expect(result.leaseExpired).toBe(false);
+    expect(result.executingStalled).toBe(false);
+  });
+
   it('prioritizes lease expiration as the stale reason', () => {
     const result = evaluateExecutingStall({
       now,

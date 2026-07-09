@@ -22,6 +22,7 @@ import {
 import '@xyflow/react/dist/style.css';
 
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import { layoutNodes, layoutTaskGraph, type LayoutEdge, type TaskGraphLayout } from '../lib/layout.js';
 import { getEdgeStyle, getEffectiveVisualStatus, matchesStatusFilter } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
@@ -40,15 +41,26 @@ interface TaskDAGProps {
   tasks: Map<string, TaskState>;
   workflows?: Map<string, WorkflowMeta>;
   selectedTaskId?: string | null;
+  /**
+   * Latest typed camera command. The DAG consumes each command once by
+   * sequence; commands scoped to other graphs are ignored. React Flow keeps
+   * owning x/y/zoom locally — this is intent, not a controlled viewport.
+   */
+  cameraCommand?: GraphCameraCommand | null;
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
+  /** Fired when the user manually pans or zooms the viewport. */
+  onManualViewport?: () => void;
   statusFilters?: Set<string>;
+  runningTaskIds?: ReadonlySet<string>;
+  surfaceMode?: 'default' | 'browser' | 'overlay';
 }
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
 const edgeTypes = { bundled: BundledEdge };
 const WORKFLOW_GAP = 100;
+const WATCHDOG_RECOVERY_MISS_COUNT = 3;
 
 type RawTaskEdge = LayoutEdge & {
   kind: 'local' | 'external';
@@ -125,15 +137,44 @@ function layoutKeyFor(tasks: TaskState[], edges: RawTaskEdge[]): string {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
-  const { fitView } = useReactFlow();
-  const prevNodeCount = useRef(0);
-  const reportedGraphVisibleRef = useRef(false);
-  const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
+function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
+  const previousById = new Map(prevNodes.map((node) => [node.id, node]));
 
+  return nextNodes.map((node) => {
+    const previous = previousById.get(node.id);
+    if (!previous) return node;
+
+    return {
+      ...node,
+      ...(previous.measured ? { measured: previous.measured } : {}),
+      ...(previous.width !== undefined ? { width: previous.width } : {}),
+      ...(previous.height !== undefined ? { height: previous.height } : {}),
+    };
+  });
+}
+
+function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds, surfaceMode = 'default' }: TaskDAGProps) {
+  const { fitView, setCenter, getZoom } = useReactFlow();
+  const graphRootRef = useRef<HTMLDivElement>(null);
+  const prevNodeCount = useRef(0);
+  const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
+  const reportedGraphVisibleRef = useRef(false);
+  const watchdogMissCountRef = useRef(0);
+  const watchdogRecoveryAttemptedRef = useRef(false);
+  const lastHandledCameraSeqRef = useRef(0);
+  const browserRemountDoneRef = useRef(false);
+  const initFitFrameRef = useRef(0);
+  const nodesRef = useRef<typeof nodes>([]);
+  const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
+  const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const onInitHandler = useCallback(() => {
-    requestAnimationFrame(() => fitView({ padding: 0.2 }));
+    initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
+
+  // Cancel a pending first-fit frame on unmount so it never fires against a
+  // torn-down graph after the component has gone away.
+  useEffect(() => () => cancelAnimationFrame(initFitFrameRef.current), []);
+
 
   const rawGraph = useMemo(() => {
     const taskArray = [...tasks.values()];
@@ -182,11 +223,11 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
       }
     }
 
-    // Build dimmed node set for edge opacity
     const dimmedNodeIds = new Set<string>();
     if (statusFilters && statusFilters.size > 0) {
       for (const task of taskArray) {
-        const vs = getEffectiveVisualStatus(task.status, task.execution);
+        const runningLike = runningTaskIds?.has(task.id) === true;
+        const vs = getEffectiveVisualStatus(task.status, task.execution, { runningLike });
         if (!Array.from(statusFilters).some((filterKey) => matchesStatusFilter(filterKey, vs))) {
           dimmedNodeIds.add(task.id);
         }
@@ -204,7 +245,10 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
       fallbackLayout: makeFallbackLayout(taskArray),
       layoutKey: layoutKeyFor(layoutTasks, rawEdges),
     };
-  }, [tasks, statusFilters]);
+  }, [runningTaskIds, tasks, statusFilters]);
+  useEffect(() => {
+    browserRemountDoneRef.current = false;
+  }, [rawGraph.layoutKey, surfaceMode]);
 
   useEffect(() => {
     if (rawGraph.taskArray.length === 0) return;
@@ -243,7 +287,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
       const wfMeta = workflows?.get(wfGroupId);
       const wfMergeMode = (wfMeta?.mergeMode as 'manual' | 'automatic' | 'external_review') ?? 'manual';
       const pos = activeLayout.positions.get(task.id) ?? { x: 0, y: 0 };
-      const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
+      const runningLike = runningTaskIds?.has(task.id) === true;
+      const visualStatus = getEffectiveVisualStatus(task.status, task.execution, { runningLike });
       const dimmed = statusFilters
         && statusFilters.size > 0
         && !Array.from(statusFilters).some((filterKey) => matchesStatusFilter(filterKey, visualStatus));
@@ -287,6 +332,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
             label: task.description,
             dimmed,
             selected: selectedTaskId === task.id,
+            runningLike,
+            ...(onTaskDoubleClick ? { onDoubleClick: onTaskDoubleClick } : {}),
           },
         });
       }
@@ -368,15 +415,15 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [activeLayout.positions, rawGraph, routedEdgePoints, selectedTaskId, statusFilters, tasks, workflows]);
+  }, [activeLayout.positions, onTaskDoubleClick, rawGraph, routedEdgePoints, runningTaskIds, selectedTaskId, statusFilters, tasks, workflows]);
 
-  // Merge task-derived nodes with React Flow's internal dimension/selection state.
+  // Merge task-derived nodes with React Flow's internal dimension state.
   // Without this, each task-delta re-render creates new node objects that discard
   // previously measured dimensions, forcing React Flow to re-measure.
   const [rfNodes, setRfNodes] = useState<Node[]>([]);
 
   useEffect(() => {
-    setRfNodes(nodes);
+    setRfNodes((prev) => mergeMeasuredNodeState(prev, nodes));
   }, [nodes]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
@@ -386,13 +433,101 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
     }
   }, []);
 
-  // Re-fit view when the actual rendered node count changes (includes merge gate)
+  // Topology changes (added/removed nodes) reset the watchdog recovery state but
+  // preserve the camera — a status refresh or new task must never re-fit or
+  // re-center. The initial fit is owned by onInit (first non-empty mount).
   useEffect(() => {
     if (nodes.length !== prevNodeCount.current && nodes.length > 0) {
       prevNodeCount.current = nodes.length;
-      requestAnimationFrame(() => fitView({ padding: 0.2 }));
+      watchdogMissCountRef.current = 0;
+      watchdogRecoveryAttemptedRef.current = false;
     }
-  }, [nodes.length, fitView]);
+  }, [nodes.length]);
+
+  // Manual pan/zoom from the user. React Flow passes a non-null DOM event for
+  // user-driven moves and null for programmatic setCenter/fitView, so this only
+  // reports genuine manual interaction.
+  const onMoveStart = useCallback(
+    (event: unknown) => {
+      if (event) onManualViewport?.();
+    },
+    [onManualViewport],
+  );
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  // Consume each task-scoped camera command exactly once, by sequence. Centering
+  // preserves the current zoom so ordinary refreshes never zoom the graph; only
+  // an explicit fitInitial command refits.
+  useEffect(() => {
+    const command = cameraCommand;
+    if (!command || command.scope !== 'task') return;
+    if (command.sequence <= lastHandledCameraSeqRef.current) return;
+    lastHandledCameraSeqRef.current = command.sequence;
+    if (nodes.length === 0) return;
+
+    if (command.kind === 'fitInitial') {
+      const frame = requestAnimationFrame(() => fitView({ padding: 0.2 }));
+      return () => cancelAnimationFrame(frame);
+    }
+
+    const targetId = command.target;
+    if (!targetId) return;
+    const node = nodes.find((candidate) => candidate.id === targetId);
+    if (!node) return;
+    const frame = requestAnimationFrame(() => {
+      if (typeof setCenter === 'function') {
+        const zoom = typeof getZoom === 'function' ? getZoom() : 1;
+        setCenter(node.position.x + 132, node.position.y + 55, { zoom, duration: 180 });
+      } else {
+        fitView({ padding: 0.2 });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [cameraCommand, fitView, getZoom, nodes, setCenter]);
+
+  useEffect(() => {
+    if (surfaceMode !== 'browser' || nodesRef.current.length === 0) return;
+
+    let cancelled = false;
+    const frame = requestAnimationFrame(() => {
+      if (cancelled) return;
+      fitView({ padding: 0.2 });
+      if (!selectedTaskId) return;
+      const node = nodesRef.current.find((candidate) => candidate.id === selectedTaskId);
+      if (!node) return;
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        const zoom = Math.max(typeof getZoom === 'function' ? getZoom() : 1, 0.85);
+        setCenter(node.position.x + 132, node.position.y + 55, { zoom, duration: 0 });
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [fitView, getZoom, rawGraph.layoutKey, selectedTaskId, setCenter, surfaceMode]);
+
+  useEffect(() => {
+    if (surfaceMode !== 'browser' || nodesRef.current.length === 0 || browserRemountDoneRef.current) return;
+
+    let cancelled = false;
+    const frame = requestAnimationFrame(() => {
+      if (cancelled) return;
+      requestAnimationFrame(() => {
+        if (cancelled || browserRemountDoneRef.current) return;
+        browserRemountDoneRef.current = true;
+        setFlowInstanceKey((key) => key + 1);
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [rawGraph.layoutKey, surfaceMode]);
 
   useEffect(() => {
     if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {
@@ -417,24 +552,42 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
   useEffect(() => {
     if (nodes.length === 0) return;
     const interval = setInterval(() => {
-      const domNodes = document.querySelectorAll('.react-flow__node');
-      const hiddenNodes = document.querySelectorAll(
+      const root = graphRootRef.current;
+      if (!root) return;
+      const renderedNodeElements = root.querySelectorAll('.react-flow__node');
+      const missingRenderedNodes = root.querySelectorAll(
         '.react-flow__node[style*="visibility: hidden"]',
       );
 
       if (
-        (domNodes.length === 0 && nodes.length > 0) ||
-        (hiddenNodes.length > 0 && hiddenNodes.length === domNodes.length)
+        (renderedNodeElements.length === 0 && nodes.length > 0) ||
+        (missingRenderedNodes.length > 0 && missingRenderedNodes.length === renderedNodeElements.length)
       ) {
+        watchdogMissCountRef.current += 1;
+        const shouldRecover =
+          watchdogMissCountRef.current >= WATCHDOG_RECOVERY_MISS_COUNT &&
+          !watchdogRecoveryAttemptedRef.current;
+
         console.warn(
-          '[DAG-watchdog] Nodes hidden or missing, forcing fitView',
+          shouldRecover
+            ? '[DAG-watchdog] Nodes hidden or missing, remounting React Flow'
+            : '[DAG-watchdog] Nodes hidden or missing, forcing fitView',
           {
             propsNodeCount: nodes.length,
-            domNodeCount: domNodes.length,
-            hiddenCount: hiddenNodes.length,
+            renderedNodeElementCount: renderedNodeElements.length,
+            missingRenderedNodeCount: missingRenderedNodes.length,
+            missCount: watchdogMissCountRef.current,
+            recoveryAttempted: watchdogRecoveryAttemptedRef.current,
+            recoveryTriggered: shouldRecover,
           },
         );
         fitView({ padding: 0.2 });
+        if (shouldRecover) {
+          watchdogRecoveryAttemptedRef.current = true;
+          setFlowInstanceKey((key) => key + 1);
+        }
+      } else {
+        watchdogMissCountRef.current = 0;
       }
     }, 2000);
     return () => clearInterval(interval);
@@ -446,8 +599,18 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
       if (task && onTaskClick) {
         onTaskClick(task);
       }
+      if (task && onTaskDoubleClick) {
+        const now = Date.now();
+        const lastClick = lastNodeClickRef.current;
+        if (lastClick?.id === node.id && now - lastClick.at <= 500) {
+          lastNodeClickRef.current = null;
+          onTaskDoubleClick(task);
+        } else {
+          lastNodeClickRef.current = { id: node.id, at: now };
+        }
+      }
     },
-    [tasks, onTaskClick],
+    [tasks, onTaskClick, onTaskDoubleClick],
   );
 
   const onNodeDoubleClick = useCallback(
@@ -475,16 +638,24 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
     return (
       <div className="h-full w-full flex items-center justify-center text-gray-500">
         <div className="text-center">
-          <p>No tasks yet</p>
-          <p className="text-sm mt-1">Load a plan to create a task graph</p>
+          <p>Your plan will appear here.</p>
         </div>
       </div>
     );
   }
 
+  const browserHeight = surfaceMode === 'browser' ? '300px' : '100%';
+
   return (
-    <div className="h-full w-full" style={{ minHeight: '300px' }}>
+    <div
+      ref={graphRootRef}
+      className="flex w-full flex-1"
+      style={{ minHeight: '300px', height: browserHeight }}
+    >
       <ReactFlow
+        key={flowInstanceKey}
+        className="h-full w-full"
+        style={{ width: '100%', height: browserHeight }}
         nodes={rfNodes}
         edges={edges}
         nodeTypes={nodeTypes}
@@ -493,6 +664,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
         onNodeClick={onNodeClick}
         onNodeDoubleClick={onNodeDoubleClick}
         onNodeContextMenu={onNodeContextMenu}
+        onMoveStart={onMoveStart}
         onInit={onInitHandler}
         zoomOnDoubleClick={false}
         minZoom={0.3}

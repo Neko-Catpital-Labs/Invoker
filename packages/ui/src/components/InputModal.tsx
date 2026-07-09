@@ -4,7 +4,7 @@
  * Shows the task's input prompt and a text area for the response.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { TaskState } from '../types.js';
 
 interface InputModalProps {
@@ -15,9 +15,23 @@ interface InputModalProps {
 
 export function InputModal({ task, onSubmit, onClose }: InputModalProps) {
   const [input, setInput] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleGlobalKeyDown);
+    return () => document.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [onClose]);
 
   const handleSubmit = () => {
+    if (submitting) return;
     if (!input.trim()) return;
+    setSubmitting(true);
     onSubmit(task.id, input.trim());
     onClose();
   };
@@ -68,7 +82,7 @@ export function InputModal({ task, onSubmit, onClose }: InputModalProps) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!input.trim()}
+            disabled={!input.trim() || submitting}
             className="px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
           >
             Submit

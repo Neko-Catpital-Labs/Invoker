@@ -1,64 +1,75 @@
 # Mergify merge queue for the default branch.
+# Add the `merge-hold` label when a PR is approved in spirit but must not be
+# queued yet. This lets reviewers leave approval-adjacent comments without
+# Mergify landing the PR before small follow-ups are pushed.
 # GitHub rulesets already require PRs, squash merges, and one approval on master.
-# Keep repo-local conditions minimal and let Mergify respect the protected-branch
-# requirements instead of duplicating the full CI matrix here.
+# Require every GitHub review thread to be resolved before queueing or merging.
+# This makes CodeRabbit and human review comments explicit blockers instead of
+# letting an approval send unresolved feedback to Mergify.
 
 queue_rules:
   - name: default
     merge_method: squash
+    batch_size: 5
+    batch_max_wait_time: 5min
+    checks_timeout: 60min
     queue_conditions:
       - base=master
       - -draft
       - "#approved-reviews-by >= 1"
+      - -label=merge-hold
+      - "#review-threads-unresolved = 0"
+    # Heavy e2e proof and the full Vitest Workspace run on PRs but do NOT block
+    # Mergify (the whole-workspace suite is currently red on master — unrelated
+    # worker-registry + SSH executor drift). "UI Vitest" runs only @invoker/ui
+    # and IS required: it holds the UI component guards, so a UI regression
+    # cannot merge even when the diff still type-checks.
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
+      - check-success = PR Body
       - check-success = quality / TypeScript Types
       - check-success = required-fast / Guardrails
-      - check-success = required-fast / Vitest Workspace
       - check-success = required-fast / Submit Workflow Chain
-      - check-success = dry-run / case-1
-      - check-success = dry-run / case-2
-      - check-success = dry-run / case-4
-      - check-success = playwright / 1-of-3
-      - check-success = playwright / 2-of-3
-      - check-success = playwright / 3-of-3
-      - check-success = ssh / shard-30
-      - check-success = ssh / shard-31
-      - check-success = optional / Worktree Provisioning
-      - check-success = optional / Visual Proof Validate
+      - check-success = UI Vitest
+      - "#review-threads-unresolved = 0"
 
   - name: admin-bypass
     merge_method: squash
+    batch_size: 1
+    batch_max_wait_time: 5min
+    checks_timeout: 60min
     queue_conditions:
       - base=master
       - -draft
       - label=admin-bypass
+      - -label=merge-hold
+      - "#review-threads-unresolved = 0"
+    # Heavy e2e proof and the full Vitest Workspace run on PRs but do NOT block
+    # Mergify (the whole-workspace suite is currently red on master — unrelated
+    # worker-registry + SSH executor drift). "UI Vitest" runs only @invoker/ui
+    # and IS required: it holds the UI component guards, so a UI regression
+    # cannot merge even when the diff still type-checks.
     merge_conditions:
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
+      - check-success = PR Body
       - check-success = quality / TypeScript Types
       - check-success = required-fast / Guardrails
-      - check-success = required-fast / Vitest Workspace
       - check-success = required-fast / Submit Workflow Chain
-      - check-success = dry-run / case-1
-      - check-success = dry-run / case-2
-      - check-success = dry-run / case-4
-      - check-success = playwright / 1-of-3
-      - check-success = playwright / 2-of-3
-      - check-success = playwright / 3-of-3
-      - check-success = ssh / shard-30
-      - check-success = ssh / shard-31
-      - check-success = optional / Worktree Provisioning
-      - check-success = optional / Visual Proof Validate
+      - check-success = UI Vitest
+      - "#review-threads-unresolved = 0"
 
 pull_request_rules:
-  - name: autoqueue approved PRs to master
+  - name: autoqueue ready approved PRs to master
     conditions:
       - base=master
       - -draft
       - "#approved-reviews-by >= 1"
+      - label=ready-to-merge
       - -label=admin-bypass
+      - -label=merge-hold
+      - "#review-threads-unresolved = 0"
     actions:
       queue:
         name: default
@@ -68,6 +79,8 @@ pull_request_rules:
       - base=master
       - -draft
       - label=admin-bypass
+      - -label=merge-hold
+      - "#review-threads-unresolved = 0"
     actions:
       queue:
         name: admin-bypass

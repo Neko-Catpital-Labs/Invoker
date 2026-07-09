@@ -9,16 +9,16 @@ import {
   abbrevRefMatchesBranch,
   canonicalPathForComparison,
   findContentHashCollisions,
-  findManagedWorktreeByActionId,
   findManagedWorktreeByContent,
   findManagedWorktreeForBranch,
+  pathIsUnderManagedPrefixes,
   parseGitWorktreePorcelain,
   parseExperimentBranch,
 } from './worktree-discovery.js';
-import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch } from './plan-base-remote.js';
+import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch, resolvePlanBaseRevision } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
-import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
+import { computeRepoCacheHash, computeRepoCacheKey, sanitizeBranchForPath } from './git-utils.js';
 
 export interface RepoPoolConfig {
   cacheDir: string;
@@ -43,17 +43,27 @@ export interface AcquiredWorktree {
 
 export interface AcquireWorktreeOptions {
   forceFresh?: boolean;
+  reusableWorktree?: {
+    branch: string;
+    workspacePath: string;
+  };
 }
 
 interface RebaseRefreshBatch {
   baseBranches: Set<string>;
   syncedBaseBranches: Set<string>;
+  resolvedBaseCommits: Map<string, string>;
   callerCount: number;
   timings: RepoPoolTiming[];
   promise: Promise<string>;
   mirrorPath?: string;
   completedAtMs?: number;
   cleanupTimer?: ReturnType<typeof setTimeout>;
+}
+
+interface RebaseMirrorRefreshResult {
+  dir: string;
+  originRefsFresh: boolean;
 }
 
 const REBASE_REFRESH_BATCH_WINDOW_MS = 25;
@@ -83,7 +93,11 @@ export class RepoPool {
   }
 
   private cloneDir(repoUrl: string): string {
-    return `${this.cacheDir}/${computeRepoUrlHash(repoUrl)}`;
+    return `${this.cacheDir}/${computeRepoCacheHash(repoUrl)}`;
+  }
+
+  private repoKey(repoUrl: string): string {
+    return computeRepoCacheKey(repoUrl);
   }
 
   /** Deterministic external worktree path for a branch (requires worktreeBaseDir). */
@@ -92,7 +106,7 @@ export class RepoPool {
       throw new Error('RepoPool.externalWorktreePath requires worktreeBaseDir');
     }
     const sanitized = sanitizeBranchForPath(branch);
-    return `${this.worktreeBaseDir}/${computeRepoUrlHash(repoUrl)}/${sanitized}`;
+    return `${this.worktreeBaseDir}/${computeRepoCacheHash(repoUrl)}/${sanitized}`;
   }
 
   /**
@@ -100,7 +114,8 @@ export class RepoPool {
    * Ignores remoteFetchForPool, while single-flighting same-repo retry storms.
    */
   async refreshMirrorForRebase(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
-    const existingBatch = this.pendingRebaseRefreshBatches.get(repoUrl);
+    const repoKey = this.repoKey(repoUrl);
+    const existingBatch = this.pendingRebaseRefreshBatches.get(repoKey);
     if (existingBatch) {
       if (existingBatch.completedAtMs !== undefined && existingBatch.mirrorPath) {
         if (existingBatch.syncedBaseBranches.has(baseBranch)) {
@@ -111,7 +126,7 @@ export class RepoPool {
           });
           return existingBatch.mirrorPath;
         }
-        this.clearRebaseRefreshBatch(repoUrl, existingBatch);
+        this.clearRebaseRefreshBatch(repoKey, existingBatch);
       } else {
         if (existingBatch.cleanupTimer) {
           clearTimeout(existingBatch.cleanupTimer);
@@ -127,11 +142,12 @@ export class RepoPool {
     const batch: RebaseRefreshBatch = {
       baseBranches: new Set([baseBranch]),
       syncedBaseBranches: new Set(),
+      resolvedBaseCommits: new Map(),
       callerCount: 1,
       timings: timing ? [timing] : [],
       promise: Promise.resolve(''),
     };
-    this.pendingRebaseRefreshBatches.set(repoUrl, batch);
+    this.pendingRebaseRefreshBatches.set(repoKey, batch);
 
     let releaseBatchWindow!: () => void;
     const batchWindow = new Promise<void>((resolve) => {
@@ -141,7 +157,7 @@ export class RepoPool {
       releaseBatchWindow();
     }, REBASE_REFRESH_BATCH_WINDOW_MS);
 
-    const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
+    const prev = this.repoChains.get(repoKey) ?? Promise.resolve();
     const queuedAtMs = Date.now();
     const next = prev.then(async () => {
       await batchWindow;
@@ -166,18 +182,18 @@ export class RepoPool {
       batch.completedAtMs = Date.now();
       return dir;
     });
-    this.repoChains.set(repoUrl, next.catch(() => {}));
+    this.repoChains.set(repoKey, next.catch(() => {}));
     batch.promise = next.then(
       (dir) => {
         batch.cleanupTimer = setTimeout(() => {
-          if (this.pendingRebaseRefreshBatches.get(repoUrl) === batch) {
-            this.pendingRebaseRefreshBatches.delete(repoUrl);
+          if (this.pendingRebaseRefreshBatches.get(repoKey) === batch) {
+            this.pendingRebaseRefreshBatches.delete(repoKey);
           }
         }, REBASE_REFRESH_RECENT_REUSE_MS);
         return dir;
       },
       (err) => {
-        this.clearRebaseRefreshBatch(repoUrl, batch);
+        this.clearRebaseRefreshBatch(repoKey, batch);
         throw err;
       },
     );
@@ -199,7 +215,7 @@ export class RepoPool {
     batch: RebaseRefreshBatch,
     timing?: RepoPoolTiming,
   ): Promise<string> {
-    const dir = await this.refreshMirrorCloneForRebase(repoUrl, timing);
+    const { dir, originRefsFresh } = await this.refreshMirrorCloneForRebase(repoUrl, timing);
     const runGit = (args: string[]) => this.execGit(args, dir);
     while (true) {
       const baseBranches = [...batch.baseBranches].filter((branch) => !batch.syncedBaseBranches.has(branch));
@@ -210,22 +226,100 @@ export class RepoPool {
         continue;
       }
       for (const branch of baseBranches) {
-        await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.syncPlanBaseRemoteForRef', { dir, baseBranch: branch }, () =>
-          syncPlanBaseRemoteForRef(runGit, branch),
-        );
+        if (originRefsFresh) {
+          timing?.mark('RepoPool.doRefreshMirrorForRebase.syncPlanBaseRemoteForRef', 'completed', {
+            dir,
+            baseBranch: branch,
+            skipped: true,
+            reason: 'origin-refs-fresh',
+          });
+        } else {
+          await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.syncPlanBaseRemoteForRef', { dir, baseBranch: branch }, () =>
+            syncPlanBaseRemoteForRef(runGit, branch),
+          );
+        }
         batch.syncedBaseBranches.add(branch);
+        const commit = await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.resolveBaseCommitNoFetch', { dir, baseBranch: branch }, () =>
+          this.tryResolveBaseCommitNoFetch(runGit, branch),
+        );
+        if (commit) {
+          batch.resolvedBaseCommits.set(branch, commit);
+        }
       }
     }
     return dir;
   }
 
-  private async refreshMirrorCloneForRebase(repoUrl: string, timing?: RepoPoolTiming): Promise<string> {
+  private async tryResolveBaseCommitNoFetch(runGit: (args: string[]) => Promise<string>, baseRef: string): Promise<string | undefined> {
+    const ref = baseRef.trim() || 'HEAD';
+    const tryRevParse = async (expr: string): Promise<string | undefined> => {
+      try {
+        const resolved = (await runGit(['rev-parse', '--verify', expr])).trim();
+        return resolved || undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    if (ref === 'HEAD') {
+      try {
+        const resolved = (await runGit(['rev-parse', 'HEAD'])).trim();
+        return resolved || undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    if (/^[0-9a-f]{40}$/i.test(ref)) {
+      return tryRevParse(`${ref}^{commit}`);
+    }
+    if (ref.startsWith('refs/heads/') || ref.startsWith('refs/remotes/origin/') || ref.startsWith('origin/')) {
+      return tryRevParse(`${ref}^{commit}`);
+    }
+    if (ref.startsWith('refs/')) {
+      return undefined;
+    }
+    if (ref.includes('~') || ref.includes('^')) {
+      return tryRevParse(ref);
+    }
+
+    const originResolved = await tryRevParse(`origin/${ref}^{commit}`);
+    if (originResolved) return originResolved;
+    const localResolved = await tryRevParse(`refs/heads/${ref}^{commit}`);
+    if (localResolved) return localResolved;
+    try {
+      const originHeadRef = (await runGit(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])).trim();
+      if (originHeadRef) return tryRevParse(`${originHeadRef}^{commit}`);
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+
+  async resolveBaseCommit(repoUrl: string, baseBranch: string, timing?: RepoPoolTiming): Promise<string> {
+    const batch = this.pendingRebaseRefreshBatches.get(this.repoKey(repoUrl));
+    const batchedCommit = batch?.resolvedBaseCommits.get(baseBranch);
+    if (batchedCommit) {
+      timing?.mark('RepoPool.resolveBaseCommit.batched', 'completed', {
+        repoUrl,
+        baseBranch,
+      });
+      return batchedCommit;
+    }
     const dir = this.cloneDir(repoUrl);
+    const runGit = (args: string[]) => this.execGit(args, dir);
+    return this.time(timing, 'RepoPool.resolveBaseCommit.resolvePlanBaseRevision', { dir, baseBranch }, () =>
+      resolvePlanBaseRevision(runGit, baseBranch),
+    );
+  }
+
+  private async refreshMirrorCloneForRebase(repoUrl: string, timing?: RepoPoolTiming): Promise<RebaseMirrorRefreshResult> {
+    const dir = this.cloneDir(repoUrl);
+    let originRefsFresh = false;
     if (existsSync(dir)) {
       try {
         await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.gitFetchAllPrune', { dir }, () =>
           this.execGit(['fetch', '--all', '--prune'], dir),
         );
+        originRefsFresh = true;
       } catch (err) {
         console.warn(`[RepoPool] refreshMirrorForRebase fetch failed: ${err}`);
       }
@@ -251,8 +345,9 @@ export class RepoPool {
       await this.time(timing, 'RepoPool.doRefreshMirrorForRebase.gitCloneMirror', { dir, repoUrl }, () =>
         this.execGit(['clone', repoUrl, dir], this.cacheDir),
       );
+      originRefsFresh = true;
     }
-    return dir;
+    return { dir, originRefsFresh };
   }
 
   /**
@@ -279,7 +374,8 @@ export class RepoPool {
       });
       return;
     }
-    const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
+    const repoKey = this.repoKey(repoUrl);
+    const prev = this.repoChains.get(repoKey) ?? Promise.resolve();
     const queuedAtMs = Date.now();
     const next = prev.then(() => {
       timing?.mark('RepoPool.removeManagedBranchesInMirror.repoChainWait', 'completed', {
@@ -289,7 +385,7 @@ export class RepoPool {
       });
       return this.doRemoveManagedBranchesInMirror(repoUrl, branches, timing);
     });
-    this.repoChains.set(repoUrl, next.catch(() => {}));
+    this.repoChains.set(repoKey, next.catch(() => {}));
     return next;
   }
 
@@ -307,7 +403,7 @@ export class RepoPool {
     for (const branch of branches) {
       if (!isInvokerManagedPoolBranch(branch)) continue;
       const sanitized = sanitizeBranchForPath(branch);
-      const wtPath = `${this.worktreeBaseDir}/${computeRepoUrlHash(repoUrl)}/${sanitized}`;
+      const wtPath = `${this.worktreeBaseDir}/${computeRepoCacheHash(repoUrl)}/${sanitized}`;
       try {
         await this.time(timing, 'RepoPool.doRemoveManagedBranchesInMirror.gitWorktreeRemove', { dir, branch, wtPath }, () =>
           this.execGit(['worktree', 'remove', '--force', wtPath], dir),
@@ -340,30 +436,39 @@ export class RepoPool {
     return timing.span(functionName, metadata, fn);
   }
 
-  async ensureClone(repoUrl: string): Promise<string> {
+  async ensureCloneThroughRepoQueue(repoUrl: string): Promise<string> {
     const bench = createExecutionBench({
       module: 'repo-pool-bench',
       baseMetadata: { repoUrl },
     });
-    bench('RepoPool.ensureClone.begin');
-    // Serialize clone operations per repo to prevent concurrent clone races
-    const existing = this.cloneLocks.get(repoUrl);
+    bench('RepoPool.ensureCloneThroughRepoQueue.begin');
+    const repoKey = this.repoKey(repoUrl);
+    // Join the per-repo git operation chain so fetch/clone cannot race with
+    // worktree acquisition, rebase refresh, or branch cleanup against the same
+    // shared cache.
+    const existing = this.cloneLocks.get(repoKey);
     if (existing) {
-      bench('RepoPool.ensureClone.waitForExistingLock.before');
+      bench('RepoPool.ensureCloneThroughRepoQueue.waitForExistingLock.before');
       const clonePath = await existing;
-      bench('RepoPool.ensureClone.waitForExistingLock.after', { clonePath });
+      bench('RepoPool.ensureCloneThroughRepoQueue.waitForExistingLock.after', { clonePath });
       return clonePath;
     }
 
-    const promise = this.doEnsureClone(repoUrl);
-    this.cloneLocks.set(repoUrl, promise);
+    const prev = this.repoChains.get(repoKey) ?? Promise.resolve();
+    const queuedAtMs = Date.now();
+    const promise = prev.then(() => {
+      bench('RepoPool.ensureCloneThroughRepoQueue.repoChainWait.after', { durationMs: Date.now() - queuedAtMs });
+      return this.ensureCloneUnqueued(repoUrl);
+    });
+    this.cloneLocks.set(repoKey, promise);
+    this.repoChains.set(repoKey, promise.catch(() => {}));
     try {
       const clonePath = await promise;
-      bench('RepoPool.ensureClone.after', { clonePath });
+      bench('RepoPool.ensureCloneThroughRepoQueue.after', { clonePath });
       return clonePath;
     } finally {
-      this.cloneLocks.delete(repoUrl);
-      bench('RepoPool.ensureClone.lockDeleted');
+      this.cloneLocks.delete(repoKey);
+      bench('RepoPool.ensureCloneThroughRepoQueue.lockDeleted');
     }
   }
 
@@ -462,53 +567,53 @@ export class RepoPool {
     bench('RepoPool.runPreserveOrResetWithRecovery.retryRunBashLocal.after');
   }
 
-  private async doEnsureClone(repoUrl: string): Promise<string> {
+  private async ensureCloneUnqueued(repoUrl: string): Promise<string> {
     const bench = createExecutionBench({
       module: 'repo-pool-bench',
       baseMetadata: { repoUrl },
     });
     const dir = this.cloneDir(repoUrl);
-    bench('RepoPool.doEnsureClone.begin', { dir, exists: existsSync(dir) });
+    bench('RepoPool.ensureCloneUnqueued.begin', { dir, exists: existsSync(dir) });
     if (existsSync(dir)) {
       if (remoteFetchForPool.enabled) {
         try {
-          bench('RepoPool.doEnsureClone.gitFetchAllPrune.before', { dir });
+          bench('RepoPool.ensureCloneUnqueued.gitFetchAllPrune.before', { dir });
           await this.execGit(['fetch', '--all', '--prune'], dir);
-          bench('RepoPool.doEnsureClone.gitFetchAllPrune.after', { dir });
+          bench('RepoPool.ensureCloneUnqueued.gitFetchAllPrune.after', { dir });
         } catch (err) {
-          console.warn(`[RepoPool] doEnsureClone fetch failed: ${err}`);
-          bench('RepoPool.doEnsureClone.gitFetchAllPrune.failed', {
+          console.warn(`[RepoPool] ensureCloneUnqueued fetch failed: ${err}`);
+          bench('RepoPool.ensureCloneUnqueued.gitFetchAllPrune.failed', {
             dir,
             error: err instanceof Error ? err.message : String(err),
           });
         }
         // Advance local HEAD branch to match origin so rev-parse returns the fresh ref
         try {
-          bench('RepoPool.doEnsureClone.gitCurrentBranch.before', { dir });
+          bench('RepoPool.ensureCloneUnqueued.gitCurrentBranch.before', { dir });
           const branch = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).trim();
-          bench('RepoPool.doEnsureClone.gitCurrentBranch.after', { dir, branch });
+          bench('RepoPool.ensureCloneUnqueued.gitCurrentBranch.after', { dir, branch });
           if (branch !== 'HEAD') {
-            bench('RepoPool.doEnsureClone.gitFastForwardCurrentBranch.before', { dir, branch });
+            bench('RepoPool.ensureCloneUnqueued.gitFastForwardCurrentBranch.before', { dir, branch });
             await this.execGit(['merge', '--ff-only', `origin/${branch}`], dir);
-            bench('RepoPool.doEnsureClone.gitFastForwardCurrentBranch.after', { dir, branch });
+            bench('RepoPool.ensureCloneUnqueued.gitFastForwardCurrentBranch.after', { dir, branch });
           } else {
-            bench('RepoPool.doEnsureClone.gitFastForwardCurrentBranch.skipped', { dir, branch });
+            bench('RepoPool.ensureCloneUnqueued.gitFastForwardCurrentBranch.skipped', { dir, branch });
           }
         } catch (err) {
-          bench('RepoPool.doEnsureClone.gitFastForwardCurrentBranch.failed', {
+          bench('RepoPool.ensureCloneUnqueued.gitFastForwardCurrentBranch.failed', {
             dir,
             error: err instanceof Error ? err.message : String(err),
           });
           /* non-ff or detached; leave as-is */
         }
       }
-      bench('RepoPool.doEnsureClone.returnExisting', { dir });
+      bench('RepoPool.ensureCloneUnqueued.returnExisting', { dir });
       return dir;
     }
     mkdirSync(this.cacheDir, { recursive: true });
-    bench('RepoPool.doEnsureClone.gitClone.before', { dir });
+    bench('RepoPool.ensureCloneUnqueued.gitClone.before', { dir });
     await this.execGit(['clone', repoUrl, dir], this.cacheDir);
-    bench('RepoPool.doEnsureClone.gitClone.after', { dir });
+    bench('RepoPool.ensureCloneUnqueued.gitClone.after', { dir });
     return dir;
   }
 
@@ -525,13 +630,14 @@ export class RepoPool {
     });
     bench('RepoPool.acquireWorktree.begin');
     // Serialize per-repo to prevent concurrent git worktree operations
-    const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
+    const repoKey = this.repoKey(repoUrl);
+    const prev = this.repoChains.get(repoKey) ?? Promise.resolve();
     const queuedAtMs = Date.now();
     const next = prev.then(() => {
       bench('RepoPool.acquireWorktree.repoChainWait.after', { durationMs: Date.now() - queuedAtMs });
       return this.doAcquireWorktree(repoUrl, branch, base, actionId, opts);
     });
-    this.repoChains.set(repoUrl, next.catch(() => {}));
+    this.repoChains.set(repoKey, next.catch(() => {}));
     const acquired = await next;
     bench('RepoPool.acquireWorktree.after', { worktreePath: acquired.worktreePath });
     return acquired;
@@ -546,12 +652,13 @@ export class RepoPool {
    * reservations behind and artificially pin the pool at max capacity.
    */
   reconcileActiveWorktrees(repoUrl: string, livePaths: Iterable<string>): void {
+    const repoKey = this.repoKey(repoUrl);
     const live = new Set(Array.from(livePaths, (path) => canonicalPathForComparison(path)));
     if (live.size === 0) {
-      this.activeWorktrees.delete(repoUrl);
+      this.activeWorktrees.delete(repoKey);
       return;
     }
-    this.activeWorktrees.set(repoUrl, live);
+    this.activeWorktrees.set(repoKey, live);
   }
 
   private async isReusableManagedWorktree(worktreePath: string, expectedBranch: string): Promise<boolean> {
@@ -580,16 +687,17 @@ export class RepoPool {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree branch=${branch} (bashPreserveOrReset here; BaseExecutor.setupTaskBranch is not used for this path)`,
     );
-    bench('RepoPool.doAcquireWorktree.ensureClone.before');
-    const clonePath = await this.ensureClone(repoUrl);
-    bench('RepoPool.doAcquireWorktree.ensureClone.after', { clonePath });
-    const active = this.activeWorktrees.get(repoUrl) ?? new Set();
+    bench('RepoPool.doAcquireWorktree.ensureCloneUnqueued.before');
+    const clonePath = await this.ensureCloneUnqueued(repoUrl);
+    bench('RepoPool.doAcquireWorktree.ensureCloneUnqueued.after', { clonePath });
+    const repoKey = this.repoKey(repoUrl);
+    const active = this.activeWorktrees.get(repoKey) ?? new Set();
     bench('RepoPool.doAcquireWorktree.activeWorktreeCount', { activeCount: active.size, maxWorktrees: this.maxWorktrees });
     if (active.size >= this.maxWorktrees) {
       throw new ResourceLimitError(`Worktree limit reached for ${repoUrl}: ${active.size}/${this.maxWorktrees}`);
     }
     const sanitized = sanitizeBranchForPath(branch);
-    const urlHash = computeRepoUrlHash(repoUrl);
+    const urlHash = computeRepoCacheHash(repoUrl);
     const worktreePath = this.worktreeBaseDir
       ? `${this.worktreeBaseDir}/${urlHash}/${sanitized}`
       : `${clonePath}/worktrees/${sanitized}`;
@@ -631,22 +739,30 @@ export class RepoPool {
     let actionIdCandidate:
       | { path: string; branch: string; baseIsAncestorOfHead: boolean }
       | undefined;
-    if (allowReuse && actionId) {
-      const actionIdHit = findManagedWorktreeByActionId(porcelain, actionId, managedPrefixes);
-      if (actionIdHit && existsSync(actionIdHit.path)) {
+    if (allowReuse && opts?.reusableWorktree) {
+      const candidate = opts.reusableWorktree;
+      if (
+        candidate.branch &&
+        candidate.workspacePath &&
+        pathIsUnderManagedPrefixes(candidate.workspacePath, managedPrefixes) &&
+        existsSync(candidate.workspacePath)
+      ) {
+        const head = await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], candidate.workspacePath).catch(() => '');
         let baseIsAncestorOfHead = true;
         if (base) {
           try {
-            await this.execGit(['merge-base', '--is-ancestor', base, 'HEAD'], actionIdHit.path);
+            await this.execGit(['merge-base', '--is-ancestor', base, 'HEAD'], candidate.workspacePath);
           } catch {
             baseIsAncestorOfHead = false;
           }
         }
-        actionIdCandidate = {
-          path: actionIdHit.path,
-          branch: actionIdHit.branch,
-          baseIsAncestorOfHead,
-        };
+        if (abbrevRefMatchesBranch(head, candidate.branch)) {
+          actionIdCandidate = {
+            path: candidate.workspacePath,
+            branch: candidate.branch,
+            baseIsAncestorOfHead,
+          };
+        }
       }
     }
 
@@ -801,7 +917,7 @@ export class RepoPool {
 
     effectivePath = canonicalPathForComparison(effectivePath);
     active.add(effectivePath);
-    this.activeWorktrees.set(repoUrl, active);
+    this.activeWorktrees.set(repoKey, active);
     bench('RepoPool.doAcquireWorktree.applyPlan.after', {
       planKind: plan.kind,
       effectivePath,

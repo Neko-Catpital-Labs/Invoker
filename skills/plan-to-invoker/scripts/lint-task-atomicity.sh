@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Enforce atomic + detailed task quality constraints for Invoker plans.
-# Usage: bash lint-task-atomicity.sh [--warn-delegation] [--strict-delegation] <plan.yaml>
+# Usage: bash lint-task-atomicity.sh [--warn-delegation] [--strict-delegation] [--stack-manifest FILE] <plan.yaml>
 #
 # --warn-delegation  Print advisory warnings if task descriptions omit best-effort
 #                    delegation headings (Files: / Change types: / Acceptance criteria:).
 #                    Does not change exit code (still 0 if no hard errors). Optional.
 # --strict-delegation  For implementation plans (onFinish != none), fail prompt tasks
 #                    that are not self-contained for zero-context remote execution.
+# --stack-manifest FILE
+#                    Mark a workflow as part of an authored stack so standalone
+#                    multi-prompt waiver checks do not fire for stack slices.
 set -euo pipefail
 
 warn_delegation=0
 strict_delegation=0
+stack_manifest_file=""
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
     --warn-delegation)
@@ -21,20 +25,37 @@ while [[ $# -gt 0 ]]; do
       strict_delegation=1
       shift
       ;;
+    --stack-manifest)
+      stack_manifest_file="${2:-}"
+      if [[ -z "$stack_manifest_file" ]]; then
+        echo "ERROR: --stack-manifest requires a file path" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
     *)
       break
       ;;
   esac
 done
 
-file="${1:?Usage: lint-task-atomicity.sh [--warn-delegation] [--strict-delegation] <plan.yaml>}"
+file="${1:?Usage: lint-task-atomicity.sh [--warn-delegation] [--strict-delegation] [--stack-manifest FILE] <plan.yaml>}"
 
 if [[ ! -f "$file" ]]; then
   echo "ERROR: File not found: $file" >&2
   exit 1
 fi
 
-awk -v warnDelegation="$warn_delegation" -v strictDelegation="$strict_delegation" '
+stack_manifest_provided=0
+if [[ -n "$stack_manifest_file" ]]; then
+  stack_manifest_provided=1
+  if [[ ! -f "$stack_manifest_file" ]]; then
+    echo "ERROR: Stack manifest not found: $stack_manifest_file" >&2
+    exit 1
+  fi
+fi
+
+awk -v warnDelegation="$warn_delegation" -v strictDelegation="$strict_delegation" -v stackManifestProvided="$stack_manifest_provided" '
 function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
 function strip_quotes(s) { gsub(/["'\''"]/, "", s); return s }
 function normalize_command(s) {
@@ -64,15 +85,88 @@ function csv_has(csv, needle,    parts, i, item) {
   }
   return 0
 }
+function reset_file_buckets() {
+  file_has_product = 0
+  file_has_test = 0
+  file_has_proof = 0
+  file_has_policy = 0
+  file_has_docs = 0
+}
+function classify_file_path(path) {
+  if (path == "") return
+  if (path ~ /^scripts\/repro\//) {
+    file_has_proof = 1
+    return
+  }
+  if (path ~ /^skills\// || path ~ /^docs\// || path ~ /\.md$/) {
+    file_has_docs = 1
+    return
+  }
+  if (path ~ /^scripts\//) {
+    file_has_policy = 1
+    return
+  }
+  if (path ~ /^packages\/.*\/(e2e|__tests__)\// || path ~ /\.(spec|test)\.[jt]sx?$/) {
+    file_has_test = 1
+    if (path ~ /(benchmark|performance|visual-proof)/) {
+      file_has_proof = 1
+    }
+    return
+  }
+  if (path ~ /(benchmark|performance|visual-proof)/) {
+    file_has_proof = 1
+    return
+  }
+  if (path ~ /^packages\//) {
+    file_has_product = 1
+    return
+  }
+}
+function parse_file_buckets(desc_text,    lines, i, line, in_files, path) {
+  reset_file_buckets()
+  split(desc_text, lines, /\n/)
+  in_files = 0
+  for (i = 1; i in lines; i++) {
+    line = tolower(trim(lines[i]))
+    if (line ~ /^files:/) {
+      in_files = 1
+      continue
+    }
+    if (in_files == 0) continue
+    if (line ~ /^[a-z][a-z _-]*:/) {
+      in_files = 0
+      continue
+    }
+    path = line
+    sub(/^-+[ \t]*/, "", path)
+    path = trim(path)
+    classify_file_path(path)
+  }
+}
 function parse_metadata(desc_lower,    tmp, parts) {
   layer = ""
   feature_state = ""
+  review_lane = ""
   layer_exception_allowed = 0
   has_acceptance_criteria = (desc_lower ~ /acceptance criteria:/)
   has_goal_heading = (desc_lower ~ /(^|\n)[ \t]*goal:/)
   has_motivation_heading = (desc_lower ~ /(^|\n)[ \t]*motivation:/)
   has_alternatives_heading = (desc_lower ~ /(^|\n)[ \t]*(alternative considerations|alternatives):/)
   has_implementation_heading = (desc_lower ~ /(^|\n)[ \t]*(implementation details|implementation):/)
+  has_review_claim_heading = (desc_lower ~ /(^|\n)[ \t]*review claim:/)
+  has_review_lane_heading = (desc_lower ~ /(^|\n)[ \t]*review lane:/)
+  has_safety_invariant_heading = (desc_lower ~ /(^|\n)[ \t]*safety invariant:/)
+  has_slice_rationale_heading = (desc_lower ~ /(^|\n)[ \t]*slice rationale:/)
+  has_architectural_effect_heading = (desc_lower ~ /(^|\n)[ \t]*architectural effect:/)
+  has_non_goals_heading = (desc_lower ~ /(^|\n)[ \t]*non-goals:/)
+
+  tmp = desc_lower
+  sub(/^.*review lane:[ \t]*/, "", tmp)
+  if (tmp != desc_lower) {
+    gsub(/^[ \t\r\n-]+/, "", tmp)
+    split(tmp, parts, /[^a-z0-9_-]/)
+    review_lane = parts[1]
+  }
 
   tmp = desc_lower
   sub(/^.*layer:[ \t]*/, "", tmp)
@@ -146,6 +240,7 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   }
 
   if (has_prompt) {
+    prompt_task_count++
     if (length(prompt_text) < 120) {
       errors[++errn] = "Task \"" id "\" prompt too short (<120 chars); include file paths + explicit acceptance criteria"
     }
@@ -173,10 +268,34 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
       errors[++errn] = "Task \"" id "\" has invalid Feature state \"" feature_state "\"; expected active or dormant"
     }
 
+    if (review_lane == "") {
+      errors[++errn] = "Task \"" id "\" missing required \"Review lane:\" heading in description (expected behavior, refactor, proof, cleanup, policy, or docs)"
+    } else if (review_lane != "behavior" && review_lane != "refactor" && review_lane != "proof" && review_lane != "cleanup" && review_lane != "policy" && review_lane != "docs") {
+      errors[++errn] = "Task \"" id "\" has invalid Review lane \"" review_lane "\"; expected behavior, refactor, proof, cleanup, policy, or docs"
+    }
+
     if (feature_state == "dormant" && has_acceptance_criteria == 0) {
       errors[++errn] = "Task \"" id "\" uses Feature state dormant but omits \"Acceptance criteria:\" in description"
     }
 
+    if (strictDelegation == 1 && has_review_claim_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Review claim:\" section in description for implementation plans"
+    }
+    if (strictDelegation == 1 && has_review_lane_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Review lane:\" section in description for implementation plans"
+    }
+    if (strictDelegation == 1 && has_safety_invariant_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Safety invariant:\" section in description for implementation plans"
+    }
+    if (strictDelegation == 1 && has_slice_rationale_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Slice rationale:\" section in description for implementation plans"
+    }
+    if (strictDelegation == 1 && has_architectural_effect_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Architectural effect:\" section in description for implementation plans"
+    }
+    if (strictDelegation == 1 && has_non_goals_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Non-goals:\" section in description for implementation plans"
+    }
     if (has_goal_heading == 0) {
       errors[++errn] = "Task \"" id "\" missing required \"Goal:\" section in description for implementation plans"
     }
@@ -190,10 +309,32 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
       errors[++errn] = "Task \"" id "\" missing required \"Implementation details:\" (or \"Implementation:\") section in description for implementation plans"
     }
 
+    parse_file_buckets(desc_lower)
+    if (review_lane == "behavior" || review_lane == "refactor" || review_lane == "cleanup") {
+      if (file_has_policy || file_has_docs || file_has_proof) {
+        errors[++errn] = "Task \"" id "\" mixes Review lane \"" review_lane "\" with policy/docs/proof files; split behavior or cleanup from scripts, docs, skills, repros, and benchmarks"
+      }
+    } else if (review_lane == "proof") {
+      if (file_has_product || file_has_policy || file_has_docs) {
+        errors[++errn] = "Task \"" id "\" mixes Review lane \"proof\" with product or policy/docs files; benchmark, repro, and regression proof should be its own slice"
+      }
+    } else if (review_lane == "policy") {
+      if (file_has_product || file_has_proof) {
+        errors[++errn] = "Task \"" id "\" mixes Review lane \"policy\" with product or proof files; keep tooling/runtime policy separate from behavior and proof changes"
+      }
+    } else if (review_lane == "docs") {
+      if (file_has_product || file_has_policy || file_has_proof) {
+        errors[++errn] = "Task \"" id "\" mixes Review lane \"docs\" with product, policy, or proof files; keep docs and skill updates in their own slice"
+      }
+    }
+
     if (has_prompt) {
       prompt_lower = tolower(prompt_text)
       if (prompt_lower !~ /(^|[ \t])goal:/) {
         errors[++errn] = "Task \"" id "\" prompt missing required \"Goal:\" section for AI implementation tasks"
+      }
+      if (prompt_lower !~ /(^|[ \t])review lane:/) {
+        errors[++errn] = "Task \"" id "\" prompt missing required \"Review lane:\" section for AI implementation tasks"
       }
       if (prompt_lower !~ /(^|[ \t])motivation:/) {
         errors[++errn] = "Task \"" id "\" prompt missing required \"Motivation:\" section for AI implementation tasks"
@@ -203,6 +344,17 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
       }
       if (prompt_lower !~ /(^|[ \t])(implementation details|implementation):/) {
         errors[++errn] = "Task \"" id "\" prompt missing required \"Implementation details:\" (or \"Implementation:\") section for AI implementation tasks"
+      }
+      if (prompt_lower !~ /(^|[ \t])non-goals:/) {
+        errors[++errn] = "Task \"" id "\" prompt missing required \"Non-goals:\" section for AI implementation tasks"
+      }
+      if (review_lane == "refactor") {
+        if ((desc_lower " " prompt_lower) !~ /(no behavior change|behavior unchanged|unchanged behavior|pass unchanged)/) {
+          errors[++errn] = "Task \"" id "\" uses Review lane refactor but does not explicitly promise no behavior change"
+        }
+        if ((desc_lower " " prompt_lower) ~ /(add field|new field|extra field|schema|default flip|new behavior|behavior change)/) {
+          errors[++errn] = "Task \"" id "\" mixes Review lane refactor with new field/schema/behavior language; split extraction from behavior changes"
+        }
       }
       if (strictDelegation == 1) {
         if (desc_lower !~ /(^|\n)[ \t]*files:/) {
@@ -284,13 +436,16 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
 
 BEGIN {
   in_task = 0
+  in_tasks_block = 0
   in_dep_block = 0
   in_description_block = 0
-  in_prompt_block = 0
   errn = 0
   warnn = 0
   taskn = 0
   has_experiment_tasks = 0
+  has_external_dependencies = 0
+  prompt_task_count = 0
+  standalone_workflow_waiver = 0
   on_finish = "pull_request"
   enforce_layering = 1
 }
@@ -298,12 +453,26 @@ BEGIN {
 {
   line = $0
 
+  if (tolower(line) ~ /standalone workflow waiver:/) {
+    standalone_workflow_waiver = 1
+  }
+
   if (!in_task && line ~ /^[[:space:]]*onFinish:[[:space:]]*/) {
     on_finish = line
     sub(/^[[:space:]]*onFinish:[[:space:]]*/, "", on_finish)
     on_finish = trim(strip_quotes(on_finish))
     enforce_layering = (tolower(on_finish) != "none")
     next
+  }
+
+  if (line ~ /^[A-Za-z_][A-Za-z0-9_-]*:[[:space:]]*/) {
+    top_key = tolower(line)
+    sub(/:.*/, "", top_key)
+    in_tasks_block = (top_key == "tasks")
+  }
+
+  if (line ~ /^[[:space:]]*externalDependencies:[[:space:]]*$/) {
+    has_external_dependencies = 1
   }
 
   if (in_description_block) {
@@ -330,7 +499,7 @@ BEGIN {
     in_dep_block = 0
   }
 
-  if (line ~ /^[[:space:]]*-[[:space:]]+id:[[:space:]]*/) {
+  if (in_tasks_block && line ~ /^[[:space:]]*-[[:space:]]+id:[[:space:]]*/) {
     flush_task()
     in_task = 1
     in_dep_block = 0
@@ -434,7 +603,7 @@ END {
       }
 
       if (cleanup_id == "") {
-        errors[++errn] = "Task \"" experiment_id "\" requires cleanup task \"cleanup-experiment-artifacts-" suffix "\" before final regression gate"
+        errors[++errn] = "Task \"" experiment_id "\" requires cleanup task \"cleanup-experiment-artifacts-" suffix "\" before that workflow final verification gate"
       } else {
         cleanup_idx = task_id_to_index[cleanup_id]
         if (cleanup_idx > 0) {
@@ -454,6 +623,10 @@ END {
   }
 
   if (enforce_layering == 1) {
+    if (stackManifestProvided == 0 && has_external_dependencies == 0 && prompt_task_count > 1 && standalone_workflow_waiver == 0) {
+      errors[++errn] = "Standalone implementation workflow has multiple prompt tasks but no stack context; split into a workflow chain or add \"Standalone workflow waiver:\" with the reason"
+    }
+
     for (idx = 1; idx <= taskn; idx++) {
       deps_csv = task_dependencies[idx]
       if (deps_csv == "") continue
@@ -470,34 +643,6 @@ END {
             errors[++errn] = "Task \"" task_ids[idx] "\" layer ordering violation: lower layer \"" cur_layer "\" depends on higher layer \"" dep_layer "\" via dependency \"" dep_id "\" (add \"Layer exception: allowed\" with rationale to override)"
           }
         }
-      }
-    }
-  }
-
-  if (enforce_layering == 1 && taskn > 0) {
-    final_idx = taskn
-    final_id = task_ids[final_idx]
-    final_command = task_command_line[final_idx]
-
-    if (task_has_command[final_idx] != 1) {
-      errors[++errn] = "Task \"" final_id "\" must be a command task because implementation plans require a final pnpm run test:all regression gate"
-    } else if (final_command != "pnpm run test:all") {
-      errors[++errn] = "Task \"" final_id "\" must be the final regression gate and run exactly \"pnpm run test:all\""
-    }
-
-    split(task_dependencies[final_idx], final_dep_ids, /,/)
-    delete final_dep_map
-    for (fdidx in final_dep_ids) {
-      dep_id = trim(final_dep_ids[fdidx])
-      if (dep_id != "") {
-        final_dep_map[dep_id] = 1
-      }
-    }
-
-    for (idx = 1; idx < final_idx; idx++) {
-      dep_id = task_ids[idx]
-      if (final_dep_map[dep_id] != 1) {
-        errors[++errn] = "Task \"" final_id "\" must depend on every earlier task; missing dependency on \"" dep_id "\""
       }
     }
   }

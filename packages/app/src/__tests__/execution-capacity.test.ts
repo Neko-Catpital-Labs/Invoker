@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
+  assertExecutionCapacityInvariant,
+  computeConfiguredExecutionCapacity,
   resolveEffectiveMaxConcurrency,
+  shouldFatalOnExecutionCapacityOvercommit,
 } from '../execution-capacity.js';
 
 describe('execution-capacity', () => {
@@ -17,5 +20,72 @@ describe('execution-capacity', () => {
   it('falls back to safe defaults for invalid values', () => {
     expect(resolveEffectiveMaxConcurrency(undefined)).toBe(DEFAULT_WORKTREE_MAX_CONCURRENCY);
     expect(resolveEffectiveMaxConcurrency(0)).toBe(DEFAULT_WORKTREE_MAX_CONCURRENCY);
+  });
+
+  it('computes capacity from SSH pool members', () => {
+    expect(computeConfiguredExecutionCapacity({
+      executionPools: {
+        ssh: {
+          members: [
+            { type: 'ssh', id: 'a' },
+            { type: 'ssh', id: 'b' },
+            { type: 'ssh', id: 'c' },
+            { type: 'ssh', id: 'd' },
+          ],
+        },
+      },
+    })).toBe(4);
+    expect(() => assertExecutionCapacityInvariant({
+      config: {
+        executionPools: {
+          ssh: {
+            members: [
+              { type: 'ssh', id: 'a' },
+              { type: 'ssh', id: 'b' },
+              { type: 'ssh', id: 'c' },
+              { type: 'ssh', id: 'd' },
+            ],
+          },
+        },
+      },
+      activeExecutions: 5,
+    })).toThrow(/configured capacity=4/);
+  });
+
+  it('does not double count the same member across overlapping pools', () => {
+    expect(computeConfiguredExecutionCapacity({
+      executionPools: {
+        one: { members: [{ type: 'ssh', id: 'shared' }, { type: 'ssh', id: 'a' }] },
+        two: { members: [{ type: 'ssh', id: 'shared' }, { type: 'ssh', id: 'b' }] },
+      },
+    })).toBe(3);
+  });
+
+  it('uses the max capacity for a repeated member instead of summing', () => {
+    expect(computeConfiguredExecutionCapacity({
+      executionPools: {
+        one: { maxConcurrentTasksPerMember: 2, members: [{ type: 'ssh', id: 'shared' }] },
+        two: { maxConcurrentTasksPerMember: 4, members: [{ type: 'ssh', id: 'shared' }] },
+      },
+    })).toBe(4);
+  });
+
+  it('counts worktree member maxConcurrentTasks', () => {
+    expect(computeConfiguredExecutionCapacity({
+      executionPools: {
+        worktree: { members: [{ type: 'worktree', id: 'local', maxConcurrentTasks: 12 }] },
+      },
+    })).toBe(12);
+  });
+
+  it('falls back to top-level maxConcurrency when no execution pools exist', () => {
+    expect(computeConfiguredExecutionCapacity({ maxConcurrency: 7 })).toBe(7);
+  });
+
+  it('keeps fatal capacity checks disabled unless opted in', () => {
+    expect(shouldFatalOnExecutionCapacityOvercommit({})).toBe(false);
+    expect(shouldFatalOnExecutionCapacityOvercommit({
+      INVOKER_FATAL_ON_EXECUTION_CAPACITY_OVERCOMMIT: '1',
+    })).toBe(true);
   });
 });

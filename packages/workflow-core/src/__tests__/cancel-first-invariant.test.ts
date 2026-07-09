@@ -12,7 +12,7 @@ import {
   type OrchestratorPersistence,
   type OrchestratorMessageBus,
 } from '../orchestrator.js';
-import type { TaskState, TaskStateChanges, Attempt } from '../task-types.js';
+import { computeWorkflowRollup, type TaskState, type TaskStateChanges, type Attempt } from '../task-types.js';
 
 // ── In-memory fixtures (focused, mirrors orchestrator.test.ts) ──
 
@@ -20,7 +20,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, {
     id: string;
     name: string;
-    status: string;
     createdAt: string;
     updatedAt: string;
     repoUrl?: string;
@@ -33,13 +32,13 @@ class InMemoryPersistence implements OrchestratorPersistence {
   saveWorkflow(workflow: {
     id: string;
     name: string;
-    status: string;
     repoUrl?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
       ...workflow,
+      status: 'pending',
       repoUrl: workflow.repoUrl ?? 'memory://test-repo',
       createdAt: (workflow as { createdAt?: string }).createdAt ?? now,
       updatedAt: (workflow as { updatedAt?: string }).updatedAt ?? now,
@@ -67,7 +66,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
       execution: { ...entry.task.execution, ...changes.execution },
     } as TaskState;
   }
-  listWorkflows() { return Array.from(this.workflows.values()); }
+  listWorkflows() { return Array.from(this.workflows.values()).map((workflow) => ({ ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status })); }
   loadTasks(workflowId: string): TaskState[] {
     return Array.from(this.tasks.values())
       .filter((e) => e.workflowId === workflowId)
@@ -300,7 +299,7 @@ describe('cancel-first invariant — policy-table iteration', () => {
 // ── Sub-suite 2: direct primitive calls bypass applyInvalidation ──
 
 function seedActiveTask(p: InMemoryPersistence, wfId: string, taskId: string): void {
-  p.saveWorkflow({ id: wfId, name: 'fixture', status: 'running' });
+  p.saveWorkflow({ id: wfId, name: 'fixture' });
   p.saveTask(wfId, {
     id: taskId,
     description: 'Active task',

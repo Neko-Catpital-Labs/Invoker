@@ -73,6 +73,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     visualStatus === 'review_ready' ? 'REVIEW READY' :
     visualStatus === 'awaiting_approval' ? 'APPROVE' :
     visualStatus === 'running' ? 'RUNNING' :
+    visualStatus === 'closed' ? 'CLOSED' :
     visualStatus === 'failed' ? 'BLOCKED' :
     'PENDING';
 

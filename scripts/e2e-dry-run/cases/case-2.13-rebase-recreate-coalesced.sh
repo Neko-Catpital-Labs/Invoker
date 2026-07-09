@@ -11,7 +11,7 @@ trap invoker_e2e_cleanup EXIT
 cd "$INVOKER_E2E_REPO_ROOT"
 unset ELECTRON_RUN_AS_NODE
 # Force deterministic failure behavior for this case (disable auto-fix fan-out).
-CFG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.XXXXXX.json")"
+CFG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.json.XXXXXX")"
 printf '{\n  "autoFixRetries": 0\n}\n' > "$CFG_FILE"
 export INVOKER_REPO_CONFIG_PATH="$CFG_FILE"
 
@@ -66,13 +66,13 @@ trap 'rm -rf "$TMP_DIR" "$CFG_FILE"; invoker_e2e_cleanup' EXIT
 echo "==> case 2.13: race reset intents (rebase + recreate x4)"
 (
   set +e
-  invoker_e2e_run_headless rebase "$TASK_ID" >"$TMP_DIR/rebase.out" 2>&1
+  invoker_e2e_run_headless --no-track rebase-recreate "$TASK_ID" >"$TMP_DIR/rebase.out" 2>&1
   echo $? >"$TMP_DIR/rebase.code"
 ) &
 for i in 1 2 3 4; do
   (
     set +e
-    invoker_e2e_run_headless recreate "$WF_ID" >"$TMP_DIR/recreate-$i.out" 2>&1
+    invoker_e2e_run_headless --no-track recreate "$WF_ID" >"$TMP_DIR/recreate-$i.out" 2>&1
     echo $? >"$TMP_DIR/recreate-$i.code"
   ) &
 done

@@ -1,0 +1,9 @@
+name: "Non-portable pipefail command"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+tasks:
+  - id: unsafe-pipefail
+    description: "Default-shell command uses bash-only pipefail"
+    command: |
+      set -euo pipefail
+      echo ok | tee /tmp/invoker-pipefail-proof

@@ -16,6 +16,7 @@ import {
   formatStatusLabel,
   getRunningPhaseLabel,
 } from '../lib/colors.js';
+import { useNow } from '../hooks/useNow.js';
 import { mergeGatePanelHeading } from '../lib/merge-gate.js';
 
 interface TaskAuditEvent {
@@ -157,16 +158,10 @@ function formatRepoUrl(url: string): string {
 }
 
 function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState; formatDate: (d?: Date | string) => string }) {
-  const [, setTick] = useState(0);
-
-  useEffect(() => {
-    if (task.status !== 'running' || !task.execution.lastHeartbeatAt) return;
-    const timer = setInterval(() => setTick(t => t + 1), 5_000);
-    return () => clearInterval(timer);
-  }, [task.status, task.execution.lastHeartbeatAt]);
+  const now = useNow(5_000, task.status === 'running' && Boolean(task.execution.lastHeartbeatAt));
 
   const heartbeatAge = task.execution.lastHeartbeatAt
-    ? Date.now() - (task.execution.lastHeartbeatAt instanceof Date ? task.execution.lastHeartbeatAt : new Date(task.execution.lastHeartbeatAt as unknown as string)).getTime()
+    ? now - (task.execution.lastHeartbeatAt instanceof Date ? task.execution.lastHeartbeatAt : new Date(task.execution.lastHeartbeatAt as unknown as string)).getTime()
     : null;
   const isHeartbeatStale = heartbeatAge !== null && heartbeatAge > 60_000;
 
@@ -413,15 +408,6 @@ export function TaskPanel({
         </span>
       </div>
 
-      {/* Auto-fix retry counter */}
-      {(task.config.autoFixRetries ?? 0) > 0 && (task.execution.autoFixAttempts ?? 0) > 0 && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Auto-fix</span>
-          <span className="text-xs text-gray-200">
-            attempt {task.execution.autoFixAttempts}/{task.config.autoFixRetries}
-          </span>
-        </div>
-      )}
 
       {/* Target branch (merge gates only) */}
       {task.config.isMergeNode && onSetMergeBranch && task.config.workflowId && (

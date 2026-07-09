@@ -15,6 +15,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 
 import {
+  computeWorkflowRollup,
   Orchestrator,
   type Attempt,
   type PlanDefinition,
@@ -25,6 +26,7 @@ import {
 import type { TaskStateChanges } from '@invoker/workflow-graph';
 import {
   DockerExecutor, WorktreeExecutor, ExecutorRegistry, SshExecutor,
+  MergeGateExecutor,
   BaseExecutor,
   getEffectivePath,
   type ExecutorHandle, type TerminalSpec, type PersistedTaskMeta,
@@ -44,6 +46,7 @@ import {
   spawnDetachedTerminal,
 } from '../terminal-external-launch.js';
 import { openExternalTerminalForTask } from '../open-terminal-for-task.js';
+import * as configModule from '../config.js';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -63,14 +66,11 @@ class InMemoryPersistence implements OrchestratorPersistence {
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   attempts = new Map<string, Attempt>();
 
-  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
+  saveWorkflow(workflow: { id: string; name: string }): void {
     const now = new Date().toISOString();
-    this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
+    this.workflows.set(workflow.id, { ...workflow, status: 'pending', createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
   }
-  updateWorkflow(workflowId: string, changes: { status?: string }): void {
-    const wf = this.workflows.get(workflowId);
-    if (wf && changes.status) wf.status = changes.status;
-  }
+  updateWorkflow(_workflowId: string, _changes: { updatedAt?: string }): void {}
   saveTask(workflowId: string, task: TaskState): void {
     this.tasks.set(task.id, { workflowId, task });
   }
@@ -79,7 +79,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
   }
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
-    return Array.from(this.workflows.values());
+    return Array.from(this.workflows.values()).map((workflow) => ({ ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status }));
   }
   loadTasks(workflowId: string): TaskState[] {
     return Array.from(this.tasks.values())
@@ -217,7 +217,7 @@ describe('open-terminal integration', () => {
     // Mock the pool to return our temp directory
     Object.defineProperty(executor, 'pool', {
       value: {
-        ensureClone: vi.fn().mockResolvedValue(mockWorktreeDir),
+        ensureCloneThroughRepoQueue: vi.fn().mockResolvedValue(mockWorktreeDir),
         acquireWorktree: vi.fn().mockResolvedValue({
           worktreePath: mockWorktreeDir,
           branch: 'test-branch',
@@ -574,6 +574,28 @@ describe('merge gate open-terminal', () => {
     vi.mocked(existsSync).mockReset();
   });
 
+  function createMergeGateExecutor() {
+    return new MergeGateExecutor({
+      persistence: {} as any,
+      orchestrator: {} as any,
+      defaultBranch: 'master',
+      callbacks: {},
+      cwd: '/home/user/repo',
+      execGitReadonly: vi.fn(),
+      execGitIn: vi.fn(),
+      createMergeWorktree: vi.fn(),
+      removeMergeWorktree: vi.fn(),
+      execGh: vi.fn(),
+      execPr: vi.fn(),
+      detectDefaultBranch: vi.fn(),
+      gitLogMessage: vi.fn(),
+      gitDiffStat: vi.fn(),
+      executeTasks: vi.fn(),
+      buildMergeSummary: vi.fn(),
+      consolidateAndMerge: vi.fn(),
+    } as any);
+  }
+
   it('resolves merge gate fallback to default worktree executor', () => {
     const registry = new ExecutorRegistry();
     const worktree = new WorktreeExecutor({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt') });
@@ -598,6 +620,37 @@ describe('merge gate open-terminal', () => {
 
     expect(executor).toBe(worktree);
     expect(executor!.type).toBe('worktree');
+  });
+
+  it('merge executor restore checks out branch before opening shell', () => {
+    const merge = createMergeGateExecutor();
+    const meta: PersistedTaskMeta = {
+      taskId: '__merge__wf-123',
+      runnerKind: 'merge',
+      workspacePath: '/home/user/.invoker/merge-clones/gate-wf',
+      branch: 'plan/example',
+    };
+
+    vi.mocked(existsSync).mockReturnValue(true);
+    const spec = merge.getRestoredTerminalSpec(meta);
+    expect(spec.cwd).toBe(meta.workspacePath);
+    expect(spec.command).toBe(worktreeCheckoutShell);
+    expect(spec.args).toContain('-c');
+    expect(spec.args![1]).toContain("git checkout 'plan/example'");
+    expect(spec.args![1]).toContain(`exec ${worktreeCheckoutShell}`);
+  });
+
+  it('merge executor restore keeps cwd-only behavior when branch is absent', () => {
+    const merge = createMergeGateExecutor();
+    const meta: PersistedTaskMeta = {
+      taskId: '__merge__wf-123',
+      runnerKind: 'merge',
+      workspacePath: '/home/user/.invoker/merge-clones/gate-wf',
+    };
+
+    vi.mocked(existsSync).mockReturnValue(true);
+    const spec = merge.getRestoredTerminalSpec(meta);
+    expect(spec).toEqual({ cwd: meta.workspacePath });
   });
 
   it('opens terminal with git checkout for merge gate with branch when workspacePath is a worktree', () => {
@@ -731,8 +784,13 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),  // Missing workspace path - invariant violation!
       getBranch: vi.fn(() => 'experiment/test-branch'),
-      getPoolMemberId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => 'remote-missing-workspace'),
     };
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'remote-missing-workspace': { host: 'h', user: 'u', sshKeyPath: '/k' },
+      },
+    } as any);
 
     const ssh = new SshExecutor({ host: 'h', user: 'u', sshKeyPath: '/k' });
     const registry = new ExecutorRegistry();
@@ -752,6 +810,7 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
     expect(result.reason).toContain('workspacePath is not set');
     expect(result.reason).toContain('Recreate the task');
     expect(result.reason).toContain('Refusing to fall back to host repo');
+    loadConfigSpy.mockRestore();
 
     // Verify no real SSH call attempted
     expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('task-ssh-no-workspace');
@@ -767,9 +826,19 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/abc/experiment-ssh-task'),  // Has workspace!
       getBranch: vi.fn(() => 'experiment/ssh-task'),
-      getPoolMemberId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => 'droplet-1'),
       getExecutionAgent: vi.fn(() => 'claude'),
     };
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'droplet-1': {
+          host: 'droplet.example',
+          user: 'ubuntu',
+          sshKeyPath: '/home/user/.ssh/id_rsa',
+          port: 2222,
+        },
+      },
+    } as any);
 
     const ssh = new SshExecutor({
       host: 'droplet.example',
@@ -794,6 +863,7 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
       expect(result.reason).not.toContain('requires a managed workspace');
       expect(result.reason).not.toContain('workspacePath is not set');
     }
+    loadConfigSpy.mockRestore();
 
     // Verify persistence was queried correctly
     expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('task-ssh-with-workspace');
@@ -821,9 +891,19 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/xyz/experiment-ssh-managed-deadbeef'),
       getBranch: vi.fn(() => 'experiment/ssh-managed-deadbeef'),
-      getPoolMemberId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => 'remote-1'),
       getExecutionAgent: vi.fn(() => 'claude'),
     };
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'remote-1': {
+          host: 'remote.dev',
+          user: 'deployer',
+          sshKeyPath: '/home/me/.ssh/deploy_key',
+          port: 2222,
+        },
+      },
+    } as any);
 
     const ssh = new SshExecutor({
       host: 'remote.dev',
@@ -877,11 +957,70 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
     // Verify no workspace invariant error
     expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('ssh-managed-task');
     expect(mockPersistence.getBranch).toHaveBeenCalledWith('ssh-managed-task');
+    expect(mockPersistence.getPoolMemberId).toHaveBeenCalledWith('ssh-managed-task');
+    loadConfigSpy.mockRestore();
 
     // Reset only the per-test spy. Do not call vi.restoreAllMocks() — it would
     // wipe the module-level vi.mock for spawnDetachedTerminal that subsequent
     // tests rely on, causing "vi.mocked(spawnDetachedTerminal).mockClear is
     // not a function" failures in the fail-fast invariant describe block.
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockReset();
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockImplementation(
+      async () => ({ opened: true } as const),
+    );
+  });
+
+  it('opens completed SSH task from persisted pool member instead of host worktree lookup', async () => {
+    const mockSpawnDetached = vi.fn(
+      async (_cmd: string, _args: string[], _opts: any, _onClose: () => void) =>
+        ({ opened: true } as const),
+    );
+    const terminalLaunch = await import('../terminal-external-launch.js');
+    vi.spyOn(terminalLaunch, 'spawnDetachedTerminal').mockImplementation(mockSpawnDetached as any);
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'remote-db': {
+          host: 'db.remote.example',
+          user: 'runner',
+          sshKeyPath: '/tmp/key',
+          port: 2222,
+        },
+      },
+    } as any);
+
+    const mockPersistence = {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getRunnerKind: vi.fn(() => 'ssh'),
+      getAgentSessionId: vi.fn(() => null),
+      getContainerId: vi.fn(() => null),
+      getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/xyz/experiment-db-backed'),
+      getBranch: vi.fn(() => 'experiment/db-backed'),
+      getPoolMemberId: vi.fn(() => 'remote-db'),
+      getExecutionAgent: vi.fn(() => 'claude'),
+    };
+    const registry = new ExecutorRegistry();
+    registry.register('ssh', new WorktreeExecutor({
+      worktreeBaseDir: '/tmp/wt',
+      cacheDir: '/tmp/cache',
+    }) as any);
+    vi.mocked(existsSync).mockReturnValue(false);
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'ssh-db-backed-task',
+      persistence: mockPersistence as any,
+      executorRegistry: registry,
+      repoRoot: '/local/repo',
+    });
+
+    expect(result.opened).toBe(true);
+    expect(mockSpawnDetached).toHaveBeenCalledTimes(1);
+    const spawned = mockSpawnDetached.mock.calls[0];
+    expect(spawned?.[0]).toBe(process.platform === 'darwin' ? 'osascript' : 'x-terminal-emulator');
+    expect(JSON.stringify(spawned?.[1])).toContain('db.remote.example');
+    expect(JSON.stringify(spawned?.[1])).toContain('experiment/db-backed');
+    expect(existsSync).not.toHaveBeenCalledWith('~/.invoker/worktrees/xyz/experiment-db-backed');
+
+    loadConfigSpy.mockRestore();
     vi.mocked(terminalLaunch.spawnDetachedTerminal).mockReset();
     vi.mocked(terminalLaunch.spawnDetachedTerminal).mockImplementation(
       async () => ({ opened: true } as const),
@@ -924,6 +1063,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       const spec = wt.getRestoredTerminalSpec(meta);
       expect(spec.command).toBe('codex');
       expect(spec.args).toContain('resume');
+      expect(spec.args).toContain('--dangerously-bypass-approvals-and-sandbox');
       expect(spec.args).toContain('codex-sess-123');
       // Must NOT be claude
       expect(spec.command).not.toBe('claude');
@@ -953,7 +1093,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       expect(spec.args).toContain('--dangerously-skip-permissions');
     });
 
-    it('defaults to claude when executionAgent is undefined', () => {
+    it('defaults to codex when executionAgent is undefined', () => {
       const agentRegistry = registerBuiltinAgents();
       const wt = new WorktreeExecutor({
         worktreeBaseDir: '/tmp/wt',
@@ -969,7 +1109,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
         // executionAgent intentionally omitted
       };
       const spec = wt.getRestoredTerminalSpec(meta);
-      expect(spec.command).toBe('claude');
+      expect(spec.command).toBe('codex');
     });
   });
 
@@ -995,6 +1135,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       const innerCmd = spec.args![spec.args!.length - 1];
       expect(innerCmd).toContain('codex');
       expect(innerCmd).toContain('resume');
+      expect(innerCmd).toContain('--dangerously-bypass-approvals-and-sandbox');
       expect(innerCmd).toContain('codex-remote-sess');
       // Must NOT be claude --resume
       expect(innerCmd).not.toContain('claude --resume');
@@ -1042,6 +1183,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       expect(scriptArg).toContain('codex');
       expect(scriptArg).toContain('exec');
       expect(scriptArg).toContain('resume');
+      expect(scriptArg).toContain('--dangerously-bypass-approvals-and-sandbox');
       expect(scriptArg).toContain('codex-docker-sess');
       expect(scriptArg).not.toContain('claude --resume');
     });
@@ -1078,7 +1220,9 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       status: string;
       runnerKind: string;
       agentSessionId?: string;
+      lastAgentSessionId?: string;
       agentName?: string;
+      lastAgentName?: string;
       workspacePath?: string;
     }>();
     return {
@@ -1095,8 +1239,14 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       // Read side — what openExternalTerminalForTask calls
       getTaskStatus(taskId: string) { return store.get(taskId)?.status ?? null; },
       getRunnerKind(taskId: string) { return store.get(taskId)?.runnerKind ?? null; },
-      getAgentSessionId(taskId: string) { return store.get(taskId)?.agentSessionId ?? null; },
-      getExecutionAgent(taskId: string) { return store.get(taskId)?.agentName ?? null; },
+      getAgentSessionId(taskId: string) {
+        const row = store.get(taskId);
+        return row?.agentSessionId ?? row?.lastAgentSessionId ?? null;
+      },
+      getExecutionAgent(taskId: string) {
+        const row = store.get(taskId);
+        return row?.agentName ?? row?.lastAgentName ?? null;
+      },
       getContainerId() { return null; },
       getWorkspacePath(taskId: string) { return store.get(taskId)?.workspacePath ?? null; },
       getBranch() { return null; },
@@ -1147,6 +1297,42 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     expect(spec.command).not.toBe('claude');
   });
 
+  it('completed command task with only last agent metadata launches codex resume', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const agentRegistry = registerBuiltinAgents();
+    const wt = new WorktreeExecutor({
+      worktreeBaseDir: '/tmp/wt',
+      cacheDir: '/tmp/cache',
+      agentRegistry,
+    });
+
+    const persistence = createMockPersistence();
+    persistence.store.set('task-completed-last-codex', {
+      status: 'completed',
+      runnerKind: 'worktree',
+      workspacePath: '/tmp/workspace',
+      lastAgentSessionId: 'codex-sess-last',
+      lastAgentName: 'codex',
+    });
+
+    const meta: PersistedTaskMeta = {
+      taskId: 'task-completed-last-codex',
+      runnerKind: persistence.getRunnerKind('task-completed-last-codex') ?? 'worktree',
+      agentSessionId: persistence.getAgentSessionId('task-completed-last-codex') ?? undefined,
+      executionAgent: persistence.getExecutionAgent('task-completed-last-codex') ?? undefined,
+      workspacePath: persistence.getWorkspacePath('task-completed-last-codex') ?? undefined,
+    };
+
+    expect(meta.executionAgent).toBe('codex');
+    expect(meta.agentSessionId).toBe('codex-sess-last');
+
+    const spec = wt.getRestoredTerminalSpec(meta);
+    expect(spec.command).toBe('codex');
+    expect(spec.args).toContain('resume');
+    expect(spec.args).toContain('codex-sess-last');
+    expect(spec.command).not.toBe('claude');
+  });
+
   it('fix with claude → terminal launches claude', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     const agentRegistry = registerBuiltinAgents();
@@ -1181,7 +1367,55 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     expect(spec.args).toContain('claude-sess-99');
   });
 
-  it('fix with no agent specified → terminal defaults to claude', () => {
+  it('prompt task with stale claude agent_name still launches configured codex resume', async () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const { resolveTaskTerminalSpec } = await import('../open-terminal-for-task.js');
+    const agentRegistry = registerBuiltinAgents();
+    vi.spyOn(agentRegistry, 'getSessionDriver').mockReturnValue({
+      processOutput: () => '',
+      loadSession: () => 'stored codex transcript',
+      parseSession: () => [],
+      inspectSession: () => ({ state: 'finished' }),
+    });
+    const executorRegistry = new ExecutorRegistry();
+    executorRegistry.register('worktree', new WorktreeExecutor({
+      worktreeBaseDir: tmpdir(),
+      cacheDir: tmpdir(),
+      maxWorktrees: 1,
+      agentRegistry,
+    }));
+    const persistence = {
+      getTaskStatus: () => 'completed',
+      getRunnerKind: () => 'worktree',
+      getAgentSessionId: () => '019e386c-87c7-71e1-80bb-eb649ae99b82',
+      getLastAgentSessionId: () => '019e386c-87c7-71e1-80bb-eb649ae99b82',
+      getExecutionAgent: () => 'codex',
+      getContainerId: () => null,
+      getWorkspacePath: () => '/tmp/workspace',
+      getBranch: () => null,
+      loadAttempts: () => [],
+    };
+
+    const resolved = resolveTaskTerminalSpec({
+      taskId: 'wf-1778431089965-37/experiment-inv-130',
+      persistence,
+      executorRegistry,
+      executionAgentRegistry: agentRegistry,
+      repoRoot: '/repo',
+    });
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) throw new Error(resolved.reason);
+    expect(resolved.spec.command).toBe('codex');
+    expect(resolved.spec.args).toEqual([
+      'resume',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '019e386c-87c7-71e1-80bb-eb649ae99b82',
+    ]);
+    expect(resolved.spec.command).not.toBe('claude');
+  });
+
+  it('fix with no agent specified → terminal defaults to codex', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     const agentRegistry = registerBuiltinAgents();
     const wt = new WorktreeExecutor({
@@ -1207,10 +1441,10 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       workspacePath: persistence.getWorkspacePath('task-noagent') ?? undefined,
     };
 
-    // executionAgent is undefined → defaults to claude
+    // executionAgent is undefined → defaults to codex
     expect(meta.executionAgent).toBeUndefined();
     const spec = wt.getRestoredTerminalSpec(meta);
-    expect(spec.command).toBe('claude');
+    expect(spec.command).toBe('codex');
   });
 
   it('openExternalTerminalForTask: refuses fallback when managed workspace has no workspacePath', async () => {
@@ -1315,8 +1549,13 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),  // Missing workspace path!
       getBranch: vi.fn(() => null),
-      getPoolMemberId: vi.fn(() => null),
+      getPoolMemberId: vi.fn(() => 'remote-missing-workspace-2'),
     };
+    const loadConfigSpy = vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      remoteTargets: {
+        'remote-missing-workspace-2': { host: 'h', user: 'u', sshKeyPath: '/k' },
+      },
+    } as any);
 
     const ssh = new SshExecutor({ host: 'h', user: 'u', sshKeyPath: '/k' });
     const registry = new ExecutorRegistry();
@@ -1332,6 +1571,7 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
     expect(result.opened).toBe(false);
     expect(result.reason).toContain('workspace metadata is missing');
     expect(result.reason).toContain('Executor type "ssh" requires a managed workspace');
+    loadConfigSpy.mockRestore();
   });
 
   it('refuses host-repo fallback when docker task has no workspace path', async () => {

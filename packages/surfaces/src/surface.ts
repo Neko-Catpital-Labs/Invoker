@@ -15,8 +15,51 @@ export type SurfaceCommand =
   | { type: 'reject'; taskId: string; reason?: string }
   | { type: 'select_experiment'; taskId: string; experimentId: string }
   | { type: 'provide_input'; taskId: string; input: string }
-  | { type: 'get_status' }
-  | { type: 'start_plan'; planText: string };
+  | { type: 'retry'; taskId: string }
+  | { type: 'get_status'; workflowId?: string }
+  | {
+      type: 'start_plan';
+      planText: string;
+      repoUrl?: string;
+      harnessPreset?: string;
+      requestedBy?: string;
+      lobbyChannel?: string;
+      lobbyThreadTs?: string;
+    };
+
+// ── Workflow operations (Surface → Orchestrator, lobby command routing) ──
+
+export type WorkflowOpName =
+  | 'recreate'
+  | 'rebase-recreate'
+  | 'rebase-retry'
+  | 'retry'
+  | 'status'
+  | 'cancel';
+
+export interface WorkflowOp {
+  operation: WorkflowOpName;
+  target: { all: true } | { workflow: string };
+}
+
+export interface WorkflowOpResult {
+  ok: boolean;
+  summary: string;
+}
+
+/** Incremental progress for a bulk workflow op, streamed to the surface while it runs. */
+export interface WorkflowOpProgress {
+  /** Workflows processed so far (ok + failed). */
+  done: number;
+  /** Total workflows in this op. */
+  total: number;
+  /** Succeeded so far. */
+  ok: number;
+  /** Failed so far. */
+  failed: number;
+  /** The workflow currently being processed, when known. */
+  current?: string;
+}
 
 // ── Events (Orchestrator → Surface) ────────────────────────
 
@@ -24,13 +67,42 @@ export interface WorkflowStatus {
   total: number;
   completed: number;
   failed: number;
+  closed: number;
   running: number;
   pending: number;
 }
 
+export interface WorkflowProgressTask {
+  id: string;
+  name: string;
+  status: string;
+  phase?: string;
+  reviewUrl?: string;
+}
+
+export interface WorkflowProgress {
+  workflowId: string;
+  name: string;
+  counts: WorkflowStatus;
+  percentComplete: number;
+  tasks: WorkflowProgressTask[];
+  prUrl?: string;
+  reviewState?: string;
+}
+
 export type SurfaceEvent =
   | { type: 'task_delta'; delta: TaskDelta }
-  | { type: 'workflow_status'; status: WorkflowStatus }
+  | { type: 'workflow_status'; status: WorkflowStatus; workflowId?: string }
+  | { type: 'workflow_progress'; progress: WorkflowProgress }
+  | {
+      type: 'workflow_created';
+      workflowId: string;
+      requestedBy?: string;
+      lobbyChannel?: string;
+      lobbyThreadTs?: string;
+      harnessPreset?: string;
+      repoUrl?: string;
+    }
   | { type: 'error'; message: string };
 
 // ── Logging ──────────────────────────────────────────────

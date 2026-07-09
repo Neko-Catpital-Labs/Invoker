@@ -1,7 +1,7 @@
 # Multi-Step Refactor with Worktrees
 # Source: examples.md Section 3
 # Description: A plan that performs a multi-step refactor where each task runs in its own isolated git worktree.
-# Uses `runnerKind: worktree` at the plan level to apply this to all tasks.
+# Omits routing fields so tasks use the configured default worktree executor/pool.
 #
 # When to use worktrees: Most implementation work. Each task gets a clean environment,
 # and changes merge back automatically when the task succeeds.
@@ -13,13 +13,12 @@ description: |
 
   Pure extraction refactor with no behavior changes. All existing tests must pass.
 
-  Uses worktrees for task isolation.
+  Uses the configured default executor for task isolation.
 onFinish: merge
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 featureBranch: refactor/config-validation
-runnerKind: worktree
 
 tasks:
   - id: extract-validator
@@ -67,8 +66,3 @@ tasks:
     description: "Run full config package test suite"
     command: "cd packages/config && pnpm test 2>&1"
     dependencies: [add-schema-types]
-
-  - id: final-regression
-    description: "Run the full repository test suite as the final regression gate"
-    command: "pnpm run test:all"
-    dependencies: [extract-validator, add-validator-tests, verify-validator, add-schema-types, verify-all-tests]
