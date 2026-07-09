@@ -6,6 +6,8 @@
  *   - spawn mode wires stdout/stderr → output events and exit
  *   - attached mode forwards executor.onOutput → output events and
  *     executor.sendInput → write()
+ *   - planning shells reuse by planning session identity without colliding
+ *     with task terminals
  *   - GUI route through resolveTaskTerminalSpec + manager returns a session
  *     descriptor (the deterministic outcome required by the task spec)
  */
@@ -122,6 +124,76 @@ describe('EmbeddedTerminalManager', () => {
     expect(second.sessionId).toBe(first.sessionId);
     expect(bashSpawnFn).toHaveBeenCalledTimes(1);
     expect(mgr.list()).toHaveLength(1);
+  });
+
+  it('opens a raw planning shell in repo cwd and reuses it by planning session id', () => {
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => spawned),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const first = mgr.openOrReusePlanningShell({
+      planningSessionId: 'planning-session-1',
+      cwd: '/repo/root',
+    });
+    const second = mgr.openOrReusePlanningShell({
+      planningSessionId: 'planning-session-1',
+      cwd: '/repo/root',
+    });
+
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(first).toMatchObject({
+      scope: 'planning',
+      planningSessionId: 'planning-session-1',
+      taskId: 'planning:planning-session-1',
+      cwd: '/repo/root',
+      mode: 'spawn',
+      attached: false,
+    });
+    expect(first.command).toBeUndefined();
+    expect(first.args).toBeUndefined();
+    expect(backend.spawn).toHaveBeenCalledTimes(1);
+    expect(backend.spawn).toHaveBeenCalledWith(expect.objectContaining({
+      spec: {},
+      cwd: '/repo/root',
+      defaultShell: expect.any(String),
+    }));
+  });
+
+  it('keeps planning terminal targets distinct from task terminal targets', () => {
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => spawned),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const planning = mgr.openOrReusePlanningShell({
+      planningSessionId: 'same-id',
+      cwd: '/repo/root',
+    });
+    const task = mgr.openOrReuse({
+      taskId: 'planning:same-id',
+      spec: {},
+      cwd: '/repo/root',
+    });
+
+    expect(task.sessionId).not.toBe(planning.sessionId);
+    expect(mgr.list()).toEqual([
+      expect.objectContaining({ sessionId: planning.sessionId, scope: 'planning' }),
+      expect.objectContaining({ sessionId: task.sessionId, scope: 'task' }),
+    ]);
+    expect(backend.spawn).toHaveBeenCalledTimes(2);
   });
 
   it('opens and reuses sessions through an injected backend object', () => {
