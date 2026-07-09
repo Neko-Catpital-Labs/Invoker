@@ -237,9 +237,11 @@ describe('Terminal drawer (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
+    expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
+    expect(mock.api.openTerminal).toHaveBeenCalledTimes(1);
 
     // Minimize (cycle partial → maximized → minimized), then re-open —
-    // should not duplicate the tab.
+    // should focus the existing tab without another IPC open.
     fireEvent.click(screen.getByRole('button', { name: 'Maximize terminal drawer' }));
     fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
@@ -249,8 +251,10 @@ describe('Terminal drawer (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
     });
+    expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
     const tabs = screen.getAllByTestId('terminal-tab-task-alpha');
     expect(tabs).toHaveLength(1);
+    expect(mock.api.openTerminal).toHaveBeenCalledTimes(1);
   });
 
   it('renders distinct tabs for different tasks side by side', async () => {
