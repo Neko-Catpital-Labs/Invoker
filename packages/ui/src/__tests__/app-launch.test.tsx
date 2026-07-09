@@ -181,6 +181,28 @@ describe('App launch (component)', () => {
     expect(screen.queryByTestId('read-only-mode-banner')).not.toBeInTheDocument();
   });
 
+  it('shows the connection-lost banner when runtime status flips after owner loss', async () => {
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId('connection-lost-banner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('read-only-mode-banner')).not.toBeInTheDocument();
+
+    await act(async () => {
+      mock.fireRuntimeStatus({
+        ownerMode: false,
+        readOnly: true,
+        mode: 'connection-lost',
+      });
+    });
+
+    expect(screen.getByTestId('connection-lost-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('connection-lost-banner')).toHaveTextContent('Connection lost.');
+    expect(screen.queryByTestId('read-only-mode-banner')).not.toBeInTheDocument();
+  });
+
   it('warns when no Claude or Codex CLI is installed', async () => {
     mock.api.getSystemDiagnostics = vi.fn(async () => ({
       platform: 'darwin',
