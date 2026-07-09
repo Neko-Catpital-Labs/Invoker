@@ -498,8 +498,9 @@ export function App() {
     [actionGraph],
   );
   const invoker = useInvoker();
-  const queueStatus = useQueueStatus();
-  const [workerStatus, refreshWorkerStatus] = useWorkerStatus();
+  const pollingRelevant = tasks.size > 0 || viewMode === 'queue';
+  const queueStatus = useQueueStatus(2000, pollingRelevant);
+  const [workerStatus, refreshWorkerStatus] = useWorkerStatus(2000, pollingRelevant);
   const handleStartWorker = useCallback(async (kind: string) => {
     await invoker.startWorker(kind);
     await refreshWorkerStatus();

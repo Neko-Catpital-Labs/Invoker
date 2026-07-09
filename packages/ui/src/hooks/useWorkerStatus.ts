@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkerStatusSnapshot } from '../types.js';
 import { areStructurallyEqual } from './useDedupedState.js';
 
-export function useWorkerStatus(pollMs = 2000): readonly [snapshot: WorkerStatusSnapshot | null, refresh: () => Promise<void>] {
+export function useWorkerStatus(
+  pollMs = 2000,
+  enabled = true,
+): readonly [snapshot: WorkerStatusSnapshot | null, refresh: () => Promise<void>] {
   const [snapshot, setSnapshot] = useState<WorkerStatusSnapshot | null>(null);
   const mountedRef = useRef(true);
 
@@ -24,12 +27,13 @@ export function useWorkerStatus(pollMs = 2000): readonly [snapshot: WorkerStatus
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     void fetchStatus();
     const interval = window.setInterval(() => {
       void fetchStatus();
     }, pollMs);
     return () => window.clearInterval(interval);
-  }, [fetchStatus, pollMs]);
+  }, [enabled, fetchStatus, pollMs]);
 
   return [snapshot, fetchStatus] as const;
 }
