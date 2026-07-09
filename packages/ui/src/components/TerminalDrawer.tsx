@@ -46,6 +46,7 @@ interface TerminalDrawerProps {
 interface TerminalSessionPaneProps {
   session: TerminalSessionDescriptor;
   isActive: boolean;
+  isDrawerVisible: boolean;
   hasHeader: boolean;
 }
 
@@ -87,7 +88,7 @@ function seedTerminalOutputSnapshot(
   }
 }
 
-function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPaneProps): JSX.Element {
+function TerminalSessionPane({ session, isActive, isDrawerVisible, hasHeader }: TerminalSessionPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -182,7 +183,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || !isDrawerVisible) return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
@@ -193,7 +194,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     } catch {
       /* fit failed (e.g., hidden) */
     }
-  }, [isActive, session.sessionId]);
+  }, [isActive, isDrawerVisible, session.sessionId]);
 
   return (
     <div
@@ -217,6 +218,7 @@ export function TerminalDrawer({
 }: TerminalDrawerProps): JSX.Element {
   const isMaximized = state === 'maximized';
   const showBody = state !== 'minimized';
+  const mountBody = showBody || sessions.length > 0;
   const cycleLabel = NEXT_STATE_BY_STATE[state].label;
   const activeSession = sessions.find((session) => session.sessionId === activeSessionId) ?? null;
   const activeCommand = activeSession?.command
@@ -293,11 +295,16 @@ export function TerminalDrawer({
           {cycleLabel}
         </button>
       </div>
-      {showBody && (
+      {mountBody && (
         <div
           data-testid="terminal-drawer-body"
           className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-black' : 'relative overflow-hidden bg-black'}
-          style={isMaximized ? undefined : { height: DRAWER_BODY_HEIGHT_PX }}
+          style={
+            showBody
+              ? isMaximized ? undefined : { height: DRAWER_BODY_HEIGHT_PX }
+              : { display: 'none', height: 0 }
+          }
+          aria-hidden={!showBody}
         >
           {sessions.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center px-3 text-xs text-gray-500">
@@ -320,6 +327,7 @@ export function TerminalDrawer({
               key={session.sessionId}
               session={session}
               isActive={session.sessionId === activeSessionId}
+              isDrawerVisible={showBody}
               hasHeader={Boolean(session.sessionId === activeSessionId && activeCommand)}
             />
           ))}

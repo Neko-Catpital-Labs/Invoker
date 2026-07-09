@@ -11,10 +11,12 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { useState } from 'react';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
+import type { TerminalDrawerState } from '../components/TerminalDrawer.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -31,11 +33,18 @@ const xtermMock = vi.hoisted(() => {
   class MockTerminal {
     cols = 80;
     rows = 24;
+    host: HTMLElement | null = null;
     dataHandler: DataHandler | null = null;
     loadAddon = vi.fn();
-    open = vi.fn();
+    open = vi.fn((host: HTMLElement) => {
+      this.host = host;
+      host.setAttribute('data-xterm-open', 'true');
+    });
     write = vi.fn((data: string) => {
       writeLog.push(data);
+      const line = document.createElement('span');
+      line.textContent = data;
+      this.host?.append(line);
     });
     onData = vi.fn((cb: DataHandler) => {
       this.dataHandler = cb;
@@ -109,6 +118,56 @@ function makeTerminalSession(
     createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
     ...overrides,
   };
+}
+
+const nextDrawerState: Record<TerminalDrawerState, TerminalDrawerState> = {
+  minimized: 'partial',
+  partial: 'maximized',
+  maximized: 'minimized',
+};
+
+function TerminalDrawerHarness({
+  initialState,
+  sessions,
+  initialActiveSessionId = sessions[0]?.sessionId ?? null,
+}: {
+  initialState: TerminalDrawerState;
+  sessions: TerminalSessionDescriptor[];
+  initialActiveSessionId?: string | null;
+}) {
+  const [state, setState] = useState<TerminalDrawerState>(initialState);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(initialActiveSessionId);
+  const labels = new Map(sessions.map((session) => [session.taskId, `${session.taskId} label`]));
+
+  return (
+    <TerminalDrawer
+      state={state}
+      onCycle={() => setState((current) => nextDrawerState[current])}
+      sessions={sessions}
+      activeSessionId={activeSessionId}
+      onSelectSession={setActiveSessionId}
+      onCloseSession={vi.fn()}
+      taskLabels={labels}
+    />
+  );
+}
+
+function expectActivePane(taskId: string, text: string) {
+  const tab = screen.getByTestId(`terminal-tab-${taskId}`);
+  const pane = screen.getByTestId(`terminal-pane-${taskId}`);
+  expect(tab).toHaveAttribute('data-active', 'true');
+  expect(pane).toHaveStyle({ display: 'block' });
+  expect(pane).toBeVisible();
+  expect(pane).toHaveTextContent(text);
+  expect(pane).toHaveAttribute('data-xterm-open', 'true');
+}
+
+function expectInactivePane(taskId: string) {
+  const tab = screen.getByTestId(`terminal-tab-${taskId}`);
+  const pane = screen.getByTestId(`terminal-pane-${taskId}`);
+  expect(tab).toHaveAttribute('data-active', 'false');
+  expect(pane).toHaveStyle({ display: 'none' });
+  expect(pane).not.toBeVisible();
 }
 
 async function selectWorkflow(): Promise<void> {
@@ -226,6 +285,55 @@ describe('Terminal drawer (component)', () => {
     expect(screen.getByTestId('terminal-drawer')).toHaveClass('min-h-0', 'overflow-hidden');
     expect(screen.getByTestId('terminal-drawer-body')).toHaveClass('min-h-0', 'flex-1', 'overflow-hidden');
     expect(screen.getByTestId('terminal-pane-task-alpha')).toHaveClass('overflow-hidden');
+  });
+
+  it('keeps the active xterm mounted while minimized and restores it nonblank', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'alpha persisted output\n',
+    });
+
+    render(<TerminalDrawerHarness initialState="partial" sessions={[session]} />);
+
+    await waitFor(() => expectActivePane('task-alpha', 'alpha persisted output'));
+    const mountedTerminal = xtermMock.instances[0];
+
+    fireEvent.click(screen.getByRole('button', { name: 'Maximize terminal drawer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
+
+    expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
+    expect(mountedTerminal.dispose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Partial terminal drawer' }));
+
+    await waitFor(() => expectActivePane('task-alpha', 'alpha persisted output'));
+    expect(xtermMock.instances).toHaveLength(1);
+    expect(mountedTerminal.open).toHaveBeenCalledTimes(1);
+    expect(mountedTerminal.dispose).not.toHaveBeenCalled();
+  });
+
+  it('shows only the newly active mounted pane when switching tabs', async () => {
+    const alpha = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'alpha terminal output\n',
+    });
+    const beta = makeTerminalSession('task-beta', {
+      outputSnapshot: 'beta terminal output\n',
+    });
+
+    render(<TerminalDrawerHarness initialState="partial" sessions={[alpha, beta]} />);
+
+    await waitFor(() => expectActivePane('task-alpha', 'alpha terminal output'));
+    expectInactivePane('task-beta');
+
+    fireEvent.click(screen.getByRole('tab', { name: /task-beta label/i }));
+
+    expectInactivePane('task-alpha');
+    await waitFor(() => expectActivePane('task-beta', 'beta terminal output'));
+    expect(xtermMock.instances).toHaveLength(2);
+    expect(xtermMock.instances[0].dispose).not.toHaveBeenCalled();
+    expect(xtermMock.instances[1].dispose).not.toHaveBeenCalled();
+    expect(xtermMock.instances[1].focus).toHaveBeenCalled();
+    expect(xtermMock.fitInstances[1].fit).toHaveBeenCalled();
   });
 
   it('reuses an existing tab when opening the same task twice', async () => {
