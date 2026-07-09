@@ -30,17 +30,22 @@ interface TaskNodeProps {
 }
 
 const TASK_NODE_STATUS_LABELS: Record<string, string> = {
-  assigning: 'ASSIGNING',
-  awaiting_approval: 'APPROVE',
-  fix_approval: 'APPROVE FIX',
-  fixing_with_ai: 'FIXING WITH AI',
-  running: 'RUNNING',
-  running_executing: 'RUNNING · EXECUTING',
+  assigning: 'Assigning',
+  awaiting_approval: 'Approve',
+  fix_approval: 'Approve fix',
+  fixing_with_ai: 'Fixing with AI',
+  running: 'Running',
+  running_executing: 'Running · Executing',
 };
 
+function humanizeStatus(status: string): string {
+  const label = status.replace(/_/g, ' ');
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 function getTaskNodeStatusLabel(task: TaskState, visualStatus: string): string {
-  if (task.config.isReconciliation && task.status === 'needs_input') return 'SELECT';
-  return TASK_NODE_STATUS_LABELS[visualStatus] ?? task.status.toUpperCase();
+  if (task.config.isReconciliation && task.status === 'needs_input') return 'Select';
+  return TASK_NODE_STATUS_LABELS[visualStatus] ?? humanizeStatus(task.status);
 }
 
 export function TaskNode({ data }: TaskNodeProps) {
@@ -68,7 +73,7 @@ export function TaskNode({ data }: TaskNodeProps) {
 
   return (
     <div
-      className={`relative w-[264px] rounded-2xl border px-5 py-4 transition-[opacity,box-shadow,border-color] duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] ${colors.bg} ${colors.border} ${selected ? 'ring-2 ring-white/90 ring-offset-2 ring-offset-gray-950 shadow-[0_0_0_1px_rgba(255,255,255,0.25),0_10px_30px_rgba(0,0,0,0.38)]' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
+      className={`relative w-[264px] overflow-hidden rounded-xl border px-4 py-3 transition-[opacity,box-shadow,border-color] duration-150 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
       title={task.id}
       data-selected={selected ? 'true' : 'false'}
       onDoubleClick={handleDoubleClick}
@@ -76,25 +81,25 @@ export function TaskNode({ data }: TaskNodeProps) {
       <Handle
         type="target"
         position={Position.Left}
-        className="!w-2 !h-2 !bg-slate-500/90 !border !border-slate-900"
+        className="!w-2 !h-2 !bg-neutral-500/90 !border !border-background"
       />
 
-      <span className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl ${dotClass}`} />
+      <span className={`absolute left-0 top-0 bottom-0 w-[3px] ${dotClass}`} />
 
-      <div className={`text-2xl font-medium truncate pl-3 ${colors.text} ${isStale ? 'line-through' : ''}`}>
+      <div className={`text-sm font-medium truncate pl-3 text-card-foreground ${isStale ? 'line-through opacity-70' : ''}`}>
         {task.description.length > 34
           ? `${task.description.slice(0, 34)}...`
           : task.description}
       </div>
 
-      <div className={`mt-1 pl-3 text-sm uppercase tracking-wide ${colors.text} opacity-75`}>
+      <div className={`mt-1 pl-3 text-[11px] tracking-wide ${colors.text}`}>
         {statusLabel}
       </div>
 
       <Handle
         type="source"
         position={Position.Right}
-        className="!w-2 !h-2 !bg-slate-500/90 !border !border-slate-900"
+        className="!w-2 !h-2 !bg-neutral-500/90 !border !border-background"
       />
     </div>
   );

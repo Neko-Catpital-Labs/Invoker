@@ -1,10 +1,20 @@
 import type { QueueStatus } from '@invoker/contracts';
 import type { JSX } from 'react';
-import { useMemo } from 'react';
 import type { TaskState, WorkflowMeta, WorkerStatusSnapshot } from '../types.js';
 import type { SidebarSurface } from '../lib/workflow-progress-surfaces.js';
 import { getAttentionTaskEntries, getRunningTaskEntries, getSortedWorkflows } from '../lib/workflow-progress-surfaces.js';
 import { countActiveWorkerActions } from '../lib/worker-display.js';
+import {
+  AttentionIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  InvokerIcon,
+  PlanningTerminalIcon,
+  RunningIcon,
+  SettingsIcon,
+  WorkerIcon,
+  WorkflowsIcon,
+} from './icons/index.js';
 
 interface LeftStatusColumnProps {
   workflows: Map<string, WorkflowMeta>;
@@ -27,131 +37,27 @@ interface SourceItem {
   icon: JSX.Element;
 }
 
-function SidebarIcon({ children }: { children: JSX.Element }): JSX.Element {
-  return <span className="inline-flex h-4 w-4 items-center justify-center" aria-hidden="true">{children}</span>;
-}
-
-function HomeIcon(): JSX.Element {
-  return (
-    <SidebarIcon>
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 10.5 12 3l9 7.5" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 9.75V21h13.5V9.75" />
-      </svg>
-    </SidebarIcon>
-  );
-}
-
-function AttentionIcon(): JSX.Element {
-  return (
-    <SidebarIcon>
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4.5" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 17.25h.008v.008H12z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M10.29 3.86 1.82 18a1.5 1.5 0 0 0 1.28 2.25h16.94A1.5 1.5 0 0 0 21.32 18L12.85 3.86a1 1 0 0 0-1.72 0Z" />
-      </svg>
-    </SidebarIcon>
-  );
-}
-
-function RunningIcon(): JSX.Element {
-  return (
-    <SidebarIcon>
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <circle cx="12" cy="12" r="8.25" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 7.5v4.75l3 1.75" />
-      </svg>
-    </SidebarIcon>
-  );
-}
-function WorkerIcon(): JSX.Element {
-  return (
-    <SidebarIcon>
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 7.5h9v7.5h-9z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9 3.75v2.25M15 3.75v2.25M9 16.5v2.25M15 16.5v2.25M3.75 9h2.25M3.75 13.5h2.25M18 9h2.25M18 13.5h2.25" />
-      </svg>
-    </SidebarIcon>
-  );
-}
-
-function WorkflowsIcon(): JSX.Element {
-  return (
-    <SidebarIcon>
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <rect x="3.75" y="4.5" width="7.5" height="6.75" rx="1.5" />
-        <rect x="12.75" y="4.5" width="7.5" height="6.75" rx="1.5" />
-        <rect x="8.25" y="12.75" width="7.5" height="6.75" rx="1.5" />
-      </svg>
-    </SidebarIcon>
-  );
-}
-function PlanningTerminalIcon(): JSX.Element {
-  return (
-    <SidebarIcon>
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 5.25h15A1.5 1.5 0 0 1 21 6.75v9a1.5 1.5 0 0 1-1.5 1.5h-6L9 20.25v-3h-4.5A1.5 1.5 0 0 1 3 15.75v-9a1.5 1.5 0 0 1 1.5-1.5Z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="m7.5 9 2 2-2 2" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 13h4.5" />
-      </svg>
-    </SidebarIcon>
-  );
-}
-
-
-function SettingsIcon(): JSX.Element {
-  return (
-    <SidebarIcon>
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M10.2 3.86a1 1 0 0 1 1.6 0l.66.95a1 1 0 0 0 1.02.4l1.14-.23a1 1 0 0 1 1.13.88l.11 1.15a1 1 0 0 0 .67.84l1.08.38a1 1 0 0 1 .54 1.5l-.6.99a1 1 0 0 0 0 1.08l.6.99a1 1 0 0 1-.54 1.5l-1.08.38a1 1 0 0 0-.67.84l-.11 1.15a1 1 0 0 1-1.13.88l-1.14-.23a1 1 0 0 0-1.02.4l-.66.95a1 1 0 0 1-1.6 0l-.66-.95a1 1 0 0 0-1.02-.4l-1.14.23a1 1 0 0 1-1.13-.88l-.11-1.15a1 1 0 0 0-.67-.84l-1.08-.38a1 1 0 0 1-.54-1.5l.6-.99a1 1 0 0 0 0-1.08l-.6-.99a1 1 0 0 1 .54-1.5l1.08-.38a1 1 0 0 0 .67-.84l.11-1.15a1 1 0 0 1 1.13-.88l1.14.23a1 1 0 0 0 1.02-.4l.66-.95Z" />
-        <circle cx="12" cy="12" r="2.75" />
-      </svg>
-    </SidebarIcon>
-  );
-}
-
-function InvokerIcon(): JSX.Element {
-  return (
-    <SidebarIcon>
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3.75v4.5" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 15.75v4.5" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="m5.64 5.64 3.18 3.18" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="m15.18 15.18 3.18 3.18" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h4.5" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 12h4.5" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="m5.64 18.36 3.18-3.18" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="m15.18 8.82 3.18-3.18" />
-        <circle cx="12" cy="12" r="2.5" />
-      </svg>
-    </SidebarIcon>
-  );
-}
+const ICON_CLASS = 'h-4 w-4';
 
 function CollapseIcon({ collapsed }: { collapsed: boolean }): JSX.Element {
-  return (
-    <SidebarIcon>
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d={collapsed ? 'm10 6 6 6-6 6' : 'm14 6-6 6 6 6'} />
-      </svg>
-    </SidebarIcon>
-  );
+  return collapsed ? <ChevronRightIcon className={ICON_CLASS} /> : <ChevronLeftIcon className={ICON_CLASS} />;
 }
 
 function navButtonClass(selected: boolean, collapsed: boolean): string {
   return [
-    'flex w-full items-center rounded-lg text-left transition-colors',
-    collapsed ? 'justify-center px-2 py-2.5' : 'justify-between gap-3 px-3 py-2',
+    'flex w-full items-center rounded-md text-left transition-colors duration-100',
+    collapsed ? 'justify-center px-2 py-2' : 'justify-between gap-3 px-2.5 py-1.5',
     selected
-      ? 'bg-gray-800/90 text-white shadow-sm'
-      : 'text-gray-300 hover:bg-gray-900/80 hover:text-white',
+      ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+      : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
   ].join(' ');
 }
 
 function countClass(tone: SourceItem['tone']): string {
-  if (tone === 'attention') return 'bg-amber-900/70 text-amber-100';
-  if (tone === 'running') return 'bg-blue-900/70 text-blue-100';
-  return 'bg-gray-800 text-gray-300';
+  const base = 'border border-border';
+  if (tone === 'attention') return `${base} text-amber-300`;
+  if (tone === 'running') return `${base} text-blue-300`;
+  return `${base} text-muted-foreground`;
 }
 
 export function LeftStatusColumn({
@@ -166,28 +72,25 @@ export function LeftStatusColumn({
   planningSessionCount,
   onOpenSettings,
 }: LeftStatusColumnProps): JSX.Element {
-  const workflowEntries = useMemo(() => getSortedWorkflows(workflows, tasks), [workflows, tasks]);
-  const attentionEntries = useMemo(() => getAttentionTaskEntries(tasks, workflows), [tasks, workflows]);
-  const runningEntries = useMemo(
-    () => getRunningTaskEntries(tasks, workflows, queueStatus),
-    [tasks, workflows, queueStatus],
-  );
+  const workflowEntries = getSortedWorkflows(workflows, tasks);
+  const attentionEntries = getAttentionTaskEntries(tasks, workflows);
+  const runningEntries = getRunningTaskEntries(tasks, workflows, queueStatus);
   const runningWorkers = workerStatus?.workers.filter((worker) => worker.lifecycle === 'running').length ?? 0;
   const registeredWorkers = workerStatus?.workers.length ?? 0;
   const activeWorkerActions = workerStatus ? countActiveWorkerActions(workerStatus.workers) : 0;
 
   const sources: SourceItem[] = [
-    { key: 'attention', label: 'Needs Attention', count: attentionEntries.length, tone: 'attention', icon: <AttentionIcon /> },
-    { key: 'running', label: 'Running', count: runningEntries.length, tone: 'running', icon: <RunningIcon /> },
-    { key: 'workers', label: 'Workers', count: registeredWorkers, tone: activeWorkerActions > 0 ? 'running' : 'neutral', icon: <WorkerIcon /> },
-    { key: 'workflows', label: 'Workflows', count: workflowEntries.length, tone: 'neutral', icon: <WorkflowsIcon /> },
+    { key: 'attention', label: 'Needs Attention', count: attentionEntries.length, tone: 'attention', icon: <AttentionIcon className={ICON_CLASS} /> },
+    { key: 'running', label: 'Running', count: runningEntries.length, tone: 'running', icon: <RunningIcon className={ICON_CLASS} /> },
+    { key: 'workers', label: 'Workers', count: registeredWorkers, tone: activeWorkerActions > 0 ? 'running' : 'neutral', icon: <WorkerIcon className={ICON_CLASS} /> },
+    { key: 'workflows', label: 'Workflows', count: workflowEntries.length, tone: 'neutral', icon: <WorkflowsIcon className={ICON_CLASS} /> },
   ];
 
   return (
     <aside
       data-testid="app-sidebar"
       className={[
-        'flex h-full shrink-0 flex-col border-r border-gray-800 bg-gray-950/85 py-4 text-sm text-gray-200 transition-all duration-150',
+        'flex h-full shrink-0 flex-col border-r border-sidebar-border bg-sidebar py-4 text-sm text-sidebar-foreground transition-all duration-150',
         collapsed ? 'w-16 px-2' : 'w-60 px-3',
       ].join(' ')}
     >
@@ -200,22 +103,22 @@ export function LeftStatusColumn({
         aria-current={selectedSurface === 'home' ? 'page' : undefined}
         onClick={() => onSelectSurface('home')}
         className={[
-          'rounded-xl text-left hover:bg-gray-900/80',
-          collapsed ? 'px-2 py-3 text-center' : 'px-3 py-2',
+          'rounded-md text-left transition-colors duration-100 hover:bg-sidebar-accent/60',
+          collapsed ? 'px-2 py-2.5 text-center' : 'px-2.5 py-2',
         ].join(' ')}
       >
         {collapsed ? (
-          <div className={`inline-flex text-gray-100 ${selectedSurface === 'home' ? 'text-white' : 'text-gray-100'}`}>
-            <InvokerIcon />
+          <div className="inline-flex text-sidebar-foreground">
+            <InvokerIcon className={ICON_CLASS} />
           </div>
         ) : (
           <div className="flex items-center gap-3">
-            <span className={`inline-flex rounded-lg border border-gray-800 bg-gray-900/80 p-2 ${selectedSurface === 'home' ? 'text-white' : 'text-gray-100'}`}>
-              <InvokerIcon />
+            <span className="inline-flex rounded-md border border-border bg-sidebar-accent/60 p-1.5 text-sidebar-foreground">
+              <InvokerIcon className={ICON_CLASS} />
             </span>
             <div>
-              <div className={`text-base font-semibold ${selectedSurface === 'home' ? 'text-white' : 'text-gray-100'}`}>Invoker</div>
-              <div className="mt-1 text-xs text-gray-500">Home</div>
+              <div className="text-sm font-semibold text-sidebar-foreground">Invoker</div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">Home</div>
             </div>
           </div>
         )}
@@ -236,9 +139,9 @@ export function LeftStatusColumn({
       >
         {collapsed ? (
           <div className="relative inline-flex h-9 w-9 items-center justify-center">
-            <span><PlanningTerminalIcon /></span>
+            <span><PlanningTerminalIcon className={ICON_CLASS} /></span>
             {planningSessionCount > 0 && (
-              <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none ${countClass('neutral')}`}>
+              <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none bg-background ${countClass('neutral')}`}>
                 {planningSessionCount}
               </span>
             )}
@@ -246,8 +149,8 @@ export function LeftStatusColumn({
         ) : (
           <>
             <span className="flex min-w-0 items-center gap-3">
-              <span className="inline-flex rounded-md border border-gray-800 bg-gray-900/70 p-1.5 text-gray-300">
-                <PlanningTerminalIcon />
+              <span className="inline-flex rounded-md border border-border bg-sidebar-accent/40 p-1.5 text-muted-foreground">
+                <PlanningTerminalIcon className={ICON_CLASS} />
               </span>
               <span className="truncate">Planning Terminal</span>
             </span>
@@ -258,8 +161,8 @@ export function LeftStatusColumn({
         )}
       </button>
 
-      {!collapsed && <div className="mt-6 px-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-500">Library</div>}
-      <nav className={collapsed ? 'mt-4 space-y-2' : 'mt-2 space-y-1'}>
+      {!collapsed && <div className="mt-6 px-2.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">Library</div>}
+      <nav className={collapsed ? 'mt-4 space-y-1' : 'mt-2 space-y-0.5'}>
         {sources.map((source, index) => {
           const selected = selectedSurface === source.key;
           return (
@@ -277,20 +180,20 @@ export function LeftStatusColumn({
                 <div className="relative inline-flex h-9 w-9 items-center justify-center">
                   <span>{source.icon}</span>
                   {source.count > 0 && (
-                    <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none ${countClass(source.tone)}`}>
+                    <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none bg-background ${countClass(source.tone)}`}>
                       {source.count}
                     </span>
                   )}
                 </div>
               ) : (
                 <>
-                  <span className="flex min-w-0 items-center gap-3">
-                    <span className="inline-flex rounded-md border border-gray-800 bg-gray-900/70 p-1.5 text-gray-300">
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <span className="inline-flex text-muted-foreground">
                       {source.icon}
                     </span>
                     <span className="truncate">{source.label}</span>
                   </span>
-                  <span className={`rounded-full px-2 py-0.5 text-[11px] ${countClass(source.tone)}`}>
+                  <span className={`rounded-full px-1.5 py-0 text-[10px] leading-4 ${countClass(source.tone)}`}>
                     {source.count}
                   </span>
                 </>
@@ -301,7 +204,7 @@ export function LeftStatusColumn({
       </nav>
 
       {!collapsed && (
-        <div className="mt-6 flex-1 overflow-y-auto px-3 text-xs text-gray-500">
+        <div className="mt-6 flex-1 overflow-y-auto scrollbar-sleek px-2.5 text-xs text-muted-foreground">
           {selectedSurface === 'workflows' && (
             workflowEntries.length === 0
               ? 'No workflows yet'
@@ -327,7 +230,7 @@ export function LeftStatusColumn({
         </div>
       )}
 
-      <div className={[collapsed ? 'mt-auto space-y-2' : 'mt-auto border-t border-gray-800 px-3 pt-3 space-y-2'].join(' ')}>
+      <div className={[collapsed ? 'mt-auto space-y-1.5' : 'mt-auto border-t border-sidebar-border px-2.5 pt-3 space-y-1.5'].join(' ')}>
         <button
           type="button"
           aria-label="Open settings"
@@ -336,11 +239,11 @@ export function LeftStatusColumn({
           data-sidebar-nav-order="5"
           onClick={onOpenSettings}
           className={[
-            'flex w-full items-center rounded-lg border border-gray-700 text-xs font-medium text-gray-200 hover:bg-gray-800',
-            collapsed ? 'justify-center px-2 py-2.5' : 'justify-center gap-2 px-3 py-2',
+            'flex w-full items-center rounded-md border border-border text-xs font-medium text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground transition-colors duration-100',
+            collapsed ? 'justify-center px-2 py-2' : 'justify-center gap-2 px-2.5 py-1.5',
           ].join(' ')}
         >
-          <SettingsIcon />
+          <SettingsIcon className={ICON_CLASS} />
           {!collapsed && <span>Settings</span>}
         </button>
         <button
@@ -349,8 +252,8 @@ export function LeftStatusColumn({
           data-testid="sidebar-collapse-toggle"
           onClick={onToggleCollapsed}
           className={[
-            'flex w-full items-center rounded-lg border border-gray-800 text-xs text-gray-400 hover:bg-gray-900 hover:text-gray-200',
-            collapsed ? 'justify-center px-2 py-2.5' : 'justify-between px-3 py-2',
+            'flex w-full items-center rounded-md border border-border text-xs text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground transition-colors duration-100',
+            collapsed ? 'justify-center px-2 py-2' : 'justify-between px-2.5 py-1.5',
           ].join(' ')}
         >
           {collapsed ? (
