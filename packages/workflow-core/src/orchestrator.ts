@@ -37,7 +37,7 @@ import {
 import { requireDefaultBranchRemote } from './repo-default-branch.js';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
-function mergeTrace(tag: string, data: Record<string, unknown>): void {
+export function mergeTrace(tag: string, data: Record<string, unknown>): void {
   try {
     mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
     appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:orchestrator] ${tag} ${JSON.stringify(data)}\n`);
@@ -112,6 +112,22 @@ import {
 } from './orchestrator/cancellation.js';
 import type { CancellationHost } from './orchestrator/cancellation.js';
 import {
+  collectSubgraphTaskIdsImpl,
+  invalidateLaunchArtifactsForTasksImpl,
+  resetSubgraphToPendingImpl,
+  restartTaskImpl,
+  retryTaskImpl,
+  retryWorkflowImpl,
+  recreateTaskImpl,
+  applyRecreateResetImpl,
+  recreateDownstreamImpl,
+  bumpWorkflowGenerationImpl,
+  recreateWorkflowImpl,
+  dispatchPostMutationImpl,
+  EXPEDITED_PRIORITY,
+} from './orchestrator/lifecycle.js';
+import type { LifecycleHost } from './orchestrator/lifecycle.js';
+import {
   editTaskCommandImpl,
   editTaskPromptImpl,
   editTaskTypeImpl,
@@ -176,10 +192,6 @@ function workflowTimestamp(): Date {
   }
   return new Date();
 }
-/** Recreate-class reset: fresh lineage, cleared attempt/session/container metadata. */
-const RECREATE_RESET_CHANGES: TaskStateChanges = buildTaskResetChanges('recreate', {
-  config: { summary: undefined },
-});
 
 const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
 const TRACE_WORKER_RESPONSE = process.env.INVOKER_TRACE_WORKER_RESPONSE === '1';
@@ -623,8 +635,6 @@ export interface TaskLineageExpectation {
 }
 
 export class Orchestrator {
-  private static readonly EXPEDITED_PRIORITY = 100;
-
   private readonly stateMachine: TaskStateMachine;
   private readonly responseHandler: ResponseHandler;
   private readonly scheduler: TaskScheduler;
