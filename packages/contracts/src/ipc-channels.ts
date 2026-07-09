@@ -140,6 +140,12 @@ export interface TaskEvent {
   createdAt: string;
 }
 
+export interface TaskHistoryEntry extends TaskState {
+  workflowName: string;
+  lastEventAt: string | null;
+  eventCount: number;
+}
+
 export interface QueueStatus {
   maxConcurrency: number;
   runningCount: number;
@@ -797,6 +803,10 @@ export const IpcChannels = {
   'invoker:get-all-completed-tasks': {} as {
     request: [];
     response: Array<TaskState & { workflowName: string }>;
+  },
+  'invoker:get-history-tasks': {} as {
+    request: [];
+    response: TaskHistoryEntry[];
   },
 
   // Task Actions
