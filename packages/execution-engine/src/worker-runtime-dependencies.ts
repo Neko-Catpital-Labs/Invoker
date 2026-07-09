@@ -13,6 +13,7 @@ import type {
   AutoApproveWorkerConfig,
 } from './workers/auto-approve-worker.js';
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
+import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
 import type { RequeueWorkerConfig, RequeueWorkerSubmitter } from './workers/requeue-worker.js';
@@ -46,4 +47,6 @@ export interface WorkerRuntimeDependencies {
   autoApprove?: AutoApproveWorkerConfig;
   /** Workflow-resume worker tuning (cooldown and poll cadence). */
   workflowResume?: WorkflowResumeWorkerConfig;
+  /** e2e auto-fix battery worker configuration. */
+  e2eAutoFix?: E2eAutoFixWorkerConfig;
 }

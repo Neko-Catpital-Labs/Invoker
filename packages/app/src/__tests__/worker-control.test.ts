@@ -3,6 +3,7 @@ import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
   CODERABBIT_ADDRESS_WORKER_KIND,
+  E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
@@ -71,7 +72,7 @@ function deps(): WorkerRuntimeDependencies {
   } as WorkerRuntimeDependencies;
 }
 
-function controller() {
+function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKER_KINDS) {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
   const runtimes = new Map<string, TestWorkerRuntime[]>();
   const register = (kind: string, note: string, runtimeKind = kind) => {
@@ -93,6 +94,7 @@ function controller() {
   register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
   register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
+  register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
   register('external-preview', 'External preview worker.');
 
   return {
@@ -100,7 +102,7 @@ function controller() {
     controller: createWorkerRuntimeController({
       registry,
       deps: deps(),
-      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      autoStartKinds,
       persistence: persistence() as never,
       canControl: () => true,
     }),
@@ -121,6 +123,19 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
+  });
+
+  it('auto-starts e2e-autofix only when its kind is in autoStartKinds', () => {
+    const gated = controller([...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]);
+    gated.controller.startAutoStartedWorkers();
+    const gatedRow = gated.controller.snapshot().workers.find((worker) => worker.kind === E2E_AUTOFIX_WORKER_KIND);
+    expect(gatedRow?.lifecycle).toBe('running');
+
+    const ungated = controller();
+    ungated.controller.startAutoStartedWorkers();
+    const ungatedRow = ungated.controller.snapshot().workers.find((worker) => worker.kind === E2E_AUTOFIX_WORKER_KIND);
+    expect(ungatedRow?.lifecycle).toBe('stopped');
+    expect(ungatedRow?.startable).toBe(true);
   });
 
   it('autofix remains stopped until explicitly started', () => {
