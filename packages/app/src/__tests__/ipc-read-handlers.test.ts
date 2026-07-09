@@ -282,4 +282,37 @@ describe('registerReadOnlyIpcHandlers', () => {
     await expect(handlers.get('invoker:list-workflows')?.({})).resolves.toEqual([{ id: 'LOCAL-FALLBACK' }]);
   });
 
+  it('notifies when owner query delegation finds no mutation owner', async () => {
+    const onMutationOwnerUnavailable = vi.fn();
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: { listWorkflows: vi.fn(() => [{ id: 'LOCAL-FALLBACK' }]) } as never,
+      getOrchestrator: () => ({}) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      getOwnerMode: () => false,
+      getMessageBus: () => ({
+        request: vi.fn(async () => {
+          throw Object.assign(new Error('No request handler registered for channel: headless.query'), { code: 'NO_HANDLER' });
+        }),
+      }),
+      onMutationOwnerUnavailable,
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 0,
+    });
+
+    await expect(handlers.get('invoker:list-workflows')?.({})).resolves.toEqual([{ id: 'LOCAL-FALLBACK' }]);
+    expect(onMutationOwnerUnavailable).toHaveBeenCalledWith(
+      'No request handler registered for channel: headless.query',
+    );
+  });
+
 });
