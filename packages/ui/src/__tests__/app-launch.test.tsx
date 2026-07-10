@@ -111,6 +111,46 @@ describe('App launch (component)', () => {
     expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(screen.getByText('Alpha · running')).toBeInTheDocument();
   });
+  it('keeps the app sidebar width while switching surfaces and dismissing browsers', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+
+    render(<App />);
+    await screen.findByTestId('sidebar-workflows');
+    act(() => window.dispatchEvent(new Event('resize')));
+
+    const sidebar = screen.getByTestId('app-sidebar');
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    expect(screen.getByRole('heading', { name: 'Needs Attention' })).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    expect(screen.getByRole('heading', { name: 'Running' })).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expect(screen.getByRole('heading', { name: 'Planning Terminal' })).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-workers'));
+    expect(await screen.findByTestId('worker-activity-card')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    expect(sidebar.className).toContain('w-60');
+  });
   it('auto-collapses the app sidebar on narrow windows without changing width across surfaces', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
 
@@ -121,15 +161,10 @@ describe('App launch (component)', () => {
     const sidebar = screen.getByTestId('app-sidebar');
     expect(sidebar.className).toContain('w-16');
 
-    fireEvent.click(screen.getByTestId('sidebar-workflows'));
-    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
-    expect(sidebar.className).toContain('w-16');
-    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('sidebar-home'));
-    expect(sidebar.className).toContain('w-16');
+    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+      fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
+      expect(sidebar.className).toContain('w-16');
+    }
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
