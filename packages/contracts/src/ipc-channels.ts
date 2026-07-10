@@ -140,6 +140,51 @@ export interface TaskEvent {
   createdAt: string;
 }
 
+/** Max rows returned by a single `invoker:get-events` page. */
+export const MAX_EVENTS_PAGE = 100;
+
+/** Required pagination options for `invoker:get-events`. */
+export interface GetEventsOptions {
+  /** Default `'desc'` (newest first). */
+  sortBy?: 'asc' | 'desc';
+  /** Required page size; must be 1..MAX_EVENTS_PAGE. */
+  limit: number;
+  /** Optional cursor: return events with id strictly less than this (older). */
+  beforeId?: number;
+}
+
+export interface NormalizedGetEventsOptions {
+  sortBy: 'asc' | 'desc';
+  limit: number;
+  beforeId?: number;
+}
+
+/**
+ * Validate and normalize get-events pagination options.
+ * Rejects missing/invalid limit and pages larger than MAX_EVENTS_PAGE.
+ */
+export function normalizeGetEventsOptions(raw: unknown): NormalizedGetEventsOptions {
+  if (raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('getEvents requires options with a numeric limit');
+  }
+  const opts = raw as Record<string, unknown>;
+  if (typeof opts.limit !== 'number' || !Number.isFinite(opts.limit)) {
+    throw new Error('getEvents options.limit is required and must be a finite number');
+  }
+  const limit = Math.floor(opts.limit);
+  if (limit <= 0 || limit > MAX_EVENTS_PAGE) {
+    throw new Error(`getEvents options.limit must be between 1 and ${MAX_EVENTS_PAGE}`);
+  }
+  const sortBy = opts.sortBy === 'asc' ? 'asc' : 'desc';
+  if (opts.beforeId === undefined) {
+    return { sortBy, limit };
+  }
+  if (typeof opts.beforeId !== 'number' || !Number.isFinite(opts.beforeId)) {
+    throw new Error('getEvents options.beforeId must be a finite number when provided');
+  }
+  return { sortBy, limit, beforeId: Math.floor(opts.beforeId) };
+}
+
 export interface TaskHistoryEntry extends TaskState {
   workflowName: string;
   lastEventAt: string | null;
@@ -787,7 +832,7 @@ export const IpcChannels = {
     response: void;
   },
   'invoker:get-events': {} as {
-    request: [taskId: string];
+    request: [taskId: string, options?: GetEventsOptions];
     response: TaskEvent[];
   },
   'invoker:get-status': {} as {
