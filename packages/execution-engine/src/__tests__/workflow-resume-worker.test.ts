@@ -23,11 +23,13 @@ const POLL_CTX = {
   identity: { kind: 'workflow-resume', instanceId: 'w1' },
   reason: 'poll' as const,
   tickNumber: 1,
+  signal: new AbortController().signal,
 };
 const WAKE_CTX = {
   identity: { kind: 'workflow-resume', instanceId: 'w1' },
   reason: 'wake' as const,
   tickNumber: 2,
+  signal: new AbortController().signal,
 };
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
