@@ -553,6 +553,7 @@ jobs:
             files: >-
               e2e/workflow-delete-latency.spec.ts
               e2e/main-process-hitch-responsiveness.spec.ts
+              e2e/dag-click-hitch-responsiveness.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
