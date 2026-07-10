@@ -232,6 +232,14 @@ describe('QueueView', () => {
           stoppable: true,
         }),
         makeWorker({
+          kind: 'pr-summary-refresh',
+          note: 'Refreshes PR summaries.',
+          lifecycle: 'running',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
+        makeWorker({
           kind: 'coderabbit-address',
           note: 'Addresses CodeRabbit review comments.',
           lifecycle: 'running',
@@ -255,13 +263,15 @@ describe('QueueView', () => {
       'worker-row-autofix',
       'worker-row-pr-status',
       'worker-row-ci-failure',
+      'worker-row-pr-summary-refresh',
       'worker-row-coderabbit-address',
       'worker-row-pr-conflict-rebase',
     ]);
-    expect(screen.getByText('Worker processes (5)')).toBeInTheDocument();
+    expect(screen.getByText('Worker processes (6)')).toBeInTheDocument();
     expect(screen.getByText('Autofix')).toBeInTheDocument();
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('CI failure repair')).toBeInTheDocument();
+    expect(screen.getByText('PR summary refresh')).toBeInTheDocument();
     expect(screen.getByText('Coderabbit Address')).toBeInTheDocument();
     expect(screen.getByText('Pr Conflict Rebase')).toBeInTheDocument();
   });

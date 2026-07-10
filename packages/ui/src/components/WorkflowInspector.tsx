@@ -27,14 +27,18 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'agentName',
   'artifactCount',
   'attempt',
+  'actionId',
+  'actionType',
   'baseBranch',
   'branch',
+  'externalKey',
   'featureBranch',
   'reviewId',
   'reviewUrl',
   'status',
   'reason',
   'route',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -83,6 +87,9 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
 
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
+  if (event.eventType === 'task.worker_action') {
+    return workerActionEventToLogEntry(event, index, payload);
+  }
   const payloadMessage = payload?.message;
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
@@ -90,6 +97,32 @@ function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry
     message: typeof payloadMessage === 'string' && payloadMessage.trim()
       ? payloadMessage
       : event.eventType,
+    detail: formatLogDetail(payload),
+    createdAt: event.createdAt,
+  };
+}
+
+function workerActionEventToLogEntry(
+  event: TaskAuditEvent,
+  index: number,
+  payload: Record<string, unknown> | undefined,
+): TaskLogEntry {
+  const workerKind = typeof payload?.workerKind === 'string' && payload.workerKind.trim()
+    ? payload.workerKind
+    : 'worker';
+  const actionType = typeof payload?.actionType === 'string' && payload.actionType.trim()
+    ? payload.actionType
+    : 'action';
+  const status = typeof payload?.status === 'string' && payload.status.trim()
+    ? payload.status
+    : 'updated';
+  const summary = typeof payload?.summary === 'string' && payload.summary.trim()
+    ? `: ${payload.summary}`
+    : '';
+  return {
+    id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
+    level: inferLogLevel(event, payload),
+    message: `Worker ${workerKind}/${actionType} ${status}${summary}`,
     detail: formatLogDetail(payload),
     createdAt: event.createdAt,
   };

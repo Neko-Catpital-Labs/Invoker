@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
 import { GitHubMergeGateProvider } from '../github-merge-gate-provider.js';
 
 vi.mock('node:child_process');
@@ -452,6 +453,44 @@ describe('GitHubMergeGateProvider', () => {
           'api', 'repos/owner/repo/pulls/42',
           '--method', 'PATCH',
           '-f', 'state=closed',
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
+  });
+
+  describe('updateReviewBody', () => {
+    it('updates the PR body through a temporary JSON input file', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      let inputPath = '';
+      let inputJson = '';
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'gh') {
+          const inputIndex = args.indexOf('--input');
+          inputPath = String(args[inputIndex + 1]);
+          inputJson = readFileSync(inputPath, 'utf8');
+          return mockSpawnResult('{}', 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await provider.updateReviewBody({
+        identifier: '42',
+        cwd: '/tmp/repo',
+        body: '## Summary\n\nUpdated body',
+      });
+
+      expect(JSON.parse(inputJson)).toEqual({ body: '## Summary\n\nUpdated body' });
+      expect(existsSync(inputPath)).toBe(false);
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'api', 'repos/owner/repo/pulls/42',
+          '--method', 'PATCH',
+          '--input', inputPath,
         ],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );

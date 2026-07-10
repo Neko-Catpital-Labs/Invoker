@@ -125,6 +125,38 @@ describe('buildCanonicalPrBody', () => {
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
   });
+
+  it('renders worker action pipeline rows in time order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh PR',
+      workflowSummary: 'Updated worker visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'completed',
+            taskId: 'wf/task-b',
+            summary: 'Fixed CI',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            workerKind: 'autofix',
+            actionType: 'fix-task',
+            status: 'completed',
+            taskId: 'wf/task-a',
+            summary: 'Fixed task',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body.indexOf('autofix/fix-task')).toBeLessThan(body.indexOf('ci-failure/fix-ci-failure'));
+    expect(body).toContain('| 2026-01-01T00:01:00.000Z | autofix/fix-task | fix-task | wf/task-a | completed | Fixed task |');
+  });
 });
 
 // ── validateReviewStackPrBody ────────────────────────────

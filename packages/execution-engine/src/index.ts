@@ -62,6 +62,7 @@ export * from './workers/auto-approve-worker.js';
 export * from './workers/disk-headroom-worker.js';
 export * from './workers/disk-headroom-monitor.js';
 export * from './workers/disk-headroom.js';
+export * from './workers/pr-summary-refresh-worker.js';
 export * from './workers/pr-maintenance-workers.js';
 export * from './workers/e2e-autofix-worker.js';
 export * from './workers/requeue-worker.js';

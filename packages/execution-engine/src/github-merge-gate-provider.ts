@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import type {
@@ -7,6 +10,7 @@ import type {
   MergeGateApprovalStatus,
   MergeGatePrLifecycle,
   MergeGateFailedCheck,
+  MergeGateUpdateReviewBodyOptions,
 } from './merge-gate-provider.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import { isGitRefLockRace, retryTransientGitHubCli } from './git-utils.js';
@@ -99,9 +103,26 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const targetRepo = await this.resolveTargetRepo(cwd);
     const stdout = await retryTransientGitHubCli(() => this.exec('gh', [
       'api', `repos/${targetRepo}/pulls/${identifier}`,
-      '--jq', '.body',
+      '--jq', '.body // ""',
     ], cwd));
     return stdout.trim();
+  }
+
+  async updateReviewBody(opts: MergeGateUpdateReviewBodyOptions): Promise<void> {
+    const { identifier, cwd, body } = opts;
+    const targetRepo = await this.resolveTargetRepo(cwd);
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-pr-body-'));
+    const bodyPath = join(dir, 'body.json');
+    try {
+      writeFileSync(bodyPath, JSON.stringify({ body }), 'utf8');
+      await retryTransientGitHubCli(() => this.exec('gh', [
+        'api', `repos/${targetRepo}/pulls/${identifier}`,
+        '--method', 'PATCH',
+        '--input', bodyPath,
+      ], cwd));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   async checkApproval(opts: {

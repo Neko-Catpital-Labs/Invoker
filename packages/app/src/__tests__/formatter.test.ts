@@ -5,6 +5,7 @@ import {
   formatEventLog,
   formatWorkerActions,
   formatWorkerDecisions,
+  formatWorkerStatusSnapshot,
   serializeWorkflow,
   serializeTask,
   serializeEvent,
@@ -15,7 +16,7 @@ import {
 } from '../formatter.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { WorkerActionSummary } from '@invoker/contracts';
+import type { WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -269,6 +270,46 @@ describe('formatWorkerDecisions', () => {
     expect(output).toContain('agent=codex');
     expect(output).toContain('task=wf-1/task-1');
     expect(output).toContain('reason=worker-retry-budget-exhausted');
+  });
+});
+
+// ── formatWorkerStatusSnapshot ───────────────────────────────
+
+describe('formatWorkerStatusSnapshot', () => {
+  it('includes recentActions under each worker', () => {
+    const snapshot: WorkerStatusSnapshot = {
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workers: [{
+        kind: 'pr-summary-refresh',
+        note: 'Refreshes PR summaries.',
+        lifecycle: 'running',
+        policy: 'enabled',
+        autoStarts: true,
+        startable: false,
+        stoppable: true,
+        recentActions: [{
+          id: 'wa-1',
+          workerKind: 'pr-summary-refresh',
+          actionType: 'refresh-pr-summary',
+          workflowId: 'wf-1',
+          taskId: '__merge__wf-1',
+          subjectType: 'pull_request',
+          subjectId: '__merge__wf-1:42',
+          externalKey: '__merge__wf-1:42',
+          status: 'completed',
+          attemptCount: 1,
+          summary: 'Refreshed PR summary body',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:01:00.000Z',
+        }],
+      }],
+    };
+
+    const output = formatWorkerStatusSnapshot(snapshot);
+    expect(output).toContain('Worker status (1)');
+    expect(output).toContain('recentActions (1)');
+    expect(output).toContain('refresh-pr-summary');
+    expect(output).toContain('Refreshed PR summary body');
   });
 });
 
