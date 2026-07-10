@@ -85,7 +85,6 @@ export class QwenExecutionAgent implements ExecutionAgent {
       this.approvalMode,
       ...(this.authType ? ['--auth-type', this.authType] : []),
       ...(executionModel ? ['--model', executionModel] : []),
-      '--prompt',
       prompt,
     ];
   }
