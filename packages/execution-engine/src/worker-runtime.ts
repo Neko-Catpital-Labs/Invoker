@@ -181,6 +181,15 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     stopped = true;
     pendingReason = null;
     if (!abortController.signal.aborted) {
+      if (inFlight) {
+        options.logger.warn(`[worker:${identity.kind}] aborting in-flight tick`, {
+          ...logFields,
+          tickNumber,
+          reason: 'stop',
+        });
+      } else {
+        options.logger.info(`[worker:${identity.kind}] stop requested`, logFields);
+      }
       abortController.abort();
     }
     if (interval) {
@@ -195,10 +204,20 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
 
   const settleInFlight = async (settleTimeoutMs: number): Promise<void> => {
     if (!inFlight || settleTimeoutMs <= 0) return;
+    let settled = false;
     await Promise.race([
-      inFlight.catch(() => undefined),
+      inFlight.catch(() => undefined).then(() => {
+        settled = true;
+      }),
       delay(settleTimeoutMs),
     ]);
+    if (!settled) {
+      options.logger.warn(`[worker:${identity.kind}] settle timed out after abort`, {
+        ...logFields,
+        settleTimeoutMs,
+        tickNumber,
+      });
+    }
   };
 
   const start = (): void => {

@@ -292,6 +292,10 @@ describe('worker runtime', () => {
       expect(Date.now() - started).toBeLessThan(50);
       expect(tickSignal?.aborted).toBe(true);
       expect(runtime.isRunning()).toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[worker:recovery] aborting in-flight tick',
+        expect.objectContaining({ kind: 'recovery', reason: 'stop', tickNumber: 1 }),
+      );
 
       inFlight.resolve();
       await Promise.resolve();
@@ -320,6 +324,60 @@ describe('worker runtime', () => {
       inFlight.resolve();
       await stopping;
       expect(settled).toBe(true);
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[worker:recovery] aborting in-flight tick',
+        expect.objectContaining({ kind: 'recovery', reason: 'stop' }),
+      );
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        '[worker:recovery] settle timed out after abort',
+        expect.anything(),
+      );
+    });
+
+    it('logs when settle times out after abort', async () => {
+      vi.useFakeTimers();
+      const inFlight = deferred();
+      const onTick = vi.fn().mockReturnValueOnce(inFlight.promise);
+      const runtime = createWorkerRuntime({
+        kind: 'recovery',
+        logger,
+        onTick,
+        installSignalHandlers: false,
+      });
+
+      void runtime.tick();
+      await Promise.resolve();
+      const stopping = runtime.stop({ settleTimeoutMs: 25 });
+      await vi.advanceTimersByTimeAsync(25);
+      await stopping;
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[worker:recovery] settle timed out after abort',
+        expect.objectContaining({ kind: 'recovery', settleTimeoutMs: 25, tickNumber: 1 }),
+      );
+
+      inFlight.resolve();
+      await Promise.resolve();
+    });
+
+    it('logs stop requested when no tick is in flight', async () => {
+      const runtime = createWorkerRuntime({
+        kind: 'recovery',
+        logger,
+        onTick: () => {},
+        tickOnStart: false,
+        installSignalHandlers: false,
+      });
+      runtime.start();
+      await runtime.stop();
+      expect(logger.info).toHaveBeenCalledWith(
+        '[worker:recovery] stop requested',
+        expect.objectContaining({ kind: 'recovery' }),
+      );
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        '[worker:recovery] aborting in-flight tick',
+        expect.anything(),
+      );
     });
 
     it('is idempotent', async () => {
