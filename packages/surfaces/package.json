@@ -18,6 +18,7 @@
   "dependencies": {
     "@invoker/contracts": "workspace:*",
     "@invoker/data-store": "workspace:*",
+    "@invoker/execution-engine": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*",
     "@slack/bolt": "^4.6.0",
