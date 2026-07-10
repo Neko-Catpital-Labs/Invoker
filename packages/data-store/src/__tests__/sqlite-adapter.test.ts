@@ -2381,6 +2381,22 @@ describe('SQLiteAdapter', () => {
       );
       expect(adapter.getEvents('t1', 'desc', 0)).toEqual([]);
     });
+
+    it('supports beforeId cursor for older pages', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      for (let index = 0; index < 30; index += 1) {
+        adapter.logEvent('t1', `event-${index}`, { index });
+      }
+
+      const first = adapter.getEvents('t1', 'desc', 10);
+      const oldest = first[first.length - 1]!;
+      const second = adapter.getEvents('t1', 'desc', 10, oldest.id);
+
+      expect(second).toHaveLength(10);
+      expect(second.every((event) => event.id < oldest.id)).toBe(true);
+      expect(second[0]!.eventType).toBe(`event-${29 - 10}`);
+    });
   });
 
   describe('JSON fields', () => {
