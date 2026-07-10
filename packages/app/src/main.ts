@@ -271,9 +271,12 @@ import {
 } from './ipc/ipc-registration.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import {
+  createRendererUiPerfCounters,
   createTerminalUiPerfCounters,
   createTerminalUiPerfReporter,
   createTerminalUiPerfSink,
+  recordRendererUiPerfMetric,
+  resetRendererUiPerfCounters,
   resetTerminalUiPerfCounters,
 } from './terminal-ui-perf.js';
 import {
@@ -1103,6 +1106,7 @@ function startHeadlessMode(): void {
           maxRendererCumulativeLagMs: 0,
           maxRendererTickDeltaMs: 0,
           maxRendererLongTaskMs: 0,
+          ...createRendererUiPerfCounters(),
         }),
         resetUiPerfStats: () => {},
         waitForApproval,
@@ -2108,6 +2112,7 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataCoalescedRequests: 0,
     largeTaskDeltaBatches: 0,
     maxTaskDeltaBatchSize: 0,
+    ...createRendererUiPerfCounters(),
     ...createTerminalUiPerfCounters(),
   };
   const terminalUiPerf = createTerminalUiPerfReporter();
@@ -2178,6 +2183,7 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
     uiPerfStats.largeTaskDeltaBatches = 0;
     uiPerfStats.maxTaskDeltaBatchSize = 0;
+    resetRendererUiPerfCounters(uiPerfStats);
     resetTerminalUiPerfCounters(uiPerfStats);
     terminalUiPerf.reset();
   };
@@ -4532,6 +4538,7 @@ function createEmbeddedTerminalBackendFromConfig(
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
       }
+      recordRendererUiPerfMetric(uiPerfStats, metric, data ?? {});
       uiPerfStats.rendererReports += 1;
       try {
         persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));

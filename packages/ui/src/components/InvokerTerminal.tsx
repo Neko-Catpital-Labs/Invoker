@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Button } from './primitives/index.js';
 
 export interface InvokerTerminalLine {
@@ -14,9 +14,21 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const PLANNING_CHAT_INPUT_SLOW_MS = 8;
+const PLANNING_CHAT_RENDER_SLOW_MS = 16;
+const PLANNING_CHAT_BURST_WINDOW_MS = 1000;
+const PLANNING_CHAT_INPUT_BURST_COUNT = 12;
+const PLANNING_CHAT_RENDER_BURST_COUNT = 20;
+const PLANNING_CHAT_REPORT_THROTTLE_MS = 1000;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
 }
 
 interface InvokerTerminalProps {
@@ -71,15 +83,97 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const renderStartedAt = nowMs();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  const inputPerfRef = useRef({
+    windowStartedAt: 0,
+    eventsInWindow: 0,
+    lastReportAt: 0,
+  });
+  const renderPerfRef = useRef({
+    windowStartedAt: 0,
+    commitsInWindow: 0,
+    lastReportAt: 0,
+  });
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
     transcript.scrollTop = transcript.scrollHeight;
   }, []);
+
+  const handleComposerChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>): void => {
+    const nextValue = event.target.value;
+    const previousValueLength = value.length;
+    const startedAt = nowMs();
+    onValueChange(nextValue);
+    const finishedAt = nowMs();
+    const durationMs = finishedAt - startedAt;
+
+    const perf = inputPerfRef.current;
+    if (perf.windowStartedAt === 0 || finishedAt - perf.windowStartedAt >= PLANNING_CHAT_BURST_WINDOW_MS) {
+      perf.windowStartedAt = finishedAt;
+      perf.eventsInWindow = 0;
+    }
+    perf.eventsInWindow += 1;
+
+    const slow = durationMs >= PLANNING_CHAT_INPUT_SLOW_MS;
+    const burst = perf.eventsInWindow >= PLANNING_CHAT_INPUT_BURST_COUNT;
+    if (!slow && !burst) return;
+    if (perf.lastReportAt !== 0 && finishedAt - perf.lastReportAt < PLANNING_CHAT_REPORT_THROTTLE_MS) return;
+    perf.lastReportAt = finishedAt;
+
+    void window.invoker?.reportUiPerf?.('planning_chat_input_change', {
+      durationMs: Math.round(durationMs),
+      valueLength: nextValue.length,
+      previousValueLength,
+      deltaChars: nextValue.length - previousValueLength,
+      inputEventsInWindow: perf.eventsInWindow,
+      inputBurstWindowMs: PLANNING_CHAT_BURST_WINDOW_MS,
+      slow,
+      burst,
+      busy,
+      readOnly,
+      expanded,
+      activeConversationKey,
+    });
+  }, [activeConversationKey, busy, expanded, onValueChange, readOnly, value.length]);
+
+  useLayoutEffect(() => {
+    const finishedAt = nowMs();
+    const durationMs = finishedAt - renderStartedAt;
+    const perf = renderPerfRef.current;
+    if (perf.windowStartedAt === 0 || finishedAt - perf.windowStartedAt >= PLANNING_CHAT_BURST_WINDOW_MS) {
+      perf.windowStartedAt = finishedAt;
+      perf.commitsInWindow = 0;
+    }
+    perf.commitsInWindow += 1;
+
+    const slow = durationMs >= PLANNING_CHAT_RENDER_SLOW_MS;
+    const burst = perf.commitsInWindow >= PLANNING_CHAT_RENDER_BURST_COUNT;
+    if (!slow && !burst) return;
+    if (perf.lastReportAt !== 0 && finishedAt - perf.lastReportAt < PLANNING_CHAT_REPORT_THROTTLE_MS) return;
+    perf.lastReportAt = finishedAt;
+
+    void window.invoker?.reportUiPerf?.('planning_chat_render_commit', {
+      durationMs: Math.round(durationMs),
+      commitsInWindow: perf.commitsInWindow,
+      renderBurstWindowMs: PLANNING_CHAT_BURST_WINDOW_MS,
+      slow,
+      burst,
+      lineCount: lines.length,
+      valueLength: value.length,
+      busy,
+      readOnly,
+      expanded,
+      draftPlanAvailable,
+      hasSubmitError: Boolean(submitError),
+      activeConversationKey,
+      transcriptScrollHeight: transcriptRef.current?.scrollHeight ?? null,
+    });
+  });
 
   useLayoutEffect(() => {
     setShouldFollowTranscript(true);
@@ -265,7 +359,7 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={handleComposerChange}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

@@ -8,12 +8,18 @@
  * requiring a real terminal backing.
  */
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const TERMINAL_ATTACH_SLOW_MS = 16;
+const TERMINAL_OUTPUT_WRITE_SLOW_MS = 16;
+const TERMINAL_OUTPUT_BURST_WINDOW_MS = 1000;
+const TERMINAL_OUTPUT_BURST_EVENTS = 20;
+const TERMINAL_OUTPUT_BURST_CHARS = 64 * 1024;
+const TERMINAL_OUTPUT_REPORT_THROTTLE_MS = 1000;
 
 /**
  * The drawer has one explicit state model:
@@ -55,10 +61,25 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+type TerminalOutputWriteSource = 'snapshot' | 'live';
+
+type TerminalOutputPerfRecorder = (
+  durationMs: number,
+  data: string,
+  source: TerminalOutputWriteSource,
+) => void;
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
+  recordOutputWrite?: TerminalOutputPerfRecorder,
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
@@ -72,7 +93,9 @@ function seedTerminalOutputSnapshot(
     )
   ) {
     try {
+      const startedAt = nowMs();
       term.write(outputSnapshot);
+      recordOutputWrite?.(nowMs() - startedAt, outputSnapshot, 'snapshot');
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
@@ -92,6 +115,66 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const isActiveRef = useRef(isActive);
+  const sessionMetaRef = useRef({
+    sessionId: session.sessionId,
+    taskId: session.taskId,
+    status: session.status,
+  });
+  const outputPerfRef = useRef({
+    windowStartedAt: 0,
+    eventsInWindow: 0,
+    charsInWindow: 0,
+    lastReportAt: 0,
+  });
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
+
+  useEffect(() => {
+    sessionMetaRef.current = {
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      status: session.status,
+    };
+  }, [session.sessionId, session.status, session.taskId]);
+
+  const recordOutputWritePerf = useCallback<TerminalOutputPerfRecorder>((durationMs, data, source) => {
+    const finishedAt = nowMs();
+    const perf = outputPerfRef.current;
+    if (perf.windowStartedAt === 0 || finishedAt - perf.windowStartedAt >= TERMINAL_OUTPUT_BURST_WINDOW_MS) {
+      perf.windowStartedAt = finishedAt;
+      perf.eventsInWindow = 0;
+      perf.charsInWindow = 0;
+    }
+    perf.eventsInWindow += 1;
+    perf.charsInWindow += data.length;
+
+    const slow = durationMs >= TERMINAL_OUTPUT_WRITE_SLOW_MS;
+    const burst =
+      perf.eventsInWindow >= TERMINAL_OUTPUT_BURST_EVENTS ||
+      perf.charsInWindow >= TERMINAL_OUTPUT_BURST_CHARS;
+    if (!slow && !burst) return;
+    if (perf.lastReportAt !== 0 && finishedAt - perf.lastReportAt < TERMINAL_OUTPUT_REPORT_THROTTLE_MS) return;
+    perf.lastReportAt = finishedAt;
+    const sessionMeta = sessionMetaRef.current;
+
+    void window.invoker?.reportUiPerf?.('embedded_terminal_output_write', {
+      durationMs: Math.round(durationMs),
+      charCount: data.length,
+      outputEventsInWindow: perf.eventsInWindow,
+      outputCharsInWindow: perf.charsInWindow,
+      outputBurstWindowMs: TERMINAL_OUTPUT_BURST_WINDOW_MS,
+      slow,
+      burst,
+      source,
+      sessionId: sessionMeta.sessionId,
+      taskId: sessionMeta.taskId,
+      status: sessionMeta.status,
+      active: isActiveRef.current,
+    });
+  }, []);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -99,6 +182,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
 
     let term: XTermTerminal;
     let fit: FitAddon;
+    const attachStartedAt = nowMs();
     try {
       term = new XTermTerminal({
         fontSize: 12,
@@ -114,10 +198,23 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     } catch {
       return;
     }
+    const attachDurationMs = nowMs() - attachStartedAt;
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    void window.invoker?.reportUiPerf?.('embedded_terminal_attach', {
+      durationMs: Math.round(attachDurationMs),
+      slow: attachDurationMs >= TERMINAL_ATTACH_SLOW_MS,
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      status: session.status,
+      active: isActiveRef.current,
+      hasHeader,
+      hasOutputSnapshot: Boolean(session.outputSnapshot),
+      outputSnapshotChars: session.outputSnapshot?.length ?? 0,
+    });
+
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, recordOutputWritePerf);
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -127,7 +224,9 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const startedAt = nowMs();
         term.write(event.data);
+        recordOutputWritePerf(nowMs() - startedAt, event.data, 'live');
       } catch {
         /* terminal disposed */
       }
@@ -178,8 +277,8 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
-  }, [session.outputSnapshot, session.sessionId]);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, recordOutputWritePerf);
+  }, [recordOutputWritePerf, session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
     if (!isActive) return;

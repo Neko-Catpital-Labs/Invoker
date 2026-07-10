@@ -1,5 +1,5 @@
 /**
- * Thresholded terminal UI-perf reporters for main-process beachball forensics.
+ * Thresholded UI-perf reporters and counters for beachball forensics.
  *
  * Telemetry only — does not change terminal write/resize/persist behavior.
  */
@@ -32,6 +32,28 @@ export type TerminalUiPerfCounters = {
   terminalSessionUpsertSlowCount: number;
 };
 
+export type RendererUiPerfCounters = {
+  planningChatInputReports: number;
+  planningChatInputSlowCount: number;
+  planningChatInputBurstCount: number;
+  maxPlanningChatInputMs: number;
+  planningChatRenderReports: number;
+  planningChatRenderSlowCount: number;
+  planningChatRenderBurstCount: number;
+  maxPlanningChatRenderMs: number;
+  maxPlanningChatRenderLineCount: number;
+  embeddedTerminalAttachReports: number;
+  embeddedTerminalAttachSlowCount: number;
+  maxEmbeddedTerminalAttachMs: number;
+  embeddedTerminalOutputReports: number;
+  embeddedTerminalOutputSlowCount: number;
+  embeddedTerminalOutputBurstCount: number;
+  maxEmbeddedTerminalOutputWriteMs: number;
+  maxEmbeddedTerminalOutputCharCount: number;
+  maxEmbeddedTerminalOutputEventsInWindow: number;
+  maxEmbeddedTerminalOutputCharsInWindow: number;
+};
+
 export function createTerminalUiPerfCounters(): TerminalUiPerfCounters {
   return {
     maxTerminalWriteMs: 0,
@@ -43,6 +65,30 @@ export function createTerminalUiPerfCounters(): TerminalUiPerfCounters {
   };
 }
 
+export function createRendererUiPerfCounters(): RendererUiPerfCounters {
+  return {
+    planningChatInputReports: 0,
+    planningChatInputSlowCount: 0,
+    planningChatInputBurstCount: 0,
+    maxPlanningChatInputMs: 0,
+    planningChatRenderReports: 0,
+    planningChatRenderSlowCount: 0,
+    planningChatRenderBurstCount: 0,
+    maxPlanningChatRenderMs: 0,
+    maxPlanningChatRenderLineCount: 0,
+    embeddedTerminalAttachReports: 0,
+    embeddedTerminalAttachSlowCount: 0,
+    maxEmbeddedTerminalAttachMs: 0,
+    embeddedTerminalOutputReports: 0,
+    embeddedTerminalOutputSlowCount: 0,
+    embeddedTerminalOutputBurstCount: 0,
+    maxEmbeddedTerminalOutputWriteMs: 0,
+    maxEmbeddedTerminalOutputCharCount: 0,
+    maxEmbeddedTerminalOutputEventsInWindow: 0,
+    maxEmbeddedTerminalOutputCharsInWindow: 0,
+  };
+}
+
 export function resetTerminalUiPerfCounters(counters: TerminalUiPerfCounters): void {
   counters.maxTerminalWriteMs = 0;
   counters.maxTerminalResizeMs = 0;
@@ -50,6 +96,90 @@ export function resetTerminalUiPerfCounters(counters: TerminalUiPerfCounters): v
   counters.terminalWriteSlowCount = 0;
   counters.terminalResizeSlowCount = 0;
   counters.terminalSessionUpsertSlowCount = 0;
+}
+
+export function resetRendererUiPerfCounters(counters: RendererUiPerfCounters): void {
+  counters.planningChatInputReports = 0;
+  counters.planningChatInputSlowCount = 0;
+  counters.planningChatInputBurstCount = 0;
+  counters.maxPlanningChatInputMs = 0;
+  counters.planningChatRenderReports = 0;
+  counters.planningChatRenderSlowCount = 0;
+  counters.planningChatRenderBurstCount = 0;
+  counters.maxPlanningChatRenderMs = 0;
+  counters.maxPlanningChatRenderLineCount = 0;
+  counters.embeddedTerminalAttachReports = 0;
+  counters.embeddedTerminalAttachSlowCount = 0;
+  counters.maxEmbeddedTerminalAttachMs = 0;
+  counters.embeddedTerminalOutputReports = 0;
+  counters.embeddedTerminalOutputSlowCount = 0;
+  counters.embeddedTerminalOutputBurstCount = 0;
+  counters.maxEmbeddedTerminalOutputWriteMs = 0;
+  counters.maxEmbeddedTerminalOutputCharCount = 0;
+  counters.maxEmbeddedTerminalOutputEventsInWindow = 0;
+  counters.maxEmbeddedTerminalOutputCharsInWindow = 0;
+}
+
+export function recordRendererUiPerfMetric(
+  counters: RendererUiPerfCounters,
+  metric: string,
+  data: Record<string, unknown> = {},
+): void {
+  if (metric === 'planning_chat_input_change') {
+    counters.planningChatInputReports += 1;
+    if (data.slow === true) counters.planningChatInputSlowCount += 1;
+    if (data.burst === true) counters.planningChatInputBurstCount += 1;
+    if (typeof data.durationMs === 'number') {
+      counters.maxPlanningChatInputMs = Math.max(counters.maxPlanningChatInputMs, data.durationMs);
+    }
+    return;
+  }
+
+  if (metric === 'planning_chat_render_commit') {
+    counters.planningChatRenderReports += 1;
+    if (data.slow === true) counters.planningChatRenderSlowCount += 1;
+    if (data.burst === true) counters.planningChatRenderBurstCount += 1;
+    if (typeof data.durationMs === 'number') {
+      counters.maxPlanningChatRenderMs = Math.max(counters.maxPlanningChatRenderMs, data.durationMs);
+    }
+    if (typeof data.lineCount === 'number') {
+      counters.maxPlanningChatRenderLineCount = Math.max(counters.maxPlanningChatRenderLineCount, data.lineCount);
+    }
+    return;
+  }
+
+  if (metric === 'embedded_terminal_attach') {
+    counters.embeddedTerminalAttachReports += 1;
+    if (data.slow === true) counters.embeddedTerminalAttachSlowCount += 1;
+    if (typeof data.durationMs === 'number') {
+      counters.maxEmbeddedTerminalAttachMs = Math.max(counters.maxEmbeddedTerminalAttachMs, data.durationMs);
+    }
+    return;
+  }
+
+  if (metric === 'embedded_terminal_output_write') {
+    counters.embeddedTerminalOutputReports += 1;
+    if (data.slow === true) counters.embeddedTerminalOutputSlowCount += 1;
+    if (data.burst === true) counters.embeddedTerminalOutputBurstCount += 1;
+    if (typeof data.durationMs === 'number') {
+      counters.maxEmbeddedTerminalOutputWriteMs = Math.max(counters.maxEmbeddedTerminalOutputWriteMs, data.durationMs);
+    }
+    if (typeof data.charCount === 'number') {
+      counters.maxEmbeddedTerminalOutputCharCount = Math.max(counters.maxEmbeddedTerminalOutputCharCount, data.charCount);
+    }
+    if (typeof data.outputEventsInWindow === 'number') {
+      counters.maxEmbeddedTerminalOutputEventsInWindow = Math.max(
+        counters.maxEmbeddedTerminalOutputEventsInWindow,
+        data.outputEventsInWindow,
+      );
+    }
+    if (typeof data.outputCharsInWindow === 'number') {
+      counters.maxEmbeddedTerminalOutputCharsInWindow = Math.max(
+        counters.maxEmbeddedTerminalOutputCharsInWindow,
+        data.outputCharsInWindow,
+      );
+    }
+  }
 }
 
 export function createTerminalUiPerfSink(

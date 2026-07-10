@@ -417,6 +417,70 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
 
+  it('reports planning chat typing pressure through reportUiPerf', () => {
+    const props = {
+      activeConversationKey: 'chat-typing',
+      lines: [{ id: 1, text: 'First chat', role: 'system' as const }],
+      busy: false,
+      value: '',
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+    render(<InvokerTerminal {...props} />);
+    const input = screen.getByTestId('invoker-terminal-input');
+
+    for (let i = 1; i <= 12; i += 1) {
+      fireEvent.change(input, { target: { value: 'x'.repeat(i) } });
+    }
+
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'planning_chat_input_change',
+      expect.objectContaining({
+        activeConversationKey: 'chat-typing',
+        burst: true,
+        inputEventsInWindow: 12,
+        valueLength: 12,
+      }),
+    );
+  });
+
+  it('reports planning chat render churn through reportUiPerf', () => {
+    const props = {
+      activeConversationKey: 'chat-render',
+      lines: [{ id: 1, text: 'First chat', role: 'system' as const }],
+      busy: false,
+      value: '',
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+    const { rerender } = render(<InvokerTerminal {...props} />);
+
+    for (let i = 1; i <= 24; i += 1) {
+      rerender(<InvokerTerminal {...props} value={`draft ${i}`} />);
+    }
+
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'planning_chat_render_commit',
+      expect.objectContaining({
+        activeConversationKey: 'chat-render',
+        burst: true,
+        lineCount: 1,
+      }),
+    );
+  });
+
   it('constrains the planning session list to a bounded scroll region', async () => {
     render(<App />);
     await openPlanningTerminal();
