@@ -357,6 +357,67 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('reports terminal renderer attach, snapshot, and live output perf markers', async () => {
+    const reportUiPerf = mock.api.reportUiPerf as ReturnType<typeof vi.fn>;
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'seeded line\n',
+      command: 'sh',
+      args: ['-lc', 'echo seeded'],
+    });
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'terminal_renderer_attach',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          active: true,
+          hasSnapshot: true,
+        }),
+      );
+    });
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'terminal_renderer_snapshot_write',
+      expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        bytes: 'seeded line\n'.length,
+      }),
+    );
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'live line\n',
+      });
+    });
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'terminal_renderer_output_write',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          bytes: 'live line\n'.length,
+          eventsInWindow: 1,
+          bytesInWindow: 'live line\n'.length,
+        }),
+      );
+    });
+  });
+
   it('does not duplicate the replay snapshot when the same session re-renders', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',

@@ -417,6 +417,66 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
 
+  it('reports planning chat input commit and transcript render perf markers', async () => {
+    const reportUiPerf = mock.api.reportUiPerf as ReturnType<typeof vi.fn>;
+    const props = {
+      activeConversationKey: 'chat-1',
+      lines: [{ id: 1, text: 'First line', role: 'system' as const }],
+      busy: false,
+      value: '',
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+    const { rerender } = render(<InvokerTerminal {...props} />);
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+    rerender(<InvokerTerminal {...props} value="hello" />);
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_commit',
+        expect.objectContaining({
+          conversationKey: 'chat-1',
+          valueLength: 5,
+          requestedValueLength: 5,
+          deltaChars: 5,
+          lineCount: 1,
+        }),
+      );
+    });
+
+    const transcript = screen.getByTestId('invoker-terminal-transcript');
+    Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 100 });
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 400 });
+
+    rerender(<InvokerTerminal
+      {...props}
+      value="hello"
+      lines={[
+        ...props.lines,
+        { id: 2, text: 'Second line', role: 'assistant' as const },
+      ]}
+    />);
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_transcript_render',
+        expect.objectContaining({
+          conversationKey: 'chat-1',
+          lineCount: 2,
+          addedLines: 1,
+          followedTranscript: true,
+        }),
+      );
+    });
+  });
+
   it('constrains the planning session list to a bounded scroll region', async () => {
     render(<App />);
     await openPlanningTerminal();

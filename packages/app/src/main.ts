@@ -2103,6 +2103,24 @@ function createEmbeddedTerminalBackendFromConfig(
     maxRendererCumulativeLagMs: 0,
     maxRendererTickDeltaMs: 0,
     maxRendererLongTaskMs: 0,
+    planningChatInputCommitCount: 0,
+    maxPlanningChatInputCommitMs: 0,
+    planningChatTranscriptRenderCount: 0,
+    maxPlanningChatTranscriptRenderMs: 0,
+    maxPlanningChatTranscriptLines: 0,
+    terminalRendererAttachCount: 0,
+    maxTerminalRendererAttachMs: 0,
+    terminalRendererFitCount: 0,
+    maxTerminalRendererFitMs: 0,
+    terminalRendererSnapshotWriteCount: 0,
+    maxTerminalRendererSnapshotWriteMs: 0,
+    maxTerminalRendererSnapshotBytes: 0,
+    terminalRendererOutputWriteCount: 0,
+    maxTerminalRendererOutputWriteMs: 0,
+    terminalRendererOutputBytes: 0,
+    maxTerminalRendererOutputBytes: 0,
+    maxTerminalRendererOutputEventsInWindow: 0,
+    maxTerminalRendererOutputBytesInWindow: 0,
     workflowMetadataPublishRequests: 0,
     workflowMetadataPublishes: 0,
     workflowMetadataCoalescedRequests: 0,
@@ -2173,6 +2191,24 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.maxRendererCumulativeLagMs = 0;
     uiPerfStats.maxRendererTickDeltaMs = 0;
     uiPerfStats.maxRendererLongTaskMs = 0;
+    uiPerfStats.planningChatInputCommitCount = 0;
+    uiPerfStats.maxPlanningChatInputCommitMs = 0;
+    uiPerfStats.planningChatTranscriptRenderCount = 0;
+    uiPerfStats.maxPlanningChatTranscriptRenderMs = 0;
+    uiPerfStats.maxPlanningChatTranscriptLines = 0;
+    uiPerfStats.terminalRendererAttachCount = 0;
+    uiPerfStats.maxTerminalRendererAttachMs = 0;
+    uiPerfStats.terminalRendererFitCount = 0;
+    uiPerfStats.maxTerminalRendererFitMs = 0;
+    uiPerfStats.terminalRendererSnapshotWriteCount = 0;
+    uiPerfStats.maxTerminalRendererSnapshotWriteMs = 0;
+    uiPerfStats.maxTerminalRendererSnapshotBytes = 0;
+    uiPerfStats.terminalRendererOutputWriteCount = 0;
+    uiPerfStats.maxTerminalRendererOutputWriteMs = 0;
+    uiPerfStats.terminalRendererOutputBytes = 0;
+    uiPerfStats.maxTerminalRendererOutputBytes = 0;
+    uiPerfStats.maxTerminalRendererOutputEventsInWindow = 0;
+    uiPerfStats.maxTerminalRendererOutputBytesInWindow = 0;
     uiPerfStats.workflowMetadataPublishRequests = 0;
     uiPerfStats.workflowMetadataPublishes = 0;
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
@@ -4526,6 +4562,70 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
+      }
+      const durationMs = typeof data?.durationMs === 'number' && Number.isFinite(data.durationMs)
+        ? data.durationMs
+        : undefined;
+      const bytes = typeof data?.bytes === 'number' && Number.isFinite(data.bytes)
+        ? data.bytes
+        : undefined;
+      if (metric === 'planning_chat_input_commit') {
+        uiPerfStats.planningChatInputCommitCount += 1;
+        if (durationMs !== undefined) {
+          uiPerfStats.maxPlanningChatInputCommitMs = Math.max(uiPerfStats.maxPlanningChatInputCommitMs, durationMs);
+        }
+      }
+      if (metric === 'planning_chat_transcript_render') {
+        uiPerfStats.planningChatTranscriptRenderCount += 1;
+        if (durationMs !== undefined) {
+          uiPerfStats.maxPlanningChatTranscriptRenderMs = Math.max(uiPerfStats.maxPlanningChatTranscriptRenderMs, durationMs);
+        }
+        if (typeof data?.lineCount === 'number' && Number.isFinite(data.lineCount)) {
+          uiPerfStats.maxPlanningChatTranscriptLines = Math.max(uiPerfStats.maxPlanningChatTranscriptLines, data.lineCount);
+        }
+      }
+      if (metric === 'terminal_renderer_attach') {
+        uiPerfStats.terminalRendererAttachCount += 1;
+        if (durationMs !== undefined) {
+          uiPerfStats.maxTerminalRendererAttachMs = Math.max(uiPerfStats.maxTerminalRendererAttachMs, durationMs);
+        }
+      }
+      if (metric === 'terminal_renderer_fit') {
+        uiPerfStats.terminalRendererFitCount += 1;
+        if (durationMs !== undefined) {
+          uiPerfStats.maxTerminalRendererFitMs = Math.max(uiPerfStats.maxTerminalRendererFitMs, durationMs);
+        }
+      }
+      if (metric === 'terminal_renderer_snapshot_write') {
+        uiPerfStats.terminalRendererSnapshotWriteCount += 1;
+        if (durationMs !== undefined) {
+          uiPerfStats.maxTerminalRendererSnapshotWriteMs = Math.max(uiPerfStats.maxTerminalRendererSnapshotWriteMs, durationMs);
+        }
+        if (bytes !== undefined) {
+          uiPerfStats.maxTerminalRendererSnapshotBytes = Math.max(uiPerfStats.maxTerminalRendererSnapshotBytes, bytes);
+        }
+      }
+      if (metric === 'terminal_renderer_output_write') {
+        uiPerfStats.terminalRendererOutputWriteCount += 1;
+        if (durationMs !== undefined) {
+          uiPerfStats.maxTerminalRendererOutputWriteMs = Math.max(uiPerfStats.maxTerminalRendererOutputWriteMs, durationMs);
+        }
+        if (bytes !== undefined) {
+          uiPerfStats.terminalRendererOutputBytes += bytes;
+          uiPerfStats.maxTerminalRendererOutputBytes = Math.max(uiPerfStats.maxTerminalRendererOutputBytes, bytes);
+        }
+        if (typeof data?.eventsInWindow === 'number' && Number.isFinite(data.eventsInWindow)) {
+          uiPerfStats.maxTerminalRendererOutputEventsInWindow = Math.max(
+            uiPerfStats.maxTerminalRendererOutputEventsInWindow,
+            data.eventsInWindow,
+          );
+        }
+        if (typeof data?.bytesInWindow === 'number' && Number.isFinite(data.bytesInWindow)) {
+          uiPerfStats.maxTerminalRendererOutputBytesInWindow = Math.max(
+            uiPerfStats.maxTerminalRendererOutputBytesInWindow,
+            data.bytesInWindow,
+          );
+        }
       }
       uiPerfStats.rendererReports += 1;
       try {
