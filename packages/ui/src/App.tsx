@@ -46,7 +46,7 @@ import { InvokerTerminal, type InvokerTerminalLine, type PlanningTerminalMode } 
 import { Toaster, toast } from 'sonner';
 import { Button } from './components/primitives/index.js';
 import { ChevronDownIcon, PlayIcon } from './components/icons/index.js';
-import { CommandPalette } from './components/CommandPalette.js';
+import { CommandPalette, COMMAND_PALETTE_MAX_ROWS } from './components/CommandPalette.js';
 import {
   getAttentionTaskEntries,
   getRunningTaskEntries,
@@ -789,7 +789,6 @@ export function App() {
   }, [planningSessions]);
   const [graphMaximized, setGraphMaximized] = useState(false);
   const { theme, toggleTheme } = useTheme();
-  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
   const selectedActionNode = useMemo(
     () => actionGraph?.nodes.find((node) => node.id === selectedActionNodeId) ?? null,
@@ -1453,6 +1452,18 @@ export function App() {
     [tasks, workflows, attentionTaskIdsWithFailures],
   );
   const runningEntries = useMemo(() => getRunningTaskEntries(tasks, workflows, queueStatus), [tasks, workflows, queueStatus]);
+  const commandPaletteWorkflowEntries = useMemo(
+    () => workflowEntries.slice(0, COMMAND_PALETTE_MAX_ROWS),
+    [workflowEntries],
+  );
+  const commandPaletteAttentionEntries = useMemo(
+    () => attentionEntries.slice(0, COMMAND_PALETTE_MAX_ROWS),
+    [attentionEntries],
+  );
+  const commandPaletteRunningEntries = useMemo(
+    () => runningEntries.slice(0, COMMAND_PALETTE_MAX_ROWS),
+    [runningEntries],
+  );
 
   const searchResults = useMemo<SearchResult[]>(
     () => computeSearchResults(searchQuery, tasks, workflows),
@@ -1704,14 +1715,6 @@ export function App() {
         return;
       }
       if (isEditableKeyboardTarget(event.target) || modal.type !== 'none') return;
-
-      if ((event.key === 'k' || event.key === 'K') && (event.metaKey || event.ctrlKey)) {
-        if (graphMaximized || planningTerminalExpanded) return;
-        event.preventDefault();
-        event.stopPropagation();
-        setCommandPaletteOpen((prev) => !prev);
-        return;
-      }
 
       // F1 is the keyboard-only camera lock control. It is already ignored for
       // input/modal/terminal/editable targets by the guard above.
@@ -3816,22 +3819,31 @@ export function App() {
           },
         }}
       />
-      {commandPaletteOpen && (
-        <CommandPalette
-          open={commandPaletteOpen}
-          onOpenChange={setCommandPaletteOpen}
-          workflows={workflows}
-          tasks={tasks}
-          onSelectSurface={handleSelectSidebarSurface}
-          onSelectWorkflow={selectWorkflowById}
-          onSelectTask={selectTaskById}
-          onOpenSettings={() => {
-            cancelPendingSystemSetupAutoOpen();
-            setShowSystemSetup(true);
-          }}
-          planningSessionCount={planningSessions.length}
-        />
-      )}
+      <CommandPalette
+        enabled={
+          !contextMenu
+          && !workflowContextMenu
+          && !searchOpen
+          && modal.type === 'none'
+          && !graphMaximized
+          && !planningTerminalExpanded
+        }
+        workflowEntries={commandPaletteWorkflowEntries}
+        attentionEntries={commandPaletteAttentionEntries}
+        runningEntries={commandPaletteRunningEntries}
+        workflowCount={workflowEntries.length}
+        attentionCount={attentionEntries.length}
+        runningCount={runningEntries.length}
+        onSelectSurface={handleSelectSidebarSurface}
+        onSelectWorkflow={selectWorkflowById}
+        onSelectTask={selectTaskById}
+        onOpenSettings={() => {
+          cancelPendingSystemSetupAutoOpen();
+          setShowSystemSetup(true);
+        }}
+        planningSessionCount={planningSessions.length}
+      />
+
       {showSystemBanner && (
         <div className="px-4 py-3 border-b border-amber-700 bg-amber-950/50 flex items-center justify-between gap-4">
           <div className="text-sm text-amber-100">
@@ -3886,15 +3898,14 @@ export function App() {
       {/* Main content */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <LeftStatusColumn
-          workflows={workflows}
-          tasks={tasks}
-          queueStatus={queueStatus}
+          workflowCount={workflowEntries.length}
+          attentionCount={attentionEntries.length}
+          runningCount={runningEntries.length}
           workerStatus={workerStatus}
           planningSessionCount={planningSessions.length}
           planningAttentionCount={planningAttentionCount}
           selectedSurface={sidebarSurface}
           collapsed={effectiveSidebarCollapsed}
-          attentionTaskIdsWithFailures={attentionTaskIdsWithFailures}
           onSelectSurface={handleSelectSidebarSurface}
           onToggleCollapsed={() => setSidebarCollapsed(!effectiveSidebarCollapsed)}
           onOpenSettings={() => {
