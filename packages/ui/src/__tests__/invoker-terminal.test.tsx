@@ -63,6 +63,37 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('reports planning chat input and render perf without logging message text', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+
+    const input = screen.getByTestId('invoker-terminal-input');
+    fireEvent.change(input, { target: { value: 'hello perf' } });
+
+    await waitFor(() => {
+      expect(vi.mocked(mock.api.reportUiPerf).mock.calls.some(([metric]) => metric === 'planning_chat_input_change')).toBe(true);
+      expect(vi.mocked(mock.api.reportUiPerf).mock.calls.some(([metric]) => metric === 'planning_chat_render_commit')).toBe(true);
+    });
+
+    const inputCall = vi.mocked(mock.api.reportUiPerf).mock.calls.find(([metric]) => metric === 'planning_chat_input_change');
+    const commitCall = vi.mocked(mock.api.reportUiPerf).mock.calls.find(([metric]) => metric === 'planning_chat_render_commit');
+    expect(inputCall?.[1]).toEqual(expect.objectContaining({
+      durationMs: expect.any(Number),
+      previousValueLength: 0,
+      valueLength: 10,
+      lineCount: expect.any(Number),
+    }));
+    expect(commitCall?.[1]).toEqual(expect.objectContaining({
+      durationMs: expect.any(Number),
+      inputToCommitMs: expect.any(Number),
+      reason: 'input',
+      valueLength: 10,
+    }));
+    expect(JSON.stringify(inputCall?.[1])).not.toContain('hello perf');
+    expect(JSON.stringify(commitCall?.[1])).not.toContain('hello perf');
+  });
+
   it('continues the same planning session', async () => {
     render(<App />);
     await openPlanningTerminal();

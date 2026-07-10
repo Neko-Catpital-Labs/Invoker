@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Button } from './primitives/index.js';
 
 export interface InvokerTerminalLine {
@@ -14,6 +14,18 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
@@ -45,6 +57,17 @@ interface SubmitErrorView {
   message: string;
 }
 
+type PendingInputCommit = {
+  startedAt: number;
+  valueLength: number;
+};
+
+type PreviousRenderSnapshot = {
+  conversationKey: string;
+  lineCount: number;
+  value: string;
+};
+
 function rolePrompt(role: InvokerTerminalLine['role']): string {
   if (role === 'user') return 'you ›';
   if (role === 'assistant') return 'invoker ›';
@@ -74,6 +97,13 @@ export function InvokerTerminal({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  const renderStartedAt = nowMs();
+  const pendingInputCommitRef = useRef<PendingInputCommit | null>(null);
+  const previousRenderRef = useRef<PreviousRenderSnapshot>({
+    conversationKey: activeConversationKey,
+    lineCount: lines.length,
+    value,
+  });
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -92,6 +122,49 @@ export function InvokerTerminal({
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
 
+  useLayoutEffect(() => {
+    const previous = previousRenderRef.current;
+    const lineCountChanged = previous.lineCount !== lines.length;
+    const valueChanged = previous.value !== value;
+    const conversationChanged = previous.conversationKey !== activeConversationKey;
+    if (!lineCountChanged && !valueChanged && !conversationChanged) return;
+
+    const committedAt = nowMs();
+    const pendingInput = pendingInputCommitRef.current;
+    const inputToCommitMs = pendingInput && pendingInput.valueLength === value.length
+      ? roundMs(committedAt - pendingInput.startedAt)
+      : undefined;
+    const reason = inputToCommitMs !== undefined
+      ? 'input'
+      : lineCountChanged
+        ? 'transcript'
+        : conversationChanged
+          ? 'conversation'
+          : 'value';
+
+    reportPlanningChatPerf('planning_chat_render_commit', {
+      durationMs: roundMs(committedAt - renderStartedAt),
+      inputToCommitMs,
+      reason,
+      lineCount: lines.length,
+      addedLines: Math.max(0, lines.length - previous.lineCount),
+      valueLength: value.length,
+      busy,
+      readOnly,
+      expanded,
+      conversationKey: activeConversationKey,
+    });
+
+    if (inputToCommitMs !== undefined) {
+      pendingInputCommitRef.current = null;
+    }
+    previousRenderRef.current = {
+      conversationKey: activeConversationKey,
+      lineCount: lines.length,
+      value,
+    };
+  });
+
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
@@ -106,6 +179,26 @@ export function InvokerTerminal({
 
   const focusComposer = (): void => {
     inputRef.current?.focus();
+  };
+
+  const handleInputChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
+    const nextValue = event.target.value;
+    const startedAt = nowMs();
+    pendingInputCommitRef.current = {
+      startedAt,
+      valueLength: nextValue.length,
+    };
+    onValueChange(nextValue);
+    reportPlanningChatPerf('planning_chat_input_change', {
+      durationMs: roundMs(nowMs() - startedAt),
+      previousValueLength: value.length,
+      valueLength: nextValue.length,
+      lineCount: lines.length,
+      busy,
+      readOnly,
+      expanded,
+      conversationKey: activeConversationKey,
+    });
   };
 
   return (
@@ -265,7 +358,7 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={handleInputChange}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

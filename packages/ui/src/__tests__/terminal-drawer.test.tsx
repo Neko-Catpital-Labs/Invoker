@@ -357,6 +357,80 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('reports renderer terminal attach, snapshot seed, large writes, and output bursts', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'early line\n',
+    });
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(mock.api.reportUiPerf).mock.calls.some(([metric]) => metric === 'terminal_attach')).toBe(true);
+      expect(vi.mocked(mock.api.reportUiPerf).mock.calls.some(([metric]) => metric === 'terminal_snapshot_seed')).toBe(true);
+    });
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'x'.repeat(9000),
+      });
+      for (let i = 0; i < 19; i += 1) {
+        mock.fireTerminalOutput({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          data: 'x',
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(mock.api.reportUiPerf).mock.calls.some(([metric]) => metric === 'terminal_output_write')).toBe(true);
+      expect(vi.mocked(mock.api.reportUiPerf).mock.calls.some(([metric]) => metric === 'terminal_output_burst')).toBe(true);
+    });
+
+    const attachCall = vi.mocked(mock.api.reportUiPerf).mock.calls.find(([metric]) => metric === 'terminal_attach');
+    const snapshotCall = vi.mocked(mock.api.reportUiPerf).mock.calls.find(([metric]) => metric === 'terminal_snapshot_seed');
+    const writeCall = vi.mocked(mock.api.reportUiPerf).mock.calls.find(([metric]) => metric === 'terminal_output_write');
+    const burstCall = vi.mocked(mock.api.reportUiPerf).mock.calls.find(([metric]) => metric === 'terminal_output_burst');
+    expect(attachCall?.[1]).toEqual(expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      durationMs: expect.any(Number),
+      outputSnapshotBytes: 11,
+    }));
+    expect(snapshotCall?.[1]).toEqual(expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      durationMs: expect.any(Number),
+      bytes: 11,
+    }));
+    expect(writeCall?.[1]).toEqual(expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      durationMs: expect.any(Number),
+      bytes: 9000,
+    }));
+    expect(burstCall?.[1]).toEqual(expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      outputCount: 20,
+      bytes: 9019,
+      maxChunkBytes: 9000,
+    }));
+    expect(JSON.stringify(snapshotCall?.[1])).not.toContain('early line');
+    expect(JSON.stringify(writeCall?.[1])).not.toContain('x'.repeat(20));
+  });
+
   it('does not duplicate the replay snapshot when the same session re-renders', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',

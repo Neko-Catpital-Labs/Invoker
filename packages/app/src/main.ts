@@ -277,6 +277,11 @@ import {
   resetTerminalUiPerfCounters,
 } from './terminal-ui-perf.js';
 import {
+  createRendererUiPerfCounters,
+  recordRendererUiPerfMetric,
+  resetRendererUiPerfCounters,
+} from './ui-perf-stats.js';
+import {
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
 } from './terminal-session-ipc.js';
@@ -2097,12 +2102,7 @@ function createEmbeddedTerminalBackendFromConfig(
     dbPollCreated: 0,
     dbPollUpdatedAsCreated: 0,
     dbPollUpdatedAsUpdated: 0,
-    rendererReports: 0,
-    maxRendererEventLoopLagMs: 0,
-    maxRendererHiddenEventLoopLagMs: 0,
-    maxRendererCumulativeLagMs: 0,
-    maxRendererTickDeltaMs: 0,
-    maxRendererLongTaskMs: 0,
+    ...createRendererUiPerfCounters(),
     workflowMetadataPublishRequests: 0,
     workflowMetadataPublishes: 0,
     workflowMetadataCoalescedRequests: 0,
@@ -2167,12 +2167,7 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.dbPollCreated = 0;
     uiPerfStats.dbPollUpdatedAsCreated = 0;
     uiPerfStats.dbPollUpdatedAsUpdated = 0;
-    uiPerfStats.rendererReports = 0;
-    uiPerfStats.maxRendererEventLoopLagMs = 0;
-    uiPerfStats.maxRendererHiddenEventLoopLagMs = 0;
-    uiPerfStats.maxRendererCumulativeLagMs = 0;
-    uiPerfStats.maxRendererTickDeltaMs = 0;
-    uiPerfStats.maxRendererLongTaskMs = 0;
+    resetRendererUiPerfCounters(uiPerfStats);
     uiPerfStats.workflowMetadataPublishRequests = 0;
     uiPerfStats.workflowMetadataPublishes = 0;
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
@@ -4510,24 +4505,7 @@ function createEmbeddedTerminalBackendFromConfig(
       ) {
         logger.info(`ui metric ${metric} ${JSON.stringify(data ?? {})}`, { module: 'ui-state' });
       }
-      if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
-        const hiddenOrUnfocused = data.visibilityState === 'hidden' || data.hasFocus === false;
-        if (hiddenOrUnfocused) {
-          uiPerfStats.maxRendererHiddenEventLoopLagMs = Math.max(uiPerfStats.maxRendererHiddenEventLoopLagMs, data.lagMs);
-        } else {
-          uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
-        }
-        if (typeof data.cumulativeLagMs === 'number') {
-          uiPerfStats.maxRendererCumulativeLagMs = Math.max(uiPerfStats.maxRendererCumulativeLagMs, data.cumulativeLagMs);
-        }
-        if (typeof data.tickDeltaMs === 'number') {
-          uiPerfStats.maxRendererTickDeltaMs = Math.max(uiPerfStats.maxRendererTickDeltaMs, data.tickDeltaMs);
-        }
-      }
-      if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
-        uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
-      }
-      uiPerfStats.rendererReports += 1;
+      recordRendererUiPerfMetric(uiPerfStats, metric, data);
       try {
         persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
       } catch {
