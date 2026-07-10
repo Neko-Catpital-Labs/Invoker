@@ -18,7 +18,12 @@ import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import {
+  isInvokerRepoUrl,
+  type PrAuthoringContext,
+  type PrAuthoringTaskEntry,
+  type PrAuthoringWorkerActionEntry,
+} from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -380,7 +385,29 @@ export async function buildPrAuthoringContext(
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    workerActions: (host.persistence.listWorkerActions?.({ workflowId }) ?? []).map(workerActionToPrAuthoringEntry),
     visualProofMarkdown,
+  };
+}
+
+function workerActionToPrAuthoringEntry(action: ReturnType<SQLiteAdapter['listWorkerActions']>[number]): PrAuthoringWorkerActionEntry {
+  const payload = action.payload && typeof action.payload === 'object' && !Array.isArray(action.payload)
+    ? action.payload as Record<string, unknown>
+    : {};
+  const reason = typeof payload.reason === 'string' ? payload.reason : undefined;
+  return {
+    id: action.id,
+    workerKind: action.workerKind,
+    actionType: action.actionType,
+    status: action.status,
+    subjectType: action.subjectType,
+    subjectId: action.subjectId,
+    ...(action.taskId ? { taskId: action.taskId } : {}),
+    ...(action.summary ? { summary: action.summary } : {}),
+    ...(reason ? { reason } : {}),
+    createdAt: action.createdAt,
+    updatedAt: action.updatedAt,
+    ...(action.completedAt ? { completedAt: action.completedAt } : {}),
   };
 }
 

@@ -13,6 +13,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
+import type { WorkerActionRecord } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
@@ -26,7 +27,7 @@ import {
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
-import { listWorkerDecisions } from './worker-control.js';
+import { listWorkerDecisions, toWorkerActionSummary } from './worker-control.js';
 import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
@@ -787,25 +788,46 @@ function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
   return lines.join('\n');
 }
 
+function listRecentWorkerActions(deps: Pick<HeadlessQueryDeps, 'persistence'>): ReturnType<typeof toWorkerActionSummary>[] {
+  const persistence = deps.persistence as { listWorkerActions?: (filters?: { limit?: number }) => WorkerActionRecord[] };
+  return (persistence.listWorkerActions?.({ limit: 5 }) ?? []).slice(0, 5).map(toWorkerActionSummary);
+}
+
+function formatRecentWorkerActions(actions: ReturnType<typeof toWorkerActionSummary>[]): string {
+  if (actions.length === 0) return '';
+  const lines = ['', `${BOLD}Recent worker actions${RESET}`];
+  for (const action of actions) {
+    const subject = action.taskId
+      ? ` task=${action.taskId}`
+      : ` ${action.subjectType}=${action.subjectId}`;
+    const summary = action.summary ? ` - ${action.summary}` : '';
+    lines.push(
+      `  ${action.updatedAt} ${action.workerKind}/${action.actionType} [${action.status}]${subject}${summary}`,
+    );
+  }
+  return lines.join('\n');
+}
+
 export async function renderWorkerStatus(
   flagArgs: string[],
   deps: Pick<HeadlessQueryDeps, 'persistence'>,
 ): Promise<void> {
   const flags = parseQueryFlags(flagArgs);
   const status = collectRecoveryWorkerStatus(deps.persistence);
+  const recentActions = listRecentWorkerActions(deps);
   const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
   switch (flags.output) {
     case 'label':
       writeOut(`${status.workerId}\n`);
       break;
     case 'json':
-      writeOut(formatAsJson(status) + '\n');
+      writeOut(formatAsJson({ ...status, recentActions }) + '\n');
       break;
     case 'jsonl':
-      writeOut(formatAsJsonl([status]) + '\n');
+      writeOut(formatAsJsonl([{ ...status, recentActions }]) + '\n');
       break;
     default:
-      writeOut(formatRecoveryWorkerStatus(status) + '\n');
+      writeOut(formatRecoveryWorkerStatus(status) + formatRecentWorkerActions(recentActions) + '\n');
       break;
   }
 }

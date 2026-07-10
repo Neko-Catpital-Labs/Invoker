@@ -7,6 +7,7 @@ import {
   createWorkerRegistry,
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
@@ -90,6 +91,7 @@ function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKE
   };
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
+  register(PR_SUMMARY_REFRESH_WORKER_KIND, 'Refreshes PR summaries.');
   register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
   register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
   register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
@@ -117,6 +119,7 @@ describe('createWorkerRuntimeController', () => {
     const snapshot = setup.controller.snapshot();
 
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_SUMMARY_REFRESH_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
@@ -179,6 +182,7 @@ describe('createWorkerRuntimeController', () => {
 
     for (const kind of [
       AUTO_FIX_WORKER_KIND,
+      PR_SUMMARY_REFRESH_WORKER_KIND,
       CI_FAILURE_WORKER_KIND,
       CODERABBIT_ADDRESS_WORKER_KIND,
       PR_CONFLICT_REBASE_WORKER_KIND,

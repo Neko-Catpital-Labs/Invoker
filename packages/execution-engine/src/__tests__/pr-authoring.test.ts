@@ -125,6 +125,45 @@ describe('buildCanonicalPrBody', () => {
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
   });
+
+  it('renders worker actions in ## Pipeline time order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Worker summary',
+      workflowSummary: 'Updated PR visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'wa-new',
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'completed',
+            subjectType: 'task',
+            subjectId: 'wf-1/t2',
+            taskId: 'wf-1/t2',
+            summary: 'Queued CI fix',
+            updatedAt: '2026-01-01T00:00:03.000Z',
+          },
+          {
+            id: 'wa-old',
+            workerKind: 'pr-summary-refresh',
+            actionType: 'refresh-pr-summary',
+            status: 'skipped',
+            subjectType: 'pull_request',
+            subjectId: '123',
+            summary: 'PR summary already current',
+            reason: 'body-unchanged',
+            updatedAt: '2026-01-01T00:00:01.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body.indexOf('pr-summary-refresh')).toBeLessThan(body.indexOf('ci-failure'));
+    expect(body).toContain('PR summary already current (reason: body-unchanged)');
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
 });
 
 // ── validateReviewStackPrBody ────────────────────────────

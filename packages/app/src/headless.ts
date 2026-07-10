@@ -18,8 +18,8 @@ import {
   acquireWorkerLock,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
-  registerAutoFixWorker,
-  registerPrMaintenanceWorkers,
+  GitHubMergeGateProvider,
+  registerBuiltinWorkers,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
@@ -422,9 +422,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerPrMaintenanceWorkers(
-      registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
-    ),
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
   );
 
   if (subCommand === 'list') {
@@ -472,6 +470,10 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
+      prSummaryRefresh: {
+        provider: new GitHubMergeGateProvider(),
+        cwd: deps.repoRoot,
+      },
     });
     await worker.tick('manual');
     await worker.stop();
@@ -929,4 +931,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-

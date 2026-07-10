@@ -90,6 +90,40 @@ function normalizeJsonValue(value: unknown, seen = new WeakSet<object>()): JsonS
     seen.delete(value);
   }
 }
+
+function parsePayloadObject(payload: string | undefined): Record<string, unknown> | undefined {
+  if (!payload) return undefined;
+  try {
+    const parsed = JSON.parse(payload);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringPayloadField(payload: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = payload?.[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function formatWorkerActionEventPayload(payload: string | undefined): string | undefined {
+  const parsed = parsePayloadObject(payload);
+  if (!parsed) return undefined;
+  const workerKind = stringPayloadField(parsed, 'workerKind') ?? 'worker';
+  const actionType = stringPayloadField(parsed, 'actionType') ?? 'action';
+  const status = stringPayloadField(parsed, 'status') ?? 'unknown';
+  const message = stringPayloadField(parsed, 'message') ?? stringPayloadField(parsed, 'summary') ?? '';
+  const reason = stringPayloadField(parsed, 'reason');
+  const reviewId = stringPayloadField(parsed, 'reviewId');
+  return [
+    `${escapeTerminalText(workerKind)}/${escapeTerminalText(actionType)} [${escapeTerminalText(status)}]`,
+    message ? `- ${escapeTerminalText(message)}` : '',
+    reason ? `(reason=${escapeTerminalText(reason)})` : '',
+    reviewId ? `review=${escapeTerminalText(reviewId)}` : '',
+  ].filter(Boolean).join(' ');
+}
 // ── Status Colors ────────────────────────────────────────────
 
 const STATUS_COLORS: Record<TaskStatus, string> = {
@@ -206,7 +240,12 @@ export function formatEventLog(events: TaskEvent[]): string {
 
   const lines = events.map((event) => {
     const timestamp = event.createdAt;
-    const payload = event.payload ? ` ${event.payload}` : '';
+    const workerActionPayload = event.eventType === 'task.worker_action'
+      ? formatWorkerActionEventPayload(event.payload)
+      : undefined;
+    const payload = workerActionPayload
+      ? ` ${workerActionPayload}`
+      : event.payload ? ` ${event.payload}` : '';
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 

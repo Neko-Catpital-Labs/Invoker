@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import type {
@@ -102,6 +105,27 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       '--jq', '.body',
     ], cwd));
     return stdout.trim();
+  }
+
+  async updateReviewBody(opts: {
+    identifier: string;
+    cwd: string;
+    body: string;
+  }): Promise<void> {
+    const { identifier, cwd, body } = opts;
+    const targetRepo = await this.resolveTargetRepo(cwd);
+    const dir = await mkdtemp(join(tmpdir(), 'invoker-gh-pr-body-'));
+    const bodyPath = join(dir, 'body.json');
+    try {
+      await writeFile(bodyPath, JSON.stringify({ body }), 'utf8');
+      await retryTransientGitHubCli(() => this.exec('gh', [
+        'api', `repos/${targetRepo}/pulls/${identifier}`,
+        '--method', 'PATCH',
+        '--input', bodyPath,
+      ], cwd));
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   async checkApproval(opts: {

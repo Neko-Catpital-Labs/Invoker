@@ -33,6 +33,22 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence rendered into the PR pipeline summary. */
+export interface PrAuthoringWorkerActionEntry {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType: string;
+  subjectId: string;
+  taskId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +62,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker actions for the PR pipeline summary. */
+  workerActions?: readonly PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -244,6 +262,55 @@ export function validateReviewStackPrBody(body: string): string[] {
 
 function promptByteLength(prompt: string): number {
   return Buffer.byteLength(prompt, 'utf8');
+}
+
+function markdownTableCell(value: string | undefined): string {
+  if (!value) return '';
+  return value
+    .replace(/\r?\n/g, ' ')
+    .replace(/\|/g, '\\|')
+    .trim();
+}
+
+function workerActionTimestamp(action: PrAuthoringWorkerActionEntry): string {
+  return action.completedAt ?? action.updatedAt ?? action.createdAt ?? '';
+}
+
+function renderPipelineRows(
+  workerActions: readonly PrAuthoringWorkerActionEntry[] | undefined,
+): string[] {
+  if (!workerActions || workerActions.length === 0) return [];
+  const ordered = [...workerActions].sort((a, b) => {
+    const aTime = Date.parse(workerActionTimestamp(a));
+    const bTime = Date.parse(workerActionTimestamp(b));
+    const normalizedA = Number.isFinite(aTime) ? aTime : 0;
+    const normalizedB = Number.isFinite(bTime) ? bTime : 0;
+    if (normalizedA !== normalizedB) return normalizedA - normalizedB;
+    return a.id.localeCompare(b.id);
+  });
+  const lines = [
+    '## Pipeline',
+    '',
+    '| Time | Worker | Action | Subject | Status | Summary |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  for (const action of ordered) {
+    const subject = action.taskId
+      ? `task:${action.taskId}`
+      : `${action.subjectType}:${action.subjectId}`;
+    const summary = action.reason
+      ? `${action.summary ?? ''}${action.summary ? ' ' : ''}(reason: ${action.reason})`
+      : action.summary;
+    lines.push(
+      `| ${markdownTableCell(workerActionTimestamp(action))} ` +
+      `| ${markdownTableCell(action.workerKind)} ` +
+      `| ${markdownTableCell(action.actionType)} ` +
+      `| ${markdownTableCell(subject)} ` +
+      `| ${markdownTableCell(action.status)} ` +
+      `| ${markdownTableCell(summary)} |`,
+    );
+  }
+  return lines;
 }
 
 function buildPromptFileBootstrap(promptPath: string): string {
@@ -484,6 +551,12 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  const pipelineRows = renderPipelineRows(args.structuredContext?.workerActions);
+  if (pipelineRows.length > 0) {
+    lines.push(...pipelineRows);
+    lines.push('');
+  }
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
@@ -592,6 +665,14 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    const pipelineRows = renderPipelineRows(ctx.workerActions);
+    if (pipelineRows.length > 0) {
+      lines.push('Worker pipeline actions (oldest first; include this as ## Pipeline when useful):');
+      lines.push('');
+      lines.push(...pipelineRows);
+      lines.push('');
     }
 
     if (ctx.visualProofMarkdown) {
