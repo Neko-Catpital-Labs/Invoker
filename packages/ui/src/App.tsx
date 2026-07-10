@@ -2144,6 +2144,9 @@ export function App() {
   const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
   const autoCollapseSidebar = viewportWidth < 1440;
   const effectiveSidebarCollapsed = sidebarCollapsed ?? autoCollapseSidebar;
+  const handleToggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed(!effectiveSidebarCollapsed);
+  }, [effectiveSidebarCollapsed]);
   const autoCollapseInspector = sidebarSurface !== 'home' && viewportWidth < 1440;
   const effectiveInspectorCollapsed = inspectorCollapsed || (autoCollapseInspector && !inspectorManualOpen);
   const showWorkerDetailsPanel = viewMode === 'queue' && sidebarSurface === 'workers';
@@ -3144,7 +3147,7 @@ export function App() {
           selectedSurface={sidebarSurface}
           collapsed={effectiveSidebarCollapsed}
           onSelectSurface={handleSelectSidebarSurface}
-          onToggleCollapsed={() => setSidebarCollapsed(!effectiveSidebarCollapsed)}
+          onToggleCollapsed={handleToggleSidebarCollapsed}
           onOpenSettings={() => {
             cancelPendingSystemSetupAutoOpen();
             setShowSystemSetup(true);
@@ -3454,4 +3457,3 @@ export function App() {
     </div>
   );
 }
-
