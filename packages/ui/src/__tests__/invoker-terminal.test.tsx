@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -35,6 +36,11 @@ describe('Invoker terminal (component)', () => {
   function submitPlanningText(text: string) {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+  }
+
+  function expectScrollableRailList(list: HTMLElement) {
+    expect(list).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+    expect(list.parentElement).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col');
   }
 
   it('generates a planning reply from plain language', async () => {
@@ -417,15 +423,27 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
 
-  it('constrains the planning session list to a bounded scroll region', async () => {
-    render(<App />);
-    await openPlanningTerminal();
+  it('makes left rail lists shrinkable scroll containers', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-rail', name: 'Rail layout workflow', status: 'running' },
+    ];
+    mock.setTasks([
+      makeUITask({ id: 'wf-rail/failed', description: 'Needs a decision', status: 'failed', workflowId: 'wf-rail' }),
+      makeUITask({ id: 'wf-rail/running', description: 'Active task', status: 'running', workflowId: 'wf-rail' }),
+    ], workflows);
 
-    const list = screen.getByTestId('planning-session-list');
-    // Regression guard: an auto-height overflow container never scrolls; long
-    // session lists overflow the rail and get clipped by the ancestor
-    // overflow-hidden instead. The scroll region needs a definite height.
-    expect(list.className).toContain('overflow-y-auto');
-    expect(list.className).toMatch(/\b(h-full|h-\[|max-h-\S+)/);
+    render(<App />);
+
+    await openPlanningTerminal();
+    expectScrollableRailList(screen.getByTestId('planning-session-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expectScrollableRailList(await screen.findByTestId('browser-workflows-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    expectScrollableRailList(await screen.findByTestId('browser-attention-tasks-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    expectScrollableRailList(await screen.findByTestId('browser-running-tasks-list'));
   });
 });
