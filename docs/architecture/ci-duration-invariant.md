@@ -13,7 +13,9 @@ Enforced by:
 
 Stacked PR pushes should stay cheap. Long Playwright batteries belong on the
 twice-daily extended e2e worker (`scripts/daily-e2e-do-submit.sh`), not on
-ordinary PR feedback.
+ordinary PR feedback. That includes the UI action responsiveness battery
+(`optional/41-ui-action-responsiveness.sh`); see
+[UI action responsiveness invariant](./ui-action-responsiveness-invariant.md).
 
 ## How to stay under budget
 

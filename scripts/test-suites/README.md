@@ -68,5 +68,7 @@ Keep extra proof, repro, and destructive coverage on normal PRs, pushes, schedul
   - `optional/33-e2e-chaos-overload.sh`: generated overload chaos suite for saturation and mixed-operation storms
   - `optional/30-e2e-ssh.sh`: `case-3.1` to `case-3.3`
   - `optional/31-e2e-ssh-merge.sh`: `case-3.4` to `case-3.6`
+  - `optional/40-playwright-app.sh`: full Playwright app suite (also used by CI shards)
+  - `optional/41-ui-action-responsiveness.sh`: UI action responsiveness battery under fat DB (daily/extended only; see `docs/architecture/ui-action-responsiveness-invariant.md`)
 
 Do **not** add ad-hoc top-level `scripts/run-*.sh` loops for tests — add a thin wrapper under `test-suites/` and delegate to existing scripts so discovery stays in one place.
