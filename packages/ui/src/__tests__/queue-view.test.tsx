@@ -146,8 +146,18 @@ describe('QueueView', () => {
     expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
   });
 
-  it('keeps worker actions and worker processes in independent scroll panes', () => {
+  it('keeps worker actions and tall worker processes in independent scroll panes', () => {
     const task = makeUITask({ id: 'wf-1/action-task', status: 'running', description: 'running task' });
+    const extraWorkers = Array.from({ length: 24 }, (_, index) =>
+      makeWorker({
+        kind: `scroll-worker-${index}`,
+        lifecycle: index % 2 === 0 ? 'running' : 'stopped',
+        autoStarts: false,
+        startable: index % 2 !== 0,
+        stoppable: index % 2 === 0,
+      }),
+    );
+
     renderQueueView(
       new Map([[task.id, task]]),
       makeWorkerStatus([
@@ -155,21 +165,34 @@ describe('QueueView', () => {
           kind: 'autofix',
           recentActions: [makeWorkerAction({ taskId: task.id, subjectId: task.id })],
         }),
+        ...extraWorkers,
       ]),
     );
 
     const actionSection = screen.getByTestId('action-queue-section');
     const actionList = screen.getByTestId('worker-action-list');
     const workersSection = screen.getByTestId('worker-processes-section');
+    const processList = screen.getByTestId('worker-process-list');
+    const activityCard = within(processList).getByTestId('worker-activity-card');
+    const lastWorkerRow = within(processList).getByTestId('worker-row-scroll-worker-23');
+    const queueRoot = actionSection.parentElement;
 
     expect(actionSection.compareDocumentPosition(workersSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(queueRoot?.className).toContain('grid-rows-[minmax(0,1fr)]');
     expect(actionSection.className).toContain('overflow-hidden');
     expect(actionList.className).toContain('overflow-y-auto');
     expect(workersSection.className).toContain('overflow-hidden');
+    expect(processList.className).toContain('min-h-0');
+    expect(processList.className).toContain('flex-1');
+    expect(processList.className).toContain('overflow-y-auto');
+    expect(activityCard.className).toContain('min-h-0');
+    expect(activityCard.className).toContain('flex-1');
     expect(within(actionSection).getByText('Worker Actions (1)')).toBeInTheDocument();
-    expect(within(workersSection).getByText('Worker processes (1)')).toBeInTheDocument();
+    expect(within(workersSection).getByText('Worker processes (25)')).toBeInTheDocument();
     expect(within(workersSection).getByTestId('worker-row-autofix')).toBeInTheDocument();
+    expect(lastWorkerRow).toBeInTheDocument();
     expect(within(actionSection).queryByTestId('worker-row-autofix')).not.toBeInTheDocument();
+    expect(within(actionSection).queryByTestId('worker-row-scroll-worker-23')).not.toBeInTheDocument();
   });
 
   it('shows an empty worker-action state without showing unrelated tasks', () => {
