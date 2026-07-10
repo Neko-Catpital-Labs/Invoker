@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
+import type { ComponentProps } from 'react';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
 vi.mock('@xyflow/react', async () => {
@@ -336,7 +337,9 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('second session request'));
   });
 
-  it('follows new transcript lines until the user scrolls away from the bottom', async () => {
+  function renderPlanningTerminalForFollowTest(
+    overrides: Partial<ComponentProps<typeof InvokerTerminal>> = {},
+  ) {
     const props = {
       activeConversationKey: 'chat-1',
       lines: [{ id: 1, text: 'First line', role: 'system' as const }],
@@ -350,16 +353,31 @@ describe('Invoker terminal (component)', () => {
       onSubmitDraft: vi.fn(),
       onPresetChange: vi.fn(),
       onExpand: vi.fn(),
+      ...overrides,
     };
-    const { rerender } = render(<InvokerTerminal {...props} />);
+    const result = render(<InvokerTerminal {...props} />);
     const transcript = screen.getByTestId('invoker-terminal-transcript');
     Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 100 });
     Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 400 });
+    return { props, transcript, rerender: result.rerender };
+  }
+
+  it('auto-follows a new assistant reply when the transcript is near the bottom', async () => {
+    const { props, transcript, rerender } = renderPlanningTerminalForFollowTest();
+
+    transcript.scrollTop = 50;
+    fireEvent.scroll(transcript);
+    transcript.scrollTop = 275;
+    fireEvent.scroll(transcript);
 
     Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 500 });
     rerender(<InvokerTerminal {...props} lines={[...props.lines, { id: 2, text: 'Second line', role: 'assistant' as const }]} />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+  });
+
+  it('does not force-follow a new assistant reply after the user scrolls upward', async () => {
+    const { props, transcript, rerender } = renderPlanningTerminalForFollowTest();
 
     transcript.scrollTop = 50;
     fireEvent.scroll(transcript);
@@ -371,39 +389,12 @@ describe('Invoker terminal (component)', () => {
     ]} />);
 
     expect(transcript.scrollTop).toBe(50);
-
-    transcript.scrollTop = 500;
-    fireEvent.scroll(transcript);
-    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 700 });
-    rerender(<InvokerTerminal {...props} lines={[
-      ...props.lines,
-      { id: 2, text: 'Second line', role: 'assistant' as const },
-      { id: 3, text: 'Third line', role: 'assistant' as const },
-      { id: 4, text: 'Fourth line', role: 'assistant' as const },
-    ]} />);
-
-    await waitFor(() => expect(transcript.scrollTop).toBe(700));
   });
 
-  it('resets transcript follow mode when the active planning conversation changes', async () => {
-    const props = {
-      activeConversationKey: 'chat-1',
+  it('re-arms transcript follow mode when the active planning conversation changes', async () => {
+    const { props, transcript, rerender } = renderPlanningTerminalForFollowTest({
       lines: [{ id: 1, text: 'First chat', role: 'system' as const }],
-      busy: false,
-      value: '',
-      selectedPresetKey: 'codex',
-      presetOptions: [{ key: 'codex', label: 'Codex' }],
-      draftPlanAvailable: false,
-      onValueChange: vi.fn(),
-      onSubmit: vi.fn(),
-      onSubmitDraft: vi.fn(),
-      onPresetChange: vi.fn(),
-      onExpand: vi.fn(),
-    };
-    const { rerender } = render(<InvokerTerminal {...props} />);
-    const transcript = screen.getByTestId('invoker-terminal-transcript');
-    Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 100 });
-    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 400 });
+    });
 
     transcript.scrollTop = 50;
     fireEvent.scroll(transcript);
@@ -415,6 +406,18 @@ describe('Invoker terminal (component)', () => {
     />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
+
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, value: 600 });
+    rerender(<InvokerTerminal
+      {...props}
+      activeConversationKey="chat-2"
+      lines={[
+        { id: 2, text: 'Second chat', role: 'system' as const },
+        { id: 3, text: 'Second chat reply', role: 'assistant' as const },
+      ]}
+    />);
+
+    await waitFor(() => expect(transcript.scrollTop).toBe(600));
   });
 
   it('constrains the planning session list to a bounded scroll region', async () => {
