@@ -91,7 +91,10 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
   );
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(20rem,24rem)_minmax(28rem,1fr)] overflow-hidden bg-background">
+    <div
+      data-testid="queue-view"
+      className="grid h-full min-h-0 grid-cols-[minmax(20rem,24rem)_minmax(28rem,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden bg-background"
+    >
       <section data-testid="action-queue-section" className="flex h-full min-h-0 flex-col overflow-hidden border-r border-border">
         <div className="shrink-0 border-b border-border p-4">
           <h3 className="text-lg font-semibold text-foreground">
@@ -213,8 +216,8 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
         </div>
       </section>
 
-      <section data-testid="worker-processes-section" className="flex h-full min-h-0 flex-col overflow-hidden">
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <section data-testid="worker-processes-section" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+        <div data-testid="worker-process-scroll" className="min-h-0 flex-1 overflow-y-auto p-4">
           <WorkerActivityCard
             snapshot={workerStatus}
             selectedWorkerKind={selectedWorkerKind}
