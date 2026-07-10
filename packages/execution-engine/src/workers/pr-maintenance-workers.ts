@@ -136,8 +136,8 @@ export function createPrConflictRebaseWorker(options: PrMaintenanceWorkerOptions
 }
 
 export function createPrMaintenanceTick(options: PrMaintenanceTickOptions): WorkerTick {
-  return async () => {
-    await runPrMaintenanceEntrypoint(options);
+  return async (ctx) => {
+    await runPrMaintenanceEntrypoint(options, ctx.signal);
   };
 }
 
@@ -145,6 +145,8 @@ export function probePrMaintenanceLock(options: PrMaintenanceLockProbeOptions): 
   const flockProbe = spawnSync('flock', ['-n', options.lockPath, '-c', 'true'], {
     env: options.env,
     stdio: 'ignore',
+    timeout: 3_000,
+    killSignal: 'SIGKILL',
   });
   if (!flockProbe.error || (flockProbe.error as NodeJS.ErrnoException).code !== 'ENOENT') {
     return flockProbe.status === 0
@@ -195,7 +197,12 @@ function createPrMaintenanceWorker(
   });
 }
 
-async function runPrMaintenanceEntrypoint(options: PrMaintenanceTickOptions): Promise<void> {
+async function runPrMaintenanceEntrypoint(
+  options: PrMaintenanceTickOptions,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) return;
+
   const repoRoot = resolvePrMaintenanceRepoRoot(options.repoRoot);
   const startedAt = new Date().toISOString();
   const runExternalKey = `${options.entrypoint.kind}:${repoRoot}:${startedAt}`;
@@ -208,6 +215,8 @@ async function runPrMaintenanceEntrypoint(options: PrMaintenanceTickOptions): Pr
     env,
     staleLockSeconds: parsePositiveInteger(env.INVOKER_PR_CRON_LOCK_STALE_SECS),
   });
+
+  if (signal?.aborted) return;
 
   if (lock.held) {
     options.logger.info(`[worker:${options.entrypoint.kind}] shared PR maintenance lock held; skipping tick`, {
@@ -263,7 +272,28 @@ async function runPrMaintenanceEntrypoint(options: PrMaintenanceTickOptions): Pr
       fn();
     };
 
+    const onAbort = (): void => {
+      if (!child.killed) {
+        child.kill('SIGTERM');
+      }
+      settle(() => {
+        recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'failed', 'PR maintenance aborted by stop', {
+          reason: 'aborted',
+        });
+        resolvePromise();
+      });
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
     child.once('error', (err) => {
+      signal?.removeEventListener('abort', onAbort);
       settle(() => {
         options.logger.error(`[worker:${options.entrypoint.kind}] process error`, {
           module: 'pr-maintenance-worker',
@@ -278,13 +308,14 @@ async function runPrMaintenanceEntrypoint(options: PrMaintenanceTickOptions): Pr
       });
     });
 
-    child.once('close', (code, signal) => {
+    child.once('close', (code, closeSignal) => {
+      signal?.removeEventListener('abort', onAbort);
       settle(() => {
         const fields = {
           module: 'pr-maintenance-worker',
           worker: options.entrypoint.kind,
           code,
-          signal,
+          signal: closeSignal,
         };
         if (code === 0) {
           options.logger.info(`[worker:${options.entrypoint.kind}] shell entrypoint completed`, fields);
@@ -292,13 +323,17 @@ async function runPrMaintenanceEntrypoint(options: PrMaintenanceTickOptions): Pr
           resolvePromise();
           return;
         }
+        if (signal?.aborted) {
+          resolvePromise();
+          return;
+        }
         const message = `PR maintenance worker ${options.entrypoint.kind} exited with code ${code ?? 'null'}`
-          + (signal ? ` signal ${signal}` : '');
+          + (closeSignal ? ` signal ${closeSignal}` : '');
         options.logger.error(`[worker:${options.entrypoint.kind}] shell entrypoint failed`, fields);
         recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'failed', message, {
           reason: 'nonzero-exit',
           code,
-          signal,
+          signal: closeSignal,
         });
         rejectPromise(new Error(message));
       });
