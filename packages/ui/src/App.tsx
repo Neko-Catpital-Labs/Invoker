@@ -1410,7 +1410,7 @@ export function App() {
     recenterForSelection('task', task.id);
   }, [recenterForSelection]);
 
-  const openTerminalForTaskId = useCallback(async (taskId: string) => {
+  const requestTerminalForTaskId = useCallback(async (taskId: string) => {
     const task = tasks.get(taskId);
     if (task && isExperimentSpawnPivotTask(task)) {
       window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
@@ -1437,6 +1437,19 @@ export function App() {
       setActiveTerminalSessionId(session.sessionId);
     }
   }, [tasks]);
+
+  const openTerminalForTaskId = useCallback(async (taskId: string) => {
+    const existingRunningSession = terminalSessions.find(
+      (session) => session.taskId === taskId && session.status === 'running',
+    );
+    if (existingRunningSession) {
+      setTerminalDrawerState('partial');
+      setActiveTerminalSessionId(existingRunningSession.sessionId);
+      return;
+    }
+
+    await requestTerminalForTaskId(taskId);
+  }, [requestTerminalForTaskId, terminalSessions]);
 
   const handleTaskDoubleClick = useCallback(async (task: TaskState) => {
     setSelectedTaskId(task.id);
@@ -1610,9 +1623,9 @@ export function App() {
   const handleOpenTerminal = useCallback(
     (taskId: string) => {
       setContextMenu(null);
-      void openTerminalForTaskId(taskId);
+      void requestTerminalForTaskId(taskId);
     },
-    [openTerminalForTaskId],
+    [requestTerminalForTaskId],
   );
 
   const handleCloseTerminalSession = useCallback(async (sessionId: string) => {
@@ -3454,4 +3467,3 @@ export function App() {
     </div>
   );
 }
-
