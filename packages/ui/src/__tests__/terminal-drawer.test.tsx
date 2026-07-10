@@ -357,6 +357,67 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('reports terminal attach, output write, and burst perf markers', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'early line\n',
+    });
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'terminal_renderer_attach',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          hadSnapshot: true,
+          seedChars: 'early line\n'.length,
+        }),
+      );
+    });
+
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+    act(() => {
+      for (let index = 0; index < 20; index += 1) {
+        mock.fireTerminalOutput({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          data: 'x',
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'terminal_renderer_output_write',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          chars: 1,
+        }),
+      );
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'terminal_renderer_output_burst',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          chunksInWindow: 20,
+          charsInWindow: 20,
+          burstByChunkCount: true,
+        }),
+      );
+    });
+  });
+
   it('does not duplicate the replay snapshot when the same session re-renders', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',

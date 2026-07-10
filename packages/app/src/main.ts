@@ -1103,6 +1103,23 @@ function startHeadlessMode(): void {
           maxRendererCumulativeLagMs: 0,
           maxRendererTickDeltaMs: 0,
           maxRendererLongTaskMs: 0,
+          planningChatInputReports: 0,
+          planningChatInputRenderReports: 0,
+          planningChatRenderBurstReports: 0,
+          maxPlanningChatInputHandlerMs: 0,
+          maxPlanningChatInputRenderMs: 0,
+          maxPlanningChatRendersInWindow: 0,
+          terminalRendererAttachReports: 0,
+          terminalRendererOutputWriteReports: 0,
+          terminalRendererOutputBurstReports: 0,
+          terminalRendererSnapshotSeedReports: 0,
+          maxTerminalRendererAttachMs: 0,
+          maxTerminalRendererOutputWriteMs: 0,
+          maxTerminalRendererOutputChars: 0,
+          maxTerminalRendererOutputChunksInWindow: 0,
+          maxTerminalRendererOutputCharsInWindow: 0,
+          maxTerminalRendererSnapshotSeedMs: 0,
+          maxTerminalRendererSnapshotSeedChars: 0,
         }),
         resetUiPerfStats: () => {},
         waitForApproval,
@@ -2103,6 +2120,23 @@ function createEmbeddedTerminalBackendFromConfig(
     maxRendererCumulativeLagMs: 0,
     maxRendererTickDeltaMs: 0,
     maxRendererLongTaskMs: 0,
+    planningChatInputReports: 0,
+    planningChatInputRenderReports: 0,
+    planningChatRenderBurstReports: 0,
+    maxPlanningChatInputHandlerMs: 0,
+    maxPlanningChatInputRenderMs: 0,
+    maxPlanningChatRendersInWindow: 0,
+    terminalRendererAttachReports: 0,
+    terminalRendererOutputWriteReports: 0,
+    terminalRendererOutputBurstReports: 0,
+    terminalRendererSnapshotSeedReports: 0,
+    maxTerminalRendererAttachMs: 0,
+    maxTerminalRendererOutputWriteMs: 0,
+    maxTerminalRendererOutputChars: 0,
+    maxTerminalRendererOutputChunksInWindow: 0,
+    maxTerminalRendererOutputCharsInWindow: 0,
+    maxTerminalRendererSnapshotSeedMs: 0,
+    maxTerminalRendererSnapshotSeedChars: 0,
     workflowMetadataPublishRequests: 0,
     workflowMetadataPublishes: 0,
     workflowMetadataCoalescedRequests: 0,
@@ -2173,6 +2207,23 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.maxRendererCumulativeLagMs = 0;
     uiPerfStats.maxRendererTickDeltaMs = 0;
     uiPerfStats.maxRendererLongTaskMs = 0;
+    uiPerfStats.planningChatInputReports = 0;
+    uiPerfStats.planningChatInputRenderReports = 0;
+    uiPerfStats.planningChatRenderBurstReports = 0;
+    uiPerfStats.maxPlanningChatInputHandlerMs = 0;
+    uiPerfStats.maxPlanningChatInputRenderMs = 0;
+    uiPerfStats.maxPlanningChatRendersInWindow = 0;
+    uiPerfStats.terminalRendererAttachReports = 0;
+    uiPerfStats.terminalRendererOutputWriteReports = 0;
+    uiPerfStats.terminalRendererOutputBurstReports = 0;
+    uiPerfStats.terminalRendererSnapshotSeedReports = 0;
+    uiPerfStats.maxTerminalRendererAttachMs = 0;
+    uiPerfStats.maxTerminalRendererOutputWriteMs = 0;
+    uiPerfStats.maxTerminalRendererOutputChars = 0;
+    uiPerfStats.maxTerminalRendererOutputChunksInWindow = 0;
+    uiPerfStats.maxTerminalRendererOutputCharsInWindow = 0;
+    uiPerfStats.maxTerminalRendererSnapshotSeedMs = 0;
+    uiPerfStats.maxTerminalRendererSnapshotSeedChars = 0;
     uiPerfStats.workflowMetadataPublishRequests = 0;
     uiPerfStats.workflowMetadataPublishes = 0;
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
@@ -4526,6 +4577,87 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
+      }
+      if (metric === 'planning_chat_input') {
+        uiPerfStats.planningChatInputReports += 1;
+        if (typeof data?.handlerDurationMs === 'number') {
+          uiPerfStats.maxPlanningChatInputHandlerMs = Math.max(
+            uiPerfStats.maxPlanningChatInputHandlerMs,
+            data.handlerDurationMs,
+          );
+        }
+      }
+      if (metric === 'planning_chat_input_render') {
+        uiPerfStats.planningChatInputRenderReports += 1;
+        if (typeof data?.durationMs === 'number') {
+          uiPerfStats.maxPlanningChatInputRenderMs = Math.max(
+            uiPerfStats.maxPlanningChatInputRenderMs,
+            data.durationMs,
+          );
+        }
+      }
+      if (metric === 'planning_chat_render_burst') {
+        uiPerfStats.planningChatRenderBurstReports += 1;
+        if (typeof data?.rendersInWindow === 'number') {
+          uiPerfStats.maxPlanningChatRendersInWindow = Math.max(
+            uiPerfStats.maxPlanningChatRendersInWindow,
+            data.rendersInWindow,
+          );
+        }
+      }
+      if (metric === 'terminal_renderer_attach') {
+        uiPerfStats.terminalRendererAttachReports += 1;
+        if (typeof data?.durationMs === 'number') {
+          uiPerfStats.maxTerminalRendererAttachMs = Math.max(
+            uiPerfStats.maxTerminalRendererAttachMs,
+            data.durationMs,
+          );
+        }
+      }
+      if (metric === 'terminal_renderer_output_write') {
+        uiPerfStats.terminalRendererOutputWriteReports += 1;
+        if (typeof data?.durationMs === 'number') {
+          uiPerfStats.maxTerminalRendererOutputWriteMs = Math.max(
+            uiPerfStats.maxTerminalRendererOutputWriteMs,
+            data.durationMs,
+          );
+        }
+        if (typeof data?.chars === 'number') {
+          uiPerfStats.maxTerminalRendererOutputChars = Math.max(
+            uiPerfStats.maxTerminalRendererOutputChars,
+            data.chars,
+          );
+        }
+      }
+      if (metric === 'terminal_renderer_output_burst') {
+        uiPerfStats.terminalRendererOutputBurstReports += 1;
+        if (typeof data?.chunksInWindow === 'number') {
+          uiPerfStats.maxTerminalRendererOutputChunksInWindow = Math.max(
+            uiPerfStats.maxTerminalRendererOutputChunksInWindow,
+            data.chunksInWindow,
+          );
+        }
+        if (typeof data?.charsInWindow === 'number') {
+          uiPerfStats.maxTerminalRendererOutputCharsInWindow = Math.max(
+            uiPerfStats.maxTerminalRendererOutputCharsInWindow,
+            data.charsInWindow,
+          );
+        }
+      }
+      if (metric === 'terminal_renderer_snapshot_seed') {
+        uiPerfStats.terminalRendererSnapshotSeedReports += 1;
+        if (typeof data?.durationMs === 'number') {
+          uiPerfStats.maxTerminalRendererSnapshotSeedMs = Math.max(
+            uiPerfStats.maxTerminalRendererSnapshotSeedMs,
+            data.durationMs,
+          );
+        }
+        if (typeof data?.chars === 'number') {
+          uiPerfStats.maxTerminalRendererSnapshotSeedChars = Math.max(
+            uiPerfStats.maxTerminalRendererSnapshotSeedChars,
+            data.chars,
+          );
+        }
       }
       uiPerfStats.rendererReports += 1;
       try {

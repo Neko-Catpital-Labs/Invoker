@@ -63,6 +63,52 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('reports planning chat input and input-render perf markers', async () => {
+    const props = {
+      activeConversationKey: 'chat-1',
+      lines: [{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system' as const, tone: 'muted' as const }],
+      busy: false,
+      value: '',
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+    const { rerender } = render(<InvokerTerminal {...props} />);
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+    rerender(<InvokerTerminal {...props} value="hello" />);
+
+    expect(props.onValueChange).toHaveBeenCalledWith('hello');
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input',
+        expect.objectContaining({
+          previousLength: 0,
+          nextLength: 5,
+          deltaLength: 5,
+          lineCount: 1,
+          activeConversationKey: 'chat-1',
+        }),
+      );
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_render',
+        expect.objectContaining({
+          previousLength: 0,
+          nextLength: 5,
+          deltaLength: 5,
+          committedLineCount: 1,
+          valueLength: 5,
+          activeConversationKey: 'chat-1',
+        }),
+      );
+    });
+  });
+
   it('continues the same planning session', async () => {
     render(<App />);
     await openPlanningTerminal();
