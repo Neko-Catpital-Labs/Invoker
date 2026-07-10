@@ -14,6 +14,12 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const TERMINAL_DRAWER_OUTPUT_REPORT_INTERVAL_MS = 500;
+const TERMINAL_DRAWER_OUTPUT_BURST_WINDOW_MS = 1000;
+const TERMINAL_DRAWER_SLOW_WRITE_MS = 8;
+const TERMINAL_DRAWER_LARGE_WRITE_CHARS = 4096;
+const TERMINAL_DRAWER_BURST_INITIAL_REPORT_COUNT = 20;
+const TERMINAL_DRAWER_BURST_REPEAT_REPORT_COUNT = 100;
 
 /**
  * The drawer has one explicit state model:
@@ -55,10 +61,33 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+type TerminalOutputBurstState = {
+  windowStartedAtMs: number;
+  eventsInWindow: number;
+  charsInWindow: number;
+  lastReportAtMs: number;
+};
+
+function perfNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundMs(value: number): number {
+  return Math.max(0, Math.round(value));
+}
+
+function reportTerminalDrawerPerf(metric: string, data: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
+  reportSnapshotWrite?: (durationMs: number, chars: number) => void,
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
@@ -72,7 +101,9 @@ function seedTerminalOutputSnapshot(
     )
   ) {
     try {
+      const startedAtMs = perfNowMs();
       term.write(outputSnapshot);
+      reportSnapshotWrite?.(perfNowMs() - startedAtMs, outputSnapshot.length);
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
@@ -92,6 +123,57 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const outputBurstRef = useRef<TerminalOutputBurstState>({
+    windowStartedAtMs: Number.NEGATIVE_INFINITY,
+    eventsInWindow: 0,
+    charsInWindow: 0,
+    lastReportAtMs: Number.NEGATIVE_INFINITY,
+  });
+
+  const reportSnapshotWrite = (durationMs: number, chars: number): void => {
+    reportTerminalDrawerPerf('terminal_drawer_snapshot_write', {
+      durationMs: roundMs(durationMs),
+      chars,
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      status: session.status,
+    });
+  };
+
+  const reportLiveOutputWrite = (durationMs: number, chars: number): void => {
+    const nowMs = perfNowMs();
+    const burst = outputBurstRef.current;
+    if (
+      !Number.isFinite(burst.windowStartedAtMs) ||
+      nowMs - burst.windowStartedAtMs >= TERMINAL_DRAWER_OUTPUT_BURST_WINDOW_MS
+    ) {
+      burst.windowStartedAtMs = nowMs;
+      burst.eventsInWindow = 0;
+      burst.charsInWindow = 0;
+    }
+    burst.eventsInWindow += 1;
+    burst.charsInWindow += chars;
+
+    const shouldReport =
+      nowMs - burst.lastReportAtMs >= TERMINAL_DRAWER_OUTPUT_REPORT_INTERVAL_MS ||
+      durationMs >= TERMINAL_DRAWER_SLOW_WRITE_MS ||
+      chars >= TERMINAL_DRAWER_LARGE_WRITE_CHARS ||
+      burst.eventsInWindow === TERMINAL_DRAWER_BURST_INITIAL_REPORT_COUNT ||
+      burst.eventsInWindow % TERMINAL_DRAWER_BURST_REPEAT_REPORT_COUNT === 0;
+    if (!shouldReport) return;
+    burst.lastReportAtMs = nowMs;
+    reportTerminalDrawerPerf('terminal_drawer_output_write', {
+      durationMs: roundMs(durationMs),
+      chars,
+      eventsInWindow: burst.eventsInWindow,
+      charsInWindow: burst.charsInWindow,
+      windowMs: Math.max(0, Math.round(nowMs - burst.windowStartedAtMs)),
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      status: session.status,
+      active: isActive,
+    });
+  };
 
   useEffect(() => {
     const host = containerRef.current;
@@ -100,6 +182,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     let term: XTermTerminal;
     let fit: FitAddon;
     try {
+      const attachStartedAtMs = perfNowMs();
       term = new XTermTerminal({
         fontSize: 12,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -111,13 +194,22 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
+      reportTerminalDrawerPerf('terminal_drawer_attach', {
+        durationMs: roundMs(perfNowMs() - attachStartedAtMs),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        status: session.status,
+        active: isActive,
+        hasOutputSnapshot: Boolean(session.outputSnapshot),
+        outputSnapshotChars: session.outputSnapshot?.length ?? 0,
+      });
     } catch {
       return;
     }
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, reportSnapshotWrite);
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -127,7 +219,9 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const startedAtMs = perfNowMs();
         term.write(event.data);
+        reportLiveOutputWrite(perfNowMs() - startedAtMs, event.data.length);
       } catch {
         /* terminal disposed */
       }
@@ -178,7 +272,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, reportSnapshotWrite);
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {

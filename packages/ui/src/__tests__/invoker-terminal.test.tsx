@@ -336,6 +336,56 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('second session request'));
   });
 
+  it('reports planning chat typing and commit perf through reportUiPerf', async () => {
+    const props = {
+      activeConversationKey: 'chat-1',
+      lines: [{ id: 1, text: 'First line', role: 'system' as const }],
+      busy: false,
+      value: '',
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+    const { rerender } = render(<InvokerTerminal {...props} />);
+    reportUiPerf.mockClear();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+
+    expect(props.onValueChange).toHaveBeenCalledWith('hello');
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'planning_chat_input_change',
+      expect.objectContaining({
+        inputSequence: 1,
+        valueLength: 5,
+        previousValueLength: 0,
+        deltaChars: 5,
+        lineCount: 1,
+        conversationKey: 'chat-1',
+      }),
+    );
+
+    rerender(<InvokerTerminal {...props} value="hello" />);
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_render_commit',
+        expect.objectContaining({
+          inputSequence: 1,
+          valueLength: 5,
+          previousValueLength: 0,
+          lineCount: 1,
+          conversationKey: 'chat-1',
+        }),
+      );
+    });
+  });
+
   it('follows new transcript lines until the user scrolls away from the bottom', async () => {
     const props = {
       activeConversationKey: 'chat-1',
