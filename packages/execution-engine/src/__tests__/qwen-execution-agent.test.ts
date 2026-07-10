@@ -22,9 +22,9 @@ describe('QwenExecutionAgent', () => {
       'yolo',
       '--model',
       'qwen3-coder-plus',
-      '--prompt',
       'prompt text',
     ]);
+    expect(spec.args).not.toContain('--prompt');
     expect(spec.sessionId).toBeDefined();
     expect(spec.fullPrompt).toBe('prompt text');
   });
@@ -38,9 +38,9 @@ describe('QwenExecutionAgent', () => {
       'yolo',
       '--model',
       'qwen3-coder-plus',
-      '--prompt',
       'fix prompt',
     ]);
+    expect(spec.args).not.toContain('--prompt');
     expect(spec.sessionId).toBeDefined();
     expect(spec).not.toHaveProperty('fullPrompt');
   });
@@ -50,7 +50,6 @@ describe('QwenExecutionAgent', () => {
     expect(agent.buildCommand('prompt text').args).toEqual([
       '--approval-mode',
       'auto-edit',
-      '--prompt',
       'prompt text',
     ]);
   });
@@ -64,7 +63,6 @@ describe('QwenExecutionAgent', () => {
       'openai',
       '--model',
       'qwen3-coder-plus',
-      '--prompt',
       'prompt text',
     ]);
   });
