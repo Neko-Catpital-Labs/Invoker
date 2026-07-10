@@ -26,7 +26,7 @@ import {
   forkWorkflow as sharedForkWorkflow,
 } from './workflow-actions.js';
 import { parseHeadlessFixArgs } from './auto-fix-intents.js';
-import { resolveDefaultExecutionAgent } from './config.js';
+import { resolveDefaultExecutionAgent, resolveConflictResolutionSettings } from './config.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
   executeGlobalTopup,
@@ -359,13 +359,19 @@ export async function headlessResolveConflict(taskId: string, deps: HeadlessDeps
   taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
-  const agent = (agentArg ?? resolveDefaultExecutionAgent(deps.invokerConfig)).toLowerCase();
+  const settings = resolveConflictResolutionSettings(deps.invokerConfig, {
+    explicitAgent: agentArg?.toLowerCase(),
+    pathDefaultAgent: resolveDefaultExecutionAgent(deps.invokerConfig),
+  });
+  const agent = settings.agent ?? resolveDefaultExecutionAgent(deps.invokerConfig);
   try {
     const result = await resolveConflictAction(taskId, {
       ...deps,
       taskExecutor: te,
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
-    }, agent, deps.signal);
+    }, agentArg?.toLowerCase(), deps.signal, {
+      pathDefaultAgent: resolveDefaultExecutionAgent(deps.invokerConfig),
+    });
     await finalizeMutationWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,
