@@ -5,6 +5,7 @@ export interface InvokerTerminalLine {
   id: number;
   text: string;
   role: 'user' | 'assistant' | 'system';
+  reasoning?: string;
   tone?: 'muted' | 'error' | 'success';
 }
 
@@ -175,6 +176,19 @@ export function InvokerTerminal({
           return (
             <div key={line.id} className="space-y-1">
               <div className="text-[11px] text-muted-foreground">{rolePrompt(line.role)}</div>
+              {line.reasoning ? (
+                <details
+                  data-testid="invoker-terminal-thinking"
+                  className="rounded-sm border border-border/60 bg-background/40 px-2 py-1 text-muted-foreground"
+                >
+                  <summary className="cursor-pointer select-none text-[11px] text-muted-foreground">
+                    Thinking
+                  </summary>
+                  <div className="mt-1 whitespace-pre-wrap text-[12px] leading-5 text-muted-foreground">
+                    {line.reasoning}
+                  </div>
+                </details>
+              ) : null}
               <div className={`whitespace-pre-wrap ${toneClass}`}>{line.text}</div>
             </div>
           );

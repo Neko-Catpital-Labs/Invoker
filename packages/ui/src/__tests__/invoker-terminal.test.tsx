@@ -50,6 +50,30 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
   });
 
+  it('shows collapsed Thinking disclosure when reasoning is present', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Hello. What should we plan?',
+      reasoning: 'Greet the user and ask what to plan.',
+      draftPlanAvailable: false,
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+    submitPlanningText('hello');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Hello. What should we plan?');
+    });
+    const thinking = screen.getByTestId('invoker-terminal-thinking');
+    expect(thinking).toBeInTheDocument();
+    expect(thinking).not.toHaveAttribute('open');
+    expect(thinking).toHaveTextContent('Thinking');
+    expect(thinking).toHaveTextContent('Greet the user and ask what to plan.');
+    expect(screen.queryByText('thread.started')).not.toBeInTheDocument();
+  });
+
   it('sends plain language when Enter is pressed', async () => {
     render(<App />);
     await openPlanningTerminal();

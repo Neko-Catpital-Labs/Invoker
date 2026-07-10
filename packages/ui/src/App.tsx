@@ -2020,7 +2020,7 @@ export function App() {
               ? (input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input)
               : session.title,
             status: result.draftPlanAvailable ? 'draft_ready' : result.reply.includes('?') ? 'waiting_for_answer' : 'still_discussing',
-            messages: [...session.messages, { id: replyLineId, text: result.reply, role: 'assistant' }],
+            messages: [...session.messages, { id: replyLineId, text: result.reply, role: 'assistant', ...((result as { reasoning?: string }).reasoning ? { reasoning: (result as { reasoning?: string }).reasoning } : {}) }],
             draftPlanAvailable: result.draftPlanAvailable,
             draftPlanSummary: result.draftPlanAvailable ? result.draftPlanSummary : undefined,
             updatedAt,
