@@ -3,6 +3,7 @@ import type {
   InAppPlanRequest,
   InAppPlanResponse,
   InAppPlanningChatLine,
+  InAppPlanningChatOutputEvent,
   InAppPlanningChatRequest,
   InAppPlanningChatResponse,
   InAppPlanningCreateSessionRequest,
@@ -47,6 +48,7 @@ export interface InAppPlannerDeps {
   planningCommandBuilder?: PlanningCommandBuilder;
   conversationRepo?: ConversationRepository;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  onPlanningChatOutput?: (event: InAppPlanningChatOutputEvent) => void;
 }
 
 export interface InAppPlanningChatSession {
@@ -277,8 +279,9 @@ function formatConversationalPlanningMessage(message: string): string {
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo'>,
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo' | 'onPlanningChatOutput'>,
   threadTs: string,
+  streamKey: string = threadTs,
 ): PlanConversationConfig {
   return {
     threadTs,
@@ -292,13 +295,16 @@ function planConversationConfig(
     experimentalPlanner: deps.config.experimentalPlanner,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
+    onRawPlannerOutput: (chunk) => {
+      deps.onPlanningChatOutput?.({ sessionId: threadTs, streamKey, chunk });
+    },
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
   };
 }
 
 async function createSession(
-  request: Partial<InAppPlanningCreateSessionRequest> | null | undefined,
+  request: (Partial<InAppPlanningCreateSessionRequest> & { streamKey?: string }) | null | undefined,
   deps: InAppPlannerDeps & {
     sessions: InAppPlanningChatSessions;
     planningCommandBuilder: PlanningCommandBuilder;
@@ -330,7 +336,7 @@ async function createSession(
       tone: 'muted',
       createdAt,
     }],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id)),
+    conversation: new PlanConversation(planConversationConfig(preset, deps, id, request?.streamKey)),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 2,
@@ -449,6 +455,7 @@ export async function sendPlanningChatMessage(
       const created = await createSession({
         presetKey: rawRequest?.presetKey,
         title: titleFromMessage(message),
+        streamKey: rawRequest?.streamKey,
       }, deps);
       if ('error' in created) {
         return { ok: false, sessionId, error: created.error };

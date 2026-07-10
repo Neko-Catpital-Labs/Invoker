@@ -472,6 +472,7 @@ export interface InAppPlanningChatRequest {
   sessionId?: string;
   message: string;
   presetKey?: string;
+  streamKey?: string;
 }
 
 export type InAppPlanningChatResponse =
@@ -487,6 +488,12 @@ export type InAppPlanningChatResponse =
       sessionId?: string;
       error: string;
     };
+
+export interface InAppPlanningChatOutputEvent {
+  sessionId: string;
+  streamKey: string;
+  chunk: string;
+}
 
 export interface InAppPlanningSubmitRequest {
   sessionId: string;
@@ -1187,6 +1194,9 @@ export const IpcEventChannels = {
   },
   'invoker:runtime-status': {} as {
     payload: RuntimeStatus;
+  },
+  'invoker:planning-chat-output': {} as {
+    payload: InAppPlanningChatOutputEvent;
   },
 } as const;
 

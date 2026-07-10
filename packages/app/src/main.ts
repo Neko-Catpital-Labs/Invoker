@@ -2033,6 +2033,13 @@ function createEmbeddedTerminalBackendFromConfig(
     backend: createEmbeddedTerminalBackendFromConfig(resolveEmbeddedTerminalBackendConfig(invokerConfig)),
   });
 
+  const publishPlanningChatOutput = (event: { sessionId: string; streamKey: string; chunk: string }): void => {
+    if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
+      mainWindow.webContents.send('invoker:planning-chat-output', event);
+    }
+    webBridge?.broadcast('invoker:planning-chat-output', event);
+  };
+
   embeddedTerminalManager.on('output', (payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('invoker:terminal-output', payload);
@@ -3901,6 +3908,7 @@ function createEmbeddedTerminalBackendFromConfig(
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      onPlanningChatOutput: publishPlanningChatOutput,
     });
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     // Two variants: (1) a successful override that returns a canned reply +
@@ -3935,6 +3943,7 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
+        onPlanningChatOutput: publishPlanningChatOutput,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -3959,6 +3968,7 @@ function createEmbeddedTerminalBackendFromConfig(
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
         plannerReplyOverride,
+        onPlanningChatOutput: publishPlanningChatOutput,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {

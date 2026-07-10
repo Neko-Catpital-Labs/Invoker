@@ -21,6 +21,7 @@ function isTranscriptNearBottom(element: HTMLDivElement): boolean {
 
 interface InvokerTerminalProps {
   lines: InvokerTerminalLine[];
+  plannerOutput?: string;
   busy: boolean;
   value: string;
   selectedPresetKey: string;
@@ -53,6 +54,7 @@ function rolePrompt(role: InvokerTerminalLine['role']): string {
 
 export function InvokerTerminal({
   lines,
+  plannerOutput,
   busy,
   value,
   selectedPresetKey,
@@ -90,7 +92,7 @@ export function InvokerTerminal({
     if (shouldFollowTranscript) {
       scrollTranscriptToBottom();
     }
-  }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+  }, [lines.length, plannerOutput, scrollTranscriptToBottom, shouldFollowTranscript]);
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -179,6 +181,15 @@ export function InvokerTerminal({
             </div>
           );
         })}
+        {plannerOutput && (
+          <div
+            data-testid="invoker-terminal-planner-output"
+            className="border-l-2 border-primary/50 bg-card/60 px-3 py-2"
+          >
+            <div className="text-[11px] text-primary">planner ›</div>
+            <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-foreground">{plannerOutput}</pre>
+          </div>
+        )}
       </div>
 
       {submitError && !readOnly && (

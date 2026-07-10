@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, InAppPlanningChatOutputEvent, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -122,6 +122,7 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   input: string;
   busy: boolean;
   conversationKey: string;
+  plannerOutput?: string;
 };
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
@@ -561,6 +562,7 @@ export function App() {
   );
   const activePlanningConversationKey = activePlanningSession.conversationKey;
   const terminalLines = activePlanningSession.messages;
+  const activePlannerOutput = activePlanningSession.plannerOutput;
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
@@ -728,6 +730,21 @@ export function App() {
   useEffect(() => {
     const unsubscribe = window.invoker?.onRuntimeStatus?.((status) => {
       setRuntimeStatus(status);
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onPlanningChatOutput?.((event: InAppPlanningChatOutputEvent) => {
+      setPlanningSessions((prev) => prev.map((session) => {
+        const matchesSession = session.conversationKey === event.streamKey || session.id === event.sessionId;
+        if (!matchesSession) return session;
+        if (!session.busy && !session.plannerOutput) return session;
+        return {
+          ...session,
+          plannerOutput: `${session.plannerOutput ?? ''}${event.chunk}`,
+        };
+      }));
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -1956,6 +1973,7 @@ export function App() {
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
     if (!input || activePlanningSessionBusy || activePlanningSessionSubmitted) return;
+    updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, plannerOutput: undefined }));
     appendTerminalLine(input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
@@ -1995,6 +2013,7 @@ export function App() {
       const request = {
         message: input,
         presetKey: selectedPlanningPresetKey || undefined,
+        streamKey: activePlanningConversationKey,
         ...(planningSessionId ? { sessionId: planningSessionId } : {}),
       };
       const result = await invoker.planningChatSend(request);
@@ -2015,6 +2034,7 @@ export function App() {
             messages: [...session.messages, { id: replyLineId, text: result.reply, role: 'assistant' }],
             draftPlanAvailable: result.draftPlanAvailable,
             draftPlanSummary: result.draftPlanAvailable ? result.draftPlanSummary : undefined,
+            plannerOutput: undefined,
             updatedAt,
           };
         }));
@@ -2035,6 +2055,7 @@ export function App() {
     }
   }, [
     activePlanningSessionBusy,
+    activePlanningConversationKey,
     activePlanningSessionId,
     activePlanningSessionSubmitted,
     appendTerminalLine,
@@ -2900,6 +2921,7 @@ export function App() {
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
+            plannerOutput={activePlannerOutput}
             busy={activePlanningSessionBusy}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
@@ -3229,6 +3251,7 @@ export function App() {
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
+            plannerOutput={activePlannerOutput}
             busy={activePlanningSessionBusy}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
@@ -3456,4 +3479,3 @@ export function App() {
     </div>
   );
 }
-
