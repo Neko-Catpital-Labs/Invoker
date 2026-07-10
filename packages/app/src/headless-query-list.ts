@@ -297,6 +297,12 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         rendererReports: 0,
         maxRendererEventLoopLagMs: 0,
         maxRendererLongTaskMs: 0,
+        planningChatInputChangeReports: 0,
+        planningChatInputCommitReports: 0,
+        planningChatRenderCommitReports: 0,
+        terminalRendererAttachReports: 0,
+        terminalRendererOutputWriteReports: 0,
+        terminalRendererOutputBurstReports: 0,
       };
       switch (flags.output) {
         case 'label':

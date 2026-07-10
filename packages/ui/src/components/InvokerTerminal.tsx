@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button } from './primitives/index.js';
 
 export interface InvokerTerminalLine {
@@ -17,6 +17,30 @@ const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function getUiPerfNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundDurationMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
+}
+
+function countTextLines(text: string): number {
+  if (text.length === 0) return 0;
+  let count = 1;
+  for (const char of text) {
+    if (char === '\n') count += 1;
+  }
+  return count;
+}
+
+function reportUiPerf(metric: string, data: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
+  void window.invoker?.reportUiPerf?.(metric, data);
 }
 
 interface InvokerTerminalProps {
@@ -45,6 +69,15 @@ interface SubmitErrorView {
   message: string;
 }
 
+interface PendingInputPerf {
+  startedAt: number;
+  handlerDurationMs: number;
+  previousValueLength: number;
+  valueLength: number;
+  deltaChars: number;
+  inputLineCount: number;
+}
+
 function rolePrompt(role: InvokerTerminalLine['role']): string {
   if (role === 'user') return 'you ›';
   if (role === 'assistant') return 'invoker ›';
@@ -71,15 +104,66 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const renderStartedAt = getUiPerfNow();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const pendingInputPerfRef = useRef<PendingInputPerf | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  const transcriptStats = useMemo(() => {
+    let charCount = 0;
+    for (const line of lines) {
+      charCount += line.text.length;
+    }
+    const lastLine = lines[lines.length - 1];
+    return {
+      lineCount: lines.length,
+      charCount,
+      lastLineRole: lastLine?.role ?? null,
+      lastLineLength: lastLine?.text.length ?? 0,
+    };
+  }, [lines]);
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
     transcript.scrollTop = transcript.scrollHeight;
   }, []);
+
+  const handleValueChange = useCallback((nextValue: string): void => {
+    const startedAt = getUiPerfNow();
+    const previousValueLength = value.length;
+    onValueChange(nextValue);
+    const handlerDurationMs = roundDurationMs(getUiPerfNow() - startedAt);
+    const pending: PendingInputPerf = {
+      startedAt,
+      handlerDurationMs,
+      previousValueLength,
+      valueLength: nextValue.length,
+      deltaChars: nextValue.length - previousValueLength,
+      inputLineCount: countTextLines(nextValue),
+    };
+    pendingInputPerfRef.current = pending;
+    reportUiPerf('planning_chat_input_change', {
+      durationMs: handlerDurationMs,
+      previousValueLength,
+      valueLength: pending.valueLength,
+      deltaChars: pending.deltaChars,
+      inputLineCount: pending.inputLineCount,
+      transcriptLineCount: transcriptStats.lineCount,
+      expanded,
+      busy,
+      readOnly,
+      conversationKey: activeConversationKey,
+    });
+  }, [
+    activeConversationKey,
+    busy,
+    expanded,
+    onValueChange,
+    readOnly,
+    transcriptStats.lineCount,
+    value.length,
+  ]);
 
   useLayoutEffect(() => {
     setShouldFollowTranscript(true);
@@ -91,6 +175,42 @@ export function InvokerTerminal({
       scrollTranscriptToBottom();
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+
+  useLayoutEffect(() => {
+    const pending = pendingInputPerfRef.current;
+    if (!pending) return;
+    pendingInputPerfRef.current = null;
+    reportUiPerf('planning_chat_input_commit', {
+      durationMs: roundDurationMs(getUiPerfNow() - pending.startedAt),
+      handlerDurationMs: pending.handlerDurationMs,
+      previousValueLength: pending.previousValueLength,
+      valueLength: pending.valueLength,
+      deltaChars: pending.deltaChars,
+      inputLineCount: pending.inputLineCount,
+      transcriptLineCount: transcriptStats.lineCount,
+      expanded,
+      busy,
+      readOnly,
+      conversationKey: activeConversationKey,
+    });
+  }, [activeConversationKey, busy, expanded, readOnly, transcriptStats.lineCount, value]);
+
+  useLayoutEffect(() => {
+    reportUiPerf('planning_chat_render_commit', {
+      durationMs: roundDurationMs(getUiPerfNow() - renderStartedAt),
+      valueLength: value.length,
+      lineCount: transcriptStats.lineCount,
+      transcriptChars: transcriptStats.charCount,
+      lastLineRole: transcriptStats.lastLineRole,
+      lastLineLength: transcriptStats.lastLineLength,
+      expanded,
+      busy,
+      readOnly,
+      draftPlanAvailable,
+      hasSubmitError: Boolean(submitError),
+      conversationKey: activeConversationKey,
+    });
+  });
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -265,7 +385,7 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => handleValueChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

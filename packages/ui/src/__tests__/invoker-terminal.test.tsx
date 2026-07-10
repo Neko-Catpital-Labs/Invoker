@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
+import { useState } from 'react';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
 vi.mock('@xyflow/react', async () => {
@@ -334,6 +335,65 @@ describe('Invoker terminal (component)', () => {
       draftPlanAvailable: false,
     });
     await waitFor(() => expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('second session request'));
+  });
+
+  it('reports planning chat input and render perf markers through reportUiPerf', async () => {
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+
+    function Harness(): JSX.Element {
+      const [value, setValue] = useState('');
+      return (
+        <InvokerTerminal
+          activeConversationKey="chat-perf"
+          lines={[{ id: 1, text: 'First line', role: 'system' }]}
+          busy={false}
+          value={value}
+          selectedPresetKey="codex"
+          presetOptions={[{ key: 'codex', label: 'Codex' }]}
+          draftPlanAvailable={false}
+          onValueChange={setValue}
+          onSubmit={vi.fn()}
+          onSubmitDraft={vi.fn()}
+          onPresetChange={vi.fn()}
+          onExpand={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+    reportUiPerf.mockClear();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_input_change', expect.objectContaining({
+        durationMs: expect.any(Number),
+        previousValueLength: 0,
+        valueLength: 5,
+        deltaChars: 5,
+        inputLineCount: 1,
+        transcriptLineCount: 1,
+        conversationKey: 'chat-perf',
+      }));
+    });
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_input_commit', expect.objectContaining({
+        durationMs: expect.any(Number),
+        handlerDurationMs: expect.any(Number),
+        valueLength: 5,
+        transcriptLineCount: 1,
+        conversationKey: 'chat-perf',
+      }));
+    });
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_render_commit', expect.objectContaining({
+        durationMs: expect.any(Number),
+        valueLength: 5,
+        lineCount: 1,
+        transcriptChars: 10,
+        conversationKey: 'chat-perf',
+      }));
+    });
   });
 
   it('follows new transcript lines until the user scrolls away from the bottom', async () => {

@@ -14,6 +14,10 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const TERMINAL_RENDERER_OUTPUT_BURST_WINDOW_MS = 1000;
+const TERMINAL_RENDERER_OUTPUT_BURST_WRITES = 20;
+const TERMINAL_RENDERER_OUTPUT_BURST_BYTES = 64 * 1024;
+const TERMINAL_RENDERER_OUTPUT_BURST_REPORT_THROTTLE_MS = 1000;
 
 /**
  * The drawer has one explicit state model:
@@ -55,10 +59,34 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+type TerminalOutputBurstStats = {
+  startedAt: number;
+  lastReportedAt: number;
+  writes: number;
+  bytes: number;
+  maxWriteMs: number;
+};
+
+function getUiPerfNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundDurationMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
+}
+
+function reportUiPerf(metric: string, data: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
+  reason: string,
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
@@ -71,13 +99,22 @@ function seedTerminalOutputSnapshot(
       seededSnapshot.term !== term
     )
   ) {
+    const startedAt = getUiPerfNow();
     try {
       term.write(outputSnapshot);
+      const durationMs = roundDurationMs(getUiPerfNow() - startedAt);
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
         term,
       };
+      reportUiPerf('terminal_renderer_snapshot_seed', {
+        durationMs,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        snapshotBytes: outputSnapshot.length,
+        reason,
+      });
     } catch (err) {
       console.warn(
         `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
@@ -92,6 +129,12 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const outputBurstRef = useRef<TerminalOutputBurstStats | null>(null);
+  const isActiveRef = useRef(isActive);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -99,6 +142,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
 
     let term: XTermTerminal;
     let fit: FitAddon;
+    const attachStartedAt = getUiPerfNow();
     try {
       term = new XTermTerminal({
         fontSize: 12,
@@ -112,45 +156,111 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       term.loadAddon(fit);
       term.open(host);
     } catch {
+      reportUiPerf('terminal_renderer_attach_failed', {
+        durationMs: roundDurationMs(getUiPerfNow() - attachStartedAt),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+      });
       return;
     }
     termRef.current = term;
     fitRef.current = fit;
+    reportUiPerf('terminal_renderer_attach', {
+      durationMs: roundDurationMs(getUiPerfNow() - attachStartedAt),
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      hasSnapshot: Boolean(session.outputSnapshot),
+      snapshotBytes: session.outputSnapshot?.length ?? 0,
+    });
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'attach');
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
     });
 
+    const recordOutputWrite = (data: string, durationMs: number): void => {
+      const bytes = data.length;
+      reportUiPerf('terminal_renderer_output_write', {
+        durationMs,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        bytes,
+        active: isActiveRef.current,
+      });
+
+      const now = Date.now();
+      let stats = outputBurstRef.current;
+      if (!stats || now - stats.startedAt >= TERMINAL_RENDERER_OUTPUT_BURST_WINDOW_MS) {
+        stats = {
+          startedAt: now,
+          lastReportedAt: 0,
+          writes: 0,
+          bytes: 0,
+          maxWriteMs: 0,
+        };
+        outputBurstRef.current = stats;
+      }
+      stats.writes += 1;
+      stats.bytes += bytes;
+      stats.maxWriteMs = Math.max(stats.maxWriteMs, durationMs);
+
+      const burst = stats.writes >= TERMINAL_RENDERER_OUTPUT_BURST_WRITES ||
+        stats.bytes >= TERMINAL_RENDERER_OUTPUT_BURST_BYTES;
+      if (!burst || now - stats.lastReportedAt < TERMINAL_RENDERER_OUTPUT_BURST_REPORT_THROTTLE_MS) {
+        return;
+      }
+      stats.lastReportedAt = now;
+      reportUiPerf('terminal_renderer_output_burst', {
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        writes: stats.writes,
+        bytes: stats.bytes,
+        maxWriteMs: stats.maxWriteMs,
+        windowMs: TERMINAL_RENDERER_OUTPUT_BURST_WINDOW_MS,
+        active: isActiveRef.current,
+      });
+    };
+
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const writeStartedAt = getUiPerfNow();
         term.write(event.data);
+        recordOutputWrite(event.data, roundDurationMs(getUiPerfNow() - writeStartedAt));
       } catch {
         /* terminal disposed */
       }
     });
 
-    const tryFit = () => {
+    const tryFit = (reason: string) => {
+      const resizeStartedAt = getUiPerfNow();
       try {
         fit.fit();
         void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+        reportUiPerf('terminal_renderer_resize', {
+          durationMs: roundDurationMs(getUiPerfNow() - resizeStartedAt),
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          cols: term.cols,
+          rows: term.rows,
+          reason,
+        });
       } catch {
         /* host has zero size or fit unsupported */
       }
     };
 
     const raf = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame(tryFit)
+      ? requestAnimationFrame(() => tryFit('initial'))
       : null;
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       try {
         resizeObserver = new ResizeObserver(() => {
-          tryFit();
+          tryFit('observer');
         });
         resizeObserver.observe(host);
       } catch {
@@ -178,7 +288,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'session_update');
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
@@ -186,9 +296,18 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
+    const resizeStartedAt = getUiPerfNow();
     try {
       fit.fit();
       void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      reportUiPerf('terminal_renderer_resize', {
+        durationMs: roundDurationMs(getUiPerfNow() - resizeStartedAt),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        cols: term.cols,
+        rows: term.rows,
+        reason: 'activate',
+      });
       term.focus();
     } catch {
       /* fit failed (e.g., hidden) */
