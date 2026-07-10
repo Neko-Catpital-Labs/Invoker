@@ -42,6 +42,7 @@ function makeCtx(): WorkerTickContext {
     identity: { kind: E2E_AUTOFIX_WORKER_KIND, instanceId: `${E2E_AUTOFIX_WORKER_KIND}-test` },
     reason: 'manual',
     tickNumber: 1,
+    signal: new AbortController().signal,
   };
 }
 
