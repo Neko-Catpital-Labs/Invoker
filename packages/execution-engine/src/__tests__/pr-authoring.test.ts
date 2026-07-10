@@ -125,6 +125,44 @@ describe('buildCanonicalPrBody', () => {
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
   });
+
+  it('renders worker pipeline rows in chronological order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Pipeline summary',
+      workflowSummary: 'Updated review visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'late',
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'queued',
+            subjectType: 'review',
+            subjectId: '124',
+            summary: 'Queued CI repair',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            id: 'early',
+            workerKind: 'autoapprove',
+            actionType: 'approve-ai-fix',
+            status: 'completed',
+            subjectType: 'task',
+            subjectId: 'wf-1/task-a',
+            taskId: 'wf-1/task-a',
+            summary: 'Approved worker | fix',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body.indexOf('autoapprove')).toBeLessThan(body.indexOf('ci-failure'));
+    expect(body).toContain('Approved worker \\| fix');
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
 });
 
 // ── validateReviewStackPrBody ────────────────────────────

@@ -205,12 +205,46 @@ export function formatEventLog(events: TaskEvent[]): string {
   }
 
   const lines = events.map((event) => {
+    const workerAction = formatTaskWorkerActionEvent(event);
+    if (workerAction) return workerAction;
     const timestamp = event.createdAt;
     const payload = event.payload ? ` ${event.payload}` : '';
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 
   return lines.join('\n');
+}
+
+function parseEventPayloadObject(payload: unknown): Record<string, unknown> | undefined {
+  if (!payload) return undefined;
+  if (typeof payload === 'object' && !Array.isArray(payload)) return payload as Record<string, unknown>;
+  if (typeof payload !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(payload);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringField(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  return typeof value === 'string' && value.trim().length > 0 ? escapeTerminalText(value) : undefined;
+}
+
+function formatTaskWorkerActionEvent(event: TaskEvent): string | undefined {
+  if (event.eventType !== 'task.worker_action') return undefined;
+  const payload = parseEventPayloadObject(event.payload);
+  if (!payload) return undefined;
+  const workerKind = stringField(payload, 'workerKind') ?? 'worker';
+  const actionType = stringField(payload, 'actionType') ?? 'action';
+  const status = stringField(payload, 'status') ?? 'unknown';
+  const summary = stringField(payload, 'summary');
+  const reason = stringField(payload, 'reason');
+  const tail = summary ? ` — ${summary}` : reason ? ` reason=${reason}` : '';
+  return `${DIM}[${event.createdAt}]${RESET} ${BOLD}${event.taskId}${RESET}: task.worker_action ${workerKind}/${actionType} [${status}]${tail}`;
 }
 
 export function formatWorkerActions(actions: WorkerActionRecord[]): string {
@@ -260,6 +294,28 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
     lines.push(
       `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
+    );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerActionSummaries(actions: WorkerActionSummary[]): string {
+  if (actions.length === 0) {
+    return `${DIM}No recent worker actions.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Recent worker actions${RESET}`);
+  for (const action of actions) {
+    const workerKind = escapeTerminalText(action.workerKind);
+    const actionType = escapeTerminalText(action.actionType);
+    const subject = action.taskId
+      ? ` task=${escapeTerminalText(action.taskId)}`
+      : ` ${escapeTerminalText(action.subjectType)}=${escapeTerminalText(action.subjectId)}`;
+    const reason = action.reason ? ` reason=${escapeTerminalText(action.reason)}` : '';
+    const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+    lines.push(
+      `  ${action.updatedAt} [${action.status}] ${workerKind}/${actionType}${subject}${reason}${summary}`,
     );
   }
   return lines.join('\n');

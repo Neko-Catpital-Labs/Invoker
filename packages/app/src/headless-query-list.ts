@@ -13,7 +13,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import { AUTO_FIX_WORKER_KIND, type AgentRegistry } from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import {
@@ -26,7 +26,7 @@ import {
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
-import { listWorkerDecisions } from './worker-control.js';
+import { listWorkerDecisions, toWorkerActionSummary } from './worker-control.js';
 import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
@@ -763,7 +763,11 @@ export async function headlessSession(taskId: string | undefined, deps: Pick<Hea
   }
 }
 
-function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
+type WorkerStatusWithRecentActions = RecoveryWorkerStatus & {
+  recentActions?: ReturnType<typeof toWorkerActionSummary>[];
+};
+
+function formatRecoveryWorkerStatus(status: WorkerStatusWithRecentActions, formatWorkerActionSummaries?: (actions: NonNullable<WorkerStatusWithRecentActions['recentActions']>) => string): string {
   const lines = [
     `${BOLD}Recovery worker${RESET}`,
     `  kind: ${status.kind}`,
@@ -784,6 +788,10 @@ function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
       lines.push(`  ${event.at} ${event.taskId} ${event.action}${phase}${reason}`);
     }
   }
+  if (status.recentActions && formatWorkerActionSummaries) {
+    lines.push('');
+    lines.push(formatWorkerActionSummaries(status.recentActions));
+  }
   return lines.join('\n');
 }
 
@@ -793,19 +801,23 @@ export async function renderWorkerStatus(
 ): Promise<void> {
   const flags = parseQueryFlags(flagArgs);
   const status = collectRecoveryWorkerStatus(deps.persistence);
-  const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+  const recentActions = typeof deps.persistence.listWorkerActions === 'function'
+    ? deps.persistence.listWorkerActions({ workerKind: AUTO_FIX_WORKER_KIND, limit: 5 }).slice(0, 5).map(toWorkerActionSummary)
+    : [];
+  const statusWithActions: WorkerStatusWithRecentActions = { ...status, recentActions };
+  const { formatAsJson, formatAsJsonl, formatWorkerActionSummaries } = await import('./formatter.js');
   switch (flags.output) {
     case 'label':
       writeOut(`${status.workerId}\n`);
       break;
     case 'json':
-      writeOut(formatAsJson(status) + '\n');
+      writeOut(formatAsJson(statusWithActions) + '\n');
       break;
     case 'jsonl':
-      writeOut(formatAsJsonl([status]) + '\n');
+      writeOut(formatAsJsonl([statusWithActions]) + '\n');
       break;
     default:
-      writeOut(formatRecoveryWorkerStatus(status) + '\n');
+      writeOut(formatRecoveryWorkerStatus(statusWithActions, formatWorkerActionSummaries) + '\n');
       break;
   }
 }

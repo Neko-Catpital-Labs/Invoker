@@ -33,6 +33,24 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Worker action evidence carried through PR authoring. */
+export interface PrAuthoringWorkerActionEntry {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType: string;
+  subjectId: string;
+  workflowId?: string;
+  taskId?: string;
+  summary?: string;
+  reason?: string;
+  agentName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +64,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Worker-owned actions observed for this workflow. Rendered as the PR pipeline summary. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -244,6 +264,37 @@ export function validateReviewStackPrBody(body: string): string[] {
 
 function promptByteLength(prompt: string): number {
   return Buffer.byteLength(prompt, 'utf8');
+}
+
+function markdownTableCell(value: string | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return ' ';
+  return trimmed
+    .replace(/\r?\n/g, '<br>')
+    .replace(/\|/g, '\\|');
+}
+
+function workerActionTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.updatedAt ?? action.completedAt ?? action.createdAt ?? '';
+}
+
+function sortWorkerActionsForTimeline(
+  actions: readonly PrAuthoringWorkerActionEntry[] | undefined,
+): PrAuthoringWorkerActionEntry[] {
+  return [...(actions ?? [])].sort((a, b) =>
+    workerActionTime(a).localeCompare(workerActionTime(b))
+    || a.workerKind.localeCompare(b.workerKind)
+    || a.id.localeCompare(b.id),
+  );
+}
+
+function workerActionSubject(action: PrAuthoringWorkerActionEntry): string {
+  return action.taskId ?? `${action.subjectType}:${action.subjectId}`;
+}
+
+function workerActionSummary(action: PrAuthoringWorkerActionEntry): string | undefined {
+  if (action.summary && action.reason) return `${action.summary} (${action.reason})`;
+  return action.summary ?? action.reason;
 }
 
 function buildPromptFileBootstrap(promptPath: string): string {
@@ -484,6 +535,25 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  const pipelineActions = sortWorkerActionsForTimeline(args.structuredContext?.workerActions);
+  if (pipelineActions.length > 0) {
+    lines.push('## Pipeline');
+    lines.push('');
+    lines.push('| Time | Worker | Action | Subject | Status | Summary |');
+    lines.push('| --- | --- | --- | --- | --- | --- |');
+    for (const action of pipelineActions) {
+      lines.push([
+        markdownTableCell(workerActionTime(action)),
+        markdownTableCell(action.workerKind),
+        markdownTableCell(action.actionType),
+        markdownTableCell(workerActionSubject(action)),
+        markdownTableCell(action.status),
+        markdownTableCell(workerActionSummary(action)),
+      ].join(' | '));
+    }
+    lines.push('');
+  }
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
@@ -592,6 +662,21 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    const workerActions = sortWorkerActionsForTimeline(ctx.workerActions);
+    if (workerActions.length > 0) {
+      lines.push('Worker pipeline actions (oldest first):');
+      for (const action of workerActions) {
+        const summary = workerActionSummary(action);
+        const agent = action.agentName ? ` agent=${action.agentName}` : '';
+        lines.push(
+          `- ${workerActionTime(action)} ${action.workerKind}/${action.actionType} `
+            + `[${action.status}] ${workerActionSubject(action)}${agent}`
+            + (summary ? ` — ${summary}` : ''),
+        );
+      }
+      lines.push('');
     }
 
     if (ctx.visualProofMarkdown) {

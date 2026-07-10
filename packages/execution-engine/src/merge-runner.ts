@@ -12,16 +12,22 @@ import { pathToFileURL } from 'node:url';
 
 import type { Orchestrator, TaskLineageExpectation, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
-import type { SQLiteAdapter } from '@invoker/data-store';
+import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import {
+  isInvokerRepoUrl,
+  type PrAuthoringContext,
+  type PrAuthoringTaskEntry,
+  type PrAuthoringWorkerActionEntry,
+} from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
+const PR_SUMMARY_REFRESH_WORKER_KIND = 'pr-summary-refresh';
 
 // ── Trace logging ────────────────────────────────────────
 
@@ -376,10 +382,40 @@ export async function buildPrAuthoringContext(
     });
   }
 
+  const listWorkerActions = (host.persistence as {
+    listWorkerActions?: (filters?: { workflowId?: string }) => WorkerActionRecord[];
+  }).listWorkerActions;
+  const persistedWorkerActions = listWorkerActions?.call(host.persistence, { workflowId }) ?? [];
+  const workerActions: PrAuthoringWorkerActionEntry[] = persistedWorkerActions
+    .filter((action) => action.workerKind !== PR_SUMMARY_REFRESH_WORKER_KIND)
+    .map((action) => {
+      const payload = action.payload && typeof action.payload === 'object' && !Array.isArray(action.payload)
+        ? action.payload as Record<string, unknown>
+        : {};
+      const reason = typeof payload.reason === 'string' ? payload.reason : undefined;
+      return {
+        id: String(action.id),
+        workerKind: String(action.workerKind),
+        actionType: String(action.actionType),
+        status: String(action.status),
+        subjectType: String(action.subjectType),
+        subjectId: String(action.subjectId),
+        ...(typeof action.workflowId === 'string' && action.workflowId ? { workflowId: action.workflowId } : {}),
+        ...(typeof action.taskId === 'string' && action.taskId ? { taskId: action.taskId } : {}),
+        ...(typeof action.summary === 'string' && action.summary ? { summary: action.summary } : {}),
+        ...(reason ? { reason } : {}),
+        ...(typeof action.agentName === 'string' && action.agentName ? { agentName: action.agentName } : {}),
+        ...(typeof action.createdAt === 'string' ? { createdAt: action.createdAt } : {}),
+        ...(typeof action.updatedAt === 'string' ? { updatedAt: action.updatedAt } : {}),
+        ...(typeof action.completedAt === 'string' && action.completedAt ? { completedAt: action.completedAt } : {}),
+      };
+    });
+
   return {
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    workerActions,
     visualProofMarkdown,
   };
 }

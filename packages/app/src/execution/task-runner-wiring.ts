@@ -77,6 +77,7 @@ export function wireTaskRunnerApproveHook(deps: Pick<
 }
 
 export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
+  const githubMergeGateProvider = new GitHubMergeGateProvider();
   const taskRunner = new TaskRunner({
     orchestrator: deps.orchestrator,
     persistence: deps.persistence,
@@ -99,10 +100,10 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
         });
       },
     },
-    mergeGateProvider: new GitHubMergeGateProvider(),
+    mergeGateProvider: githubMergeGateProvider,
     reviewProviderRegistry: (() => {
       const registry = new ReviewProviderRegistry();
-      registry.register(new GitHubMergeGateProvider());
+      registry.register(githubMergeGateProvider);
       return registry;
     })(),
     callbacks: {

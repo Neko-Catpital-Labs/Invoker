@@ -111,6 +111,7 @@ import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry, TaskRunner,
   WorktreeExecutor,
+  GitHubMergeGateProvider,
   CI_FAILURE_WORKER_KIND,
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
@@ -364,6 +365,8 @@ function buildRegisteredOwnerWorkerDeps(
     },
     logger,
     messageBus,
+    cwd: repoRoot,
+    mergeGateProvider: new GitHubMergeGateProvider(),
     reviewGate: {
       checkMergeGateStatuses,
     },

@@ -22,6 +22,7 @@ import type {
   WorkflowResumeWorkerStore,
   WorkflowResumeWorkerSubmitter,
 } from './workers/workflow-resume-worker.js';
+import type { MergeGateProvider } from './merge-gate-provider.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
@@ -33,6 +34,10 @@ export interface WorkerRuntimeDependencies {
   logger: Logger;
   /** Optional bus that turns lifecycle events into immediate wakeups. */
   messageBus?: MessageBus;
+  /** Repository cwd used by provider-backed workers. */
+  cwd?: string;
+  /** Provider used by workers that update or inspect external review bodies. */
+  mergeGateProvider?: MergeGateProvider;
   /** Review-gate polling surface owned by the task runner. */
   reviewGate?: PrStatusReviewGate;
   /** Auto-fix tuning shared by workers that submit fix intents. */
