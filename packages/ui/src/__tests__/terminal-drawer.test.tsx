@@ -432,4 +432,68 @@ describe('Terminal drawer (component)', () => {
       expect(mock.api.terminalClose).toHaveBeenCalledWith('mock-session-task-alpha');
     });
   });
+
+  it('reports embedded xterm attach, output, and input perf markers', async () => {
+    const reportUiPerf = mock.api.reportUiPerf as ReturnType<typeof vi.fn>;
+    const session = makeTerminalSession('task-alpha');
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'terminal_xterm_attach',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          hasOutputSnapshot: false,
+          snapshotBytes: 0,
+        }),
+      );
+    });
+
+    reportUiPerf.mockClear();
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'live output\n',
+      });
+    });
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'terminal_xterm_output',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          bytes: 'live output\n'.length,
+          chunksInWindow: 1,
+          bytesInWindow: 'live output\n'.length,
+        }),
+      );
+    });
+
+    reportUiPerf.mockClear();
+    act(() => {
+      xtermMock.instances[0]?.emitData('pwd\n');
+    });
+
+    expect(mock.api.terminalWrite).toHaveBeenCalledWith(session.sessionId, 'pwd\n');
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'terminal_xterm_input',
+      expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        bytes: 'pwd\n'.length,
+      }),
+    );
+  });
 });

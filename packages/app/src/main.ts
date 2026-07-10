@@ -277,6 +277,11 @@ import {
   resetTerminalUiPerfCounters,
 } from './terminal-ui-perf.js';
 import {
+  createUiPerfHotPathCounters,
+  recordUiPerfHotPathMetric,
+  resetUiPerfHotPathCounters,
+} from './ui-perf-rollup.js';
+import {
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
 } from './terminal-session-ipc.js';
@@ -1103,6 +1108,8 @@ function startHeadlessMode(): void {
           maxRendererCumulativeLagMs: 0,
           maxRendererTickDeltaMs: 0,
           maxRendererLongTaskMs: 0,
+          ...createTerminalUiPerfCounters(),
+          ...createUiPerfHotPathCounters(),
         }),
         resetUiPerfStats: () => {},
         waitForApproval,
@@ -2109,6 +2116,7 @@ function createEmbeddedTerminalBackendFromConfig(
     largeTaskDeltaBatches: 0,
     maxTaskDeltaBatchSize: 0,
     ...createTerminalUiPerfCounters(),
+    ...createUiPerfHotPathCounters(),
   };
   const terminalUiPerf = createTerminalUiPerfReporter();
   const terminalUiPerfSink = createTerminalUiPerfSink(
@@ -2179,6 +2187,7 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.largeTaskDeltaBatches = 0;
     uiPerfStats.maxTaskDeltaBatchSize = 0;
     resetTerminalUiPerfCounters(uiPerfStats);
+    resetUiPerfHotPathCounters(uiPerfStats);
     terminalUiPerf.reset();
   };
 
@@ -4527,6 +4536,7 @@ function createEmbeddedTerminalBackendFromConfig(
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
       }
+      recordUiPerfHotPathMetric(uiPerfStats, metric, data ?? {});
       uiPerfStats.rendererReports += 1;
       try {
         persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
