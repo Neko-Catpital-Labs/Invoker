@@ -128,7 +128,13 @@ describe('App launch (component)', () => {
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('sidebar-home'));
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-return-home')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('browser-return-home'));
     expect(sidebar.className).toContain('w-16');
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
@@ -141,21 +147,39 @@ describe('App launch (component)', () => {
 
     const sidebar = screen.getByTestId('app-sidebar');
     const toggle = screen.getByTestId('sidebar-collapse-toggle');
+    const surfaces = ['workflows', 'attention', 'running', 'workers', 'planning', 'home'] as const;
+    type SurfaceUnderTest = typeof surfaces[number];
+    const expectSurfaceWidth = async (surface: SurfaceUnderTest, width: 'w-16' | 'w-60') => {
+      fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
+      expect(sidebar.className).toContain(width);
+      if (surface === 'workers') {
+        expect(await screen.findByTestId('action-queue-section')).toBeInTheDocument();
+      } else if (surface === 'home') {
+        expect(await screen.findByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
+      } else {
+        const heading = surface === 'workflows'
+          ? 'Workflows'
+          : surface === 'attention'
+            ? 'Needs Attention'
+            : surface === 'running'
+              ? 'Running'
+              : 'Planning Terminal';
+        expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+      }
+    };
 
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-16');
 
-    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
-      fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
-      expect(sidebar.className).toContain('w-16');
+    for (const surface of surfaces) {
+      await expectSurfaceWidth(surface, 'w-16');
     }
 
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-60');
 
-    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
-      fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
-      expect(sidebar.className).toContain('w-60');
+    for (const surface of surfaces) {
+      await expectSurfaceWidth(surface, 'w-60');
     }
   });
 
