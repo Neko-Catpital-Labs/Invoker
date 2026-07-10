@@ -102,7 +102,7 @@ export function ApprovalModal({
     if (task.execution.agentSessionId || task.execution.lastAgentSessionId || fallbackSessionId) return;
     let cancelled = false;
     window.invoker
-      .getEvents(task.id)
+      .getEvents(task.id, { limit: 50, sortBy: 'desc' })
       .then((events) => {
         if (cancelled) return;
         const recovered = extractSessionFromEvents(events as Array<{ eventType?: string; payload?: string }>);
