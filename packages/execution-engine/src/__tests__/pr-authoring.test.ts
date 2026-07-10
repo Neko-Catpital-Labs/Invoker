@@ -125,6 +125,45 @@ describe('buildCanonicalPrBody', () => {
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
   });
+
+  it('renders worker action pipeline rows in time order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Worker summary',
+      workflowSummary: 'Updated the workflow.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'later',
+            workerKind: 'ci-failure',
+            actionType: 'submit-fix',
+            taskId: 'task-b',
+            status: 'completed',
+            summary: 'Submitted CI fix',
+            updatedAt: '2026-01-01T00:00:03.000Z',
+          },
+          {
+            id: 'earlier',
+            workerKind: 'autofix',
+            actionType: 'fix-task',
+            taskId: 'task-a',
+            status: 'completed',
+            summary: 'Applied worker fix',
+            updatedAt: '2026-01-01T00:00:01.000Z',
+          },
+        ],
+      },
+    });
+
+    const pipelineIndex = body.indexOf('## Pipeline');
+    const earlierIndex = body.indexOf('autofix');
+    const laterIndex = body.indexOf('ci-failure');
+
+    expect(pipelineIndex).toBeGreaterThanOrEqual(0);
+    expect(earlierIndex).toBeGreaterThan(pipelineIndex);
+    expect(laterIndex).toBeGreaterThan(earlierIndex);
+    expect(body).toContain('| Time | Worker | Action | Subject | Status | Summary |');
+  });
 });
 
 // ── validateReviewStackPrBody ────────────────────────────

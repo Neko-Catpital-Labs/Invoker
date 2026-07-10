@@ -433,6 +433,39 @@ describe('GitHubMergeGateProvider', () => {
     });
   });
 
+  describe('updateReviewBody', () => {
+    it('updates the PR body through a temporary body file', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'edit') {
+          return mockSpawnResult('', 0);
+        }
+        throw new Error(`unexpected command: ${cmd} ${args.join(' ')}`);
+      }) as any);
+
+      await provider.updateReviewBody({
+        identifier: '12',
+        cwd: '/tmp/repo',
+        body: '## Summary\n\nUpdated body',
+      });
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr', 'edit', '12',
+          '--repo', 'owner/repo',
+          '--body-file', expect.stringContaining('body.md'),
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
+  });
+
   describe('closeReview', () => {
     it('closes the owning PR without deleting the branch', async () => {
       process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';

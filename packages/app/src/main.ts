@@ -120,6 +120,7 @@ import {
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   DEFAULT_EXECUTION_AGENT,
+  GitHubMergeGateProvider,
   registerBuiltinAgents,
   registerBuiltinWorkers,
   parseRequeueMutationArgs,
@@ -367,6 +368,7 @@ function buildRegisteredOwnerWorkerDeps(
     reviewGate: {
       checkMergeGateStatuses,
     },
+    mergeGateProvider: new GitHubMergeGateProvider(),
     autoFix: {
       defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
       attemptLedger: autoFixAttemptLedger,

@@ -70,6 +70,38 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('renders worker action audit events in the task log surface', async () => {
+    mock.setEvents('task-alpha', [{
+      id: 1,
+      taskId: 'task-alpha',
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'review-body-refresh',
+        status: 'completed',
+        summary: 'Refreshed PR summary body',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Worker pr-summary-refresh/review-body-refresh completed: Refreshed PR summary body')).toBeInTheDocument();
+    });
+  });
+
   it('selecting a mini DAG task shows task sidebar state', async () => {
     const failedTask = makeUITask({
       id: 'task-failed',

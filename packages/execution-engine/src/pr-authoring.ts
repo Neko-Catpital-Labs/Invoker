@@ -33,6 +33,23 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence carried into PR body pipeline summaries. */
+export interface PrAuthoringWorkerActionEntry {
+  id?: string;
+  workerKind: string;
+  actionType: string;
+  status: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType?: string;
+  subjectId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +63,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker actions shown in the PR pipeline summary. */
+  workerActions?: readonly PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -287,6 +306,60 @@ function extractAssistantBody(driver: SessionDriver | undefined, sessionId: stri
   return fallback.trim();
 }
 
+function workerActionTimestamp(action: PrAuthoringWorkerActionEntry): string {
+  return action.completedAt ?? action.updatedAt ?? action.createdAt ?? '';
+}
+
+function escapeMarkdownTableCell(value: string | undefined): string {
+  return (value?.trim() || '-')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\|/g, '\\|');
+}
+
+function workerActionSubject(action: PrAuthoringWorkerActionEntry): string {
+  if (action.taskId) return action.taskId;
+  if (action.subjectType && action.subjectId) return `${action.subjectType}:${action.subjectId}`;
+  return action.workflowId ?? '-';
+}
+
+function workerActionSummary(action: PrAuthoringWorkerActionEntry): string {
+  if (action.summary && action.reason) return `${action.summary} (${action.reason})`;
+  return action.summary ?? action.reason ?? '';
+}
+
+function renderPipelineSection(actions: readonly PrAuthoringWorkerActionEntry[] | undefined): string[] {
+  const lines: string[] = [];
+  lines.push('## Pipeline');
+  lines.push('');
+
+  const sorted = [...(actions ?? [])].sort((a, b) => {
+    const byTime = workerActionTimestamp(a).localeCompare(workerActionTimestamp(b));
+    if (byTime !== 0) return byTime;
+    return (a.id ?? '').localeCompare(b.id ?? '');
+  });
+
+  if (sorted.length === 0) {
+    lines.push('- No worker actions recorded yet.');
+    lines.push('');
+    return lines;
+  }
+
+  lines.push('| Time | Worker | Action | Subject | Status | Summary |');
+  lines.push('| --- | --- | --- | --- | --- | --- |');
+  for (const action of sorted) {
+    lines.push(
+      `| ${escapeMarkdownTableCell(workerActionTimestamp(action))} `
+      + `| ${escapeMarkdownTableCell(action.workerKind)} `
+      + `| ${escapeMarkdownTableCell(action.actionType)} `
+      + `| ${escapeMarkdownTableCell(workerActionSubject(action))} `
+      + `| ${escapeMarkdownTableCell(action.status)} `
+      + `| ${escapeMarkdownTableCell(workerActionSummary(action))} |`,
+    );
+  }
+  lines.push('');
+  return lines;
+}
+
 export function resolveInstalledSkillPathForAgent(agentName: string, skillName: string): string | null {
   const normalized = agentName.trim().toLowerCase();
   const home = homedir();
@@ -484,6 +557,8 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  lines.push(...renderPipelineSection(args.structuredContext?.workerActions));
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
@@ -597,6 +672,21 @@ export function buildMakePrPrompt(args: {
     if (ctx.visualProofMarkdown) {
       lines.push('Visual proof (include verbatim in PR body if present):');
       lines.push(ctx.visualProofMarkdown);
+      lines.push('');
+    }
+
+    if (ctx.workerActions && ctx.workerActions.length > 0) {
+      lines.push('Worker action pipeline:');
+      for (const action of [...ctx.workerActions].sort((a, b) =>
+        workerActionTimestamp(a).localeCompare(workerActionTimestamp(b)))) {
+        const subject = workerActionSubject(action);
+        const timestamp = workerActionTimestamp(action);
+        const summary = workerActionSummary(action);
+        lines.push(
+          `- ${timestamp || 'unknown time'} ${action.workerKind}/${action.actionType} `
+          + `${subject} ${action.status}${summary ? ` — ${summary}` : ''}`,
+        );
+      }
       lines.push('');
     }
   }

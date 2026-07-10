@@ -206,11 +206,41 @@ export function formatEventLog(events: TaskEvent[]): string {
 
   const lines = events.map((event) => {
     const timestamp = event.createdAt;
+    if (event.eventType === 'task.worker_action') {
+      const payload = parseEventPayload(event.payload);
+      const workerKind = stringPayload(payload, 'workerKind') ?? 'worker';
+      const actionType = stringPayload(payload, 'actionType') ?? 'action';
+      const status = stringPayload(payload, 'status') ?? 'unknown';
+      const summary = stringPayload(payload, 'summary');
+      const reason = stringPayload(payload, 'reason');
+      const suffix = summary ? ` — ${escapeTerminalText(summary)}` : '';
+      const reasonSuffix = reason ? ` ${DIM}(${escapeTerminalText(reason)})${RESET}` : '';
+      return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: worker ${escapeTerminalText(workerKind)}/${escapeTerminalText(actionType)} [${escapeTerminalText(status)}]${suffix}${reasonSuffix}`;
+    }
     const payload = event.payload ? ` ${event.payload}` : '';
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 
   return lines.join('\n');
+}
+
+function parseEventPayload(payload: unknown): Record<string, unknown> | undefined {
+  if (!payload) return undefined;
+  if (typeof payload === 'object' && !Array.isArray(payload)) return payload as Record<string, unknown>;
+  if (typeof payload !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(payload);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringPayload(payload: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = payload?.[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
 export function formatWorkerActions(actions: WorkerActionRecord[]): string {
@@ -260,6 +290,26 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
     lines.push(
       `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
+    );
+  }
+  return lines.join('\n');
+}
+
+export function formatRecentWorkerActions(actions: WorkerActionRecord[]): string {
+  if (actions.length === 0) {
+    return `${DIM}No recent worker actions.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Recent worker actions${RESET}`);
+  for (const action of actions) {
+    const task = action.taskId ? ` task=${escapeTerminalText(action.taskId)}` : '';
+    const workflow = action.workflowId ? ` workflow=${escapeTerminalText(action.workflowId)}` : '';
+    const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+    lines.push(
+      `  ${escapeTerminalText(action.updatedAt)} ${BOLD}${escapeTerminalText(action.workerKind)}${RESET}/` +
+        `${escapeTerminalText(action.actionType)} [${escapeTerminalText(action.status)}]` +
+        `${workflow}${task}${summary}`,
     );
   }
   return lines.join('\n');
