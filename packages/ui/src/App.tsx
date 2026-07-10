@@ -130,7 +130,7 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     title: 'Untitled plan',
     status: 'still_discussing',
     presetKey: '',
-    messages: [{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' }],
+    messages: [],
     input: '',
     draftPlanAvailable: false,
     busy: false,
@@ -147,6 +147,14 @@ function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
 function previewPlanningMessage(session: PlanningSessionView): string {
   const last = [...session.messages].reverse().find((line) => line.role !== 'system') ?? session.messages.at(-1);
   return last?.text.replace(/\s+/g, ' ').trim() || 'No messages yet';
+}
+
+function planningSessionStatusLabel(session: PlanningSessionView): string {
+  if (session.busy) return 'Working';
+  if (session.status === 'draft_ready') return 'Draft ready';
+  if (session.status === 'waiting_for_answer') return 'Waiting for answer';
+  if (session.status === 'submitted') return 'Submitted';
+  return 'Still discussing';
 }
 
 function relativePlanningUpdatedAt(value: string): string {
@@ -557,7 +565,7 @@ export function App() {
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
-  const nextTerminalLineIdRef = useRef(2);
+  const nextTerminalLineIdRef = useRef(1);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
@@ -2068,7 +2076,6 @@ export function App() {
       conversationKey: localId,
       presetKey: selectedPlanningPresetKey,
     };
-    nextTerminalLineIdRef.current += 1;
     setPlanningSessions((prev) => [session, ...prev]);
     setActivePlanningSessionId(session.id);
     setSidebarSurface('planning');
@@ -2890,8 +2897,14 @@ export function App() {
         <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="border-b border-border bg-card px-4 py-2.5">
-          <h2 className="truncate text-sm font-medium text-foreground">{activePlanningSession.title}</h2>
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2.5">
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-medium text-foreground">Planning chat window</h2>
+            <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{activePlanningSession.title}</p>
+          </div>
+          <span className="shrink-0 rounded-full border border-border bg-background px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
+            {planningSessionStatusLabel(activePlanningSession)}
+          </span>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden bg-background">
           <InvokerTerminal
