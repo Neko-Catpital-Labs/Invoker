@@ -83,6 +83,50 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('reports planning chat input and render perf through the ui-perf bridge', () => {
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+    const props = {
+      activeConversationKey: 'chat-1',
+      lines: [{ id: 1, text: 'First line', role: 'system' as const }],
+      busy: false,
+      value: '',
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+
+    const { rerender } = render(<InvokerTerminal {...props} />);
+    reportUiPerf.mockClear();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+
+    expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_input_change', expect.objectContaining({
+      valueLength: 5,
+      previousValueLength: 0,
+      deltaLength: 5,
+      transcriptLineCount: 1,
+      conversationKey: 'chat-1',
+    }));
+
+    for (let index = 1; index <= 5; index += 1) {
+      rerender(<InvokerTerminal {...props} value={'x'.repeat(index)} />);
+    }
+
+    expect(reportUiPerf.mock.calls.some(([metric, payload]) => (
+      metric === 'planning_chat_render' &&
+      typeof payload === 'object' &&
+      payload !== null &&
+      typeof (payload as Record<string, unknown>).inputLength === 'number' &&
+      ((payload as Record<string, unknown>).inputLength as number) > 0 &&
+      (payload as Record<string, unknown>).conversationKey === 'chat-1'
+    ))).toBe(true);
+  });
+
   it('passes the selected planning preset', async () => {
     render(<App />);
     await openPlanningTerminal();

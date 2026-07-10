@@ -228,6 +228,66 @@ describe('Terminal drawer (component)', () => {
     expect(screen.getByTestId('terminal-pane-task-alpha')).toHaveClass('overflow-hidden');
   });
 
+  it('reports renderer terminal attach, input, and output burst perf through ui-perf', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'restored output\n',
+    });
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('terminal_renderer_attach', expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        snapshotChars: 'restored output\n'.length,
+      }));
+      expect(reportUiPerf).toHaveBeenCalledWith('terminal_renderer_snapshot_seed', expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        chars: 'restored output\n'.length,
+      }));
+    });
+
+    reportUiPerf.mockClear();
+    act(() => {
+      xtermMock.instances[0]?.emitData('pwd\n');
+    });
+    expect(reportUiPerf).toHaveBeenCalledWith('terminal_renderer_input', expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      chars: 4,
+    }));
+
+    reportUiPerf.mockClear();
+    act(() => {
+      for (let index = 0; index < 50; index += 1) {
+        mock.fireTerminalOutput({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          data: 'x',
+        });
+      }
+    });
+
+    expect(reportUiPerf).toHaveBeenCalledWith('terminal_renderer_output_write', expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      chunksSinceReport: 50,
+      charsSinceReport: 50,
+      totalChunks: 50,
+    }));
+  });
+
   it('reuses an existing tab when opening the same task twice', async () => {
     render(<App />);
     act(() => mock.setTasks([taskAlpha], workflows));

@@ -14,6 +14,11 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const TERMINAL_RENDERER_FIT_SLOW_MS = 16;
+const TERMINAL_RENDERER_OUTPUT_SLOW_MS = 16;
+const TERMINAL_RENDERER_OUTPUT_REPORT_CHUNKS = 50;
+const TERMINAL_RENDERER_OUTPUT_REPORT_CHARS = 32_768;
+const TERMINAL_RENDERER_OUTPUT_REPORT_MIN_INTERVAL_MS = 250;
 
 /**
  * The drawer has one explicit state model:
@@ -55,6 +60,21 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function reportTerminalRendererPerf(metric: string, data: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
@@ -72,12 +92,22 @@ function seedTerminalOutputSnapshot(
     )
   ) {
     try {
+      const startedAt = nowMs();
       term.write(outputSnapshot);
+      const durationMs = nowMs() - startedAt;
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
         term,
       };
+      reportTerminalRendererPerf('terminal_renderer_snapshot_seed', {
+        durationMs: roundMs(durationMs),
+        chars: outputSnapshot.length,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        status: session.status,
+        mode: session.mode,
+      });
     } catch (err) {
       console.warn(
         `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
@@ -92,6 +122,20 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const isActiveRef = useRef(isActive);
+  const inputPerfRef = useRef({ count: 0 });
+  const fitPerfRef = useRef({ count: 0 });
+  const outputPerfRef = useRef({
+    totalChunks: 0,
+    totalChars: 0,
+    chunksSinceReport: 0,
+    charsSinceReport: 0,
+    lastReportedAt: 0,
+  });
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -100,6 +144,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     let term: XTermTerminal;
     let fit: FitAddon;
     try {
+      const attachStartedAt = nowMs();
       term = new XTermTerminal({
         fontSize: 12,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -111,6 +156,14 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
+      reportTerminalRendererPerf('terminal_renderer_attach', {
+        durationMs: roundMs(nowMs() - attachStartedAt),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        status: session.status,
+        mode: session.mode,
+        snapshotChars: session.outputSnapshot?.length ?? 0,
+      });
     } catch {
       return;
     }
@@ -120,14 +173,57 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
 
     const inputDisposable = term.onData((data) => {
+      const startedAt = nowMs();
       void window.invoker?.terminalWrite?.(session.sessionId, data);
+      const durationMs = nowMs() - startedAt;
+      inputPerfRef.current.count += 1;
+      reportTerminalRendererPerf('terminal_renderer_input', {
+        durationMs: roundMs(durationMs),
+        inputCount: inputPerfRef.current.count,
+        chars: data.length,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        active: isActiveRef.current,
+      });
     });
 
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const startedAt = nowMs();
         term.write(event.data);
+        const durationMs = nowMs() - startedAt;
+        const perf = outputPerfRef.current;
+        const chars = event.data.length;
+        perf.totalChunks += 1;
+        perf.totalChars += chars;
+        perf.chunksSinceReport += 1;
+        perf.charsSinceReport += chars;
+        const slow = durationMs >= TERMINAL_RENDERER_OUTPUT_SLOW_MS;
+        const burst =
+          perf.chunksSinceReport >= TERMINAL_RENDERER_OUTPUT_REPORT_CHUNKS ||
+          perf.charsSinceReport >= TERMINAL_RENDERER_OUTPUT_REPORT_CHARS;
+        const now = Date.now();
+        const intervalElapsed = now - perf.lastReportedAt >= TERMINAL_RENDERER_OUTPUT_REPORT_MIN_INTERVAL_MS;
+        if (slow || (burst && intervalElapsed)) {
+          reportTerminalRendererPerf('terminal_renderer_output_write', {
+            durationMs: roundMs(durationMs),
+            chunkChars: chars,
+            chunksSinceReport: perf.chunksSinceReport,
+            charsSinceReport: perf.charsSinceReport,
+            totalChunks: perf.totalChunks,
+            totalChars: perf.totalChars,
+            slow,
+            burst,
+            sessionId: session.sessionId,
+            taskId: session.taskId,
+            active: isActiveRef.current,
+          });
+          perf.lastReportedAt = now;
+          perf.chunksSinceReport = 0;
+          perf.charsSinceReport = 0;
+        }
       } catch {
         /* terminal disposed */
       }
@@ -135,8 +231,22 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
 
     const tryFit = () => {
       try {
+        const startedAt = nowMs();
         fit.fit();
         void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+        const durationMs = nowMs() - startedAt;
+        fitPerfRef.current.count += 1;
+        if (durationMs >= TERMINAL_RENDERER_FIT_SLOW_MS || fitPerfRef.current.count <= 2) {
+          reportTerminalRendererPerf('terminal_renderer_fit', {
+            durationMs: roundMs(durationMs),
+            fitCount: fitPerfRef.current.count,
+            cols: term.cols,
+            rows: term.rows,
+            sessionId: session.sessionId,
+            taskId: session.taskId,
+            active: isActiveRef.current,
+          });
+        }
       } catch {
         /* host has zero size or fit unsupported */
       }
@@ -187,9 +297,24 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const fit = fitRef.current;
     if (!term || !fit) return;
     try {
+      const startedAt = nowMs();
       fit.fit();
       void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
       term.focus();
+      const durationMs = nowMs() - startedAt;
+      fitPerfRef.current.count += 1;
+      if (durationMs >= TERMINAL_RENDERER_FIT_SLOW_MS || fitPerfRef.current.count <= 2) {
+        reportTerminalRendererPerf('terminal_renderer_fit', {
+          durationMs: roundMs(durationMs),
+          fitCount: fitPerfRef.current.count,
+          cols: term.cols,
+          rows: term.rows,
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          active: isActiveRef.current,
+          reason: 'active-session',
+        });
+      }
     } catch {
       /* fit failed (e.g., hidden) */
     }
