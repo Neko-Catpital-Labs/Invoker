@@ -96,6 +96,42 @@ describe('buildCanonicalPrBody', () => {
     expect(body).not.toContain('pnpm e2e');
   });
 
+  it('renders worker actions in a chronological Pipeline section', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh PR',
+      workflowSummary: 'Updated PR visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'completed',
+            timestamp: '2026-01-01T00:02:00.000Z',
+            summary: 'Submitted CI fix',
+            taskId: 'wf-1/task-b',
+          },
+          {
+            workerKind: 'autofix',
+            actionType: 'auto-retry',
+            status: 'skipped',
+            timestamp: '2026-01-01T00:01:00.000Z',
+            reason: 'retry budget exhausted',
+            taskId: 'wf-1/task-a',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    const first = body.indexOf('autofix');
+    const second = body.indexOf('ci-failure');
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(first);
+    expect(body).toContain('| 2026-01-01T00:01:00.000Z | autofix | auto-retry | wf-1/task-a | skipped | retry budget exhausted |');
+    expect(body).toContain('| 2026-01-01T00:02:00.000Z | ci-failure | fix-ci-failure | wf-1/task-b | completed | Submitted CI fix |');
+  });
+
   it('preserves visual proof markdown verbatim', () => {
     const visualProof = '## Visual Proof\n\n| Before | After |\n|--------|-------|\n| ![b](b.png) | ![a](a.png) |';
     const body = buildCanonicalPrBody({

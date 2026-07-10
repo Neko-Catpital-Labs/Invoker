@@ -12,13 +12,13 @@ import { pathToFileURL } from 'node:url';
 
 import type { Orchestrator, TaskLineageExpectation, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
-import type { SQLiteAdapter } from '@invoker/data-store';
+import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry, type PrAuthoringWorkerActionEntry } from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -143,6 +143,33 @@ function buildMergeConflictJson(errorText: string, failedBranch: string): string
     failedBranch,
     conflictFiles: [...files],
   });
+}
+
+function workerActionReason(action: WorkerActionRecord): string | undefined {
+  const payload = action.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const reason = (payload as Record<string, unknown>).reason;
+  return typeof reason === 'string' && reason.length > 0 ? reason : undefined;
+}
+
+function workerActionTimestamp(action: WorkerActionRecord): string {
+  return action.completedAt ?? action.updatedAt ?? action.createdAt;
+}
+
+function toPrAuthoringWorkerAction(action: WorkerActionRecord): PrAuthoringWorkerActionEntry {
+  const reason = workerActionReason(action);
+  return {
+    workerKind: action.workerKind,
+    actionType: action.actionType,
+    status: action.status,
+    timestamp: workerActionTimestamp(action),
+    ...(action.summary ? { summary: action.summary } : {}),
+    ...(reason ? { reason } : {}),
+    ...(action.taskId ? { taskId: action.taskId } : {}),
+    ...(action.workflowId ? { workflowId: action.workflowId } : {}),
+    ...(action.subjectType ? { subjectType: action.subjectType } : {}),
+    ...(action.subjectId ? { subjectId: action.subjectId } : {}),
+  };
 }
 
 // ── Host-cwd safety guard ─────────────────────────────────
@@ -380,6 +407,9 @@ export async function buildPrAuthoringContext(
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    workerActions: ((host.persistence as { listWorkerActions?: SQLiteAdapter['listWorkerActions'] })
+      .listWorkerActions?.({ workflowId }) ?? [])
+      .map(toPrAuthoringWorkerAction),
     visualProofMarkdown,
   };
 }

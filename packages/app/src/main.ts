@@ -117,6 +117,7 @@ import {
   createWorkerRegistry,
   PR_STATUS_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
+  GitHubMergeGateProvider,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   DEFAULT_EXECUTION_AGENT,
@@ -367,6 +368,7 @@ function buildRegisteredOwnerWorkerDeps(
     reviewGate: {
       checkMergeGateStatuses,
     },
+    mergeGateProvider: new GitHubMergeGateProvider(),
     autoFix: {
       defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
       attemptLedger: autoFixAttemptLedger,
