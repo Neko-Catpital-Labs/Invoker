@@ -33,6 +33,19 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Worker action evidence carried into the PR pipeline summary. */
+export interface PrAuthoringWorkerActionEntry {
+  workerKind: string;
+  actionType: string;
+  status: string;
+  taskId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +59,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Worker actions that explain automated follow-up work performed on the PR/task. */
+  workerActions?: readonly PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -244,6 +259,57 @@ export function validateReviewStackPrBody(body: string): string[] {
 
 function promptByteLength(prompt: string): number {
   return Buffer.byteLength(prompt, 'utf8');
+}
+
+function escapeMarkdownTableCell(value: string | undefined): string {
+  const normalized = value?.trim();
+  if (!normalized) return '-';
+  return normalized
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, '<br>');
+}
+
+function pipelineActionTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.createdAt ?? action.updatedAt ?? action.completedAt ?? '';
+}
+
+function comparePipelineActions(
+  a: PrAuthoringWorkerActionEntry,
+  b: PrAuthoringWorkerActionEntry,
+): number {
+  const aTime = pipelineActionTime(a);
+  const bTime = pipelineActionTime(b);
+  const aMs = Date.parse(aTime);
+  const bMs = Date.parse(bTime);
+  const normalizedAMs = Number.isFinite(aMs) ? aMs : Number.MAX_SAFE_INTEGER;
+  const normalizedBMs = Number.isFinite(bMs) ? bMs : Number.MAX_SAFE_INTEGER;
+  if (normalizedAMs !== normalizedBMs) return normalizedAMs - normalizedBMs;
+  return `${a.workerKind}/${a.actionType}/${a.taskId ?? ''}`.localeCompare(
+    `${b.workerKind}/${b.actionType}/${b.taskId ?? ''}`,
+  );
+}
+
+function renderPipelineRows(workerActions: readonly PrAuthoringWorkerActionEntry[]): string[] {
+  if (workerActions.length === 0) return [];
+
+  const lines: string[] = [];
+  lines.push('## Pipeline');
+  lines.push('');
+  lines.push('| Time | Task | Worker Action | Status | Summary |');
+  lines.push('| --- | --- | --- | --- | --- |');
+  for (const action of [...workerActions].sort(comparePipelineActions)) {
+    const summary = action.summary ?? action.reason;
+    lines.push([
+      escapeMarkdownTableCell(pipelineActionTime(action)),
+      escapeMarkdownTableCell(action.taskId),
+      escapeMarkdownTableCell(`${action.workerKind}/${action.actionType}`),
+      escapeMarkdownTableCell(action.status),
+      escapeMarkdownTableCell(summary),
+    ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+  }
+  lines.push('');
+  return lines;
 }
 
 function buildPromptFileBootstrap(promptPath: string): string {
@@ -473,16 +539,22 @@ export function buildCanonicalPrBody(args: {
   structuredContext?: PrAuthoringContext;
 }): string {
   const lines: string[] = [];
+  const ctx = args.structuredContext;
 
   // ## Summary
   lines.push('## Summary');
   lines.push('');
-  if (args.structuredContext?.workflowDescription) {
-    lines.push(args.structuredContext.workflowDescription);
+  if (ctx?.workflowDescription) {
+    lines.push(ctx.workflowDescription);
   } else {
     lines.push(args.workflowSummary.trim());
   }
   lines.push('');
+
+  const pipelineLines = renderPipelineRows(ctx?.workerActions ?? []);
+  if (pipelineLines.length > 0) {
+    lines.push(...pipelineLines);
+  }
 
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
@@ -490,7 +562,6 @@ export function buildCanonicalPrBody(args: {
   lines.push('<details>');
   lines.push('<summary>Test Plan</summary>');
   lines.push('');
-  const ctx = args.structuredContext;
   const commandTasks = ctx?.tasks.filter((t) => t.command && t.status === 'completed') ?? [];
   if (commandTasks.length > 0) {
     for (const t of commandTasks) {
@@ -592,6 +663,20 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    if (ctx.workerActions && ctx.workerActions.length > 0) {
+      lines.push('Worker actions:');
+      for (const action of [...ctx.workerActions].sort(comparePipelineActions)) {
+        const summary = action.summary ? ` — ${action.summary}` : '';
+        const reason = action.reason ? ` (reason: ${action.reason})` : '';
+        const task = action.taskId ? ` task=${action.taskId}` : '';
+        lines.push(
+          `- ${pipelineActionTime(action) || 'unknown time'} ${action.workerKind}/${action.actionType}`
+            + `${task} [${action.status}]${summary}${reason}`,
+        );
+      }
+      lines.push('');
     }
 
     if (ctx.visualProofMarkdown) {

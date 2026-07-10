@@ -115,17 +115,25 @@ describe('runReadOnlyHeadlessQueryToString', () => {
 
   it('answers a delegated `worker status` query on the writable owner', async () => {
     const deps = makeQueryDeps(() => []);
-    deps.persistence = {
-      listWorkflows: () => [],
-      loadTasks: () => [],
-      getEvents: () => [],
-    } as unknown as HeadlessQueryDeps['persistence'];
+    deps.getWorkerStatus = () => ({
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workers: [{
+        kind: 'autofix',
+        note: 'Auto-fixes failed tasks.',
+        lifecycle: 'stopped',
+        policy: 'enabled',
+        autoStarts: false,
+        startable: true,
+        stoppable: false,
+        recentActions: [],
+      }],
+    });
     const writeSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     try {
       const label = await runReadOnlyHeadlessQueryToString(['worker', 'status', '--output', 'label'], deps);
-      expect(label).toBe('auto-fix-recovery\n');
+      expect(label).toBe('autofix\n');
       const json = await runReadOnlyHeadlessQueryToString(['worker', 'status', '--output', 'json'], deps);
-      expect(JSON.parse(json).workerId).toBe('auto-fix-recovery');
+      expect(JSON.parse(json).workers[0].kind).toBe('autofix');
       expect(writeSpy).not.toHaveBeenCalled();
     } finally {
       writeSpy.mockRestore();

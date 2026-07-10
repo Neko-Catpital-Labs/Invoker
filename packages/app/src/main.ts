@@ -112,6 +112,7 @@ import {
   ExecutorRegistry, TaskRunner,
   WorktreeExecutor,
   CI_FAILURE_WORKER_KIND,
+  GitHubMergeGateProvider,
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
@@ -367,6 +368,7 @@ function buildRegisteredOwnerWorkerDeps(
     reviewGate: {
       checkMergeGateStatuses,
     },
+    mergeGateProvider: new GitHubMergeGateProvider(),
     autoFix: {
       defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
       attemptLedger: autoFixAttemptLedger,
@@ -378,6 +380,7 @@ function buildRegisteredOwnerWorkerDeps(
       stallRequeueBackoffMs: invokerConfig.stallRequeueBackoffMs,
     },
     prMaintenance: resolvePrMaintenanceWorkerConfig(invokerConfig),
+    prSummaryRefresh: { cwd: repoRoot },
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,
@@ -1838,6 +1841,7 @@ function startHeadlessMode(): void {
             executionAgentRegistry: headlessDeps.executionAgentRegistry,
             getUiPerfStats: headlessDeps.getUiPerfStats,
             resetUiPerfStats: headlessDeps.resetUiPerfStats,
+            getWorkerStatus: () => workerRuntimeController?.snapshot() ?? { generatedAt: new Date().toISOString(), workers: [] },
           }));
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           noteStandaloneOwnerActivity();
@@ -3650,6 +3654,7 @@ function createEmbeddedTerminalBackendFromConfig(
           executionAgentRegistry: agentRegistry,
           getUiPerfStats,
           resetUiPerfStats,
+          getWorkerStatus: () => workerRuntimeController?.snapshot() ?? { generatedAt: new Date().toISOString(), workers: [] },
         }));
       messageBus.onRequest('headless.run', async (req: unknown) => {
         const { planPath, traceId } = req as { planPath: string; traceId?: string };

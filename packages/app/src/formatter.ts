@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -261,6 +261,37 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
       `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
     );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  if (snapshot.workers.length === 0) {
+    return `${DIM}No workers registered.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Worker status${RESET} ${DIM}(${escapeTerminalText(snapshot.generatedAt)})${RESET}`);
+  for (const worker of snapshot.workers) {
+    const runtime = worker.runtimeKind ? ` runtime=${escapeTerminalText(worker.runtimeKind)}` : '';
+    const auto = worker.autoStarts ? ' auto' : '';
+    lines.push(
+      `  ${BOLD}${escapeTerminalText(worker.kind)}${RESET} [${worker.lifecycle}] ` +
+        `policy=${worker.policy}${auto}${runtime}`,
+    );
+    if (worker.recentActions.length > 0) {
+      for (const action of worker.recentActions) {
+        const subject = action.taskId
+          ? ` task=${escapeTerminalText(action.taskId)}`
+          : ` ${escapeTerminalText(action.subjectType)}=${escapeTerminalText(action.subjectId)}`;
+        const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+        lines.push(
+          `    ${action.status} ${escapeTerminalText(action.actionType)}${subject} attempts=${action.attemptCount}${summary}`,
+        );
+      }
+    } else {
+      lines.push(`    ${DIM}No recent actions.${RESET}`);
+    }
   }
   return lines.join('\n');
 }

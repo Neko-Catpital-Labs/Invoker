@@ -110,6 +110,42 @@ describe('buildCanonicalPrBody', () => {
     expect(body).toContain(visualProof);
   });
 
+  it('renders worker actions in Pipeline time order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh PR summary',
+      workflowSummary: 'Added worker visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            taskId: 'wf-1/test',
+            status: 'completed',
+            summary: 'Submitted CI fix',
+            createdAt: '2026-01-01T00:00:03.000Z',
+          },
+          {
+            workerKind: 'autoapprove',
+            actionType: 'approve-ai-fix',
+            taskId: 'wf-1/build',
+            status: 'skipped',
+            reason: 'not-awaiting-approval',
+            createdAt: '2026-01-01T00:00:01.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    const first = body.indexOf('autoapprove/approve-ai-fix');
+    const second = body.indexOf('ci-failure/fix-ci-failure');
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(first);
+    expect(body).toContain('| 2026-01-01T00:00:01.000Z | wf-1/build | autoapprove/approve-ai-fix | skipped | not-awaiting-approval |');
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
+
   it('canonical body passes validation', () => {
     const body = buildCanonicalPrBody({
       title: 'Anything',

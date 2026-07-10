@@ -94,6 +94,39 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('renders worker action task events in the task log surface', async () => {
+    const workerTask = makeUITask({
+      id: 'task-worker-action',
+      description: 'Worker action task',
+      status: 'running',
+      workflowId: 'wf-a',
+      command: 'pnpm test',
+    });
+    mock.setEvents('task-worker-action', [{
+      id: 1,
+      taskId: 'task-worker-action',
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        summary: 'Updated PR body with 2 worker actions',
+        actionId: 'wa-1',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    render(<App />);
+    act(() => mock.setTasks([workerTask], workflows));
+
+    fireEvent.click(await screen.findByTestId('rf__node-task-worker-action'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Updated PR body with 2 worker actions')).toBeInTheDocument();
+      expect(screen.getByText(/"workerKind":"pr-summary-refresh"/)).toBeInTheDocument();
+    });
+  });
+
   it('clicking workflow graph background dismisses the selected mini DAG', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
