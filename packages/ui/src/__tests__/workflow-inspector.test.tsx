@@ -611,6 +611,31 @@ describe('WorkflowInspector', () => {
     expect(screen.getByTestId('inspector-pending-fix-error')).toHaveTextContent('tests failed');
   });
 
+  it('renders the latest mutation failure detail when provided', () => {
+    render(
+      <WorkflowInspector
+        workflow={null}
+        task={makeTask({ id: 'wf-1/task-1', description: 'Task one', status: 'awaiting_approval' })}
+        collapsed={false}
+        advancedExpanded={false}
+        mutationFailure={{
+          intentId: 9,
+          workflowId: 'wf-1',
+          channel: 'invoker:approve',
+          taskId: 'wf-1/task-1',
+          message: 'Error: missing execution harness "codex"',
+          failedAt: '2026-07-08T10:00:00.000Z',
+        }}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('inspector-mutation-failure')).toHaveTextContent(
+      /missing execution harness "codex"/,
+    );
+  });
+
   it('surfaces an executor-selection failure captured in pendingFixError so approve dispatch errors are visible', () => {
     const capabilityError =
       'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"';

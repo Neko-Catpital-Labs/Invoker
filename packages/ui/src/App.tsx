@@ -14,6 +14,12 @@ import yaml from 'js-yaml';
 import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
+import {
+  mutationFailureBannerMessage,
+  mutationFailureDetailMessage,
+  mutationFailureTitle,
+  shouldShowMutationFailureBanner,
+} from './lib/mutation-failure-display.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
 import { useWorkerStatus } from './hooks/useWorkerStatus.js';
@@ -578,6 +584,7 @@ export function App() {
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
   const [mutationFailure, setMutationFailure] = useState<WorkflowMutationFailedEvent | null>(null);
+  const [taskMutationFailures, setTaskMutationFailures] = useState<Record<string, WorkflowMutationFailedEvent>>({});
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
   const [updateCliPending, setUpdateCliPending] = useState(false);
@@ -716,12 +723,6 @@ export function App() {
     return () => { unsubscribe?.(); };
   }, []);
 
-  useEffect(() => {
-    const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
-      setMutationFailure(event);
-    });
-    return () => { unsubscribe?.(); };
-  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -1055,6 +1056,41 @@ export function App() {
     recenterForSelection('task', task.id);
     focusKeyboardRegion('taskGraph');
   }, [focusKeyboardRegion, recenterForSelection, tasks]);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
+      // Task/workflow mutation failures belong in Needs Attention + inspector.
+      if (!shouldShowMutationFailureBanner(event)) {
+        if (event.taskId) {
+          setTaskMutationFailures((prev) => ({ ...prev, [event.taskId!]: event }));
+          setSidebarSurface('attention');
+          setInspectorCollapsed(false);
+          setInspectorManualOpen(true);
+          // Set selection from the event ids directly so the inspector opens even
+          // if the task map has not hydrated this id yet.
+          setSelectedTaskId(event.taskId);
+          setWorkflowSelectionDismissed(false);
+          if (event.workflowId) {
+            setSelectedWorkflowId(event.workflowId);
+          }
+          setContextMenu(null);
+          setWorkflowContextMenu(null);
+          focusKeyboardRegion('taskGraph');
+        } else if (event.workflowId) {
+          setSelectedWorkflowId(event.workflowId);
+          setSelectedTaskId(null);
+          setWorkflowSelectionDismissed(false);
+          setContextMenu(null);
+          setWorkflowContextMenu(null);
+          focusKeyboardRegion('workflowGraph');
+        }
+        setMutationFailure(null);
+        return;
+      }
+      setMutationFailure(event);
+    });
+    return () => { unsubscribe?.(); };
+  }, [focusKeyboardRegion]);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
@@ -3058,17 +3094,13 @@ export function App() {
         >
           <div className="text-sm text-amber-100 min-w-0">
             <div className="font-semibold text-amber-50">
-              {mutationFailure.channel === 'invoker:approve'
-                ? 'Approve failed'
-                : mutationFailure.channel === 'invoker:reject'
-                  ? 'Reject failed'
-                  : `Mutation failed (${mutationFailure.channel})`}
+              {mutationFailureTitle(mutationFailure)}
             </div>
             <div
               data-testid="workflow-mutation-failed-message"
               className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100/90"
             >
-              {mutationFailure.message}
+              {mutationFailureBannerMessage(mutationFailure)}
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -3164,6 +3196,7 @@ export function App() {
                   workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
                   reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
                   actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
+                  mutationFailure={selectedTask ? taskMutationFailures[selectedTask.id] ?? null : null}
                   collapsed={effectiveInspectorCollapsed}
                   advancedExpanded={advancedMetadataExpanded}
                   remoteTargets={remoteTargets}

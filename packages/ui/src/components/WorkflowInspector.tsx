@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
-import type { ActionGraphNode } from '@invoker/contracts';
+import type { ActionGraphNode, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import { mutationFailureDetailMessage, mutationFailureTitle } from '../lib/mutation-failure-display.js';
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
 type TaskLogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -141,6 +142,7 @@ interface WorkflowInspectorProps {
   executionPools?: string[];
   executionAgents?: string[];
   actionNode?: ActionGraphNode | null;
+  mutationFailure?: WorkflowMutationFailedEvent | null;
   collapsed: boolean;
   advancedExpanded: boolean;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
@@ -246,6 +248,7 @@ export function WorkflowInspector({
   executionPools,
   executionAgents,
   actionNode,
+  mutationFailure = null,
   collapsed,
   advancedExpanded,
   onEditPool,
@@ -471,6 +474,19 @@ export function WorkflowInspector({
               <h3 className="text-[11px] uppercase tracking-wide text-amber-200">Fix Error</h3>
               <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100">
                 {task.execution.pendingFixError}
+              </pre>
+            </div>
+          )}
+          {mutationFailure && (
+            <div
+              data-testid="inspector-mutation-failure"
+              className="mt-3 rounded border border-amber-500/40 bg-amber-950/40 p-2"
+            >
+              <h3 className="text-[11px] uppercase tracking-wide text-amber-200">
+                {mutationFailureTitle(mutationFailure)}
+              </h3>
+              <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100">
+                {mutationFailureDetailMessage(mutationFailure)}
               </pre>
             </div>
           )}

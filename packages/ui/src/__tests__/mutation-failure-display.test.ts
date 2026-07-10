@@ -1,0 +1,77 @@
+import { describe, expect, it } from 'vitest';
+import {
+  mutationFailureBannerMessage,
+  mutationFailureDetailMessage,
+  mutationFailureTitle,
+  shouldShowMutationFailureBanner,
+} from '../lib/mutation-failure-display.js';
+
+describe('shouldShowMutationFailureBanner', () => {
+  it('hides the banner for task-scoped failures', () => {
+    expect(shouldShowMutationFailureBanner({
+      intentId: 1,
+      workflowId: 'wf-1',
+      channel: 'invoker:approve',
+      taskId: 'wf-1/task-alpha',
+      message: 'SSH remote script failed',
+      failedAt: '2026-07-09T00:00:00.000Z',
+    })).toBe(false);
+  });
+
+  it('hides the banner for workflow-scoped failures', () => {
+    expect(shouldShowMutationFailureBanner({
+      intentId: 1,
+      workflowId: 'wf-1',
+      channel: 'invoker:recreate',
+      message: 'recreate failed',
+      failedAt: '2026-07-09T00:00:00.000Z',
+    })).toBe(false);
+  });
+
+  it('shows the banner only for unscoped failures', () => {
+    expect(shouldShowMutationFailureBanner({
+      intentId: 1,
+      workflowId: '',
+      channel: 'unknown',
+      message: 'boom',
+      failedAt: '2026-07-09T00:00:00.000Z',
+    })).toBe(true);
+  });
+});
+
+describe('mutationFailureTitle', () => {
+  it('maps approve failures to a friendly title', () => {
+    expect(mutationFailureTitle({
+      intentId: 1,
+      workflowId: '',
+      channel: 'invoker:approve',
+      message: 'boom',
+      failedAt: '2026-07-09T00:00:00.000Z',
+    })).toBe('Approve failed');
+  });
+});
+
+describe('mutationFailureBannerMessage', () => {
+  it('keeps only a short first-line summary', () => {
+    expect(mutationFailureBannerMessage({
+      intentId: 1,
+      workflowId: '',
+      channel: 'unknown',
+      message: 'SSH remote script failed\nSTDOUT:\n{"type":"error"}',
+      failedAt: '2026-07-09T00:00:00.000Z',
+    })).toBe('SSH remote script failed');
+  });
+});
+
+describe('mutationFailureDetailMessage', () => {
+  it('preserves the full operator-facing message without the Error prefix', () => {
+    expect(mutationFailureDetailMessage({
+      intentId: 1,
+      workflowId: 'wf-1',
+      channel: 'invoker:approve',
+      taskId: 'wf-1/task',
+      message: 'Error: missing execution harness "codex"',
+      failedAt: '2026-07-09T00:00:00.000Z',
+    })).toBe('missing execution harness "codex"');
+  });
+});
