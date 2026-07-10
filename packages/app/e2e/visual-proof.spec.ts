@@ -802,16 +802,19 @@ test.describe('Visual proof capture', () => {
 
   test('workflows browser and home return', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    const sidebar = page.getByTestId('app-sidebar');
+    await expect(sidebar).toHaveClass(/w-16/);
+
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
     await expect(page.getByRole('button', { name: /Menu Proof Workflow/ }).first()).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(sidebar).toHaveClass(/w-16/);
     await expect(page.getByText('Invoker Terminal')).toHaveCount(0);
     await captureScreenshot(page, 'workflows-browser');
 
     await page.getByTestId('browser-rail-dismiss').click();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
+    await expect(sidebar).toHaveClass(/w-16/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
@@ -832,10 +835,12 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
+    const sidebar = page.getByTestId('app-sidebar');
+    await expect(sidebar).toHaveClass(/w-16/);
     await page.getByTestId('sidebar-attention').click();
     await expect(page.getByTestId('browser-rail')).toHaveClass(/w-64/);
     await expect(page.getByTestId('browser-rail').getByRole('heading', { name: 'Needs Attention' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(sidebar).toHaveClass(/w-16/);
     await expect(page.getByRole('heading', { name: 'First test task' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Partial terminal drawer' })).toBeVisible();
     await expect(page.getByText('More needs attention')).toHaveCount(0);
@@ -866,15 +871,26 @@ test.describe('Visual proof capture', () => {
   });
 
 
-  test('collapsible workflow browsers', async ({ page }) => {
+  test('explicit sidebar toggle controls workflow browser width', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    const sidebar = page.getByTestId('app-sidebar');
+    await expect(sidebar).toHaveClass(/w-16/);
+
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(sidebar).toHaveClass(/w-16/);
     await captureScreenshot(page, 'collapsed-workflow-browsers');
 
     await page.getByTestId('sidebar-collapse-toggle').click();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
+    await expect(sidebar).toHaveClass(/w-60/);
+
+    await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(sidebar).toHaveClass(/w-60/);
+
+    await page.getByTestId('sidebar-workflows').click();
+    await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
+    await expect(sidebar).toHaveClass(/w-60/);
   });
 
   test('sidebar-default-width — home to workflows keeps auto-collapsed width', async ({ page }) => {

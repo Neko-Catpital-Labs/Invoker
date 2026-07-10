@@ -73,10 +73,14 @@ describe('App launch (component)', () => {
 
     render(<App />);
 
+    const sidebar = await screen.findByTestId('app-sidebar');
+    expect(sidebar.className).toContain('w-60');
+
     const workersButton = await screen.findByTestId('sidebar-workers');
     expect(workersButton).toHaveTextContent('Workers');
     fireEvent.click(workersButton);
 
+    expect(sidebar.className).toContain('w-60');
     expect(await screen.findByTestId('worker-activity-card')).toBeInTheDocument();
     expect(screen.getByText('PR status')).toBeInTheDocument();
   });
@@ -128,12 +132,20 @@ describe('App launch (component)', () => {
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
 
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
+
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(sidebar.className).toContain('w-16');
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
-  it('keeps the manual app sidebar width while switching left rail surfaces', async () => {
+  it('keeps app sidebar width while switching surfaces unless the explicit toggle changes it', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
 
     render(<App />);
@@ -141,6 +153,13 @@ describe('App launch (component)', () => {
 
     const sidebar = screen.getByTestId('app-sidebar');
     const toggle = screen.getByTestId('sidebar-collapse-toggle');
+
+    expect(sidebar.className).toContain('w-60');
+
+    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+      fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
+      expect(sidebar.className).toContain('w-60');
+    }
 
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-16');
