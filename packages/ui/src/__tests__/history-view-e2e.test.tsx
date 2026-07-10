@@ -121,7 +121,7 @@ describe('History view (component)', () => {
     expect(timeline).toHaveTextContent('Running');
     expect(timeline).toHaveTextContent('exit 1');
     expect(timeline).toHaveTextContent('Command exited non-zero');
-    expect(mock.api.getEvents).toHaveBeenCalledWith('task-beta');
+    expect(mock.api.getEvents).toHaveBeenCalledWith('task-beta', { limit: 50, sortBy: 'desc' });
 
     const labels = Array.from(timeline.querySelectorAll('li span.font-medium')).map((el) => el.textContent);
     expect(labels[0]).toBe('Failed');

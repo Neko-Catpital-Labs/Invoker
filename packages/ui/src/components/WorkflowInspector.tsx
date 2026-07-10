@@ -291,7 +291,7 @@ export function WorkflowInspector({
     let inFlight = false;
     const refreshEvents = () => {
       if (inFlight) return;
-      const eventsPromise = window.invoker?.getEvents(task.id);
+      const eventsPromise = window.invoker?.getEvents(task.id, { limit: 50, sortBy: 'desc' });
       if (!eventsPromise) return;
 
       inFlight = true;
@@ -365,15 +365,12 @@ export function WorkflowInspector({
     && onReject,
   );
   const statusHeading = task ? 'Task Status' : 'Status';
-  const workspaceRecreateNotice = [...taskLogEvents]
-    .reverse()
+  const workspaceRecreateNotice = taskLogEvents
     .map(workspaceRecreateNoticeFromEvent)
     .find((notice): notice is WorkspaceRecreateNotice => Boolean(notice));
   const logEntries = taskLogEvents.map(taskEventToLogEntry);
   const visibleLogEntries = logEntries
-    .filter((entry) => LOG_LEVEL_RANK[entry.level] >= LOG_LEVEL_RANK[logLevelFilter])
-    .slice()
-    .reverse();
+    .filter((entry) => LOG_LEVEL_RANK[entry.level] >= LOG_LEVEL_RANK[logLevelFilter]);
 
   const savePrompt = () => {
     if (task && onEditPrompt && editPromptValue !== (task.config.prompt ?? '')) {
