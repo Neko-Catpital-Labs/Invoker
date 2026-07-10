@@ -94,6 +94,41 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('renders task.worker_action events in the task log surface', async () => {
+    const workerTask = makeUITask({
+      id: 'task-worker-action',
+      description: 'Worker-visible task',
+      status: 'review_ready',
+      workflowId: 'wf-a',
+      isMergeNode: true,
+    });
+    mock.setEvents(workerTask.id, [{
+      id: 1,
+      taskId: workerTask.id,
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'pr-summary-refresh',
+        status: 'completed',
+        summary: 'Refreshed PR Pipeline summary for 42',
+        subjectType: 'pull_request',
+        subjectId: '42',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    render(<App />);
+    act(() => mock.setTasks([workerTask], workflows));
+
+    fireEvent.click(await screen.findByTestId('rf__node-task-worker-action'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Refreshed PR Pipeline summary for 42')).toBeInTheDocument();
+      expect(screen.getByText(/"workerKind":"pr-summary-refresh"/)).toBeInTheDocument();
+      expect(screen.getByText(/"subjectId":"42"/)).toBeInTheDocument();
+    });
+  });
+
   it('clicking workflow graph background dismisses the selected mini DAG', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));

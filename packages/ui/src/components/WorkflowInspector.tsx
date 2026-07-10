@@ -27,14 +27,20 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'agentName',
   'artifactCount',
   'attempt',
+  'actionType',
   'baseBranch',
   'branch',
+  'externalKey',
   'featureBranch',
   'reviewId',
   'reviewUrl',
   'status',
   'reason',
   'route',
+  'subjectId',
+  'subjectType',
+  'workerActionId',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -84,6 +90,21 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
   const payloadMessage = payload?.message;
+  if (event.eventType === 'task.worker_action') {
+    const workerKind = typeof payload?.workerKind === 'string' ? payload.workerKind : 'worker';
+    const actionType = typeof payload?.actionType === 'string' ? payload.actionType : 'action';
+    const status = typeof payload?.status === 'string' ? payload.status : 'unknown';
+    const summary = typeof payload?.summary === 'string' && payload.summary.trim()
+      ? payload.summary
+      : undefined;
+    return {
+      id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
+      level: inferLogLevel(event, payload),
+      message: summary ?? `${workerKind}/${actionType} ${status}`,
+      detail: formatLogDetail(payload),
+      createdAt: event.createdAt,
+    };
+  }
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
     level: inferLogLevel(event, payload),

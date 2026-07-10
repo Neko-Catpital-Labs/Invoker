@@ -33,6 +33,19 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence rendered into PR Pipeline summaries. */
+export interface PrAuthoringWorkerActionEntry {
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType: string;
+  subjectId: string;
+  summary?: string;
+  reason?: string;
+  taskId?: string;
+  updatedAt: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +59,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Worker action rows for the PR Pipeline summary. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -244,6 +259,54 @@ export function validateReviewStackPrBody(body: string): string[] {
 
 function promptByteLength(prompt: string): number {
   return Buffer.byteLength(prompt, 'utf8');
+}
+
+function markdownTableCell(value: string | undefined): string {
+  const normalized = value?.trim() ? value.trim() : '-';
+  return normalized
+    .replaceAll('\\', '\\\\')
+    .replaceAll('|', '\\|')
+    .replace(/\r?\n/g, '<br>');
+}
+
+function compareWorkerActionTime(
+  a: PrAuthoringWorkerActionEntry,
+  b: PrAuthoringWorkerActionEntry,
+): number {
+  const byTime = a.updatedAt.localeCompare(b.updatedAt);
+  if (byTime !== 0) return byTime;
+  const byWorker = a.workerKind.localeCompare(b.workerKind);
+  if (byWorker !== 0) return byWorker;
+  return a.actionType.localeCompare(b.actionType);
+}
+
+function renderPipelineSection(
+  actions: readonly PrAuthoringWorkerActionEntry[] | undefined,
+): string[] {
+  const lines: string[] = ['## Pipeline', ''];
+  const ordered = [...(actions ?? [])].sort(compareWorkerActionTime);
+  if (ordered.length === 0) {
+    lines.push('No worker actions recorded yet.');
+    lines.push('');
+    return lines;
+  }
+
+  lines.push('| Time | Worker | Action | Target | Status | Summary |');
+  lines.push('| --- | --- | --- | --- | --- | --- |');
+  for (const action of ordered) {
+    const target = action.taskId ?? `${action.subjectType}:${action.subjectId}`;
+    const summary = action.summary ?? action.reason;
+    lines.push(
+      `| ${markdownTableCell(action.updatedAt)} `
+        + `| ${markdownTableCell(action.workerKind)} `
+        + `| ${markdownTableCell(action.actionType)} `
+        + `| ${markdownTableCell(target)} `
+        + `| ${markdownTableCell(action.status)} `
+        + `| ${markdownTableCell(summary)} |`,
+    );
+  }
+  lines.push('');
+  return lines;
 }
 
 function buildPromptFileBootstrap(promptPath: string): string {
@@ -503,6 +566,8 @@ export function buildCanonicalPrBody(args: {
   lines.push('</details>');
   lines.push('');
 
+  lines.push(...renderPipelineSection(ctx?.workerActions));
+
   // ## Revert Plan — content collapsed per the canonical schema.
   lines.push('## Revert Plan');
   lines.push('');
@@ -597,6 +662,20 @@ export function buildMakePrPrompt(args: {
     if (ctx.visualProofMarkdown) {
       lines.push('Visual proof (include verbatim in PR body if present):');
       lines.push(ctx.visualProofMarkdown);
+      lines.push('');
+    }
+
+    if (ctx.workerActions && ctx.workerActions.length > 0) {
+      lines.push('PR Pipeline worker actions (oldest first; include as a ## Pipeline section):');
+      for (const action of [...ctx.workerActions].sort(compareWorkerActionTime)) {
+        const target = action.taskId ?? `${action.subjectType}:${action.subjectId}`;
+        lines.push(
+          `- ${action.updatedAt} ${action.workerKind}/${action.actionType} `
+            + `${action.status} on ${target}`
+            + (action.summary ? ` — ${action.summary}` : '')
+            + (!action.summary && action.reason ? ` — ${action.reason}` : ''),
+        );
+      }
       lines.push('');
     }
   }

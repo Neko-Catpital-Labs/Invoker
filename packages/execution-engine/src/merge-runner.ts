@@ -18,7 +18,12 @@ import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import {
+  isInvokerRepoUrl,
+  type PrAuthoringContext,
+  type PrAuthoringTaskEntry,
+  type PrAuthoringWorkerActionEntry,
+} from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -380,8 +385,46 @@ export async function buildPrAuthoringContext(
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    workerActions: collectPrAuthoringWorkerActions(host, workflowId),
     visualProofMarkdown,
   };
+}
+
+function collectPrAuthoringWorkerActions(
+  host: MergeRunnerHost,
+  workflowId: string,
+): PrAuthoringWorkerActionEntry[] {
+  const persistence = host.persistence as {
+    listWorkerActions?: (filters?: { workflowId?: string }) => Array<{
+      workerKind: string;
+      actionType: string;
+      status: string;
+      subjectType: string;
+      subjectId: string;
+      summary?: string;
+      taskId?: string;
+      updatedAt: string;
+      payload?: unknown;
+    }>;
+  };
+  const rows = persistence.listWorkerActions?.({ workflowId }) ?? [];
+  return rows.map((row) => {
+    const payload = row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+      ? row.payload as Record<string, unknown>
+      : {};
+    const reason = typeof payload.reason === 'string' ? payload.reason : undefined;
+    return {
+      workerKind: row.workerKind,
+      actionType: row.actionType,
+      status: row.status,
+      subjectType: row.subjectType,
+      subjectId: row.subjectId,
+      ...(row.summary ? { summary: row.summary } : {}),
+      ...(reason ? { reason } : {}),
+      ...(row.taskId ? { taskId: row.taskId } : {}),
+      updatedAt: row.updatedAt,
+    };
+  });
 }
 
 /**

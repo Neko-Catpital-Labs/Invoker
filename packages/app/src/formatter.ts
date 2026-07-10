@@ -206,11 +206,30 @@ export function formatEventLog(events: TaskEvent[]): string {
 
   const lines = events.map((event) => {
     const timestamp = event.createdAt;
-    const payload = event.payload ? ` ${event.payload}` : '';
+    const payload = formatTaskEventPayload(event);
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 
   return lines.join('\n');
+}
+
+function formatTaskEventPayload(event: TaskEvent): string {
+  if (!event.payload) return '';
+  if (event.eventType !== 'task.worker_action') return ` ${event.payload}`;
+  try {
+    const payload = JSON.parse(event.payload) as Record<string, unknown>;
+    const workerKind = typeof payload.workerKind === 'string' ? payload.workerKind : 'worker';
+    const actionType = typeof payload.actionType === 'string' ? payload.actionType : 'action';
+    const status = typeof payload.status === 'string' ? payload.status : 'unknown';
+    const subjectType = typeof payload.subjectType === 'string' ? payload.subjectType : undefined;
+    const subjectId = typeof payload.subjectId === 'string' ? payload.subjectId : undefined;
+    const summary = typeof payload.summary === 'string' ? payload.summary : undefined;
+    const target = subjectType && subjectId ? ` ${subjectType}=${escapeTerminalText(subjectId)}` : '';
+    const summarySuffix = summary ? ` — ${escapeTerminalText(summary)}` : '';
+    return ` ${escapeTerminalText(workerKind)}/${escapeTerminalText(actionType)} [${escapeTerminalText(status)}]${target}${summarySuffix}`;
+  } catch {
+    return ` ${event.payload}`;
+  }
 }
 
 export function formatWorkerActions(actions: WorkerActionRecord[]): string {

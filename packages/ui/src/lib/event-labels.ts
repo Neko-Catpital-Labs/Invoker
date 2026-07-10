@@ -32,6 +32,7 @@ const RAW_TO_FRIENDLY: Record<string, string> = {
   'task.launch_claimed': 'Launch claimed',
   'task.metadata.updated': 'Metadata updated',
   'task.log': 'Log',
+  'task.worker_action': 'Worker action',
   'workflow.mutation.timing': 'Workflow mutation timing',
   'debug.auto-fix': 'Autofix debug',
   // Legacy short names (pre-2025-01 event vocabulary):
