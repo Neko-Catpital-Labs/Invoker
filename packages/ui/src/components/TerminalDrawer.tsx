@@ -8,12 +8,13 @@
  * requiring a real terminal backing.
  */
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const TERMINAL_OUTPUT_BURST_FLUSH_MS = 100;
 
 /**
  * The drawer has one explicit state model:
@@ -55,10 +56,40 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+type TerminalOutputBurst = {
+  timer: ReturnType<typeof setTimeout> | null;
+  startedAtMs: number;
+  eventCount: number;
+  chars: number;
+  failedWriteCount: number;
+  maxWriteDurationMs: number;
+};
+
+type TerminalPerfContext = {
+  sessionId: string;
+  taskId: string;
+  mode: TerminalSessionDescriptor['mode'];
+  status: TerminalSessionDescriptor['status'];
+  isActive: boolean;
+};
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function reportUiPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
+  reason: 'attach' | 'snapshot-update',
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
@@ -71,6 +102,8 @@ function seedTerminalOutputSnapshot(
       seededSnapshot.term !== term
     )
   ) {
+    const startedAtMs = nowMs();
+    let failed = false;
     try {
       term.write(outputSnapshot);
       seededSnapshotRef.current = {
@@ -79,11 +112,22 @@ function seedTerminalOutputSnapshot(
         term,
       };
     } catch (err) {
+      failed = true;
       console.warn(
         `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
         err,
       );
     }
+    reportUiPerf('embedded_terminal_snapshot_seed', {
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      mode: session.mode,
+      status: session.status,
+      reason,
+      chars: outputSnapshot.length,
+      durationMs: roundMs(nowMs() - startedAtMs),
+      failed,
+    });
   }
 }
 
@@ -92,6 +136,71 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const terminalPerfContextRef = useRef<TerminalPerfContext>({
+    sessionId: session.sessionId,
+    taskId: session.taskId,
+    mode: session.mode,
+    status: session.status,
+    isActive,
+  });
+  const outputBurstRef = useRef<TerminalOutputBurst>({
+    timer: null,
+    startedAtMs: 0,
+    eventCount: 0,
+    chars: 0,
+    failedWriteCount: 0,
+    maxWriteDurationMs: 0,
+  });
+
+  terminalPerfContextRef.current = {
+    sessionId: session.sessionId,
+    taskId: session.taskId,
+    mode: session.mode,
+    status: session.status,
+    isActive,
+  };
+
+  const flushOutputBurst = useCallback((reason: 'timer' | 'unmount'): void => {
+    const burst = outputBurstRef.current;
+    if (burst.timer !== null) {
+      clearTimeout(burst.timer);
+      burst.timer = null;
+    }
+    if (burst.eventCount === 0) return;
+    const context = terminalPerfContextRef.current;
+    reportUiPerf('embedded_terminal_output_burst', {
+      ...context,
+      reason,
+      durationMs: roundMs(nowMs() - burst.startedAtMs),
+      eventCount: burst.eventCount,
+      chars: burst.chars,
+      failedWriteCount: burst.failedWriteCount,
+      maxWriteDurationMs: roundMs(burst.maxWriteDurationMs),
+    });
+    burst.startedAtMs = 0;
+    burst.eventCount = 0;
+    burst.chars = 0;
+    burst.failedWriteCount = 0;
+    burst.maxWriteDurationMs = 0;
+  }, []);
+
+  const recordOutputWrite = useCallback((chars: number, durationMs: number, failed: boolean): void => {
+    const burst = outputBurstRef.current;
+    if (burst.eventCount === 0) {
+      burst.startedAtMs = nowMs();
+    }
+    burst.eventCount += 1;
+    burst.chars += chars;
+    if (failed) {
+      burst.failedWriteCount += 1;
+    }
+    burst.maxWriteDurationMs = Math.max(burst.maxWriteDurationMs, durationMs);
+    if (burst.timer === null) {
+      burst.timer = setTimeout(() => flushOutputBurst('timer'), TERMINAL_OUTPUT_BURST_FLUSH_MS);
+    }
+  }, [flushOutputBurst]);
+
+  useEffect(() => () => flushOutputBurst('unmount'), [flushOutputBurst]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -99,6 +208,8 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
 
     let term: XTermTerminal;
     let fit: FitAddon;
+    const attachStartedAtMs = nowMs();
+    let openDurationMs = 0;
     try {
       term = new XTermTerminal({
         fontSize: 12,
@@ -110,14 +221,27 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       });
       fit = new FitAddon();
       term.loadAddon(fit);
+      const openStartedAtMs = nowMs();
       term.open(host);
+      openDurationMs = nowMs() - openStartedAtMs;
     } catch {
       return;
     }
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'attach');
+    reportUiPerf('embedded_terminal_attach', {
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      mode: session.mode,
+      status: session.status,
+      isActive,
+      durationMs: roundMs(nowMs() - attachStartedAtMs),
+      openDurationMs: roundMs(openDurationMs),
+      hasOutputSnapshot: Boolean(session.outputSnapshot),
+      outputSnapshotChars: session.outputSnapshot?.length ?? 0,
+    });
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -126,10 +250,15 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
+      const writeStartedAtMs = nowMs();
+      let failed = false;
       try {
         term.write(event.data);
       } catch {
+        failed = true;
         /* terminal disposed */
+      } finally {
+        recordOutputWrite(event.data.length, nowMs() - writeStartedAtMs, failed);
       }
     });
 
@@ -170,15 +299,16 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       } catch {
         /* already disposed */
       }
+      flushOutputBurst('unmount');
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [session.sessionId]);
+  }, [flushOutputBurst, recordOutputWrite, session.sessionId]);
 
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'snapshot-update');
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {

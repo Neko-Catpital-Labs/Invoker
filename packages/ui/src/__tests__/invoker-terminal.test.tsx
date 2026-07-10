@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
+import { useState } from 'react';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
 vi.mock('@xyflow/react', async () => {
@@ -60,6 +61,44 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex' });
+    });
+  });
+
+  it('reports planning chat input render perf through the existing ui-perf bridge', async () => {
+    function Harness(): JSX.Element {
+      const [value, setValue] = useState('');
+      return (
+        <InvokerTerminal
+          activeConversationKey="chat-1"
+          lines={[{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' }]}
+          busy={false}
+          value={value}
+          selectedPresetKey="codex"
+          presetOptions={[{ key: 'codex', label: 'Codex' }]}
+          draftPlanAvailable={false}
+          onValueChange={setValue}
+          onSubmit={vi.fn()}
+          onSubmitDraft={vi.fn()}
+          onPresetChange={vi.fn()}
+          onExpand={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_render',
+        expect.objectContaining({
+          conversationKey: 'chat-1',
+          inputLength: 5,
+          inputDelta: 5,
+          transcriptLineCount: 1,
+        }),
+      );
     });
   });
 

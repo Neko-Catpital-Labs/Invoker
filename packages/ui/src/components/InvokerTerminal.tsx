@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button } from './primitives/index.js';
 
 export interface InvokerTerminalLine {
@@ -17,6 +17,18 @@ const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function reportUiPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
 }
 
 interface InvokerTerminalProps {
@@ -43,6 +55,22 @@ interface InvokerTerminalProps {
 interface SubmitErrorView {
   title: string;
   message: string;
+}
+
+interface PendingInputRender {
+  eventId: number;
+  startedAtMs: number;
+  previousLength: number;
+  nextValue: string;
+  conversationKey: string;
+}
+
+interface TranscriptSignature {
+  conversationKey: string;
+  lineCount: number;
+  charCount: number;
+  lastLineId: number | null;
+  lastRole: InvokerTerminalLine['role'] | null;
 }
 
 function rolePrompt(role: InvokerTerminalLine['role']): string {
@@ -73,7 +101,17 @@ export function InvokerTerminal({
 }: InvokerTerminalProps): JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const pendingInputRenderRef = useRef<PendingInputRender | null>(null);
+  const inputEventIdRef = useRef(0);
+  const previousTranscriptSignatureRef = useRef<TranscriptSignature | null>(null);
+  const renderStartedAtMsRef = useRef(0);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  renderStartedAtMsRef.current = nowMs();
+  const transcriptCharCount = useMemo(
+    () => lines.reduce((sum, line) => sum + line.text.length, 0),
+    [lines],
+  );
+  const lastLine = lines[lines.length - 1];
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -91,6 +129,72 @@ export function InvokerTerminal({
       scrollTranscriptToBottom();
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+
+  useLayoutEffect(() => {
+    const pending = pendingInputRenderRef.current;
+    if (!pending || pending.nextValue !== value) return;
+    pendingInputRenderRef.current = null;
+    reportUiPerf('planning_chat_input_render', {
+      durationMs: roundMs(nowMs() - pending.startedAtMs),
+      eventId: pending.eventId,
+      conversationKey: activeConversationKey,
+      conversationChanged: pending.conversationKey !== activeConversationKey,
+      inputLength: value.length,
+      inputDelta: value.length - pending.previousLength,
+      transcriptLineCount: lines.length,
+      transcriptCharCount,
+      expanded,
+      busy,
+      readOnly,
+    });
+  }, [activeConversationKey, busy, expanded, lines.length, readOnly, transcriptCharCount, value]);
+
+  useLayoutEffect(() => {
+    const signature: TranscriptSignature = {
+      conversationKey: activeConversationKey,
+      lineCount: lines.length,
+      charCount: transcriptCharCount,
+      lastLineId: lastLine?.id ?? null,
+      lastRole: lastLine?.role ?? null,
+    };
+    const previous = previousTranscriptSignatureRef.current;
+    previousTranscriptSignatureRef.current = signature;
+    if (!previous) return;
+    if (
+      previous.conversationKey === signature.conversationKey &&
+      previous.lineCount === signature.lineCount &&
+      previous.charCount === signature.charCount &&
+      previous.lastLineId === signature.lastLineId &&
+      previous.lastRole === signature.lastRole
+    ) {
+      return;
+    }
+    reportUiPerf('planning_chat_transcript_render', {
+      durationMs: roundMs(nowMs() - renderStartedAtMsRef.current),
+      conversationKey: activeConversationKey,
+      conversationChanged: previous.conversationKey !== activeConversationKey,
+      lineCount: lines.length,
+      lineDelta: lines.length - previous.lineCount,
+      charCount: transcriptCharCount,
+      charDelta: transcriptCharCount - previous.charCount,
+      lastLineId: signature.lastLineId,
+      lastRole: lastLine?.role ?? null,
+      shouldFollowTranscript,
+      expanded,
+      busy,
+      readOnly,
+    });
+  }, [
+    activeConversationKey,
+    busy,
+    expanded,
+    lastLine?.id,
+    lastLine?.role,
+    lines.length,
+    readOnly,
+    shouldFollowTranscript,
+    transcriptCharCount,
+  ]);
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -265,7 +369,18 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              pendingInputRenderRef.current = {
+                eventId: inputEventIdRef.current + 1,
+                startedAtMs: nowMs(),
+                previousLength: value.length,
+                nextValue,
+                conversationKey: activeConversationKey,
+              };
+              inputEventIdRef.current += 1;
+              onValueChange(nextValue);
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();
