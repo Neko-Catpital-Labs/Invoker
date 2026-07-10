@@ -214,7 +214,7 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
       </section>
 
       <section data-testid="worker-processes-section" className="flex h-full min-h-0 flex-col overflow-hidden">
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div data-testid="worker-process-scroll" className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
           <WorkerActivityCard
             snapshot={workerStatus}
             selectedWorkerKind={selectedWorkerKind}
