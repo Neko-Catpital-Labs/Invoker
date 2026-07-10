@@ -67,8 +67,10 @@ describe('answerOwnerReadQuery', () => {
     expect(answerOwnerReadQuery({ kind: 'workflow', workflowId: 'wf-9' }, h)).toEqual({ workflow: { id: 'wf-9' }, tasks: [] });
     expect(h.loadWorkflowBundle).toHaveBeenCalledWith('wf-9');
     expect(answerOwnerReadQuery({ kind: 'review-gate', workflowId: 'wf-9' }, h)).toEqual({ reviewGate: { gate: true } });
-    expect(answerOwnerReadQuery({ kind: 'events', taskId: 't-1' }, h)).toEqual({ events: [{ e: 1 }] });
-    expect(h.getEvents).toHaveBeenCalledWith('t-1');
+    expect(answerOwnerReadQuery({ kind: 'events', taskId: 't-1', limit: 50, sortBy: 'desc' }, h)).toEqual({
+      events: [{ e: 1 }],
+    });
+    expect(h.getEvents).toHaveBeenCalledWith('t-1', { limit: 50, sortBy: 'desc' });
     expect(answerOwnerReadQuery({ kind: 'task-by-id', taskId: 't-1' }, h)).toEqual({ task: { id: 't-1' } });
     expect(answerOwnerReadQuery({ kind: 'task-output', taskId: 't-1' }, h)).toEqual({ output: 'output-text' });
     expect(answerOwnerReadQuery({ kind: 'output-chunks', taskId: 't-1' }, h)).toEqual({ chunks: [{ c: 1 }] });
@@ -163,7 +165,7 @@ describe('buildOwnerReadQueryHandlers', () => {
   it('passes reads straight through to persistence', () => {
     const h = build();
     expect(h.listWorkflows()).toEqual([{ id: 'wf' }]);
-    expect(h.getEvents('t1')).toEqual([{ e: 1 }]);
+    expect(h.getEvents('t1', { limit: 50, sortBy: 'desc' })).toEqual([{ e: 1 }]);
     expect(h.getTaskOutput('t1')).toBe('out');
     expect(h.getTaskById('t1')).toEqual({ id: 't1' });
     expect(h.getOutputChunks('t1')).toEqual([{ c: 1 }]);
