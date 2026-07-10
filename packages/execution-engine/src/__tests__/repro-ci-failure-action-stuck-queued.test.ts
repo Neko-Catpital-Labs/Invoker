@@ -179,7 +179,7 @@ function makeHarness(opts: { intents: WorkflowMutationIntent[]; existingActionSt
     getAutoFixAgent: () => 'codex',
     drainEvents: () => [event],
   });
-  const runTick = () => tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1 });
+  const runTick = () => tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
   return { actions, store, submit, event, externalKey, runTick };
 }
 
