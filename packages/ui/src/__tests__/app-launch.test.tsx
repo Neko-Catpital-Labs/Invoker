@@ -128,12 +128,13 @@ describe('App launch (component)', () => {
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('sidebar-home'));
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(sidebar.className).toContain('w-16');
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
-  it('keeps the manual app sidebar width while switching left rail surfaces', async () => {
+  it('keeps the app sidebar width while switching and dismissing left rail surfaces', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
 
     render(<App />);
@@ -141,6 +142,16 @@ describe('App launch (component)', () => {
 
     const sidebar = screen.getByTestId('app-sidebar');
     const toggle = screen.getByTestId('sidebar-collapse-toggle');
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('browser-return-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
 
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-16');
@@ -149,6 +160,7 @@ describe('App launch (component)', () => {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-16');
     }
+    expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
 
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-60');
@@ -157,6 +169,9 @@ describe('App launch (component)', () => {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-60');
     }
+    fireEvent.click(screen.getByTestId('sidebar-workers'));
+    expect(await screen.findByTestId('action-queue-section')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
   });
 
 
