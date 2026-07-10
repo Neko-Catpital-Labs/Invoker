@@ -428,6 +428,9 @@ importers:
       '@invoker/data-store':
         specifier: workspace:*
         version: link:../data-store
+      '@invoker/execution-engine':
+        specifier: workspace:*
+        version: link:../execution-engine
       '@invoker/transport':
         specifier: workspace:*
         version: link:../transport

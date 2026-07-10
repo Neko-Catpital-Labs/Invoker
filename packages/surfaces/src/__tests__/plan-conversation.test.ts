@@ -435,6 +435,31 @@ describe('PlanConversation', () => {
     expect(reply).toBe('What kind of project is this?');
   });
 
+  it('formats Codex JSONL into agent message and exposes reasoning', async () => {
+    const jsonl = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'tid-1' }),
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'item_0', type: 'reasoning', text: 'Greet the user and ask what to plan.' },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'item_1', type: 'agent_message', text: 'Hello. What should we plan?' },
+      }),
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } }),
+    ].join('\n');
+    mockCursorResponse(jsonl);
+    const reply = await conversation.sendMessage('hello');
+    expect(reply).toBe('Hello. What should we plan?');
+    expect(reply).not.toContain('thread.started');
+    expect(conversation.lastTurnReasoning).toEqual(['Greet the user and ask what to plan.']);
+    expect(conversation.history[1]).toEqual({
+      role: 'assistant',
+      content: 'Hello. What should we plan?',
+    });
+  });
+
   it('tracks conversation history', async () => {
     mockCursorResponse('Tell me more.');
     await conversation.sendMessage('Build a REST API');
