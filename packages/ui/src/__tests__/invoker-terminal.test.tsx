@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -417,15 +418,46 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
 
-  it('constrains the planning session list to a bounded scroll region', async () => {
-    render(<App />);
-    await openPlanningTerminal();
+  it('uses bounded scroll containers for every left rail list', async () => {
+    const railWorkflows: WorkflowMeta[] = [
+      { id: 'wf-active', name: 'Active workflow', status: 'running' },
+      { id: 'wf-review', name: 'Review workflow', status: 'failed' },
+    ];
+    const railTasks = [
+      makeUITask({
+        id: 'wf-active/run',
+        description: 'Running task',
+        status: 'running',
+        workflowId: 'wf-active',
+      }),
+      makeUITask({
+        id: 'wf-review/input',
+        description: 'Input task',
+        status: 'needs_input',
+        workflowId: 'wf-review',
+      }),
+    ];
 
-    const list = screen.getByTestId('planning-session-list');
-    // Regression guard: an auto-height overflow container never scrolls; long
-    // session lists overflow the rail and get clipped by the ancestor
-    // overflow-hidden instead. The scroll region needs a definite height.
-    expect(list.className).toContain('overflow-y-auto');
-    expect(list.className).toMatch(/\b(h-full|h-\[|max-h-\S+)/);
+    const expectRailListContract = (list: HTMLElement, railTestId: string) => {
+      expect(screen.getByTestId(railTestId)).toContainElement(list);
+      expect(list).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+      expect(list.parentElement).not.toBeNull();
+      expect(list.parentElement!).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col');
+    };
+
+    mock.setTasks(railTasks, railWorkflows);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    expectRailListContract(await screen.findByTestId('workflows-rail-list'), 'browser-rail');
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    expectRailListContract(await screen.findByTestId('attention-rail-list'), 'browser-rail');
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    expectRailListContract(await screen.findByTestId('running-rail-list'), 'browser-rail');
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expectRailListContract(await screen.findByTestId('planning-session-list'), 'planning-session-rail');
   });
 });
