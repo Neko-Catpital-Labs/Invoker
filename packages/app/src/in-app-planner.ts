@@ -5,6 +5,7 @@ import type {
   InAppPlanningChatLine,
   InAppPlanningChatRequest,
   InAppPlanningChatResponse,
+  InAppPlanningChatStreamEvent,
   InAppPlanningCreateSessionRequest,
   InAppPlanningCreateSessionResponse,
   InAppPlanningListSessionsResponse,
@@ -47,6 +48,7 @@ export interface InAppPlannerDeps {
   planningCommandBuilder?: PlanningCommandBuilder;
   conversationRepo?: ConversationRepository;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  onRawPlannerOutput?: (event: InAppPlanningChatStreamEvent) => void;
 }
 
 export interface InAppPlanningChatSession {
@@ -65,6 +67,7 @@ export interface InAppPlanningChatSession {
   nextMessageId: number;
   pendingSend?: Promise<void>;
   pendingSubmit?: Promise<InAppPlanningSubmitResponse>;
+  activeStreamClientId?: string;
 }
 
 export type InAppPlanningChatSessions = Map<string, InAppPlanningChatSession>;
@@ -277,7 +280,9 @@ function formatConversationalPlanningMessage(message: string): string {
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo'>,
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo' | 'onRawPlannerOutput'> & {
+    getRawPlannerOutputClientSessionId?: (sessionId: string) => string | undefined;
+  },
   threadTs: string,
 ): PlanConversationConfig {
   return {
@@ -294,6 +299,13 @@ function planConversationConfig(
     planningCommandBuilder: deps.planningCommandBuilder,
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
+    onRawPlannerOutput: deps.onRawPlannerOutput
+      ? (chunk) => deps.onRawPlannerOutput?.({
+        sessionId: threadTs,
+        clientSessionId: deps.getRawPlannerOutputClientSessionId?.(threadTs),
+        chunk,
+      })
+      : undefined,
   };
 }
 
@@ -330,7 +342,10 @@ async function createSession(
       tone: 'muted',
       createdAt,
     }],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id)),
+    conversation: new PlanConversation(planConversationConfig(preset, {
+      ...deps,
+      getRawPlannerOutputClientSessionId: (sessionId) => deps.sessions.get(sessionId)?.activeStreamClientId,
+    }, id)),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 2,
@@ -443,6 +458,9 @@ export async function sendPlanningChatMessage(
   }
 
   let sessionId = rawRequest?.sessionId;
+  const clientSessionId = typeof rawRequest?.clientSessionId === 'string' && rawRequest.clientSessionId
+    ? rawRequest.clientSessionId
+    : undefined;
   try {
     let session = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
     if (!session) {
@@ -463,6 +481,7 @@ export async function sendPlanningChatMessage(
     const activeSession = session;
     const previousSend = activeSession.pendingSend ?? Promise.resolve();
     const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
+      activeSession.activeStreamClientId = clientSessionId;
       appendSessionMessage(activeSession, 'user', message);
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);
@@ -522,6 +541,8 @@ export async function sendPlanningChatMessage(
           sessionId: activeSession.id,
           error: error instanceof Error ? error.message : String(error),
         };
+      } finally {
+        activeSession.activeStreamClientId = undefined;
       }
     });
     activeSession.pendingSend = turn.then(() => undefined, () => undefined);

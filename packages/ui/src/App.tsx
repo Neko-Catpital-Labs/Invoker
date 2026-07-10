@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, InAppPlanningChatStreamEvent, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import {
@@ -121,7 +121,13 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   input: string;
   busy: boolean;
   conversationKey: string;
+  plannerOutput?: PlanningSessionPlannerOutput;
 };
+
+interface PlanningSessionPlannerOutput {
+  text: string;
+  sessionId?: string;
+}
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
   return {
@@ -181,6 +187,31 @@ function relativePlanningUpdatedAt(value: string): string {
   if (hours < 24) return `Updated ${hours}h ago`;
   const days = Math.round(hours / 24);
   return `Updated ${days}d ago`;
+}
+
+function findPlanningStreamTargetSessionId(
+  sessions: PlanningSessionView[],
+  event: Pick<InAppPlanningChatStreamEvent, 'sessionId' | 'clientSessionId'>,
+): string | null {
+  if (event.clientSessionId && sessions.some((session) => session.id === event.clientSessionId)) {
+    return event.clientSessionId;
+  }
+
+  const exactSession = sessions.find((session) => session.id === event.sessionId);
+  if (exactSession) return exactSession.id;
+
+  const existingStreamSession = sessions.find((session) => session.plannerOutput?.sessionId === event.sessionId);
+  if (existingStreamSession) return existingStreamSession.id;
+
+  const unresolvedBusyLocalSessions = sessions.filter((session) => (
+    session.busy && session.id.startsWith('local-') && !session.plannerOutput?.sessionId
+  ));
+  if (unresolvedBusyLocalSessions.length === 1) {
+    return unresolvedBusyLocalSessions[0].id;
+  }
+
+  const busySessions = sessions.filter((session) => session.busy);
+  return busySessions.length === 1 ? busySessions[0].id : null;
 }
 
 
@@ -564,6 +595,7 @@ export function App() {
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
+  const plannerOutputText = activePlanningSession.plannerOutput?.text ?? '';
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
   const [graphMaximized, setGraphMaximized] = useState(false);
@@ -727,6 +759,30 @@ export function App() {
   useEffect(() => {
     const unsubscribe = window.invoker?.onRuntimeStatus?.((status) => {
       setRuntimeStatus(status);
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onPlanningChatStream?.((event) => {
+      if (!event || typeof event.chunk !== 'string' || event.chunk.length === 0) return;
+      setPlanningSessions((prev) => {
+        const targetSessionId = findPlanningStreamTargetSessionId(prev, event);
+        if (!targetSessionId) return prev;
+        const updatedAt = new Date().toISOString();
+        return prev.map((session) => {
+          if (session.id !== targetSessionId) return session;
+          if (!session.busy && !session.plannerOutput) return session;
+          return {
+            ...session,
+            plannerOutput: {
+              text: `${session.plannerOutput?.text ?? ''}${event.chunk}`,
+              sessionId: event.sessionId,
+            },
+            updatedAt,
+          };
+        });
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -1866,6 +1922,12 @@ export function App() {
     updatePlanningSessionById(activePlanningSessionId, updater);
   }, [activePlanningSessionId, updatePlanningSessionById]);
 
+  const clearPlanningPlannerOutput = useCallback((sessionId: string) => {
+    updatePlanningSessionById(sessionId, (session) => (
+      session.plannerOutput ? { ...session, plannerOutput: undefined } : session
+    ));
+  }, [updatePlanningSessionById]);
+
   const setPlanningInput = useCallback((value: string) => {
     updateActivePlanningSession((session) => ({ ...session, input: value }));
   }, [updateActivePlanningSession]);
@@ -1958,6 +2020,7 @@ export function App() {
     appendTerminalLine(input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
+    clearPlanningPlannerOutput(activePlanningSessionId);
 
     if (input.toLowerCase() === 'run') {
       if (!hasLoadedPlan || hasStarted) {
@@ -2014,6 +2077,7 @@ export function App() {
             messages: [...session.messages, { id: replyLineId, text: result.reply, role: 'assistant' }],
             draftPlanAvailable: result.draftPlanAvailable,
             draftPlanSummary: result.draftPlanAvailable ? result.draftPlanSummary : undefined,
+            plannerOutput: undefined,
             updatedAt,
           };
         }));
@@ -2037,6 +2101,7 @@ export function App() {
     activePlanningSessionId,
     activePlanningSessionSubmitted,
     appendTerminalLine,
+    clearPlanningPlannerOutput,
     handlePlanningSubmitDraft,
     handleStart,
     hasLoadedPlan,
@@ -2880,6 +2945,7 @@ export function App() {
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
+            plannerOutput={plannerOutputText}
             busy={activePlanningSessionBusy}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
@@ -3209,6 +3275,7 @@ export function App() {
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
+            plannerOutput={plannerOutputText}
             busy={activePlanningSessionBusy}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
@@ -3436,4 +3503,3 @@ export function App() {
     </div>
   );
 }
-

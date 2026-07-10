@@ -89,6 +89,7 @@ import type {
   InAppPlanRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
+  InAppPlanningChatStreamEvent,
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
   Logger,
@@ -2142,6 +2143,12 @@ function createEmbeddedTerminalBackendFromConfig(
   // not applied against an empty cache (quarantined and dropped).
   let detachedDeltaBuffer: TaskDelta[] | null = null;
   let uiInteractive = false;
+  const publishPlanningChatStream = (event: InAppPlanningChatStreamEvent): void => {
+    if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
+      mainWindow.webContents.send('invoker:planning-chat-stream', event);
+    }
+    webBridge?.broadcast('invoker:planning-chat-stream', event);
+  };
   let deferredStartupTriggered = false;
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
   const traceDbPollPerTask = process.env.INVOKER_TRACE_DB_POLL === '1';
@@ -3943,6 +3950,7 @@ function createEmbeddedTerminalBackendFromConfig(
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      onRawPlannerOutput: publishPlanningChatStream,
     });
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     // Two variants: (1) a successful override that returns a canned reply +
@@ -3977,6 +3985,7 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
+        onRawPlannerOutput: publishPlanningChatStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -4001,6 +4010,7 @@ function createEmbeddedTerminalBackendFromConfig(
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
         plannerReplyOverride,
+        onRawPlannerOutput: publishPlanningChatStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
