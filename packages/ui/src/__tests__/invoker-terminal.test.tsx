@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import type { InvokerTerminalLine } from '../components/InvokerTerminal.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -60,6 +61,65 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex' });
+    });
+  });
+
+  it('reports planning chat input and render perf markers through reportUiPerf', async () => {
+    const reportUiPerf = mock.api.reportUiPerf as ReturnType<typeof vi.fn>;
+    let currentValue = '';
+    const initialLines: InvokerTerminalLine[] = [
+      { id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' },
+    ];
+    const props = {
+      activeConversationKey: 'chat-1',
+      lines: initialLines,
+      busy: false,
+      value: currentValue,
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange: vi.fn((nextValue: string) => {
+        currentValue = nextValue;
+      }),
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+    const { rerender } = render(<InvokerTerminal {...props} />);
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_render_commit', expect.objectContaining({
+        valueLength: 0,
+        lineCount: 1,
+      }));
+    });
+    reportUiPerf.mockClear();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+
+    expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_input_change', expect.objectContaining({
+      valueLength: 5,
+      previousValueLength: 0,
+      deltaChars: 5,
+      lineCount: 1,
+    }));
+
+    rerender(<InvokerTerminal
+      {...props}
+      value={currentValue}
+      lines={[
+        ...initialLines,
+        { id: 2, text: 'I can help draft that.', role: 'assistant' as const },
+      ]}
+    />);
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_render_commit', expect.objectContaining({
+        valueLength: 5,
+        lineCount: 2,
+        lastLineId: 2,
+        inputDeltaChars: 5,
+      }));
     });
   });
 

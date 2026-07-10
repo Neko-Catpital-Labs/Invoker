@@ -1103,6 +1103,22 @@ function startHeadlessMode(): void {
           maxRendererCumulativeLagMs: 0,
           maxRendererTickDeltaMs: 0,
           maxRendererLongTaskMs: 0,
+          planningChatInputEvents: 0,
+          planningChatRenderCommits: 0,
+          maxPlanningChatInputToCommitMs: 0,
+          maxPlanningChatRenderCommitMs: 0,
+          maxPlanningChatInputDeltaChars: 0,
+          maxPlanningChatLineCount: 0,
+          terminalDrawerAttachEvents: 0,
+          maxTerminalDrawerAttachMs: 0,
+          terminalDrawerSnapshotWrites: 0,
+          terminalDrawerSnapshotBytes: 0,
+          maxTerminalDrawerSnapshotWriteMs: 0,
+          terminalDrawerOutputBursts: 0,
+          terminalDrawerOutputBytes: 0,
+          terminalDrawerOutputChunks: 0,
+          maxTerminalDrawerOutputBurstBytes: 0,
+          maxTerminalDrawerOutputWriteMs: 0,
         }),
         resetUiPerfStats: () => {},
         waitForApproval,
@@ -2103,11 +2119,27 @@ function createEmbeddedTerminalBackendFromConfig(
     maxRendererCumulativeLagMs: 0,
     maxRendererTickDeltaMs: 0,
     maxRendererLongTaskMs: 0,
+    planningChatInputEvents: 0,
+    planningChatRenderCommits: 0,
+    maxPlanningChatInputToCommitMs: 0,
+    maxPlanningChatRenderCommitMs: 0,
+    maxPlanningChatInputDeltaChars: 0,
+    maxPlanningChatLineCount: 0,
     workflowMetadataPublishRequests: 0,
     workflowMetadataPublishes: 0,
     workflowMetadataCoalescedRequests: 0,
     largeTaskDeltaBatches: 0,
     maxTaskDeltaBatchSize: 0,
+    terminalDrawerAttachEvents: 0,
+    maxTerminalDrawerAttachMs: 0,
+    terminalDrawerSnapshotWrites: 0,
+    terminalDrawerSnapshotBytes: 0,
+    maxTerminalDrawerSnapshotWriteMs: 0,
+    terminalDrawerOutputBursts: 0,
+    terminalDrawerOutputBytes: 0,
+    terminalDrawerOutputChunks: 0,
+    maxTerminalDrawerOutputBurstBytes: 0,
+    maxTerminalDrawerOutputWriteMs: 0,
     ...createTerminalUiPerfCounters(),
   };
   const terminalUiPerf = createTerminalUiPerfReporter();
@@ -2173,11 +2205,27 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.maxRendererCumulativeLagMs = 0;
     uiPerfStats.maxRendererTickDeltaMs = 0;
     uiPerfStats.maxRendererLongTaskMs = 0;
+    uiPerfStats.planningChatInputEvents = 0;
+    uiPerfStats.planningChatRenderCommits = 0;
+    uiPerfStats.maxPlanningChatInputToCommitMs = 0;
+    uiPerfStats.maxPlanningChatRenderCommitMs = 0;
+    uiPerfStats.maxPlanningChatInputDeltaChars = 0;
+    uiPerfStats.maxPlanningChatLineCount = 0;
     uiPerfStats.workflowMetadataPublishRequests = 0;
     uiPerfStats.workflowMetadataPublishes = 0;
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
     uiPerfStats.largeTaskDeltaBatches = 0;
     uiPerfStats.maxTaskDeltaBatchSize = 0;
+    uiPerfStats.terminalDrawerAttachEvents = 0;
+    uiPerfStats.maxTerminalDrawerAttachMs = 0;
+    uiPerfStats.terminalDrawerSnapshotWrites = 0;
+    uiPerfStats.terminalDrawerSnapshotBytes = 0;
+    uiPerfStats.maxTerminalDrawerSnapshotWriteMs = 0;
+    uiPerfStats.terminalDrawerOutputBursts = 0;
+    uiPerfStats.terminalDrawerOutputBytes = 0;
+    uiPerfStats.terminalDrawerOutputChunks = 0;
+    uiPerfStats.maxTerminalDrawerOutputBurstBytes = 0;
+    uiPerfStats.maxTerminalDrawerOutputWriteMs = 0;
     resetTerminalUiPerfCounters(uiPerfStats);
     terminalUiPerf.reset();
   };
@@ -4500,6 +4548,10 @@ function createEmbeddedTerminalBackendFromConfig(
         metric,
         ...(data ?? {}),
       };
+      const numberValue = (key: string): number | undefined => {
+        const value = data?.[key];
+        return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+      };
       if (
         metric === 'startup_bootstrap_state' ||
         metric === 'startup_snapshot_applied' ||
@@ -4526,6 +4578,59 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
+      }
+      if (metric === 'planning_chat_input_change') {
+        uiPerfStats.planningChatInputEvents += 1;
+        uiPerfStats.maxPlanningChatInputDeltaChars = Math.max(
+          uiPerfStats.maxPlanningChatInputDeltaChars,
+          numberValue('deltaChars') ?? 0,
+        );
+        uiPerfStats.maxPlanningChatLineCount = Math.max(
+          uiPerfStats.maxPlanningChatLineCount,
+          numberValue('lineCount') ?? 0,
+        );
+      }
+      if (metric === 'planning_chat_render_commit') {
+        uiPerfStats.planningChatRenderCommits += 1;
+        uiPerfStats.maxPlanningChatRenderCommitMs = Math.max(
+          uiPerfStats.maxPlanningChatRenderCommitMs,
+          numberValue('renderMs') ?? 0,
+        );
+        uiPerfStats.maxPlanningChatInputToCommitMs = Math.max(
+          uiPerfStats.maxPlanningChatInputToCommitMs,
+          numberValue('inputToCommitMs') ?? 0,
+        );
+        uiPerfStats.maxPlanningChatLineCount = Math.max(
+          uiPerfStats.maxPlanningChatLineCount,
+          numberValue('lineCount') ?? 0,
+        );
+      }
+      if (metric === 'terminal_drawer_attach') {
+        uiPerfStats.terminalDrawerAttachEvents += 1;
+        uiPerfStats.maxTerminalDrawerAttachMs = Math.max(
+          uiPerfStats.maxTerminalDrawerAttachMs,
+          numberValue('durationMs') ?? 0,
+        );
+      }
+      if (metric === 'terminal_drawer_snapshot_write') {
+        uiPerfStats.terminalDrawerSnapshotWrites += 1;
+        uiPerfStats.terminalDrawerSnapshotBytes += numberValue('bytes') ?? 0;
+        uiPerfStats.maxTerminalDrawerSnapshotWriteMs = Math.max(
+          uiPerfStats.maxTerminalDrawerSnapshotWriteMs,
+          numberValue('durationMs') ?? 0,
+        );
+      }
+      if (metric === 'terminal_drawer_output_burst') {
+        const bytes = numberValue('bytes') ?? 0;
+        const chunks = numberValue('chunks') ?? 0;
+        uiPerfStats.terminalDrawerOutputBursts += 1;
+        uiPerfStats.terminalDrawerOutputBytes += bytes;
+        uiPerfStats.terminalDrawerOutputChunks += chunks;
+        uiPerfStats.maxTerminalDrawerOutputBurstBytes = Math.max(uiPerfStats.maxTerminalDrawerOutputBurstBytes, bytes);
+        uiPerfStats.maxTerminalDrawerOutputWriteMs = Math.max(
+          uiPerfStats.maxTerminalDrawerOutputWriteMs,
+          numberValue('maxWriteMs') ?? 0,
+        );
       }
       uiPerfStats.rendererReports += 1;
       try {

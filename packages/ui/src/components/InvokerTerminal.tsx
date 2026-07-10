@@ -19,6 +19,17 @@ function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
 }
 
+function perfNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 interface InvokerTerminalProps {
   lines: InvokerTerminalLine[];
   busy: boolean;
@@ -71,9 +82,22 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const lastLine = lines.length > 0 ? lines[lines.length - 1] : null;
+  const lastLineId = lastLine?.id ?? null;
+  const lastLineChars = lastLine?.text.length ?? 0;
+  const renderStartedAtRef = useRef(0);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const pendingInputRef = useRef<{
+    seq: number;
+    startedAt: number;
+    valueLength: number;
+    deltaChars: number;
+  } | null>(null);
+  const lastInputRef = useRef<{ at: number; valueLength: number; seq: number } | null>(null);
+  const lastRenderReportRef = useRef<{ at: number; signature: string } | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  renderStartedAtRef.current = perfNow();
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -98,11 +122,77 @@ export function InvokerTerminal({
     setShouldFollowTranscript(isTranscriptNearBottom(transcript));
   }, []);
 
+  const handleValueChange = useCallback((nextValue: string): void => {
+    const now = perfNow();
+    const prevInput = lastInputRef.current;
+    const seq = (prevInput?.seq ?? 0) + 1;
+    const deltaChars = Math.abs(nextValue.length - value.length);
+    pendingInputRef.current = {
+      seq,
+      startedAt: now,
+      valueLength: nextValue.length,
+      deltaChars,
+    };
+    lastInputRef.current = { at: now, valueLength: nextValue.length, seq };
+    reportPlanningChatPerf('planning_chat_input_change', {
+      seq,
+      valueLength: nextValue.length,
+      previousValueLength: value.length,
+      deltaChars,
+      lineCount: lines.length,
+      busy,
+      readOnly,
+      expanded,
+      timeSincePreviousInputMs: prevInput ? Math.round(now - prevInput.at) : undefined,
+    });
+    onValueChange(nextValue);
+  }, [busy, expanded, lines.length, onValueChange, readOnly, value.length]);
+
   useEffect(() => {
     if (!busy && !readOnly) {
       inputRef.current?.focus();
     }
   }, [busy, readOnly]);
+
+  useEffect(() => {
+    const now = perfNow();
+    const pendingInput = pendingInputRef.current;
+    const inputToCommitMs = pendingInput && pendingInput.valueLength === value.length
+      ? Math.max(0, now - pendingInput.startedAt)
+      : undefined;
+    if (inputToCommitMs !== undefined) {
+      pendingInputRef.current = null;
+    }
+    const signature = [
+      activeConversationKey,
+      value.length,
+      lines.length,
+      lastLineId ?? '',
+      busy,
+      readOnly,
+      expanded,
+    ].join(':');
+    const previousReport = lastRenderReportRef.current;
+    if (inputToCommitMs === undefined && previousReport && previousReport.signature === signature && now - previousReport.at < 500) {
+      return;
+    }
+    lastRenderReportRef.current = { at: now, signature };
+
+    reportPlanningChatPerf('planning_chat_render_commit', {
+      valueLength: value.length,
+      lineCount: lines.length,
+      lastLineId,
+      lastLineChars,
+      busy,
+      readOnly,
+      expanded,
+      inputSeq: pendingInput?.seq,
+      inputDeltaChars: pendingInput?.deltaChars,
+      inputToCommitMs: inputToCommitMs === undefined ? undefined : Math.round(inputToCommitMs),
+      renderMs: Math.max(0, Math.round(now - renderStartedAtRef.current)),
+      activeConversationKey,
+    });
+  });
 
   const focusComposer = (): void => {
     inputRef.current?.focus();
@@ -265,7 +355,7 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => handleValueChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

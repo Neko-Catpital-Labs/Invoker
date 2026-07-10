@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
-import type { TerminalSessionDescriptor } from '@invoker/contracts';
+import type { TerminalOutputEvent, TerminalSessionDescriptor } from '@invoker/contracts';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -355,6 +355,71 @@ describe('Terminal drawer (component)', () => {
     await waitFor(() => {
       expect(xtermMock.writeLog).toEqual(['early line\n', 'live line\n']);
     });
+  });
+
+  it('reports terminal attach, snapshot, and output burst perf markers through reportUiPerf', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'boot output\n',
+    });
+    const reportUiPerf = mock.api.reportUiPerf as ReturnType<typeof vi.fn>;
+    const outputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
+    const previousTestOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__;
+    window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ = (cb) => {
+      outputCallbacks.add(cb);
+      return () => { outputCallbacks.delete(cb); };
+    };
+
+    try {
+      const { unmount } = render(
+        <TerminalDrawer
+          state="partial"
+          onCycle={vi.fn()}
+          sessions={[session]}
+          activeSessionId={session.sessionId}
+          onSelectSession={vi.fn()}
+          onCloseSession={vi.fn()}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(reportUiPerf).toHaveBeenCalledWith('terminal_drawer_attach', expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          hasOutputSnapshot: true,
+          outputSnapshotBytes: 'boot output\n'.length,
+        }));
+        expect(reportUiPerf).toHaveBeenCalledWith('terminal_drawer_snapshot_write', expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          bytes: 'boot output\n'.length,
+        }));
+      });
+      reportUiPerf.mockClear();
+
+      act(() => {
+        for (const callback of outputCallbacks) {
+          callback({
+            sessionId: session.sessionId,
+            taskId: session.taskId,
+            data: 'live output\n',
+          });
+        }
+      });
+      unmount();
+
+      expect(reportUiPerf).toHaveBeenCalledWith('terminal_drawer_output_burst', expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        chunks: 1,
+        bytes: 'live output\n'.length,
+      }));
+    } finally {
+      if (previousTestOutput) {
+        window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ = previousTestOutput;
+      } else {
+        delete window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__;
+      }
+    }
   });
 
   it('does not duplicate the replay snapshot when the same session re-renders', async () => {
