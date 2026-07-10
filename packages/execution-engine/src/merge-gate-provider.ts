@@ -16,6 +16,12 @@ export interface MergeGateCheckApprovalOptions {
   cwd: string;
 }
 
+export interface MergeGateUpdateReviewBodyOptions {
+  identifier: string;
+  cwd: string;
+  body: string;
+}
+
 export interface MergeGateCloseReviewOptions {
   identifier: string;
   cwd: string;
@@ -70,4 +76,7 @@ export interface MergeGateProvider {
 
   /** Read the live PR body as published on the provider (e.g. GitHub). */
   getReviewBody?(opts: { identifier: string; cwd: string }): Promise<string>;
+
+  /** Replace the live PR body on the provider (e.g. GitHub). */
+  updateReviewBody?(opts: MergeGateUpdateReviewBodyOptions): Promise<void>;
 }

@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import type {
@@ -102,6 +105,27 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       '--jq', '.body',
     ], cwd));
     return stdout.trim();
+  }
+
+  async updateReviewBody(opts: {
+    identifier: string;
+    cwd: string;
+    body: string;
+  }): Promise<void> {
+    const { identifier, cwd, body } = opts;
+    const targetRepo = await this.resolveTargetRepo(cwd);
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-gh-pr-body-'));
+    const bodyPath = join(dir, 'body.md');
+    writeFileSync(bodyPath, body, 'utf8');
+    try {
+      await retryTransientGitHubCli(() => this.exec('gh', [
+        'pr', 'edit', identifier,
+        '--repo', targetRepo,
+        '--body-file', bodyPath,
+      ], cwd));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   async checkApproval(opts: {

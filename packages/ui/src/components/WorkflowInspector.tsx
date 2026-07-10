@@ -23,6 +23,8 @@ interface TaskLogEntry {
 }
 
 const SAFE_LOG_DETAIL_KEYS = new Set([
+  'actionId',
+  'actionType',
   'agentCount',
   'agentName',
   'artifactCount',
@@ -33,8 +35,11 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'reviewId',
   'reviewUrl',
   'status',
+  'subjectId',
+  'subjectType',
   'reason',
   'route',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -64,6 +69,10 @@ function parseEventPayload(payload: string | undefined): Record<string, unknown>
 
 function inferLogLevel(event: TaskAuditEvent, payload: Record<string, unknown> | undefined): TaskLogLevel {
   if (isTaskLogLevel(payload?.level)) return payload.level;
+  if (event.eventType === 'task.worker_action') {
+    const status = typeof payload?.status === 'string' ? payload.status : undefined;
+    if (status === 'failed') return 'error';
+  }
   if (event.eventType.includes('failed') || event.eventType.includes('error')) return 'error';
   if (event.eventType.includes('warn')) return 'warn';
   if (event.eventType.startsWith('debug.')) return 'debug';
@@ -81,15 +90,33 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
   return Object.keys(detail).length > 0 ? JSON.stringify(detail) : undefined;
 }
 
+function stringPayloadField(payload: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = payload?.[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function formatWorkerActionMessage(
+  event: TaskAuditEvent,
+  payload: Record<string, unknown> | undefined,
+): string | undefined {
+  if (event.eventType !== 'task.worker_action') return undefined;
+  const workerKind = stringPayloadField(payload, 'workerKind') ?? 'worker';
+  const actionType = stringPayloadField(payload, 'actionType') ?? 'action';
+  const status = stringPayloadField(payload, 'status') ?? 'unknown';
+  const summary = stringPayloadField(payload, 'summary');
+  return `${workerKind}/${actionType} ${status}${summary ? `: ${summary}` : ''}`;
+}
+
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
   const payloadMessage = payload?.message;
+  const workerActionMessage = formatWorkerActionMessage(event, payload);
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
     level: inferLogLevel(event, payload),
-    message: typeof payloadMessage === 'string' && payloadMessage.trim()
+    message: workerActionMessage ?? (typeof payloadMessage === 'string' && payloadMessage.trim()
       ? payloadMessage
-      : event.eventType,
+      : event.eventType),
     detail: formatLogDetail(payload),
     createdAt: event.createdAt,
   };

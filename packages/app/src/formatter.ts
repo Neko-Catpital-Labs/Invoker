@@ -206,11 +206,48 @@ export function formatEventLog(events: TaskEvent[]): string {
 
   const lines = events.map((event) => {
     const timestamp = event.createdAt;
-    const payload = event.payload ? ` ${event.payload}` : '';
+    const payload = formatEventPayload(event);
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 
   return lines.join('\n');
+}
+
+function parsePayloadObject(payload: string | undefined): Record<string, unknown> | undefined {
+  if (!payload) return undefined;
+  try {
+    const parsed = JSON.parse(payload);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringPayloadField(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function formatEventPayload(event: TaskEvent): string {
+  if (event.eventType !== 'task.worker_action') {
+    return event.payload ? ` ${event.payload}` : '';
+  }
+  const payload = parsePayloadObject(event.payload);
+  if (!payload) return event.payload ? ` ${event.payload}` : '';
+
+  const workerKind = stringPayloadField(payload, 'workerKind') ?? 'worker';
+  const actionType = stringPayloadField(payload, 'actionType') ?? 'action';
+  const status = stringPayloadField(payload, 'status') ?? 'unknown';
+  const summary = stringPayloadField(payload, 'summary');
+  const reason = stringPayloadField(payload, 'reason');
+  const reviewId = stringPayloadField(payload, 'reviewId');
+  return ` ${escapeTerminalText(workerKind)}/${escapeTerminalText(actionType)}`
+    + ` [${escapeTerminalText(status)}]`
+    + (summary ? ` — ${escapeTerminalText(summary)}` : '')
+    + (reviewId ? ` review=${escapeTerminalText(reviewId)}` : '')
+    + (reason ? ` reason=${escapeTerminalText(reason)}` : '');
 }
 
 export function formatWorkerActions(actions: WorkerActionRecord[]): string {

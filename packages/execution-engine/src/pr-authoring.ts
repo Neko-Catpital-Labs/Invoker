@@ -33,6 +33,20 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Worker action evidence carried through PR authoring. */
+export interface PrAuthoringWorkerActionEntry {
+  workerKind: string;
+  actionType: string;
+  status: string;
+  summary?: string;
+  taskId?: string;
+  subjectType?: string;
+  subjectId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +60,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Worker actions performed for this workflow/task/PR, rendered in time order. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -273,6 +289,34 @@ function materializeLocalPrompt(prompt: string): { effectivePrompt: string; clea
   };
 }
 
+function markdownTableCell(value: string | undefined): string {
+  const normalized = (value ?? '').replace(/\r?\n/g, ' ').trim();
+  return normalized.replace(/\|/g, '\\|');
+}
+
+function workerActionTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.completedAt ?? action.updatedAt ?? action.createdAt ?? '';
+}
+
+function workerActionTarget(action: PrAuthoringWorkerActionEntry): string {
+  if (action.taskId) return action.taskId;
+  if (action.subjectType && action.subjectId) return `${action.subjectType}:${action.subjectId}`;
+  return action.subjectId ?? '';
+}
+
+function sortWorkerActionsInTimeOrder(
+  actions: readonly PrAuthoringWorkerActionEntry[],
+): PrAuthoringWorkerActionEntry[] {
+  return [...actions].sort((a, b) => {
+    const aTime = workerActionTime(a) || '\uffff';
+    const bTime = workerActionTime(b) || '\uffff';
+    return aTime.localeCompare(bTime)
+      || a.workerKind.localeCompare(b.workerKind)
+      || a.actionType.localeCompare(b.actionType)
+      || workerActionTarget(a).localeCompare(workerActionTarget(b));
+  });
+}
+
 function extractAssistantBody(driver: SessionDriver | undefined, sessionId: string, fallback: string): string {
   const rawSession = driver?.loadSession(sessionId);
   if (rawSession && driver) {
@@ -473,16 +517,36 @@ export function buildCanonicalPrBody(args: {
   structuredContext?: PrAuthoringContext;
 }): string {
   const lines: string[] = [];
+  const ctx = args.structuredContext;
 
   // ## Summary
   lines.push('## Summary');
   lines.push('');
-  if (args.structuredContext?.workflowDescription) {
-    lines.push(args.structuredContext.workflowDescription);
+  if (ctx?.workflowDescription) {
+    lines.push(ctx.workflowDescription);
   } else {
     lines.push(args.workflowSummary.trim());
   }
   lines.push('');
+
+  const workerActions = sortWorkerActionsInTimeOrder(ctx?.workerActions ?? []);
+  if (workerActions.length > 0) {
+    lines.push('## Pipeline');
+    lines.push('');
+    lines.push('| Time | Worker | Action | Status | Target | Summary |');
+    lines.push('| --- | --- | --- | --- | --- | --- |');
+    for (const action of workerActions) {
+      lines.push([
+        markdownTableCell(workerActionTime(action)),
+        markdownTableCell(action.workerKind),
+        markdownTableCell(action.actionType),
+        markdownTableCell(action.status),
+        markdownTableCell(workerActionTarget(action)),
+        markdownTableCell(action.summary),
+      ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+    }
+    lines.push('');
+  }
 
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
@@ -490,7 +554,6 @@ export function buildCanonicalPrBody(args: {
   lines.push('<details>');
   lines.push('<summary>Test Plan</summary>');
   lines.push('');
-  const ctx = args.structuredContext;
   const commandTasks = ctx?.tasks.filter((t) => t.command && t.status === 'completed') ?? [];
   if (commandTasks.length > 0) {
     for (const t of commandTasks) {
@@ -597,6 +660,21 @@ export function buildMakePrPrompt(args: {
     if (ctx.visualProofMarkdown) {
       lines.push('Visual proof (include verbatim in PR body if present):');
       lines.push(ctx.visualProofMarkdown);
+      lines.push('');
+    }
+
+    const workerActions = sortWorkerActionsInTimeOrder(ctx.workerActions ?? []);
+    if (workerActions.length > 0) {
+      lines.push('Worker actions (render these as a ## Pipeline section in time order when useful):');
+      for (const action of workerActions) {
+        const target = workerActionTarget(action);
+        const summary = action.summary ? ` — ${action.summary}` : '';
+        const time = workerActionTime(action);
+        lines.push(
+          `- ${time || 'unknown time'} ${action.workerKind}/${action.actionType} `
+            + `[${action.status}]${target ? ` target=${target}` : ''}${summary}`,
+        );
+      }
       lines.push('');
     }
   }

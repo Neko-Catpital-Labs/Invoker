@@ -110,6 +110,53 @@ describe('buildCanonicalPrBody', () => {
     expect(body).toContain(visualProof);
   });
 
+  it('renders worker actions as Pipeline rows in time order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Worker visibility',
+      workflowSummary: 'Updated worker visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-with-agent',
+            status: 'completed',
+            taskId: 'wf-1/test',
+            summary: 'queued CI repair',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            workerKind: 'pr-summary-refresh',
+            actionType: 'pr-summary-refresh',
+            status: 'completed',
+            subjectType: 'pull_request',
+            subjectId: '42',
+            summary: 'refreshed table | escaped',
+            updatedAt: '2026-01-01T00:03:00.000Z',
+          },
+          {
+            workerKind: 'auto-fix',
+            actionType: 'fix-task',
+            status: 'queued',
+            taskId: 'wf-1/build',
+            summary: 'queued task repair',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    const autoFixIndex = body.indexOf('auto-fix');
+    const ciFailureIndex = body.indexOf('ci-failure');
+    const refreshIndex = body.indexOf('pr-summary-refresh');
+    expect(autoFixIndex).toBeGreaterThan(-1);
+    expect(autoFixIndex).toBeLessThan(ciFailureIndex);
+    expect(ciFailureIndex).toBeLessThan(refreshIndex);
+    expect(body).toContain('refreshed table \\| escaped');
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
+
   it('canonical body passes validation', () => {
     const body = buildCanonicalPrBody({
       title: 'Anything',

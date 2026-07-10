@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
 import { GitHubMergeGateProvider } from '../github-merge-gate-provider.js';
 
 vi.mock('node:child_process');
@@ -455,6 +456,44 @@ describe('GitHubMergeGateProvider', () => {
         ],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
+    });
+  });
+
+  describe('updateReviewBody', () => {
+    it('updates the PR body through a temporary body file', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      let bodyPath: string | undefined;
+      let bodyFileContents: string | undefined;
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'edit') {
+          bodyPath = args[args.indexOf('--body-file') + 1];
+          bodyFileContents = readFileSync(bodyPath!, 'utf8');
+          return mockSpawnResult('{}', 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await provider.updateReviewBody({
+        identifier: '42',
+        cwd: '/tmp/repo',
+        body: '## Summary\n\nUpdated body.',
+      });
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr', 'edit', '42',
+          '--repo', 'owner/repo',
+          '--body-file', expect.any(String),
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+      expect(bodyFileContents).toBe('## Summary\n\nUpdated body.');
+      expect(bodyPath).toBeDefined();
+      expect(existsSync(bodyPath!)).toBe(false);
     });
   });
 
