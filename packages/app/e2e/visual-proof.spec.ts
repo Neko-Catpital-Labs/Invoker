@@ -811,7 +811,7 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('browser-rail-dismiss').click();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
@@ -918,6 +918,10 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'sidebar-collapse-state-2-attention-after-navigation');
     await expect(sidebar).toHaveClass(/w-60/);
 
+    await page.getByTestId('browser-return-home').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(sidebar).toHaveClass(/w-60/);
+
     for (const surface of ['running', 'workers', 'workflows'] as const) {
       await page.getByTestId(`sidebar-${surface}`).click();
       await expect(sidebar).toHaveClass(/w-60/);
@@ -935,6 +939,10 @@ test.describe('Visual proof capture', () => {
       await page.getByTestId(`sidebar-${surface}`).click();
       await expect(sidebar).toHaveClass(/w-16/);
     }
+
+    await page.getByTestId('browser-rail-dismiss').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(sidebar).toHaveClass(/w-16/);
   });
   test('dag loaded', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
