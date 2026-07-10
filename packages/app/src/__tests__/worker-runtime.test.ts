@@ -271,7 +271,33 @@ describe('worker runtime', () => {
       expect(runtime.isRunning()).toBe(false);
     });
 
-    it('awaits the in-flight tick before resolving stop', async () => {
+    it('resolves stop promptly without awaiting an in-flight tick by default', async () => {
+      const inFlight = deferred();
+      let tickSignal: AbortSignal | undefined;
+      const onTick = vi.fn().mockImplementation((ctx) => {
+        tickSignal = ctx.signal;
+        return inFlight.promise;
+      });
+      const runtime = createWorkerRuntime({
+        kind: 'recovery',
+        logger,
+        onTick,
+        installSignalHandlers: false,
+      });
+
+      void runtime.tick();
+      await Promise.resolve();
+      const started = Date.now();
+      await runtime.stop();
+      expect(Date.now() - started).toBeLessThan(50);
+      expect(tickSignal?.aborted).toBe(true);
+      expect(runtime.isRunning()).toBe(false);
+
+      inFlight.resolve();
+      await Promise.resolve();
+    });
+
+    it('awaits the in-flight tick when settleTimeoutMs is set', async () => {
       const inFlight = deferred();
       let settled = false;
       const onTick = vi.fn().mockReturnValueOnce(inFlight.promise);
@@ -284,7 +310,7 @@ describe('worker runtime', () => {
 
       void runtime.tick();
       await Promise.resolve();
-      const stopping = runtime.stop().then(() => {
+      const stopping = runtime.stop({ settleTimeoutMs: 5_000 }).then(() => {
         settled = true;
       });
 
