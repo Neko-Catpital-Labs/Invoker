@@ -7,6 +7,10 @@ export interface KimiExecutionAgentConfig {
   command?: string;
   configDir?: string;
   containerHomePath?: string;
+  /**
+   * Deprecated compatibility knob. Current Kimi prompt mode rejects approval-mode
+   * flags, so Invoker never passes --yolo with -p/--prompt.
+   */
   yolo?: boolean;
 }
 
@@ -28,13 +32,11 @@ export class KimiExecutionAgent implements ExecutionAgent {
   private readonly command: string;
   private readonly configDir: string;
   private readonly containerHomePath: string;
-  private readonly yolo: boolean;
 
   constructor(config: KimiExecutionAgentConfig = {}) {
     this.command = config.command ?? process.env.INVOKER_KIMI_COMMAND ?? 'kimi';
     this.configDir = config.configDir ?? join(homedir(), '.kimi-code');
     this.containerHomePath = config.containerHomePath ?? '/home/invoker';
-    this.yolo = config.yolo ?? true;
   }
 
   buildCommand(fullPrompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
@@ -77,7 +79,6 @@ export class KimiExecutionAgent implements ExecutionAgent {
 
   private buildArgs(prompt: string, executionModel?: string): string[] {
     return [
-      ...(this.yolo ? ['--yolo'] : []),
       ...(executionModel ? ['--model', executionModel] : []),
       '-p',
       prompt,
