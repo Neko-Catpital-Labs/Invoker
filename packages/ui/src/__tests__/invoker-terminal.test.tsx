@@ -63,6 +63,45 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('reports planning chat input and render perf markers through ui-perf', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+    reportUiPerf.mockClear();
+    const input = screen.getByTestId('invoker-terminal-input');
+    for (let index = 1; index <= 10; index += 1) {
+      fireEvent.change(input, { target: { value: `measure typing ${index}` } });
+    }
+
+    await waitFor(() => {
+      expect(reportUiPerf.mock.calls.some(([metric]) => metric === 'planning_chat_input_change')).toBe(true);
+      expect(reportUiPerf.mock.calls.some(([metric]) => metric === 'planning_chat_render')).toBe(true);
+    });
+
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'planning_chat_input_change',
+      expect.objectContaining({
+        conversationKey: 'local-planning-session-1',
+        changesSinceLastReport: expect.any(Number),
+        valueLength: expect.any(Number),
+        lineCount: 1,
+        handlerDurationMs: expect.any(Number),
+        maxHandlerDurationMs: expect.any(Number),
+      }),
+    );
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'planning_chat_render',
+      expect.objectContaining({
+        conversationKey: 'local-planning-session-1',
+        phase: expect.stringMatching(/update/),
+        valueLength: expect.any(Number),
+        actualDurationMs: expect.any(Number),
+        commitsSinceLastReport: expect.any(Number),
+      }),
+    );
+  });
+
   it('continues the same planning session', async () => {
     render(<App />);
     await openPlanningTerminal();

@@ -181,6 +181,66 @@ describe('Terminal drawer (component)', () => {
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
   });
 
+  it('reports embedded terminal attach, input, and output perf markers through ui-perf', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+    reportUiPerf.mockClear();
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_attach',
+        expect.objectContaining({
+          sessionId: 'mock-session-task-alpha',
+          taskId: 'task-alpha',
+          durationMs: expect.any(Number),
+        }),
+      );
+    });
+
+    reportUiPerf.mockClear();
+    act(() => {
+      xtermMock.instances[0]?.emitData('pwd\n');
+    });
+    expect(reportUiPerf).toHaveBeenCalledWith(
+      'embedded_terminal_input_burst',
+      expect.objectContaining({
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        chunksSinceLastReport: 1,
+        charsSinceLastReport: 'pwd\n'.length,
+        chunkChars: 'pwd\n'.length,
+        durationMs: expect.any(Number),
+      }),
+    );
+
+    reportUiPerf.mockClear();
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: 'mock-session-task-alpha',
+        taskId: 'task-alpha',
+        data: 'alpha live output\n',
+      });
+    });
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_output_burst',
+        expect.objectContaining({
+          sessionId: 'mock-session-task-alpha',
+          taskId: 'task-alpha',
+          source: 'live',
+          chunksSinceLastReport: 1,
+          charsSinceLastReport: 'alpha live output\n'.length,
+          chunkChars: 'alpha live output\n'.length,
+          durationMs: expect.any(Number),
+        }),
+      );
+    });
+  });
+
   it('cycles minimized → partial → maximized → minimized via the single button', async () => {
     render(<App />);
     act(() => mock.setTasks([taskAlpha], workflows));

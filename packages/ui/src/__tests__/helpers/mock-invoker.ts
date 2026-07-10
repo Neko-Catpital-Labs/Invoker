@@ -355,6 +355,8 @@ export function createMockInvoker(
     getActionGraph: vi.fn(async () => actionGraphSnapshot),
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
+    reportUiPerf: vi.fn(async () => undefined),
+    getUiPerfStats: vi.fn(async () => ({})),
   };
 
   function setTasks(tasks: TaskState[], workflows?: WorkflowMeta[]) {
