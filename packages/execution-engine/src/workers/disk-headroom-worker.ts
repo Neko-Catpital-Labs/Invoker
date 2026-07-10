@@ -118,9 +118,9 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
     intervalMs: options.intervalMs ?? resolveDiskCheckIntervalMs(),
     tickOnStart: options.tickOnStart ?? true,
     onTick: async (ctx) => {
-      if (ctx.signal?.aborted) return;
+      ctx.signal?.throwIfAborted();
       await options.onTick?.(ctx);
-      if (ctx.signal?.aborted) return;
+      ctx.signal?.throwIfAborted();
 
       const thresholds = options.thresholds ?? resolveDiskHeadroomThresholds();
       const evaluationsRaw = await runCheck({

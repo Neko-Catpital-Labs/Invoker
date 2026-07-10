@@ -201,7 +201,7 @@ async function runPrMaintenanceEntrypoint(
   options: PrMaintenanceTickOptions,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (signal?.aborted) return;
+  signal?.throwIfAborted();
 
   const repoRoot = resolvePrMaintenanceRepoRoot(options.repoRoot);
   const startedAt = new Date().toISOString();
@@ -216,7 +216,7 @@ async function runPrMaintenanceEntrypoint(
     staleLockSeconds: parsePositiveInteger(env.INVOKER_PR_CRON_LOCK_STALE_SECS),
   });
 
-  if (signal?.aborted) return;
+  signal?.throwIfAborted();
 
   if (lock.held) {
     options.logger.info(`[worker:${options.entrypoint.kind}] shared PR maintenance lock held; skipping tick`, {
