@@ -811,7 +811,7 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('browser-rail-dismiss').click();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
@@ -912,6 +912,13 @@ test.describe('Visual proof capture', () => {
     await expect(sidebar).toHaveClass(/w-60/);
     await captureScreenshot(page, 'sidebar-collapse-state-1-workflows-manually-expanded');
 
+    await page.getByTestId('browser-rail-dismiss').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(sidebar).toHaveClass(/w-60/);
+    await page.getByTestId('sidebar-workflows').click();
+    await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
+    await expect(sidebar).toHaveClass(/w-60/);
+
     // Screenshots precede the width assertions so a buggy build still records
     // the snap-back frame (regression: navigation overwrote the manual choice).
     await page.getByTestId('sidebar-attention').click();
@@ -929,6 +936,12 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('sidebar-home').click();
     await captureScreenshot(page, 'sidebar-collapse-state-4-home-still-collapsed');
+    await expect(sidebar).toHaveClass(/w-16/);
+
+    await page.getByTestId('sidebar-workflows').click();
+    await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
+    await page.getByTestId('browser-return-home').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
     await expect(sidebar).toHaveClass(/w-16/);
 
     for (const surface of ['planning', 'workflows'] as const) {
