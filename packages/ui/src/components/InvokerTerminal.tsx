@@ -14,9 +14,21 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const PLANNING_CHAT_INPUT_PERF_THROTTLE_MS = 250;
+const PLANNING_CHAT_RENDER_PERF_THROTTLE_MS = 1000;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function perfNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundPerfMs(durationMs: number): number {
+  return Math.round(durationMs * 10) / 10;
 }
 
 interface InvokerTerminalProps {
@@ -71,9 +83,103 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const renderStartedAtMs = perfNowMs();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const pendingInputEventRef = useRef<{
+    startedAtMs: number;
+    valueLength: number;
+    deltaChars: number;
+    handlerDurationMs: number;
+    conversationKey: string;
+  } | null>(null);
+  const inputEventsSinceLastReportRef = useRef(0);
+  const maxInputHandlerMsSinceLastReportRef = useRef(0);
+  const inputCommitsSinceLastReportRef = useRef(0);
+  const maxInputCommitMsSinceLastReportRef = useRef(0);
+  const renderCommitsSinceLastReportRef = useRef(0);
+  const maxRenderCommitMsSinceLastReportRef = useRef(0);
+  const inputEventFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputCommitFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const renderFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastInputEventPerfDataRef = useRef<Record<string, unknown> | null>(null);
+  const lastInputCommitPerfDataRef = useRef<Record<string, unknown> | null>(null);
+  const lastRenderPerfDataRef = useRef<Record<string, unknown> | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+
+  const reportPlanningChatPerf = useCallback((
+    metric: string,
+    data: Record<string, unknown>,
+  ): boolean => {
+    const reportUiPerf = window.invoker?.reportUiPerf;
+    if (!reportUiPerf) return false;
+    try {
+      void reportUiPerf(metric, {
+        component: 'InvokerTerminal',
+        conversationKey: activeConversationKey,
+        expanded,
+        readOnly,
+        busy,
+        lineCount: lines.length,
+        valueLength: value.length,
+        ...data,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [activeConversationKey, busy, expanded, lines.length, readOnly, value.length]);
+
+  const flushInputEventPerf = useCallback((): void => {
+    if (!lastInputEventPerfDataRef.current || inputEventsSinceLastReportRef.current === 0) return;
+    const reported = reportPlanningChatPerf('planning_chat_input_event', {
+      ...lastInputEventPerfDataRef.current,
+      maxDurationMs: roundPerfMs(maxInputHandlerMsSinceLastReportRef.current),
+      eventsSinceLastReport: inputEventsSinceLastReportRef.current,
+    });
+    if (reported) {
+      inputEventsSinceLastReportRef.current = 0;
+      maxInputHandlerMsSinceLastReportRef.current = 0;
+    }
+  }, [reportPlanningChatPerf]);
+
+  const flushInputCommitPerf = useCallback((): void => {
+    if (!lastInputCommitPerfDataRef.current || inputCommitsSinceLastReportRef.current === 0) return;
+    const reported = reportPlanningChatPerf('planning_chat_input_commit', {
+      ...lastInputCommitPerfDataRef.current,
+      maxDurationMs: roundPerfMs(maxInputCommitMsSinceLastReportRef.current),
+      commitsSinceLastReport: inputCommitsSinceLastReportRef.current,
+    });
+    if (reported) {
+      inputCommitsSinceLastReportRef.current = 0;
+      maxInputCommitMsSinceLastReportRef.current = 0;
+    }
+  }, [reportPlanningChatPerf]);
+
+  const flushRenderPerf = useCallback((): void => {
+    if (!lastRenderPerfDataRef.current || renderCommitsSinceLastReportRef.current === 0) return;
+    const reported = reportPlanningChatPerf('planning_chat_render_commit', {
+      ...lastRenderPerfDataRef.current,
+      maxDurationMs: roundPerfMs(maxRenderCommitMsSinceLastReportRef.current),
+      commitsSinceLastReport: renderCommitsSinceLastReportRef.current,
+    });
+    if (reported) {
+      renderCommitsSinceLastReportRef.current = 0;
+      maxRenderCommitMsSinceLastReportRef.current = 0;
+    }
+  }, [reportPlanningChatPerf]);
+
+  useEffect(() => () => {
+    if (inputEventFlushTimerRef.current !== null) {
+      clearTimeout(inputEventFlushTimerRef.current);
+    }
+    if (inputCommitFlushTimerRef.current !== null) {
+      clearTimeout(inputCommitFlushTimerRef.current);
+    }
+    if (renderFlushTimerRef.current !== null) {
+      clearTimeout(renderFlushTimerRef.current);
+    }
+  }, []);
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -92,6 +198,73 @@ export function InvokerTerminal({
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
 
+  useLayoutEffect(() => {
+    const pendingInputEvent = pendingInputEventRef.current;
+    if (!pendingInputEvent) {
+      return;
+    }
+    if (pendingInputEvent.conversationKey !== activeConversationKey) {
+      pendingInputEventRef.current = null;
+      return;
+    }
+    if (pendingInputEvent.valueLength !== value.length) return;
+
+    const durationMs = perfNowMs() - pendingInputEvent.startedAtMs;
+    inputCommitsSinceLastReportRef.current += 1;
+    maxInputCommitMsSinceLastReportRef.current = Math.max(
+      maxInputCommitMsSinceLastReportRef.current,
+      durationMs,
+    );
+
+    lastInputCommitPerfDataRef.current = {
+      conversationKey: pendingInputEvent.conversationKey,
+      durationMs: roundPerfMs(durationMs),
+      handlerDurationMs: roundPerfMs(pendingInputEvent.handlerDurationMs),
+      deltaChars: pendingInputEvent.deltaChars,
+      valueLength: pendingInputEvent.valueLength,
+      lineCount: lines.length,
+    };
+    if (inputCommitFlushTimerRef.current === null) {
+      flushInputCommitPerf();
+      inputCommitFlushTimerRef.current = setTimeout(() => {
+        inputCommitFlushTimerRef.current = null;
+        flushInputCommitPerf();
+      }, PLANNING_CHAT_INPUT_PERF_THROTTLE_MS);
+    }
+    pendingInputEventRef.current = null;
+  }, [activeConversationKey, flushInputCommitPerf, lines.length, value.length]);
+
+  useLayoutEffect(() => {
+    const durationMs = perfNowMs() - renderStartedAtMs;
+    renderCommitsSinceLastReportRef.current += 1;
+    maxRenderCommitMsSinceLastReportRef.current = Math.max(
+      maxRenderCommitMsSinceLastReportRef.current,
+      durationMs,
+    );
+    const lastLine = lines.length > 0 ? lines[lines.length - 1] : null;
+    lastRenderPerfDataRef.current = {
+      conversationKey: activeConversationKey,
+      durationMs: roundPerfMs(durationMs),
+      shouldFollowTranscript,
+      draftPlanAvailable,
+      submitErrorVisible: Boolean(submitError),
+      lastLineRole: lastLine?.role,
+      lastLineChars: lastLine?.text.length ?? 0,
+      lineCount: lines.length,
+      valueLength: value.length,
+      expanded,
+      readOnly,
+      busy,
+    };
+    if (renderFlushTimerRef.current === null) {
+      flushRenderPerf();
+      renderFlushTimerRef.current = setTimeout(() => {
+        renderFlushTimerRef.current = null;
+        flushRenderPerf();
+      }, PLANNING_CHAT_RENDER_PERF_THROTTLE_MS);
+    }
+  });
+
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
@@ -107,6 +280,39 @@ export function InvokerTerminal({
   const focusComposer = (): void => {
     inputRef.current?.focus();
   };
+
+  const handleComposerChange = useCallback((nextValue: string): void => {
+    const startedAtMs = perfNowMs();
+    const deltaChars = nextValue.length - value.length;
+    onValueChange(nextValue);
+    const handlerDurationMs = perfNowMs() - startedAtMs;
+    pendingInputEventRef.current = {
+      startedAtMs,
+      valueLength: nextValue.length,
+      deltaChars,
+      handlerDurationMs,
+      conversationKey: activeConversationKey,
+    };
+    inputEventsSinceLastReportRef.current += 1;
+    maxInputHandlerMsSinceLastReportRef.current = Math.max(
+      maxInputHandlerMsSinceLastReportRef.current,
+      handlerDurationMs,
+    );
+    lastInputEventPerfDataRef.current = {
+      conversationKey: activeConversationKey,
+      durationMs: roundPerfMs(handlerDurationMs),
+      deltaChars,
+      valueLength: nextValue.length,
+      lineCount: lines.length,
+    };
+    if (inputEventFlushTimerRef.current === null) {
+      flushInputEventPerf();
+      inputEventFlushTimerRef.current = setTimeout(() => {
+        inputEventFlushTimerRef.current = null;
+        flushInputEventPerf();
+      }, PLANNING_CHAT_INPUT_PERF_THROTTLE_MS);
+    }
+  }, [activeConversationKey, flushInputEventPerf, lines.length, onValueChange, value.length]);
 
   return (
     <section className="flex h-full min-h-0 flex-col border border-border bg-card">
@@ -265,7 +471,7 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => handleComposerChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

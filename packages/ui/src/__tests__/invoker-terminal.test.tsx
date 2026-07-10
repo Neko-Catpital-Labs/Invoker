@@ -63,6 +63,67 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('reports planning chat input and render perf markers through reportUiPerf', async () => {
+    const onValueChange = vi.fn();
+    const props = {
+      activeConversationKey: 'chat-1',
+      lines: [{ id: 1, text: 'First line', role: 'system' as const }],
+      busy: false,
+      value: '',
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange,
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+
+    const { rerender } = render(<InvokerTerminal {...props} />);
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_render_commit',
+        expect.objectContaining({
+          component: 'InvokerTerminal',
+          conversationKey: 'chat-1',
+          lineCount: 1,
+          lastLineChars: 'First line'.length,
+        }),
+      );
+    });
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+
+    expect(onValueChange).toHaveBeenCalledWith('hello');
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'planning_chat_input_event',
+      expect.objectContaining({
+        component: 'InvokerTerminal',
+        conversationKey: 'chat-1',
+        eventsSinceLastReport: 1,
+        deltaChars: 5,
+        valueLength: 5,
+      }),
+    );
+
+    rerender(<InvokerTerminal {...props} value="hello" />);
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_commit',
+        expect.objectContaining({
+          component: 'InvokerTerminal',
+          conversationKey: 'chat-1',
+          commitsSinceLastReport: 1,
+          deltaChars: 5,
+          valueLength: 5,
+        }),
+      );
+    });
+  });
+
   it('continues the same planning session', async () => {
     render(<App />);
     await openPlanningTerminal();

@@ -357,6 +357,68 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('reports terminal attach, snapshot replay, and live output perf markers through reportUiPerf', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'early line\n',
+    });
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['early line\n']);
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_attach',
+        expect.objectContaining({
+          component: 'TerminalDrawer',
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          snapshotChars: 'early line\n'.length,
+        }),
+      );
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_snapshot_write',
+        expect.objectContaining({
+          component: 'TerminalDrawer',
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          phase: 'mount',
+          chars: 'early line\n'.length,
+        }),
+      );
+    });
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'live line\n',
+      });
+    });
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['early line\n', 'live line\n']);
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_output_burst',
+        expect.objectContaining({
+          component: 'TerminalDrawer',
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          eventCount: 1,
+          chars: 'live line\n'.length,
+        }),
+      );
+    });
+  });
+
   it('does not duplicate the replay snapshot when the same session re-renders', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',
