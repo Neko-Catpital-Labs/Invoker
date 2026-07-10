@@ -111,7 +111,7 @@ jobs:
   ui-vitest:
     name: UI Vitest
     runs-on:
-      labels: Runner_2_4_core
+      labels: Runner_Vitest
     timeout-minutes: 5
 
     steps:
