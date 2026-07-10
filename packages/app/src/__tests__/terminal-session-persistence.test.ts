@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
   EmbeddedTerminalManager,
@@ -22,8 +22,16 @@ function createFakeChild() {
   return ee;
 }
 
-describe('terminal session persistence upsert storm (proof)', () => {
-  it('persists every running output chunk with a sync upsert (current behavior)', () => {
+describe('registerTerminalSessionPersistence coalesce', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function setup(coalesceMs = 250) {
     const child = createFakeChild();
     const mgr = new EmbeddedTerminalManager({
       backend: createBashTerminalBackend({ spawnFn: (() => child) as unknown as BashSpawnFn }),
@@ -38,15 +46,19 @@ describe('terminal session persistence upsert storm (proof)', () => {
         upserts.push({ status: record.status, outputSnapshot: record.outputSnapshot });
       }),
     };
-
-    registerTerminalSessionPersistence({
+    const handle = registerTerminalSessionPersistence({
       embeddedTerminalManager: mgr,
       persistence: persistence as any,
       uiPerfStats: createTerminalUiPerfCounters(),
       terminalUiPerf: createTerminalUiPerfReporter({ throttleMs: 0 }),
       terminalUiPerfSink: createTerminalUiPerfSink(() => {}, createTerminalUiPerfCounters()),
+      coalesceMs,
     });
+    return { child, mgr, upserts, persistence, handle };
+  }
 
+  it('coalesces N running output chunks into one delayed upsert', () => {
+    const { child, mgr, upserts, handle } = setup(250);
     mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
     expect(upserts).toHaveLength(1);
     expect(upserts[0]).toMatchObject({ status: 'running', outputSnapshot: '' });
@@ -55,9 +67,49 @@ describe('terminal session persistence upsert storm (proof)', () => {
     for (let i = 0; i < CHUNKS; i++) {
       child.stdout.emit('data', Buffer.from('x'));
     }
+    expect(upserts).toHaveLength(1);
 
-    // Proof of the main-thread hitch: every PTY chunk forces a full-snapshot upsert.
-    expect(upserts).toHaveLength(1 + CHUNKS);
-    expect(upserts[upserts.length - 1]?.outputSnapshot).toBe('x'.repeat(CHUNKS));
+    vi.advanceTimersByTime(249);
+    expect(upserts).toHaveLength(1);
+
+    vi.advanceTimersByTime(1);
+    expect(upserts).toHaveLength(2);
+    expect(upserts[1]).toMatchObject({
+      status: 'running',
+      outputSnapshot: 'x'.repeat(CHUNKS),
+    });
+
+    handle.dispose();
+  });
+
+  it('exit flushes immediately with full snapshot and cancels pending timer', () => {
+    const { child, mgr, upserts, handle } = setup(250);
+    mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
+    child.stdout.emit('data', Buffer.from('hello'));
+    expect(upserts).toHaveLength(1);
+
+    child.emit('exit', 0);
+    expect(upserts).toHaveLength(2);
+    expect(upserts[1]).toMatchObject({
+      status: 'exited',
+      outputSnapshot: 'hello',
+    });
+
+    vi.advanceTimersByTime(1000);
+    expect(upserts).toHaveLength(2);
+
+    handle.dispose();
+  });
+
+  it('keeps only the latest snapshot across a coalesce window', () => {
+    const { child, mgr, upserts, handle } = setup(100);
+    mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
+    child.stdout.emit('data', Buffer.from('a'));
+    child.stdout.emit('data', Buffer.from('b'));
+    child.stdout.emit('data', Buffer.from('c'));
+    vi.advanceTimersByTime(100);
+    expect(upserts).toHaveLength(2);
+    expect(upserts[1]?.outputSnapshot).toBe('abc');
+    handle.dispose();
   });
 });
