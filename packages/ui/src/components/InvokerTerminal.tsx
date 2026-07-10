@@ -14,9 +14,37 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const PLANNING_CHAT_INPUT_PERF_THROTTLE_MS = 500;
+const PLANNING_CHAT_RENDER_PERF_THROTTLE_MS = 1000;
+const PLANNING_CHAT_SLOW_INPUT_HANDLER_MS = 16;
+const PLANNING_CHAT_SLOW_RENDER_MS = 16;
+
+interface PlanningChatInputPerfWindow {
+  startedAtMs: number;
+  lastEmitAtMs: number;
+  changes: number;
+  charsChanged: number;
+  maxHandlerDurationMs: number;
+}
+
+interface PlanningChatRenderSnapshot {
+  conversationKey: string;
+  lineCount: number;
+  valueLength: number;
+}
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function perfNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function reportUiPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
 }
 
 interface InvokerTerminalProps {
@@ -71,8 +99,19 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const renderStartedAtMs = perfNowMs();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const inputPerfRef = useRef<PlanningChatInputPerfWindow>({
+    startedAtMs: renderStartedAtMs,
+    lastEmitAtMs: 0,
+    changes: 0,
+    charsChanged: 0,
+    maxHandlerDurationMs: 0,
+  });
+  const lastInputLengthRef = useRef(value.length);
+  const lastRenderSnapshotRef = useRef<PlanningChatRenderSnapshot | null>(null);
+  const lastRenderEmitAtRef = useRef(0);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
 
   const scrollTranscriptToBottom = useCallback((): void => {
@@ -85,6 +124,58 @@ export function InvokerTerminal({
     setShouldFollowTranscript(true);
     scrollTranscriptToBottom();
   }, [activeConversationKey, scrollTranscriptToBottom]);
+
+  useEffect(() => {
+    lastInputLengthRef.current = value.length;
+  }, [activeConversationKey, value.length]);
+
+  useEffect(() => {
+    const now = perfNowMs();
+    inputPerfRef.current = {
+      startedAtMs: now,
+      lastEmitAtMs: 0,
+      changes: 0,
+      charsChanged: 0,
+      maxHandlerDurationMs: 0,
+    };
+  }, [activeConversationKey]);
+
+  useLayoutEffect(() => {
+    const finishedAtMs = perfNowMs();
+    const durationMs = Math.max(0, finishedAtMs - renderStartedAtMs);
+    const previous = lastRenderSnapshotRef.current;
+    const lineCountDelta = previous ? lines.length - previous.lineCount : lines.length;
+    const valueLengthDelta = previous ? value.length - previous.valueLength : value.length;
+    const conversationChanged = previous ? previous.conversationKey !== activeConversationKey : true;
+    const shouldReport = lastRenderEmitAtRef.current === 0 ||
+      durationMs >= PLANNING_CHAT_SLOW_RENDER_MS ||
+      lineCountDelta !== 0 ||
+      conversationChanged ||
+      finishedAtMs - lastRenderEmitAtRef.current >= PLANNING_CHAT_RENDER_PERF_THROTTLE_MS;
+
+    if (shouldReport) {
+      reportUiPerf('planning_chat_render', {
+        durationMs: Math.round(durationMs),
+        lineCount: lines.length,
+        lineCountDelta,
+        valueLength: value.length,
+        valueLengthDelta,
+        busy,
+        readOnly,
+        expanded,
+        draftPlanAvailable,
+        hasSubmitError: Boolean(submitError),
+        conversationChanged,
+      });
+      lastRenderEmitAtRef.current = finishedAtMs;
+    }
+
+    lastRenderSnapshotRef.current = {
+      conversationKey: activeConversationKey,
+      lineCount: lines.length,
+      valueLength: value.length,
+    };
+  });
 
   useLayoutEffect(() => {
     if (shouldFollowTranscript) {
@@ -107,6 +198,56 @@ export function InvokerTerminal({
   const focusComposer = (): void => {
     inputRef.current?.focus();
   };
+
+  const handleValueChange = useCallback((nextValue: string): void => {
+    const startedAtMs = perfNowMs();
+    const previousLength = lastInputLengthRef.current;
+    onValueChange(nextValue);
+    const finishedAtMs = perfNowMs();
+    const durationMs = Math.max(0, finishedAtMs - startedAtMs);
+    const perf = inputPerfRef.current;
+    if (perf.changes === 0) {
+      perf.startedAtMs = startedAtMs;
+    }
+    perf.changes += 1;
+    perf.charsChanged += Math.abs(nextValue.length - previousLength);
+    perf.maxHandlerDurationMs = Math.max(perf.maxHandlerDurationMs, durationMs);
+    lastInputLengthRef.current = nextValue.length;
+
+    const shouldReport = perf.lastEmitAtMs === 0 ||
+      durationMs >= PLANNING_CHAT_SLOW_INPUT_HANDLER_MS ||
+      finishedAtMs - perf.lastEmitAtMs >= PLANNING_CHAT_INPUT_PERF_THROTTLE_MS;
+    if (!shouldReport) return;
+
+    reportUiPerf('planning_chat_input_change', {
+      durationMs: Math.round(durationMs),
+      maxHandlerDurationMs: Math.round(perf.maxHandlerDurationMs),
+      changesInWindow: perf.changes,
+      windowMs: Math.round(finishedAtMs - perf.startedAtMs),
+      charsChangedInWindow: perf.charsChanged,
+      valueLength: nextValue.length,
+      previousValueLength: previousLength,
+      lineCount: lines.length,
+      busy,
+      readOnly,
+      expanded,
+      draftPlanAvailable,
+      hasSubmitError: Boolean(submitError),
+    });
+    perf.lastEmitAtMs = finishedAtMs;
+    perf.startedAtMs = finishedAtMs;
+    perf.changes = 0;
+    perf.charsChanged = 0;
+    perf.maxHandlerDurationMs = 0;
+  }, [
+    busy,
+    draftPlanAvailable,
+    expanded,
+    lines.length,
+    onValueChange,
+    readOnly,
+    submitError,
+  ]);
 
   return (
     <section className="flex h-full min-h-0 flex-col border border-border bg-card">
@@ -265,7 +406,7 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => handleValueChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

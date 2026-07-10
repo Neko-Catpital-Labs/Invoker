@@ -357,6 +357,56 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('reports renderer attach and live output perf through reportUiPerf', async () => {
+    const session = makeTerminalSession('task-alpha');
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'terminal_renderer_attach',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          hasOutputSnapshot: false,
+        }),
+      );
+    });
+
+    reportUiPerf.mockClear();
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'live output\n',
+      });
+    });
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'terminal_renderer_output_write',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          kind: 'live',
+          chars: 'live output\n'.length,
+          lines: 1,
+          chunksInWindow: 1,
+        }),
+      );
+    });
+  });
+
   it('does not duplicate the replay snapshot when the same session re-renders', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',

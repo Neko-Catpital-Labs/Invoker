@@ -344,6 +344,8 @@ export function createMockInvoker(
     })),
     getWorkerStatus: vi.fn(async () => workerStatus),
     getWorkerDecisions: vi.fn(async () => ({ actions: [], limit: 25, offset: 0, hasMore: false })),
+    reportUiPerf: vi.fn(async () => undefined),
+    getUiPerfStats: vi.fn(async () => ({})),
     startWorker: vi.fn(async (kind: string) => {
       const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
       return row;
