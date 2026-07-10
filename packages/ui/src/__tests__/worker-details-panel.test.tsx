@@ -2,10 +2,14 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { WorkerDetailsPanel } from '../components/WorkerDetailsPanel.js';
 import { makeUITask } from './helpers/mock-invoker.js';
-import type { WorkerActionSummary, WorkerStatusEntry } from '../types.js';
+import type { WorkerActionSummary, WorkerStatusEntry, WorkflowMeta } from '../types.js';
 
 const onToggleCollapsed = vi.fn();
 const onTaskClick = vi.fn();
+
+const DEFAULT_WORKFLOWS = new Map<string, WorkflowMeta>([
+  ['wf-1', { id: 'wf-1', name: 'My Workflow', status: 'running' }],
+]);
 
 function makeAction(overrides: Partial<WorkerActionSummary> = {}): WorkerActionSummary {
   return {
@@ -40,13 +44,19 @@ function makeWorker(overrides: Partial<WorkerStatusEntry> = {}): WorkerStatusEnt
   };
 }
 
-function renderPanel(worker: WorkerStatusEntry | null, tasks = new Map(), collapsed = false) {
+function renderPanel(
+  worker: WorkerStatusEntry | null,
+  tasks = new Map(),
+  collapsed = false,
+  workflows: Map<string, WorkflowMeta> = DEFAULT_WORKFLOWS,
+) {
   onToggleCollapsed.mockReset();
   onTaskClick.mockReset();
   render(
     <WorkerDetailsPanel
       worker={worker}
       tasks={tasks}
+      workflows={workflows}
       collapsed={collapsed}
       onToggleCollapsed={onToggleCollapsed}
       onTaskClick={onTaskClick}
@@ -61,11 +71,15 @@ describe('WorkerDetailsPanel', () => {
 
     expect(screen.getByTestId('worker-details-title')).toHaveTextContent('CI failure repair');
     expect(screen.getByText('Current work')).toBeInTheDocument();
+    expect(screen.getAllByText('Task')).toHaveLength(2);
+    expect(screen.getAllByText('needs fix')).toHaveLength(2);
+    expect(screen.getAllByText('Workflow')).toHaveLength(2);
+    expect(screen.getAllByText('My Workflow')).toHaveLength(2);
     expect(screen.getAllByText('Action')).toHaveLength(2);
     expect(screen.getAllByText('Fix With Agent')).toHaveLength(2);
     expect(screen.getAllByText('Running')).toHaveLength(2);
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Open task: fix-target' })[0]!);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Open task: needs fix · My Workflow' })[0]!);
     expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
   });
 
@@ -96,7 +110,7 @@ describe('WorkerDetailsPanel', () => {
     }), new Map());
 
     expect(screen.getByText('Last recorded action')).toBeInTheDocument();
-    expect(screen.getByText('Target task: merge gate')).toBeInTheDocument();
+    expect(screen.getByText('Target task: merge gate · My Workflow')).toBeInTheDocument();
     expect(screen.getByText('Autofix history')).toBeInTheDocument();
     expect(screen.getByText('Scanned 14 · submitted 2 · skipped 1 · last skip: retry budget exhausted on task merge gate')).toBeInTheDocument();
   });

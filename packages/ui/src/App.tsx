@@ -2682,6 +2682,7 @@ export function App() {
       {viewMode === 'queue' ? (
         <QueueView
           tasks={tasks}
+          workflows={workflows}
           workerStatus={workerStatus}
           readOnly={runtimeStatus?.readOnly === true}
           onStartWorker={handleStartWorker}
@@ -3184,6 +3185,7 @@ export function App() {
                 <WorkerDetailsPanel
                   worker={selectedWorker}
                   tasks={tasks}
+                  workflows={workflows}
                   collapsed={effectiveInspectorCollapsed}
                   onToggleCollapsed={handleToggleInspectorCollapsed}
                   onTaskClick={handleTaskClick}
