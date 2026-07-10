@@ -9,7 +9,7 @@
  * - Modals overlay when needed
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type ReactNode, type RefObject } from 'react';
 import yaml from 'js-yaml';
 import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
@@ -110,6 +110,22 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] textarea',
 ].join(',');
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
+
+export function RailListBody({
+  testId,
+  paddingClass = 'p-3',
+  children,
+}: {
+  testId: string;
+  paddingClass?: string;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <div data-testid={testId} className={`min-h-0 flex-1 overflow-y-auto ${paddingClass}`}>
+      {children}
+    </div>
+  );
+}
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -2787,7 +2803,7 @@ export function App() {
 
   const renderWorkflowsList = (): JSX.Element => (
     workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
-      <div className="overflow-y-auto p-3">
+      <RailListBody testId="workflow-rail-list">
         <div className="space-y-1">
           {workflowEntries.map((entry) => (
             <BrowserWorkflowRow
@@ -2801,13 +2817,13 @@ export function App() {
             />
           ))}
         </div>
-      </div>
+      </RailListBody>
     )
   );
 
   const renderTaskList = (entries: typeof attentionEntries, emptyTitle: string, emptyCopy: string, tone: 'attention' | 'running'): JSX.Element => (
     entries.length === 0 ? renderBrowserEmptyState(emptyTitle, emptyCopy) : (
-      <div className="overflow-y-auto p-3">
+      <RailListBody testId={`${tone}-task-rail-list`}>
         <div className="space-y-1">
           {entries.map((entry) => (
             <BrowserTaskRow
@@ -2822,13 +2838,13 @@ export function App() {
             />
           ))}
         </div>
-      </div>
+      </RailListBody>
     )
   );
 
 
   const renderPlanningSessionList = (): JSX.Element => (
-    <div data-testid="planning-session-list" className="h-full overflow-y-auto py-1">
+    <RailListBody testId="planning-session-list" paddingClass="py-1">
       <div className="space-y-0.5">
         {planningSessions.map((session) => {
           const selected = session.id === activePlanningSession.id;
@@ -2852,7 +2868,7 @@ export function App() {
           );
         })}
       </div>
-    </div>
+    </RailListBody>
   );
 
   const planningReadyCount = planningSessions.filter((session) => session.status === 'draft_ready').length;
@@ -2876,7 +2892,7 @@ export function App() {
             New
           </Button>
         </div>
-        <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
+        <div className="flex min-h-0 flex-1 flex-col">{renderPlanningSessionList()}</div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2.5">
@@ -2935,7 +2951,7 @@ export function App() {
           Close
         </button>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col">
         {sidebarSurface === 'workflows'
           ? renderWorkflowsList()
           : sidebarSurface === 'attention'
@@ -3456,4 +3472,3 @@ export function App() {
     </div>
   );
 }
-

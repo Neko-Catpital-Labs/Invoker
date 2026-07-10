@@ -10,7 +10,7 @@ vi.mock('@xyflow/react', async () => {
 });
 
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
-const { App } = await import('../App.js');
+const { App, RailListBody } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
 
 describe('Invoker terminal (component)', () => {
@@ -35,6 +35,21 @@ describe('Invoker terminal (component)', () => {
   function submitPlanningText(text: string) {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+  }
+
+  function expectRailListScrollContract(list: HTMLElement) {
+    const listClasses = list.className.split(/\s+/);
+    expect(listClasses).toContain('min-h-0');
+    expect(listClasses).toContain('flex-1');
+    expect(listClasses).toContain('overflow-y-auto');
+
+    const railBody = list.parentElement;
+    expect(railBody).not.toBeNull();
+    const railBodyClasses = railBody!.className.split(/\s+/);
+    expect(railBodyClasses).toContain('flex');
+    expect(railBodyClasses).toContain('min-h-0');
+    expect(railBodyClasses).toContain('flex-1');
+    expect(railBodyClasses).toContain('flex-col');
   }
 
   it('generates a planning reply from plain language', async () => {
@@ -417,15 +432,39 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
 
-  it('constrains the planning session list to a bounded scroll region', async () => {
-    render(<App />);
-    await openPlanningTerminal();
+  it('constrains terminal rail lists to bounded scroll regions', () => {
+    render(
+      <div>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <RailListBody testId="workflow-rail-list">
+            <div>workflow list</div>
+          </RailListBody>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <RailListBody testId="attention-task-rail-list">
+            <div>attention task list</div>
+          </RailListBody>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <RailListBody testId="running-task-rail-list">
+            <div>running task list</div>
+          </RailListBody>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <RailListBody testId="planning-session-list" paddingClass="py-1">
+            <div>planning session list</div>
+          </RailListBody>
+        </div>
+      </div>,
+    );
 
-    const list = screen.getByTestId('planning-session-list');
-    // Regression guard: an auto-height overflow container never scrolls; long
-    // session lists overflow the rail and get clipped by the ancestor
-    // overflow-hidden instead. The scroll region needs a definite height.
-    expect(list.className).toContain('overflow-y-auto');
-    expect(list.className).toMatch(/\b(h-full|h-\[|max-h-\S+)/);
+    expectRailListScrollContract(screen.getByTestId('workflow-rail-list'));
+    expectRailListScrollContract(screen.getByTestId('attention-task-rail-list'));
+    expectRailListScrollContract(screen.getByTestId('running-task-rail-list'));
+    expectRailListScrollContract(screen.getByTestId('planning-session-list'));
+    expect(screen.getByTestId('workflow-rail-list').className.split(/\s+/)).toContain('p-3');
+    expect(screen.getByTestId('attention-task-rail-list').className.split(/\s+/)).toContain('p-3');
+    expect(screen.getByTestId('running-task-rail-list').className.split(/\s+/)).toContain('p-3');
+    expect(screen.getByTestId('planning-session-list').className.split(/\s+/)).toContain('py-1');
   });
 });
