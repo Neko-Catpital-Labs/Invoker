@@ -136,6 +136,18 @@ export interface InvokerConfig {
    * then to the built-in default agent.
    */
   autoFixAgent?: string;
+  /**
+   * Preferred execution agent for resolve-conflict (git merge conflicts).
+   * When unset, resolve-conflict uses the entry-point path default
+   * (explicit CLI/UI agent, then defaultExecutionAgent / autoFixAgent).
+   */
+  conflictResolutionAgent?: string;
+  /**
+   * Preferred execution model for resolve-conflict only.
+   * When set, wins over task.config.executionModel / defaultExecutionModel
+   * so conflict resolution can use a cheaper model than normal task work.
+   */
+  conflictResolutionModel?: string;
   /** Default execution harness for prompt-backed tasks when the task does not override it. */
   defaultExecutionAgent?: string;
   /** Default execution model for prompt-backed tasks when the task does not override it. */
@@ -402,6 +414,44 @@ export function resolveDefaultTaskExecutionSettings(config: InvokerConfig): Defa
   };
 }
 
+
+
+export interface ConflictResolutionSettings {
+  agent?: string;
+  model?: string;
+}
+
+/**
+ * Resolve agent/model for resolve-conflict.
+ *
+ * Precedence for agent: explicitAgent → conflictResolutionAgent → pathDefaultAgent.
+ * Model: conflictResolutionModel when set (wins over task/default execution models).
+ */
+export function resolveConflictResolutionSettings(
+  config: Pick<InvokerConfig, 'conflictResolutionAgent' | 'conflictResolutionModel'>,
+  options?: {
+    explicitAgent?: string;
+    pathDefaultAgent?: string;
+  },
+): ConflictResolutionSettings {
+  const explicit = options?.explicitAgent?.trim();
+  const configAgent = config.conflictResolutionAgent?.trim();
+  const configModel = config.conflictResolutionModel?.trim();
+  const pathDefault = options?.pathDefaultAgent?.trim();
+
+  const agent = (explicit && explicit.length > 0)
+    ? explicit
+    : (configAgent && configAgent.length > 0)
+      ? configAgent
+      : (pathDefault && pathDefault.length > 0)
+        ? pathDefault
+        : undefined;
+
+  return {
+    ...(agent ? { agent } : {}),
+    ...(configModel && configModel.length > 0 ? { model: configModel } : {}),
+  };
+}
 
 export type EmbeddedTerminalBackendConfig = 'bash' | 'pty';
 
