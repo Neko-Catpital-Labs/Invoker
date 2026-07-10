@@ -48,4 +48,31 @@ describe('useActionGraphSnapshot', () => {
     expect(getActionGraph).toHaveBeenCalled();
     unmount();
   });
+
+  it('does not poll while document is hidden', async () => {
+    vi.useFakeTimers();
+    const getActionGraph = vi.fn().mockResolvedValue(emptyGraph);
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = { getActionGraph };
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+
+    const { unmount } = renderHook(() => useActionGraphSnapshot(20, true));
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(getActionGraph).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(getActionGraph).not.toHaveBeenCalled();
+    unmount();
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    vi.useRealTimers();
+  });
 });

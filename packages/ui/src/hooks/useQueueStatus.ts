@@ -1,15 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { QueueStatus } from '../types.js';
 import { areStructurallyEqual } from './useDedupedState.js';
+import { subscribeVisibilityAwarePoll } from './visibilityAwarePoll.js';
 
 export function useQueueStatus(pollMs = 2000, enabled = true): QueueStatus | null {
   const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
+  const inFlightRef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
 
     const poll = async () => {
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
       try {
         const status = await window.invoker?.getQueueStatus();
         if (!cancelled && status) {
@@ -19,16 +23,17 @@ export function useQueueStatus(pollMs = 2000, enabled = true): QueueStatus | nul
         }
       } catch {
         // ignore polling errors
+      } finally {
+        inFlightRef.current = false;
       }
     };
 
-    void poll();
-    const interval = window.setInterval(() => {
+    const unsubscribe = subscribeVisibilityAwarePoll(() => {
       void poll();
-    }, pollMs);
+    }, pollMs, { restoreDelayMs: 25 });
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      unsubscribe();
     };
   }, [enabled, pollMs]);
 
