@@ -3209,6 +3209,12 @@ function createEmbeddedTerminalBackendFromConfig(
     if (deferredStartupTriggered) return;
     deferredStartupTriggered = true;
     recordStartupMark('deferred-startup.begin');
+    if (ownerMode && workerRuntimeController) {
+      setTimeout(() => {
+        workerRuntimeController?.startAutoStartedWorkers();
+        recordStartupMark('workers.auto-started');
+      }, 0);
+    }
     const configuredStartupPollDelayMs = Number.parseInt(process.env.INVOKER_STARTUP_POLL_DELAY_MS ?? '10000', 10);
     const startupPollDelayMs = Number.isFinite(configuredStartupPollDelayMs)
       ? configuredStartupPollDelayMs
@@ -3754,7 +3760,6 @@ function createEmbeddedTerminalBackendFromConfig(
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
       });
-      workerRuntimeController.startAutoStartedWorkers();
     }
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
