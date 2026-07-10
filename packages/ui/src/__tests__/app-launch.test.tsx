@@ -37,7 +37,9 @@ describe('App launch (component)', () => {
     vi.restoreAllMocks();
   });
   it('shows the reskinned empty shell when no plan is loaded', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
     render(<App />);
+    act(() => window.dispatchEvent(new Event('resize')));
     expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
     expect(screen.getByText('What to expect')).toBeInTheDocument();
@@ -50,6 +52,8 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
   });
   it('opens worker status from the left panel', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    act(() => window.dispatchEvent(new Event('resize')));
     mock.setWorkerStatus({
       generatedAt: '2026-01-01T00:00:00.000Z',
       workers: [
@@ -77,7 +81,9 @@ describe('App launch (component)', () => {
     expect(screen.getByText('PR status')).toBeInTheDocument();
   });
   it('renders the Apple-like source list without manual plan loading', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
     render(<App />);
+    act(() => window.dispatchEvent(new Event('resize')));
     expect(await screen.findByTestId('sidebar-home')).toHaveTextContent('Invoker');
     expect(screen.queryByTestId('rail-open-file')).not.toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
@@ -105,19 +111,25 @@ describe('App launch (component)', () => {
     expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(screen.getByText('Alpha · running')).toBeInTheDocument();
   });
-  it('auto-collapses the app sidebar for browser views on narrow windows', async () => {
+  it('auto-collapses the app sidebar on narrow windows without changing width across surfaces', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
 
     render(<App />);
     await screen.findByTestId('sidebar-workflows');
     act(() => window.dispatchEvent(new Event('resize')));
 
+    const sidebar = screen.getByTestId('app-sidebar');
+    expect(sidebar.className).toContain('w-16');
+
     fireEvent.click(screen.getByTestId('sidebar-workflows'));
     expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
-    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+    expect(sidebar.className).toContain('w-16');
     expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    expect(sidebar.className).toContain('w-16');
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
