@@ -128,6 +128,10 @@ describe('App launch (component)', () => {
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
 
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
+
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(sidebar.className).toContain('w-16');
 
@@ -145,18 +149,70 @@ describe('App launch (component)', () => {
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-16');
 
-    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('browser-return-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
+
+    const collapsedSurfaces = [
+      ['attention', 'Needs Attention'],
+      ['running', 'Running'],
+    ] as const;
+    for (const [surface, heading] of collapsedSurfaces) {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
+      expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
       expect(sidebar.className).toContain('w-16');
     }
+
+    fireEvent.click(screen.getByTestId('sidebar-workers'));
+    expect(await screen.findByTestId('action-queue-section')).toBeInTheDocument();
+    expect(screen.getByTestId('worker-processes-section')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expect(await screen.findByTestId('planning-session-rail')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
 
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-60');
 
-    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    const expandedSurfaces = [
+      ['attention', 'Needs Attention'],
+      ['running', 'Running'],
+    ] as const;
+    for (const [surface, heading] of expandedSurfaces) {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
+      expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
       expect(sidebar.className).toContain('w-60');
     }
+
+    fireEvent.click(screen.getByTestId('sidebar-workers'));
+    expect(await screen.findByTestId('action-queue-section')).toBeInTheDocument();
+    expect(screen.getByTestId('worker-processes-section')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expect(await screen.findByTestId('planning-session-rail')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
   });
 
 
