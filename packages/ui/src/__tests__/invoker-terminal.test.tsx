@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -417,15 +418,42 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
 
-  it('constrains the planning session list to a bounded scroll region', async () => {
-    render(<App />);
-    await openPlanningTerminal();
+  it('keeps left rail lists as bounded scroll containers', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-rail-a', name: 'Rail Workflow A', status: 'running' },
+      { id: 'wf-rail-b', name: 'Rail Workflow B', status: 'failed' },
+    ];
+    const tasks = [
+      makeUITask({ id: 'task-rail-running', description: 'Running rail task', status: 'running', workflowId: 'wf-rail-a' }),
+      makeUITask({ id: 'task-rail-attention', description: 'Attention rail task', status: 'failed', workflowId: 'wf-rail-b' }),
+    ];
+    const expectScrollableRailList = (list: HTMLElement, railTestId: string) => {
+      const slot = list.parentElement;
 
-    const list = screen.getByTestId('planning-session-list');
-    // Regression guard: an auto-height overflow container never scrolls; long
-    // session lists overflow the rail and get clipped by the ancestor
-    // overflow-hidden instead. The scroll region needs a definite height.
-    expect(list.className).toContain('overflow-y-auto');
-    expect(list.className).toMatch(/\b(h-full|h-\[|max-h-\S+)/);
+      expect(slot).not.toBeNull();
+      expect(slot!.classList.contains('flex')).toBe(true);
+      expect(slot!.classList.contains('min-h-0')).toBe(true);
+      expect(slot!.classList.contains('flex-1')).toBe(true);
+      expect(slot!.classList.contains('flex-col')).toBe(true);
+      expect(list.closest(`[data-testid="${railTestId}"]`)).not.toBeNull();
+      expect(list.classList.contains('min-h-0')).toBe(true);
+      expect(list.classList.contains('flex-1')).toBe(true);
+      expect(list.classList.contains('overflow-y-auto')).toBe(true);
+    };
+
+    render(<App />);
+    act(() => mock.setTasks(tasks, workflows));
+
+    await openPlanningTerminal();
+    expectScrollableRailList(screen.getByTestId('planning-session-list'), 'planning-session-rail');
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    expectScrollableRailList(await screen.findByTestId('browser-workflows-list'), 'browser-rail');
+
+    fireEvent.click(await screen.findByTestId('sidebar-attention'));
+    expectScrollableRailList(await screen.findByTestId('browser-attention-task-list'), 'browser-rail');
+
+    fireEvent.click(await screen.findByTestId('sidebar-running'));
+    expectScrollableRailList(await screen.findByTestId('browser-running-task-list'), 'browser-rail');
   });
 });
