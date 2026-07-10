@@ -495,12 +495,18 @@ describe('GET /api/queue', () => {
 });
 
 describe('GET /api/tasks/:id/events', () => {
-  it('returns event log', async () => {
-    const res = await request(port, 'GET', '/api/tasks/task-1/events');
+  it('returns event log page when limit is provided', async () => {
+    const res = await request(port, 'GET', '/api/tasks/task-1/events?limit=50&sortBy=desc');
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].eventType).toBe('started');
-    expect(mocks.persistence.getEvents).toHaveBeenCalledWith('task-1');
+    expect(mocks.persistence.getEvents).toHaveBeenCalledWith('task-1', 'desc', 50, undefined);
+  });
+
+  it('rejects missing limit', async () => {
+    const res = await request(port, 'GET', '/api/tasks/task-1/events');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/limit/i);
   });
 });
 
