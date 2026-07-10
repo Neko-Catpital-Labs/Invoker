@@ -1,9 +1,22 @@
-import type { WorkerActionStatus, WorkerActionSummary, WorkerStatusEntry } from '../types.js';
+import type {
+  TaskState,
+  WorkerActionStatus,
+  WorkerActionSummary,
+  WorkerStatusEntry,
+  WorkflowMeta,
+} from '../types.js';
 
 export interface WorkerDisplayCopy {
   readonly name: string;
   readonly idleText: string;
   readonly noActionText: string;
+}
+
+export interface WorkerActionTargetContext {
+  readonly task: TaskState | null;
+  readonly taskTitle: string;
+  readonly workflowId: string | undefined;
+  readonly workflowName: string | undefined;
 }
 
 export const ACTIVE_WORKER_ACTION_STATUSES: ReadonlySet<WorkerActionStatus> = new Set<WorkerActionStatus>([
@@ -26,6 +39,34 @@ export function displayWorkerTaskId(taskId: string): string {
   if (taskId.startsWith('__merge__')) return 'merge gate';
   const slash = taskId.lastIndexOf('/');
   return slash >= 0 ? taskId.slice(slash + 1) : taskId;
+}
+
+export function resolveWorkerActionTarget(
+  action: WorkerActionSummary,
+  tasks: Map<string, TaskState>,
+  workflows?: Map<string, WorkflowMeta>,
+): WorkerActionTargetContext {
+  const task = action.taskId ? tasks.get(action.taskId) ?? null : null;
+  const workflowId = action.workflowId ?? task?.config.workflowId;
+  const workflowName = workflowId
+    ? workflows?.get(workflowId)?.name ?? workflowId
+    : undefined;
+
+  let taskTitle: string;
+  if (task?.description) {
+    taskTitle = task.description;
+  } else if (action.taskId) {
+    taskTitle = displayWorkerTaskId(action.taskId);
+  } else {
+    taskTitle = `${formatWorkerValue(action.subjectType)} ${action.subjectId}`;
+  }
+
+  return {
+    task,
+    taskTitle,
+    workflowId,
+    workflowName,
+  };
 }
 
 export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
