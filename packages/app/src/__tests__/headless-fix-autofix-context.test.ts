@@ -99,8 +99,9 @@ describe('headless fix auto-fix context', () => {
     expect(resolveConflictActionMock).toHaveBeenCalledWith(
       'wf-1/task-1',
       expect.any(Object),
-      'custom-agent',
       undefined,
+      undefined,
+      { pathDefaultAgent: 'custom-agent' },
     );
   });
 

@@ -8,6 +8,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { TaskRunner } from '@invoker/execution-engine';
 import type { SQLiteAdapter } from '@invoker/data-store';
+
+const loadConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+
+vi.mock('../config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config.js')>();
+  return {
+    ...actual,
+    loadConfig: () => loadConfigMock(),
+  };
+});
+
 import { resolveConflictAction } from '../workflow-actions.js';
 
 describe('resolveConflictAction', () => {
@@ -26,6 +37,7 @@ describe('resolveConflictAction', () => {
   };
 
   beforeEach(() => {
+    loadConfigMock.mockReturnValue({});
     orchestrator = {
       getTask: vi.fn(() => ({
         id: 'task-a',
@@ -50,10 +62,50 @@ describe('resolveConflictAction', () => {
     });
 
     expect(orchestrator.beginFixSession).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', 'saved-err', undefined);
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', 'saved-err', 'codex', undefined);
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
     expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
+  });
+
+  it('applies conflictResolutionAgent and conflictResolutionModel from config', async () => {
+    loadConfigMock.mockReturnValue({
+      conflictResolutionAgent: 'omp',
+      conflictResolutionModel: 'gpt-5-mini',
+    });
+
+    await resolveConflictAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith(
+      'task-a',
+      'saved-err',
+      'omp',
+      'gpt-5-mini',
+    );
+  });
+
+  it('lets an explicit agent override conflictResolutionAgent but still applies the config model', async () => {
+    loadConfigMock.mockReturnValue({
+      conflictResolutionAgent: 'omp',
+      conflictResolutionModel: 'gpt-5-mini',
+    });
+
+    await resolveConflictAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, 'claude');
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith(
+      'task-a',
+      'saved-err',
+      'claude',
+      'gpt-5-mini',
+    );
   });
 
   it('auto-approves after conflict resolution when configured', async () => {
