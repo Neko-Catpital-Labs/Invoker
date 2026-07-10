@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ActionGraphResponse } from '@invoker/contracts';
 import { areStructurallyEqual } from './useDedupedState.js';
+import { subscribeVisibilityAwarePoll } from './visibilityAwarePoll.js';
 
 export function useActionGraphSnapshot(pollMs = 2000, enabled = true): {
   graph: ActionGraphResponse | null;
@@ -50,13 +51,12 @@ export function useActionGraphSnapshot(pollMs = 2000, enabled = true): {
       }
     };
 
-    void poll();
-    const interval = window.setInterval(() => {
+    const unsubscribe = subscribeVisibilityAwarePoll(() => {
       void poll();
-    }, pollMs);
+    }, pollMs, { restoreDelayMs: 50 });
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      unsubscribe();
     };
   }, [enabled, pollMs]);
 
