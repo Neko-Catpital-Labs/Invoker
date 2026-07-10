@@ -14,7 +14,9 @@ matching index.
 
 A follow-on beachball class was DAG task selection: the inspector called
 unbounded `getEvents` on click, stalling main while marshaling full task
-history even though the UI only rendered 20 log rows.
+history even though the UI only rendered 20 log rows. The same inspector
+path fires when selecting a row in Needs Attention, so that surface needs
+the same hitch coverage.
 
 ## Rules
 
@@ -49,7 +51,7 @@ history even though the UI only rendered 20 log rows.
 | --- | --- | --- |
 | `useWorkerStatus` → `getWorkerStatus` → `snapshot()` | ~2s | Recovery via aggregates; indexed `listWorkerActions` (no TTL cache) |
 | Main `dbPollInterval` → `loadTasks` | ~2s | Projection must not unbounded-scan attempts |
-| Task inspector / History / Approval `getEvents` | on demand | Always paginated (`limit` required; History uses `beforeId` for Load more) |
+| Needs Attention / DAG / inspector / History / Approval `getEvents` | on demand | Always paginated (`limit` required; History uses `beforeId` for Load more) |
 
 ## Preferred APIs
 
@@ -67,7 +69,8 @@ history even though the UI only rendered 20 log rows.
 ## How to catch regressions
 
 - Unit cost guards under fat fixtures (many events / large attempt errors),
-  including `packages/app/src/__tests__/dag-click-get-events-cost.test.ts`
+  including `packages/app/src/__tests__/dag-click-get-events-cost.test.ts` and
+  `packages/app/src/__tests__/attention-click-get-events-cost.test.ts`
   (unbounded vs page cost + reject missing limit).
 - Main-process hitch e2e (`packages/app/e2e/main-process-hitch-responsiveness.spec.ts`):
   while worker-status polls against a seeded fat DB, cheap IPC RTT must stay
@@ -77,6 +80,9 @@ history even though the UI only rendered 20 log rows.
   seed fat events, click task nodes, assert `listWorkflows` RTT stays under the
   same hitch budget. Included in GitHub Playwright shards (merge-queue / master)
   and in the extended Playwright battery used by the twice-daily e2e worker.
+- Needs Attention hitch e2e (`packages/app/e2e/attention-click-hitch-responsiveness.spec.ts`):
+  seed fat events, open Needs Attention, click list rows, assert `listWorkflows`
+  RTT stays under the same hitch budget. Included in GitHub Playwright shards.
 - Slow-query telemetry: `SQLiteAdapter` logs statements slower than 25ms
   (`slowQueryThresholdMs` / `onSlowQuery`) so the next spike shows up without
   attaching a sampler. Set `slowQueryThresholdMs: 0` to disable.
