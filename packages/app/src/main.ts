@@ -91,6 +91,7 @@ import type {
   InAppPlanningChatRequest,
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
+  PlannerStreamEvent,
   Logger,
   WorkflowMeta,
   WorkflowMutationAcceptedResult,
@@ -466,6 +467,10 @@ let commandService: CommandService;
 let latestTaskExecutor: TaskRunner | null = null;
 let guiUsingDaemonOwner = false;
 let guiDaemonOwnerConnectionLost = false;
+
+function publishPlannerStream(event: PlannerStreamEvent): void {
+  messageBus.publish(Channels.PLANNER_STREAM, event);
+}
 
 function buildCommandServiceInvalidationDeps() {
   return buildWorkflowInvalidationDeps({
@@ -1209,6 +1214,7 @@ function startHeadlessMode(): void {
         loadGeneratedPlan,
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
+        onPlannerStream: publishPlannerStream,
       });
 
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
@@ -1252,6 +1258,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              onPlannerStream: publishPlannerStream,
             });
           }
           case 'invoker:planning-chat-list': {
@@ -1266,6 +1273,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              onPlannerStream: publishPlannerStream,
             });
           }
           case 'invoker:planning-chat-submit': {
@@ -3808,6 +3816,11 @@ function createEmbeddedTerminalBackendFromConfig(
         mainWindow.webContents.send('invoker:task-output', data);
       }
     });
+    messageBus.subscribe(Channels.PLANNER_STREAM, (data: unknown) => {
+      if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
+        mainWindow.webContents.send('invoker:planner-stream', data);
+      }
+    });
 
     // Register IPC handlers
     const computeRuntimeStatus = () => {
@@ -3901,6 +3914,7 @@ function createEmbeddedTerminalBackendFromConfig(
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      onPlannerStream: publishPlannerStream,
     });
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     // Two variants: (1) a successful override that returns a canned reply +
@@ -3935,6 +3949,7 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
+        onPlannerStream: publishPlannerStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -3959,6 +3974,7 @@ function createEmbeddedTerminalBackendFromConfig(
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
         plannerReplyOverride,
+        onPlannerStream: publishPlannerStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {

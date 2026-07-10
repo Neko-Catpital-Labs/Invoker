@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -79,6 +79,100 @@ describe('Invoker terminal (component)', () => {
         sessionId: 'session-1',
         message: 'make the plan more detailed',
         presetKey: 'codex',
+      });
+    });
+  });
+
+  it('renders live raw planner text while busy and removes it after the final reply', async () => {
+    let resolveSend: ((value: any) => void) | undefined;
+    mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => {
+      resolveSend = resolve;
+    }) as any) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      mock.firePlannerStream({ sessionId: 'session-stream-1', chunk: 'raw planner', text: 'raw planner' });
+    });
+
+    const streamPanel = await screen.findByTestId('invoker-terminal-planner-stream');
+    expect(streamPanel).toHaveTextContent('planner raw');
+    expect(streamPanel).toHaveTextContent('raw planner');
+    expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
+
+    act(() => {
+      mock.firePlannerStream({
+        sessionId: 'session-stream-1',
+        chunk: ' output',
+        text: 'raw planner output',
+      });
+    });
+    expect(screen.getByTestId('invoker-terminal-planner-stream')).toHaveTextContent('raw planner output');
+
+    await act(async () => {
+      resolveSend?.({
+        ok: true,
+        sessionId: 'session-stream-1',
+        reply: 'Final assistant reply.',
+        draftPlanAvailable: false,
+      });
+    });
+
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Final assistant reply.'));
+    expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('raw planner output');
+  });
+
+  it('keeps failed raw planner text visible until the next send starts', async () => {
+    let resolveFirstSend: ((value: any) => void) | undefined;
+    let resolveSecondSend: ((value: any) => void) | undefined;
+    mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => {
+      if (!resolveFirstSend) {
+        resolveFirstSend = resolve;
+      } else {
+        resolveSecondSend = resolve;
+      }
+    }) as any) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    act(() => {
+      mock.firePlannerStream({
+        sessionId: 'session-stream-fail',
+        chunk: 'planner stderr tail',
+        text: 'planner stderr tail',
+      });
+    });
+
+    await act(async () => {
+      resolveFirstSend?.({
+        ok: false,
+        sessionId: 'session-stream-fail',
+        error: 'Planner exited without a final answer.',
+      });
+    });
+
+    expect(await screen.findByTestId('invoker-terminal-submit-error')).toHaveTextContent('Planner exited without a final answer.');
+    expect(screen.getByTestId('invoker-terminal-planner-stream')).toHaveTextContent('planner stderr tail');
+    expect(screen.getByTestId('invoker-terminal-input')).not.toBeDisabled();
+
+    submitPlanningText('try again');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveSecondSend?.({
+        ok: true,
+        sessionId: 'session-stream-retry',
+        reply: 'Retry reply.',
+        draftPlanAvailable: false,
       });
     });
   });
@@ -296,6 +390,47 @@ describe('Invoker terminal (component)', () => {
     fireEvent.click(screen.getByText('hello'));
 
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
+  });
+
+  it('keeps live raw planner text isolated when switching planning sessions', async () => {
+    let resolveFirstSend: ((value: any) => void) | undefined;
+    mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => {
+      resolveFirstSend = resolve;
+    }) as any) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('first session request');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    act(() => {
+      mock.firePlannerStream({ sessionId: 'session-stream-switch', chunk: 'first raw', text: 'first raw' });
+    });
+    expect(await screen.findByTestId('invoker-terminal-planner-stream')).toHaveTextContent('first raw');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+
+    act(() => {
+      mock.firePlannerStream({
+        sessionId: 'session-stream-switch',
+        chunk: ' still first',
+        text: 'first raw still first',
+      });
+    });
+    expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('first session request'));
+    expect(screen.getByTestId('invoker-terminal-planner-stream')).toHaveTextContent('first raw still first');
+
+    await act(async () => {
+      resolveFirstSend?.({
+        ok: true,
+        sessionId: 'session-stream-switch',
+        reply: 'First final reply.',
+        draftPlanAvailable: false,
+      });
+    });
   });
 
   it('keeps a new planning chat editable while another session is working', async () => {

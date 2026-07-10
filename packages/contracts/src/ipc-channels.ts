@@ -433,6 +433,12 @@ export interface InAppPlanningChatLine {
   createdAt: string;
 }
 
+export interface PlannerStreamEvent {
+  sessionId: string;
+  chunk: string;
+  text: string;
+}
+
 export interface InAppPlanningSessionSummary {
   id: string;
   title: string;
@@ -1169,6 +1175,9 @@ export const IpcEventChannels = {
   },
   'invoker:task-output': {} as {
     payload: TaskOutputData;
+  },
+  'invoker:planner-stream': {} as {
+    payload: PlannerStreamEvent;
   },
   'invoker:activity-log': {} as {
     payload: ActivityLogEntry[];

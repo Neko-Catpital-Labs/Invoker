@@ -76,6 +76,16 @@ describe('installWebInvoker', () => {
     expect(cb).toHaveBeenCalledWith(payload);
   });
 
+  it('onPlannerStream receives a fired SSE event payload', () => {
+    installWebInvoker({});
+    const cb = vi.fn();
+    window.invoker.onPlannerStream(cb);
+    const es = FakeEventSource.instances[0];
+    const payload = { sessionId: 'session-1', chunk: 'raw', text: 'raw planner text' };
+    es.fire('invoker:planner-stream', payload);
+    expect(cb).toHaveBeenCalledWith(payload);
+  });
+
   it('approve POSTs the approve channel with args', async () => {
     fetchResult = undefined;
     installWebInvoker({});

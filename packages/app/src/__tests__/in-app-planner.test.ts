@@ -11,6 +11,7 @@ import {
   submitPlanningChatDraft,
   type LoadedGeneratedPlan,
 } from '../in-app-planner.js';
+import type { PlannerStreamEvent } from '@invoker/contracts';
 import { ConversationRepository, SQLiteAdapter, type InAppPlanningSessionRecord } from '@invoker/data-store';
 
 const VALID_PLAN = `Here is the plan.
@@ -214,6 +215,40 @@ describe('planning chat', () => {
     expect(result.ok && result.sessionId).toBeTruthy();
     expect(sessions.size).toBe(1);
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits raw planner stream events without persisting them as transcript messages', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockImplementation(async function mockSpawnPlanner() {
+      (this as unknown as { onRawPlannerOutput?: (chunk: string) => void }).onRawPlannerOutput?.('raw ');
+      (this as unknown as { onRawPlannerOutput?: (chunk: string) => void }).onRawPlannerOutput?.('planner text');
+      return 'Final planner reply.';
+    });
+    const sessions = createInAppPlanningChatSessions();
+    const events: PlannerStreamEvent[] = [];
+
+    const result = await sendPlanningChatMessage({
+      message: 'hello',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      onPlannerStream: (event) => events.push(event),
+    });
+
+    if (!result.ok) throw new Error(result.error);
+    expect(events).toEqual([
+      { sessionId: result.sessionId, chunk: 'raw ', text: 'raw ' },
+      { sessionId: result.sessionId, chunk: 'planner text', text: 'raw planner text' },
+    ]);
+    const session = sessions.get(result.sessionId);
+    expect(session?.transientStreamText).toBeUndefined();
+    expect(session?.messages.map((message) => message.text)).toEqual([
+      'Ask Invoker what you want to build.',
+      'hello',
+      'Final planner reply.',
+    ]);
   });
 
   it('tells the in-app planner to resolve ambiguity before drafting', async () => {

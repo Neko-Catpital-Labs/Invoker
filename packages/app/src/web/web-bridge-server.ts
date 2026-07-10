@@ -309,6 +309,9 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
   const unsubscribeOutput = messageBus.subscribe(Channels.TASK_OUTPUT, (payload: unknown) => {
     broadcast('invoker:task-output', payload);
   });
+  const unsubscribePlannerStream = messageBus.subscribe(Channels.PLANNER_STREAM, (payload: unknown) => {
+    broadcast('invoker:planner-stream', payload);
+  });
 
   let activityWatermark = 0;
   const activityTimer = setInterval(() => {
@@ -357,6 +360,7 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     clearInterval(workflowsTimer);
     clearInterval(pingTimer);
     unsubscribeOutput?.();
+    unsubscribePlannerStream?.();
     for (const client of clients) client.end();
     clients.clear();
     const { promise, resolve } = Promise.withResolvers<void>();
