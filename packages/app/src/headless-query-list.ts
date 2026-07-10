@@ -792,19 +792,31 @@ export async function renderWorkerStatus(
 ): Promise<void> {
   const flags = parseQueryFlags(flagArgs);
   const status = collectRecoveryWorkerStatus(deps.persistence);
-  const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+  const recentActions = deps.persistence.listWorkerActions?.({ limit: 5 }) ?? [];
+  const {
+    formatAsJson,
+    formatAsJsonl,
+    formatWorkerActions,
+    serializeWorkerAction,
+  } = await import('./formatter.js');
+  const payload = {
+    ...status,
+    recentActions: recentActions.map(serializeWorkerAction),
+  };
   switch (flags.output) {
     case 'label':
       writeOut(`${status.workerId}\n`);
       break;
     case 'json':
-      writeOut(formatAsJson(status) + '\n');
+      writeOut(formatAsJson(payload) + '\n');
       break;
     case 'jsonl':
-      writeOut(formatAsJsonl([status]) + '\n');
+      writeOut(formatAsJsonl([payload]) + '\n');
       break;
     default:
       writeOut(formatRecoveryWorkerStatus(status) + '\n');
+      writeOut('\n');
+      writeOut(formatWorkerActions(recentActions) + '\n');
       break;
   }
 }

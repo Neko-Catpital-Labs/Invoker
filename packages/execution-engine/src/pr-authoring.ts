@@ -33,6 +33,20 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+export interface PrAuthoringWorkerActionEntry {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  status: string;
+  taskId?: string;
+  subjectType?: string;
+  subjectId?: string;
+  summary?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +60,7 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -244,6 +259,32 @@ export function validateReviewStackPrBody(body: string): string[] {
 
 function promptByteLength(prompt: string): number {
   return Buffer.byteLength(prompt, 'utf8');
+}
+
+function escapeMarkdownTableCell(value: string | undefined): string {
+  if (!value) return '';
+  return value
+    .replace(/\r?\n/g, ' ')
+    .replace(/\|/g, '\\|')
+    .trim();
+}
+
+function workerActionTimestamp(action: PrAuthoringWorkerActionEntry): string {
+  return action.createdAt ?? action.updatedAt ?? action.completedAt ?? '';
+}
+
+function compareWorkerActionsByTime(
+  a: PrAuthoringWorkerActionEntry,
+  b: PrAuthoringWorkerActionEntry,
+): number {
+  return workerActionTimestamp(a).localeCompare(workerActionTimestamp(b))
+    || a.id.localeCompare(b.id);
+}
+
+function renderPipelineSubject(action: PrAuthoringWorkerActionEntry): string {
+  if (action.taskId) return action.taskId;
+  if (action.subjectType && action.subjectId) return `${action.subjectType}:${action.subjectId}`;
+  return action.subjectId ?? '';
 }
 
 function buildPromptFileBootstrap(promptPath: string): string {
@@ -473,16 +514,39 @@ export function buildCanonicalPrBody(args: {
   structuredContext?: PrAuthoringContext;
 }): string {
   const lines: string[] = [];
+  const ctx = args.structuredContext;
 
   // ## Summary
   lines.push('## Summary');
   lines.push('');
-  if (args.structuredContext?.workflowDescription) {
-    lines.push(args.structuredContext.workflowDescription);
+  if (ctx?.workflowDescription) {
+    lines.push(ctx.workflowDescription);
   } else {
     lines.push(args.workflowSummary.trim());
   }
   lines.push('');
+
+  if (ctx?.workerActions) {
+    lines.push('## Pipeline');
+    lines.push('');
+    if (ctx.workerActions.length === 0) {
+      lines.push('No worker actions recorded.');
+    } else {
+      lines.push('| Time | Worker | Action | Subject | Status | Summary |');
+      lines.push('| --- | --- | --- | --- | --- | --- |');
+      for (const action of [...ctx.workerActions].sort(compareWorkerActionsByTime)) {
+        lines.push([
+          escapeMarkdownTableCell(workerActionTimestamp(action)),
+          escapeMarkdownTableCell(action.workerKind),
+          escapeMarkdownTableCell(action.actionType),
+          escapeMarkdownTableCell(renderPipelineSubject(action)),
+          escapeMarkdownTableCell(action.status),
+          escapeMarkdownTableCell(action.summary),
+        ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+      }
+    }
+    lines.push('');
+  }
 
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
@@ -490,7 +554,6 @@ export function buildCanonicalPrBody(args: {
   lines.push('<details>');
   lines.push('<summary>Test Plan</summary>');
   lines.push('');
-  const ctx = args.structuredContext;
   const commandTasks = ctx?.tasks.filter((t) => t.command && t.status === 'completed') ?? [];
   if (commandTasks.length > 0) {
     for (const t of commandTasks) {
@@ -580,6 +643,20 @@ export function buildMakePrPrompt(args: {
       lines.push('Executed verification commands:');
       for (const t of commandTasks) {
         lines.push(`- \`${t.command}\` — ${t.description} (${t.status})`);
+      }
+      lines.push('');
+    }
+
+    if (ctx.workerActions && ctx.workerActions.length > 0) {
+      lines.push('Worker pipeline actions (oldest first):');
+      for (const action of [...ctx.workerActions].sort(compareWorkerActionsByTime)) {
+        const subject = renderPipelineSubject(action);
+        lines.push(
+          `- ${workerActionTimestamp(action) || 'unknown time'} ` +
+          `${action.workerKind}/${action.actionType} [${action.status}]` +
+          `${subject ? ` on ${subject}` : ''}` +
+          `${action.summary ? ` — ${action.summary}` : ''}`,
+        );
       }
       lines.push('');
     }

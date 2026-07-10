@@ -90,6 +90,34 @@ function normalizeJsonValue(value: unknown, seen = new WeakSet<object>()): JsonS
     seen.delete(value);
   }
 }
+
+function formatWorkerActionEventPayload(payload: string | undefined): string | undefined {
+  if (!payload) return undefined;
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const record = parsed as Record<string, unknown>;
+    const worker = typeof record.workerKind === 'string'
+      ? record.workerKind
+      : typeof record.worker === 'string'
+        ? record.worker
+        : undefined;
+    const actionType = typeof record.actionType === 'string' ? record.actionType : undefined;
+    const status = typeof record.status === 'string' ? record.status : undefined;
+    const message = typeof record.message === 'string' ? record.message : undefined;
+    const review = typeof record.reviewId === 'string' ? ` review=${record.reviewId}` : '';
+    const summary = message ? ` — ${escapeTerminalText(message)}` : '';
+    return [
+      worker ? escapeTerminalText(worker) : undefined,
+      actionType ? `/${escapeTerminalText(actionType)}` : undefined,
+      status ? ` [${escapeTerminalText(status)}]` : undefined,
+      review,
+      summary,
+    ].filter((part): part is string => Boolean(part)).join('');
+  } catch {
+    return undefined;
+  }
+}
 // ── Status Colors ────────────────────────────────────────────
 
 const STATUS_COLORS: Record<TaskStatus, string> = {
@@ -206,7 +234,12 @@ export function formatEventLog(events: TaskEvent[]): string {
 
   const lines = events.map((event) => {
     const timestamp = event.createdAt;
-    const payload = event.payload ? ` ${event.payload}` : '';
+    const workerAction = event.eventType === 'task.worker_action'
+      ? formatWorkerActionEventPayload(event.payload)
+      : undefined;
+    const payload = workerAction
+      ? ` ${workerAction}`
+      : event.payload ? ` ${event.payload}` : '';
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 

@@ -50,6 +50,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No CI repair actions recorded yet.',
     };
   }
+  if (kind === 'pr-summary-refresh') {
+    return {
+      name: 'PR summary refresh',
+      idleText: 'Idle. Refreshes review PR bodies when worker activity changes.',
+      noActionText: 'No PR summary refresh actions recorded yet.',
+    };
+  }
   if (kind === 'e2e-autofix') {
     return {
       name: 'Daily e2e auto-fix',

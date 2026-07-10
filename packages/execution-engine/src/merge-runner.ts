@@ -376,10 +376,29 @@ export async function buildPrAuthoringContext(
     });
   }
 
+  const workerActions = typeof host.persistence.listWorkerActions === 'function'
+    ? host.persistence.listWorkerActions({ workflowId })
+      .filter((action) => action.workerKind !== 'pr-summary-refresh')
+      .map((action) => ({
+        id: action.id,
+        workerKind: action.workerKind,
+        actionType: action.actionType,
+        status: action.status,
+        ...(action.taskId ? { taskId: action.taskId } : {}),
+        subjectType: action.subjectType,
+        subjectId: action.subjectId,
+        ...(action.summary ? { summary: action.summary } : {}),
+        createdAt: action.createdAt,
+        updatedAt: action.updatedAt,
+        ...(action.completedAt ? { completedAt: action.completedAt } : {}),
+      }))
+    : undefined;
+
   return {
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    ...(workerActions ? { workerActions } : {}),
     visualProofMarkdown,
   };
 }

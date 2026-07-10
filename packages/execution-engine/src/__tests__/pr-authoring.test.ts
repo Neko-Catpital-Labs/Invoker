@@ -125,6 +125,41 @@ describe('buildCanonicalPrBody', () => {
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
   });
+
+  it('renders worker pipeline actions in chronological order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Pipeline',
+      workflowSummary: 'Summary.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'later',
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'completed',
+            taskId: 'wf/t2',
+            summary: 'Fixed CI',
+            createdAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            id: 'earlier',
+            workerKind: 'autoapprove',
+            actionType: 'approve-ai-fix',
+            status: 'skipped',
+            taskId: 'wf/t1',
+            summary: 'No approval needed',
+            createdAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body).toContain('| Time | Worker | Action | Subject | Status | Summary |');
+    expect(body.indexOf('autoapprove')).toBeLessThan(body.indexOf('ci-failure'));
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
 });
 
 // ── validateReviewStackPrBody ────────────────────────────

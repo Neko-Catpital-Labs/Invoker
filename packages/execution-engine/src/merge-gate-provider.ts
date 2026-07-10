@@ -70,4 +70,6 @@ export interface MergeGateProvider {
 
   /** Read the live PR body as published on the provider (e.g. GitHub). */
   getReviewBody?(opts: { identifier: string; cwd: string }): Promise<string>;
+
+  updateReviewBody?(opts: { identifier: string; cwd: string; body: string }): Promise<void>;
 }

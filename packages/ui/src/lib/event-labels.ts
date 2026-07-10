@@ -31,6 +31,7 @@ const RAW_TO_FRIENDLY: Record<string, string> = {
   'task.launch_dispatch_claimed': 'Launch dispatch claimed',
   'task.launch_claimed': 'Launch claimed',
   'task.metadata.updated': 'Metadata updated',
+  'task.worker_action': 'Worker action',
   'task.log': 'Log',
   'workflow.mutation.timing': 'Workflow mutation timing',
   'debug.auto-fix': 'Autofix debug',
@@ -92,6 +93,7 @@ export function payloadDetail(payload: string | undefined): string | undefined {
   if (!payload) return undefined;
   try {
     const parsed = JSON.parse(payload) as Record<string, unknown>;
+    if (typeof parsed.message === 'string') return parsed.message;
     if (typeof parsed.phase === 'string') return parsed.phase;
     if (typeof parsed.reason === 'string') return parsed.reason;
     return undefined;

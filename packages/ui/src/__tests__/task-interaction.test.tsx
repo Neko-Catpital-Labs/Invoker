@@ -94,6 +94,36 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('renders worker action task events in the inspector log surface', async () => {
+    mock.setEvents(alpha.id, [{
+      id: 1,
+      taskId: alpha.id,
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        reviewId: '42',
+        message: 'Refreshed PR summary',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(await screen.findByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Refreshed PR summary')).toBeInTheDocument();
+      expect(screen.getByText(/pr-summary-refresh/)).toBeInTheDocument();
+    });
+  });
+
   it('clicking workflow graph background dismisses the selected mini DAG', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
