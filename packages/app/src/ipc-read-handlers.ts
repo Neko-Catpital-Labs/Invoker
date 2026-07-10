@@ -1,11 +1,12 @@
 import type { IpcMain } from 'electron';
-import type { Logger, SearchOptions, WorkerActionHistoryRequest, WorkerActionHistoryResponse, WorkerDecisionsRequest, WorkerDecisionsResponse } from '@invoker/contracts';
+import type { GetEventsOptions, Logger, SearchOptions, WorkerActionHistoryRequest, WorkerActionHistoryResponse, WorkerDecisionsRequest, WorkerDecisionsResponse } from '@invoker/contracts';
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { DEFAULT_EXECUTION_AGENT, type AgentRegistry } from '@invoker/execution-engine';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { MessageBus } from '@invoker/transport';
 import { loadConfig } from './config.js';
+import { getEventsPage } from './get-events-page.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { buildTaskGraphSnapshot } from './web/task-graph-snapshot.js';
 import { listWorkerActionHistory, listWorkerDecisions } from './worker-control.js';
@@ -169,8 +170,9 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     return { tasks, workflows, streamSequence };
   });
 
-  ipcMain.handle('invoker:get-events', (_event, taskId: string) =>
-    delegatedRead('events', { taskId }, 'events', () => persistence.getEvents(taskId)));
+  ipcMain.handle('invoker:get-events', (_event, taskId: string, options: GetEventsOptions) =>
+    delegatedRead('events', { taskId, options }, 'events', () =>
+      getEventsPage(persistence, String(taskId), options)));
   ipcMain.handle('invoker:get-status', async () => (
     await delegateOwnerQuery('workflow-status') ?? getOrchestrator().getWorkflowStatus()
   ));
