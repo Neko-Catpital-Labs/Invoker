@@ -255,9 +255,15 @@ Rules:
    - Show a short plan preview with the likely review slice(s) and verification commands.
    - Ask at most 1-2 clarifying questions only when the answer would materially change the plan. If the assumptions are safe, continue to YAML in the same response after the preview.
 3. Keep plans focused. ${preferStackedWorkflows ? 'For reviewable multi-slice implementation work, prefer 2-6 stacked child workflows with one local implementation-and-verification slice each, instead of one workflow with many independent implementation tasks. ' : ''}For small nits, prefer one reviewable implementation slice plus focused verification instead of a large workflow.
-4. File-count guidance is a soft heuristic, not a hard validator gate. Prefer small reviewable slices (for example around 10 files per implementation task when practical), but exceed this when correctness or shared wiring requires broader edits.
-5. Each task should have either a \`command\` or a \`prompt\`, not both. Do not include legacy \`autoFix\` or \`autoFixRetries\` fields anywhere in the YAML; auto-fix retries are configured only in ~/.invoker/config.json.
-6. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` discovered from the target repo (e.g. that repo's package scripts, build commands, or focused checks such as \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
+4. Stack semantics:
+   - One workflow plan file is only the submission envelope. It can describe one workflow with \`tasks:\` or multiple child workflows with \`workflows:\`. Do not reason \`one plan file => one PR\`.
+   - Tasks inside a plan are execution steps. Do not infer PR count from task count.
+   - If you need to describe intended review-stack shape before publication, use optional \`reviewGate.artifacts\` intent metadata. \`reviewGate.artifacts\` is review-stack vocabulary only; it does not replace task dependencies, workflow dependencies, or actual published GitHub PRs.
+   - Actual published GitHub PRs exist only after the review gate publishes them and reports review artifacts or URLs. Before then, describe intended review artifacts, not published PRs.
+   - \`onFinish: pull_request\` only means review output is expected when the workflow finishes. Do not reason \`onFinish: pull_request => one PR\`.
+5. File-count guidance is a soft heuristic, not a hard validator gate. Prefer small reviewable slices (for example around 10 files per implementation task when practical), but exceed this when correctness or shared wiring requires broader edits.
+6. Each task should have either a \`command\` or a \`prompt\`, not both. Do not include legacy \`autoFix\` or \`autoFixRetries\` fields anywhere in the YAML; auto-fix retries are configured only in ~/.invoker/config.json.
+7. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` discovered from the target repo (e.g. that repo's package scripts, build commands, or focused checks such as \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
    Test command rules:
    - Inspect repo manifests and existing docs/scripts before choosing commands.
    - Use the package manager and test runner the target repo already uses; do not impose Invoker-specific commands on external repos.
@@ -266,12 +272,12 @@ Rules:
    - Prefer focused verification during iteration and reserve broad/full-suite commands for the final gate only when the target repo documents such a command.
    - If Invoker config auto-routes heavyweight commands, keep discovered test/build commands as normal command tasks unless the task must name a specific remote target
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
-7. Use meaningful task IDs (kebab-case).
-8. When ready, output the plan inside a \`\`\`yaml code block.
-9. Always include \`dependencies\` (even if empty array).
-10. After generating a plan, tell the user they can submit it by replying with \`submit\`.
-11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically after explicit Slack approval.
-12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
+8. Use meaningful task IDs (kebab-case).
+9. When ready, output the plan inside a \`\`\`yaml code block.
+10. Always include \`dependencies\` (even if empty array).
+11. After generating a plan, tell the user they can submit it by replying with \`submit\`.
+12. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically after explicit Slack approval.
+13. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
 }
 
 // ── Dangerous Command Detection ─────────────────────────────
