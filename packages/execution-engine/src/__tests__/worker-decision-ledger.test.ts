@@ -150,7 +150,7 @@ function makeAutoFixHarness(options: {
   return { store, submit };
 }
 
-const tickCtx = { identity: { kind: 'recovery', instanceId: 'test' }, reason: 'poll' as const, tickNumber: 1 };
+const tickCtx = { identity: { kind: 'recovery', instanceId: 'test' }, reason: 'poll' as const, tickNumber: 1, signal: new AbortController().signal };
 
 describe('autofix decision ledger', () => {
   it('records a queued decision row when it escalates to an auto-fix on the second tick', async () => {

@@ -7,9 +7,9 @@
  *   - poll       — an optional periodic timer drives ticks on an interval
  *   - coalesce   — overlapping wake/poll requests collapse into a single
  *                  follow-up tick; ticks never run concurrently
- *   - shutdown   — `stop()` is deterministic and idempotent: it clears the
- *                  timer, drops SIGINT/SIGTERM handlers, and awaits the
- *                  in-flight tick before resolving
+ *   - shutdown   — `stop()` requests cooperative cancel via AbortSignal and
+ *                  returns promptly; callers that need deterministic cleanup
+ *                  (quit / stopAll) pass `settleTimeoutMs` for a bounded wait
  */
 
 import type { Logger } from '@invoker/contracts';
@@ -32,10 +32,20 @@ export interface WorkerTickContext {
   readonly reason: WorkerTickReason;
   /** 1-based count of ticks that have started for this runtime. */
   readonly tickNumber: number;
+  /** Aborted when `stop()` is requested; ticks should check between units of work. */
+  readonly signal: AbortSignal;
 }
 
 /** The unit of work a worker performs on each tick. */
 export type WorkerTick = (ctx: WorkerTickContext) => void | Promise<void>;
+
+export interface WorkerRuntimeStopOptions {
+  /**
+   * When > 0, wait up to this many ms for an in-flight tick after cancel.
+   * Default 0: return as soon as cancel is requested (GUI IPC path).
+   */
+  settleTimeoutMs?: number;
+}
 
 export interface WorkerRuntimeOptions {
   /** Worker family. Combined with `instanceId` to form the identity. */
@@ -65,10 +75,11 @@ export interface WorkerRuntime {
   /** Run a single tick now and await it (manual/test hook). */
   tick(reason?: WorkerTickReason): Promise<void>;
   /**
-   * Deterministically stop: clear the timer, drop signal handlers, and await
-   * any in-flight tick before resolving. Idempotent.
+   * Request stop: clear the timer, drop signal handlers, abort the tick
+   * signal. Resolves promptly unless `settleTimeoutMs` is set for a bounded
+   * wait on the in-flight tick. Idempotent.
    */
-  stop(): Promise<void>;
+  stop(options?: WorkerRuntimeStopOptions): Promise<void>;
   /** True between `start()` and `stop()`. */
   isRunning(): boolean;
 }
@@ -82,6 +93,13 @@ function nextInstanceId(kind: string): string {
   instanceCounter += 1;
   const pid = typeof process !== 'undefined' && process.pid ? process.pid : 0;
   return `${kind}-${pid}-${instanceCounter}`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }
 
 /**
@@ -106,13 +124,23 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   let pendingReason: WorkerTickReason | null = null;
   let tickNumber = 0;
   const signalHandlers = new Map<NodeJS.Signals, () => void>();
+  let abortController = new AbortController();
 
   const runOnce = async (reason: WorkerTickReason): Promise<void> => {
     tickNumber += 1;
-    const ctx: WorkerTickContext = { identity, reason, tickNumber };
+    const ctx: WorkerTickContext = {
+      identity,
+      reason,
+      tickNumber,
+      signal: abortController.signal,
+    };
     try {
       await options.onTick(ctx);
     } catch (err) {
+      if (abortController.signal.aborted) {
+        options.logger.info(`[worker:${identity.kind}] tick aborted`, { ...logFields, reason });
+        return;
+      }
       options.logger.error(`[worker:${identity.kind}] tick failed`, { ...logFields, reason, err });
     }
   };
@@ -148,6 +176,31 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
 
   const tick = (reason: WorkerTickReason = 'manual'): Promise<void> => schedule(reason);
 
+  const beginStop = (): void => {
+    if (stopped) return;
+    stopped = true;
+    pendingReason = null;
+    if (!abortController.signal.aborted) {
+      abortController.abort();
+    }
+    if (interval) {
+      clearInterval(interval);
+      interval = null;
+    }
+    for (const [signal, handler] of signalHandlers) {
+      process.removeListener(signal, handler);
+    }
+    signalHandlers.clear();
+  };
+
+  const settleInFlight = async (settleTimeoutMs: number): Promise<void> => {
+    if (!inFlight || settleTimeoutMs <= 0) return;
+    await Promise.race([
+      inFlight.catch(() => undefined),
+      delay(settleTimeoutMs),
+    ]);
+  };
+
   const start = (): void => {
     if (stopped) {
       throw new Error(`worker runtime ${identity.kind}/${identity.instanceId} cannot start after stop`);
@@ -163,7 +216,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       for (const signal of shutdownSignals) {
         const handler = (): void => {
           options.logger.info(`[worker:${identity.kind}] received ${signal}; shutting down`, logFields);
-          void stop();
+          void stop({ settleTimeoutMs: 5_000 });
         };
         signalHandlers.set(signal, handler);
         process.once(signal, handler);
@@ -178,24 +231,14 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     if (tickOnStart) wake('startup');
   };
 
-  const stop = async (): Promise<void> => {
+  const stop = async (stopOptions?: WorkerRuntimeStopOptions): Promise<void> => {
+    const settleTimeoutMs = stopOptions?.settleTimeoutMs ?? 0;
     if (stopped) {
-      // Idempotent: a second stop still waits for any in-flight tick to settle.
-      if (inFlight) await inFlight.catch(() => undefined);
+      await settleInFlight(settleTimeoutMs);
       return;
     }
-    stopped = true;
-    pendingReason = null;
-    if (interval) {
-      clearInterval(interval);
-      interval = null;
-    }
-    for (const [signal, handler] of signalHandlers) {
-      process.removeListener(signal, handler);
-    }
-    signalHandlers.clear();
-    // Deterministic shutdown: never resolve while a tick is still running.
-    if (inFlight) await inFlight.catch(() => undefined);
+    beginStop();
+    await settleInFlight(settleTimeoutMs);
     options.logger.info(`[worker:${identity.kind}] stopped`, logFields);
   };
 
