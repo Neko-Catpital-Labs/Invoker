@@ -125,6 +125,46 @@ describe('buildCanonicalPrBody', () => {
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
   });
+
+  it('renders worker actions in a Pipeline section sorted by time', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Worker summary',
+      workflowSummary: 'Added worker visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'later',
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'queued',
+            subjectType: 'review',
+            subjectId: '124',
+            taskId: 'wf-1/merge',
+            summary: 'Queued CI fix',
+            createdAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            id: 'earlier',
+            workerKind: 'pr-summary-refresh',
+            actionType: 'refresh-pr-summary',
+            status: 'completed',
+            subjectType: 'review',
+            subjectId: '123',
+            summary: 'Updated summary | with table',
+            reason: 'changed',
+            createdAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body).toContain('| Time | Worker | Action | Status | Target | Summary |');
+    expect(body.indexOf('pr-summary-refresh')).toBeLessThan(body.indexOf('ci-failure'));
+    expect(body).toContain('Updated summary \\| with table (reason: changed)');
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
 });
 
 // ── validateReviewStackPrBody ────────────────────────────

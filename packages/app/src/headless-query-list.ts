@@ -13,7 +13,14 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import {
+  createWorkerRegistry,
+  registerAutoFixWorker,
+  registerPrMaintenanceWorkers,
+  registerPrSummaryRefreshWorker,
+  type AgentRegistry,
+  type WorkerRuntimeDependencies,
+} from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import {
@@ -26,11 +33,12 @@ import {
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
-import { listWorkerDecisions } from './worker-control.js';
+import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
-  collectRecoveryWorkerStatus,
-  type RecoveryWorkerStatus,
-} from './recovery-worker-observability.js';
+  AUTO_STARTED_OWNER_WORKER_KINDS,
+  createLocalWorkerStatusSnapshot,
+  listWorkerDecisions,
+} from './worker-control.js';
 
 /**
  * The read-query family writes its formatted output through {@link writeOut}.
@@ -763,49 +771,35 @@ export async function headlessSession(taskId: string | undefined, deps: Pick<Hea
   }
 }
 
-function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
-  const lines = [
-    `${BOLD}Recovery worker${RESET}`,
-    `  kind: ${status.kind}`,
-    `  workerId: ${status.workerId}`,
-    `  owner: ${status.owner}`,
-    `  lastWakeupAt: ${status.lastWakeupAt ?? 'never'}`,
-    `  lastScanAt: ${status.lastScanAt ?? 'never'}`,
-    `  lastSubmitAt: ${status.lastSubmitAt ?? 'never'}`,
-    `  lastSkip: ${status.lastSkipAt ?? 'never'}${status.lastSkipReason ? ` (${status.lastSkipReason} task=${status.lastSkipTaskId})` : ''}`,
-    `  counts: wakeups=${status.wakeups} scans=${status.scans} submissions=${status.submissions} skips=${status.skips}`,
-  ];
-  if (status.recent.length > 0) {
-    lines.push('');
-    lines.push(`${BOLD}Recent recovery decisions${RESET}`);
-    for (const event of status.recent) {
-      const reason = event.reason ? ` reason=${event.reason}` : '';
-      const phase = event.phase ? ` phase=${event.phase}` : '';
-      lines.push(`  ${event.at} ${event.taskId} ${event.action}${phase}${reason}`);
-    }
-  }
-  return lines.join('\n');
-}
-
 export async function renderWorkerStatus(
   flagArgs: string[],
-  deps: Pick<HeadlessQueryDeps, 'persistence'>,
+  deps: Pick<HeadlessQueryDeps, 'persistence' | 'invokerConfig'>,
 ): Promise<void> {
   const flags = parseQueryFlags(flagArgs);
-  const status = collectRecoveryWorkerStatus(deps.persistence);
-  const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+  const registry = registerExternalWorkersFromConfig(
+    deps.invokerConfig?.externalWorkers,
+    registerPrMaintenanceWorkers(registerPrSummaryRefreshWorker(
+      registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    )),
+  );
+  const snapshot = createLocalWorkerStatusSnapshot({
+    registry,
+    persistence: deps.persistence,
+    autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+  });
+  const { formatAsJson, formatAsJsonl, formatWorkerStatusSnapshot } = await import('./formatter.js');
   switch (flags.output) {
     case 'label':
-      writeOut(`${status.workerId}\n`);
+      writeOut(snapshot.workers.map((worker) => worker.kind).join('\n') + '\n');
       break;
     case 'json':
-      writeOut(formatAsJson(status) + '\n');
+      writeOut(formatAsJson(snapshot) + '\n');
       break;
     case 'jsonl':
-      writeOut(formatAsJsonl([status]) + '\n');
+      writeOut(formatAsJsonl(snapshot.workers) + '\n');
       break;
     default:
-      writeOut(formatRecoveryWorkerStatus(status) + '\n');
+      writeOut(formatWorkerStatusSnapshot(snapshot) + '\n');
       break;
   }
 }

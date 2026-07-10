@@ -20,6 +20,7 @@ import {
   createWorkerRegistry,
   registerAutoFixWorker,
   registerPrMaintenanceWorkers,
+  registerPrSummaryRefreshWorker,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
@@ -72,8 +73,10 @@ import {
 
 export { createHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
 export type { HeadlessDeps, QueryFlags };
-import { headlessQuery, headlessQuerySelect, renderWorkerStatus } from './headless-query-list.js';
+import { headlessQuery, headlessQuerySelect } from './headless-query-list.js';
 export { resolveAgentSession } from './headless-query-list.js';
+import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot } from './worker-control.js';
+import { formatAsJson, formatAsJsonl, formatWorkerStatusSnapshot } from './formatter.js';
 import {
   headlessRun,
   headlessResume,
@@ -422,9 +425,9 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerPrMaintenanceWorkers(
+    registerPrMaintenanceWorkers(registerPrSummaryRefreshWorker(
       registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
-    ),
+    )),
   );
 
   if (subCommand === 'list') {
@@ -436,7 +439,26 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
 
   if (subCommand === 'status') {
-    await renderWorkerStatus(args.slice(1), deps);
+    const flags = parseQueryFlags(args.slice(1));
+    const snapshot = createLocalWorkerStatusSnapshot({
+      registry,
+      persistence: deps.persistence,
+      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+    });
+    switch (flags.output) {
+      case 'label':
+        process.stdout.write(snapshot.workers.map((worker) => worker.kind).join('\n') + '\n');
+        break;
+      case 'json':
+        process.stdout.write(formatAsJson(snapshot) + '\n');
+        break;
+      case 'jsonl':
+        process.stdout.write(formatAsJsonl(snapshot.workers) + '\n');
+        break;
+      default:
+        process.stdout.write(formatWorkerStatusSnapshot(snapshot) + '\n');
+        break;
+    }
     return;
   }
 
@@ -929,4 +951,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-

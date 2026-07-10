@@ -31,6 +31,7 @@ const RAW_TO_FRIENDLY: Record<string, string> = {
   'task.launch_dispatch_claimed': 'Launch dispatch claimed',
   'task.launch_claimed': 'Launch claimed',
   'task.metadata.updated': 'Metadata updated',
+  'task.worker_action': 'Worker action',
   'task.log': 'Log',
   'workflow.mutation.timing': 'Workflow mutation timing',
   'debug.auto-fix': 'Autofix debug',

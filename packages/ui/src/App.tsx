@@ -527,6 +527,10 @@ export function App() {
   const invoker = useInvoker();
   const queueStatus = useQueueStatus();
   const [workerStatus, refreshWorkerStatus] = useWorkerStatus();
+  useEffect(() => {
+    if (graphRefreshSequence === 0) return;
+    void refreshWorkerStatus();
+  }, [graphRefreshSequence, refreshWorkerStatus]);
   const handleStartWorker = useCallback(async (kind: string) => {
     await invoker.startWorker(kind);
     await refreshWorkerStatus();
@@ -3454,4 +3458,3 @@ export function App() {
     </div>
   );
 }
-

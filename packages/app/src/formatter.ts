@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -261,6 +261,42 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
       `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
     );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  if (snapshot.workers.length === 0) {
+    return `${DIM}No workers registered.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Workers (${snapshot.workers.length})${RESET}`);
+  lines.push(`${DIM}Generated: ${escapeTerminalText(snapshot.generatedAt)}${RESET}`);
+  for (const worker of snapshot.workers) {
+    const auto = worker.autoStarts ? ' auto' : '';
+    lines.push('');
+    lines.push(
+      `  ${BOLD}${escapeTerminalText(worker.kind)}${RESET} [${escapeTerminalText(worker.lifecycle)}]` +
+        ` policy=${escapeTerminalText(worker.policy)}${auto}`,
+    );
+    if (worker.note) {
+      lines.push(`    ${escapeTerminalText(worker.note)}`);
+    }
+    if (worker.recentActions.length === 0) {
+      lines.push(`    ${DIM}recentActions: none${RESET}`);
+      continue;
+    }
+    lines.push('    recentActions:');
+    for (const action of worker.recentActions.slice(0, 5)) {
+      const task = action.taskId ? ` task=${escapeTerminalText(action.taskId)}` : '';
+      const workflow = action.workflowId ? ` workflow=${escapeTerminalText(action.workflowId)}` : '';
+      const summary = action.summary ? ` - ${escapeTerminalText(action.summary)}` : '';
+      lines.push(
+        `      ${escapeTerminalText(action.updatedAt)} ${escapeTerminalText(action.status)} ` +
+          `${escapeTerminalText(action.actionType)}${workflow}${task}${summary}`,
+      );
+    }
   }
   return lines.join('\n');
 }

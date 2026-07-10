@@ -25,16 +25,23 @@ interface TaskLogEntry {
 const SAFE_LOG_DETAIL_KEYS = new Set([
   'agentCount',
   'agentName',
+  'actionId',
+  'actionType',
   'artifactCount',
   'attempt',
   'baseBranch',
   'branch',
+  'bodyHash',
   'featureBranch',
+  'nextBodyHash',
+  'previousBodyHash',
   'reviewId',
   'reviewUrl',
   'status',
   'reason',
   'route',
+  'workerActionCount',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -81,8 +88,46 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
   return Object.keys(detail).length > 0 ? JSON.stringify(detail) : undefined;
 }
 
+function formatWorkerActionToken(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return value
+    .split(/[-_]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function workerActionLogEntry(
+  event: TaskAuditEvent,
+  index: number,
+  payload: Record<string, unknown> | undefined,
+): TaskLogEntry | undefined {
+  if (event.eventType !== 'task.worker_action') return undefined;
+  const status = typeof payload?.status === 'string' ? payload.status : undefined;
+  const summary = typeof payload?.summary === 'string' && payload.summary.trim()
+    ? payload.summary
+    : undefined;
+  const worker = formatWorkerActionToken(payload?.workerKind) ?? 'Worker';
+  const action = formatWorkerActionToken(payload?.actionType) ?? 'action';
+  const reviewId = typeof payload?.reviewId === 'string' && payload.reviewId.trim()
+    ? ` #${payload.reviewId}`
+    : '';
+  const message = summary
+    ? `${worker} ${action}${reviewId}: ${summary}`
+    : `${worker} ${action}${reviewId}${status ? ` (${status})` : ''}`;
+  return {
+    id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
+    level: status === 'failed' ? 'error' : 'info',
+    message,
+    detail: formatLogDetail(payload),
+    createdAt: event.createdAt,
+  };
+}
+
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
+  const workerActionEntry = workerActionLogEntry(event, index, payload);
+  if (workerActionEntry) return workerActionEntry;
   const payloadMessage = payload?.message;
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
