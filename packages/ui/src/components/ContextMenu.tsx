@@ -285,6 +285,7 @@ export function ContextMenu({
     <div
       ref={menuRef}
       role="menu"
+      data-testid="task-context-menu"
       className="fixed z-50 bg-secondary border border-border-strong rounded-lg shadow-xl py-1 min-w-[160px]"
       style={{ left: position.left, top: position.top }}
       onKeyDown={handleKeyDown}

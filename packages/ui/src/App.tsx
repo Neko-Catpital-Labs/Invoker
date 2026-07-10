@@ -416,6 +416,7 @@ function WorkflowContextMenu({
     <div
       ref={menuRef}
       role="menu"
+      data-testid="workflow-context-menu"
       className="fixed z-50 min-w-[200px] rounded-lg border border-border-strong bg-secondary py-1 shadow-xl"
       style={{ left: position.left, top: position.top }}
       tabIndex={-1}
@@ -529,11 +530,11 @@ export function App() {
   const [workerStatus, refreshWorkerStatus] = useWorkerStatus();
   const handleStartWorker = useCallback(async (kind: string) => {
     await invoker.startWorker(kind);
-    await refreshWorkerStatus();
+    void refreshWorkerStatus();
   }, [invoker, refreshWorkerStatus]);
   const handleStopWorker = useCallback(async (kind: string) => {
     await invoker.stopWorker(kind);
-    await refreshWorkerStatus();
+    void refreshWorkerStatus();
   }, [invoker, refreshWorkerStatus]);
   const runningTaskIds = useMemo(
     () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
