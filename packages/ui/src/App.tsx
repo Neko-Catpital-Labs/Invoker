@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InAppPlanningStreamEvent, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -122,6 +122,8 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   input: string;
   busy: boolean;
   conversationKey: string;
+  transientPlannerText?: string;
+  transientPlannerRequestId?: string;
 };
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
@@ -558,6 +560,7 @@ export function App() {
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(2);
+  const nextPlannerStreamRequestIdRef = useRef(1);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
@@ -572,6 +575,7 @@ export function App() {
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
+  const activePlannerStreamText = activePlanningSession.transientPlannerText;
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
   const [graphMaximized, setGraphMaximized] = useState(false);
@@ -735,6 +739,24 @@ export function App() {
   useEffect(() => {
     const unsubscribe = window.invoker?.onRuntimeStatus?.((status) => {
       setRuntimeStatus(status);
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onPlanningChatStream?.((event: InAppPlanningStreamEvent) => {
+      if (!event.chunk) return;
+      const updatedAt = new Date().toISOString();
+      setPlanningSessions((prev) => prev.map((session) => {
+        const requestMatches = event.requestId && session.transientPlannerRequestId === event.requestId;
+        const sessionMatches = !event.requestId && session.id === event.sessionId;
+        if (!requestMatches && !sessionMatches) return session;
+        return {
+          ...session,
+          transientPlannerText: `${session.transientPlannerText ?? ''}${event.chunk}`,
+          updatedAt,
+        };
+      }));
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -1966,6 +1988,11 @@ export function App() {
     appendTerminalLine(input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
+    updatePlanningSessionById(activePlanningSessionId, (session) => ({
+      ...session,
+      transientPlannerText: undefined,
+      transientPlannerRequestId: undefined,
+    }));
 
     if (input.toLowerCase() === 'run') {
       if (!hasLoadedPlan || hasStarted) {
@@ -1997,10 +2024,18 @@ export function App() {
     }
 
     const previousSessionId = activePlanningSessionId;
-    updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
+    const plannerStreamRequestId = `planning-chat-stream-${nextPlannerStreamRequestIdRef.current}`;
+    nextPlannerStreamRequestIdRef.current += 1;
+    updatePlanningSessionById(previousSessionId, (session) => ({
+      ...session,
+      busy: true,
+      transientPlannerText: undefined,
+      transientPlannerRequestId: plannerStreamRequestId,
+    }));
     try {
       const request = {
         message: input,
+        requestId: plannerStreamRequestId,
         presetKey: selectedPlanningPresetKey || undefined,
         ...(planningSessionId ? { sessionId: planningSessionId } : {}),
       };
@@ -2020,6 +2055,8 @@ export function App() {
               : session.title,
             status: result.draftPlanAvailable ? 'draft_ready' : result.reply.includes('?') ? 'waiting_for_answer' : 'still_discussing',
             messages: [...session.messages, { id: replyLineId, text: result.reply, role: 'assistant' }],
+            transientPlannerText: undefined,
+            transientPlannerRequestId: undefined,
             draftPlanAvailable: result.draftPlanAvailable,
             draftPlanSummary: result.draftPlanAvailable ? result.draftPlanSummary : undefined,
             updatedAt,
@@ -2030,12 +2067,20 @@ export function App() {
         ));
         setHasLoadedPlan(false);
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+        updatePlanningSessionById(previousSessionId, (session) => ({
+          ...session,
+          busy: false,
+          transientPlannerRequestId: undefined,
+        }));
         appendTerminalLine(result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
-      updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+      updatePlanningSessionById(previousSessionId, (session) => ({
+        ...session,
+        busy: false,
+        transientPlannerRequestId: undefined,
+      }));
       const message = err instanceof Error ? err.message : 'Failed to reach the planner.';
       setPlanningSubmitError({ title: 'Planner could not respond', message });
       appendTerminalLine(message, 'system', 'error');
@@ -2902,6 +2947,7 @@ export function App() {
             presetOptions={planningPresetOptions}
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
+            plannerStreamText={activePlannerStreamText}
             submitError={planningSubmitError}
             readOnly={activePlanningSessionSubmitted}
             onValueChange={setPlanningInput}
@@ -3231,6 +3277,7 @@ export function App() {
             presetOptions={planningPresetOptions}
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
+            plannerStreamText={activePlannerStreamText}
             submitError={planningSubmitError}
             expanded
             onValueChange={setPlanningInput}
@@ -3452,4 +3499,3 @@ export function App() {
     </div>
   );
 }
-

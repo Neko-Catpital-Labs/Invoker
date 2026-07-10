@@ -27,6 +27,7 @@ interface InvokerTerminalProps {
   presetOptions: PlanningPresetOptionView[];
   draftPlanAvailable: boolean;
   draftPlanSummary?: { name: string; taskCount: number; workflowCount?: number };
+  plannerStreamText?: string;
   submitError?: SubmitErrorView | null;
   readOnly?: boolean;
   expanded?: boolean;
@@ -59,6 +60,7 @@ export function InvokerTerminal({
   presetOptions,
   draftPlanAvailable,
   draftPlanSummary,
+  plannerStreamText,
   submitError,
   readOnly = false,
   expanded = false,
@@ -90,7 +92,7 @@ export function InvokerTerminal({
     if (shouldFollowTranscript) {
       scrollTranscriptToBottom();
     }
-  }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+  }, [lines.length, plannerStreamText, scrollTranscriptToBottom, shouldFollowTranscript]);
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -179,6 +181,15 @@ export function InvokerTerminal({
             </div>
           );
         })}
+        {plannerStreamText && (
+          <div
+            data-testid="invoker-terminal-planner-stream"
+            className="border border-border bg-card/80 px-3 py-2"
+          >
+            <div className="text-[11px] text-muted-foreground">planner raw ›</div>
+            <div className="mt-1 whitespace-pre-wrap text-foreground">{plannerStreamText}</div>
+          </div>
+        )}
       </div>
 
       {submitError && !readOnly && (

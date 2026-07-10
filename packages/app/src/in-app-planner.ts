@@ -13,6 +13,7 @@ import type {
   InAppPlanningResetResponse,
   InAppPlanningSessionStatus,
   InAppPlanningSessionSummary,
+  InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
   PlanningPresetOption,
@@ -47,6 +48,7 @@ export interface InAppPlannerDeps {
   planningCommandBuilder?: PlanningCommandBuilder;
   conversationRepo?: ConversationRepository;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  onPlanningChatStream?: (event: InAppPlanningStreamEvent) => void;
 }
 
 export interface InAppPlanningChatSession {
@@ -63,6 +65,7 @@ export interface InAppPlanningChatSession {
   createdAt: string;
   updatedAt: string;
   nextMessageId: number;
+  activeStreamRequestId?: string;
   pendingSend?: Promise<void>;
   pendingSubmit?: Promise<InAppPlanningSubmitResponse>;
 }
@@ -279,6 +282,7 @@ function planConversationConfig(
   preset: HarnessPreset,
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo'>,
   threadTs: string,
+  onRawPlannerOutput?: (chunk: string) => void,
 ): PlanConversationConfig {
   return {
     threadTs,
@@ -294,6 +298,7 @@ function planConversationConfig(
     planningCommandBuilder: deps.planningCommandBuilder,
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
+    onRawPlannerOutput,
   };
 }
 
@@ -318,7 +323,15 @@ async function createSession(
   const { PlanConversation } = await loadPlannerSurfaces();
   const createdAt = new Date().toISOString();
   const id = randomUUID();
-  const session: InAppPlanningChatSession = {
+  let session: InAppPlanningChatSession;
+  const conversation = new PlanConversation(planConversationConfig(preset, deps, id, (chunk) => {
+    deps.onPlanningChatStream?.({
+      sessionId: id,
+      requestId: session.activeStreamRequestId,
+      chunk,
+    });
+  }));
+  session = {
     id,
     title: typeof request?.title === 'string' && request.title.trim() ? request.title.trim() : 'Untitled plan',
     presetKey,
@@ -330,7 +343,7 @@ async function createSession(
       tone: 'muted',
       createdAt,
     }],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id)),
+    conversation,
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 2,
@@ -438,6 +451,9 @@ export async function sendPlanningChatMessage(
 ): Promise<InAppPlanningChatResponse> {
   const rawRequest = request as Partial<InAppPlanningChatRequest> | null | undefined;
   const message = typeof rawRequest?.message === 'string' ? rawRequest.message.trim() : '';
+  const requestId = typeof rawRequest?.requestId === 'string' && rawRequest.requestId.trim()
+    ? rawRequest.requestId.trim()
+    : undefined;
   if (!message) {
     return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
   }
@@ -464,6 +480,7 @@ export async function sendPlanningChatMessage(
     const previousSend = activeSession.pendingSend ?? Promise.resolve();
     const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
       appendSessionMessage(activeSession, 'user', message);
+      activeSession.activeStreamRequestId = requestId;
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);
       }
@@ -522,6 +539,8 @@ export async function sendPlanningChatMessage(
           sessionId: activeSession.id,
           error: error instanceof Error ? error.message : String(error),
         };
+      } finally {
+        activeSession.activeStreamRequestId = undefined;
       }
     });
     activeSession.pendingSend = turn.then(() => undefined, () => undefined);
@@ -626,11 +645,18 @@ export async function restorePlanningChatSessions(
     const preset = presets[record.presetKey];
     if (!preset) continue;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id));
+    let session: InAppPlanningChatSession;
+    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id, (chunk) => {
+      deps.onPlanningChatStream?.({
+        sessionId: record.id,
+        requestId: session.activeStreamRequestId,
+        chunk,
+      });
+    }));
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;
-    const session: InAppPlanningChatSession = {
+    session = {
       id: record.id,
       title: record.title,
       presetKey: record.presetKey,
