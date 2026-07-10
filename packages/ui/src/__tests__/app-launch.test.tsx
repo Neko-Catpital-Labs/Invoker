@@ -128,6 +128,16 @@ describe('App launch (component)', () => {
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
 
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(screen.getByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('browser-return-home'));
+    expect(screen.getByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
+
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(sidebar.className).toContain('w-16');
 
@@ -157,6 +167,12 @@ describe('App launch (component)', () => {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-60');
     }
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(screen.getByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
   });
 
 

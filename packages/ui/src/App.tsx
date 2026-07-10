@@ -2215,6 +2215,10 @@ export function App() {
     setInspectorCollapsed((prev) => !prev);
   }, [autoCollapseInspector]);
 
+  const handleToggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed((current) => !(current ?? autoCollapseSidebar));
+  }, [autoCollapseSidebar]);
+
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
     reportUiNavigation(window.invoker?.reportUiPerf, {
@@ -3144,7 +3148,7 @@ export function App() {
           selectedSurface={sidebarSurface}
           collapsed={effectiveSidebarCollapsed}
           onSelectSurface={handleSelectSidebarSurface}
-          onToggleCollapsed={() => setSidebarCollapsed(!effectiveSidebarCollapsed)}
+          onToggleCollapsed={handleToggleSidebarCollapsed}
           onOpenSettings={() => {
             cancelPendingSystemSetupAutoOpen();
             setShowSystemSetup(true);
@@ -3454,4 +3458,3 @@ export function App() {
     </div>
   );
 }
-

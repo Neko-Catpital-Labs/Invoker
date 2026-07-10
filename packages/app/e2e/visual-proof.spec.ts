@@ -811,6 +811,9 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('browser-rail-dismiss').click();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+
+    await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
@@ -883,8 +886,8 @@ test.describe('Visual proof capture', () => {
     const sidebar = page.getByTestId('app-sidebar');
 
     // Capture the full Home -> Workflows -> Home sequence before asserting so a
-    // buggy build still records the width snap (regression: Home expanded, then
-    // Workflows collapsed).
+    // buggy build still records the width snap (regression: navigation changed
+    // the sidebar width).
     await page.getByTestId('sidebar-home').click();
     await captureScreenshot(page, 'sidebar-default-width-1-home');
 
