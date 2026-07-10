@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
+import { useState } from 'react';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
 vi.mock('@xyflow/react', async () => {
@@ -383,6 +384,58 @@ describe('Invoker terminal (component)', () => {
     ]} />);
 
     await waitFor(() => expect(transcript.scrollTop).toBe(700));
+  });
+
+  it('reports planning chat input and render perf through reportUiPerf', async () => {
+    function PlanningPerfHarness(): JSX.Element {
+      const [value, setValue] = useState('');
+      return (
+        <InvokerTerminal
+          activeConversationKey="chat-1"
+          lines={[{ id: 1, text: 'First line', role: 'system' as const }]}
+          busy={false}
+          value={value}
+          selectedPresetKey="codex"
+          presetOptions={[{ key: 'codex', label: 'Codex' }]}
+          draftPlanAvailable={false}
+          onValueChange={setValue}
+          onSubmit={vi.fn()}
+          onSubmitDraft={vi.fn()}
+          onPresetChange={vi.fn()}
+          onExpand={vi.fn()}
+        />
+      );
+    }
+
+    render(<PlanningPerfHarness />);
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_change',
+        expect.objectContaining({
+          valueLength: 5,
+          deltaChars: 5,
+          lineCount: 1,
+        }),
+      );
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_commit',
+        expect.objectContaining({
+          valueLength: 5,
+          deltaChars: 5,
+          lineCount: 1,
+        }),
+      );
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_render_commit',
+        expect.objectContaining({
+          lineCount: 1,
+          valueLength: 5,
+        }),
+      );
+    });
   });
 
   it('resets transcript follow mode when the active planning conversation changes', async () => {

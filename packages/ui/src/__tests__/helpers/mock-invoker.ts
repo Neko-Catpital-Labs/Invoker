@@ -284,6 +284,8 @@ export function createMockInvoker(
       return filtered.slice(0, options?.limit ?? filtered.length);
     }),
     getHistoryTasks: vi.fn(async () => historySnapshot),
+    reportUiPerf: vi.fn(async () => undefined),
+    getUiPerfStats: vi.fn(async () => ({})),
     openTerminal: vi.fn(async (taskId: string) => ({
       opened: true,
       session: {

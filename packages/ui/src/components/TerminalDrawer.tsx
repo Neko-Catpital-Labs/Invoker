@@ -14,6 +14,13 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const TERMINAL_RENDERER_OUTPUT_SAMPLE_MS = 250;
+const TERMINAL_RENDERER_SLOW_SAMPLE_MS = 1000;
+const TERMINAL_RENDERER_SLOW_WRITE_MS = 16;
+const TERMINAL_RENDERER_OUTPUT_BURST_EVENTS = 20;
+const TERMINAL_RENDERER_OUTPUT_BURST_BYTES = 64 * 1024;
+const TERMINAL_RENDERER_OUTPUT_BURST_WINDOW_MS = 1000;
+const terminalTextEncoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
 
 /**
  * The drawer has one explicit state model:
@@ -55,10 +62,98 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+interface TerminalPanePerfState {
+  lastEmitByMetric: Map<string, number>;
+  outputWindowStartedAt: number | null;
+  outputEventsInWindow: number;
+  outputBytesInWindow: number;
+}
+
+function createTerminalPanePerfState(): TerminalPanePerfState {
+  return {
+    lastEmitByMetric: new Map(),
+    outputWindowStartedAt: null,
+    outputEventsInWindow: 0,
+    outputBytesInWindow: 0,
+  };
+}
+
+function perfNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function textByteLength(value: string): number {
+  if (terminalTextEncoder) {
+    return terminalTextEncoder.encode(value).byteLength;
+  }
+  return value.length;
+}
+
+function reportTerminalPanePerf(
+  metric: string,
+  data: Record<string, unknown>,
+  perfState: TerminalPanePerfState,
+  options: { force?: boolean; throttleKey?: string; throttleMs?: number } = {},
+): void {
+  const now = perfNow();
+  const throttleKey = options.throttleKey ?? metric;
+  if (!options.force) {
+    const previous = perfState.lastEmitByMetric.get(throttleKey);
+    const throttleMs = options.throttleMs ?? TERMINAL_RENDERER_OUTPUT_SAMPLE_MS;
+    if (previous !== undefined && now - previous < throttleMs) return;
+  }
+  perfState.lastEmitByMetric.set(throttleKey, now);
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
+function recordTerminalOutputPressure(
+  session: TerminalSessionDescriptor,
+  data: string,
+  perfState: TerminalPanePerfState,
+): { bytes: number; eventsInWindow: number; bytesInWindow: number } {
+  const now = perfNow();
+  const bytes = textByteLength(data);
+  if (
+    perfState.outputWindowStartedAt === null ||
+    now - perfState.outputWindowStartedAt >= TERMINAL_RENDERER_OUTPUT_BURST_WINDOW_MS
+  ) {
+    perfState.outputWindowStartedAt = now;
+    perfState.outputEventsInWindow = 0;
+    perfState.outputBytesInWindow = 0;
+  }
+  perfState.outputEventsInWindow += 1;
+  perfState.outputBytesInWindow += bytes;
+
+  const burst = perfState.outputEventsInWindow >= TERMINAL_RENDERER_OUTPUT_BURST_EVENTS
+    || perfState.outputBytesInWindow >= TERMINAL_RENDERER_OUTPUT_BURST_BYTES;
+  if (burst) {
+    reportTerminalPanePerf('terminal_xterm_output_burst', {
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      eventsInWindow: perfState.outputEventsInWindow,
+      bytesInWindow: perfState.outputBytesInWindow,
+      burstWindowMs: TERMINAL_RENDERER_OUTPUT_BURST_WINDOW_MS,
+    }, perfState, { throttleMs: TERMINAL_RENDERER_SLOW_SAMPLE_MS });
+  }
+
+  return {
+    bytes,
+    eventsInWindow: perfState.outputEventsInWindow,
+    bytesInWindow: perfState.outputBytesInWindow,
+  };
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
+  perfState?: TerminalPanePerfState,
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
@@ -72,7 +167,17 @@ function seedTerminalOutputSnapshot(
     )
   ) {
     try {
+      const startedAt = perfNow();
       term.write(outputSnapshot);
+      if (perfState) {
+        reportTerminalPanePerf('terminal_xterm_snapshot_write', {
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          durationMs: roundMs(perfNow() - startedAt),
+          chars: outputSnapshot.length,
+          bytes: textByteLength(outputSnapshot),
+        }, perfState, { force: true });
+      }
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
@@ -92,6 +197,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const perfStateRef = useRef<TerminalPanePerfState>(createTerminalPanePerfState());
 
   useEffect(() => {
     const host = containerRef.current;
@@ -100,6 +206,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     let term: XTermTerminal;
     let fit: FitAddon;
     try {
+      const attachStartedAt = perfNow();
       term = new XTermTerminal({
         fontSize: 12,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -111,13 +218,20 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
+      reportTerminalPanePerf('terminal_xterm_attach', {
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        durationMs: roundMs(perfNow() - attachStartedAt),
+        hasOutputSnapshot: Boolean(session.outputSnapshot),
+        isActive,
+      }, perfStateRef.current, { force: true });
     } catch {
       return;
     }
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, perfStateRef.current);
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -127,7 +241,24 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const pressure = recordTerminalOutputPressure(session, event.data, perfStateRef.current);
+        const startedAt = perfNow();
         term.write(event.data);
+        const durationMs = perfNow() - startedAt;
+        const slow = durationMs >= TERMINAL_RENDERER_SLOW_WRITE_MS;
+        reportTerminalPanePerf('terminal_xterm_output_write', {
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          durationMs: roundMs(durationMs),
+          chars: event.data.length,
+          bytes: pressure.bytes,
+          eventsInWindow: pressure.eventsInWindow,
+          bytesInWindow: pressure.bytesInWindow,
+          slow,
+        }, perfStateRef.current, {
+          ...(slow ? { throttleKey: 'terminal_xterm_output_write_slow' } : {}),
+          throttleMs: slow ? TERMINAL_RENDERER_SLOW_SAMPLE_MS : TERMINAL_RENDERER_OUTPUT_SAMPLE_MS,
+        });
       } catch {
         /* terminal disposed */
       }
@@ -135,8 +266,19 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
 
     const tryFit = () => {
       try {
+        const startedAt = perfNow();
         fit.fit();
         void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+        const durationMs = perfNow() - startedAt;
+        if (durationMs >= TERMINAL_RENDERER_SLOW_WRITE_MS) {
+          reportTerminalPanePerf('terminal_xterm_fit', {
+            sessionId: session.sessionId,
+            taskId: session.taskId,
+            durationMs: roundMs(durationMs),
+            cols: term.cols,
+            rows: term.rows,
+          }, perfStateRef.current, { throttleMs: TERMINAL_RENDERER_SLOW_SAMPLE_MS });
+        }
       } catch {
         /* host has zero size or fit unsupported */
       }
@@ -178,7 +320,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, perfStateRef.current);
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
@@ -187,8 +329,20 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const fit = fitRef.current;
     if (!term || !fit) return;
     try {
+      const startedAt = perfNow();
       fit.fit();
       void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      const durationMs = perfNow() - startedAt;
+      if (durationMs >= TERMINAL_RENDERER_SLOW_WRITE_MS) {
+        reportTerminalPanePerf('terminal_xterm_fit', {
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          durationMs: roundMs(durationMs),
+          cols: term.cols,
+          rows: term.rows,
+          reason: 'active',
+        }, perfStateRef.current, { throttleMs: TERMINAL_RENDERER_SLOW_SAMPLE_MS });
+      }
       term.focus();
     } catch {
       /* fit failed (e.g., hidden) */

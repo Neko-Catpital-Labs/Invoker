@@ -14,9 +14,45 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const PLANNING_CHAT_INPUT_SAMPLE_MS = 250;
+const PLANNING_CHAT_RENDER_SAMPLE_MS = 1000;
+const PLANNING_CHAT_SLOW_INPUT_HANDLER_MS = 8;
+const PLANNING_CHAT_SLOW_INPUT_COMMIT_MS = 16;
+const PLANNING_CHAT_SLOW_RENDER_MS = 16;
+
+interface PendingPlanningInputPerf {
+  sequence: number;
+  startedAt: number;
+  handlerMs: number;
+  valueLength: number;
+  deltaChars: number;
+}
+
+interface PlanningRenderShape {
+  activeConversationKey: string;
+  busy: boolean;
+  expanded: boolean;
+  lineCount: number;
+  readOnly: boolean;
+  valueLength: number;
+}
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function perfNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
 }
 
 interface InvokerTerminalProps {
@@ -73,7 +109,12 @@ export function InvokerTerminal({
 }: InvokerTerminalProps): JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const inputPerfSequenceRef = useRef(0);
+  const lastPerfReportAtRef = useRef<Record<string, number>>({});
+  const pendingInputPerfRef = useRef<PendingPlanningInputPerf | null>(null);
+  const previousRenderShapeRef = useRef<PlanningRenderShape | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  const renderStartedAt = perfNow();
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -91,6 +132,81 @@ export function InvokerTerminal({
       scrollTranscriptToBottom();
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+
+  const shouldReportPerf = useCallback((metric: string, minIntervalMs: number): boolean => {
+    const now = perfNow();
+    const previous = lastPerfReportAtRef.current[metric];
+    if (previous !== undefined && now - previous < minIntervalMs) return false;
+    lastPerfReportAtRef.current[metric] = now;
+    return true;
+  }, []);
+
+  useLayoutEffect(() => {
+    const pending = pendingInputPerfRef.current;
+    if (!pending) return;
+    pendingInputPerfRef.current = null;
+    const inputToCommitMs = perfNow() - pending.startedAt;
+    const slow = inputToCommitMs >= PLANNING_CHAT_SLOW_INPUT_COMMIT_MS
+      || pending.handlerMs >= PLANNING_CHAT_SLOW_INPUT_HANDLER_MS;
+    if (!slow && !shouldReportPerf('planning_chat_input_commit', PLANNING_CHAT_INPUT_SAMPLE_MS)) {
+      return;
+    }
+    reportPlanningChatPerf('planning_chat_input_commit', {
+      sequence: pending.sequence,
+      inputToCommitMs: roundMs(inputToCommitMs),
+      handlerMs: roundMs(pending.handlerMs),
+      valueLength: pending.valueLength,
+      deltaChars: pending.deltaChars,
+      lineCount: lines.length,
+      expanded,
+      busy,
+      readOnly,
+    });
+  }, [busy, expanded, lines.length, readOnly, shouldReportPerf, value]);
+
+  useLayoutEffect(() => {
+    const renderMs = perfNow() - renderStartedAt;
+    const lastLine = lines.length > 0 ? lines[lines.length - 1] : undefined;
+    const previous = previousRenderShapeRef.current;
+    const shape: PlanningRenderShape = {
+      activeConversationKey,
+      busy,
+      expanded,
+      lineCount: lines.length,
+      readOnly,
+      valueLength: value.length,
+    };
+    const lineDelta = previous ? lines.length - previous.lineCount : lines.length;
+    const valueDelta = previous ? value.length - previous.valueLength : value.length;
+    const changed = !previous
+      || lineDelta !== 0
+      || valueDelta !== 0
+      || busy !== previous.busy
+      || expanded !== previous.expanded
+      || readOnly !== previous.readOnly
+      || activeConversationKey !== previous.activeConversationKey;
+    previousRenderShapeRef.current = shape;
+    if (!changed) return;
+
+    const slow = renderMs >= PLANNING_CHAT_SLOW_RENDER_MS;
+    const transcriptChanged = lineDelta !== 0 || activeConversationKey !== previous?.activeConversationKey;
+    if (!slow && !transcriptChanged && !shouldReportPerf('planning_chat_render_commit', PLANNING_CHAT_RENDER_SAMPLE_MS)) {
+      return;
+    }
+    reportPlanningChatPerf('planning_chat_render_commit', {
+      renderMs: roundMs(renderMs),
+      lineCount: lines.length,
+      lineDelta,
+      valueLength: value.length,
+      valueDelta,
+      lastLineRole: lastLine?.role,
+      lastLineLength: lastLine?.text.length ?? 0,
+      expanded,
+      busy,
+      readOnly,
+      shouldFollowTranscript,
+    });
+  });
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -265,7 +381,34 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              const startedAt = perfNow();
+              inputPerfSequenceRef.current += 1;
+              onValueChange(nextValue);
+              const handlerMs = perfNow() - startedAt;
+              const pending: PendingPlanningInputPerf = {
+                sequence: inputPerfSequenceRef.current,
+                startedAt,
+                handlerMs,
+                valueLength: nextValue.length,
+                deltaChars: Math.abs(nextValue.length - value.length),
+              };
+              pendingInputPerfRef.current = pending;
+              const slow = handlerMs >= PLANNING_CHAT_SLOW_INPUT_HANDLER_MS;
+              if (slow || shouldReportPerf('planning_chat_input_change', PLANNING_CHAT_INPUT_SAMPLE_MS)) {
+                reportPlanningChatPerf('planning_chat_input_change', {
+                  sequence: pending.sequence,
+                  handlerMs: roundMs(handlerMs),
+                  valueLength: pending.valueLength,
+                  deltaChars: pending.deltaChars,
+                  lineCount: lines.length,
+                  expanded,
+                  busy,
+                  readOnly,
+                });
+              }
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();
