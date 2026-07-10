@@ -3579,19 +3579,23 @@ export class Orchestrator {
     deferTaskImpl(this as unknown as CancellationHost, taskId, reason);
   }
 
-  /**
-   * Get detailed queue status with task metadata for display.
-   */
-  getQueueStatus(): {
+  getQueueStatus(options?: { refresh?: boolean }): {
     maxConcurrency: number;
     runningCount: number;
     running: Array<{ taskId: string; attemptId?: string; description: string }>;
     queued: Array<{ taskId: string; priority: number; description: string }>;
   } {
-    this.refreshFromDb();
+    if (options?.refresh !== false) {
+      this.refreshFromDb();
+    }
     const tasks = this.stateMachine.getAllTasks();
     const now = Date.now();
     const activeAttempts = tasks
+      .filter((task) =>
+        task.status === 'running'
+        || task.status === 'fixing_with_ai'
+        || (task.status === 'pending' && !!task.execution.selectedAttemptId),
+      )
       .map((task) => {
         const attemptId = task.execution.selectedAttemptId;
         const attempt = this.loadAttemptById(attemptId);
@@ -3599,11 +3603,20 @@ export class Orchestrator {
       })
       .filter(({ task, attempt }) => this.isTaskExecutionActive(task, attempt, now));
     const activeTaskIds = new Set(activeAttempts.map(({ task }) => task.id));
+    const workflowBlockerCache = new Map<string, string | undefined>();
+    const isExternallyBlocked = (task: TaskState): boolean => {
+      const workflowId = task.config.workflowId;
+      if (!workflowId) return false;
+      if (!workflowBlockerCache.has(workflowId)) {
+        workflowBlockerCache.set(workflowId, this.getWorkflowDependencyBlocker(workflowId));
+      }
+      return workflowBlockerCache.get(workflowId) !== undefined;
+    };
     const queuedTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => task.status === 'pending')
       .filter((task) => !activeTaskIds.has(task.id))
-      .filter((task) => this.getExternalDependencyBlocker(task) === undefined)
+      .filter((task) => !isExternallyBlocked(task))
       .map((task) => {
         const attempt = task.execution.selectedAttemptId
           ? this.loadAttemptById(task.execution.selectedAttemptId)
