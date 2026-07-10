@@ -256,6 +256,21 @@ const TERMINAL_PLANNED_PLAN = {
   ...TEST_PLAN,
   name: 'Terminal Planned Flow',
 };
+const PLANNING_CHAT_LONG_TRANSCRIPT_PLAN = {
+  name: 'Planning Chat Long Transcript',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: Array.from({ length: 18 }, (_, index) => {
+    const taskNumber = String(index + 1).padStart(2, '0');
+    const previousTaskNumber = String(index).padStart(2, '0');
+    return {
+      id: `long-chat-task-${taskNumber}`,
+      description: `Long transcript proof task ${taskNumber}`,
+      command: `echo long-chat-task-${taskNumber}`,
+      dependencies: index === 0 ? [] : [`long-chat-task-${previousTaskNumber}`],
+    };
+  }),
+};
 
 
 const SSH_TERMINAL_RESUME_PLAN = {
@@ -705,6 +720,42 @@ test.describe('Visual proof capture', () => {
     await page.evaluate(async () => {
       await window.invoker.setTestPlanningChatResponse(null);
     });
+  });
+
+  test('planning chat long transcript visual proof stays followed', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 771 });
+    const planYaml = yamlStringify(PLANNING_CHAT_LONG_TRANSCRIPT_PLAN);
+    const reply = [
+      'I drafted a long planning transcript for follow-state proof.',
+      ...Array.from({ length: 24 }, (_, index) => (
+        `Follow check line ${String(index + 1).padStart(2, '0')}: keep this transcript scrollable while preserving the tail.`
+      )),
+    ].join('\n');
+    await page.evaluate(async ({ planYaml, planName, reply }) => {
+      await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply });
+    }, { planYaml, planName: 'Planning Chat Long Transcript', reply });
+
+    try {
+      await page.getByTestId('sidebar-planning').click();
+      await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+      await page.getByTestId('invoker-terminal-input').fill('Draft a long transcript follow proof');
+      await page.getByRole('button', { name: 'Send' }).click();
+
+      const transcript = page.getByTestId('invoker-terminal-transcript');
+      await expect(transcript).toContainText('Draft a long transcript follow proof');
+      await expect(transcript).toContainText('Follow check line 24');
+      await expect(transcript).toContainText('long-chat-task-18');
+      await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
+      await expect.poll(async () => transcript.evaluate((el) => (
+        el.scrollHeight - el.scrollTop - el.clientHeight
+      ))).toBeLessThanOrEqual(1);
+
+      await captureScreenshot(page, 'planning-chat-long-transcript-follow');
+    } finally {
+      await page.evaluate(async () => {
+        await window.invoker.setTestPlanningChatResponse(null);
+      });
+    }
   });
 
   test('planner retry exhausted surfaces raw error to chat and error card', async ({ page }) => {
