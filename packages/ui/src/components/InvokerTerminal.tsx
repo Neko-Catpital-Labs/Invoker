@@ -21,6 +21,7 @@ function isTranscriptNearBottom(element: HTMLDivElement): boolean {
 
 interface InvokerTerminalProps {
   lines: InvokerTerminalLine[];
+  plannerOutput?: PlannerOutputView | null;
   busy: boolean;
   value: string;
   selectedPresetKey: string;
@@ -45,6 +46,11 @@ interface SubmitErrorView {
   message: string;
 }
 
+interface PlannerOutputView {
+  text: string;
+  status: 'streaming' | 'failed';
+}
+
 function rolePrompt(role: InvokerTerminalLine['role']): string {
   if (role === 'user') return 'you ›';
   if (role === 'assistant') return 'invoker ›';
@@ -53,6 +59,7 @@ function rolePrompt(role: InvokerTerminalLine['role']): string {
 
 export function InvokerTerminal({
   lines,
+  plannerOutput,
   busy,
   value,
   selectedPresetKey,
@@ -90,7 +97,7 @@ export function InvokerTerminal({
     if (shouldFollowTranscript) {
       scrollTranscriptToBottom();
     }
-  }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+  }, [lines.length, plannerOutput?.text, scrollTranscriptToBottom, shouldFollowTranscript]);
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -179,6 +186,20 @@ export function InvokerTerminal({
             </div>
           );
         })}
+        {plannerOutput?.text && (
+          <div
+            data-testid="invoker-terminal-planner-output"
+            className="rounded-sm border border-border-strong bg-card/70 p-3 text-foreground shadow-sm"
+          >
+            <div className="mb-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+              <span>planner raw</span>
+              <span>{plannerOutput.status === 'streaming' ? 'live' : 'failed'}</span>
+            </div>
+            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-foreground">
+              {plannerOutput.text}
+            </pre>
+          </div>
+        )}
       </div>
 
       {submitError && !readOnly && (

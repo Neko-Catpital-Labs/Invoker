@@ -50,6 +50,77 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
   });
 
+  it('renders live raw planner output and removes it when the final reply lands', async () => {
+    let resolveSend: ((value: any) => void) | null = null;
+    mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => {
+      resolveSend = resolve;
+    }) as any) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+
+    mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'raw planner ' });
+    mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'text' });
+
+    const rawPanel = await screen.findByTestId('invoker-terminal-planner-output');
+    expect(rawPanel).toHaveTextContent('planner raw');
+    expect(rawPanel).toHaveTextContent('live');
+    expect(rawPanel).toHaveTextContent('raw planner text');
+
+    resolveSend?.({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Final answer.',
+      draftPlanAvailable: false,
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('invoker-terminal-planner-output')).not.toBeInTheDocument();
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Final answer.');
+    });
+  });
+
+  it('keeps failed raw planner output visible until the next send starts', async () => {
+    let resolveFirstSend: ((value: any) => void) | null = null;
+    let resolveSecondSend: ((value: any) => void) | null = null;
+    mock.api.planningChatSend = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirstSend = resolve; }) as any)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecondSend = resolve; }) as any) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'partial raw output' });
+
+    resolveFirstSend?.({ ok: false, sessionId: 'session-1', error: 'planner failed' });
+
+    const rawPanel = await screen.findByTestId('invoker-terminal-planner-output');
+    await waitFor(() => expect(rawPanel).toHaveTextContent('failed'));
+    expect(rawPanel).toHaveTextContent('partial raw output');
+    expect(screen.getByTestId('invoker-terminal-submit-error')).toHaveTextContent('planner failed');
+
+    submitPlanningText('try again');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(screen.queryByTestId('invoker-terminal-planner-output')).not.toBeInTheDocument();
+    });
+
+    resolveSecondSend?.({
+      ok: true,
+      sessionId: 'session-2',
+      reply: 'Recovered.',
+      draftPlanAvailable: false,
+    });
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Recovered.'));
+  });
+
   it('sends plain language when Enter is pressed', async () => {
     render(<App />);
     await openPlanningTerminal();
@@ -296,6 +367,46 @@ describe('Invoker terminal (component)', () => {
     fireEvent.click(screen.getByText('hello'));
 
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
+  });
+
+  it('keeps live raw planner output isolated to its planning session', async () => {
+    let resolveSend: ((value: any) => void) | null = null;
+    mock.api.planningChatSend = vi.fn((request: any) => {
+      if (!request.sessionId) {
+        return Promise.resolve({
+          ok: true,
+          sessionId: 'session-1',
+          reply: 'First session is ready.',
+          draftPlanAvailable: false,
+        }) as any;
+      }
+      return new Promise((resolve) => { resolveSend = resolve; }) as any;
+    }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('first session request');
+    await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('First session is ready.'));
+
+    submitPlanningText('continue first session');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2));
+    mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'session one raw text' });
+    expect(await screen.findByTestId('invoker-terminal-planner-output')).toHaveTextContent('session one raw text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    expect(screen.queryByTestId('invoker-terminal-planner-output')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('first session request'));
+    expect(screen.getByTestId('invoker-terminal-planner-output')).toHaveTextContent('session one raw text');
+
+    resolveSend?.({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Final first-session reply.',
+      draftPlanAvailable: false,
+    });
+    await waitFor(() => expect(screen.queryByTestId('invoker-terminal-planner-output')).not.toBeInTheDocument());
   });
 
   it('keeps a new planning chat editable while another session is working', async () => {

@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, InAppPlanningChatStreamEvent, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -122,6 +122,10 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   input: string;
   busy: boolean;
   conversationKey: string;
+};
+type PlanningRawOutputView = {
+  text: string;
+  status: 'streaming' | 'failed';
 };
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
@@ -549,6 +553,8 @@ export function App() {
   const [planName, setPlanName] = useState<string | null>(null);
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
+  const planningSessionsRef = useRef(planningSessions);
+  const [planningRawOutputBySessionId, setPlanningRawOutputBySessionId] = useState<Record<string, PlanningRawOutputView>>({});
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(2);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
@@ -567,6 +573,42 @@ export function App() {
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
+  const activePlanningRawOutput = planningRawOutputBySessionId[activePlanningSession.id] ?? null;
+  const resolvePlanningRawOutputSessionId = useCallback((eventSessionId: string): string => {
+    const sessions = planningSessionsRef.current;
+    if (sessions.some((session) => session.id === eventSessionId)) {
+      return eventSessionId;
+    }
+    const pendingLocalSessions = sessions.filter((session) => session.id.startsWith('local-') && session.busy);
+    return pendingLocalSessions.length === 1 ? pendingLocalSessions[0].id : eventSessionId;
+  }, []);
+  const clearPlanningRawOutput = useCallback((...sessionIds: Array<string | null | undefined>) => {
+    const ids = new Set(sessionIds.filter((id): id is string => Boolean(id)));
+    if (ids.size === 0) return;
+    setPlanningRawOutputBySessionId((prev) => {
+      if (![...ids].some((id) => prev[id])) return prev;
+      const next = { ...prev };
+      for (const id of ids) {
+        delete next[id];
+      }
+      return next;
+    });
+  }, []);
+  const markPlanningRawOutputFailed = useCallback((visibleSessionId: string, ...aliases: Array<string | null | undefined>) => {
+    setPlanningRawOutputBySessionId((prev) => {
+      const sourceId = [visibleSessionId, ...aliases].find((id): id is string => Boolean(id && prev[id]));
+      if (!sourceId) return prev;
+      const source = prev[sourceId];
+      if (!source) return prev;
+      const next = { ...prev, [visibleSessionId]: { ...source, status: 'failed' as const } };
+      for (const alias of aliases) {
+        if (alias && alias !== visibleSessionId) {
+          delete next[alias];
+        }
+      }
+      return next;
+    });
+  }, []);
   const [graphMaximized, setGraphMaximized] = useState(false);
   const { theme, toggleTheme } = useTheme();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -699,6 +741,26 @@ export function App() {
       }
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    planningSessionsRef.current = planningSessions;
+  }, [planningSessions]);
+
+  useEffect(() => {
+    const unsubscribe = invoker?.onPlanningChatStream?.((event: InAppPlanningChatStreamEvent) => {
+      if (!event.sessionId || !event.chunk) return;
+      const sessionId = resolvePlanningRawOutputSessionId(event.sessionId);
+      setPlanningRawOutputBySessionId((prev) => ({
+        ...prev,
+        [sessionId]: {
+          text: `${prev[sessionId]?.text ?? ''}${event.chunk}`,
+          status: 'streaming',
+        },
+      }));
+    });
+    return () => { unsubscribe?.(); };
+  }, [invoker, resolvePlanningRawOutputSessionId]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -1959,6 +2021,7 @@ export function App() {
     appendTerminalLine(input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
+    clearPlanningRawOutput(activePlanningSessionId, planningSessionId);
 
     if (input.toLowerCase() === 'run') {
       if (!hasLoadedPlan || hasStarted) {
@@ -1999,6 +2062,7 @@ export function App() {
       };
       const result = await invoker.planningChatSend(request);
       if (result.ok) {
+        clearPlanningRawOutput(previousSessionId, result.sessionId);
         const updatedAt = new Date().toISOString();
         const replyLineId = nextTerminalLineIdRef.current;
         nextTerminalLineIdRef.current += 1;
@@ -2024,11 +2088,13 @@ export function App() {
         setHasLoadedPlan(false);
       } else {
         updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+        markPlanningRawOutputFailed(previousSessionId, result.sessionId);
         appendTerminalLine(result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
       updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+      markPlanningRawOutputFailed(previousSessionId);
       const message = err instanceof Error ? err.message : 'Failed to reach the planner.';
       setPlanningSubmitError({ title: 'Planner could not respond', message });
       appendTerminalLine(message, 'system', 'error');
@@ -2038,11 +2104,13 @@ export function App() {
     activePlanningSessionId,
     activePlanningSessionSubmitted,
     appendTerminalLine,
+    clearPlanningRawOutput,
     handlePlanningSubmitDraft,
     handleStart,
     hasLoadedPlan,
     hasStarted,
     invoker,
+    markPlanningRawOutputFailed,
     planningInput,
     planningSessionId,
     selectedPlanningPresetKey,
@@ -2900,6 +2968,7 @@ export function App() {
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
+            plannerOutput={activePlanningRawOutput}
             busy={activePlanningSessionBusy}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
@@ -3229,6 +3298,7 @@ export function App() {
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
+            plannerOutput={activePlanningRawOutput}
             busy={activePlanningSessionBusy}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
@@ -3456,4 +3526,3 @@ export function App() {
     </div>
   );
 }
-

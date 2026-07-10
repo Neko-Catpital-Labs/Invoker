@@ -87,6 +87,7 @@ import type {
   ActionGraphResponse,
   BundledSkillsInstallMode,
   InAppPlanRequest,
+  InAppPlanningChatStreamEvent,
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
   InAppPlanningResetRequest,
@@ -2043,6 +2044,12 @@ function createEmbeddedTerminalBackendFromConfig(
       mainWindow.webContents.send('invoker:terminal-exit', payload);
     }
   });
+  const emitPlanningChatStream = (event: InAppPlanningChatStreamEvent): void => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('invoker:planning-chat-stream', event);
+    }
+    webBridge?.broadcast('invoker:planning-chat-stream', event);
+  };
   // CC.5: the legacy `launchingTasks` Set is gone. Per-attempt launch
   // state is tracked durably by `task_launch_dispatch` (Phase B); the
   // TaskRunner's internal `launchingAttemptIds` Set (CB.4) is the
@@ -3901,6 +3908,7 @@ function createEmbeddedTerminalBackendFromConfig(
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      emitPlanningChatStream,
     });
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     // Two variants: (1) a successful override that returns a canned reply +
@@ -3935,6 +3943,7 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
+        emitPlanningChatStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -3959,6 +3968,7 @@ function createEmbeddedTerminalBackendFromConfig(
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
         plannerReplyOverride,
+        emitPlanningChatStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {

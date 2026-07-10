@@ -5,6 +5,7 @@ import type {
   InAppPlanningChatLine,
   InAppPlanningChatRequest,
   InAppPlanningChatResponse,
+  InAppPlanningChatStreamEvent,
   InAppPlanningCreateSessionRequest,
   InAppPlanningCreateSessionResponse,
   InAppPlanningListSessionsResponse,
@@ -47,6 +48,7 @@ export interface InAppPlannerDeps {
   planningCommandBuilder?: PlanningCommandBuilder;
   conversationRepo?: ConversationRepository;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  emitPlanningChatStream?: (event: InAppPlanningChatStreamEvent) => void;
 }
 
 export interface InAppPlanningChatSession {
@@ -277,7 +279,7 @@ function formatConversationalPlanningMessage(message: string): string {
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo'>,
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo' | 'emitPlanningChatStream'>,
   threadTs: string,
 ): PlanConversationConfig {
   return {
@@ -292,6 +294,9 @@ function planConversationConfig(
     experimentalPlanner: deps.config.experimentalPlanner,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
+    onRawPlannerOutput: deps.emitPlanningChatStream
+      ? (chunk) => deps.emitPlanningChatStream?.({ sessionId: threadTs, chunk })
+      : undefined,
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
   };
