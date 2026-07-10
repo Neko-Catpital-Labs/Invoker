@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildInvokerHomeCleanupScript,
   cleanupLocalInvokerHome,
+  DISK_RECLAIMABLE_DIRS,
   DiskCleanupCooldownTracker,
   isSafeInvokerHome,
   isSafeRemoteInvokerHomePath,
@@ -41,14 +42,20 @@ describe('disk-headroom cleanup guards', () => {
     expect(isSafeRemoteInvokerHomePath('/home/invoker/.invoker')).toBe(true);
   });
 
-  it('embeds path guards and provision-only pkill in the remote script', () => {
+  it('embeds path guards, reclaimable dirs, and sync delete in the remote script', () => {
     const script = buildInvokerHomeCleanupScript('~/.invoker');
     expect(script).toContain('Refusing unsafe INVOKER_HOME');
     expect(script).toContain("pkill -9 -f 'pnpm install");
     expect(script).not.toContain('pkill -9 -f "$INVOKER_HOME"');
-    expect(script).toContain('$INVOKER_HOME/runtime');
-    expect(script).toContain('$INVOKER_HOME/repos');
-    expect(script).toContain('$INVOKER_HOME/worktrees');
+    for (const name of DISK_RECLAIMABLE_DIRS) {
+      expect(script).toContain(`$INVOKER_HOME/${name}`);
+    }
+    expect(script).toContain('*.deleting.*');
+    expect(script).not.toContain('nohup');
+    expect(script).not.toMatch(/rm -rf[^\n]*&\s*$/m);
+    expect(script).not.toContain('$HOME/.cache/electron');
+    expect(script).not.toContain('$HOME/.local/share/pnpm');
+    expect(script).not.toContain('$HOME/.pnpm-store');
   });
 });
 
@@ -79,7 +86,7 @@ describe('DiskCleanupCooldownTracker', () => {
 });
 
 describe('cleanupLocalInvokerHome', () => {
-  it('wipes runtime/repos/worktrees and recreates empty dirs', async () => {
+  it('wipes reclaimable dirs, orphans, and recreates empty dirs', async () => {
     const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-'));
     tempDirs.push(root);
     const home = join(root, '.invoker');
@@ -89,7 +96,17 @@ describe('cleanupLocalInvokerHome', () => {
     mkdirSync(join(home, 'repos', 'abc'), { recursive: true });
     writeFileSync(join(home, 'repos', 'abc', 'file.txt'), 'x');
     mkdirSync(join(home, 'runtime', 'ssh'), { recursive: true });
+    mkdirSync(join(home, 'merge-clones', 'gate-wf'), { recursive: true });
+    writeFileSync(join(home, 'merge-clones', 'gate-wf', 'file.txt'), 'x');
+    mkdirSync(join(home, 'merge-launches', 'launch-1'), { recursive: true });
+    writeFileSync(join(home, 'merge-launches', 'launch-1', 'file.txt'), 'x');
+    mkdirSync(join(home, 'merge-clones.deleting.123', 'stale'), { recursive: true });
+    writeFileSync(join(home, 'merge-clones.deleting.123', 'stale', 'file.txt'), 'x');
     writeFileSync(join(home, 'invoker.db'), 'keep-me');
+    mkdirSync(join(home, 'plans'), { recursive: true });
+    writeFileSync(join(home, 'plans', 'keep.yaml'), 'name: keep');
+    mkdirSync(join(userHome, '.cache', 'electron'), { recursive: true });
+    writeFileSync(join(userHome, '.cache', 'electron', 'keep.bin'), 'x');
 
     const result = await cleanupLocalInvokerHome({
       invokerHome: home,
@@ -99,11 +116,16 @@ describe('cleanupLocalInvokerHome', () => {
 
     expect(result.ok).toBe(true);
     expect(result.reason).toBe('critical-cleanup');
-    expect(existsSync(join(home, 'worktrees'))).toBe(true);
-    expect(existsSync(join(home, 'repos'))).toBe(true);
-    expect(existsSync(join(home, 'runtime'))).toBe(true);
+    for (const name of DISK_RECLAIMABLE_DIRS) {
+      expect(existsSync(join(home, name))).toBe(true);
+      expect(readdirSync(join(home, name))).toEqual([]);
+    }
+    expect(existsSync(join(home, 'merge-clones.deleting.123'))).toBe(false);
     expect(existsSync(join(home, 'worktrees', 'abc'))).toBe(false);
+    expect(existsSync(join(home, 'merge-launches', 'launch-1'))).toBe(false);
     expect(existsSync(join(home, 'invoker.db'))).toBe(true);
+    expect(existsSync(join(home, 'plans', 'keep.yaml'))).toBe(true);
+    expect(existsSync(join(userHome, '.cache', 'electron', 'keep.bin'))).toBe(true);
   });
 
   it('refuses to clean the user home itself', async () => {

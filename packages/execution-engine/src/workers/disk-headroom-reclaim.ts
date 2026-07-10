@@ -1,11 +1,11 @@
 /**
  * Critical-disk remediation for the disk-headroom worker.
  *
- * Wipes reclaimable Invoker-managed dirs (runtime/repos/worktrees) plus common
- * provision caches. Never touches invoker.db / config.json / the home root.
+ * Wipes reclaimable Invoker-managed dirs under the Invoker home only.
+ * Never touches invoker.db / config.json / the home root / paths outside the home.
  */
 
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,6 +17,17 @@ import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from
 import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
 
 export const DEFAULT_DISK_CLEANUP_COOLDOWN_MS = 30 * 60 * 1000;
+
+/** Invoker-managed dirs reclaimed on critical disk pressure (local + remote). */
+export const DISK_RECLAIMABLE_DIRS = [
+  'runtime',
+  'repos',
+  'worktrees',
+  'merge-clones',
+  'merge-launches',
+] as const;
+
+export type DiskReclaimableDir = (typeof DISK_RECLAIMABLE_DIRS)[number];
 
 export interface DiskCleanupResult {
   targetKey: string;
@@ -74,13 +85,24 @@ export function isSafeRemoteInvokerHomePath(remotePath: string): boolean {
   return true;
 }
 
+function isDeletingOrphanName(name: string): boolean {
+  return name.includes('.deleting.');
+}
+
 /**
  * Remote bash that frees Invoker-managed disk under `$INVOKER_HOME`.
  * Kills only provision grinders (pnpm install / electron unzip), not every
  * process whose argv mentions the home (that can kill the SSH session).
+ * Deletes synchronously so SSH timeout cannot leave fire-and-forget orphans.
  */
 export function buildInvokerHomeCleanupScript(invokerHome: string): string {
   const homeQ = shellPosixSingleQuote(invokerHome);
+  const removeCalls = DISK_RECLAIMABLE_DIRS
+    .map((name) => `remove_path "$INVOKER_HOME/${name}"`)
+    .join('\n');
+  const mkdirArgs = DISK_RECLAIMABLE_DIRS
+    .map((name) => `"$INVOKER_HOME/${name}"`)
+    .join(' ');
   return `set +e
 INVOKER_HOME=${homeQ}
 ${bashNormalizeTildePath('INVOKER_HOME')}
@@ -98,23 +120,22 @@ pkill -9 -f 'pnpm install' >/dev/null 2>&1
 pkill -9 -f 'electron-v[0-9].*-linux-x64.zip' >/dev/null 2>&1
 pkill -9 -f 'node_modules/.pnpm/electron@' >/dev/null 2>&1
 sleep 1
+# Prior rename leftovers from interrupted cleanups.
+rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
 remove_path() {
   local path="$1"
   if [ -e "$path" ]; then
-    mv "$path" "\${path}.deleting.$$" 2>/dev/null || true
-    nohup rm -rf "\${path}.deleting.$$" >/dev/null 2>&1 &
+    local staged="\${path}.deleting.$$"
+    if mv "$path" "$staged" 2>/dev/null; then
+      rm -rf "$staged" 2>/dev/null || true
+    fi
     rm -rf "$path" 2>/dev/null || true
   fi
 }
-remove_path "$INVOKER_HOME/runtime"
-remove_path "$INVOKER_HOME/repos"
-remove_path "$INVOKER_HOME/worktrees"
-remove_path "$INVOKER_HOME/merge-clones"
+${removeCalls}
 rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
-# Common provision caches (best effort).
-rm -rf "$HOME/.cache/electron" "$HOME/.local/share/pnpm" "$HOME/.pnpm-store" >/dev/null 2>&1
-mkdir -p "$INVOKER_HOME/runtime" "$INVOKER_HOME/repos" "$INVOKER_HOME/worktrees"
-chmod 700 "$INVOKER_HOME/runtime" "$INVOKER_HOME/repos" "$INVOKER_HOME/worktrees"
+mkdir -p ${mkdirArgs}
+chmod 700 ${mkdirArgs}
 echo "[disk-headroom-cleanup] done"
 df -h / | tail -1
 exit 0
@@ -138,6 +159,21 @@ function ensureLocalDir(path: string, errors: string[]): void {
   }
 }
 
+function sweepLocalDeletingOrphans(home: string, errors: string[]): void {
+  if (!existsSync(home)) return;
+  let entries: string[];
+  try {
+    entries = readdirSync(home);
+  } catch (err) {
+    errors.push(`readdir ${home}: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  for (const name of entries) {
+    if (!isDeletingOrphanName(name)) continue;
+    removeLocalDir(join(home, name), errors);
+  }
+}
+
 export async function cleanupLocalInvokerHome(opts: {
   invokerHome: string;
   targetKey?: string;
@@ -157,18 +193,12 @@ export async function cleanupLocalInvokerHome(opts: {
   });
 
   const errors: string[] = [];
-  for (const name of ['runtime', 'repos', 'worktrees', 'merge-clones'] as const) {
+  sweepLocalDeletingOrphans(home, errors);
+  for (const name of DISK_RECLAIMABLE_DIRS) {
     removeLocalDir(join(home, name), errors);
   }
-  for (const name of ['runtime', 'repos', 'worktrees'] as const) {
+  for (const name of DISK_RECLAIMABLE_DIRS) {
     ensureLocalDir(join(home, name), errors);
-  }
-  for (const cache of [
-    join(userHome, '.cache', 'electron'),
-    join(userHome, '.local', 'share', 'pnpm'),
-    join(userHome, '.pnpm-store'),
-  ]) {
-    removeLocalDir(cache, errors);
   }
 
   if (errors.length > 0) {
