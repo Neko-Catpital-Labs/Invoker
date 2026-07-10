@@ -13,6 +13,7 @@
 import { spawn } from 'node:child_process';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
+import { formatCodexPlannerStdout } from '@invoker/execution-engine';
 import type { LogFn } from '../surface.js';
 
 // ── Types ───────────────────────────────────────────────────
@@ -325,6 +326,7 @@ export class PlanConversation {
   private plannerRetryLimit: number;
   private plannerRetryBaseDelayMs: number;
   private _initialized = false;
+  private _lastTurnReasoning: string[] = [];
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -407,14 +409,22 @@ export class PlanConversation {
 
     const response = await this.spawnPlanner(prompt);
     const tCursor = Date.now();
-    this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, responsePreview="${response.slice(0, 500).replace(/\n/g, '\\n')}"`);
+    const formatted = formatCodexPlannerStdout(response);
+    const message = formatted.message;
+    this._lastTurnReasoning = formatted.reasoning;
+    this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${formatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
-    this.messages.push({ role: 'assistant', content: response });
+    this.messages.push({ role: 'assistant', content: message });
     this.saveState();
     const tSave = Date.now();
 
     this.log('plan-conversation', 'info', `[PERF] sendMessage: init=${tInit - t0}ms, buildPrompt=${tPrompt - tInit}ms, cursor=${tCursor - tPrompt}ms, saveState=${tSave - tCursor}ms, total=${tSave - t0}ms`);
-    return response;
+    return message;
+  }
+
+  /** Reasoning summaries from the most recent planner turn (Codex JSONL), if any. */
+  get lastTurnReasoning(): string[] {
+    return this._lastTurnReasoning;
   }
 
   /** Returns the raw plan text that was submitted via confirmation, or null. */
