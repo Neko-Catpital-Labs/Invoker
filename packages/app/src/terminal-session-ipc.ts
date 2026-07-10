@@ -1,7 +1,7 @@
 import type { IpcMain } from 'electron';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
+import type { EmbeddedTerminalManager, TerminalSessionPersistenceRecord } from './embedded-terminal-manager.js';
 import {
   timeTerminalResize,
   timeTerminalSessionUpsert,
@@ -10,6 +10,9 @@ import {
   type TerminalUiPerfReporter,
   type TerminalUiPerfSink,
 } from './terminal-ui-perf.js';
+
+/** Coalesce running-session snapshot upserts so PTY output does not 1:1 SQLite-write on main. */
+export const TERMINAL_SESSION_UPSERT_COALESCE_MS = 250;
 
 type TerminalSessionRow = ReturnType<SQLiteAdapter['listTerminalSessions']>[number];
 
@@ -65,32 +68,49 @@ export function restorePersistedTerminalSessions(deps: {
   }
 }
 
+function toUpsertRow(record: TerminalSessionPersistenceRecord) {
+  return {
+    sessionId: record.sessionId,
+    taskId: record.taskId,
+    targetKey: record.targetKey,
+    status: record.status,
+    exitCode: record.exitCode,
+    cwd: record.cwd,
+    command: record.spec.command,
+    args: record.spec.args,
+    linuxTerminalTail: record.spec.linuxTerminalTail,
+    mode: record.mode,
+    attached: record.attached,
+    outputSnapshot: record.outputSnapshot,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+export interface TerminalSessionPersistenceHandle {
+  /** Flush any coalesced running-session upserts immediately. */
+  flushPending: () => void;
+  /** Remove the session-updated listener and clear timers. */
+  dispose: () => void;
+}
+
 export function registerTerminalSessionPersistence(deps: {
   embeddedTerminalManager: EmbeddedTerminalManager;
   persistence: Pick<SQLiteAdapter, 'upsertTerminalSession' | 'listTerminalSessions' | 'loadTask' | 'deleteTerminalSession' | 'updateTerminalSession'>;
   uiPerfStats: TerminalUiPerfCounters;
   terminalUiPerf: TerminalUiPerfReporter;
   terminalUiPerfSink: TerminalUiPerfSink;
-}): void {
-  deps.embeddedTerminalManager.on('session-updated', (record) => {
+  /** Override coalesce window (tests). */
+  coalesceMs?: number;
+}): TerminalSessionPersistenceHandle {
+  const coalesceMs = deps.coalesceMs ?? TERMINAL_SESSION_UPSERT_COALESCE_MS;
+  const pendingBySession = new Map<string, TerminalSessionPersistenceRecord>();
+  const timerBySession = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const upsertNow = (record: TerminalSessionPersistenceRecord): void => {
     timeTerminalSessionUpsert(
       () => {
-        deps.persistence.upsertTerminalSession({
-          sessionId: record.sessionId,
-          taskId: record.taskId,
-          targetKey: record.targetKey,
-          status: record.status,
-          exitCode: record.exitCode,
-          cwd: record.cwd,
-          command: record.spec.command,
-          args: record.spec.args,
-          linuxTerminalTail: record.spec.linuxTerminalTail,
-          mode: record.mode,
-          attached: record.attached,
-          outputSnapshot: record.outputSnapshot,
-          createdAt: record.createdAt,
-          updatedAt: record.updatedAt,
-        });
+        deps.persistence.upsertTerminalSession(toUpsertRow(record));
       },
       deps.uiPerfStats,
       deps.terminalUiPerf,
@@ -102,8 +122,72 @@ export function registerTerminalSessionPersistence(deps: {
         outputSnapshotChars: record.outputSnapshot?.length ?? 0,
       },
     );
-  });
+  };
+
+  const clearTimer = (sessionId: string): void => {
+    const timer = timerBySession.get(sessionId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timerBySession.delete(sessionId);
+    }
+  };
+
+  const flushSession = (sessionId: string): void => {
+    clearTimer(sessionId);
+    const pending = pendingBySession.get(sessionId);
+    if (!pending) return;
+    pendingBySession.delete(sessionId);
+    upsertNow(pending);
+  };
+
+  const flushPending = (): void => {
+    for (const sessionId of [...pendingBySession.keys()]) {
+      flushSession(sessionId);
+    }
+  };
+
+  const scheduleCoalesced = (record: TerminalSessionPersistenceRecord): void => {
+    pendingBySession.set(record.sessionId, record);
+    if (timerBySession.has(record.sessionId)) return;
+    timerBySession.set(
+      record.sessionId,
+      setTimeout(() => {
+        timerBySession.delete(record.sessionId);
+        flushSession(record.sessionId);
+      }, coalesceMs),
+    );
+  };
+
+  const onSessionUpdated = (record: TerminalSessionPersistenceRecord): void => {
+    // Open (empty snapshot) and exit/status boundaries persist immediately so
+    // restart restore and final state stay correct. Output while running is
+    // coalesced — that is the PTY storm path that blocked Electron main.
+    const isLifecycleBoundary =
+      record.status !== 'running' || record.outputSnapshot.length === 0;
+
+    if (isLifecycleBoundary) {
+      clearTimer(record.sessionId);
+      pendingBySession.delete(record.sessionId);
+      upsertNow(record);
+      return;
+    }
+
+    scheduleCoalesced(record);
+  };
+
+  deps.embeddedTerminalManager.on('session-updated', onSessionUpdated);
   restorePersistedTerminalSessions(deps);
+
+  return {
+    flushPending,
+    dispose: () => {
+      flushPending();
+      deps.embeddedTerminalManager.off('session-updated', onSessionUpdated);
+      for (const timer of timerBySession.values()) clearTimeout(timer);
+      timerBySession.clear();
+      pendingBySession.clear();
+    },
+  };
 }
 
 export function registerTerminalSessionIpcHandlers(deps: {
