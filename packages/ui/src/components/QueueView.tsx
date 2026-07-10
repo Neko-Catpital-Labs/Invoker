@@ -1,16 +1,18 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { TaskState, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot } from '../types.js';
+import type { TaskState, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMeta } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';
 import {
   displayWorkerTaskId,
   formatWorkerValue,
   getActiveWorkerActions,
   getWorkerDisplayCopy,
+  resolveWorkerActionTarget,
 } from '../lib/worker-display.js';
 import { WorkerActivityCard } from './WorkerActivityCard.js';
 
 interface QueueViewProps {
   tasks: Map<string, TaskState>;
+  workflows: Map<string, WorkflowMeta>;
   workerStatus: WorkerStatusSnapshot | null;
   readOnly: boolean;
   onStartWorker: (kind: string) => Promise<void> | void;
@@ -26,23 +28,26 @@ type WorkerActionRow = {
   worker: WorkerStatusEntry;
 };
 
-
-function actionTargetLabel(action: WorkerActionSummary, tasks: Map<string, TaskState>): string {
-  if (action.taskId) {
-    return tasks.get(action.taskId)?.description || displayWorkerTaskId(action.taskId);
-  }
-  return `${formatWorkerValue(action.subjectType)} ${action.subjectId}`;
-}
-
 function actionRowKey(row: WorkerActionRow): string {
   return `${row.worker.kind}:${row.action.id}`;
 }
 
-function actionTargetTask(action: WorkerActionSummary, tasks: Map<string, TaskState>): TaskState | null {
-  return action.taskId ? tasks.get(action.taskId) ?? null : null;
+function relatedTaskLabel(taskId: string, tasks: Map<string, TaskState>): string {
+  return tasks.get(taskId)?.description || displayWorkerTaskId(taskId);
 }
 
-export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStopWorker, onTaskClick, selectedTaskId, selectedWorkerKind, onSelectWorker }: QueueViewProps) {
+export function QueueView({
+  tasks,
+  workflows,
+  workerStatus,
+  readOnly,
+  onStartWorker,
+  onStopWorker,
+  onTaskClick,
+  selectedTaskId,
+  selectedWorkerKind,
+  onSelectWorker,
+}: QueueViewProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -106,7 +111,8 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
           <div className="space-y-1">
             {actionRows.map((row) => {
               const { action, worker } = row;
-              const task = actionTargetTask(action, tasks);
+              const target = resolveWorkerActionTarget(action, tasks, workflows);
+              const task = target.task;
               const rowKey = actionRowKey(row);
               const taskId = action.taskId;
               const upstream = task?.dependencies ?? [];
@@ -115,6 +121,11 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
               const isExpanded = expandedRows.has(rowKey);
               const colors = getStatusColor(action.status);
               const copy = getWorkerDisplayCopy(worker.kind);
+              const secondaryParts = [
+                copy.name,
+                formatWorkerValue(action.actionType),
+                ...(target.workflowName ? [target.workflowName] : []),
+              ];
               return (
                 <div
                   key={rowKey}
@@ -150,14 +161,14 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
                       className={`min-w-0 flex-1 p-3 text-left ${task ? 'cursor-pointer' : 'cursor-default'}`}
                     >
                       <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-foreground">{copy.name}</span>
+                        <span className="truncate text-sm font-medium text-foreground">{target.taskTitle}</span>
                         <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${colors.bg} ${colors.border} ${colors.text}`}>
                           <span className={`h-1.5 w-1.5 rounded-full ${colors.dot}`} aria-hidden="true" />
                           {formatWorkerValue(action.status)}
                         </span>
                       </div>
                       <div className="mt-1 truncate text-xs text-muted-foreground">
-                        {formatWorkerValue(action.actionType)} · {actionTargetLabel(action, tasks)}
+                        {secondaryParts.join(' · ')}
                       </div>
                       {action.summary ? (
                         <div className="mt-1 truncate text-xs text-muted-foreground">{action.summary}</div>
@@ -179,7 +190,7 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
                               onClick={(e) => handleRelatedClick(depId, e)}
                               className="mr-1 inline-block cursor-pointer rounded bg-secondary px-1.5 py-0.5 text-foreground hover:bg-secondary"
                             >
-                              {displayWorkerTaskId(depId)}
+                              {relatedTaskLabel(depId, tasks)}
                             </button>
                           ))}
                         </div>
@@ -194,7 +205,7 @@ export function QueueView({ tasks, workerStatus, readOnly, onStartWorker, onStop
                               onClick={(e) => handleRelatedClick(depId, e)}
                               className="mr-1 inline-block cursor-pointer rounded bg-green-900 px-1.5 py-0.5 text-green-300 hover:bg-green-800"
                             >
-                              {displayWorkerTaskId(depId)}
+                              {relatedTaskLabel(depId, tasks)}
                             </button>
                           ))}
                         </div>
