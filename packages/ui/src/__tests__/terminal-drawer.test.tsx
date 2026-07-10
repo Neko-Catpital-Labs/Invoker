@@ -228,6 +228,62 @@ describe('Terminal drawer (component)', () => {
     expect(screen.getByTestId('terminal-pane-task-alpha')).toHaveClass('overflow-hidden');
   });
 
+  it('reports embedded terminal attach and output perf markers through reportUiPerf', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      command: 'sh',
+      args: ['-lc', 'printf ready'],
+    });
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_attach',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          failed: false,
+          durationMs: expect.any(Number),
+        }),
+      );
+    });
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'ready\n',
+      });
+    });
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_output_write',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          source: 'live',
+          reason: 'initial',
+          eventChars: 'ready\n'.length,
+          charCount: 'ready\n'.length,
+          eventCount: 1,
+          durationMs: expect.any(Number),
+          maxDurationMs: expect.any(Number),
+        }),
+      );
+    });
+  });
+
   it('reuses an existing tab when opening the same task twice', async () => {
     render(<App />);
     act(() => mock.setTasks([taskAlpha], workflows));

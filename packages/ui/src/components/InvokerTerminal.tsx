@@ -15,6 +15,31 @@ interface PlanningPresetOptionView {
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
 
+interface PendingChatInputPerf {
+  sequence: number;
+  startedAt: number;
+  handlerDurationMs: number;
+  previousValueLength: number;
+  nextValueLength: number;
+  lineCount: number;
+  transcriptTextLength: number;
+}
+
+function perfNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function reportUiPerf(metric: string, data: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
 }
@@ -71,9 +96,15 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const renderStartedAtRef = useRef(0);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const pendingInputPerfRef = useRef<PendingChatInputPerf | null>(null);
+  const inputSequenceRef = useRef(0);
+  renderStartedAtRef.current = perfNow();
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  const transcriptTextLength = lines.reduce((total, line) => total + line.text.length, 0);
+  const lastLine = lines[lines.length - 1] ?? null;
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -92,11 +123,79 @@ export function InvokerTerminal({
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
 
+  useLayoutEffect(() => {
+    reportUiPerf('planning_chat_render_commit', {
+      durationMs: roundMs(perfNow() - renderStartedAtRef.current),
+      activeConversationKey,
+      lineCount: lines.length,
+      transcriptTextLength,
+      lastLineId: lastLine?.id ?? null,
+      lastLineRole: lastLine?.role ?? null,
+      lastLineTextLength: lastLine?.text.length ?? 0,
+      valueLength: value.length,
+      busy,
+      readOnly,
+      expanded,
+      draftPlanAvailable,
+      submitErrorVisible: Boolean(submitError),
+      shouldFollowTranscript,
+    });
+  }, [
+    activeConversationKey,
+    busy,
+    draftPlanAvailable,
+    expanded,
+    lastLine?.id,
+    lastLine?.role,
+    lastLine?.text.length,
+    lines.length,
+    readOnly,
+    shouldFollowTranscript,
+    submitError,
+    transcriptTextLength,
+    value,
+  ]);
+
+  useLayoutEffect(() => {
+    const pending = pendingInputPerfRef.current;
+    if (!pending || pending.nextValueLength !== value.length) return;
+    pendingInputPerfRef.current = null;
+    reportUiPerf('planning_chat_input_commit', {
+      sequence: pending.sequence,
+      commitLatencyMs: roundMs(perfNow() - pending.startedAt),
+      handlerDurationMs: roundMs(pending.handlerDurationMs),
+      previousValueLength: pending.previousValueLength,
+      valueLength: value.length,
+      deltaLength: pending.nextValueLength - pending.previousValueLength,
+      lineCount: pending.lineCount,
+      transcriptTextLength: pending.transcriptTextLength,
+      activeConversationKey,
+      busy,
+      readOnly,
+      expanded,
+    });
+  }, [activeConversationKey, busy, expanded, readOnly, value]);
+
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
     setShouldFollowTranscript(isTranscriptNearBottom(transcript));
   }, []);
+
+  const handleValueChange = useCallback((nextValue: string): void => {
+    const startedAt = perfNow();
+    onValueChange(nextValue);
+    pendingInputPerfRef.current = {
+      sequence: inputSequenceRef.current + 1,
+      startedAt,
+      handlerDurationMs: perfNow() - startedAt,
+      previousValueLength: value.length,
+      nextValueLength: nextValue.length,
+      lineCount: lines.length,
+      transcriptTextLength,
+    };
+    inputSequenceRef.current += 1;
+  }, [lines.length, onValueChange, transcriptTextLength, value.length]);
 
   useEffect(() => {
     if (!busy && !readOnly) {
@@ -265,7 +364,7 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => handleValueChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

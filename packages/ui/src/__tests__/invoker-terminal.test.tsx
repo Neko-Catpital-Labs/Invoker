@@ -63,6 +63,68 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('reports planning chat input and render perf markers through reportUiPerf', async () => {
+    let currentValue = '';
+    const onValueChange = vi.fn((nextValue: string) => {
+      currentValue = nextValue;
+    });
+    const props = {
+      activeConversationKey: 'chat-perf',
+      lines: [{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system' as const }],
+      busy: false,
+      value: currentValue,
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange,
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+
+    const { rerender } = render(<InvokerTerminal {...props} />);
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_render_commit',
+        expect.objectContaining({
+          activeConversationKey: 'chat-perf',
+          lineCount: 1,
+          transcriptTextLength: 'Ask Invoker what you want to build.'.length,
+          valueLength: 0,
+        }),
+      );
+    });
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+    rerender(<InvokerTerminal {...props} value={currentValue} />);
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_commit',
+        expect.objectContaining({
+          activeConversationKey: 'chat-perf',
+          previousValueLength: 0,
+          valueLength: 5,
+          deltaLength: 5,
+          lineCount: 1,
+          transcriptTextLength: 'Ask Invoker what you want to build.'.length,
+          commitLatencyMs: expect.any(Number),
+          handlerDurationMs: expect.any(Number),
+        }),
+      );
+    });
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'planning_chat_render_commit',
+      expect.objectContaining({
+        activeConversationKey: 'chat-perf',
+        lineCount: 1,
+        valueLength: 5,
+      }),
+    );
+  });
+
   it('continues the same planning session', async () => {
     render(<App />);
     await openPlanningTerminal();

@@ -14,6 +14,10 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const TERMINAL_OUTPUT_WRITE_SLOW_MS = 16;
+const TERMINAL_OUTPUT_BURST_COUNT = 25;
+const TERMINAL_OUTPUT_BURST_CHARS = 64 * 1024;
+const TERMINAL_OUTPUT_REPORT_WINDOW_MS = 1000;
 
 /**
  * The drawer has one explicit state model:
@@ -55,10 +59,102 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+type TerminalOutputPerfWindow = {
+  startedAtMs: number;
+  eventCount: number;
+  charCount: number;
+  maxDurationMs: number;
+  emittedInitial: boolean;
+};
+
+function perfNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function reportUiPerf(metric: string, data: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
+function recordTerminalOutputPerf(
+  perfWindowRef: { current: TerminalOutputPerfWindow | null },
+  session: TerminalSessionDescriptor,
+  source: 'snapshot' | 'live',
+  eventChars: number,
+  durationMs: number,
+  isActive: boolean,
+): void {
+  const nowMs = Date.now();
+  let perfWindow = perfWindowRef.current;
+  if (!perfWindow) {
+    perfWindow = {
+      startedAtMs: nowMs,
+      eventCount: 0,
+      charCount: 0,
+      maxDurationMs: 0,
+      emittedInitial: false,
+    };
+    perfWindowRef.current = perfWindow;
+  }
+
+  perfWindow.eventCount += 1;
+  perfWindow.charCount += eventChars;
+  perfWindow.maxDurationMs = Math.max(perfWindow.maxDurationMs, durationMs);
+
+  const windowMs = nowMs - perfWindow.startedAtMs;
+  const slow = durationMs >= TERMINAL_OUTPUT_WRITE_SLOW_MS;
+  const burstCount = perfWindow.eventCount >= TERMINAL_OUTPUT_BURST_COUNT;
+  const burstChars = perfWindow.charCount >= TERMINAL_OUTPUT_BURST_CHARS;
+  const interval = windowMs >= TERMINAL_OUTPUT_REPORT_WINDOW_MS;
+  const initial = !perfWindow.emittedInitial;
+  if (!initial && !slow && !burstCount && !burstChars && !interval) return;
+
+  reportUiPerf('embedded_terminal_output_write', {
+    sessionId: session.sessionId,
+    taskId: session.taskId,
+    source,
+    reason: initial
+      ? 'initial'
+      : slow
+        ? 'slow'
+        : burstCount
+          ? 'burst_count'
+          : burstChars
+            ? 'burst_chars'
+            : 'interval',
+    durationMs: roundMs(durationMs),
+    maxDurationMs: roundMs(perfWindow.maxDurationMs),
+    eventChars,
+    charCount: perfWindow.charCount,
+    eventCount: perfWindow.eventCount,
+    windowMs,
+    slow,
+    burstCount,
+    burstChars,
+    interval,
+    isActive,
+  });
+
+  perfWindowRef.current = {
+    startedAtMs: nowMs,
+    eventCount: 0,
+    charCount: 0,
+    maxDurationMs: 0,
+    emittedInitial: true,
+  };
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
+  onWrite?: (snapshot: string, durationMs: number) => void,
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
@@ -72,7 +168,9 @@ function seedTerminalOutputSnapshot(
     )
   ) {
     try {
+      const startedAt = perfNow();
       term.write(outputSnapshot);
+      onWrite?.(outputSnapshot, perfNow() - startedAt);
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
@@ -92,11 +190,18 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const outputPerfWindowRef = useRef<TerminalOutputPerfWindow | null>(null);
+  const isActiveRef = useRef(isActive);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   useEffect(() => {
     const host = containerRef.current;
     if (!host) return;
 
+    const attachStartedAt = perfNow();
     let term: XTermTerminal;
     let fit: FitAddon;
     try {
@@ -111,13 +216,38 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
-    } catch {
+    } catch (err) {
+      reportUiPerf('embedded_terminal_attach', {
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        durationMs: roundMs(perfNow() - attachStartedAt),
+        failed: true,
+        errorName: err instanceof Error ? err.name : 'unknown',
+      });
       return;
     }
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, (snapshot, durationMs) => {
+      recordTerminalOutputPerf(
+        outputPerfWindowRef,
+        session,
+        'snapshot',
+        snapshot.length,
+        durationMs,
+        isActiveRef.current,
+      );
+    });
+    reportUiPerf('embedded_terminal_attach', {
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      durationMs: roundMs(perfNow() - attachStartedAt),
+      failed: false,
+      isActive: isActiveRef.current,
+      hasHeader,
+      snapshotChars: session.outputSnapshot?.length ?? 0,
+    });
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -127,7 +257,16 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const startedAt = perfNow();
         term.write(event.data);
+        recordTerminalOutputPerf(
+          outputPerfWindowRef,
+          session,
+          'live',
+          event.data.length,
+          perfNow() - startedAt,
+          isActiveRef.current,
+        );
       } catch {
         /* terminal disposed */
       }
@@ -172,13 +311,23 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       }
       termRef.current = null;
       fitRef.current = null;
+      outputPerfWindowRef.current = null;
     };
   }, [session.sessionId]);
 
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, (snapshot, durationMs) => {
+      recordTerminalOutputPerf(
+        outputPerfWindowRef,
+        session,
+        'snapshot',
+        snapshot.length,
+        durationMs,
+        isActiveRef.current,
+      );
+    });
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
