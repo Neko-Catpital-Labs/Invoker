@@ -1,0 +1,65 @@
+name: "{{feature_summary}} (1) persistence layer"
+description: |
+  Implement the persistence layer of {{feature_summary}} and prove it with
+  `{{l1_verify}}`.
+
+  REPLACE_ME: describe the persistence-layer change (schema, storage, or types)
+  in 1-3 paragraphs before submitting. This is the bottom of the stack; the
+  domain and api layers build on it.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: {{base_branch}}
+repoUrl: {{repo_url}}
+
+tasks:
+  - id: implement-{{feature_slug}}-persistence
+    description: |
+      Implement the persistence-layer part of {{feature_summary}}.
+      Review claim: Delivers the persistence layer for {{feature_summary}} with no unrelated edits. REPLACE_ME with the precise one-unit claim.
+      Review lane: behavior
+      Safety invariant: Only the persistence layer changes; all other behavior in {{l1_file}} stays identical.
+      Slice rationale: One layer slice; the domain and api layers build on this one. REPLACE_ME.
+      Architectural effect: Adds the persistence layer of {{feature_summary}}; higher layers depend on it.
+      Goal: Implement the persistence layer so `{{l1_verify}}` passes.
+      Motivation: {{feature_summary}} needs its persistence layer first. REPLACE_ME with user impact.
+      Alternative considerations: Building all layers in one slice was rejected as unreviewable. REPLACE_ME.
+      Implementation details: Implement the persistence layer in {{l1_file}}; keep everything else identical. REPLACE_ME with the concrete change.
+      Non-goals: No higher-layer work, no refactor, no unrelated cleanup, no doc edits.
+      Layer: persistence
+      Feature state: active
+      Files: {{l1_file}}
+      Change types:
+      - {{l1_file}}: modify
+      Acceptance criteria:
+      - `{{l1_verify}}` exits 0 after the change.
+    prompt: |
+      Goal: Implement the persistence layer of {{feature_summary}} so its proof passes.
+      Review lane: behavior
+      Motivation: {{feature_summary}} needs this layer first. REPLACE_ME with user impact.
+      Alternative considerations: Do not bundle higher layers here. REPLACE_ME.
+      Implementation details: Edit {{l1_file}} to implement this layer only. REPLACE_ME with the concrete change.
+      Non-goals: No higher-layer work, no refactor, no unrelated cleanup.
+      Assume no prior context. You are given only this task.
+      Implement the persistence layer described above in {{l1_file}}. Touch nothing outside this layer.
+      Acceptance criteria:
+      - `{{l1_verify}}` exits 0 after your change (this is the pass condition).
+    dependencies: []
+
+  - id: verify-{{feature_slug}}-persistence
+    description: |
+      Run the deterministic proof for the persistence layer of {{feature_summary}}.
+      Review claim: `{{l1_verify}}` passes only when the persistence layer is correct.
+      Review lane: proof
+      Safety invariant: Proof-only; adds no product behavior.
+      Slice rationale: One proof slice for the persistence layer.
+      Architectural effect: None; verification only.
+      Goal: Prove the persistence layer deterministically.
+      Motivation: Each layer carries its own proof. REPLACE_ME if the proof differs.
+      Alternative considerations: Manual verification was rejected as non-deterministic.
+      Implementation details: Execute `{{l1_verify}}` as the terminal proof.
+      Non-goals: No product edits here; proof only.
+      Layer: app_regression
+      Feature state: active
+    command: "{{l1_verify}}"
+    dependencies:
+      - implement-{{feature_slug}}-persistence
