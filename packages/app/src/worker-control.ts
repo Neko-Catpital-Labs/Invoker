@@ -55,6 +55,8 @@ type WorkerStatusPersistence = Pick<
 
 const DEFAULT_WORKER_ACTION_HISTORY_LIMIT = 20;
 const MAX_WORKER_ACTION_HISTORY_LIMIT = 100;
+/** Bounded wait for quit / stopAll so in-flight ticks cannot hang process exit. */
+export const STOP_ALL_SETTLE_TIMEOUT_MS = 5_000;
 
 function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback;
@@ -207,8 +209,12 @@ export function createWorkerRuntimeController(options: {
     });
   };
 
-  const stopHandle = async (kind: string, handle: RuntimeHandle): Promise<void> => {
-    await handle.runtime.stop();
+  const stopHandle = async (
+    kind: string,
+    handle: RuntimeHandle,
+    settleTimeoutMs = 0,
+  ): Promise<void> => {
+    await handle.runtime.stop({ settleTimeoutMs });
     const stoppedAt = new Date().toISOString();
     stoppedAtByKind.set(kind, stoppedAt);
     handles.delete(kind);
@@ -254,7 +260,9 @@ export function createWorkerRuntimeController(options: {
     },
 
     async stopAll(): Promise<void> {
-      const stopping = [...handles.entries()].map(([kind, handle]) => stopHandle(kind, handle).catch(() => undefined));
+      const stopping = [...handles.entries()].map(([kind, handle]) =>
+        stopHandle(kind, handle, STOP_ALL_SETTLE_TIMEOUT_MS).catch(() => undefined),
+      );
       await Promise.all(stopping);
     },
 

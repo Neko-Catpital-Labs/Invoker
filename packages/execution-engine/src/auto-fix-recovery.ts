@@ -172,10 +172,13 @@ function candidateFromTask(task: TaskState): AutoFixRecoveryCandidate | undefine
 
 export function listAutoFixRecoveryScanCandidates(
   options: Pick<AutoFixRecoveryPolicyOptions, 'store'>,
+  signal?: AbortSignal,
 ): AutoFixRecoveryCandidate[] {
   const candidates: AutoFixRecoveryCandidate[] = [];
   for (const workflow of options.store.listWorkflows()) {
+    if (signal?.aborted) break;
     for (const task of options.store.loadTasks(workflow.id)) {
+      if (signal?.aborted) break;
       if (task.status !== 'failed') continue;
       const candidate = candidateFromTask(task);
       if (candidate) candidates.push(candidate);
@@ -480,16 +483,19 @@ export function collectValidatedAutoFixRecoveryCandidates(
 
 export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions): WorkerTick {
   return async (ctx) => {
+    if (ctx.signal?.aborted) return;
     const wakeups = options.drainWakeupHints?.() ?? [];
     const wakeupCandidates = wakeups.map(candidateFromWakeup).filter((c): c is AutoFixRecoveryCandidate => Boolean(c));
     const candidates = dedupeCandidates(
       wakeupCandidates.length > 0 && ctx.reason === 'wake'
         ? wakeupCandidates
-        : listAutoFixRecoveryScanCandidates(options),
+        : listAutoFixRecoveryScanCandidates(options, ctx.signal),
     );
+    if (ctx.signal?.aborted) return;
     const submittedThisTick = new Set<string>();
 
     for (const candidate of collectValidatedAutoFixRecoveryCandidates(options, candidates)) {
+      if (ctx.signal?.aborted) return;
       if (submittedThisTick.has(candidate.taskId)) {
         skipAutoFixCandidate(options, candidate, 'duplicate-candidate');
         continue;
