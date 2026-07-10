@@ -66,6 +66,10 @@ if (playwright) {
     listed.includes('e2e/dag-click-hitch-responsiveness.spec.ts'),
     'playwright shards must include e2e/dag-click-hitch-responsiveness.spec.ts',
   );
+  assert(
+    listed.includes('e2e/attention-click-hitch-responsiveness.spec.ts'),
+    'playwright shards must include e2e/attention-click-hitch-responsiveness.spec.ts',
+  );
 }
 
 for (const [jobName, job] of Object.entries(jobs)) {
