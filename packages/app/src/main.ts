@@ -90,6 +90,7 @@ import type {
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
   InAppPlanningResetRequest,
+  InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   Logger,
   WorkflowMeta,
@@ -3935,6 +3936,12 @@ function createEmbeddedTerminalBackendFromConfig(
       warn: (message) => logger.warn(message, { module: 'planning-chat' }),
       error: (message) => logger.error(message, { module: 'planning-chat' }),
     });
+    const emitInAppPlanningStream = (event: InAppPlanningStreamEvent): void => {
+      if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
+        mainWindow.webContents.send('invoker:planning-chat-stream', event);
+      }
+      webBridge?.broadcast('invoker:planning-chat-stream', event);
+    };
     await restorePlanningChatSessions(persistence.listInAppPlanningSessions(), {
       config: invokerConfig,
       workingDir: repoRoot,
@@ -3943,6 +3950,7 @@ function createEmbeddedTerminalBackendFromConfig(
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      onRawPlannerOutput: emitInAppPlanningStream,
     });
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     // Two variants: (1) a successful override that returns a canned reply +
@@ -3977,6 +3985,7 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
+        onRawPlannerOutput: emitInAppPlanningStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -4001,6 +4010,7 @@ function createEmbeddedTerminalBackendFromConfig(
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
         plannerReplyOverride,
+        onRawPlannerOutput: emitInAppPlanningStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {

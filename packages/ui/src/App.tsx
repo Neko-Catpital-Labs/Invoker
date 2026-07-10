@@ -121,6 +121,7 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   input: string;
   busy: boolean;
   conversationKey: string;
+  transientPlannerText: string;
 };
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
@@ -133,6 +134,7 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     input: '',
     draftPlanAvailable: false,
     busy: false,
+    transientPlannerText: '',
     createdAt: now,
     updatedAt: now,
     conversationKey: 'local-planning-session-1',
@@ -564,6 +566,7 @@ export function App() {
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
+  const transientPlannerText = activePlanningSession.transientPlannerText;
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
   const [graphMaximized, setGraphMaximized] = useState(false);
@@ -727,6 +730,22 @@ export function App() {
   useEffect(() => {
     const unsubscribe = window.invoker?.onRuntimeStatus?.((status) => {
       setRuntimeStatus(status);
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onPlanningChatStream?.((event) => {
+      if (!event.sessionId || typeof event.chunk !== 'string' || event.chunk.length === 0) return;
+      setPlanningSessions((prev) => prev.map((session) => (
+        session.id === event.sessionId && session.busy
+          ? {
+              ...session,
+              transientPlannerText: `${session.transientPlannerText}${event.chunk}`,
+              updatedAt: new Date().toISOString(),
+            }
+          : session
+      )));
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -1870,7 +1889,8 @@ export function App() {
     updateActivePlanningSession((session) => ({ ...session, input: value }));
   }, [updateActivePlanningSession]);
 
-  const appendTerminalLine = useCallback((
+  const appendTerminalLineToSession = useCallback((
+    sessionId: string,
     text: string,
     role: InvokerTerminalLine['role'] = 'system',
     tone?: InvokerTerminalLine['tone'],
@@ -1878,12 +1898,20 @@ export function App() {
     const id = nextTerminalLineIdRef.current;
     nextTerminalLineIdRef.current += 1;
     const updatedAt = new Date().toISOString();
-    updateActivePlanningSession((session) => ({
+    updatePlanningSessionById(sessionId, (session) => ({
       ...session,
       messages: [...session.messages, { id, text, role, tone }],
       updatedAt,
     }));
-  }, [updateActivePlanningSession]);
+  }, [updatePlanningSessionById]);
+
+  const appendTerminalLine = useCallback((
+    text: string,
+    role: InvokerTerminalLine['role'] = 'system',
+    tone?: InvokerTerminalLine['tone'],
+  ) => {
+    appendTerminalLineToSession(activePlanningSessionId, text, role, tone);
+  }, [activePlanningSessionId, appendTerminalLineToSession]);
 
   const handleStart = useCallback(async (): Promise<boolean> => {
     if (!invoker) return false;
@@ -1958,6 +1986,7 @@ export function App() {
     appendTerminalLine(input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
+    updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, transientPlannerText: '' }));
 
     if (input.toLowerCase() === 'run') {
       if (!hasLoadedPlan || hasStarted) {
@@ -1989,12 +2018,53 @@ export function App() {
     }
 
     const previousSessionId = activePlanningSessionId;
-    updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
+    let targetSessionId = planningSessionId ?? previousSessionId;
+    updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true, transientPlannerText: '' }));
     try {
+      let sendSessionId = planningSessionId;
+      if (!sendSessionId) {
+        if (!invoker.planningChatCreate) {
+          updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+          appendTerminalLineToSession(previousSessionId, 'Planner is not available.', 'system', 'error');
+          return;
+        }
+        const title = input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input;
+        const created = await invoker.planningChatCreate({
+          presetKey: selectedPlanningPresetKey || undefined,
+          title,
+        });
+        if (!created.ok) {
+          updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+          appendTerminalLineToSession(previousSessionId, created.error, 'system', 'error');
+          setPlanningSubmitError({ title: 'Planner could not respond', message: created.error });
+          return;
+        }
+        sendSessionId = created.session.id;
+        targetSessionId = created.session.id;
+        setPlanningSessions((prev) => prev.map((session) => {
+          if (session.id !== previousSessionId) return session;
+          return {
+            ...session,
+            id: created.session.id,
+            conversationKey: created.session.id,
+            title: session.title === 'Untitled plan' ? created.session.title : session.title,
+            presetKey: created.session.presetKey,
+            status: created.session.status,
+            draftPlanAvailable: created.session.draftPlanAvailable,
+            draftPlanSummary: created.session.draftPlanSummary,
+            createdAt: created.session.createdAt,
+            updatedAt: created.session.updatedAt,
+          };
+        }));
+        setActivePlanningSessionId((currentSessionId) => (
+          currentSessionId === previousSessionId ? created.session.id : currentSessionId
+        ));
+      }
+
       const request = {
+        sessionId: sendSessionId,
         message: input,
         presetKey: selectedPlanningPresetKey || undefined,
-        ...(planningSessionId ? { sessionId: planningSessionId } : {}),
       };
       const result = await invoker.planningChatSend(request);
       if (result.ok) {
@@ -2002,11 +2072,12 @@ export function App() {
         const replyLineId = nextTerminalLineIdRef.current;
         nextTerminalLineIdRef.current += 1;
         setPlanningSessions((prev) => prev.map((session) => {
-          if (session.id !== previousSessionId) return session;
+          if (session.id !== targetSessionId) return session;
           return {
             ...session,
             busy: false,
             id: result.sessionId,
+            conversationKey: result.sessionId,
             title: session.title === 'Untitled plan'
               ? (input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input)
               : session.title,
@@ -2014,29 +2085,43 @@ export function App() {
             messages: [...session.messages, { id: replyLineId, text: result.reply, role: 'assistant' }],
             draftPlanAvailable: result.draftPlanAvailable,
             draftPlanSummary: result.draftPlanAvailable ? result.draftPlanSummary : undefined,
+            transientPlannerText: '',
             updatedAt,
           };
         }));
         setActivePlanningSessionId((currentSessionId) => (
-          currentSessionId === previousSessionId ? result.sessionId : currentSessionId
+          currentSessionId === previousSessionId || currentSessionId === targetSessionId ? result.sessionId : currentSessionId
         ));
         setHasLoadedPlan(false);
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
-        appendTerminalLine(result.error, 'system', 'error');
+        const failedSessionId = result.sessionId ?? targetSessionId;
+        setPlanningSessions((prev) => prev.map((session) => {
+          if (session.id !== targetSessionId && session.id !== failedSessionId) return session;
+          return {
+            ...session,
+            id: failedSessionId,
+            conversationKey: failedSessionId,
+            busy: false,
+          };
+        }));
+        setActivePlanningSessionId((currentSessionId) => (
+          currentSessionId === previousSessionId || currentSessionId === targetSessionId ? failedSessionId : currentSessionId
+        ));
+        appendTerminalLineToSession(failedSessionId, result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
-      updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+      updatePlanningSessionById(targetSessionId, (session) => ({ ...session, busy: false }));
       const message = err instanceof Error ? err.message : 'Failed to reach the planner.';
       setPlanningSubmitError({ title: 'Planner could not respond', message });
-      appendTerminalLine(message, 'system', 'error');
+      appendTerminalLineToSession(targetSessionId, message, 'system', 'error');
     }
   }, [
     activePlanningSessionBusy,
     activePlanningSessionId,
     activePlanningSessionSubmitted,
     appendTerminalLine,
+    appendTerminalLineToSession,
     handlePlanningSubmitDraft,
     handleStart,
     hasLoadedPlan,
@@ -2881,6 +2966,7 @@ export function App() {
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
+            transientPlannerText={transientPlannerText}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
@@ -3210,6 +3296,7 @@ export function App() {
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
+            transientPlannerText={transientPlannerText}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
@@ -3436,4 +3523,3 @@ export function App() {
     </div>
   );
 }
-

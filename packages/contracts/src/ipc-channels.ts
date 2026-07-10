@@ -466,6 +466,11 @@ export interface InAppPlanningResetRequest {
 
 export type InAppPlanningResetResponse = { ok: true };
 
+export interface InAppPlanningStreamEvent {
+  sessionId: string;
+  chunk: string;
+}
+
 
 
 export interface WorkflowListEntry {
@@ -1142,6 +1147,9 @@ export const IpcEventChannels = {
   },
   'invoker:runtime-status': {} as {
     payload: RuntimeStatus;
+  },
+  'invoker:planning-chat-stream': {} as {
+    payload: InAppPlanningStreamEvent;
   },
 } as const;
 
