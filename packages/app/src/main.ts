@@ -95,7 +95,6 @@ import type {
   WorkflowMeta,
   WorkflowMutationAcceptedResult,
   WorkResponse,
-  TerminalSessionDescriptor,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -271,6 +270,16 @@ import {
   type WorkflowScopedGuiMutationRegistrationContext,
 } from './ipc/ipc-registration.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
+import {
+  createTerminalUiPerfCounters,
+  createTerminalUiPerfReporter,
+  createTerminalUiPerfSink,
+  resetTerminalUiPerfCounters,
+} from './terminal-ui-perf.js';
+import {
+  registerTerminalSessionIpcHandlers,
+  registerTerminalSessionPersistence,
+} from './terminal-session-ipc.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
 import {
   buildRecoveryWorkerAuditPayload,
@@ -2023,74 +2032,7 @@ function createEmbeddedTerminalBackendFromConfig(
   const embeddedTerminalManager = new EmbeddedTerminalManager({
     backend: createEmbeddedTerminalBackendFromConfig(resolveEmbeddedTerminalBackendConfig(invokerConfig)),
   });
-  const terminalRowToDescriptor = (row: ReturnType<SQLiteAdapter['listTerminalSessions']>[number]): TerminalSessionDescriptor => ({
-    sessionId: row.sessionId,
-    taskId: row.taskId,
-    status: row.status,
-    exitCode: row.exitCode,
-    cwd: row.cwd,
-    command: row.command,
-    args: row.args,
-    mode: row.mode,
-    attached: row.attached,
-    createdAt: row.createdAt,
-    outputSnapshot: row.outputSnapshot,
-  });
 
-  const restorePersistedTerminalSessions = (): void => {
-    const nowIso = () => new Date().toISOString();
-    for (const row of persistence.listTerminalSessions()) {
-      if (!persistence.loadTask(row.taskId)) {
-        persistence.deleteTerminalSession(row.sessionId);
-        continue;
-      }
-      if (row.status !== 'running') continue;
-      if (row.mode === 'attached') {
-        persistence.updateTerminalSession(row.sessionId, { status: 'exited', updatedAt: nowIso() });
-        continue;
-      }
-      try {
-        embeddedTerminalManager.restoreSpawnSession({
-          sessionId: row.sessionId,
-          taskId: row.taskId,
-          targetKey: row.targetKey,
-          spec: {
-            cwd: row.cwd,
-            command: row.command,
-            args: row.args,
-            linuxTerminalTail: row.linuxTerminalTail,
-          },
-          cwd: row.cwd ?? process.cwd(),
-          createdAt: row.createdAt,
-          outputSnapshot: row.outputSnapshot,
-        });
-      } catch {
-        persistence.updateTerminalSession(row.sessionId, { status: 'exited', updatedAt: nowIso() });
-      }
-    }
-  };
-
-  const registerTerminalSessionPersistence = (): void => {
-    embeddedTerminalManager.on('session-updated', (record) => {
-      persistence.upsertTerminalSession({
-        sessionId: record.sessionId,
-        taskId: record.taskId,
-        targetKey: record.targetKey,
-        status: record.status,
-        exitCode: record.exitCode,
-        cwd: record.cwd,
-        command: record.spec.command,
-        args: record.spec.args,
-        linuxTerminalTail: record.spec.linuxTerminalTail,
-        mode: record.mode,
-        attached: record.attached,
-        outputSnapshot: record.outputSnapshot,
-        createdAt: record.createdAt,
-        updatedAt: record.updatedAt,
-      });
-    });
-    restorePersistedTerminalSessions();
-  };
   embeddedTerminalManager.on('output', (payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('invoker:terminal-output', payload);
@@ -2166,7 +2108,15 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataCoalescedRequests: 0,
     largeTaskDeltaBatches: 0,
     maxTaskDeltaBatchSize: 0,
+    ...createTerminalUiPerfCounters(),
   };
+  const terminalUiPerf = createTerminalUiPerfReporter();
+  const terminalUiPerfSink = createTerminalUiPerfSink(
+    (source, level, message) => {
+      persistence.writeActivityLog(source, level, message);
+    },
+    uiPerfStats,
+  );
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
   const recordStartupMark = (phase: string, extra?: Record<string, unknown>): void => {
@@ -2228,6 +2178,8 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
     uiPerfStats.largeTaskDeltaBatches = 0;
     uiPerfStats.maxTaskDeltaBatchSize = 0;
+    resetTerminalUiPerfCounters(uiPerfStats);
+    terminalUiPerf.reset();
   };
 
   const getUiPerfStats = (): Record<string, unknown> => ({
@@ -3605,7 +3557,13 @@ function createEmbeddedTerminalBackendFromConfig(
     }
 
     if (ownerMode) {
-      registerTerminalSessionPersistence();
+      registerTerminalSessionPersistence({
+        embeddedTerminalManager,
+        persistence,
+        uiPerfStats,
+        terminalUiPerf,
+        terminalUiPerfSink,
+      });
     }
 
     if (ownerMode) {
@@ -5351,30 +5309,13 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     });
 
-    ipcMain.handle('invoker:terminal-list', async () => {
-      const live = new Map(embeddedTerminalManager.list().map((session) => [session.sessionId, session]));
-      const merged = persistence.listTerminalSessions().map((row) => live.get(row.sessionId) ?? terminalRowToDescriptor(row));
-      const persistedIds = new Set(merged.map((session) => session.sessionId));
-      for (const session of live.values()) {
-        if (!persistedIds.has(session.sessionId)) {
-          merged.push(session);
-        }
-      }
-      return merged;
-    });
-
-    ipcMain.handle('invoker:terminal-write', async (_event, sessionId: string, data: string) => {
-      return embeddedTerminalManager.write(sessionId, data);
-    });
-
-    ipcMain.handle('invoker:terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
-      return embeddedTerminalManager.resize(sessionId, cols, rows);
-    });
-
-    ipcMain.handle('invoker:terminal-close', async (_event, sessionId: string) => {
-      const result = embeddedTerminalManager.close(sessionId);
-      persistence.deleteTerminalSession(sessionId);
-      return result.ok ? result : { ok: true };
+    registerTerminalSessionIpcHandlers({
+      ipcMain,
+      embeddedTerminalManager,
+      persistence,
+      uiPerfStats,
+      terminalUiPerf,
+      terminalUiPerfSink,
     });
 
     Menu.setApplicationMenu(
