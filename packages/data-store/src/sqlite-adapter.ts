@@ -47,6 +47,8 @@ import type {
   WorkerActionListFilters,
   WorkerActionRecord,
   WorkerActionWrite,
+  WorkerDesiredState,
+  WorkerDesiredStateRecord,
   TerminalSessionPatch,
   TerminalSessionRecord,
   InAppPlanningSessionPatch,
@@ -1633,6 +1635,41 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map((row) => this.rowToWorkerAction(row));
   }
 
+  getWorkerDesiredState(workerKind: string): WorkerDesiredStateRecord | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM worker_desired_states WHERE worker_kind = ?',
+      [workerKind],
+    );
+    return row ? this.rowToWorkerDesiredState(row) : undefined;
+  }
+
+  setWorkerDesiredState(workerKind: string, desiredState: WorkerDesiredState): WorkerDesiredStateRecord {
+    if (desiredState !== 'running' && desiredState !== 'stopped') {
+      throw new Error(`Invalid worker desired state: "${String(desiredState)}"`);
+    }
+    const updatedAt = new Date().toISOString();
+    this.execRun(
+      `INSERT INTO worker_desired_states (worker_kind, desired_state, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(worker_kind) DO UPDATE SET
+         desired_state = excluded.desired_state,
+         updated_at = excluded.updated_at`,
+      [workerKind, desiredState, updatedAt],
+    );
+    const saved = this.getWorkerDesiredState(workerKind);
+    if (!saved) {
+      throw new Error(`Failed to persist worker desired state for "${workerKind}"`);
+    }
+    return saved;
+  }
+
+  listWorkerDesiredStates(): WorkerDesiredStateRecord[] {
+    const rows = this.queryAll(
+      'SELECT * FROM worker_desired_states ORDER BY worker_kind ASC',
+    );
+    return rows.map((row) => this.rowToWorkerDesiredState(row));
+  }
+
   // ── Queries ─────────────────────────────────────────
 
   getSelectedExperiment(taskId: string): string | null {
@@ -3080,6 +3117,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private rowToWorkerAction(row: Record<string, unknown>): WorkerActionRecord {
     return mapRowToWorkerAction(row);
+  }
+
+  private rowToWorkerDesiredState(row: Record<string, unknown>): WorkerDesiredStateRecord {
+    const desiredState = String(row.desired_state);
+    if (desiredState !== 'running' && desiredState !== 'stopped') {
+      throw new Error(`Invalid worker desired state row for worker "${String(row.worker_kind)}"`);
+    }
+    return {
+      workerKind: String(row.worker_kind),
+      desiredState,
+      updatedAt: String(row.updated_at),
+    };
   }
 
   private requeueWorkflowMutationLease(workflowId: string): void {
