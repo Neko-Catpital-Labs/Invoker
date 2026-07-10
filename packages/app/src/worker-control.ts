@@ -9,7 +9,11 @@ import type {
   WorkerStatusEntry,
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
-import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
+import type {
+  SQLiteAdapter,
+  WorkerActionRecord,
+  WorkerDesiredState,
+} from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
   AUTO_APPROVE_WORKER_KIND,
@@ -48,10 +52,15 @@ export interface WorkerRuntimeController {
   snapshot(): WorkerStatusSnapshot;
 }
 
+export type WorkerDesiredStatePersistence = Partial<Pick<
+  SQLiteAdapter,
+  'getWorkerDesiredState' | 'setWorkerDesiredState' | 'listWorkerDesiredStates'
+>>;
+
 type WorkerStatusPersistence = Pick<
   SQLiteAdapter,
   'listWorkerActions' | 'listWorkflows' | 'loadTasks' | 'getEvents' | 'getEventsByTypes' | 'countEventsByTypes'
->;
+> & WorkerDesiredStatePersistence;
 
 const DEFAULT_WORKER_ACTION_HISTORY_LIMIT = 20;
 const MAX_WORKER_ACTION_HISTORY_LIMIT = 100;
@@ -180,6 +189,10 @@ export function createWorkerRuntimeController(options: {
 }): WorkerRuntimeController {
   const handles = new Map<string, RuntimeHandle>();
   const stoppedAtByKind = new Map<string, string>();
+  const desiredStateByKind = loadWorkerDesiredStateMap(
+    options.persistence,
+    options.registry.list().map((definition) => definition.kind),
+  );
 
   const requireDefinition = (kind: string) => {
     const definition = options.registry.get(kind);
@@ -199,9 +212,13 @@ export function createWorkerRuntimeController(options: {
       note: definition.note,
       handle: handles.get(kind),
       stoppedAt: stoppedAtByKind.get(kind),
-      autoStarts: options.autoStartKinds.includes(kind),
       policy: policyForKind(kind),
       persistence: options.persistence,
+      autoStarts: getEffectiveWorkerDesiredState(
+        kind,
+        desiredStateByKind,
+        options.autoStartKinds,
+      ) === 'running',
       canControl: options.canControl(),
       recovery: definition.kind === AUTO_FIX_WORKER_KIND
         ? toWorkerRecoverySummary(options.persistence)
@@ -220,37 +237,58 @@ export function createWorkerRuntimeController(options: {
     handles.delete(kind);
   };
 
+  const setDesiredState = (kind: string, desiredState: WorkerDesiredState, persist: boolean): void => {
+    if (persist) {
+      persistWorkerDesiredState(options.persistence, kind, desiredState);
+    }
+    desiredStateByKind.set(kind, desiredState);
+  };
+
+  const startKind = (kind: string, persistDesiredState: boolean): WorkerStatusEntry => {
+    const definition = requireDefinition(kind);
+    setDesiredState(kind, 'running', persistDesiredState);
+
+    const existing = handles.get(kind);
+    if (existing) {
+      if (existing.runtime.isRunning()) {
+        return rowForKind(kind);
+      }
+      void existing.runtime.stop().catch(() => undefined);
+      handles.delete(kind);
+    }
+
+    const runtime = definition.factory(options.deps);
+    runtime.start();
+    handles.set(kind, {
+      runtime,
+      startedAt: new Date().toISOString(),
+    });
+    stoppedAtByKind.delete(kind);
+    return rowForKind(kind);
+  };
+
   return {
     startAutoStartedWorkers(): void {
-      for (const kind of options.autoStartKinds) {
-        if (!options.registry.get(kind)) continue;
-        this.start(kind);
+      for (const definition of options.registry.list()) {
+        if (
+          getEffectiveWorkerDesiredState(
+            definition.kind,
+            desiredStateByKind,
+            options.autoStartKinds,
+          ) !== 'running'
+        ) {
+          continue;
+        }
+        startKind(definition.kind, false);
       }
     },
 
     start(kind: string): WorkerStatusEntry {
-      const definition = requireDefinition(kind);
-
-      const existing = handles.get(kind);
-      if (existing) {
-        if (existing.runtime.isRunning()) {
-          return rowForKind(kind);
-        }
-        void existing.runtime.stop().catch(() => undefined);
-        handles.delete(kind);
-      }
-
-      const runtime = definition.factory(options.deps);
-      runtime.start();
-      handles.set(kind, {
-        runtime,
-        startedAt: new Date().toISOString(),
-      });
-      stoppedAtByKind.delete(kind);
-      return rowForKind(kind);
+      return startKind(kind, true);
     },
     async stop(kind: string): Promise<WorkerStatusEntry> {
       requireDefinition(kind);
+      setDesiredState(kind, 'stopped', true);
       const handle = handles.get(kind);
       if (!handle) {
         return rowForKind(kind);
@@ -279,6 +317,10 @@ export function createLocalWorkerStatusSnapshot(options: {
   persistence: WorkerStatusPersistence;
   autoStartKinds: readonly string[];
 }): WorkerStatusSnapshot {
+  const desiredStateByKind = loadWorkerDesiredStateMap(
+    options.persistence,
+    options.registry.list().map((definition) => definition.kind),
+  );
   const recovery = options.registry.list().some((definition) => definition.kind === AUTO_FIX_WORKER_KIND)
     ? toWorkerRecoverySummary(options.persistence)
     : undefined;
@@ -287,13 +329,63 @@ export function createLocalWorkerStatusSnapshot(options: {
     workers: options.registry.list().map((definition) => buildWorkerStatusEntry({
       definitionKind: definition.kind,
       note: definition.note,
-      autoStarts: options.autoStartKinds.includes(definition.kind),
+      autoStarts: getEffectiveWorkerDesiredState(
+        definition.kind,
+        desiredStateByKind,
+        options.autoStartKinds,
+      ) === 'running',
       policy: 'unknown',
       persistence: options.persistence,
       canControl: false,
       recovery: definition.kind === AUTO_FIX_WORKER_KIND ? recovery : undefined,
     })),
   };
+}
+
+export function persistWorkerDesiredState(
+  persistence: WorkerDesiredStatePersistence,
+  workerKind: string,
+  desiredState: WorkerDesiredState,
+): void {
+  persistence.setWorkerDesiredState?.(workerKind, desiredState);
+}
+
+function loadWorkerDesiredStateMap(
+  persistence: WorkerDesiredStatePersistence,
+  workerKinds: readonly string[],
+): Map<string, WorkerDesiredState> {
+  const states = new Map<string, WorkerDesiredState>();
+  if (persistence.listWorkerDesiredStates) {
+    for (const state of persistence.listWorkerDesiredStates()) {
+      if (isWorkerDesiredState(state.desiredState)) {
+        states.set(state.workerKind, state.desiredState);
+      }
+    }
+    return states;
+  }
+
+  if (persistence.getWorkerDesiredState) {
+    for (const kind of workerKinds) {
+      const state = persistence.getWorkerDesiredState(kind);
+      if (state && isWorkerDesiredState(state.desiredState)) {
+        states.set(kind, state.desiredState);
+      }
+    }
+  }
+  return states;
+}
+
+function getEffectiveWorkerDesiredState(
+  workerKind: string,
+  desiredStateByKind: ReadonlyMap<string, WorkerDesiredState>,
+  defaultAutoStartKinds: readonly string[],
+): WorkerDesiredState {
+  return desiredStateByKind.get(workerKind)
+    ?? (defaultAutoStartKinds.includes(workerKind) ? 'running' : 'stopped');
+}
+
+function isWorkerDesiredState(value: unknown): value is WorkerDesiredState {
+  return value === 'running' || value === 'stopped';
 }
 
 

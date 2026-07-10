@@ -393,7 +393,11 @@ function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependenc
   return registerExternalWorkersFromConfig(invokerConfig.externalWorkers, registry);
 }
 
-
+function resolveDefaultOwnerWorkerAutoStartKinds(): readonly string[] {
+  return invokerConfig.e2eAutoFixEnabled
+    ? [...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]
+    : AUTO_STARTED_OWNER_WORKER_KINDS;
+}
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -1908,9 +1912,7 @@ function startHeadlessMode(): void {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
           ),
-          autoStartKinds: invokerConfig.e2eAutoFixEnabled
-            ? [...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]
-            : AUTO_STARTED_OWNER_WORKER_KINDS,
+          autoStartKinds: resolveDefaultOwnerWorkerAutoStartKinds(),
           persistence,
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
@@ -3753,9 +3755,7 @@ function createEmbeddedTerminalBackendFromConfig(
             await requireTaskExecutor().checkMergeGateStatuses();
           },
         ),
-        autoStartKinds: invokerConfig.e2eAutoFixEnabled
-          ? [...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]
-          : AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: resolveDefaultOwnerWorkerAutoStartKinds(),
         persistence,
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
@@ -4471,13 +4471,13 @@ function createEmbeddedTerminalBackendFromConfig(
         return createLocalWorkerStatusSnapshot({
           registry: createRegisteredWorkerRegistry(),
           persistence,
-          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          autoStartKinds: resolveDefaultOwnerWorkerAutoStartKinds(),
         });
       }
       return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
-        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: resolveDefaultOwnerWorkerAutoStartKinds(),
       });
     });
 
