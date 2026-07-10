@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -35,6 +36,13 @@ describe('Invoker terminal (component)', () => {
   function submitPlanningText(text: string) {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+  }
+
+  function expectRailListScrollContract(testId: string) {
+    const list = screen.getByTestId(testId);
+    expect(list).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+    expect(list.parentElement).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col');
+    return list;
   }
 
   it('generates a planning reply from plain language', async () => {
@@ -417,15 +425,45 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
 
-  it('constrains the planning session list to a bounded scroll region', async () => {
-    render(<App />);
-    await openPlanningTerminal();
+  it('constrains left rail lists to bounded scroll regions', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha workflow', status: 'running' },
+      { id: 'wf-beta', name: 'Beta workflow', status: 'failed' },
+    ];
+    const runningTask = makeUITask({
+      id: 'task-running',
+      description: 'Running task',
+      status: 'running',
+      workflowId: 'wf-alpha',
+    });
+    const attentionTask = makeUITask({
+      id: 'task-attention',
+      description: 'Attention task',
+      status: 'failed',
+      workflowId: 'wf-beta',
+    });
 
-    const list = screen.getByTestId('planning-session-list');
-    // Regression guard: an auto-height overflow container never scrolls; long
-    // session lists overflow the rail and get clipped by the ancestor
-    // overflow-hidden instead. The scroll region needs a definite height.
-    expect(list.className).toContain('overflow-y-auto');
-    expect(list.className).toMatch(/\b(h-full|h-\[|max-h-\S+)/);
+    const { unmount } = render(<App />);
+    act(() => mock.setTasks([runningTask, attentionTask], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('2');
+    });
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(expectRailListScrollContract('workflow-rail-list')).toHaveClass('p-3');
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    expect(expectRailListScrollContract('attention-task-rail-list')).toHaveClass('p-3');
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    expect(expectRailListScrollContract('running-task-rail-list')).toHaveClass('p-3');
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    await waitFor(() => {
+      expect(screen.getByTestId('planning-session-list')).toBeInTheDocument();
+    });
+    expect(expectRailListScrollContract('planning-session-list')).toHaveClass('py-1');
+    unmount();
   });
 });
