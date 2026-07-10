@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { ActionGraphNode } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -58,6 +58,116 @@ interface WorkflowContextMenuProps {
   onDeleteWorkflow: (workflowId: string) => void;
   onCopyWorkflowId: (workflowId: string) => void;
   onClose: () => void;
+}
+
+type PlanningTypingMetrics = {
+  taskCount: number;
+  workflowCount: number;
+  sessionCount: number;
+  transcriptSizeChars: number;
+  transcriptLineCount: number;
+  transcriptMessageCount: number;
+  selectedWorkflowTaskCount: number;
+};
+
+type EditableTypingTarget = HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+
+const NON_TEXT_INPUT_TYPES = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'hidden',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+]);
+
+function addTranscriptMetric(
+  metrics: Pick<PlanningTypingMetrics, 'transcriptSizeChars' | 'transcriptLineCount' | 'transcriptMessageCount'>,
+  value: unknown,
+): void {
+  if (typeof value !== 'string' || value.length === 0) return;
+  metrics.transcriptSizeChars += value.length;
+  metrics.transcriptLineCount += value.split('\n').length;
+  metrics.transcriptMessageCount += 1;
+}
+
+function collectPlanningTypingMetrics(
+  tasks: Map<string, TaskState>,
+  workflows: Map<string, WorkflowMeta>,
+  selectedWorkflowId: string | null | undefined,
+): PlanningTypingMetrics {
+  const sessionIds = new Set<string>();
+  const metrics: PlanningTypingMetrics = {
+    taskCount: tasks.size,
+    workflowCount: workflows.size,
+    sessionCount: 0,
+    transcriptSizeChars: 0,
+    transcriptLineCount: 0,
+    transcriptMessageCount: 0,
+    selectedWorkflowTaskCount: 0,
+  };
+
+  for (const task of tasks.values()) {
+    if (selectedWorkflowId && task.config.workflowId === selectedWorkflowId) {
+      metrics.selectedWorkflowTaskCount += 1;
+    }
+
+    for (const sessionId of [
+      task.execution.agentSessionId,
+      task.execution.lastAgentSessionId,
+      task.execution.actionRequestId,
+    ]) {
+      if (sessionId) sessionIds.add(sessionId);
+    }
+
+    addTranscriptMetric(metrics, task.description);
+    addTranscriptMetric(metrics, task.config.prompt);
+    addTranscriptMetric(metrics, task.config.command);
+    addTranscriptMetric(metrics, task.config.experimentPrompt);
+    addTranscriptMetric(metrics, task.config.summary);
+    addTranscriptMetric(metrics, task.config.problem);
+    addTranscriptMetric(metrics, task.config.approach);
+    addTranscriptMetric(metrics, task.config.testPlan);
+    addTranscriptMetric(metrics, task.config.reproCommand);
+    addTranscriptMetric(metrics, task.execution.inputPrompt);
+    addTranscriptMetric(metrics, task.execution.error);
+  }
+
+  metrics.sessionCount = sessionIds.size;
+  return metrics;
+}
+
+function getEditableTypingTarget(target: EventTarget | null): EditableTypingTarget | null {
+  if (!(target instanceof HTMLElement)) return null;
+  if (target instanceof HTMLTextAreaElement) return target;
+  if (target instanceof HTMLInputElement) {
+    return NON_TEXT_INPUT_TYPES.has(target.type) ? null : target;
+  }
+  return target.isContentEditable ? target : null;
+}
+
+function getEditableTargetKind(target: EditableTypingTarget): string {
+  if (target instanceof HTMLTextAreaElement) return 'textarea';
+  if (target instanceof HTMLInputElement) return `input:${target.type || 'text'}`;
+  return 'contenteditable';
+}
+
+function getEditableValueLength(target: EditableTypingTarget): number {
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+    return target.value.length;
+  }
+  return target.textContent?.length ?? 0;
+}
+
+function isReadonlyTypingTarget(target: EditableTypingTarget): boolean {
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+    return target.readOnly || target.disabled;
+  }
+  return target.getAttribute('contenteditable') === 'false';
 }
 
 function WorkflowContextMenu({
@@ -359,6 +469,94 @@ export function App() {
     }
     return next;
   }, [selectedWorkflow, selectedWorkflowId, tasks]);
+  const planningTypingContext = useMemo(() => {
+    const activeSurface =
+      viewMode === 'dag'
+        ? terminalCollapsed
+          ? selectedWorkflow
+            ? 'workflow_task_dag'
+            : 'workflow_graph'
+          : 'terminal_drawer'
+        : viewMode;
+    const activeNodeKind = selectedTask ? 'task' : selectedWorkflow ? 'workflow' : 'none';
+    return {
+      ...collectPlanningTypingMetrics(tasks, workflows, selectedWorkflow?.id ?? selectedWorkflowId),
+      activeSurface,
+      activeState: selectedTask?.status ?? selectedWorkflow?.status ?? 'none',
+      activeNodeKind,
+      statusFilterCount: statusFilters.size,
+      terminalState: terminalCollapsed ? 'collapsed' : 'expanded',
+      inspectorState: inspectorCollapsed ? 'collapsed' : 'expanded',
+    };
+  }, [
+    inspectorCollapsed,
+    selectedTask,
+    selectedWorkflow,
+    selectedWorkflowId,
+    statusFilters.size,
+    tasks,
+    terminalCollapsed,
+    viewMode,
+    workflows,
+  ]);
+  const planningTypingContextRef = useRef(planningTypingContext);
+
+  useEffect(() => {
+    planningTypingContextRef.current = planningTypingContext;
+  }, [planningTypingContext]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    let pendingFrame: number | null = null;
+
+    const handleTypingInput = (event: Event) => {
+      if (!window.invoker?.reportUiPerf) return;
+      const target = getEditableTypingTarget(event.target);
+      if (!target || isReadonlyTypingTarget(target)) return;
+
+      const inputEvent = event as InputEvent & { isComposing?: boolean; inputType?: string };
+      if (inputEvent.isComposing) return;
+
+      const now = Date.now();
+      const throttleKey = 'planning_typing_lag';
+      const prev = uiPerfThrottleRef.current[throttleKey] ?? 0;
+      if (now - prev < 250) return;
+      uiPerfThrottleRef.current[throttleKey] = now;
+
+      const startedAt = performance.now();
+      const targetKind = getEditableTargetKind(target);
+      const targetValueLength = getEditableValueLength(target);
+      const inputType =
+        typeof inputEvent.inputType === 'string' && inputEvent.inputType
+          ? inputEvent.inputType
+          : 'unknown';
+
+      pendingFrame = requestAnimationFrame(() => {
+        pendingFrame = null;
+        void window.invoker?.reportUiPerf?.('planning_typing_lag', {
+          ...planningTypingContextRef.current,
+          durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+          eventType: event.type,
+          inputType,
+          targetKind,
+          targetValueLength,
+          readOnly: false,
+          isComposing: false,
+          visibilityState: document.visibilityState,
+          hasFocus: document.hasFocus(),
+        });
+      });
+    };
+
+    document.addEventListener('input', handleTypingInput, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener('input', handleTypingInput, true);
+      if (pendingFrame !== null) {
+        cancelAnimationFrame(pendingFrame);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (selectedTask?.config.workflowId) {
