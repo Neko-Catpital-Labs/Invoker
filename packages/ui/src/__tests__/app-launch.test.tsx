@@ -128,7 +128,8 @@ describe('App launch (component)', () => {
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('sidebar-home'));
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
     expect(sidebar.className).toContain('w-16');
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
@@ -157,6 +158,11 @@ describe('App launch (component)', () => {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-60');
     }
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(sidebar.className).toContain('w-60');
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(sidebar.className).toContain('w-60');
   });
 
 
