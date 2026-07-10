@@ -133,7 +133,7 @@ describe('App launch (component)', () => {
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
-  it('keeps the manual app sidebar width while switching left rail surfaces', async () => {
+  it('keeps the app sidebar width across left rail navigation and only changes from the explicit toggle', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
 
     render(<App />);
@@ -141,6 +141,13 @@ describe('App launch (component)', () => {
 
     const sidebar = screen.getByTestId('app-sidebar');
     const toggle = screen.getByTestId('sidebar-collapse-toggle');
+
+    expect(sidebar.className).toContain('w-60');
+
+    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+      fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
+      expect(sidebar.className).toContain('w-60');
+    }
 
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-16');
