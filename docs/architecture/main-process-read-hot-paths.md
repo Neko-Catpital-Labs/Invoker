@@ -95,4 +95,6 @@ timer ticks into a main-thread SQLite convoy (macOS beachball).
   (`slowQueryThresholdMs` / `onSlowQuery`) so the next spike shows up without
   attaching a sampler. Set `slowQueryThresholdMs: 0` to disable.
 
-See also: [CI duration invariant](./ci-duration-invariant.md).
+See also: [CI duration invariant](./ci-duration-invariant.md) and
+[UI action responsiveness invariant](./ui-action-responsiveness-invariant.md)
+(user actions must acknowledge within 200ms; main/IPC must not beach-ball).
