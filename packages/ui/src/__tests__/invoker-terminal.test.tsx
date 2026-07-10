@@ -63,6 +63,46 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('reports planning chat typing and render perf without message text', () => {
+    const props = {
+      activeConversationKey: 'chat-1',
+      lines: [{ id: 1, text: 'First line', role: 'system' as const }],
+      busy: false,
+      value: '',
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+    const { rerender } = render(<InvokerTerminal {...props} />);
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+    expect(props.onValueChange).toHaveBeenCalledWith('hello');
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith('planning_chat_input_change', expect.objectContaining({
+      valueLength: 5,
+      valueDelta: 5,
+      lineCount: 1,
+    }));
+
+    rerender(<InvokerTerminal {...props} value="hello" />);
+
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith('planning_chat_input_commit', expect.objectContaining({
+      valueLength: 5,
+      valueDelta: 5,
+      pendingLineCount: 1,
+    }));
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith('planning_chat_render_commit', expect.objectContaining({
+      valueLength: 5,
+      valueDelta: 5,
+      lineCount: 1,
+    }));
+    expect(JSON.stringify(vi.mocked(mock.api.reportUiPerf).mock.calls)).not.toContain('hello');
+  });
+
   it('continues the same planning session', async () => {
     render(<App />);
     await openPlanningTerminal();

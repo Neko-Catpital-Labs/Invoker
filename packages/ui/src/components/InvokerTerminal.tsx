@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Button } from './primitives/index.js';
 
 export interface InvokerTerminalLine {
@@ -14,9 +14,45 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const PLANNING_CHAT_INPUT_SLOW_MS = 8;
+const PLANNING_CHAT_INPUT_COMMIT_SLOW_MS = 16;
+const PLANNING_CHAT_RENDER_SLOW_MS = 16;
+const PLANNING_CHAT_PERF_REPORT_INTERVAL_MS = 1000;
+
+interface PendingPlanningChatInputPerf {
+  startedAt: number;
+  handlerMs: number;
+  valueLength: number;
+  previousValueLength: number;
+  lineCount: number;
+  expanded: boolean;
+  busy: boolean;
+  readOnly: boolean;
+  draftPlanAvailable: boolean;
+}
+
+interface PlanningChatRenderSnapshot {
+  valueLength: number;
+  lineCount: number;
+  expanded: boolean;
+  busy: boolean;
+  readOnly: boolean;
+  draftPlanAvailable: boolean;
+  activeConversationKey: string;
+}
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function nowPerformanceMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundDurationMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
 }
 
 interface InvokerTerminalProps {
@@ -71,9 +107,33 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const renderStartedAt = nowPerformanceMs();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const lastPerfReportAtRef = useRef<Record<string, number>>({});
+  const pendingInputPerfRef = useRef<PendingPlanningChatInputPerf | null>(null);
+  const previousRenderSnapshotRef = useRef<PlanningChatRenderSnapshot>({
+    valueLength: value.length,
+    lineCount: lines.length,
+    expanded,
+    busy,
+    readOnly,
+    draftPlanAvailable,
+    activeConversationKey,
+  });
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+
+  const shouldReportPerf = useCallback((metric: string, durationMs: number, slowMs: number): boolean => {
+    const now = Date.now();
+    const previous = lastPerfReportAtRef.current[metric] ?? 0;
+    if (durationMs < slowMs && now - previous < PLANNING_CHAT_PERF_REPORT_INTERVAL_MS) return false;
+    lastPerfReportAtRef.current[metric] = now;
+    return true;
+  }, []);
+
+  const reportUiPerf = useCallback((metric: string, data: Record<string, unknown>): void => {
+    void window.invoker?.reportUiPerf?.(metric, data);
+  }, []);
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -92,6 +152,63 @@ export function InvokerTerminal({
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
 
+  useLayoutEffect(() => {
+    const pending = pendingInputPerfRef.current;
+    if (!pending || pending.valueLength !== value.length) return;
+    pendingInputPerfRef.current = null;
+    const durationMs = nowPerformanceMs() - pending.startedAt;
+    if (!shouldReportPerf('planning_chat_input_commit', durationMs, PLANNING_CHAT_INPUT_COMMIT_SLOW_MS)) return;
+    reportUiPerf('planning_chat_input_commit', {
+      durationMs: roundDurationMs(durationMs),
+      handlerMs: roundDurationMs(pending.handlerMs),
+      valueLength: pending.valueLength,
+      valueDelta: pending.valueLength - pending.previousValueLength,
+      lineCount: lines.length,
+      pendingLineCount: pending.lineCount,
+      expanded: pending.expanded,
+      busy: pending.busy,
+      readOnly: pending.readOnly,
+      draftPlanAvailable: pending.draftPlanAvailable,
+    });
+  }, [lines.length, reportUiPerf, shouldReportPerf, value.length]);
+
+  useLayoutEffect(() => {
+    const durationMs = nowPerformanceMs() - renderStartedAt;
+    const previous = previousRenderSnapshotRef.current;
+    const snapshot: PlanningChatRenderSnapshot = {
+      valueLength: value.length,
+      lineCount: lines.length,
+      expanded,
+      busy,
+      readOnly,
+      draftPlanAvailable,
+      activeConversationKey,
+    };
+    previousRenderSnapshotRef.current = snapshot;
+
+    const changed =
+      previous.valueLength !== snapshot.valueLength ||
+      previous.lineCount !== snapshot.lineCount ||
+      previous.expanded !== snapshot.expanded ||
+      previous.busy !== snapshot.busy ||
+      previous.readOnly !== snapshot.readOnly ||
+      previous.draftPlanAvailable !== snapshot.draftPlanAvailable ||
+      previous.activeConversationKey !== snapshot.activeConversationKey;
+    if (!changed || !shouldReportPerf('planning_chat_render_commit', durationMs, PLANNING_CHAT_RENDER_SLOW_MS)) return;
+    reportUiPerf('planning_chat_render_commit', {
+      durationMs: roundDurationMs(durationMs),
+      valueLength: snapshot.valueLength,
+      valueDelta: snapshot.valueLength - previous.valueLength,
+      lineCount: snapshot.lineCount,
+      lineDelta: snapshot.lineCount - previous.lineCount,
+      expanded,
+      busy,
+      readOnly,
+      draftPlanAvailable,
+      conversationChanged: previous.activeConversationKey !== snapshot.activeConversationKey,
+    });
+  });
+
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
@@ -107,6 +224,45 @@ export function InvokerTerminal({
   const focusComposer = (): void => {
     inputRef.current?.focus();
   };
+
+  const handleInputChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>): void => {
+    const startedAt = nowPerformanceMs();
+    const nextValue = event.target.value;
+    onValueChange(nextValue);
+    const handlerMs = nowPerformanceMs() - startedAt;
+    pendingInputPerfRef.current = {
+      startedAt,
+      handlerMs,
+      valueLength: nextValue.length,
+      previousValueLength: value.length,
+      lineCount: lines.length,
+      expanded,
+      busy,
+      readOnly,
+      draftPlanAvailable,
+    };
+    if (!shouldReportPerf('planning_chat_input_change', handlerMs, PLANNING_CHAT_INPUT_SLOW_MS)) return;
+    reportUiPerf('planning_chat_input_change', {
+      durationMs: roundDurationMs(handlerMs),
+      valueLength: nextValue.length,
+      valueDelta: nextValue.length - value.length,
+      lineCount: lines.length,
+      expanded,
+      busy,
+      readOnly,
+      draftPlanAvailable,
+    });
+  }, [
+    busy,
+    draftPlanAvailable,
+    expanded,
+    lines.length,
+    onValueChange,
+    readOnly,
+    reportUiPerf,
+    shouldReportPerf,
+    value.length,
+  ]);
 
   return (
     <section className="flex h-full min-h-0 flex-col border border-border bg-card">
@@ -265,7 +421,7 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={handleInputChange}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

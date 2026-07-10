@@ -142,6 +142,8 @@ export function createMockInvoker(
           });
         }),
     ),
+    reportUiPerf: vi.fn(async () => {}),
+    getUiPerfStats: vi.fn(async () => ({})),
     refreshTaskGraph: vi.fn(
       () =>
         new Promise<void>((resolve) => {

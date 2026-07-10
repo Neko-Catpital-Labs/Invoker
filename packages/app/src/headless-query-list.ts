@@ -31,6 +31,7 @@ import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
 } from './recovery-worker-observability.js';
+import { createRendererUiPerfCounters } from './ui-perf-rollup.js';
 
 /**
  * The read-query family writes its formatted output through {@link writeOut}.
@@ -294,9 +295,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         dbPollCreated: 0,
         dbPollUpdatedAsCreated: 0,
         dbPollUpdatedAsUpdated: 0,
-        rendererReports: 0,
-        maxRendererEventLoopLagMs: 0,
-        maxRendererLongTaskMs: 0,
+        ...createRendererUiPerfCounters(),
       };
       switch (flags.output) {
         case 'label':

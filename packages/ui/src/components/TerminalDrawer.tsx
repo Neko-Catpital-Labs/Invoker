@@ -14,6 +14,12 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const TERMINAL_RENDERER_ATTACH_SLOW_MS = 16;
+const TERMINAL_RENDERER_OUTPUT_WRITE_SLOW_MS = 16;
+const TERMINAL_RENDERER_OUTPUT_SEED_SLOW_MS = 16;
+const TERMINAL_RENDERER_OUTPUT_BURST_COUNT = 20;
+const TERMINAL_RENDERER_OUTPUT_BURST_BYTES = 64 * 1024;
+const TERMINAL_RENDERER_PERF_REPORT_INTERVAL_MS = 1000;
 
 /**
  * The drawer has one explicit state model:
@@ -55,11 +61,58 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+type SeedTerminalOutputSnapshotResult = {
+  bytes: number;
+  durationMs: number;
+};
+
+function nowPerformanceMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundDurationMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
+}
+
+function shouldReportTerminalPerf(
+  lastReportAtByMetric: Record<string, number>,
+  metric: string,
+  durationMs: number,
+  slowMs: number,
+  force = false,
+): boolean {
+  const now = Date.now();
+  const throttleKey = force ? `${metric}:force` : metric;
+  const previous = lastReportAtByMetric[throttleKey] ?? 0;
+  if (force) {
+    if (now - previous < TERMINAL_RENDERER_PERF_REPORT_INTERVAL_MS) return false;
+    lastReportAtByMetric[throttleKey] = now;
+    return true;
+  }
+  if (durationMs < slowMs && now - previous < TERMINAL_RENDERER_PERF_REPORT_INTERVAL_MS) return false;
+  lastReportAtByMetric[throttleKey] = now;
+  return true;
+}
+
+function reportTerminalUiPerf(
+  lastReportAtByMetric: Record<string, number>,
+  metric: string,
+  data: Record<string, unknown>,
+  slowMs: number,
+  force = false,
+): void {
+  const durationMs = typeof data.durationMs === 'number' ? data.durationMs : 0;
+  if (!shouldReportTerminalPerf(lastReportAtByMetric, metric, durationMs, slowMs, force)) return;
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
-): void {
+): SeedTerminalOutputSnapshotResult | null {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
   if (
@@ -71,12 +124,18 @@ function seedTerminalOutputSnapshot(
       seededSnapshot.term !== term
     )
   ) {
+    const startedAt = nowPerformanceMs();
     try {
       term.write(outputSnapshot);
+      const durationMs = nowPerformanceMs() - startedAt;
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
         term,
+      };
+      return {
+        bytes: outputSnapshot.length,
+        durationMs,
       };
     } catch (err) {
       console.warn(
@@ -85,6 +144,7 @@ function seedTerminalOutputSnapshot(
       );
     }
   }
+  return null;
 }
 
 function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPaneProps): JSX.Element {
@@ -92,6 +152,12 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const isActiveRef = useRef(isActive);
+  const lastPerfReportAtRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -99,6 +165,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
 
     let term: XTermTerminal;
     let fit: FitAddon;
+    const attachStartedAt = nowPerformanceMs();
     try {
       term = new XTermTerminal({
         fontSize: 12,
@@ -117,20 +184,88 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    const seedResult = seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    const attachDurationMs = nowPerformanceMs() - attachStartedAt;
+    reportTerminalUiPerf(
+      lastPerfReportAtRef.current,
+      'terminal_renderer_attach',
+      {
+        durationMs: roundDurationMs(attachDurationMs),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        active: isActiveRef.current,
+        hasHeader,
+        hasOutputSnapshot: Boolean(session.outputSnapshot),
+        outputSnapshotBytes: session.outputSnapshot?.length ?? 0,
+        cols: term.cols,
+        rows: term.rows,
+        hostClientWidth: host.clientWidth,
+        hostClientHeight: host.clientHeight,
+      },
+      TERMINAL_RENDERER_ATTACH_SLOW_MS,
+    );
+    if (seedResult) {
+      reportTerminalUiPerf(
+        lastPerfReportAtRef.current,
+        'terminal_renderer_output_seed',
+        {
+          durationMs: roundDurationMs(seedResult.durationMs),
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          bytes: seedResult.bytes,
+          active: isActiveRef.current,
+        },
+        TERMINAL_RENDERER_OUTPUT_SEED_SLOW_MS,
+      );
+    }
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
     });
 
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
+    let outputWindowStartedAt = Date.now();
+    let outputEventsInWindow = 0;
+    let outputBytesInWindow = 0;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
+      const now = Date.now();
+      if (now - outputWindowStartedAt >= TERMINAL_RENDERER_PERF_REPORT_INTERVAL_MS) {
+        outputWindowStartedAt = now;
+        outputEventsInWindow = 0;
+        outputBytesInWindow = 0;
+      }
+      const bytes = event.data.length;
+      outputEventsInWindow += 1;
+      outputBytesInWindow += bytes;
+      const writeStartedAt = nowPerformanceMs();
       try {
         term.write(event.data);
       } catch {
         /* terminal disposed */
+        return;
       }
+      const durationMs = nowPerformanceMs() - writeStartedAt;
+      const burst =
+        outputEventsInWindow >= TERMINAL_RENDERER_OUTPUT_BURST_COUNT ||
+        outputBytesInWindow >= TERMINAL_RENDERER_OUTPUT_BURST_BYTES;
+      reportTerminalUiPerf(
+        lastPerfReportAtRef.current,
+        'terminal_renderer_output_write',
+        {
+          durationMs: roundDurationMs(durationMs),
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          bytes,
+          eventsInWindow: outputEventsInWindow,
+          bytesInWindow: outputBytesInWindow,
+          burst,
+          slow: durationMs >= TERMINAL_RENDERER_OUTPUT_WRITE_SLOW_MS,
+          active: isActiveRef.current,
+        },
+        TERMINAL_RENDERER_OUTPUT_WRITE_SLOW_MS,
+        burst,
+      );
     });
 
     const tryFit = () => {
@@ -178,8 +313,21 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
-  }, [session.outputSnapshot, session.sessionId]);
+    const seedResult = seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    if (!seedResult) return;
+    reportTerminalUiPerf(
+      lastPerfReportAtRef.current,
+      'terminal_renderer_output_seed',
+      {
+        durationMs: roundDurationMs(seedResult.durationMs),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        bytes: seedResult.bytes,
+        active: isActiveRef.current,
+      },
+      TERMINAL_RENDERER_OUTPUT_SEED_SLOW_MS,
+    );
+  }, [session.outputSnapshot, session.sessionId, session.taskId]);
 
   useEffect(() => {
     if (!isActive) return;

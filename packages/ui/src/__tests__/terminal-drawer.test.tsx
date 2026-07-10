@@ -343,6 +343,17 @@ describe('Terminal drawer (component)', () => {
     await waitFor(() => {
       expect(xtermMock.writeLog).toEqual(['early line\n']);
     });
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith('terminal_renderer_attach', expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      hasOutputSnapshot: true,
+      outputSnapshotBytes: 'early line\n'.length,
+    }));
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith('terminal_renderer_output_seed', expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      bytes: 'early line\n'.length,
+    }));
 
     act(() => {
       mock.fireTerminalOutput({
@@ -355,6 +366,13 @@ describe('Terminal drawer (component)', () => {
     await waitFor(() => {
       expect(xtermMock.writeLog).toEqual(['early line\n', 'live line\n']);
     });
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith('terminal_renderer_output_write', expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      bytes: 'live line\n'.length,
+      eventsInWindow: 1,
+      bytesInWindow: 'live line\n'.length,
+    }));
   });
 
   it('does not duplicate the replay snapshot when the same session re-renders', async () => {
