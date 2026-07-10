@@ -27,14 +27,18 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'agentName',
   'artifactCount',
   'attempt',
+  'actionId',
+  'actionType',
   'baseBranch',
   'branch',
   'featureBranch',
   'reviewId',
   'reviewUrl',
+  'summary',
   'status',
   'reason',
   'route',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -64,6 +68,7 @@ function parseEventPayload(payload: string | undefined): Record<string, unknown>
 
 function inferLogLevel(event: TaskAuditEvent, payload: Record<string, unknown> | undefined): TaskLogLevel {
   if (isTaskLogLevel(payload?.level)) return payload.level;
+  if (event.eventType === 'task.worker_action' && payload?.status === 'failed') return 'error';
   if (event.eventType.includes('failed') || event.eventType.includes('error')) return 'error';
   if (event.eventType.includes('warn')) return 'warn';
   if (event.eventType.startsWith('debug.')) return 'debug';
@@ -81,8 +86,30 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
   return Object.keys(detail).length > 0 ? JSON.stringify(detail) : undefined;
 }
 
+function stringPayloadField(payload: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = payload?.[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function formatWorkerActionMessage(payload: Record<string, unknown> | undefined): string {
+  const workerKind = stringPayloadField(payload, 'workerKind') ?? 'worker';
+  const actionType = stringPayloadField(payload, 'actionType') ?? 'action';
+  const status = stringPayloadField(payload, 'status') ?? 'unknown';
+  const summary = stringPayloadField(payload, 'summary');
+  return `Worker action ${workerKind}/${actionType} ${status}${summary ? `: ${summary}` : ''}`;
+}
+
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
+  if (event.eventType === 'task.worker_action') {
+    return {
+      id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
+      level: inferLogLevel(event, payload),
+      message: formatWorkerActionMessage(payload),
+      detail: formatLogDetail(payload),
+      createdAt: event.createdAt,
+    };
+  }
   const payloadMessage = payload?.message;
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),

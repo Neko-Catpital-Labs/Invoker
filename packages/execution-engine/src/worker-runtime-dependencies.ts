@@ -16,6 +16,7 @@ import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
+import type { PrSummaryRefreshWorkerConfig } from './workers/pr-summary-refresh-worker.js';
 import type { RequeueWorkerConfig, RequeueWorkerSubmitter } from './workers/requeue-worker.js';
 import type {
   WorkflowResumeWorkerConfig,
@@ -35,6 +36,8 @@ export interface WorkerRuntimeDependencies {
   messageBus?: MessageBus;
   /** Review-gate polling surface owned by the task runner. */
   reviewGate?: PrStatusReviewGate;
+  /** PR body summary refresh configuration. */
+  prSummaryRefresh?: PrSummaryRefreshWorkerConfig;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
   /** Requeue worker tuning (stall requeue budget / backoff). */

@@ -18,7 +18,12 @@ import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import {
+  isInvokerRepoUrl,
+  type PrAuthoringContext,
+  type PrAuthoringTaskEntry,
+  type PrAuthoringWorkerActionEntry,
+} from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -376,10 +381,40 @@ export async function buildPrAuthoringContext(
     });
   }
 
+  const workerActions: PrAuthoringWorkerActionEntry[] = [];
+  try {
+    const actions = host.persistence.listWorkerActions({ workflowId })
+      .filter((action) => action.workerKind !== 'pr-summary-refresh');
+    for (const action of actions) {
+      const payload = action.payload && typeof action.payload === 'object' && !Array.isArray(action.payload)
+        ? action.payload as Record<string, unknown>
+        : undefined;
+      const reason = typeof payload?.reason === 'string' ? payload.reason : undefined;
+      workerActions.push({
+        workerKind: action.workerKind,
+        actionType: action.actionType,
+        status: action.status,
+        subjectType: action.subjectType,
+        subjectId: action.subjectId,
+        externalKey: action.externalKey,
+        ...(action.workflowId !== undefined ? { workflowId: action.workflowId } : {}),
+        ...(action.taskId !== undefined ? { taskId: action.taskId } : {}),
+        ...(action.summary !== undefined ? { summary: action.summary } : {}),
+        ...(reason !== undefined ? { reason } : {}),
+        createdAt: action.createdAt,
+        updatedAt: action.updatedAt,
+        ...(action.completedAt !== undefined ? { completedAt: action.completedAt } : {}),
+      });
+    }
+  } catch {
+    // Worker action history is observability-only and should not block PR authoring.
+  }
+
   return {
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    workerActions,
     visualProofMarkdown,
   };
 }

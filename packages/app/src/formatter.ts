@@ -205,12 +205,52 @@ export function formatEventLog(events: TaskEvent[]): string {
   }
 
   const lines = events.map((event) => {
+    if (event.eventType === 'task.worker_action') {
+      return formatTaskWorkerActionEvent(event);
+    }
     const timestamp = event.createdAt;
     const payload = event.payload ? ` ${event.payload}` : '';
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 
   return lines.join('\n');
+}
+
+function parseEventPayload(payload: string | undefined): Record<string, unknown> | undefined {
+  if (!payload) return undefined;
+  try {
+    const parsed = JSON.parse(payload);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringField(payload: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = payload?.[key];
+  return typeof value === 'string' && value.length > 0 ? escapeTerminalText(value) : undefined;
+}
+
+function formatTaskWorkerActionEvent(event: TaskEvent): string {
+  const payload = parseEventPayload(event.payload);
+  const workerKind = stringField(payload, 'workerKind') ?? 'worker';
+  const actionType = stringField(payload, 'actionType') ?? 'action';
+  const status = stringField(payload, 'status') ?? 'unknown';
+  const actionId = stringField(payload, 'actionId');
+  const reason = stringField(payload, 'reason');
+  const reviewId = stringField(payload, 'reviewId');
+  const summary = stringField(payload, 'summary');
+  const detailParts = [
+    actionId ? `id=${actionId}` : undefined,
+    reviewId ? `review=${reviewId}` : undefined,
+    reason ? `reason=${reason}` : undefined,
+  ].filter((part): part is string => Boolean(part));
+  const detail = detailParts.length > 0 ? ` ${DIM}(${detailParts.join(' ')})${RESET}` : '';
+  const summarySuffix = summary ? ` — ${summary}` : '';
+  return `${DIM}[${event.createdAt}]${RESET} ${BOLD}${event.taskId}${RESET}: ` +
+    `worker_action ${workerKind}/${actionType} [${status}]${detail}${summarySuffix}`;
 }
 
 export function formatWorkerActions(actions: WorkerActionRecord[]): string {

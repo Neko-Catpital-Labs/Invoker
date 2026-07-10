@@ -458,6 +458,44 @@ describe('GitHubMergeGateProvider', () => {
     });
   });
 
+  describe('updateReviewBody', () => {
+    it('updates the PR body using a temporary body file', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { readFileSync } = await import('node:fs');
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      let bodyFileArg: string | undefined;
+      let bodyFileContent: string | undefined;
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'edit') {
+          bodyFileArg = args[args.indexOf('--body-file') + 1];
+          bodyFileContent = readFileSync(bodyFileArg!, 'utf8');
+          return mockSpawnResult('{}', 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await provider.updateReviewBody({
+        identifier: '42',
+        cwd: '/tmp/repo',
+        body: '## Summary\n\nUpdated by worker',
+      });
+
+      expect(bodyFileArg).toMatch(/body\.md$/);
+      expect(bodyFileContent).toBe('## Summary\n\nUpdated by worker');
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr', 'edit', '42',
+          '--repo', 'owner/repo',
+          '--body-file', expect.stringMatching(/body\.md$/),
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
+  });
+
   describe('checkApproval', () => {
     it('treats a merged PR as approved with statusText "Merged"', async () => {
       process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';

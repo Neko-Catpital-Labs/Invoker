@@ -96,6 +96,48 @@ describe('buildCanonicalPrBody', () => {
     expect(body).not.toContain('pnpm e2e');
   });
 
+  it('renders worker actions in a Pipeline table in time order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh visibility',
+      workflowSummary: 'Expose worker activity.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'queued',
+            subjectType: 'review',
+            subjectId: '124',
+            externalKey: 'late',
+            taskId: 'wf-1/merge',
+            summary: 'Queued CI repair',
+            createdAt: '2026-01-01T00:02:00.000Z',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            workerKind: 'autoapprove',
+            actionType: 'approve-ai-fix',
+            status: 'completed',
+            subjectType: 'task',
+            subjectId: 'wf-1/task-a',
+            externalKey: 'early',
+            taskId: 'wf-1/task-a',
+            summary: 'Approved AI fix',
+            createdAt: '2026-01-01T00:01:00.000Z',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body).toContain('| Time | Worker | Action | Target | Status | Summary |');
+    expect(body.indexOf('autoapprove/approve-ai-fix')).toBeLessThan(body.indexOf('ci-failure/fix-ci-failure'));
+    expect(body).toContain('| 2026-01-01T00:01:00.000Z | autoapprove/approve-ai-fix | early | wf-1/task-a | completed | Approved AI fix |');
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
+
   it('preserves visual proof markdown verbatim', () => {
     const visualProof = '## Visual Proof\n\n| Before | After |\n|--------|-------|\n| ![b](b.png) | ![a](a.png) |';
     const body = buildCanonicalPrBody({

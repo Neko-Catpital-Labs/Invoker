@@ -33,6 +33,23 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence carried through PR authoring. */
+export interface PrAuthoringWorkerActionEntry {
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  workflowId?: string;
+  taskId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +63,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker actions that explain automated follow-up work on the task/PR. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -252,6 +271,32 @@ function buildPromptFileBootstrap(promptPath: string): string {
     'Read the file completely, then execute those instructions in this workspace.',
     'Do not ask for the file contents.',
   ].join('\n');
+}
+
+function escapeMarkdownTableCell(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('|', '\\|').replace(/\r?\n/g, '<br>');
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+}
+
+function workerActionTimestamp(action: PrAuthoringWorkerActionEntry): string {
+  return firstNonEmpty(action.createdAt, action.updatedAt, action.completedAt) ?? '';
+}
+
+function sortWorkerActionsByTime(
+  actions: readonly PrAuthoringWorkerActionEntry[],
+): PrAuthoringWorkerActionEntry[] {
+  return [...actions].sort((a, b) =>
+    workerActionTimestamp(a).localeCompare(workerActionTimestamp(b))
+    || a.workerKind.localeCompare(b.workerKind)
+    || a.actionType.localeCompare(b.actionType)
+    || a.externalKey.localeCompare(b.externalKey));
 }
 
 function materializeLocalPrompt(prompt: string): { effectivePrompt: string; cleanup: () => void } {
@@ -484,6 +529,28 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  const workerActions = sortWorkerActionsByTime(args.structuredContext?.workerActions ?? []);
+  if (workerActions.length > 0) {
+    lines.push('## Pipeline');
+    lines.push('');
+    lines.push('| Time | Worker | Action | Target | Status | Summary |');
+    lines.push('| --- | --- | --- | --- | --- | --- |');
+    for (const action of workerActions) {
+      const target = action.taskId
+        ?? (action.workflowId ? `workflow:${action.workflowId}` : `${action.subjectType}:${action.subjectId}`);
+      const summary = firstNonEmpty(action.summary, action.reason) ?? '';
+      lines.push([
+        workerActionTimestamp(action),
+        `${action.workerKind}/${action.actionType}`,
+        action.externalKey,
+        target,
+        action.status,
+        summary,
+      ].map((value) => escapeMarkdownTableCell(value)).join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+    }
+    lines.push('');
+  }
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
@@ -592,6 +659,21 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    const workerActions = sortWorkerActionsByTime(ctx.workerActions ?? []);
+    if (workerActions.length > 0) {
+      lines.push('Worker actions in time order:');
+      for (const action of workerActions) {
+        const target = action.taskId
+          ?? (action.workflowId ? `workflow:${action.workflowId}` : `${action.subjectType}:${action.subjectId}`);
+        const summary = firstNonEmpty(action.summary, action.reason);
+        lines.push(
+          `- ${workerActionTimestamp(action)} ${action.workerKind}/${action.actionType} ` +
+          `[${action.status}] ${target}${summary ? ` — ${summary}` : ''}`,
+        );
+      }
+      lines.push('');
     }
 
     if (ctx.visualProofMarkdown) {
