@@ -33,6 +33,23 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Worker action evidence rendered into PR pipeline summaries. */
+export interface PrAuthoringWorkerActionEntry {
+  id?: string;
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType: string;
+  subjectId: string;
+  workflowId?: string;
+  taskId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +63,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Worker decisions/actions that Invoker took for this workflow. */
+  workerActions?: readonly PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -273,6 +292,63 @@ function materializeLocalPrompt(prompt: string): { effectivePrompt: string; clea
   };
 }
 
+function markdownTableCell(value: string | undefined): string {
+  const normalized = value?.trim();
+  if (!normalized) return '-';
+  return normalized.replaceAll('\\', '\\\\').replaceAll('|', '\\|').replace(/\r?\n/g, '<br>');
+}
+
+function markdownInlineCode(value: string | undefined): string {
+  const normalized = value?.trim();
+  if (!normalized) return '-';
+  return `\`${normalized.replaceAll('`', '\\`')}\``;
+}
+
+function workerActionTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.createdAt ?? action.updatedAt ?? action.completedAt ?? '';
+}
+
+function workerActionTarget(action: PrAuthoringWorkerActionEntry): string {
+  return action.taskId ?? `${action.subjectType}:${action.subjectId}`;
+}
+
+function sortWorkerActionsInTimeOrder(
+  actions: readonly PrAuthoringWorkerActionEntry[] | undefined,
+): PrAuthoringWorkerActionEntry[] {
+  return [...(actions ?? [])].sort((a, b) =>
+    workerActionTime(a).localeCompare(workerActionTime(b))
+      || a.workerKind.localeCompare(b.workerKind)
+      || a.actionType.localeCompare(b.actionType)
+      || workerActionTarget(a).localeCompare(workerActionTarget(b)),
+  );
+}
+
+export function renderPrPipelineSection(
+  actions: readonly PrAuthoringWorkerActionEntry[] | undefined,
+): string {
+  const sorted = sortWorkerActionsInTimeOrder(actions);
+  if (sorted.length === 0) return '';
+
+  const lines = [
+    '## Pipeline',
+    '',
+    '| Time | Worker | Action | Target | Status | Summary |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  for (const action of sorted) {
+    const summary = action.summary ?? action.reason ?? '';
+    lines.push([
+      markdownTableCell(workerActionTime(action)),
+      markdownInlineCode(action.workerKind),
+      markdownInlineCode(action.actionType),
+      markdownInlineCode(workerActionTarget(action)),
+      markdownTableCell(action.status),
+      markdownTableCell(summary),
+    ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+  }
+  return lines.join('\n');
+}
+
 function extractAssistantBody(driver: SessionDriver | undefined, sessionId: string, fallback: string): string {
   const rawSession = driver?.loadSession(sessionId);
   if (rawSession && driver) {
@@ -484,6 +560,12 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  const pipeline = renderPrPipelineSection(args.structuredContext?.workerActions);
+  if (pipeline) {
+    lines.push(pipeline);
+    lines.push('');
+  }
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
@@ -592,6 +674,21 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    const workerActions = sortWorkerActionsInTimeOrder(ctx.workerActions);
+    if (workerActions.length > 0) {
+      lines.push('Worker pipeline actions:');
+      for (const action of workerActions) {
+        const target = workerActionTarget(action);
+        const summary = action.summary ? ` — ${action.summary}` : '';
+        const at = workerActionTime(action);
+        lines.push(
+          `- ${at || 'unknown time'} ${action.workerKind}/${action.actionType} `
+            + `${target} (${action.status})${summary}`,
+        );
+      }
+      lines.push('');
     }
 
     if (ctx.visualProofMarkdown) {

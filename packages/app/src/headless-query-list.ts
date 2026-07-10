@@ -13,7 +13,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import type { AgentRegistry, WorkerRegistry, WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import {
@@ -26,7 +26,7 @@ import {
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
-import { listWorkerDecisions } from './worker-control.js';
+import { createLocalWorkerStatusSnapshot, listWorkerDecisions } from './worker-control.js';
 import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
@@ -789,9 +789,36 @@ function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
 
 export async function renderWorkerStatus(
   flagArgs: string[],
-  deps: Pick<HeadlessQueryDeps, 'persistence'>,
+  deps: Pick<HeadlessQueryDeps, 'persistence'> & {
+    registry?: WorkerRegistry<WorkerRuntimeDependencies>;
+    autoStartKinds?: readonly string[];
+  },
 ): Promise<void> {
   const flags = parseQueryFlags(flagArgs);
+  if (deps.registry) {
+    const snapshot = createLocalWorkerStatusSnapshot({
+      registry: deps.registry,
+      persistence: deps.persistence,
+      autoStartKinds: deps.autoStartKinds ?? [],
+    });
+    const { formatAsJson, formatAsJsonl, formatWorkerStatusSnapshot } = await import('./formatter.js');
+    switch (flags.output) {
+      case 'label':
+        writeOut(snapshot.workers.map((worker) => worker.kind).join('\n') + '\n');
+        break;
+      case 'json':
+        writeOut(formatAsJson(snapshot) + '\n');
+        break;
+      case 'jsonl':
+        writeOut(formatAsJsonl(snapshot.workers) + '\n');
+        break;
+      default:
+        writeOut(formatWorkerStatusSnapshot(snapshot) + '\n');
+        break;
+    }
+    return;
+  }
+
   const status = collectRecoveryWorkerStatus(deps.persistence);
   const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
   switch (flags.output) {

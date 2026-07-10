@@ -110,6 +110,7 @@ import type { RuntimeServices } from '@invoker/runtime-service';
 import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry, TaskRunner,
+  GitHubMergeGateProvider,
   WorktreeExecutor,
   CI_FAILURE_WORKER_KIND,
   initializeShellEnvironment,
@@ -378,6 +379,9 @@ function buildRegisteredOwnerWorkerDeps(
       stallRequeueBackoffMs: invokerConfig.stallRequeueBackoffMs,
     },
     prMaintenance: resolvePrMaintenanceWorkerConfig(invokerConfig),
+    prSummaryRefresh: {
+      provider: new GitHubMergeGateProvider(),
+    },
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,

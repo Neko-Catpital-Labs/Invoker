@@ -8,6 +8,7 @@ import {
   buildCanonicalPrBody,
   buildMakePrStackPublishPrompt,
   parseMakePrStackPublishResult,
+  renderPrPipelineSection,
   resolveSkillPathViaAgent,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
@@ -96,6 +97,44 @@ describe('buildCanonicalPrBody', () => {
     expect(body).not.toContain('pnpm e2e');
   });
 
+  it('renders worker pipeline rows in time order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh summary',
+      workflowSummary: 'Updated PR visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            subjectType: 'review',
+            subjectId: '42',
+            status: 'queued',
+            summary: 'Queued CI repair',
+            createdAt: '2026-01-02T00:00:00.000Z',
+          },
+          {
+            workerKind: 'auto-approve',
+            actionType: 'approve-fix',
+            subjectType: 'task',
+            subjectId: 'task-1',
+            taskId: 'task-1',
+            status: 'completed',
+            summary: 'Approved fix',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    const first = body.indexOf('auto-approve');
+    const second = body.indexOf('ci-failure');
+    expect(first).toBeGreaterThan(-1);
+    expect(second).toBeGreaterThan(first);
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
+
   it('preserves visual proof markdown verbatim', () => {
     const visualProof = '## Visual Proof\n\n| Before | After |\n|--------|-------|\n| ![b](b.png) | ![a](a.png) |';
     const body = buildCanonicalPrBody({
@@ -124,6 +163,12 @@ describe('buildCanonicalPrBody', () => {
 
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
+  });
+});
+
+describe('renderPrPipelineSection', () => {
+  it('omits the section when there are no worker actions', () => {
+    expect(renderPrPipelineSection([])).toBe('');
   });
 });
 

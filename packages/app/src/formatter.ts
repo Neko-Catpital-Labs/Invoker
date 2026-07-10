@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -205,12 +205,40 @@ export function formatEventLog(events: TaskEvent[]): string {
   }
 
   const lines = events.map((event) => {
+    if (event.eventType === 'task.worker_action') {
+      const formatted = formatWorkerActionEvent(event);
+      if (formatted) return formatted;
+    }
     const timestamp = event.createdAt;
     const payload = event.payload ? ` ${event.payload}` : '';
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 
   return lines.join('\n');
+}
+
+function formatWorkerActionEvent(event: TaskEvent): string | undefined {
+  if (!event.payload) return undefined;
+  let payload: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(event.payload);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    payload = parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  const workerKind = typeof payload.workerKind === 'string' ? payload.workerKind : 'worker';
+  const actionType = typeof payload.actionType === 'string' ? payload.actionType : 'action';
+  const status = typeof payload.status === 'string' ? payload.status : 'unknown';
+  const summary = typeof payload.summary === 'string'
+    ? payload.summary
+    : typeof payload.message === 'string'
+      ? payload.message
+      : undefined;
+  const review = typeof payload.reviewUrl === 'string' ? ` review=${escapeTerminalText(payload.reviewUrl)}` : '';
+  return `${DIM}[${event.createdAt}]${RESET} ${BOLD}${event.taskId}${RESET}: worker action ` +
+    `${escapeTerminalText(workerKind)}/${escapeTerminalText(actionType)} [${escapeTerminalText(status)}]` +
+    `${review}${summary ? ` — ${escapeTerminalText(summary)}` : ''}`;
 }
 
 export function formatWorkerActions(actions: WorkerActionRecord[]): string {
@@ -233,6 +261,39 @@ export function formatWorkerActions(actions: WorkerActionRecord[]): string {
       `  ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${task}${attempts}${completed}${summary}`,
     );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  if (snapshot.workers.length === 0) {
+    return `${DIM}No workers registered.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Workers (${snapshot.workers.length})${RESET}`);
+  lines.push(`${DIM}generatedAt=${escapeTerminalText(snapshot.generatedAt)}${RESET}`);
+  for (const worker of snapshot.workers) {
+    const lifecycle = escapeTerminalText(worker.lifecycle);
+    const policy = escapeTerminalText(worker.policy);
+    const autoStart = worker.autoStarts ? 'auto' : 'manual';
+    lines.push(`  ${BOLD}${escapeTerminalText(worker.kind)}${RESET} [${lifecycle}] policy=${policy} start=${autoStart}`);
+    if (worker.note) {
+      lines.push(`    ${escapeTerminalText(worker.note)}`);
+    }
+    if (worker.recentActions.length > 0) {
+      lines.push('    recentActions:');
+      for (const action of worker.recentActions) {
+        const target = action.taskId
+          ? `task=${escapeTerminalText(action.taskId)}`
+          : `${escapeTerminalText(action.subjectType)}=${escapeTerminalText(action.subjectId)}`;
+        const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+        lines.push(
+          `      ${escapeTerminalText(action.updatedAt)} [${escapeTerminalText(action.status)}] ` +
+            `${escapeTerminalText(action.actionType)} ${target}${summary}`,
+        );
+      }
+    }
   }
   return lines.join('\n');
 }

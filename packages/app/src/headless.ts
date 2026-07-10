@@ -14,12 +14,14 @@ import { makeEnvelope } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import {
   AUTO_FIX_WORKER_KIND,
+  GitHubMergeGateProvider,
   TaskRunner,
   acquireWorkerLock,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
   registerPrMaintenanceWorkers,
+  registerPrSummaryRefreshWorker,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
@@ -74,6 +76,7 @@ export { createHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
 export type { HeadlessDeps, QueryFlags };
 import { headlessQuery, headlessQuerySelect, renderWorkerStatus } from './headless-query-list.js';
 export { resolveAgentSession } from './headless-query-list.js';
+import { AUTO_STARTED_OWNER_WORKER_KINDS } from './worker-control.js';
 import {
   headlessRun,
   headlessResume,
@@ -422,8 +425,10 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerPrMaintenanceWorkers(
-      registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerPrSummaryRefreshWorker(
+      registerPrMaintenanceWorkers(
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+      ),
     ),
   );
 
@@ -436,7 +441,11 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
 
   if (subCommand === 'status') {
-    await renderWorkerStatus(args.slice(1), deps);
+    await renderWorkerStatus(args.slice(1), {
+      ...deps,
+      registry,
+      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+    });
     return;
   }
 
@@ -472,6 +481,9 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
+      prSummaryRefresh: {
+        provider: new GitHubMergeGateProvider(),
+      },
     });
     await worker.tick('manual');
     await worker.stop();
@@ -929,4 +941,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-
