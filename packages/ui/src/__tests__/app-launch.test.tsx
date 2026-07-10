@@ -133,7 +133,7 @@ describe('App launch (component)', () => {
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
-  it('keeps the manual app sidebar width while switching left rail surfaces', async () => {
+  it('keeps the app sidebar width while switching left rail surfaces until the explicit toggle changes it', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
 
     render(<App />);
@@ -141,21 +141,49 @@ describe('App launch (component)', () => {
 
     const sidebar = screen.getByTestId('app-sidebar');
     const toggle = screen.getByTestId('sidebar-collapse-toggle');
+    const expectSurfaceWidth = (widthClass: string) => {
+      expect(sidebar.className).toContain(widthClass);
+    };
+
+    expectSurfaceWidth('w-60');
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
+    expectSurfaceWidth('w-60');
+
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expectSurfaceWidth('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-return-home')).toBeInTheDocument();
+    expectSurfaceWidth('w-60');
+    fireEvent.click(screen.getByTestId('browser-return-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expectSurfaceWidth('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expect(screen.getByRole('heading', { name: 'Planning Terminal' })).toBeInTheDocument();
+    expectSurfaceWidth('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-workers'));
+    expect(await screen.findByTestId('action-queue-section')).toBeInTheDocument();
+    expectSurfaceWidth('w-60');
 
     fireEvent.click(toggle);
-    expect(sidebar.className).toContain('w-16');
+    expectSurfaceWidth('w-16');
 
     for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
-      expect(sidebar.className).toContain('w-16');
+      expectSurfaceWidth('w-16');
     }
 
     fireEvent.click(toggle);
-    expect(sidebar.className).toContain('w-60');
+    expectSurfaceWidth('w-60');
 
     for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
-      expect(sidebar.className).toContain('w-60');
+      expectSurfaceWidth('w-60');
     }
   });
 
