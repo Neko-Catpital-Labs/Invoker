@@ -478,6 +478,10 @@ export async function sendPlanningChatMessage(
         if (deps.plannerReplyOverride) {
           saveOverrideConversation(deps.conversationRepo, activeSession.id, formattedMessage, reply);
         }
+        const reasoningParts = deps.plannerReplyOverride
+          ? []
+          : activeSession.conversation.lastTurnReasoning;
+        const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
         const planText = activeSession.conversation.getDraftedPlan() ?? extractYamlPlan(reply);
         if (!planText) {
           activeSession.draftPlanSummary = undefined;
@@ -485,7 +489,7 @@ export async function sendPlanningChatMessage(
           activeSession.status = reply.includes('?') ? 'waiting_for_answer' : 'still_discussing';
           appendSessionMessage(activeSession, 'assistant', reply);
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
-          return { ok: true, sessionId: activeSession.id, reply, draftPlanAvailable: false };
+          return { ok: true, sessionId: activeSession.id, reply, reasoning, draftPlanAvailable: false } as InAppPlanningChatResponse;
         }
 
         const summary = summarizePlanText(planText);
@@ -512,9 +516,10 @@ export async function sendPlanningChatMessage(
           ok: true,
           sessionId: activeSession.id,
           reply,
+          reasoning,
           draftPlanAvailable: true,
           draftPlanSummary: summary,
-        };
+        } as InAppPlanningChatResponse;
       } catch (error) {
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
         return {
