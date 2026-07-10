@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -35,6 +36,11 @@ describe('Invoker terminal (component)', () => {
   function submitPlanningText(text: string) {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+  }
+
+  function expectScrollableRailList(list: HTMLElement) {
+    expect(list).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+    expect(list.parentElement).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col');
   }
 
   it('generates a planning reply from plain language', async () => {
@@ -417,15 +423,43 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
 
-  it('constrains the planning session list to a bounded scroll region', async () => {
-    render(<App />);
-    await openPlanningTerminal();
+  it('keeps every left rail list as a bounded scroll region', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha', status: 'running' },
+    ];
+    const tasks = [
+      makeUITask({
+        id: 'task-review',
+        description: 'Needs review',
+        status: 'review_ready',
+        workflowId: 'wf-alpha',
+      }),
+      makeUITask({
+        id: 'task-running',
+        description: 'Running task',
+        status: 'running',
+        workflowId: 'wf-alpha',
+      }),
+    ];
+    mock.cleanup();
+    mock = createMockInvoker(tasks, workflows);
+    mock.install();
 
-    const list = screen.getByTestId('planning-session-list');
-    // Regression guard: an auto-height overflow container never scrolls; long
-    // session lists overflow the rail and get clipped by the ancestor
-    // overflow-hidden instead. The scroll region needs a definite height.
-    expect(list.className).toContain('overflow-y-auto');
-    expect(list.className).toMatch(/\b(h-full|h-\[|max-h-\S+)/);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    expectScrollableRailList(screen.getByTestId('planning-session-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    const workflowsRail = await screen.findByTestId('browser-rail');
+    expectScrollableRailList(within(workflowsRail).getByTestId('workflows-rail-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    const attentionRail = await screen.findByTestId('browser-rail');
+    expectScrollableRailList(within(attentionRail).getByTestId('attention-tasks-rail-list'));
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    const runningRail = await screen.findByTestId('browser-rail');
+    expectScrollableRailList(within(runningRail).getByTestId('running-tasks-rail-list'));
   });
 });
