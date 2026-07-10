@@ -357,6 +357,65 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('reports renderer xterm attach, snapshot, input, and output perf markers', async () => {
+    const reportUiPerf = mock.api.reportUiPerf as ReturnType<typeof vi.fn>;
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'early line\n',
+    });
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('terminal_xterm_attach', expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        active: true,
+        outputSnapshotChars: 'early line\n'.length,
+      }));
+    });
+    expect(reportUiPerf).toHaveBeenCalledWith('terminal_xterm_snapshot_seed', expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      bytes: 'early line\n'.length,
+    }));
+
+    act(() => {
+      xtermMock.instances[0]?.emitData('pwd\n');
+    });
+    expect(reportUiPerf).toHaveBeenCalledWith('terminal_xterm_input', expect.objectContaining({
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      bytes: 'pwd\n'.length,
+    }));
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'live line\n',
+      });
+    });
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('terminal_xterm_output_write', expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        bytes: 'live line\n'.length,
+        chunksInWindow: 1,
+        bytesInWindow: 'live line\n'.length,
+      }));
+    });
+  });
+
   it('does not duplicate the replay snapshot when the same session re-renders', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',

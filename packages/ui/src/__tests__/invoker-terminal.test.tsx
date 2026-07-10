@@ -37,6 +37,41 @@ describe('Invoker terminal (component)', () => {
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
 
+  it('reports planning chat input and render perf markers', async () => {
+    const reportUiPerf = mock.api.reportUiPerf as ReturnType<typeof vi.fn>;
+    render(<InvokerTerminal
+      activeConversationKey="chat-1"
+      lines={[{ id: 1, text: 'First line', role: 'system' as const }]}
+      busy={false}
+      value=""
+      selectedPresetKey="codex"
+      presetOptions={[{ key: 'codex', label: 'Codex' }]}
+      draftPlanAvailable={false}
+      onValueChange={vi.fn()}
+      onSubmit={vi.fn()}
+      onSubmitDraft={vi.fn()}
+      onPresetChange={vi.fn()}
+      onExpand={vi.fn()}
+    />);
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_render', expect.objectContaining({
+        transcriptLines: 1,
+        transcriptChars: 'First line'.length,
+        inputChars: 0,
+      }));
+    });
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello\nworld' } });
+
+    expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_input_change', expect.objectContaining({
+      inputChars: 'hello\nworld'.length,
+      deltaChars: 'hello\nworld'.length,
+      lineBreaks: 1,
+      transcriptLines: 1,
+    }));
+  });
+
   it('generates a planning reply from plain language', async () => {
     render(<App />);
     await openPlanningTerminal();

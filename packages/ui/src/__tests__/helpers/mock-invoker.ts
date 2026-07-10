@@ -167,6 +167,8 @@ export function createMockInvoker(
     }),
     onTaskOutput: vi.fn(() => () => {}),
     onActivityLog: vi.fn(() => () => {}),
+    reportUiPerf: vi.fn(async () => undefined),
+    getUiPerfStats: vi.fn(async () => ({})),
     loadPlan: vi.fn(async () => {}),
     planFromGoal: vi.fn(async () => ({
       ok: true,

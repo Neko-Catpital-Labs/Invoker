@@ -14,9 +14,23 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const PLANNING_CHAT_INPUT_PERF_INTERVAL_MS = 250;
+const PLANNING_CHAT_RENDER_PERF_INTERVAL_MS = 1000;
+const PLANNING_CHAT_SLOW_RENDER_MS = 16;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function perfNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function countLineBreaks(value: string): number {
+  if (value.length === 0) return 0;
+  return (value.match(/\n/g) ?? []).length;
 }
 
 interface InvokerTerminalProps {
@@ -73,7 +87,22 @@ export function InvokerTerminal({
 }: InvokerTerminalProps): JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const lastInputCharsRef = useRef(value.length);
+  const lastPerfReportAtRef = useRef<Map<string, number>>(new Map());
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  const renderStartedAt = perfNowMs();
+
+  const shouldReportPerf = useCallback((metric: string, minIntervalMs: number): boolean => {
+    const now = perfNowMs();
+    const previous = lastPerfReportAtRef.current.get(metric);
+    if (previous !== undefined && now - previous < minIntervalMs) return false;
+    lastPerfReportAtRef.current.set(metric, now);
+    return true;
+  }, []);
+
+  const reportPerf = useCallback((metric: string, data: Record<string, unknown>): void => {
+    void window.invoker?.reportUiPerf?.(metric, data);
+  }, []);
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -91,6 +120,29 @@ export function InvokerTerminal({
       scrollTranscriptToBottom();
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+
+  useLayoutEffect(() => {
+    const durationMs = perfNowMs() - renderStartedAt;
+    const minIntervalMs = durationMs >= PLANNING_CHAT_SLOW_RENDER_MS
+      ? PLANNING_CHAT_INPUT_PERF_INTERVAL_MS
+      : PLANNING_CHAT_RENDER_PERF_INTERVAL_MS;
+    if (!shouldReportPerf('planning_chat_render', minIntervalMs)) return;
+    const transcriptChars = lines.reduce((total, line) => total + line.text.length, 0);
+    reportPerf('planning_chat_render', {
+      durationMs: Math.round(durationMs),
+      transcriptLines: lines.length,
+      transcriptChars,
+      inputChars: value.length,
+      busy,
+      readOnly,
+      expanded,
+      shouldFollowTranscript,
+    });
+  });
+
+  useEffect(() => {
+    lastInputCharsRef.current = value.length;
+  }, [value.length]);
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -265,7 +317,23 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              const previousChars = lastInputCharsRef.current;
+              lastInputCharsRef.current = nextValue.length;
+              if (shouldReportPerf('planning_chat_input_change', PLANNING_CHAT_INPUT_PERF_INTERVAL_MS)) {
+                reportPerf('planning_chat_input_change', {
+                  inputChars: nextValue.length,
+                  deltaChars: nextValue.length - previousChars,
+                  lineBreaks: countLineBreaks(nextValue),
+                  transcriptLines: lines.length,
+                  busy,
+                  readOnly,
+                  expanded,
+                });
+              }
+              onValueChange(nextValue);
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

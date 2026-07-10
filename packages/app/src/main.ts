@@ -277,6 +277,11 @@ import {
   resetTerminalUiPerfCounters,
 } from './terminal-ui-perf.js';
 import {
+  createRendererHotPathUiPerfCounters,
+  recordRendererHotPathUiPerfMetric,
+  resetRendererHotPathUiPerfCounters,
+} from './renderer-ui-perf.js';
+import {
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
 } from './terminal-session-ipc.js';
@@ -2109,6 +2114,7 @@ function createEmbeddedTerminalBackendFromConfig(
     largeTaskDeltaBatches: 0,
     maxTaskDeltaBatchSize: 0,
     ...createTerminalUiPerfCounters(),
+    ...createRendererHotPathUiPerfCounters(),
   };
   const terminalUiPerf = createTerminalUiPerfReporter();
   const terminalUiPerfSink = createTerminalUiPerfSink(
@@ -2179,6 +2185,7 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.largeTaskDeltaBatches = 0;
     uiPerfStats.maxTaskDeltaBatchSize = 0;
     resetTerminalUiPerfCounters(uiPerfStats);
+    resetRendererHotPathUiPerfCounters(uiPerfStats);
     terminalUiPerf.reset();
   };
 
@@ -4527,6 +4534,7 @@ function createEmbeddedTerminalBackendFromConfig(
       if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
       }
+      recordRendererHotPathUiPerfMetric(uiPerfStats, metric, data);
       uiPerfStats.rendererReports += 1;
       try {
         persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
