@@ -458,6 +458,37 @@ describe('GitHubMergeGateProvider', () => {
     });
   });
 
+  describe('updateReviewBody', () => {
+    it('updates a PR body through a temporary body file', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') return mockSpawnResult('', 0);
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await provider.updateReviewBody({
+        identifier: '42',
+        cwd: '/tmp/repo',
+        body: '## Summary\n\nUpdated body',
+      });
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr', 'edit', '42',
+          '--repo', 'owner/repo',
+          '--body-file', expect.stringMatching(/body\.md$/),
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+      const ghArgs = spawnMock.mock.calls.find((call) => call[0] === 'gh')?.[1] as string[];
+      expect(ghArgs).not.toContain('## Summary\n\nUpdated body');
+    });
+  });
+
   describe('checkApproval', () => {
     it('treats a merged PR as approved with statusText "Merged"', async () => {
       process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';

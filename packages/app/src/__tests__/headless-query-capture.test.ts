@@ -123,9 +123,12 @@ describe('runReadOnlyHeadlessQueryToString', () => {
     const writeSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     try {
       const label = await runReadOnlyHeadlessQueryToString(['worker', 'status', '--output', 'label'], deps);
-      expect(label).toBe('auto-fix-recovery\n');
+      expect(label).toContain('autofix\n');
+      expect(label).toContain('pr-summary-refresh\n');
       const json = await runReadOnlyHeadlessQueryToString(['worker', 'status', '--output', 'json'], deps);
-      expect(JSON.parse(json).workerId).toBe('auto-fix-recovery');
+      const parsed = JSON.parse(json) as { workers: Array<{ kind: string; recentActions: unknown[] }> };
+      expect(parsed.workers.some((worker) => worker.kind === 'pr-summary-refresh')).toBe(true);
+      expect(parsed.workers.every((worker) => Array.isArray(worker.recentActions))).toBe(true);
       expect(writeSpy).not.toHaveBeenCalled();
     } finally {
       writeSpy.mockRestore();

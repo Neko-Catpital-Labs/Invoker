@@ -36,6 +36,8 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'reason',
   'route',
   'workflowId',
+  'worker',
+  'actionType',
 ]);
 
 const LOG_LEVELS: readonly TaskLogLevel[] = ['debug', 'info', 'warn', 'error'];
@@ -83,7 +85,9 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
 
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
-  const payloadMessage = payload?.message;
+  const payloadMessage = event.eventType === 'task.worker_action'
+    ? formatWorkerActionMessage(payload)
+    : payload?.message;
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
     level: inferLogLevel(event, payload),
@@ -93,6 +97,27 @@ function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry
     detail: formatLogDetail(payload),
     createdAt: event.createdAt,
   };
+}
+
+function formatWorkerActionMessage(payload: Record<string, unknown> | undefined): string | undefined {
+  if (!payload) return undefined;
+  const rawMessage = typeof payload.message === 'string' && payload.message.trim()
+    ? payload.message.trim()
+    : undefined;
+  const worker = typeof payload.worker === 'string' && payload.worker.trim()
+    ? payload.worker.trim()
+    : undefined;
+  const actionType = typeof payload.actionType === 'string' && payload.actionType.trim()
+    ? payload.actionType.trim()
+    : undefined;
+  const status = typeof payload.status === 'string' && payload.status.trim()
+    ? payload.status.trim().replaceAll('_', ' ')
+    : undefined;
+  const actionLabel = [worker, actionType].filter(Boolean).join('/');
+  if (rawMessage && actionLabel) return `${actionLabel}: ${rawMessage}`;
+  if (rawMessage) return rawMessage;
+  if (actionLabel && status) return `${actionLabel}: ${status}`;
+  return actionLabel || undefined;
 }
 
 interface WorkspaceRecreateNotice {

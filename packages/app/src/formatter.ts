@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -261,6 +261,34 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
       `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
     );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  const lines: string[] = [];
+  lines.push(`${BOLD}Worker status${RESET}`);
+  for (const worker of snapshot.workers) {
+    const kind = escapeTerminalText(worker.kind);
+    const lifecycle = escapeTerminalText(worker.lifecycle);
+    const policy = escapeTerminalText(worker.policy);
+    const process = worker.instanceId ? ` instance=${escapeTerminalText(worker.instanceId)}` : '';
+    lines.push(`  ${BOLD}${kind}${RESET} [${lifecycle}] policy=${policy}${process}`);
+    if (worker.recentActions.length === 0) {
+      lines.push(`${DIM}    recentActions: none${RESET}`);
+      continue;
+    }
+    lines.push(`    recentActions (${worker.recentActions.length})`);
+    for (const action of worker.recentActions) {
+      const actionType = `${escapeTerminalText(action.workerKind)}/${escapeTerminalText(action.actionType)}`;
+      const target = action.taskId
+        ? ` task=${escapeTerminalText(action.taskId)}`
+        : ` ${escapeTerminalText(action.subjectType)}=${escapeTerminalText(action.subjectId)}`;
+      const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+      lines.push(
+        `      ${escapeTerminalText(action.updatedAt)} ${escapeTerminalText(action.status)} ${actionType}${target}${summary}`,
+      );
+    }
   }
   return lines.join('\n');
 }

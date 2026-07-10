@@ -11,6 +11,10 @@ import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-dec
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
+import {
+  PR_SUMMARY_REFRESH_WORKER_KIND,
+  registerPrSummaryRefreshWorker,
+} from './pr-summary-refresh-worker.js';
 
 export const CODERABBIT_ADDRESS_WORKER_KIND = 'coderabbit-address';
 export const PR_CONFLICT_REBASE_WORKER_KIND = 'pr-conflict-rebase';
@@ -18,7 +22,8 @@ export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
 
 export type PrMaintenanceWorkerKind =
   | typeof CODERABBIT_ADDRESS_WORKER_KIND
-  | typeof PR_CONFLICT_REBASE_WORKER_KIND;
+  | typeof PR_CONFLICT_REBASE_WORKER_KIND
+  | typeof PR_SUMMARY_REFRESH_WORKER_KIND;
 
 type EnvOverrides = Record<string, string | undefined>;
 
@@ -86,10 +91,11 @@ export interface PrMaintenanceTickOptions extends PrMaintenanceWorkerConfig {
   lockProbe?: PrMaintenanceLockProbe;
 }
 
-/** Register both built-in PR-maintenance workers in cron job order. */
+/** Register built-in PR-maintenance workers in visibility/cron job order. */
 export function registerPrMaintenanceWorkers(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
+  registerPrSummaryRefreshWorker(registry);
   registerCoderabbitAddressWorker(registry);
   registerPrConflictRebaseWorker(registry);
   return registry;

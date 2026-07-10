@@ -13,6 +13,10 @@ import type {
   AutoApproveWorkerConfig,
 } from './workers/auto-approve-worker.js';
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
+import type {
+  PrSummaryRefreshWorkerConfig,
+  PrSummaryRefreshWorkerStore,
+} from './workers/pr-summary-refresh-worker.js';
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
@@ -26,7 +30,7 @@ import type {
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore & CiFailureWorkerStore & AutoApproveWorkerStore & WorkflowResumeWorkerStore;
+  store: AutoFixRecoveryStore & CiFailureWorkerStore & AutoApproveWorkerStore & WorkflowResumeWorkerStore & PrSummaryRefreshWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter & RequeueWorkerSubmitter & AutoApproveWorkerSubmitter & WorkflowResumeWorkerSubmitter;
   /** Operator logger. */
@@ -41,6 +45,8 @@ export interface WorkerRuntimeDependencies {
   requeue?: RequeueWorkerConfig;
   /** PR-maintenance shell worker launch configuration. */
   prMaintenance?: PrMaintenanceWorkerConfig;
+  /** PR summary refresh worker configuration. */
+  prSummaryRefresh?: PrSummaryRefreshWorkerConfig;
   /** Disk-headroom worker configuration (local/remote paths and thresholds). */
   diskHeadroom?: DiskHeadroomWorkerConfig;
   /** Auto-approval tuning for worker-owned AI fix approvals. */

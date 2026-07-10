@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
 } from '@invoker/execution-engine';
 import { runHeadless } from '../headless.js';
 
@@ -91,10 +92,11 @@ describe('headless worker PR-maintenance', () => {
     expect(stdout).toContain(`${PR_CONFLICT_REBASE_WORKER_KIND} worker scan completed.`);
   });
 
-  it('lists both PR-maintenance worker kinds from the manual entrypoint', async () => {
+  it('lists PR-maintenance worker kinds from the manual entrypoint', async () => {
     await runHeadless(['worker', 'list'], { invokerConfig: {} } as never);
 
     expect(stdout).toContain('Worker kinds');
+    expect(stdout).toContain(PR_SUMMARY_REFRESH_WORKER_KIND);
     expect(stdout).toContain(CODERABBIT_ADDRESS_WORKER_KIND);
     expect(stdout).toContain(PR_CONFLICT_REBASE_WORKER_KIND);
   });

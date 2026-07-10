@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
   createWorkerRegistry,
   registerBuiltinWorkers,
   type WorkerRuntimeDependencies,
@@ -96,15 +97,18 @@ describe('registered owner PR-maintenance worker dependencies', () => {
     expect(deps.prMaintenance).toEqual({ intervalMs: 90000, shell: '/bin/bash' });
   });
 
-  it('builds both PR-maintenance workers from the owner deps without starting them', () => {
+  it('builds PR-maintenance workers from the owner deps without starting them', () => {
     const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
     const deps = buildOwnerWorkerDeps({
       prMaintenance: { enabled: true, intervalMs: 90000 },
     });
 
+    const summaryRefresh = registry.get(PR_SUMMARY_REFRESH_WORKER_KIND)?.factory(deps);
     const coderabbit = registry.get(CODERABBIT_ADDRESS_WORKER_KIND)?.factory(deps);
     const rebase = registry.get(PR_CONFLICT_REBASE_WORKER_KIND)?.factory(deps);
 
+    expect(summaryRefresh?.identity.kind).toBe(PR_SUMMARY_REFRESH_WORKER_KIND);
+    expect(summaryRefresh?.isRunning()).toBe(false);
     expect(coderabbit?.identity.kind).toBe(CODERABBIT_ADDRESS_WORKER_KIND);
     expect(coderabbit?.isRunning()).toBe(false);
     expect(rebase?.identity.kind).toBe(PR_CONFLICT_REBASE_WORKER_KIND);

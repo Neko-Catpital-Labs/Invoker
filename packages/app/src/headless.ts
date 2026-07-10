@@ -472,6 +472,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
+      prSummaryRefresh: { cwd: deps.repoRoot },
     });
     await worker.tick('manual');
     await worker.stop();
@@ -929,4 +930,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-
