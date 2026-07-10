@@ -55,3 +55,53 @@ test('worker-status polling keeps listWorkflows IPC responsive under a fat DB', 
     `max IPC RTT ${max.toFixed(1)}ms exceeded ${MAX_SAMPLE_RTT_MS}ms (p95=${p95.toFixed(1)}ms, n=${samples.length})`,
   ).toBeLessThanOrEqual(MAX_SAMPLE_RTT_MS);
 });
+
+test('startWorker/stopWorker accept within 200ms under fat DB with concurrent listWorkflows', async ({ page }) => {
+  const seeded = await page.evaluate(async () => {
+    if (!window.invoker.seedMainProcessHitchFixture) {
+      throw new Error('seedMainProcessHitchFixture is not exposed (NODE_ENV=test required)');
+    }
+    return window.invoker.seedMainProcessHitchFixture();
+  });
+
+  expect(seeded.eventCount).toBeGreaterThanOrEqual(10_000);
+
+  const kind = await page.evaluate(async () => {
+    const snapshot = await window.invoker.getWorkerStatus();
+    const candidate = snapshot.workers.find((worker) => worker.startable || worker.stoppable || worker.lifecycle === 'running')
+      ?? snapshot.workers[0];
+    if (!candidate) throw new Error('No workers available for start/stop probe');
+    return candidate.kind;
+  });
+
+  const ACCEPT_BUDGET_MS = 200;
+
+  const startSample = await page.evaluate(async (workerKind) => {
+    const started = performance.now();
+    const [startResult] = await Promise.all([
+      window.invoker.startWorker(workerKind),
+      window.invoker.listWorkflows(),
+    ]);
+    return { rtt: performance.now() - started, lifecycle: startResult.lifecycle };
+  }, kind);
+
+  expect(
+    startSample.rtt,
+    `startWorker accept RTT ${startSample.rtt.toFixed(1)}ms exceeded ${ACCEPT_BUDGET_MS}ms`,
+  ).toBeLessThanOrEqual(ACCEPT_BUDGET_MS);
+
+  const stopSample = await page.evaluate(async (workerKind) => {
+    const started = performance.now();
+    const [stopResult] = await Promise.all([
+      window.invoker.stopWorker(workerKind),
+      window.invoker.listWorkflows(),
+    ]);
+    return { rtt: performance.now() - started, lifecycle: stopResult.lifecycle };
+  }, kind);
+
+  expect(
+    stopSample.rtt,
+    `stopWorker accept RTT ${stopSample.rtt.toFixed(1)}ms exceeded ${ACCEPT_BUDGET_MS}ms`,
+  ).toBeLessThanOrEqual(ACCEPT_BUDGET_MS);
+});
+
