@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowInspector } from '../components/WorkflowInspector.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { WorkflowMutationFailedEvent } from '@invoker/contracts';
 
 function makeTask(partial?: Partial<TaskState>): TaskState {
   return {
@@ -812,5 +813,48 @@ describe('WorkflowInspector', () => {
     } finally {
       delete (window as unknown as { invoker?: unknown }).invoker;
     }
+  });
+
+  it('shows a persistent mutation failure detail panel for the selected task', () => {
+    const mutationFailure: WorkflowMutationFailedEvent = {
+      intentId: 5,
+      workflowId: 'wf-1',
+      channel: 'invoker:approve',
+      taskId: 'task-1',
+      message: 'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"',
+      failedAt: '2026-07-08T10:00:00.000Z',
+    };
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        mutationFailure={mutationFailure}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const detail = screen.getByTestId('task-mutation-failure-detail');
+    expect(detail).toHaveTextContent('Approve failed');
+    expect(detail).toHaveTextContent('missing execution harness "codex"');
+    expect(detail).toHaveTextContent('invoker:approve');
+  });
+
+  it('hides the mutation failure detail panel when no failure is provided', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('task-mutation-failure-detail')).not.toBeInTheDocument();
   });
 });
