@@ -129,6 +129,7 @@ describe('autoapprove worker', () => {
       identity: { kind: 'autoapprove', instanceId: 'test' },
       reason: 'manual',
       tickNumber: 1,
+      signal: new AbortController().signal,
     });
 
     expect(submitter.submit).not.toHaveBeenCalled();
@@ -167,7 +168,8 @@ describe('autoapprove worker', () => {
       logger,
       enabled: true,
       drainWakeupHints: () => [wakeup(), wakeup()],
-    })({ identity: { kind: 'autoapprove', instanceId: 'test' }, reason: 'wake', tickNumber: 1 });
+    })({ identity: { kind: 'autoapprove', instanceId: 'test' }, reason: 'wake', tickNumber: 1,
+      signal: new AbortController().signal });
 
     expect(submitter.submit).toHaveBeenCalledTimes(1);
   });
@@ -194,6 +196,7 @@ describe('autoapprove worker', () => {
       identity: { kind: 'autoapprove', instanceId: 'test' },
       reason: 'manual',
       tickNumber: 1,
+      signal: new AbortController().signal,
     });
 
     expect(submitter.submit).toHaveBeenCalledWith('wf-1', 'normal', 'invoker:approve', ['wf-1/task-1']);
@@ -217,6 +220,7 @@ describe('autoapprove worker', () => {
       identity: { kind: 'autoapprove', instanceId: 'test' },
       reason: 'manual',
       tickNumber: 1,
+      signal: new AbortController().signal,
     });
 
     expect(store.listWorkflows).not.toHaveBeenCalled();

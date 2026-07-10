@@ -22,7 +22,7 @@ const logger = {
   child: vi.fn(),
 };
 
-const POLL_CTX = { identity: { kind: 'requeue', instanceId: 'r1' }, reason: 'poll' as const, tickNumber: 1 };
+const POLL_CTX = { identity: { kind: 'requeue', instanceId: 'r1' }, reason: 'poll' as const, tickNumber: 1, signal: new AbortController().signal };
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   const { config, execution, ...rest } = overrides;
