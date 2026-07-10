@@ -32,6 +32,7 @@ import {
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import { isDispatchableLaunch } from './global-topup.js';
+import { loadConfig, resolveConflictResolutionSettings, resolveDefaultExecutionAgent } from './config.js';
 
 type LoadedWorkflow = NonNullable<ReturnType<SQLiteAdapter['loadWorkflow']>>;
 type FreshBaseState = { branch: string; commit: string };
@@ -832,6 +833,7 @@ export async function resolveConflictAction(
   deps: Pick<ActionDeps, 'orchestrator' | 'persistence' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
   agentName?: string,
   signal?: AbortSignal,
+  options?: { pathDefaultAgent?: string },
 ): Promise<{ autoApproved: boolean; started: TaskState[] }> {
   const { orchestrator, persistence, taskExecutor } = deps;
   const entryLineage = captureTaskLineage(taskId, orchestrator);
@@ -840,7 +842,12 @@ export async function resolveConflictAction(
   const lineage = captureTaskLineage(taskId, orchestrator);
   try {
     assertLineageCurrent(lineage, orchestrator, signal);
-    await taskExecutor.resolveConflict(taskId, savedError, agentName);
+    const config = loadConfig();
+    const settings = resolveConflictResolutionSettings(config, {
+      explicitAgent: agentName,
+      pathDefaultAgent: options?.pathDefaultAgent ?? resolveDefaultExecutionAgent(config),
+    });
+    await taskExecutor.resolveConflict(taskId, savedError, settings.agent, settings.model);
     assertLineageCurrent(lineage, orchestrator, signal);
     return await finalizeAppliedFix(taskId, savedError, deps, signal, lineage);
   } catch (err) {
@@ -931,7 +938,16 @@ export async function fixWithAgentAction(
   try {
     assertLineageCurrent(lineage, orchestrator, options.signal);
     if (recoveryRoute.kind === 'resolveConflict') {
-      await taskExecutor.resolveConflict(taskId, persistedSavedError, effectiveAgentName);
+      const conflictSettings = resolveConflictResolutionSettings(loadConfig(), {
+        explicitAgent: options.agentName,
+        pathDefaultAgent: resolveTaskRunnerDefaultExecutionAgent(taskExecutor),
+      });
+      await taskExecutor.resolveConflict(
+        taskId,
+        persistedSavedError,
+        conflictSettings.agent,
+        conflictSettings.model,
+      );
     } else {
       const output = persistence.getTaskOutput(taskId);
       const fixContext = options.reviewGateContext?.fixContext;
@@ -1276,7 +1292,15 @@ export async function autoFixOnFailure(
       savedErrorLength: persistedSavedError.length,
     });
     if (recoveryRoute.kind === 'resolveConflict') {
-      await taskExecutor.resolveConflict(taskId, persistedSavedError, agentSelection.selectedAgent);
+      const conflictSettings = resolveConflictResolutionSettings(loadConfig(), {
+        pathDefaultAgent: agentSelection.selectedAgent,
+      });
+      await taskExecutor.resolveConflict(
+        taskId,
+        persistedSavedError,
+        conflictSettings.agent,
+        conflictSettings.model,
+      );
     } else {
       const output = persistence.getTaskOutput(taskId);
       await taskExecutor.fixWithAgent(taskId, output, agentSelection.selectedAgent, persistedSavedError);
