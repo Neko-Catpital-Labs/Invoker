@@ -169,6 +169,28 @@ describe('formatEventLog', () => {
     const output = formatEventLog([]);
     expect(output).toContain('No events recorded');
   });
+
+  it('formats worker action events as task activity', () => {
+    const output = formatEventLog([{
+      id: 1,
+      taskId: '__merge__wf-1',
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        summary: 'Refreshed PR summary body',
+        reviewId: '42',
+        actionId: 'pr-summary-refresh:wf-1:42',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    expect(output).toContain('task.worker_action pr-summary-refresh/refresh-pr-summary [completed]');
+    expect(output).toContain('review=42');
+    expect(output).toContain('action=pr-summary-refresh:wf-1:42');
+    expect(output).toContain('Refreshed PR summary body');
+  });
 });
 
 // ── formatWorkerActions ─────────────────────────────────────

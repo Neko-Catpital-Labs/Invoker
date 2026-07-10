@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
-import type { WorkflowMeta } from '../types.js';
+import type { TaskEvent, WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -91,6 +91,41 @@ describe('Task interaction (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('failed');
       expect(screen.getByTestId('prompt-command-display')).toHaveTextContent('exit 1');
+    });
+  });
+
+  it('renders worker action task events in the task log surface', async () => {
+    const task = makeUITask({
+      id: 'task-worker-action',
+      description: 'Worker action task',
+      status: 'completed',
+      workflowId: 'wf-a',
+      command: 'echo worker',
+    });
+    const events: TaskEvent[] = [{
+      id: 1,
+      taskId: task.id,
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        summary: 'Refreshed PR summary body',
+        reviewId: '42',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }];
+
+    mock.setEvents(task.id, events);
+    render(<App />);
+    act(() => mock.setTasks([task], workflows));
+
+    fireEvent.click(await screen.findByTestId('rf__node-task-worker-action'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('Refreshed PR summary body');
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('pr-summary-refresh');
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('reviewId');
     });
   });
 

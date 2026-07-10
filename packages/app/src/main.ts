@@ -115,6 +115,7 @@ import {
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
+  GitHubMergeGateProvider,
   PR_STATUS_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
@@ -378,6 +379,10 @@ function buildRegisteredOwnerWorkerDeps(
       stallRequeueBackoffMs: invokerConfig.stallRequeueBackoffMs,
     },
     prMaintenance: resolvePrMaintenanceWorkerConfig(invokerConfig),
+    prSummaryRefresh: {
+      mergeGateProvider: new GitHubMergeGateProvider(),
+      cwd: repoRoot,
+    },
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,

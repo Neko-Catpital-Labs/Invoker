@@ -8,6 +8,7 @@ import {
   buildCanonicalPrBody,
   buildMakePrStackPublishPrompt,
   parseMakePrStackPublishResult,
+  renderPrPipelineMarkdown,
   resolveSkillPathViaAgent,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
@@ -108,6 +109,52 @@ describe('buildCanonicalPrBody', () => {
     });
 
     expect(body).toContain(visualProof);
+  });
+
+  it('renders worker actions in a ## Pipeline table sorted by time', () => {
+    const pipeline = renderPrPipelineMarkdown([
+      {
+        workerKind: 'ci-failure',
+        actionType: 'fix-ci-failure',
+        status: 'completed',
+        taskId: 'wf-1/verify',
+        summary: 'Queued CI repair',
+        updatedAt: '2026-01-01T00:03:00.000Z',
+      },
+      {
+        workerKind: 'pr-status',
+        actionType: 'poll-review',
+        status: 'completed',
+        taskId: '__merge__wf-1',
+        summary: 'Observed review',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+      },
+    ]);
+
+    expect(pipeline).toContain('## Pipeline');
+    expect(pipeline.indexOf('pr-status')).toBeLessThan(pipeline.indexOf('ci-failure'));
+  });
+
+  it('includes the worker Pipeline section in canonical PR bodies', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh PR summary',
+      workflowSummary: 'Updated visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [{
+          workerKind: 'pr-summary-refresh',
+          actionType: 'refresh-pr-summary',
+          status: 'completed',
+          taskId: '__merge__wf-1',
+          summary: 'Refreshed PR summary body',
+          completedAt: '2026-01-01T00:00:00.000Z',
+        }],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body).toContain('| 2026-01-01T00:00:00.000Z | pr-summary-refresh | refresh-pr-summary | __merge__wf-1 | completed | Refreshed PR summary body |');
+    expect(validateCanonicalPrBody(body)).toEqual([]);
   });
 
   it('canonical body passes validation', () => {

@@ -25,6 +25,7 @@ export { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from
 export * from './repo-pool.js';
 export * from './registry.js';
 export * from './task-runner.js';
+export * from './pr-authoring.js';
 export type {
   ExecutionPoolMember,
   ExecutionPoolConfig,
@@ -57,6 +58,7 @@ export * from './worker-lock.js';
 export * from './builtin-workers.js';
 export * from './auto-fix-recovery.js';
 export * from './workers/pr-status-worker.js';
+export * from './workers/pr-summary-refresh-worker.js';
 export * from './workers/ci-failure-worker.js';
 export * from './workers/auto-approve-worker.js';
 export * from './workers/disk-headroom-worker.js';

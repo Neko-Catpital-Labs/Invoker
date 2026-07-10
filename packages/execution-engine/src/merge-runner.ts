@@ -12,13 +12,18 @@ import { pathToFileURL } from 'node:url';
 
 import type { Orchestrator, TaskLineageExpectation, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
-import type { SQLiteAdapter } from '@invoker/data-store';
+import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import {
+  isInvokerRepoUrl,
+  type PrAuthoringContext,
+  type PrAuthoringTaskEntry,
+  type PrAuthoringWorkerActionEntry,
+} from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -328,6 +333,30 @@ async function authorPrBodyForMerge(
   return authored.body;
 }
 
+function workerActionReason(action: WorkerActionRecord): string | undefined {
+  const payload = action.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const reason = (payload as Record<string, unknown>).reason;
+  return typeof reason === 'string' && reason.trim().length > 0 ? reason : undefined;
+}
+
+function workerActionForPrContext(action: WorkerActionRecord): PrAuthoringWorkerActionEntry {
+  const reason = workerActionReason(action);
+  return {
+    workerKind: action.workerKind,
+    actionType: action.actionType,
+    status: action.status,
+    ...(action.taskId ? { taskId: action.taskId } : {}),
+    subjectType: action.subjectType,
+    subjectId: action.subjectId,
+    ...(action.summary ? { summary: action.summary } : {}),
+    ...(reason ? { reason } : {}),
+    createdAt: action.createdAt,
+    updatedAt: action.updatedAt,
+    ...(action.completedAt ? { completedAt: action.completedAt } : {}),
+  };
+}
+
 /**
  * Build structured PR-authoring context from workflow tasks.
  * This carries per-task evidence (verification commands, file-change summaries)
@@ -376,10 +405,18 @@ export async function buildPrAuthoringContext(
     });
   }
 
+  const persistedWorkerActions = (host.persistence as {
+    listWorkerActions?: (filters?: { workflowId?: string }) => WorkerActionRecord[];
+  }).listWorkerActions?.({ workflowId }) ?? [];
+  const workerActions = persistedWorkerActions
+    .filter((action) => action.workerKind !== 'pr-summary-refresh')
+    .map(workerActionForPrContext);
+
   return {
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    workerActions,
     visualProofMarkdown,
   };
 }

@@ -206,11 +206,41 @@ export function formatEventLog(events: TaskEvent[]): string {
 
   const lines = events.map((event) => {
     const timestamp = event.createdAt;
+    const workerAction = formatWorkerActionEvent(event);
+    if (workerAction) {
+      return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${workerAction}`;
+    }
     const payload = event.payload ? ` ${event.payload}` : '';
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 
   return lines.join('\n');
+}
+
+function parseEventPayload(payload: string | undefined): Record<string, unknown> | undefined {
+  if (!payload) return undefined;
+  try {
+    const parsed = JSON.parse(payload);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatWorkerActionEvent(event: TaskEvent): string | undefined {
+  if (event.eventType !== 'task.worker_action') return undefined;
+  const payload = parseEventPayload(event.payload);
+  const workerKind = typeof payload?.workerKind === 'string' ? escapeTerminalText(payload.workerKind) : 'worker';
+  const actionType = typeof payload?.actionType === 'string' ? escapeTerminalText(payload.actionType) : 'action';
+  const status = typeof payload?.status === 'string' ? escapeTerminalText(payload.status) : 'recorded';
+  const summary = typeof payload?.summary === 'string' && payload.summary.trim()
+    ? ` — ${escapeTerminalText(payload.summary)}`
+    : '';
+  const review = typeof payload?.reviewId === 'string' ? ` review=${escapeTerminalText(payload.reviewId)}` : '';
+  const actionId = typeof payload?.actionId === 'string' ? ` action=${escapeTerminalText(payload.actionId)}` : '';
+  return `task.worker_action ${workerKind}/${actionType} [${status}]${review}${actionId}${summary}`;
 }
 
 export function formatWorkerActions(actions: WorkerActionRecord[]): string {
