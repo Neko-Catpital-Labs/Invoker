@@ -14,6 +14,7 @@ import yaml from 'js-yaml';
 import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
+import { reportUiNavigation } from './lib/report-ui-navigation.js';
 import {
   mutationFailureBannerMessage,
   mutationFailureTitle,
@@ -2167,6 +2168,12 @@ export function App() {
 
   const selectViewMode = useCallback((nextView: 'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph') => {
     setGraphActionsMenuOpen(false);
+    reportUiNavigation(window.invoker?.reportUiPerf, {
+      kind: 'viewMode',
+      from: viewMode,
+      to: nextView,
+      sidebarSurface,
+    });
     if (nextView !== 'actionGraph' && selectedActionNodeId !== null) {
       setSelectedActionNodeId(null);
     }
@@ -2189,7 +2196,7 @@ export function App() {
       setSidebarSurface('home');
     }
     setViewMode(nextView);
-  }, [selectedActionNodeId]);
+  }, [selectedActionNodeId, sidebarSurface, viewMode]);
 
   const handleToggleInspectorCollapsed = useCallback(() => {
     if (autoCollapseInspector) {
@@ -2203,6 +2210,12 @@ export function App() {
 
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
+    reportUiNavigation(window.invoker?.reportUiPerf, {
+      kind: 'sidebarSurface',
+      from: sidebarSurface,
+      to: nextSurface,
+      viewMode,
+    });
     if (nextSurface === 'workers') {
       setSidebarSurface('workers');
       setInspectorCollapsed(true);
@@ -2220,14 +2233,21 @@ export function App() {
     setSidebarSurface(nextSurface);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, []);
+  }, [sidebarSurface, viewMode]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
+    reportUiNavigation(window.invoker?.reportUiPerf, {
+      kind: 'sidebarSurface',
+      from: sidebarSurface,
+      to: 'home',
+      viewMode,
+      dismiss: true,
+    });
     setSidebarSurface('home');
     setInspectorManualOpen(false);
     setViewMode('dag');
-  }, []);
+  }, [sidebarSurface, viewMode]);
 
   // ── Task actions ──────────────────────────────────────────
   const handleProvideInput = useCallback(

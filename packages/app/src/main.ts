@@ -271,6 +271,7 @@ import {
   type WorkflowScopedGuiMutationRegistrationContext,
 } from './ipc/ipc-registration.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
+import { createTerminalUiPerfReporter } from './terminal-ui-perf.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
 import {
   buildRecoveryWorkerAuditPayload,
@@ -2072,6 +2073,7 @@ function createEmbeddedTerminalBackendFromConfig(
 
   const registerTerminalSessionPersistence = (): void => {
     embeddedTerminalManager.on('session-updated', (record) => {
+      const startedAt = performance.now();
       persistence.upsertTerminalSession({
         sessionId: record.sessionId,
         taskId: record.taskId,
@@ -2088,6 +2090,14 @@ function createEmbeddedTerminalBackendFromConfig(
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       });
+      const durationMs = performance.now() - startedAt;
+      uiPerfStats.maxTerminalSessionUpsertMs = Math.max(uiPerfStats.maxTerminalSessionUpsertMs, durationMs);
+      terminalUiPerf.recordUpsert(durationMs, {
+        sessionId: record.sessionId,
+        taskId: record.taskId,
+        status: record.status,
+        outputSnapshotChars: record.outputSnapshot?.length ?? 0,
+      }, terminalUiPerfSink);
     });
     restorePersistedTerminalSessions();
   };
@@ -2166,6 +2176,31 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataCoalescedRequests: 0,
     largeTaskDeltaBatches: 0,
     maxTaskDeltaBatchSize: 0,
+    maxTerminalWriteMs: 0,
+    maxTerminalResizeMs: 0,
+    maxTerminalSessionUpsertMs: 0,
+    terminalWriteSlowCount: 0,
+    terminalResizeSlowCount: 0,
+    terminalSessionUpsertSlowCount: 0,
+  };
+  const terminalUiPerf = createTerminalUiPerfReporter();
+  const terminalUiPerfSink = {
+    writeActivityLog: (source: string, level: string, message: string) => {
+      persistence.writeActivityLog(source, level, message);
+    },
+    onSlowMetric: (metric: string, data: Record<string, unknown>) => {
+      const durationMs = typeof data.durationMs === 'number' ? data.durationMs : 0;
+      if (metric === 'terminal_write_slow') {
+        uiPerfStats.terminalWriteSlowCount += 1;
+        uiPerfStats.maxTerminalWriteMs = Math.max(uiPerfStats.maxTerminalWriteMs, durationMs);
+      } else if (metric === 'terminal_resize_slow') {
+        uiPerfStats.terminalResizeSlowCount += 1;
+        uiPerfStats.maxTerminalResizeMs = Math.max(uiPerfStats.maxTerminalResizeMs, durationMs);
+      } else if (metric === 'terminal_session_upsert_slow') {
+        uiPerfStats.terminalSessionUpsertSlowCount += 1;
+        uiPerfStats.maxTerminalSessionUpsertMs = Math.max(uiPerfStats.maxTerminalSessionUpsertMs, durationMs);
+      }
+    },
   };
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
@@ -2228,6 +2263,13 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
     uiPerfStats.largeTaskDeltaBatches = 0;
     uiPerfStats.maxTaskDeltaBatchSize = 0;
+    uiPerfStats.maxTerminalWriteMs = 0;
+    uiPerfStats.maxTerminalResizeMs = 0;
+    uiPerfStats.maxTerminalSessionUpsertMs = 0;
+    uiPerfStats.terminalWriteSlowCount = 0;
+    uiPerfStats.terminalResizeSlowCount = 0;
+    uiPerfStats.terminalSessionUpsertSlowCount = 0;
+    terminalUiPerf.reset();
   };
 
   const getUiPerfStats = (): Record<string, unknown> => ({
@@ -5364,11 +5406,28 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     ipcMain.handle('invoker:terminal-write', async (_event, sessionId: string, data: string) => {
-      return embeddedTerminalManager.write(sessionId, data);
+      const startedAt = performance.now();
+      const result = embeddedTerminalManager.write(sessionId, data);
+      const durationMs = performance.now() - startedAt;
+      uiPerfStats.maxTerminalWriteMs = Math.max(uiPerfStats.maxTerminalWriteMs, durationMs);
+      terminalUiPerf.recordWrite(durationMs, {
+        sessionId,
+        bytes: typeof data === 'string' ? data.length : 0,
+      }, terminalUiPerfSink);
+      return result;
     });
 
     ipcMain.handle('invoker:terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
-      return embeddedTerminalManager.resize(sessionId, cols, rows);
+      const startedAt = performance.now();
+      const result = embeddedTerminalManager.resize(sessionId, cols, rows);
+      const durationMs = performance.now() - startedAt;
+      uiPerfStats.maxTerminalResizeMs = Math.max(uiPerfStats.maxTerminalResizeMs, durationMs);
+      terminalUiPerf.recordResize(durationMs, {
+        sessionId,
+        cols,
+        rows,
+      }, terminalUiPerfSink);
+      return result;
     });
 
     ipcMain.handle('invoker:terminal-close', async (_event, sessionId: string) => {
