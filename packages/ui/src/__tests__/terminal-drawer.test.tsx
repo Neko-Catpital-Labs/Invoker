@@ -383,6 +383,54 @@ describe('Terminal drawer (component)', () => {
     expect(xtermMock.writeLog).toEqual(['replayed once\n']);
   });
 
+  it('reports renderer terminal attach and output burst perf markers', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      command: 'sh',
+      args: ['-lc', 'seq 1 200'],
+    });
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('terminal_renderer_attach', expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        mode: 'spawn',
+      }));
+    });
+
+    reportUiPerf.mockClear();
+    act(() => {
+      for (let i = 0; i < 20; i += 1) {
+        mock.fireTerminalOutput({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          data: 'x',
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('terminal_renderer_output_write', expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        burst: true,
+        chunksInWindow: 20,
+        charsInWindow: 20,
+      }));
+    });
+  });
+
   it('keeps live output, input, resize, close, and tab selection intact without a preview row', async () => {
     (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockImplementation(async (taskId: string) => ({
       opened: true,

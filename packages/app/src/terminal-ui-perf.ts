@@ -32,6 +32,26 @@ export type TerminalUiPerfCounters = {
   terminalSessionUpsertSlowCount: number;
 };
 
+export type RendererHotPathUiPerfCounters = {
+  planningChatInputCommitCount: number;
+  maxPlanningChatInputCommitMs: number;
+  maxPlanningChatInputRenderMs: number;
+  planningChatTranscriptRenderCount: number;
+  maxPlanningChatTranscriptRenderMs: number;
+  maxPlanningChatTranscriptLineCount: number;
+  maxPlanningChatTranscriptChars: number;
+  terminalRendererAttachCount: number;
+  maxTerminalRendererAttachMs: number;
+  terminalRendererSnapshotSeedCount: number;
+  maxTerminalRendererSnapshotSeedMs: number;
+  terminalRendererOutputWriteReports: number;
+  terminalRendererOutputBurstReports: number;
+  maxTerminalRendererOutputWriteMs: number;
+  maxTerminalRendererOutputChars: number;
+  maxTerminalRendererOutputChunksInWindow: number;
+  maxTerminalRendererOutputCharsInWindow: number;
+};
+
 export function createTerminalUiPerfCounters(): TerminalUiPerfCounters {
   return {
     maxTerminalWriteMs: 0,
@@ -50,6 +70,134 @@ export function resetTerminalUiPerfCounters(counters: TerminalUiPerfCounters): v
   counters.terminalWriteSlowCount = 0;
   counters.terminalResizeSlowCount = 0;
   counters.terminalSessionUpsertSlowCount = 0;
+}
+
+export function createRendererHotPathUiPerfCounters(): RendererHotPathUiPerfCounters {
+  return {
+    planningChatInputCommitCount: 0,
+    maxPlanningChatInputCommitMs: 0,
+    maxPlanningChatInputRenderMs: 0,
+    planningChatTranscriptRenderCount: 0,
+    maxPlanningChatTranscriptRenderMs: 0,
+    maxPlanningChatTranscriptLineCount: 0,
+    maxPlanningChatTranscriptChars: 0,
+    terminalRendererAttachCount: 0,
+    maxTerminalRendererAttachMs: 0,
+    terminalRendererSnapshotSeedCount: 0,
+    maxTerminalRendererSnapshotSeedMs: 0,
+    terminalRendererOutputWriteReports: 0,
+    terminalRendererOutputBurstReports: 0,
+    maxTerminalRendererOutputWriteMs: 0,
+    maxTerminalRendererOutputChars: 0,
+    maxTerminalRendererOutputChunksInWindow: 0,
+    maxTerminalRendererOutputCharsInWindow: 0,
+  };
+}
+
+export function resetRendererHotPathUiPerfCounters(counters: RendererHotPathUiPerfCounters): void {
+  counters.planningChatInputCommitCount = 0;
+  counters.maxPlanningChatInputCommitMs = 0;
+  counters.maxPlanningChatInputRenderMs = 0;
+  counters.planningChatTranscriptRenderCount = 0;
+  counters.maxPlanningChatTranscriptRenderMs = 0;
+  counters.maxPlanningChatTranscriptLineCount = 0;
+  counters.maxPlanningChatTranscriptChars = 0;
+  counters.terminalRendererAttachCount = 0;
+  counters.maxTerminalRendererAttachMs = 0;
+  counters.terminalRendererSnapshotSeedCount = 0;
+  counters.maxTerminalRendererSnapshotSeedMs = 0;
+  counters.terminalRendererOutputWriteReports = 0;
+  counters.terminalRendererOutputBurstReports = 0;
+  counters.maxTerminalRendererOutputWriteMs = 0;
+  counters.maxTerminalRendererOutputChars = 0;
+  counters.maxTerminalRendererOutputChunksInWindow = 0;
+  counters.maxTerminalRendererOutputCharsInWindow = 0;
+}
+
+function numberValue(data: Record<string, unknown> | undefined, key: string): number {
+  const value = data?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+export function recordRendererHotPathUiPerfMetric(
+  counters: RendererHotPathUiPerfCounters,
+  metric: string,
+  data?: Record<string, unknown>,
+): boolean {
+  if (metric === 'planning_chat_input_commit') {
+    counters.planningChatInputCommitCount += 1;
+    counters.maxPlanningChatInputCommitMs = Math.max(
+      counters.maxPlanningChatInputCommitMs,
+      numberValue(data, 'durationMs'),
+    );
+    counters.maxPlanningChatInputRenderMs = Math.max(
+      counters.maxPlanningChatInputRenderMs,
+      numberValue(data, 'renderDurationMs'),
+    );
+    return true;
+  }
+
+  if (metric === 'planning_chat_transcript_render') {
+    counters.planningChatTranscriptRenderCount += 1;
+    counters.maxPlanningChatTranscriptRenderMs = Math.max(
+      counters.maxPlanningChatTranscriptRenderMs,
+      numberValue(data, 'durationMs'),
+    );
+    counters.maxPlanningChatTranscriptLineCount = Math.max(
+      counters.maxPlanningChatTranscriptLineCount,
+      numberValue(data, 'lineCount'),
+    );
+    counters.maxPlanningChatTranscriptChars = Math.max(
+      counters.maxPlanningChatTranscriptChars,
+      numberValue(data, 'transcriptTextChars'),
+    );
+    return true;
+  }
+
+  if (metric === 'terminal_renderer_attach') {
+    counters.terminalRendererAttachCount += 1;
+    counters.maxTerminalRendererAttachMs = Math.max(
+      counters.maxTerminalRendererAttachMs,
+      numberValue(data, 'durationMs'),
+    );
+    return true;
+  }
+
+  if (metric === 'terminal_renderer_snapshot_seed') {
+    counters.terminalRendererSnapshotSeedCount += 1;
+    counters.maxTerminalRendererSnapshotSeedMs = Math.max(
+      counters.maxTerminalRendererSnapshotSeedMs,
+      numberValue(data, 'durationMs'),
+    );
+    return true;
+  }
+
+  if (metric === 'terminal_renderer_output_write') {
+    counters.terminalRendererOutputWriteReports += 1;
+    if (data?.burst === true) {
+      counters.terminalRendererOutputBurstReports += 1;
+    }
+    counters.maxTerminalRendererOutputWriteMs = Math.max(
+      counters.maxTerminalRendererOutputWriteMs,
+      numberValue(data, 'durationMs'),
+      numberValue(data, 'maxWriteMsInWindow'),
+    );
+    counters.maxTerminalRendererOutputChars = Math.max(
+      counters.maxTerminalRendererOutputChars,
+      numberValue(data, 'chars'),
+    );
+    counters.maxTerminalRendererOutputChunksInWindow = Math.max(
+      counters.maxTerminalRendererOutputChunksInWindow,
+      numberValue(data, 'chunksInWindow'),
+    );
+    counters.maxTerminalRendererOutputCharsInWindow = Math.max(
+      counters.maxTerminalRendererOutputCharsInWindow,
+      numberValue(data, 'charsInWindow'),
+    );
+    return true;
+  }
+
+  return false;
 }
 
 export function createTerminalUiPerfSink(

@@ -14,9 +14,27 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const PLANNING_CHAT_INPUT_COMMIT_SLOW_MS = 16;
+const PLANNING_CHAT_INPUT_COMMIT_REPORT_INTERVAL_MS = 1000;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function uiPerfNow(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundDurationMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
+}
+
+function countTranscriptTextChars(lines: readonly InvokerTerminalLine[]): number {
+  return lines.reduce((total, line) => total + line.text.length, 0);
+}
+
+function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
 }
 
 interface InvokerTerminalProps {
@@ -45,6 +63,22 @@ interface SubmitErrorView {
   message: string;
 }
 
+interface PendingInputCommit {
+  inputSeq: number;
+  startedAtMs: number;
+  previousValueLength: number;
+  nextValue: string;
+  deltaChars: number;
+  lineCount: number;
+  expanded: boolean;
+}
+
+interface PlanningChatRenderSnapshot {
+  activeConversationKey: string;
+  lineCount: number;
+  transcriptTextChars: number;
+}
+
 function rolePrompt(role: InvokerTerminalLine['role']): string {
   if (role === 'user') return 'you ›';
   if (role === 'assistant') return 'invoker ›';
@@ -71,9 +105,16 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const renderStartedAtRef = useRef(uiPerfNow());
+  renderStartedAtRef.current = uiPerfNow();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const inputSeqRef = useRef(0);
+  const lastInputCommitReportAtRef = useRef(-PLANNING_CHAT_INPUT_COMMIT_REPORT_INTERVAL_MS);
+  const pendingInputCommitRef = useRef<PendingInputCommit | null>(null);
+  const renderSnapshotRef = useRef<PlanningChatRenderSnapshot | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  const transcriptTextChars = countTranscriptTextChars(lines);
 
   const scrollTranscriptToBottom = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -91,6 +132,63 @@ export function InvokerTerminal({
       scrollTranscriptToBottom();
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+
+  useLayoutEffect(() => {
+    const finishedAtMs = uiPerfNow();
+    const renderDurationMs = finishedAtMs - renderStartedAtRef.current;
+    const pendingInputCommit = pendingInputCommitRef.current;
+    if (pendingInputCommit && value === pendingInputCommit.nextValue) {
+      pendingInputCommitRef.current = null;
+      const durationMs = finishedAtMs - pendingInputCommit.startedAtMs;
+      const shouldReport =
+        durationMs >= PLANNING_CHAT_INPUT_COMMIT_SLOW_MS ||
+        finishedAtMs - lastInputCommitReportAtRef.current >= PLANNING_CHAT_INPUT_COMMIT_REPORT_INTERVAL_MS;
+      if (shouldReport) {
+        lastInputCommitReportAtRef.current = finishedAtMs;
+        reportPlanningChatPerf('planning_chat_input_commit', {
+          durationMs: roundDurationMs(durationMs),
+          renderDurationMs: roundDurationMs(renderDurationMs),
+          inputSeq: pendingInputCommit.inputSeq,
+          valueLength: value.length,
+          previousValueLength: pendingInputCommit.previousValueLength,
+          deltaChars: pendingInputCommit.deltaChars,
+          lineCount: pendingInputCommit.lineCount,
+          expanded: pendingInputCommit.expanded,
+          busy,
+          readOnly,
+          activeConversationKey,
+        });
+      }
+    }
+
+    const previousSnapshot = renderSnapshotRef.current;
+    if (
+      previousSnapshot &&
+      (
+        previousSnapshot.activeConversationKey !== activeConversationKey ||
+        previousSnapshot.lineCount !== lines.length ||
+        previousSnapshot.transcriptTextChars !== transcriptTextChars
+      )
+    ) {
+      reportPlanningChatPerf('planning_chat_transcript_render', {
+        durationMs: roundDurationMs(renderDurationMs),
+        lineCount: lines.length,
+        previousLineCount: previousSnapshot.lineCount,
+        appendedLines: Math.max(0, lines.length - previousSnapshot.lineCount),
+        transcriptTextChars,
+        previousTranscriptTextChars: previousSnapshot.transcriptTextChars,
+        expanded,
+        busy,
+        readOnly,
+        activeConversationKey,
+      });
+    }
+    renderSnapshotRef.current = {
+      activeConversationKey,
+      lineCount: lines.length,
+      transcriptTextChars,
+    };
+  });
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -265,7 +363,20 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              inputSeqRef.current += 1;
+              pendingInputCommitRef.current = {
+                inputSeq: inputSeqRef.current,
+                startedAtMs: uiPerfNow(),
+                previousValueLength: value.length,
+                nextValue,
+                deltaChars: nextValue.length - value.length,
+                lineCount: lines.length,
+                expanded,
+              };
+              onValueChange(nextValue);
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

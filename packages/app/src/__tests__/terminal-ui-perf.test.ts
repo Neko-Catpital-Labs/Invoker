@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  createRendererHotPathUiPerfCounters,
   createTerminalUiPerfCounters,
   createTerminalUiPerfReporter,
   createTerminalUiPerfSink,
+  recordRendererHotPathUiPerfMetric,
+  resetRendererHotPathUiPerfCounters,
   timeTerminalWrite,
   TERMINAL_SESSION_UPSERT_SLOW_MS,
   TERMINAL_WRITE_SLOW_MS,
@@ -100,5 +103,65 @@ describe('createTerminalUiPerfReporter', () => {
     expect(counters.maxTerminalWriteMs).toBeGreaterThanOrEqual(0);
     expect(writeActivityLog).toHaveBeenCalledTimes(1);
     expect(counters.terminalWriteSlowCount).toBe(1);
+  });
+});
+
+describe('recordRendererHotPathUiPerfMetric', () => {
+  it('rolls up planning chat input and transcript render markers', () => {
+    const counters = createRendererHotPathUiPerfCounters();
+
+    expect(recordRendererHotPathUiPerfMetric(counters, 'planning_chat_input_commit', {
+      durationMs: 42,
+      renderDurationMs: 17,
+    })).toBe(true);
+    expect(recordRendererHotPathUiPerfMetric(counters, 'planning_chat_transcript_render', {
+      durationMs: 9,
+      lineCount: 12,
+      transcriptTextChars: 2048,
+    })).toBe(true);
+
+    expect(counters.planningChatInputCommitCount).toBe(1);
+    expect(counters.maxPlanningChatInputCommitMs).toBe(42);
+    expect(counters.maxPlanningChatInputRenderMs).toBe(17);
+    expect(counters.planningChatTranscriptRenderCount).toBe(1);
+    expect(counters.maxPlanningChatTranscriptRenderMs).toBe(9);
+    expect(counters.maxPlanningChatTranscriptLineCount).toBe(12);
+    expect(counters.maxPlanningChatTranscriptChars).toBe(2048);
+  });
+
+  it('rolls up renderer terminal attach, snapshot seed, and output pressure markers', () => {
+    const counters = createRendererHotPathUiPerfCounters();
+
+    expect(recordRendererHotPathUiPerfMetric(counters, 'terminal_renderer_attach', {
+      durationMs: 31,
+    })).toBe(true);
+    expect(recordRendererHotPathUiPerfMetric(counters, 'terminal_renderer_snapshot_seed', {
+      durationMs: 13,
+    })).toBe(true);
+    expect(recordRendererHotPathUiPerfMetric(counters, 'terminal_renderer_output_write', {
+      durationMs: 7,
+      maxWriteMsInWindow: 19,
+      chars: 80,
+      chunksInWindow: 24,
+      charsInWindow: 65536,
+      burst: true,
+    })).toBe(true);
+    expect(recordRendererHotPathUiPerfMetric(counters, 'unrelated_metric', {})).toBe(false);
+
+    expect(counters.terminalRendererAttachCount).toBe(1);
+    expect(counters.maxTerminalRendererAttachMs).toBe(31);
+    expect(counters.terminalRendererSnapshotSeedCount).toBe(1);
+    expect(counters.maxTerminalRendererSnapshotSeedMs).toBe(13);
+    expect(counters.terminalRendererOutputWriteReports).toBe(1);
+    expect(counters.terminalRendererOutputBurstReports).toBe(1);
+    expect(counters.maxTerminalRendererOutputWriteMs).toBe(19);
+    expect(counters.maxTerminalRendererOutputChars).toBe(80);
+    expect(counters.maxTerminalRendererOutputChunksInWindow).toBe(24);
+    expect(counters.maxTerminalRendererOutputCharsInWindow).toBe(65536);
+
+    resetRendererHotPathUiPerfCounters(counters);
+    expect(counters.planningChatInputCommitCount).toBe(0);
+    expect(counters.terminalRendererOutputBurstReports).toBe(0);
+    expect(counters.maxTerminalRendererOutputCharsInWindow).toBe(0);
   });
 });

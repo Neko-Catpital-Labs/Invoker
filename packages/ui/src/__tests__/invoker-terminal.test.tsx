@@ -417,6 +417,68 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(transcript.scrollTop).toBe(500));
   });
 
+  it('reports planning chat input commit and transcript render perf markers', async () => {
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+    const nowSpy = vi.spyOn(performance, 'now');
+    let now = 100;
+    nowSpy.mockImplementation(() => now);
+
+    try {
+      const props = {
+        activeConversationKey: 'chat-1',
+        lines: [{ id: 1, text: 'First chat', role: 'system' as const }],
+        busy: false,
+        value: '',
+        selectedPresetKey: 'codex',
+        presetOptions: [{ key: 'codex', label: 'Codex' }],
+        draftPlanAvailable: false,
+        onValueChange: vi.fn(),
+        onSubmit: vi.fn(),
+        onSubmitDraft: vi.fn(),
+        onPresetChange: vi.fn(),
+        onExpand: vi.fn(),
+      };
+      const { rerender } = render(<InvokerTerminal {...props} />);
+      reportUiPerf.mockClear();
+
+      now = 200;
+      fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+      expect(props.onValueChange).toHaveBeenCalledWith('hello');
+
+      now = 240;
+      rerender(<InvokerTerminal {...props} value="hello" />);
+
+      expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_input_commit', expect.objectContaining({
+        activeConversationKey: 'chat-1',
+        durationMs: 40,
+        valueLength: 5,
+        previousValueLength: 0,
+        deltaChars: 5,
+      }));
+
+      reportUiPerf.mockClear();
+      now = 300;
+      rerender(<InvokerTerminal
+        {...props}
+        value="hello"
+        lines={[
+          ...props.lines,
+          { id: 2, text: 'Second chat', role: 'assistant' as const },
+        ]}
+      />);
+
+      expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_transcript_render', expect.objectContaining({
+        activeConversationKey: 'chat-1',
+        lineCount: 2,
+        previousLineCount: 1,
+        appendedLines: 1,
+        transcriptTextChars: 'First chat'.length + 'Second chat'.length,
+      }));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('constrains the planning session list to a bounded scroll region', async () => {
     render(<App />);
     await openPlanningTerminal();

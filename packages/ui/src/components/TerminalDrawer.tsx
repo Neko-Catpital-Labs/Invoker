@@ -14,6 +14,11 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const TERMINAL_RENDERER_OUTPUT_SLOW_MS = 16;
+const TERMINAL_RENDERER_OUTPUT_BURST_CHUNKS = 20;
+const TERMINAL_RENDERER_OUTPUT_BURST_CHARS = 64 * 1024;
+const TERMINAL_RENDERER_OUTPUT_BURST_WINDOW_MS = 1000;
+const TERMINAL_RENDERER_PERF_THROTTLE_MS = 1000;
 
 /**
  * The drawer has one explicit state model:
@@ -55,10 +60,80 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+type TerminalOutputPerfWindow = {
+  windowStartedAtMs: number;
+  chunksInWindow: number;
+  charsInWindow: number;
+  maxWriteMsInWindow: number;
+  lastEmitAtMs: number;
+};
+
+function uiPerfNow(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundDurationMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
+}
+
+function reportTerminalRendererPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
+function recordTerminalOutputWritePerf(
+  outputPerfWindow: TerminalOutputPerfWindow,
+  session: TerminalSessionDescriptor,
+  data: string,
+  durationMs: number,
+): void {
+  const now = uiPerfNow();
+  if (
+    outputPerfWindow.windowStartedAtMs < 0 ||
+    now - outputPerfWindow.windowStartedAtMs >= TERMINAL_RENDERER_OUTPUT_BURST_WINDOW_MS
+  ) {
+    outputPerfWindow.windowStartedAtMs = now;
+    outputPerfWindow.chunksInWindow = 0;
+    outputPerfWindow.charsInWindow = 0;
+    outputPerfWindow.maxWriteMsInWindow = 0;
+  }
+
+  outputPerfWindow.chunksInWindow += 1;
+  outputPerfWindow.charsInWindow += data.length;
+  outputPerfWindow.maxWriteMsInWindow = Math.max(outputPerfWindow.maxWriteMsInWindow, durationMs);
+
+  const slow = durationMs >= TERMINAL_RENDERER_OUTPUT_SLOW_MS;
+  const burst =
+    outputPerfWindow.chunksInWindow >= TERMINAL_RENDERER_OUTPUT_BURST_CHUNKS ||
+    outputPerfWindow.charsInWindow >= TERMINAL_RENDERER_OUTPUT_BURST_CHARS;
+  if (!slow && !burst) return;
+  if (
+    outputPerfWindow.lastEmitAtMs > 0 &&
+    now - outputPerfWindow.lastEmitAtMs < TERMINAL_RENDERER_PERF_THROTTLE_MS
+  ) {
+    return;
+  }
+  outputPerfWindow.lastEmitAtMs = now;
+
+  reportTerminalRendererPerf('terminal_renderer_output_write', {
+    durationMs: roundDurationMs(durationMs),
+    maxWriteMsInWindow: roundDurationMs(outputPerfWindow.maxWriteMsInWindow),
+    chars: data.length,
+    charsInWindow: outputPerfWindow.charsInWindow,
+    chunksInWindow: outputPerfWindow.chunksInWindow,
+    burstWindowMs: TERMINAL_RENDERER_OUTPUT_BURST_WINDOW_MS,
+    slow,
+    burst,
+    sessionId: session.sessionId,
+    taskId: session.taskId,
+    mode: session.mode,
+  });
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
+  onSeeded?: (durationMs: number, snapshotChars: number) => void,
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
@@ -72,7 +147,9 @@ function seedTerminalOutputSnapshot(
     )
   ) {
     try {
+      const startedAtMs = uiPerfNow();
       term.write(outputSnapshot);
+      onSeeded?.(uiPerfNow() - startedAtMs, outputSnapshot.length);
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
@@ -92,6 +169,13 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const outputPerfWindowRef = useRef<TerminalOutputPerfWindow>({
+    windowStartedAtMs: -1,
+    chunksInWindow: 0,
+    charsInWindow: 0,
+    maxWriteMsInWindow: 0,
+    lastEmitAtMs: 0,
+  });
 
   useEffect(() => {
     const host = containerRef.current;
@@ -99,6 +183,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
 
     let term: XTermTerminal;
     let fit: FitAddon;
+    const attachStartedAtMs = uiPerfNow();
     try {
       term = new XTermTerminal({
         fontSize: 12,
@@ -117,7 +202,24 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    reportTerminalRendererPerf('terminal_renderer_attach', {
+      durationMs: roundDurationMs(uiPerfNow() - attachStartedAtMs),
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      mode: session.mode,
+      snapshotChars: session.outputSnapshot?.length ?? 0,
+      hasHeader,
+    });
+
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, (durationMs, snapshotChars) => {
+      reportTerminalRendererPerf('terminal_renderer_snapshot_seed', {
+        durationMs: roundDurationMs(durationMs),
+        snapshotChars,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        mode: session.mode,
+      });
+    });
 
     const inputDisposable = term.onData((data) => {
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -127,7 +229,9 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const startedAtMs = uiPerfNow();
         term.write(event.data);
+        recordTerminalOutputWritePerf(outputPerfWindowRef.current, session, event.data, uiPerfNow() - startedAtMs);
       } catch {
         /* terminal disposed */
       }
@@ -178,7 +282,15 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, (durationMs, snapshotChars) => {
+      reportTerminalRendererPerf('terminal_renderer_snapshot_seed', {
+        durationMs: roundDurationMs(durationMs),
+        snapshotChars,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        mode: session.mode,
+      });
+    });
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
