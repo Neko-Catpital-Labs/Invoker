@@ -14,9 +14,7 @@ matching index.
 
 A follow-on beachball class was DAG task selection: the inspector called
 unbounded `getEvents` on click, stalling main while marshaling full task
-history even though the UI only rendered 20 log rows. The same inspector
-path fires when selecting a row in Needs Attention, so that surface needs
-the same hitch coverage.
+history even though the UI only rendered 20 log rows.
 
 ## Rules
 
@@ -49,9 +47,18 @@ the same hitch coverage.
 
 | Path | Cadence | Must stay cheap |
 | --- | --- | --- |
-| `useWorkerStatus` → `getWorkerStatus` → `snapshot()` | ~2s | Recovery via aggregates; indexed `listWorkerActions` (no TTL cache) |
+| `useWorkerStatus` → `getWorkerStatus` → `snapshot()` | ~2s (paused while `document.hidden`) | Recovery via aggregates; indexed `listWorkerActions` (no TTL cache) |
+| `useQueueStatus` / `getQueueStatus` | ~2s (paused while hidden) | Prefer in-memory after an explicit sync; Action Graph must call `getQueueStatus({ refresh: false })` after `syncAllFromDb()`. Cache external-dep blockers per workflow inside one `getQueueStatus` call — never re-`listWorkflows` per ready task |
+| `useActionGraphSnapshot` → `buildCurrentActionGraphSnapshot` | ~2s when Action Graph open (paused while hidden) | Per-task `getEvents` / `loadActionGraphAttempts` only for active/attention tasks — not every pending/completed node; never re-`refreshFromDb` inside the same snapshot |
 | Main `dbPollInterval` → `loadTasks` | ~2s | Projection must not unbounded-scan attempts |
-| Needs Attention / DAG / inspector / History / Approval `getEvents` | on demand | Always paginated (`limit` required; History uses `beforeId` for Load more) |
+| Task inspector / History / Approval `getEvents` | on demand | Always paginated (`limit` required; History uses `beforeId` for Load more) |
+
+## Visibility rule
+
+UI status polls (`useWorkerStatus`, `useQueueStatus`, `useActionGraphSnapshot`) must
+**not** run while `document.visibilityState !== 'visible'`. On restore they refresh
+once (optionally staggered) so Cmd-Tab back from another app cannot herd deferred
+timer ticks into a main-thread SQLite convoy (macOS beachball).
 
 ## Preferred APIs
 
@@ -69,20 +76,21 @@ the same hitch coverage.
 ## How to catch regressions
 
 - Unit cost guards under fat fixtures (many events / large attempt errors),
-  including `packages/app/src/__tests__/dag-click-get-events-cost.test.ts` and
-  `packages/app/src/__tests__/attention-click-get-events-cost.test.ts`
+  including `packages/app/src/__tests__/dag-click-get-events-cost.test.ts`
   (unbounded vs page cost + reject missing limit).
 - Main-process hitch e2e (`packages/app/e2e/main-process-hitch-responsiveness.spec.ts`):
   while worker-status polls against a seeded fat DB, cheap IPC RTT must stay
   under budget (window-drag stickiness maps to main-loop stalls, not renderer
   frame gaps alone). Included in GitHub Playwright shards (merge-queue / master).
+- Focus-switch hitch e2e (`packages/app/e2e/focus-switch-hitch-responsiveness.spec.ts`):
+  hide→show + stacked status IPC under the hitch fixture must stay under the
+  same budget (Cmd-Tab beachball class).
+- Unit cost: `packages/app/src/__tests__/focus-switch-main-process-cost.test.ts`
+  keeps Action Graph snapshot under 100ms on a 200-task fat events table.
 - DAG-click hitch e2e (`packages/app/e2e/dag-click-hitch-responsiveness.spec.ts`):
   seed fat events, click task nodes, assert `listWorkflows` RTT stays under the
   same hitch budget. Included in GitHub Playwright shards (merge-queue / master)
   and in the extended Playwright battery used by the twice-daily e2e worker.
-- Needs Attention hitch e2e (`packages/app/e2e/attention-click-hitch-responsiveness.spec.ts`):
-  seed fat events, open Needs Attention, click list rows, assert `listWorkflows`
-  RTT stays under the same hitch budget. Included in GitHub Playwright shards.
 - Slow-query telemetry: `SQLiteAdapter` logs statements slower than 25ms
   (`slowQueryThresholdMs` / `onSlowQuery`) so the next spike shows up without
   attaching a sampler. Set `slowQueryThresholdMs: 0` to disable.
