@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -48,6 +48,101 @@ describe('Invoker terminal (component)', () => {
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
     });
     expect(screen.queryByText(/Unknown command/)).not.toBeInTheDocument();
+  });
+
+  it('renders raw planner stream while busy and removes it when the final reply lands', async () => {
+    let resolveSend: ((value: any) => void) | null = null;
+    mock.api.planningChatSend = vi.fn(() => new Promise((resolve) => {
+      resolveSend = resolve;
+    }) as any) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('show raw stream');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'raw planner line 1\n' });
+      mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'raw planner line 2' });
+    });
+
+    const panel = await screen.findByTestId('invoker-terminal-planner-stream');
+    expect(panel).toHaveTextContent('streaming');
+    expect(panel).toHaveTextContent('raw planner line 1 raw planner line 2');
+
+    await act(async () => {
+      resolveSend?.({
+        ok: true,
+        sessionId: 'session-1',
+        reply: 'Final assistant reply.',
+        draftPlanAvailable: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Final assistant reply.');
+    });
+  });
+
+  it('keeps failed raw planner output visible until the next send starts', async () => {
+    let resolveFirstSend: ((value: any) => void) | null = null;
+    mock.api.planningChatSend = vi.fn(() => {
+      if (!resolveFirstSend) {
+        return new Promise((resolve) => {
+          resolveFirstSend = resolve;
+        }) as any;
+      }
+      return new Promise(() => undefined) as any;
+    }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('first failed stream');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    act(() => {
+      mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'raw failure output' });
+    });
+
+    await act(async () => {
+      resolveFirstSend?.({ ok: false, sessionId: 'session-1', error: 'Planner failed.' });
+    });
+
+    const failedPanel = await screen.findByTestId('invoker-terminal-planner-stream');
+    expect(failedPanel).toHaveTextContent('failed');
+    expect(failedPanel).toHaveTextContent('raw failure output');
+    expect(screen.getByTestId('invoker-terminal-submit-error')).toHaveTextContent('Planner failed.');
+
+    submitPlanningText('try again');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps raw planner stream state isolated by planning session', async () => {
+    mock.api.planningChatSend = vi.fn(() => new Promise(() => undefined) as any) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('first session request');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+    act(() => {
+      mock.firePlanningChatStream({ sessionId: 'session-1', chunk: 'first session raw output' });
+    });
+    expect(await screen.findByTestId('invoker-terminal-planner-stream')).toHaveTextContent('first session raw output');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+
+    const firstSessionPreview = within(screen.getByTestId('planning-session-list')).getByText('first session request');
+    fireEvent.click(firstSessionPreview.closest('button')!);
+
+    expect(await screen.findByTestId('invoker-terminal-planner-stream')).toHaveTextContent('first session raw output');
   });
 
   it('sends plain language when Enter is pressed', async () => {

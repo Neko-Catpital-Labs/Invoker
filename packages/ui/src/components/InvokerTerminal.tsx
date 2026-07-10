@@ -13,6 +13,11 @@ interface PlanningPresetOptionView {
   label: string;
 }
 
+export interface InvokerTerminalPlannerStream {
+  text: string;
+  state: 'streaming' | 'failed';
+}
+
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
@@ -27,6 +32,7 @@ interface InvokerTerminalProps {
   presetOptions: PlanningPresetOptionView[];
   draftPlanAvailable: boolean;
   draftPlanSummary?: { name: string; taskCount: number; workflowCount?: number };
+  plannerStream?: InvokerTerminalPlannerStream | null;
   submitError?: SubmitErrorView | null;
   readOnly?: boolean;
   expanded?: boolean;
@@ -59,6 +65,7 @@ export function InvokerTerminal({
   presetOptions,
   draftPlanAvailable,
   draftPlanSummary,
+  plannerStream,
   submitError,
   readOnly = false,
   expanded = false,
@@ -86,11 +93,13 @@ export function InvokerTerminal({
     scrollTranscriptToBottom();
   }, [activeConversationKey, scrollTranscriptToBottom]);
 
+  const plannerStreamText = plannerStream?.text ?? '';
+
   useLayoutEffect(() => {
     if (shouldFollowTranscript) {
       scrollTranscriptToBottom();
     }
-  }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+  }, [lines.length, plannerStreamText, scrollTranscriptToBottom, shouldFollowTranscript]);
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -179,6 +188,23 @@ export function InvokerTerminal({
             </div>
           );
         })}
+        {plannerStream && plannerStream.text && (
+          <div
+            data-testid="invoker-terminal-planner-stream"
+            className={`border-l-2 py-1 pl-3 ${plannerStream.state === 'failed' ? 'border-destructive/70' : 'border-primary/70'}`}
+          >
+            <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+              <span>planner raw ›</span>
+              <span>{plannerStream.state === 'failed' ? 'failed' : 'streaming…'}</span>
+            </div>
+            <div
+              aria-live="polite"
+              className={`mt-1 whitespace-pre-wrap ${plannerStream.state === 'failed' ? 'text-destructive' : 'text-foreground'}`}
+            >
+              {plannerStream.text}
+            </div>
+          </div>
+        )}
       </div>
 
       {submitError && !readOnly && (
