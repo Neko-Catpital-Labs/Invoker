@@ -15,6 +15,23 @@ interface PlanningPresetOptionView {
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
 
+type PlanningChatRenderReason = 'input' | 'lines' | 'value';
+
+function readHighResolutionTimeMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundDurationMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs * 10) / 10);
+}
+
+function reportUiPerf(metric: string, data: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
 }
@@ -71,8 +88,12 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const renderStartedAtMs = readHighResolutionTimeMs();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const previousInputValueLengthRef = useRef(value.length);
+  const previousRenderStateRef = useRef({ valueLength: value.length, lineCount: lines.length });
+  const pendingRenderMarkerRef = useRef<{ reason: PlanningChatRenderReason; startedAtMs: number } | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
 
   const scrollTranscriptToBottom = useCallback((): void => {
@@ -103,6 +124,37 @@ export function InvokerTerminal({
       inputRef.current?.focus();
     }
   }, [busy, readOnly]);
+
+  useEffect(() => {
+    previousInputValueLengthRef.current = value.length;
+  }, [value.length]);
+
+  useLayoutEffect(() => {
+    const previous = previousRenderStateRef.current;
+    const valueLengthChanged = previous.valueLength !== value.length;
+    const lineCountChanged = previous.lineCount !== lines.length;
+    const marker = pendingRenderMarkerRef.current;
+    previousRenderStateRef.current = { valueLength: value.length, lineCount: lines.length };
+
+    if (!marker && !valueLengthChanged && !lineCountChanged) return;
+    pendingRenderMarkerRef.current = null;
+
+    const finishedAtMs = readHighResolutionTimeMs();
+    const reason = marker?.reason ?? (lineCountChanged ? 'lines' : 'value');
+    reportUiPerf('planning_chat_render_commit', {
+      reason,
+      durationMs: roundDurationMs(finishedAtMs - (marker?.startedAtMs ?? renderStartedAtMs)),
+      renderMs: roundDurationMs(finishedAtMs - renderStartedAtMs),
+      valueLength: value.length,
+      lineCount: lines.length,
+      busy,
+      readOnly,
+      expanded,
+      draftPlanAvailable,
+      conversationKey: activeConversationKey,
+      shouldFollowTranscript,
+    });
+  });
 
   const focusComposer = (): void => {
     inputRef.current?.focus();
@@ -265,7 +317,27 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => {
+              const startedAtMs = readHighResolutionTimeMs();
+              const nextValue = event.target.value;
+              const previousValueLength = previousInputValueLengthRef.current;
+              previousInputValueLengthRef.current = nextValue.length;
+              pendingRenderMarkerRef.current = { reason: 'input', startedAtMs };
+              onValueChange(nextValue);
+              const handlerMs = roundDurationMs(readHighResolutionTimeMs() - startedAtMs);
+              reportUiPerf('planning_chat_input_change', {
+                handlerMs,
+                durationMs: handlerMs,
+                valueLength: nextValue.length,
+                deltaChars: nextValue.length - previousValueLength,
+                lineCount: lines.length,
+                busy,
+                readOnly,
+                expanded,
+                draftPlanAvailable,
+                conversationKey: activeConversationKey,
+              });
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();

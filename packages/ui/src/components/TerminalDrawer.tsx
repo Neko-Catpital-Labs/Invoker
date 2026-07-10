@@ -14,6 +14,26 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const textEncoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+
+function readHighResolutionTimeMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundDurationMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs * 10) / 10);
+}
+
+function measureUtf8Bytes(data: string): number {
+  return textEncoder?.encode(data).byteLength ?? data.length;
+}
+
+function reportUiPerf(metric: string, data: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
 
 /**
  * The drawer has one explicit state model:
@@ -59,6 +79,7 @@ function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
+  isActive: boolean,
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
@@ -72,7 +93,19 @@ function seedTerminalOutputSnapshot(
     )
   ) {
     try {
+      const startedAtMs = readHighResolutionTimeMs();
       term.write(outputSnapshot);
+      reportUiPerf('embedded_terminal_output_write', {
+        source: 'snapshot',
+        durationMs: roundDurationMs(readHighResolutionTimeMs() - startedAtMs),
+        bytes: measureUtf8Bytes(outputSnapshot),
+        chars: outputSnapshot.length,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        active: isActive,
+        status: session.status,
+        mode: session.mode,
+      });
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
@@ -92,6 +125,11 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const isActiveRef = useRef(isActive);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -100,6 +138,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
     let term: XTermTerminal;
     let fit: FitAddon;
     try {
+      const attachStartedAtMs = readHighResolutionTimeMs();
       term = new XTermTerminal({
         fontSize: 12,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -111,23 +150,56 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
+      reportUiPerf('embedded_terminal_attach', {
+        durationMs: roundDurationMs(readHighResolutionTimeMs() - attachStartedAtMs),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        active: isActiveRef.current,
+        status: session.status,
+        mode: session.mode,
+        hasSnapshot: Boolean(session.outputSnapshot),
+        snapshotBytes: session.outputSnapshot ? measureUtf8Bytes(session.outputSnapshot) : 0,
+      });
     } catch {
       return;
     }
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, isActiveRef.current);
 
     const inputDisposable = term.onData((data) => {
+      const startedAtMs = readHighResolutionTimeMs();
       void window.invoker?.terminalWrite?.(session.sessionId, data);
+      reportUiPerf('embedded_terminal_input_write', {
+        durationMs: roundDurationMs(readHighResolutionTimeMs() - startedAtMs),
+        bytes: measureUtf8Bytes(data),
+        chars: data.length,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        active: isActiveRef.current,
+        status: session.status,
+        mode: session.mode,
+      });
     });
 
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const startedAtMs = readHighResolutionTimeMs();
         term.write(event.data);
+        reportUiPerf('embedded_terminal_output_write', {
+          source: 'live',
+          durationMs: roundDurationMs(readHighResolutionTimeMs() - startedAtMs),
+          bytes: measureUtf8Bytes(event.data),
+          chars: event.data.length,
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          active: isActiveRef.current,
+          status: session.status,
+          mode: session.mode,
+        });
       } catch {
         /* terminal disposed */
       }
@@ -178,7 +250,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, isActiveRef.current);
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {

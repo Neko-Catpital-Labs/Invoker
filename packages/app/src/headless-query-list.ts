@@ -30,6 +30,7 @@ import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
 } from './recovery-worker-observability.js';
+import { createUiPerfStats } from './ui-perf-stats.js';
 
 /**
  * The read-query family writes its formatted output through {@link writeOut}.
@@ -289,13 +290,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       const stats = deps.getUiPerfStats?.() ?? {
         ownerMode: 'local',
         ts: new Date().toISOString(),
-        mainDeltaToUi: 0,
-        dbPollCreated: 0,
-        dbPollUpdatedAsCreated: 0,
-        dbPollUpdatedAsUpdated: 0,
-        rendererReports: 0,
-        maxRendererEventLoopLagMs: 0,
-        maxRendererLongTaskMs: 0,
+        ...createUiPerfStats(),
       };
       switch (flags.output) {
         case 'label':

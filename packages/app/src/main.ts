@@ -279,6 +279,11 @@ import {
 } from './recovery-worker-observability.js';
 import { seedMainProcessHitchFixture } from './main-process-hitch-fixture.js';
 import {
+  createUiPerfStats,
+  recordUiPerfMetric,
+  resetUiPerfStatsAccumulator,
+} from './ui-perf-stats.js';
+import {
   executeNoTrackHeadlessBatch,
   type HeadlessBatchExecRequest,
   type HeadlessExecMutationPayload,
@@ -1084,16 +1089,7 @@ function startHeadlessMode(): void {
         commandService,
         getUiPerfStats: () => ({
           ts: new Date().toISOString(),
-          mainDeltaToUi: 0,
-          dbPollCreated: 0,
-          dbPollUpdatedAsCreated: 0,
-          dbPollUpdatedAsUpdated: 0,
-          rendererReports: 0,
-          maxRendererEventLoopLagMs: 0,
-          maxRendererHiddenEventLoopLagMs: 0,
-          maxRendererCumulativeLagMs: 0,
-          maxRendererTickDeltaMs: 0,
-          maxRendererLongTaskMs: 0,
+          ...createUiPerfStats(),
         }),
         resetUiPerfStats: () => {},
         waitForApproval,
@@ -2150,23 +2146,7 @@ function createEmbeddedTerminalBackendFromConfig(
     process.env.INVOKER_EXECUTING_STALL_TIMEOUT_MS ?? '180000',
     10,
   ) || 180000;
-  const uiPerfStats = {
-    mainDeltaToUi: 0,
-    dbPollCreated: 0,
-    dbPollUpdatedAsCreated: 0,
-    dbPollUpdatedAsUpdated: 0,
-    rendererReports: 0,
-    maxRendererEventLoopLagMs: 0,
-    maxRendererHiddenEventLoopLagMs: 0,
-    maxRendererCumulativeLagMs: 0,
-    maxRendererTickDeltaMs: 0,
-    maxRendererLongTaskMs: 0,
-    workflowMetadataPublishRequests: 0,
-    workflowMetadataPublishes: 0,
-    workflowMetadataCoalescedRequests: 0,
-    largeTaskDeltaBatches: 0,
-    maxTaskDeltaBatchSize: 0,
-  };
+  const uiPerfStats = createUiPerfStats();
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
   const recordStartupMark = (phase: string, extra?: Record<string, unknown>): void => {
@@ -2213,21 +2193,7 @@ function createEmbeddedTerminalBackendFromConfig(
   };
 
   const resetUiPerfStats = (): void => {
-    uiPerfStats.mainDeltaToUi = 0;
-    uiPerfStats.dbPollCreated = 0;
-    uiPerfStats.dbPollUpdatedAsCreated = 0;
-    uiPerfStats.dbPollUpdatedAsUpdated = 0;
-    uiPerfStats.rendererReports = 0;
-    uiPerfStats.maxRendererEventLoopLagMs = 0;
-    uiPerfStats.maxRendererHiddenEventLoopLagMs = 0;
-    uiPerfStats.maxRendererCumulativeLagMs = 0;
-    uiPerfStats.maxRendererTickDeltaMs = 0;
-    uiPerfStats.maxRendererLongTaskMs = 0;
-    uiPerfStats.workflowMetadataPublishRequests = 0;
-    uiPerfStats.workflowMetadataPublishes = 0;
-    uiPerfStats.workflowMetadataCoalescedRequests = 0;
-    uiPerfStats.largeTaskDeltaBatches = 0;
-    uiPerfStats.maxTaskDeltaBatchSize = 0;
+    resetUiPerfStatsAccumulator(uiPerfStats);
   };
 
   const getUiPerfStats = (): Record<string, unknown> => ({
@@ -4552,23 +4518,7 @@ function createEmbeddedTerminalBackendFromConfig(
       ) {
         logger.info(`ui metric ${metric} ${JSON.stringify(data ?? {})}`, { module: 'ui-state' });
       }
-      if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
-        const hiddenOrUnfocused = data.visibilityState === 'hidden' || data.hasFocus === false;
-        if (hiddenOrUnfocused) {
-          uiPerfStats.maxRendererHiddenEventLoopLagMs = Math.max(uiPerfStats.maxRendererHiddenEventLoopLagMs, data.lagMs);
-        } else {
-          uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
-        }
-        if (typeof data.cumulativeLagMs === 'number') {
-          uiPerfStats.maxRendererCumulativeLagMs = Math.max(uiPerfStats.maxRendererCumulativeLagMs, data.cumulativeLagMs);
-        }
-        if (typeof data.tickDeltaMs === 'number') {
-          uiPerfStats.maxRendererTickDeltaMs = Math.max(uiPerfStats.maxRendererTickDeltaMs, data.tickDeltaMs);
-        }
-      }
-      if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
-        uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
-      }
+      recordUiPerfMetric(uiPerfStats, metric, data);
       uiPerfStats.rendererReports += 1;
       try {
         persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));

@@ -228,6 +228,80 @@ describe('Terminal drawer (component)', () => {
     expect(screen.getByTestId('terminal-pane-task-alpha')).toHaveClass('overflow-hidden');
   });
 
+  it('reports embedded terminal attach, output, and input perf markers', async () => {
+    const reportUiPerf = mock.api.reportUiPerf as unknown as ReturnType<typeof vi.fn>;
+    const snapshot = 'seed line\n';
+    const liveOutput = 'live line\n';
+    const input = 'pwd\n';
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: snapshot,
+      command: 'sh',
+      args: ['-lc', 'echo test'],
+    });
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('embedded_terminal_attach', expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        hasSnapshot: true,
+        snapshotBytes: snapshot.length,
+      }));
+    });
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('embedded_terminal_output_write', expect.objectContaining({
+        source: 'snapshot',
+        bytes: snapshot.length,
+        chars: snapshot.length,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+      }));
+    });
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: liveOutput,
+      });
+    });
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('embedded_terminal_output_write', expect.objectContaining({
+        source: 'live',
+        bytes: liveOutput.length,
+        chars: liveOutput.length,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+      }));
+    });
+
+    act(() => {
+      xtermMock.instances[0]?.emitData(input);
+    });
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('embedded_terminal_input_write', expect.objectContaining({
+        bytes: input.length,
+        chars: input.length,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+      }));
+    });
+    expect(JSON.stringify(reportUiPerf.mock.calls.map(([, payload]) => payload))).not.toContain(liveOutput);
+    expect(JSON.stringify(reportUiPerf.mock.calls.map(([, payload]) => payload))).not.toContain(snapshot);
+  });
+
   it('reuses an existing tab when opening the same task twice', async () => {
     render(<App />);
     act(() => mock.setTasks([taskAlpha], workflows));

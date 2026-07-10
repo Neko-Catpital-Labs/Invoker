@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
+import { useState } from 'react';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
 vi.mock('@xyflow/react', async () => {
@@ -36,6 +37,53 @@ describe('Invoker terminal (component)', () => {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
+
+  it('reports planning chat input and render perf markers without message text', async () => {
+    const typedMessage = 'instrument this path';
+    const reportUiPerf = mock.api.reportUiPerf as unknown as ReturnType<typeof vi.fn>;
+
+    function Harness() {
+      const [inputValue, setInputValue] = useState('');
+      return (
+        <InvokerTerminal
+          activeConversationKey="chat-perf"
+          lines={[{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' }]}
+          busy={false}
+          value={inputValue}
+          selectedPresetKey="codex"
+          presetOptions={[{ key: 'codex', label: 'Codex' }]}
+          draftPlanAvailable={false}
+          onValueChange={setInputValue}
+          onSubmit={vi.fn()}
+          onSubmitDraft={vi.fn()}
+          onPresetChange={vi.fn()}
+          onExpand={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: typedMessage } });
+
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_input_change', expect.objectContaining({
+        valueLength: typedMessage.length,
+        deltaChars: typedMessage.length,
+        lineCount: 1,
+        conversationKey: 'chat-perf',
+      }));
+    });
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith('planning_chat_render_commit', expect.objectContaining({
+        reason: 'input',
+        valueLength: typedMessage.length,
+        lineCount: 1,
+        conversationKey: 'chat-perf',
+      }));
+    });
+    expect(JSON.stringify(reportUiPerf.mock.calls.map(([, payload]) => payload))).not.toContain(typedMessage);
+  });
 
   it('generates a planning reply from plain language', async () => {
     render(<App />);
