@@ -1,9 +1,10 @@
 /**
  * Integration test: workflow-mutation-failed handling in <App />.
  *
- * Task-scoped and workflow-scoped mutation failures must not open the top
- * banner. Task failures select the task so the right-hand panel can show the
- * error.
+ * Task-scoped and workflow-scoped mutation failures are surfaced through the
+ * Needs Attention browser instead of the top banner. Task failures select the
+ * task and open the attention surface so the right-hand panel can show the
+ * failure details.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -76,9 +77,17 @@ describe('Workflow mutation failed banner', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Verify worker summary surface');
     });
+    await waitFor(() => {
+      expect(screen.getByTestId('browser-rail')).toBeInTheDocument();
+    });
+    const taskRow = screen.getByTestId('browser-task-row-wf-1/verify-worker-summary-surface');
+    expect(taskRow).toHaveAttribute('data-selected', 'true');
+    const detail = screen.getByTestId('task-mutation-failure-detail');
+    expect(detail).toHaveTextContent('Approve failed');
+    expect(detail).toHaveTextContent('missing execution harness "codex"');
   });
 
-  it('does not show the banner for headless fix failures', async () => {
+  it('does not show the banner for headless fix failures and surfaces the detail in Needs Attention', async () => {
     render(<App />);
     await settleTasks();
 
@@ -100,9 +109,16 @@ describe('Workflow mutation failed banner', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Verify worker summary surface');
     });
+    await waitFor(() => {
+      expect(screen.getByTestId('browser-rail')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('browser-task-row-wf-1/verify-worker-summary-surface')).toHaveAttribute('data-selected', 'true');
+    const detail = screen.getByTestId('task-mutation-failure-detail');
+    expect(detail).toHaveTextContent('Fix failed');
+    expect(detail).toHaveTextContent('model unsupported');
   });
 
-  it('does not show the banner for workflow-scoped failures', async () => {
+  it('does not show the banner for workflow-scoped failures and opens the workflow in the Workflows browser', async () => {
     render(<App />);
     await settleTasks();
 
@@ -119,5 +135,12 @@ describe('Workflow mutation failed banner', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('workflow-mutation-failed-banner')).not.toBeInTheDocument();
     });
+    await waitFor(() => {
+      expect(screen.getByTestId('browser-rail')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Local test plan');
+    });
+    expect(screen.queryByTestId('task-mutation-failure-detail')).not.toBeInTheDocument();
   });
 });
