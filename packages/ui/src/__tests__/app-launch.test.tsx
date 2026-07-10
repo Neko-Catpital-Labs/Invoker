@@ -153,7 +153,21 @@ describe('App launch (component)', () => {
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-60');
 
-    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    fireEvent.click(screen.getByTestId('sidebar-running'));
+    expect(await screen.findByTestId('browser-return-home')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+    fireEvent.click(screen.getByTestId('browser-return-home'));
+    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
+
+    for (const surface of ['attention', 'workers', 'planning', 'home']) {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-60');
     }
