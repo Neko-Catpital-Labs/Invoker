@@ -811,6 +811,14 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('browser-rail-dismiss').click();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+
+    await page.getByTestId('sidebar-collapse-toggle').click();
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
+    await page.getByTestId('sidebar-workflows').click();
+    await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
+    await page.getByTestId('browser-return-home').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
@@ -920,8 +928,18 @@ test.describe('Visual proof capture', () => {
 
     for (const surface of ['running', 'workers', 'workflows'] as const) {
       await page.getByTestId(`sidebar-${surface}`).click();
+      if (surface === 'workers') {
+        await expect(page.getByTestId('worker-activity-card')).toBeVisible();
+      }
       await expect(sidebar).toHaveClass(/w-60/);
     }
+
+    await page.getByTestId('browser-return-home').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(sidebar).toHaveClass(/w-60/);
+
+    await page.getByTestId('sidebar-workflows').click();
+    await expect(sidebar).toHaveClass(/w-60/);
 
     await page.getByTestId('sidebar-collapse-toggle').click();
     await expect(sidebar).toHaveClass(/w-16/);
