@@ -109,12 +109,8 @@ export function InvokerTerminal({
   };
 
   return (
-    <section className="flex h-full min-h-0 flex-col border border-border bg-card">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-        <div className="min-w-0">
-          <h1 className="truncate text-sm font-medium tracking-tight text-foreground">What do you want to build?</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">Talk it through, then submit the plan to Invoker.</p>
-        </div>
+    <section className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex items-center justify-end gap-2 border-b border-border bg-background px-4 py-2.5">
         <div className="flex shrink-0 items-center gap-2">
           {busy && (
             <span className="font-mono text-[11px] text-muted-foreground">working…</span>
@@ -184,7 +180,7 @@ export function InvokerTerminal({
       {submitError && !readOnly && (
         <div
           data-testid="invoker-terminal-submit-error"
-          className="sticky bottom-0 z-10 border-t border-destructive/40 bg-card px-4 py-3 text-destructive-foreground"
+          className="sticky bottom-0 z-10 border-t border-destructive/40 bg-background px-4 py-3 text-destructive-foreground"
         >
           <div className="text-sm font-medium text-destructive">{submitError.title}</div>
           <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-5 text-destructive/90">{submitError.message}</div>
@@ -220,7 +216,7 @@ export function InvokerTerminal({
       {draftPlanAvailable && !readOnly && (
         <div
           data-testid="invoker-terminal-ready-bar"
-          className="sticky bottom-0 z-10 border-t border-border bg-card px-4 py-3 text-sm text-foreground"
+          className="sticky bottom-0 z-10 border-t border-border bg-background px-4 py-3 text-sm text-foreground"
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span className="font-mono text-xs text-muted-foreground">
@@ -250,7 +246,7 @@ export function InvokerTerminal({
       )}
 
       <form
-        className="border-t border-border bg-card px-4 py-3"
+        className="border-t border-border bg-background px-4 py-3"
         onSubmit={(event) => {
           event.preventDefault();
           if (!value.trim() || busy || readOnly) return;
