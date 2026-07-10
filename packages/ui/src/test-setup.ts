@@ -39,3 +39,10 @@ if (typeof window !== 'undefined' && !window.localStorage) {
     value: storage,
   });
 }
+
+// jsdom defaults to 1024px; pin a wide viewport so App auto-collapse matches desktop
+// unless a test explicitly overrides window.innerWidth.
+if (typeof window !== "undefined") {
+  Object.defineProperty(window, "innerWidth", { value: 1600, configurable: true, writable: true });
+  Object.defineProperty(window, "innerHeight", { value: 900, configurable: true, writable: true });
+}
