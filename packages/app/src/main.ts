@@ -121,6 +121,7 @@ import {
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   DEFAULT_EXECUTION_AGENT,
+  GitHubMergeGateProvider,
   registerBuiltinAgents,
   registerBuiltinWorkers,
   parseRequeueMutationArgs,
@@ -369,6 +370,9 @@ function buildRegisteredOwnerWorkerDeps(
       stallRequeueBackoffMs: invokerConfig.stallRequeueBackoffMs,
     },
     prMaintenance: resolvePrMaintenanceWorkerConfig(invokerConfig),
+    prSummaryRefresh: {
+      provider: new GitHubMergeGateProvider(),
+    },
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,

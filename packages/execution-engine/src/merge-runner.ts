@@ -12,13 +12,18 @@ import { pathToFileURL } from 'node:url';
 
 import type { Orchestrator, TaskLineageExpectation, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
-import type { SQLiteAdapter } from '@invoker/data-store';
+import type { SQLiteAdapter, WorkerActionRecord } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import {
+  isInvokerRepoUrl,
+  type PrAuthoringContext,
+  type PrAuthoringTaskEntry,
+  type PrAuthoringWorkerActionEntry,
+} from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -64,6 +69,39 @@ function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 
   if (m === 'external_review') return 'external_review';
   if (m === 'automatic') return 'automatic';
   return 'manual';
+}
+
+function workerActionReason(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const reason = (payload as Record<string, unknown>).reason;
+  return typeof reason === 'string' && reason.trim() ? reason : undefined;
+}
+
+function workerActionToPrEntry(action: WorkerActionRecord): PrAuthoringWorkerActionEntry {
+  return {
+    id: action.id,
+    workerKind: action.workerKind,
+    actionType: action.actionType,
+    status: action.status,
+    ...(action.workflowId ? { workflowId: action.workflowId } : {}),
+    ...(action.taskId ? { taskId: action.taskId } : {}),
+    subjectType: action.subjectType,
+    subjectId: action.subjectId,
+    ...(action.summary ? { summary: action.summary } : {}),
+    ...(workerActionReason(action.payload) ? { reason: workerActionReason(action.payload) } : {}),
+    createdAt: action.createdAt,
+    updatedAt: action.updatedAt,
+    ...(action.completedAt ? { completedAt: action.completedAt } : {}),
+  };
+}
+
+function listPrAuthoringWorkerActions(
+  persistence: SQLiteAdapter,
+  workflowId: string,
+): PrAuthoringWorkerActionEntry[] {
+  const maybeList = (persistence as { listWorkerActions?: SQLiteAdapter['listWorkerActions'] }).listWorkerActions;
+  if (typeof maybeList !== 'function') return [];
+  return maybeList.call(persistence, { workflowId }).map(workerActionToPrEntry);
 }
 
 async function resolveBaseCheckoutRef(
@@ -380,6 +418,7 @@ export async function buildPrAuthoringContext(
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    workerActions: listPrAuthoringWorkerActions(host.persistence, workflowId),
     visualProofMarkdown,
   };
 }

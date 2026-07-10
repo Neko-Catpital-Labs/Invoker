@@ -110,6 +110,42 @@ describe('buildCanonicalPrBody', () => {
     expect(body).toContain(visualProof);
   });
 
+  it('renders worker actions in Pipeline time order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Worker visibility',
+      workflowSummary: 'Added worker visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'late',
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'queued',
+            taskId: 'wf/task-b',
+            summary: 'Queued CI fix',
+            createdAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            id: 'early',
+            workerKind: 'autofix',
+            actionType: 'auto-fix',
+            status: 'completed',
+            taskId: 'wf/task-a',
+            summary: 'Applied fix',
+            createdAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    const earlyIndex = body.indexOf('autofix | auto-fix | completed');
+    const lateIndex = body.indexOf('ci-failure | fix-ci-failure | queued');
+    expect(earlyIndex).toBeGreaterThan(0);
+    expect(lateIndex).toBeGreaterThan(earlyIndex);
+  });
+
   it('canonical body passes validation', () => {
     const body = buildCanonicalPrBody({
       title: 'Anything',

@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import type {
@@ -85,7 +88,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const { identifier, cwd } = opts;
     const targetRepo = await this.resolveTargetRepo(cwd);
     await retryTransientGitHubCli(() => this.exec('gh', [
-      'api', `repos/${targetRepo}/pulls/${identifier}`,
+      'api', `repos/${targetRepo}/pulls/${normalizePullIdentifier(identifier)}`,
       '--method', 'PATCH',
       '-f', 'state=closed',
     ], cwd));
@@ -98,10 +101,31 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const { identifier, cwd } = opts;
     const targetRepo = await this.resolveTargetRepo(cwd);
     const stdout = await retryTransientGitHubCli(() => this.exec('gh', [
-      'api', `repos/${targetRepo}/pulls/${identifier}`,
+      'api', `repos/${targetRepo}/pulls/${normalizePullIdentifier(identifier)}`,
       '--jq', '.body',
     ], cwd));
     return stdout.trim();
+  }
+
+  async updateReviewBody(opts: {
+    identifier: string;
+    cwd: string;
+    body: string;
+  }): Promise<void> {
+    const { identifier, cwd, body } = opts;
+    const targetRepo = await this.resolveTargetRepo(cwd);
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-pr-body-'));
+    const bodyPath = join(dir, 'body.md');
+    try {
+      writeFileSync(bodyPath, body, 'utf8');
+      await retryTransientGitHubCli(() => this.exec('gh', [
+        'pr', 'edit', normalizePullIdentifier(identifier),
+        '--repo', targetRepo,
+        '--body-file', bodyPath,
+      ], cwd));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   async checkApproval(opts: {
@@ -296,6 +320,15 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       });
     });
   }
+}
+
+function normalizePullIdentifier(identifier: string): string {
+  const trimmed = identifier.trim();
+  const urlMatch = trimmed.match(/\/pull\/(\d+)(?:\D*)?$/);
+  if (urlMatch?.[1]) return urlMatch[1];
+  const hashMatch = trimmed.match(/#(\d+)$/);
+  if (hashMatch?.[1]) return hashMatch[1];
+  return trimmed;
 }
 
 function normalizeMergeState(value: string | undefined): 'clean' | 'dirty' | 'unknown' {

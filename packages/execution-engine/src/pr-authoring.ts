@@ -33,6 +33,23 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Worker action evidence rendered into the PR Pipeline section. */
+export interface PrAuthoringWorkerActionEntry {
+  id?: string;
+  workerKind: string;
+  actionType: string;
+  status: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType?: string;
+  subjectId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +63,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker actions in this workflow, rendered as the PR Pipeline section. */
+  workerActions?: readonly PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -181,6 +200,109 @@ function getMarkdownSection(body: string, heading: string): string {
     out.push(line);
   }
   return out.join('\n').trim();
+}
+
+function markdownTableCell(value: string | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return '-';
+  return trimmed
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, '<br>');
+}
+
+function workerActionTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.createdAt ?? action.updatedAt ?? action.completedAt ?? '';
+}
+
+function workerActionTarget(action: PrAuthoringWorkerActionEntry): string {
+  if (action.taskId) return action.taskId;
+  if (action.subjectType && action.subjectId) return `${action.subjectType}:${action.subjectId}`;
+  return action.subjectId ?? action.workflowId ?? '-';
+}
+
+function workerActionSummary(action: PrAuthoringWorkerActionEntry): string {
+  if (action.summary && action.reason) return `${action.summary} (${action.reason})`;
+  return action.summary ?? action.reason ?? '';
+}
+
+function compareWorkerActionTime(
+  a: PrAuthoringWorkerActionEntry,
+  b: PrAuthoringWorkerActionEntry,
+): number {
+  const byTime = workerActionTime(a).localeCompare(workerActionTime(b));
+  if (byTime !== 0) return byTime;
+  return (a.id ?? '').localeCompare(b.id ?? '');
+}
+
+export function renderPrPipelineSection(
+  workerActions: readonly PrAuthoringWorkerActionEntry[] | undefined,
+): string | undefined {
+  if (!workerActions || workerActions.length === 0) return undefined;
+  const rows = [...workerActions].sort(compareWorkerActionTime);
+  const lines = [
+    '## Pipeline',
+    '',
+    '| Time | Worker | Action | Status | Target | Summary |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  for (const action of rows) {
+    lines.push([
+      markdownTableCell(workerActionTime(action)),
+      markdownTableCell(action.workerKind),
+      markdownTableCell(action.actionType),
+      markdownTableCell(action.status),
+      markdownTableCell(workerActionTarget(action)),
+      markdownTableCell(workerActionSummary(action)),
+    ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+  }
+  return lines.join('\n');
+}
+
+export function upsertPrPipelineSection(
+  body: string,
+  workerActions: readonly PrAuthoringWorkerActionEntry[] | undefined,
+): string {
+  const section = renderPrPipelineSection(workerActions);
+  if (!section) return body.trimEnd();
+
+  const lines = body.trimEnd().split(/\r?\n/);
+  const pipelineHeadingIndex = lines.findIndex((line) => isHeadingLine(line, '## pipeline'));
+  if (pipelineHeadingIndex >= 0) {
+    let end = lines.length;
+    for (let i = pipelineHeadingIndex + 1; i < lines.length; i += 1) {
+      if (/^ {0,3}##\s+/.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    return [
+      ...lines.slice(0, pipelineHeadingIndex),
+      ...section.split('\n'),
+      '',
+      ...lines.slice(end),
+    ].join('\n').trimEnd();
+  }
+
+  const summaryHeadingIndex = lines.findIndex((line) => isHeadingLine(line, '## summary'));
+  if (summaryHeadingIndex >= 0) {
+    let insertAt = lines.length;
+    for (let i = summaryHeadingIndex + 1; i < lines.length; i += 1) {
+      if (/^ {0,3}##\s+/.test(lines[i])) {
+        insertAt = i;
+        break;
+      }
+    }
+    return [
+      ...lines.slice(0, insertAt),
+      '',
+      ...section.split('\n'),
+      '',
+      ...lines.slice(insertAt),
+    ].join('\n').trimEnd();
+  }
+
+  return `${body.trimEnd()}\n\n${section}`.trimEnd();
 }
 
 /** Extract the collapsed `<details><summary>Review metadata</summary>` block from ## Summary. */
@@ -483,6 +605,12 @@ export function buildCanonicalPrBody(args: {
     lines.push(args.workflowSummary.trim());
   }
   lines.push('');
+
+  const pipelineSection = renderPrPipelineSection(args.structuredContext?.workerActions);
+  if (pipelineSection) {
+    lines.push(pipelineSection);
+    lines.push('');
+  }
 
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');

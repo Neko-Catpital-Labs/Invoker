@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -206,11 +206,31 @@ export function formatEventLog(events: TaskEvent[]): string {
 
   const lines = events.map((event) => {
     const timestamp = event.createdAt;
-    const payload = event.payload ? ` ${event.payload}` : '';
+    const workerAction = formatWorkerActionEventPayload(event);
+    const payload = workerAction ? ` ${workerAction}` : event.payload ? ` ${event.payload}` : '';
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 
   return lines.join('\n');
+}
+
+function formatWorkerActionEventPayload(event: TaskEvent): string | undefined {
+  if (event.eventType !== 'task.worker_action' || !event.payload) return undefined;
+  try {
+    const parsed = JSON.parse(event.payload) as Record<string, unknown>;
+    const workerKind = typeof parsed.workerKind === 'string' ? parsed.workerKind : 'worker';
+    const actionType = typeof parsed.actionType === 'string' ? parsed.actionType : 'action';
+    const status = typeof parsed.status === 'string' ? parsed.status : 'unknown';
+    const summary = typeof parsed.summary === 'string' ? parsed.summary : undefined;
+    const reason = typeof parsed.reason === 'string' ? parsed.reason : undefined;
+    return escapeTerminalText(
+      `${workerKind}/${actionType} [${status}]` +
+        (summary ? ` — ${summary}` : '') +
+        (reason ? ` (${reason})` : ''),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 export function formatWorkerActions(actions: WorkerActionRecord[]): string {
@@ -261,6 +281,33 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
       `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
     );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  const lines: string[] = [];
+  lines.push(`${BOLD}Worker status${RESET} ${DIM}${escapeTerminalText(snapshot.generatedAt)}${RESET}`);
+  for (const worker of snapshot.workers) {
+    const runtime = worker.runtimeKind ? ` runtime=${escapeTerminalText(worker.runtimeKind)}` : '';
+    const instance = worker.instanceId ? ` instance=${escapeTerminalText(worker.instanceId)}` : '';
+    const auto = worker.autoStarts ? ' auto-start' : '';
+    lines.push(
+      `  ${BOLD}${escapeTerminalText(worker.kind)}${RESET} [${worker.lifecycle}] policy=${worker.policy}${auto}${runtime}${instance}`,
+    );
+    if (worker.recentActions.length === 0) {
+      lines.push(`    ${DIM}recentActions: none${RESET}`);
+      continue;
+    }
+    lines.push('    recentActions:');
+    for (const action of worker.recentActions) {
+      const task = action.taskId ? ` task=${escapeTerminalText(action.taskId)}` : '';
+      const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+      lines.push(
+        `      ${escapeTerminalText(action.updatedAt)} ${escapeTerminalText(action.id)} ` +
+          `[${action.status}] ${escapeTerminalText(action.workerKind)}/${escapeTerminalText(action.actionType)}${task}${summary}`,
+      );
+    }
   }
   return lines.join('\n');
 }

@@ -29,12 +29,15 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'attempt',
   'baseBranch',
   'branch',
+  'actionType',
   'featureBranch',
   'reviewId',
   'reviewUrl',
   'status',
   'reason',
   'route',
+  'workerActionId',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -64,6 +67,7 @@ function parseEventPayload(payload: string | undefined): Record<string, unknown>
 
 function inferLogLevel(event: TaskAuditEvent, payload: Record<string, unknown> | undefined): TaskLogLevel {
   if (isTaskLogLevel(payload?.level)) return payload.level;
+  if (event.eventType === 'task.worker_action' && payload?.status === 'failed') return 'error';
   if (event.eventType.includes('failed') || event.eventType.includes('error')) return 'error';
   if (event.eventType.includes('warn')) return 'warn';
   if (event.eventType.startsWith('debug.')) return 'debug';
@@ -81,13 +85,26 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
   return Object.keys(detail).length > 0 ? JSON.stringify(detail) : undefined;
 }
 
+function formatWorkerActionMessage(payload: Record<string, unknown> | undefined): string | undefined {
+  if (!payload) return undefined;
+  const workerKind = typeof payload.workerKind === 'string' ? payload.workerKind : 'worker';
+  const actionType = typeof payload.actionType === 'string' ? payload.actionType : 'action';
+  const status = typeof payload.status === 'string' ? payload.status : 'unknown';
+  const summary = typeof payload.summary === 'string' && payload.summary.trim()
+    ? payload.summary.trim()
+    : undefined;
+  return `${workerKind}/${actionType} ${status}${summary ? `: ${summary}` : ''}`;
+}
+
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
   const payloadMessage = payload?.message;
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
     level: inferLogLevel(event, payload),
-    message: typeof payloadMessage === 'string' && payloadMessage.trim()
+    message: event.eventType === 'task.worker_action'
+      ? formatWorkerActionMessage(payload) ?? event.eventType
+      : typeof payloadMessage === 'string' && payloadMessage.trim()
       ? payloadMessage
       : event.eventType,
     detail: formatLogDetail(payload),
