@@ -198,7 +198,8 @@ export function formatCodexPlannerStdout(raw: string): CodexPlannerStdout {
         && payload?.type === 'message'
         && payload.role === 'assistant'
       ) {
-        const blocks = Array.isArray(payload.content) ? payload.content : [];
+        const blocks: Array<string | { type?: string; text?: string }> =
+          Array.isArray(payload.content) ? payload.content : [];
         const text = blocks
           .filter((b) => typeof b === 'string' || b?.type === 'output_text')
           .map((b) => typeof b === 'string' ? b : b.text ?? '')
