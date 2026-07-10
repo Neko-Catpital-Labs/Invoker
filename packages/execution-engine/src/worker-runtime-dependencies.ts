@@ -1,6 +1,7 @@
 import type { Logger } from '@invoker/contracts';
 import type { MessageBus } from '@invoker/transport';
 
+import type { MergeGateProvider } from './merge-gate-provider.js';
 import type {
   AutoFixRecoveryStore,
   AutoFixRecoverySubmitter,
@@ -15,6 +16,7 @@ import type {
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
+import type { PrSummaryRefreshWorkerStore } from './workers/pr-summary-refresh-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
 import type { RequeueWorkerConfig, RequeueWorkerSubmitter } from './workers/requeue-worker.js';
 import type {
@@ -26,7 +28,11 @@ import type {
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore & CiFailureWorkerStore & AutoApproveWorkerStore & WorkflowResumeWorkerStore;
+  store: AutoFixRecoveryStore
+    & CiFailureWorkerStore
+    & AutoApproveWorkerStore
+    & WorkflowResumeWorkerStore
+    & PrSummaryRefreshWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter & RequeueWorkerSubmitter & AutoApproveWorkerSubmitter & WorkflowResumeWorkerSubmitter;
   /** Operator logger. */
@@ -35,6 +41,10 @@ export interface WorkerRuntimeDependencies {
   messageBus?: MessageBus;
   /** Review-gate polling surface owned by the task runner. */
   reviewGate?: PrStatusReviewGate;
+  /** Merge-gate provider IO used by PR body maintenance workers. */
+  mergeGateProvider?: MergeGateProvider;
+  /** Repository cwd fallback for provider IO when a merge task has no workspace path. */
+  cwd?: string;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
   /** Requeue worker tuning (stall requeue budget / backoff). */

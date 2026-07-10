@@ -33,6 +33,23 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker activity rendered into the PR Pipeline summary. */
+export interface PrAuthoringWorkerActionEntry {
+  id?: string;
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType?: string;
+  subjectId?: string;
+  taskId?: string;
+  workflowId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +63,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker decisions/actions in chronological order for operator visibility. */
+  workerActions?: readonly PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -287,6 +306,40 @@ function extractAssistantBody(driver: SessionDriver | undefined, sessionId: stri
   return fallback.trim();
 }
 
+function markdownTableCell(value: string | undefined): string {
+  return (value ?? '')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\|/g, '\\|')
+    .trim();
+}
+
+function workerActionTimestamp(action: PrAuthoringWorkerActionEntry): string {
+  return action.createdAt ?? action.updatedAt ?? action.completedAt ?? '';
+}
+
+function compareWorkerActionsByTime(
+  left: PrAuthoringWorkerActionEntry,
+  right: PrAuthoringWorkerActionEntry,
+): number {
+  const leftTime = Date.parse(workerActionTimestamp(left));
+  const rightTime = Date.parse(workerActionTimestamp(right));
+  const normalizedLeft = Number.isFinite(leftTime) ? leftTime : 0;
+  const normalizedRight = Number.isFinite(rightTime) ? rightTime : 0;
+  if (normalizedLeft !== normalizedRight) return normalizedLeft - normalizedRight;
+  return (left.id ?? '').localeCompare(right.id ?? '');
+}
+
+function workerActionTarget(action: PrAuthoringWorkerActionEntry): string {
+  if (action.taskId) return action.taskId;
+  if (action.subjectType && action.subjectId) return `${action.subjectType}:${action.subjectId}`;
+  return action.subjectId ?? '';
+}
+
+function workerActionSummary(action: PrAuthoringWorkerActionEntry): string {
+  if (action.summary && action.reason) return `${action.summary} (${action.reason})`;
+  return action.summary ?? action.reason ?? '';
+}
+
 export function resolveInstalledSkillPathForAgent(agentName: string, skillName: string): string | null {
   const normalized = agentName.trim().toLowerCase();
   const home = homedir();
@@ -484,13 +537,32 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  const ctx = args.structuredContext;
+  const workerActions = [...(ctx?.workerActions ?? [])].sort(compareWorkerActionsByTime);
+  if (workerActions.length > 0) {
+    lines.push('## Pipeline');
+    lines.push('');
+    lines.push('| Time | Worker | Action | Target | Status | Summary |');
+    lines.push('| --- | --- | --- | --- | --- | --- |');
+    for (const action of workerActions) {
+      lines.push([
+        markdownTableCell(workerActionTimestamp(action)),
+        markdownTableCell(action.workerKind),
+        markdownTableCell(action.actionType),
+        markdownTableCell(workerActionTarget(action)),
+        markdownTableCell(action.status),
+        markdownTableCell(workerActionSummary(action)),
+      ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+    }
+    lines.push('');
+  }
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
   lines.push('<details>');
   lines.push('<summary>Test Plan</summary>');
   lines.push('');
-  const ctx = args.structuredContext;
   const commandTasks = ctx?.tasks.filter((t) => t.command && t.status === 'completed') ?? [];
   if (commandTasks.length > 0) {
     for (const t of commandTasks) {

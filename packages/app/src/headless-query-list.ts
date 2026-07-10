@@ -13,7 +13,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import {
+  createWorkerRegistry,
+  registerBuiltinWorkers,
+  type AgentRegistry,
+  type WorkerRuntimeDependencies,
+} from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import {
@@ -25,7 +30,8 @@ import {
   restoreWorkflowForTask,
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
-import { listWorkerDecisions } from './worker-control.js';
+import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot, listWorkerDecisions } from './worker-control.js';
+import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
@@ -788,14 +794,41 @@ function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
 
 export async function renderWorkerStatus(
   flagArgs: string[],
-  deps: Pick<HeadlessQueryDeps, 'persistence'>,
+  deps: Pick<HeadlessQueryDeps, 'persistence' | 'invokerConfig'>,
 ): Promise<void> {
   const flags = parseQueryFlags(flagArgs);
-  const status = collectRecoveryWorkerStatus(deps.persistence);
-  const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+  const recoveryStatus = collectRecoveryWorkerStatus(deps.persistence);
+  const registry = registerExternalWorkersFromConfig(
+    deps.invokerConfig?.externalWorkers,
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+  );
+  const persistence = deps.persistence as HeadlessQueryDeps['persistence'] & {
+    listWorkerActions?: (...args: unknown[]) => unknown[];
+    getEventsByTypes?: (...args: unknown[]) => unknown[];
+    countEventsByTypes?: (...args: unknown[]) => unknown[];
+  };
+  const snapshot = createLocalWorkerStatusSnapshot({
+    registry,
+    autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+    persistence: {
+      listWorkerActions: persistence.listWorkerActions?.bind(persistence) ?? (() => []),
+      listWorkflows: persistence.listWorkflows.bind(persistence),
+      loadTasks: persistence.loadTasks.bind(persistence),
+      getEvents: persistence.getEvents.bind(persistence),
+      getEventsByTypes: persistence.getEventsByTypes?.bind(persistence),
+      countEventsByTypes: persistence.countEventsByTypes?.bind(persistence),
+    } as never,
+  });
+  const status = {
+    ...recoveryStatus,
+    generatedAt: snapshot.generatedAt,
+    workers: snapshot.workers,
+    snapshot,
+  };
+  const { formatAsJson, formatAsJsonl, formatWorkerStatusSnapshot } = await import('./formatter.js');
   switch (flags.output) {
     case 'label':
-      writeOut(`${status.workerId}\n`);
+      writeOut(`${recoveryStatus.workerId}\n`);
       break;
     case 'json':
       writeOut(formatAsJson(status) + '\n');
@@ -804,7 +837,7 @@ export async function renderWorkerStatus(
       writeOut(formatAsJsonl([status]) + '\n');
       break;
     default:
-      writeOut(formatRecoveryWorkerStatus(status) + '\n');
+      writeOut(`${formatRecoveryWorkerStatus(recoveryStatus)}\n\n${formatWorkerStatusSnapshot(snapshot)}\n`);
       break;
   }
 }

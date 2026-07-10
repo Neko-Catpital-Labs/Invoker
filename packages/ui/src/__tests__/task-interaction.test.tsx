@@ -247,4 +247,43 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
     });
   });
+
+  it('renders task.worker_action events in the inspector log surface', async () => {
+    const task = makeUITask({
+      id: 'task-worker-action',
+      description: 'Worker action target',
+      status: 'completed',
+      workflowId: 'wf-a',
+      command: 'pnpm test',
+    });
+    mock.setEvents(task.id, [{
+      id: 1,
+      taskId: task.id,
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        summary: 'Updated PR summary with pipeline actions',
+        subjectType: 'review',
+        subjectId: '123',
+        reviewId: '123',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    render(<App />);
+    act(() => mock.setTasks([task], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(await screen.findByTestId('rf__node-task-worker-action'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('Updated PR summary with pipeline actions');
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('pr-summary-refresh');
+    });
+  });
 });

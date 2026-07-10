@@ -27,6 +27,8 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'agentName',
   'artifactCount',
   'attempt',
+  'actionId',
+  'actionType',
   'baseBranch',
   'branch',
   'featureBranch',
@@ -35,6 +37,9 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'status',
   'reason',
   'route',
+  'subjectId',
+  'subjectType',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -64,6 +69,7 @@ function parseEventPayload(payload: string | undefined): Record<string, unknown>
 
 function inferLogLevel(event: TaskAuditEvent, payload: Record<string, unknown> | undefined): TaskLogLevel {
   if (isTaskLogLevel(payload?.level)) return payload.level;
+  if (event.eventType === 'task.worker_action' && payload?.status === 'failed') return 'error';
   if (event.eventType.includes('failed') || event.eventType.includes('error')) return 'error';
   if (event.eventType.includes('warn')) return 'warn';
   if (event.eventType.startsWith('debug.')) return 'debug';
@@ -81,15 +87,32 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
   return Object.keys(detail).length > 0 ? JSON.stringify(detail) : undefined;
 }
 
+function workerActionMessage(payload: Record<string, unknown> | undefined): string | undefined {
+  if (!payload) return undefined;
+  const summary = typeof payload.summary === 'string' && payload.summary.trim()
+    ? payload.summary.trim()
+    : undefined;
+  if (summary) return summary;
+
+  const workerKind = typeof payload.workerKind === 'string' ? formatStatus(payload.workerKind) : 'Worker';
+  const actionType = typeof payload.actionType === 'string' ? formatStatus(payload.actionType) : 'action';
+  const status = typeof payload.status === 'string' ? formatStatus(payload.status) : 'updated';
+  return `${workerKind} ${actionType}: ${status}`;
+}
+
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
   const payloadMessage = payload?.message;
+  const workerMessage = event.eventType === 'task.worker_action'
+    ? workerActionMessage(payload)
+    : undefined;
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
     level: inferLogLevel(event, payload),
-    message: typeof payloadMessage === 'string' && payloadMessage.trim()
+    message: workerMessage
+      ?? (typeof payloadMessage === 'string' && payloadMessage.trim()
       ? payloadMessage
-      : event.eventType,
+      : event.eventType),
     detail: formatLogDetail(payload),
     createdAt: event.createdAt,
   };

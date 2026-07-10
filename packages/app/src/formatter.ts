@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -261,6 +261,38 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
       `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
     );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  const lines: string[] = [];
+  lines.push(`${BOLD}Worker status${RESET}`);
+  lines.push(`${DIM}generatedAt=${escapeTerminalText(snapshot.generatedAt)}${RESET}`);
+  for (const worker of snapshot.workers) {
+    const lifecycle = escapeTerminalText(worker.lifecycle);
+    const policy = escapeTerminalText(worker.policy);
+    const auto = worker.autoStarts ? ' auto' : '';
+    lines.push('');
+    lines.push(`  ${BOLD}${escapeTerminalText(worker.kind)}${RESET} [${lifecycle}] policy=${policy}${auto}`);
+    if (worker.note) {
+      lines.push(`    ${escapeTerminalText(worker.note)}`);
+    }
+    if (worker.recentActions.length > 0) {
+      lines.push('    recentActions:');
+      for (const action of worker.recentActions) {
+        const task = action.taskId ? ` task=${escapeTerminalText(action.taskId)}` : '';
+        const reason = action.reason ? ` reason=${escapeTerminalText(action.reason)}` : '';
+        const summary = action.summary ? ` - ${escapeTerminalText(action.summary)}` : '';
+        lines.push(
+          `      ${escapeTerminalText(action.updatedAt)} ${escapeTerminalText(action.status)} ` +
+          `${escapeTerminalText(action.workerKind)}/${escapeTerminalText(action.actionType)}` +
+          `${task}${reason}${summary}`,
+        );
+      }
+    } else {
+      lines.push(`    ${DIM}recentActions: none${RESET}`);
+    }
   }
   return lines.join('\n');
 }

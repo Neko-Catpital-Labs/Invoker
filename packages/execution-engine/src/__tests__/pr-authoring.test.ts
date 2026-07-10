@@ -110,6 +110,43 @@ describe('buildCanonicalPrBody', () => {
     expect(body).toContain(visualProof);
   });
 
+  it('renders worker action pipeline rows in chronological order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh PR summary',
+      workflowSummary: 'Updated worker visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'later',
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'queued',
+            taskId: 'wf-1/test',
+            summary: 'Queued CI repair',
+            createdAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            id: 'earlier',
+            workerKind: 'autoapprove',
+            actionType: 'approve-ai-fix',
+            status: 'skipped',
+            taskId: 'wf-1/fix',
+            reason: 'already-recorded',
+            createdAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    const earlierIndex = body.indexOf('autoapprove | approve-ai-fix');
+    const laterIndex = body.indexOf('ci-failure | fix-ci-failure');
+    expect(earlierIndex).toBeGreaterThan(0);
+    expect(laterIndex).toBeGreaterThan(earlierIndex);
+    expect(body).toContain('already-recorded');
+  });
+
   it('canonical body passes validation', () => {
     const body = buildCanonicalPrBody({
       title: 'Anything',
