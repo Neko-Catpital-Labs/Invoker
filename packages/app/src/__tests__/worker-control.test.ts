@@ -7,6 +7,7 @@ import {
   createWorkerRegistry,
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
@@ -90,6 +91,7 @@ function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKE
   };
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
+  register(PR_SUMMARY_REFRESH_WORKER_KIND, 'Refreshes PR summaries.');
   register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
   register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
   register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');

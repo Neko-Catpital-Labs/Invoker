@@ -237,6 +237,13 @@ export function formatWorkerActions(actions: WorkerActionRecord[]): string {
   return lines.join('\n');
 }
 
+export function formatWorkerStatusRecentActions(actions: WorkerActionRecord[]): string {
+  if (actions.length === 0) {
+    return `${DIM}No recent worker actions.${RESET}`;
+  }
+  return formatWorkerActions(actions);
+}
+
 export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
   if (actions.length === 0) {
     return `${DIM}No worker decisions found.${RESET}`;

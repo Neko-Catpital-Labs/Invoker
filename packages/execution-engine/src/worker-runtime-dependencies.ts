@@ -1,4 +1,5 @@
 import type { Logger } from '@invoker/contracts';
+import type { WorkerActionListFilters, WorkerActionRecord, Workflow } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
 
 import type {
@@ -22,11 +23,15 @@ import type {
   WorkflowResumeWorkerStore,
   WorkflowResumeWorkerSubmitter,
 } from './workers/workflow-resume-worker.js';
+import type { MergeGateProvider } from './merge-gate-provider.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
-  store: AutoFixRecoveryStore & CiFailureWorkerStore & AutoApproveWorkerStore & WorkflowResumeWorkerStore;
+  store: AutoFixRecoveryStore & CiFailureWorkerStore & AutoApproveWorkerStore & WorkflowResumeWorkerStore & {
+    loadWorkflow?(workflowId: string): Workflow | undefined;
+    listWorkerActions?(filters?: WorkerActionListFilters): WorkerActionRecord[];
+  };
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter & CiFailureWorkerSubmitter & RequeueWorkerSubmitter & AutoApproveWorkerSubmitter & WorkflowResumeWorkerSubmitter;
   /** Operator logger. */
@@ -35,6 +40,8 @@ export interface WorkerRuntimeDependencies {
   messageBus?: MessageBus;
   /** Review-gate polling surface owned by the task runner. */
   reviewGate?: PrStatusReviewGate;
+  /** Provider surface used by PR summary refresh workers. */
+  mergeGateProvider?: MergeGateProvider;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
   /** Requeue worker tuning (stall requeue budget / backoff). */

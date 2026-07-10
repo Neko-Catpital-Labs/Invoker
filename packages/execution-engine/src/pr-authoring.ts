@@ -33,6 +33,23 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence rendered into the PR Pipeline summary. */
+export interface PrAuthoringWorkerActionEntry {
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType?: string;
+  subjectId?: string;
+  workflowId?: string;
+  taskId?: string;
+  summary?: string;
+  reason?: string;
+  attemptCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +63,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker action rows to summarize what Invoker did for this PR/task. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -252,6 +271,65 @@ function buildPromptFileBootstrap(promptPath: string): string {
     'Read the file completely, then execute those instructions in this workspace.',
     'Do not ask for the file contents.',
   ].join('\n');
+}
+
+function markdownTableCell(value: string | number | undefined): string {
+  if (value === undefined || value === '') return '-';
+  return String(value)
+    .replaceAll('\\', '\\\\')
+    .replaceAll('|', '\\|')
+    .replace(/\r?\n/g, '<br>');
+}
+
+function workerActionTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.updatedAt ?? action.completedAt ?? action.createdAt ?? '';
+}
+
+function workerActionTimestampMs(action: PrAuthoringWorkerActionEntry): number {
+  const raw = workerActionTime(action);
+  if (!raw) return 0;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function workerActionSubject(action: PrAuthoringWorkerActionEntry): string {
+  if (action.taskId) return action.taskId;
+  if (action.subjectType && action.subjectId) return `${action.subjectType}:${action.subjectId}`;
+  return action.subjectId ?? action.workflowId ?? '-';
+}
+
+function sortedWorkerActions(
+  actions: readonly PrAuthoringWorkerActionEntry[] | undefined,
+): PrAuthoringWorkerActionEntry[] {
+  return [...(actions ?? [])].sort((a, b) =>
+    workerActionTimestampMs(a) - workerActionTimestampMs(b)
+    || workerActionTime(a).localeCompare(workerActionTime(b))
+    || a.workerKind.localeCompare(b.workerKind)
+    || a.actionType.localeCompare(b.actionType)
+    || workerActionSubject(a).localeCompare(workerActionSubject(b)),
+  );
+}
+
+function appendPipelineSection(lines: string[], actions: readonly PrAuthoringWorkerActionEntry[] | undefined): void {
+  const sorted = sortedWorkerActions(actions);
+  if (sorted.length === 0) return;
+
+  lines.push('## Pipeline');
+  lines.push('');
+  lines.push('| Time | Worker | Action | Subject | Status | Summary |');
+  lines.push('| --- | --- | --- | --- | --- | --- |');
+  for (const action of sorted) {
+    const summary = action.summary ?? action.reason;
+    lines.push(
+      `| ${markdownTableCell(workerActionTime(action))} ` +
+        `| ${markdownTableCell(action.workerKind)} ` +
+        `| ${markdownTableCell(action.actionType)} ` +
+        `| ${markdownTableCell(workerActionSubject(action))} ` +
+        `| ${markdownTableCell(action.status)} ` +
+        `| ${markdownTableCell(summary)} |`,
+    );
+  }
+  lines.push('');
 }
 
 function materializeLocalPrompt(prompt: string): { effectivePrompt: string; cleanup: () => void } {
@@ -484,6 +562,8 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  appendPipelineSection(lines, args.structuredContext?.workerActions);
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
@@ -592,6 +672,24 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    const workerActions = sortedWorkerActions(ctx.workerActions);
+    if (workerActions.length > 0) {
+      lines.push('Worker action pipeline (oldest first; use this for the ## Pipeline section):');
+      lines.push('| Time | Worker | Action | Subject | Status | Summary |');
+      lines.push('| --- | --- | --- | --- | --- | --- |');
+      for (const action of workerActions) {
+        lines.push(
+          `| ${markdownTableCell(workerActionTime(action))} ` +
+            `| ${markdownTableCell(action.workerKind)} ` +
+            `| ${markdownTableCell(action.actionType)} ` +
+            `| ${markdownTableCell(workerActionSubject(action))} ` +
+            `| ${markdownTableCell(action.status)} ` +
+            `| ${markdownTableCell(action.summary ?? action.reason)} |`,
+        );
+      }
+      lines.push('');
     }
 
     if (ctx.visualProofMarkdown) {

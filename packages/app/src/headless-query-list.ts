@@ -13,6 +13,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
+import type { WorkerActionRecord } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
@@ -763,7 +764,7 @@ export async function headlessSession(taskId: string | undefined, deps: Pick<Hea
   }
 }
 
-function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
+function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus, recentActions: WorkerActionRecord[] = []): string {
   const lines = [
     `${BOLD}Recovery worker${RESET}`,
     `  kind: ${status.kind}`,
@@ -784,6 +785,15 @@ function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
       lines.push(`  ${event.at} ${event.taskId} ${event.action}${phase}${reason}`);
     }
   }
+  if (recentActions.length > 0) {
+    lines.push('');
+    lines.push(`${BOLD}Recent worker actions${RESET}`);
+    for (const action of recentActions) {
+      const task = action.taskId ? ` task=${action.taskId}` : '';
+      const summary = action.summary ? ` — ${action.summary}` : '';
+      lines.push(`  ${action.updatedAt} ${action.workerKind}/${action.actionType} [${action.status}]${task}${summary}`);
+    }
+  }
   return lines.join('\n');
 }
 
@@ -793,19 +803,24 @@ export async function renderWorkerStatus(
 ): Promise<void> {
   const flags = parseQueryFlags(flagArgs);
   const status = collectRecoveryWorkerStatus(deps.persistence);
-  const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+  const recentActions = deps.persistence.listWorkerActions?.({ limit: 5 }).slice(0, 5) ?? [];
+  const { formatAsJson, formatAsJsonl, serializeWorkerAction } = await import('./formatter.js');
+  const statusWithActions = {
+    ...status,
+    recentActions: recentActions.map(serializeWorkerAction),
+  };
   switch (flags.output) {
     case 'label':
       writeOut(`${status.workerId}\n`);
       break;
     case 'json':
-      writeOut(formatAsJson(status) + '\n');
+      writeOut(formatAsJson(statusWithActions) + '\n');
       break;
     case 'jsonl':
-      writeOut(formatAsJsonl([status]) + '\n');
+      writeOut(formatAsJsonl([statusWithActions]) + '\n');
       break;
     default:
-      writeOut(formatRecoveryWorkerStatus(status) + '\n');
+      writeOut(formatRecoveryWorkerStatus(status, recentActions) + '\n');
       break;
   }
 }

@@ -125,6 +125,53 @@ describe('buildCanonicalPrBody', () => {
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
   });
+
+  it('renders worker action Pipeline rows in chronological order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Worker visibility',
+      workflowSummary: 'Updated PR visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'queued',
+            taskId: 'wf-1/__merge__',
+            summary: 'Queued CI repair',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            workerKind: 'pr-summary-refresh',
+            actionType: 'refresh-pr-summary',
+            status: 'completed',
+            subjectType: 'review',
+            subjectId: '123',
+            summary: 'Updated | PR summary',
+            updatedAt: '2026-01-01T00:03:00.000Z',
+          },
+          {
+            workerKind: 'autofix',
+            actionType: 'auto-fix',
+            status: 'completed',
+            taskId: 'wf-1/task-a',
+            summary: 'Fixed task',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    const autofixIndex = body.indexOf('| 2026-01-01T00:01:00.000Z | autofix | auto-fix');
+    const ciIndex = body.indexOf('| 2026-01-01T00:02:00.000Z | ci-failure | fix-ci-failure');
+    const refreshIndex = body.indexOf('| 2026-01-01T00:03:00.000Z | pr-summary-refresh | refresh-pr-summary');
+    expect(autofixIndex).toBeGreaterThan(-1);
+    expect(ciIndex).toBeGreaterThan(autofixIndex);
+    expect(refreshIndex).toBeGreaterThan(ciIndex);
+    expect(body).toContain('Updated \\| PR summary');
+    expect(validateCanonicalPrBody(body)).toEqual([]);
+  });
 });
 
 // ── validateReviewStackPrBody ────────────────────────────
