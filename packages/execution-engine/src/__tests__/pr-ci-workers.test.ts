@@ -180,7 +180,7 @@ describe('PR status and CI failure workers', () => {
       drainEvents: () => [event],
     });
 
-    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1 });
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
 
     expect(ciFailureActionKey(sameChecksDifferentOrder)).toBe(ciFailureActionKey(event));
     expect(harness.submit).toHaveBeenCalledTimes(1);
@@ -221,7 +221,7 @@ describe('PR status and CI failure workers', () => {
       drainEvents: () => [event],
     });
 
-    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1 });
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
 
     expect(harness.submit).toHaveBeenCalledTimes(1);
   });
@@ -239,7 +239,7 @@ describe('PR status and CI failure workers', () => {
       drainEvents: () => [event],
     });
 
-    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1 });
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
 
     expect(harness.submit).not.toHaveBeenCalled();
     expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
@@ -279,7 +279,7 @@ describe('PR status and CI failure workers', () => {
       drainEvents: () => [event],
     });
 
-    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1 });
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
 
     expect(harness.submit).not.toHaveBeenCalled();
     // Stale events are routine scan noise: logged, but NOT recorded as a durable
