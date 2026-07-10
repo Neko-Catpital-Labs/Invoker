@@ -1,29 +1,118 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CodeRabbit PR #3050 (discussion r3523490877): after planningChatSubmit succeeds,
-# `draftPlanAvailable` / `draftPlanSummary` were never cleared, so the "Submit to
-# Invoker" ready bar stayed mounted and could resubmit the same planning session.
+# Bug-only repro for CodeRabbit PR #3050 (discussion r3523490877).
 #
-# The focused regression submits a ready draft, clicks "Submit to Invoker", then
-# asserts the ready bar is dismissed.
-#   - Buggy code leaves the ready bar visible -> vitest fails -> repro exits non-zero.
-#   - Fixed code clears the draft state -> vitest passes -> repro exits zero.
+# The renderer bug: after planningChatSubmit succeeded, draftPlanAvailable and
+# draftPlanSummary stayed live, so the "Submit to Invoker" ready bar could come
+# back for the same planning session.
+#
+# Exit codes:
+#   0  the intended bug reproduced
+#   1  the focused test passed, so the bug did not reproduce
+#   2  repro setup failed or Vitest failed for an unrelated reason
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+UI_DIR="$REPO_ROOT/packages/ui"
+TEST_FILE="$(mktemp "$UI_DIR/src/__tests__/tmp-repro-pr3050-draft-clear.XXXXXX.test.tsx")"
+TEST_NAME="$(basename "$TEST_FILE")"
 LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-pr3050-draft-clear.XXXXXX.log")"
-trap 'rm -f "$LOG_FILE"' EXIT
+BUG_SENTINEL="REPRO_BUG_PR3050_DRAFT_CLEAR"
 
-echo "[repro] PR #3050: draft state must be cleared after a successful submit."
+cleanup() {
+  rm -f "$TEST_FILE" "$LOG_FILE"
+}
+trap cleanup EXIT
 
-if pnpm -C "$REPO_ROOT" --filter @invoker/ui exec vitest run \
-  src/__tests__/coderabbit-pr3050-draft-clear-repro.test.tsx \
-  >"$LOG_FILE" 2>&1; then
-  echo "[repro] PASS: the Submit to Invoker ready bar is dismissed after submit; no resubmit path remains."
-  exit 0
-else
-  status=$?
-  echo "[repro] FAIL: the ready bar stayed mounted after submit, so the same session can be resubmitted."
-  cat "$LOG_FILE"
-  exit "$status"
+cat > "$TEST_FILE" <<'TS'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import type { InAppPlanningChatResponse } from '@invoker/contracts';
+import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+
+vi.mock('@xyflow/react', async () => {
+  const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
+  return createReactFlowMock();
+});
+
+const { App } = await import('../App.js');
+
+describe('PR #3050 draft-clear bug repro', () => {
+  let mock: MockInvoker;
+
+  beforeEach(() => {
+    mock = createMockInvoker();
+    mock.install();
+  });
+
+  afterEach(() => {
+    mock.cleanup();
+  });
+
+  async function openPlanningTerminal() {
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
+    });
+  }
+
+  function submitPlanningText(text: string) {
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
+    fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+  }
+
+  it('clears the ready draft after a successful submit', async () => {
+    const draftReply: InAppPlanningChatResponse = {
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Here is the plan.',
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
+    };
+    mock.api.planningChatSend = vi.fn(async () => draftReply);
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft the full plan');
+    await screen.findByTestId('invoker-terminal-ready-bar');
+    fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(1);
+    });
+
+    await openPlanningTerminal();
+    await Promise.resolve();
+
+    if (screen.queryByTestId('invoker-terminal-ready-bar')) {
+      throw new Error('REPRO_BUG_PR3050_DRAFT_CLEAR: ready draft bar survived successful submit');
+    }
+
+    expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(1);
+  });
+});
+TS
+
+echo "[repro] PR #3050: proving submitted draft state is still live only when the bug is present."
+
+set +e
+pnpm -C "$REPO_ROOT" --filter @invoker/ui exec vitest run \
+  --reporter=verbose \
+  "src/__tests__/$TEST_NAME" \
+  >"$LOG_FILE" 2>&1
+status=$?
+set -e
+
+if [[ "$status" -eq 0 ]]; then
+  echo "[repro] FAIL: focused draft-clear test passed; the bug did not reproduce."
+  exit 1
 fi
+
+if grep -Fq "$BUG_SENTINEL" "$LOG_FILE"; then
+  echo "[repro] PASS: submitted draft state stayed live after planningChatSubmit."
+  exit 0
+fi
+
+echo "[repro] ERROR: Vitest failed, but not with the intended draft-clear bug." >&2
+cat "$LOG_FILE" >&2
+exit 2
