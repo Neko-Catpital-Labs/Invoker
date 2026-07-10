@@ -554,6 +554,8 @@ jobs:
               e2e/workflow-delete-latency.spec.ts
               e2e/main-process-hitch-responsiveness.spec.ts
               e2e/dag-click-hitch-responsiveness.spec.ts
+              e2e/terminal-upsert-hitch-responsiveness.spec.ts
+              e2e/attention-click-hitch-responsiveness.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
