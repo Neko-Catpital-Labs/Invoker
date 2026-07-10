@@ -96,6 +96,40 @@ describe('buildCanonicalPrBody', () => {
     expect(body).not.toContain('pnpm e2e');
   });
 
+  it('renders worker actions in a chronological Pipeline section', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh PR summary',
+      workflowSummary: 'Updated PR visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'queued',
+            taskId: 'wf-1/test',
+            summary: 'Queued CI repair',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            workerKind: 'autoapprove',
+            actionType: 'approve-ai-fix',
+            status: 'completed',
+            taskId: 'wf-1/test',
+            summary: 'Approved fix',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    const approveIndex = body.indexOf('| 2026-01-01T00:01:00.000Z | autoapprove | approve-ai-fix | completed | wf-1/test | Approved fix |');
+    const ciIndex = body.indexOf('| 2026-01-01T00:02:00.000Z | ci-failure | fix-ci-failure | queued | wf-1/test | Queued CI repair |');
+    expect(approveIndex).toBeGreaterThan(0);
+    expect(ciIndex).toBeGreaterThan(approveIndex);
+  });
+
   it('preserves visual proof markdown verbatim', () => {
     const visualProof = '## Visual Proof\n\n| Before | After |\n|--------|-------|\n| ![b](b.png) | ![a](a.png) |';
     const body = buildCanonicalPrBody({

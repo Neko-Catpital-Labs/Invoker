@@ -33,6 +33,20 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence rendered into the PR Pipeline summary. */
+export interface PrAuthoringWorkerActionEntry {
+  workerKind: string;
+  actionType: string;
+  status: string;
+  taskId?: string;
+  subjectType?: string;
+  subjectId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +60,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker actions observed for this workflow. Rendered chronologically. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -181,6 +197,65 @@ function getMarkdownSection(body: string, heading: string): string {
     out.push(line);
   }
   return out.join('\n').trim();
+}
+
+function markdownTableCell(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  return String(value)
+    .replace(/\r?\n/g, ' ')
+    .replace(/\|/g, '\\|')
+    .trim();
+}
+
+function pipelineTarget(action: PrAuthoringWorkerActionEntry): string {
+  if (action.taskId) return action.taskId;
+  if (action.subjectType && action.subjectId) return `${action.subjectType}:${action.subjectId}`;
+  return '';
+}
+
+function pipelineActionTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.updatedAt ?? action.createdAt ?? '';
+}
+
+function pipelineActionSummary(action: PrAuthoringWorkerActionEntry): string {
+  if (action.summary?.trim()) return action.summary;
+  if (action.reason?.trim()) return action.reason;
+  return '';
+}
+
+function comparePipelineActions(
+  a: PrAuthoringWorkerActionEntry,
+  b: PrAuthoringWorkerActionEntry,
+): number {
+  return pipelineActionTime(a).localeCompare(pipelineActionTime(b))
+    || a.workerKind.localeCompare(b.workerKind)
+    || a.actionType.localeCompare(b.actionType)
+    || pipelineTarget(a).localeCompare(pipelineTarget(b));
+}
+
+function appendPipelineSection(lines: string[], actions: readonly PrAuthoringWorkerActionEntry[] | undefined): void {
+  lines.push('## Pipeline');
+  lines.push('');
+  const sorted = [...(actions ?? [])].sort(comparePipelineActions);
+  if (sorted.length === 0) {
+    lines.push('- No worker actions recorded.');
+    lines.push('');
+    return;
+  }
+
+  lines.push('| Time | Worker | Action | Status | Target | Summary |');
+  lines.push('| --- | --- | --- | --- | --- | --- |');
+  for (const action of sorted) {
+    lines.push(`| ${[
+      markdownTableCell(pipelineActionTime(action)),
+      markdownTableCell(action.workerKind),
+      markdownTableCell(action.actionType),
+      markdownTableCell(action.status),
+      markdownTableCell(pipelineTarget(action)),
+      markdownTableCell(pipelineActionSummary(action)),
+    ].join(' | ')} |`);
+  }
+  lines.push('');
 }
 
 /** Extract the collapsed `<details><summary>Review metadata</summary>` block from ## Summary. */
@@ -484,6 +559,8 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  appendPipelineSection(lines, args.structuredContext?.workerActions);
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
@@ -592,6 +669,21 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    if (ctx.workerActions && ctx.workerActions.length > 0) {
+      lines.push('Worker action pipeline (oldest first):');
+      for (const action of [...ctx.workerActions].sort(comparePipelineActions)) {
+        const target = pipelineTarget(action);
+        const summary = pipelineActionSummary(action);
+        lines.push(
+          `- ${pipelineActionTime(action) || 'unknown time'} — `
+            + `${action.workerKind}/${action.actionType} [${action.status}]`
+            + `${target ? ` on ${target}` : ''}`
+            + `${summary ? `: ${summary}` : ''}`,
+        );
+      }
+      lines.push('');
     }
 
     if (ctx.visualProofMarkdown) {

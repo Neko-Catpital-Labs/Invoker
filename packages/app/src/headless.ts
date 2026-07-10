@@ -20,8 +20,10 @@ import {
   createWorkerRegistry,
   registerAutoFixWorker,
   registerPrMaintenanceWorkers,
+  registerPrSummaryRefreshWorker,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
+  type WorkerRegistry,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import {
@@ -72,8 +74,12 @@ import {
 
 export { createHeadlessExecutor, wireHeadlessApproveHook, parseQueryFlags };
 export type { HeadlessDeps, QueryFlags };
-import { headlessQuery, headlessQuerySelect, renderWorkerStatus } from './headless-query-list.js';
+import { headlessQuery, headlessQuerySelect } from './headless-query-list.js';
 export { resolveAgentSession } from './headless-query-list.js';
+import {
+  AUTO_STARTED_OWNER_WORKER_KINDS,
+  createLocalWorkerStatusSnapshot,
+} from './worker-control.js';
 import {
   headlessRun,
   headlessResume,
@@ -422,8 +428,10 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerPrMaintenanceWorkers(
-      registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerPrSummaryRefreshWorker(
+      registerPrMaintenanceWorkers(
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+      ),
     ),
   );
 
@@ -436,7 +444,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
 
   if (subCommand === 'status') {
-    await renderWorkerStatus(args.slice(1), deps);
+    await renderHeadlessWorkerStatus(args.slice(1), deps, registry);
     return;
   }
 
@@ -482,6 +490,34 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
   const label = definition.kind === AUTO_FIX_WORKER_KIND ? 'Auto-fix' : definition.kind;
   process.stdout.write(`${label} worker scan completed.\n`);
+}
+
+async function renderHeadlessWorkerStatus(
+  flagArgs: string[],
+  deps: Pick<HeadlessDeps, 'persistence'>,
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): Promise<void> {
+  const flags = parseQueryFlags(flagArgs);
+  const snapshot = createLocalWorkerStatusSnapshot({
+    registry,
+    persistence: deps.persistence,
+    autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+  });
+  const { formatAsJson, formatAsJsonl, formatWorkerStatusSnapshot } = await import('./formatter.js');
+  switch (flags.output) {
+    case 'label':
+      process.stdout.write(snapshot.workers.map((worker) => worker.kind).join('\n') + '\n');
+      break;
+    case 'json':
+      process.stdout.write(formatAsJson(snapshot) + '\n');
+      break;
+    case 'jsonl':
+      process.stdout.write(formatAsJsonl(snapshot.workers) + '\n');
+      break;
+    default:
+      process.stdout.write(formatWorkerStatusSnapshot(snapshot) + '\n');
+      break;
+  }
 }
 
 async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdle'>): Promise<void> {
@@ -929,4 +965,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-

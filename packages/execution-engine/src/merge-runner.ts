@@ -18,7 +18,12 @@ import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import {
+  isInvokerRepoUrl,
+  type PrAuthoringContext,
+  type PrAuthoringTaskEntry,
+  type PrAuthoringWorkerActionEntry,
+} from './pr-authoring.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -376,10 +381,32 @@ export async function buildPrAuthoringContext(
     });
   }
 
+  const workerActions: PrAuthoringWorkerActionEntry[] = host.persistence
+    .listWorkerActions({ workflowId })
+    .map((action) => {
+      const payload = action.payload && typeof action.payload === 'object' && !Array.isArray(action.payload)
+        ? action.payload as Record<string, unknown>
+        : undefined;
+      const reason = typeof payload?.reason === 'string' ? payload.reason : undefined;
+      return {
+        workerKind: action.workerKind,
+        actionType: action.actionType,
+        status: action.status,
+        ...(action.taskId ? { taskId: action.taskId } : {}),
+        subjectType: action.subjectType,
+        subjectId: action.subjectId,
+        ...(action.summary ? { summary: action.summary } : {}),
+        ...(reason ? { reason } : {}),
+        createdAt: action.createdAt,
+        updatedAt: action.updatedAt,
+      };
+    });
+
   return {
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    workerActions,
     visualProofMarkdown,
   };
 }

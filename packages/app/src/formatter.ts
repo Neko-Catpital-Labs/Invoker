@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -261,6 +261,41 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
       `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
     );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  if (snapshot.workers.length === 0) {
+    return `${DIM}No workers registered.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Worker status${RESET} ${DIM}(${escapeTerminalText(snapshot.generatedAt)})${RESET}`);
+  for (const worker of snapshot.workers) {
+    const note = worker.note ? ` — ${escapeTerminalText(worker.note)}` : '';
+    const runtime = worker.instanceId ? ` instance=${escapeTerminalText(worker.instanceId)}` : '';
+    lines.push(
+      `  ${BOLD}${escapeTerminalText(worker.kind)}${RESET} [${worker.lifecycle}] `
+        + `policy=${worker.policy} autoStart=${worker.autoStarts ? 'yes' : 'no'}${runtime}${note}`,
+    );
+    if (worker.recentActions.length === 0) {
+      lines.push(`    ${DIM}recentActions: none${RESET}`);
+      continue;
+    }
+    lines.push('    recentActions:');
+    for (const action of worker.recentActions) {
+      const target = action.taskId
+        ? ` task=${escapeTerminalText(action.taskId)}`
+        : ` ${escapeTerminalText(action.subjectType)}=${escapeTerminalText(action.subjectId)}`;
+      const reason = action.reason ? ` reason=${escapeTerminalText(action.reason)}` : '';
+      const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+      lines.push(
+        `      ${action.updatedAt} ${BOLD}${escapeTerminalText(action.id)}${RESET} [${action.status}] `
+          + `${escapeTerminalText(action.workerKind)}/${escapeTerminalText(action.actionType)}`
+          + `${target}${reason}${summary}`,
+      );
+    }
   }
   return lines.join('\n');
 }

@@ -10,7 +10,7 @@ type TaskLogLevel = 'debug' | 'info' | 'warn' | 'error';
 interface TaskAuditEvent {
   id?: number;
   eventType: string;
-  payload?: string;
+  payload?: unknown;
   createdAt?: string;
 }
 
@@ -25,16 +25,20 @@ interface TaskLogEntry {
 const SAFE_LOG_DETAIL_KEYS = new Set([
   'agentCount',
   'agentName',
+  'actionId',
+  'actionType',
   'artifactCount',
   'attempt',
   'baseBranch',
   'branch',
+  'bodyChanged',
   'featureBranch',
   'reviewId',
   'reviewUrl',
   'status',
   'reason',
   'route',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -50,8 +54,12 @@ function isTaskLogLevel(value: unknown): value is TaskLogLevel {
   return typeof value === 'string' && (LOG_LEVELS as readonly string[]).includes(value);
 }
 
-function parseEventPayload(payload: string | undefined): Record<string, unknown> | undefined {
+function parseEventPayload(payload: unknown): Record<string, unknown> | undefined {
   if (!payload) return undefined;
+  if (typeof payload === 'object' && !Array.isArray(payload)) {
+    return payload as Record<string, unknown>;
+  }
+  if (typeof payload !== 'string') return undefined;
   try {
     const parsed = JSON.parse(payload);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
@@ -60,6 +68,26 @@ function parseEventPayload(payload: string | undefined): Record<string, unknown>
   } catch {
     return undefined;
   }
+}
+
+function formatWorkerActionLogMessage(
+  event: TaskAuditEvent,
+  payload: Record<string, unknown> | undefined,
+): string | undefined {
+  if (event.eventType !== 'task.worker_action') return undefined;
+  const workerKind = typeof payload?.workerKind === 'string' && payload.workerKind.trim()
+    ? payload.workerKind
+    : 'worker';
+  const actionType = typeof payload?.actionType === 'string' && payload.actionType.trim()
+    ? payload.actionType
+    : 'action';
+  const status = typeof payload?.status === 'string' && payload.status.trim()
+    ? ` [${payload.status}]`
+    : '';
+  const summary = typeof payload?.summary === 'string' && payload.summary.trim()
+    ? ` — ${payload.summary}`
+    : '';
+  return `${workerKind}/${actionType}${status}${summary}`;
 }
 
 function inferLogLevel(event: TaskAuditEvent, payload: Record<string, unknown> | undefined): TaskLogLevel {
@@ -84,12 +112,14 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
   const payloadMessage = payload?.message;
+  const workerActionMessage = formatWorkerActionLogMessage(event, payload);
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
     level: inferLogLevel(event, payload),
-    message: typeof payloadMessage === 'string' && payloadMessage.trim()
+    message: workerActionMessage
+      ?? (typeof payloadMessage === 'string' && payloadMessage.trim()
       ? payloadMessage
-      : event.eventType,
+      : event.eventType),
     detail: formatLogDetail(payload),
     createdAt: event.createdAt,
   };

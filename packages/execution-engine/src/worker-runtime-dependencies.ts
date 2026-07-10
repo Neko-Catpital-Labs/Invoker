@@ -1,5 +1,6 @@
 import type { Logger } from '@invoker/contracts';
 import type { MessageBus } from '@invoker/transport';
+import type { MergeGateProvider } from './merge-gate-provider.js';
 
 import type {
   AutoFixRecoveryStore,
@@ -35,6 +36,8 @@ export interface WorkerRuntimeDependencies {
   messageBus?: MessageBus;
   /** Review-gate polling surface owned by the task runner. */
   reviewGate?: PrStatusReviewGate;
+  /** Provider used by PR-summary maintenance workers for body refreshes. */
+  mergeGateProvider?: MergeGateProvider;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
   /** Requeue worker tuning (stall requeue budget / backoff). */

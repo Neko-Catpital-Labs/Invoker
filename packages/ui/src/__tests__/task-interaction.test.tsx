@@ -94,6 +94,43 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('renders task.worker_action events in the task log surface', async () => {
+    const mergeTask = makeUITask({
+      id: '__merge__wf-a',
+      description: 'Merge gate',
+      status: 'review_ready',
+      workflowId: 'wf-a',
+      execution: { reviewId: '42' },
+      config: { workflowId: 'wf-a', isMergeNode: true, runnerKind: 'merge' },
+    });
+    mock.setEvents('__merge__wf-a', [
+      {
+        id: 1,
+        taskId: '__merge__wf-a',
+        eventType: 'task.worker_action',
+        payload: JSON.stringify({
+          workerKind: 'pr-summary-refresh',
+          actionType: 'refresh-pr-summary',
+          status: 'completed',
+          summary: 'Updated PR summary with worker pipeline',
+          reviewId: '42',
+        }),
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+
+    render(<App />);
+    act(() => mock.setTasks([mergeTask], workflows));
+
+    fireEvent.click(await screen.findByTestId('rf__node-__merge__wf-a'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent(
+        'pr-summary-refresh/refresh-pr-summary [completed] — Updated PR summary with worker pipeline',
+      );
+    });
+  });
+
   it('clicking workflow graph background dismisses the selected mini DAG', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
