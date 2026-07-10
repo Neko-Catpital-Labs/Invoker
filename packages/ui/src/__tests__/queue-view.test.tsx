@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { QueueView } from '../components/QueueView.js';
 import { makeUITask } from './helpers/mock-invoker.js';
-import type { TaskState, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot } from '../types.js';
+import type { TaskState, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMeta } from '../types.js';
 
 describe('QueueView', () => {
   const onTaskClick = vi.fn();
@@ -14,6 +14,10 @@ describe('QueueView', () => {
     generatedAt: '2026-01-01T00:00:00.000Z',
     workers: [],
   };
+
+  const DEFAULT_WORKFLOWS = new Map<string, WorkflowMeta>([
+    ['wf-1', { id: 'wf-1', name: 'My Workflow', status: 'running' }],
+  ]);
 
   function makeWorkerAction(overrides: Partial<WorkerActionSummary> = {}): WorkerActionSummary {
     return {
@@ -61,10 +65,12 @@ describe('QueueView', () => {
     selectedTaskId: string | null = null,
     readOnly = false,
     selectedWorkerKind: string | null = null,
+    workflows: Map<string, WorkflowMeta> = DEFAULT_WORKFLOWS,
   ) {
     render(
       <QueueView
         tasks={tasks}
+        workflows={workflows}
         workerStatus={workerStatus}
         readOnly={readOnly}
         onStartWorker={onStartWorker}
@@ -125,7 +131,8 @@ describe('QueueView', () => {
 
     expect(screen.getByText('Worker Actions (1)')).toBeInTheDocument();
     expect(screen.getByText('Only work started by a worker process appears here.')).toBeInTheDocument();
-    expect(screen.getByText('Fix With Agent · needs fix')).toBeInTheDocument();
+    expect(screen.getByText('needs fix')).toBeInTheDocument();
+    expect(screen.getByText('Autofix · Fix With Agent · My Workflow')).toBeInTheDocument();
     expect(screen.queryByText('normal scheduler work')).not.toBeInTheDocument();
     expect(screen.queryByText('Workflow gate for queued merge')).not.toBeInTheDocument();
     expect(screen.queryByText(/Backlog/)).not.toBeInTheDocument();
@@ -141,9 +148,42 @@ describe('QueueView', () => {
       ]),
     );
 
-    fireEvent.click(screen.getByText('Fix With Agent · needs fix'));
+    fireEvent.click(screen.getByText('needs fix'));
 
     expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
+  });
+
+  it('distinguishes CI failure repair rows by target task title', () => {
+    const taskA = makeUITask({ id: 'wf-1/gate-a', status: 'failed', description: 'Review gate A' });
+    const taskB = makeUITask({ id: 'wf-1/gate-b', status: 'failed', description: 'Review gate B' });
+    renderQueueView(
+      new Map([[taskA.id, taskA], [taskB.id, taskB]]),
+      makeWorkerStatus([
+        makeWorker({
+          kind: 'ci-failure',
+          recentActions: [
+            makeWorkerAction({
+              id: 'ci-a',
+              workerKind: 'ci-failure',
+              actionType: 'fix-ci-failure',
+              taskId: taskA.id,
+              subjectId: taskA.id,
+            }),
+            makeWorkerAction({
+              id: 'ci-b',
+              workerKind: 'ci-failure',
+              actionType: 'fix-ci-failure',
+              taskId: taskB.id,
+              subjectId: taskB.id,
+            }),
+          ],
+        }),
+      ]),
+    );
+
+    expect(screen.getByText('Review gate A')).toBeInTheDocument();
+    expect(screen.getByText('Review gate B')).toBeInTheDocument();
+    expect(screen.getAllByText('CI failure repair · Fix Ci Failure · My Workflow')).toHaveLength(2);
   });
 
   it('keeps worker actions and worker processes in independent scroll panes', () => {
@@ -197,9 +237,10 @@ describe('QueueView', () => {
       ]),
     );
 
-    expect(screen.getByText('Fix With Agent · missing-target')).toBeInTheDocument();
+    expect(screen.getByText('missing-target')).toBeInTheDocument();
+    expect(screen.getByText('Autofix · Fix With Agent · My Workflow')).toBeInTheDocument();
     expect(screen.getByText('Target task is not loaded.')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Fix With Agent · missing-target'));
+    fireEvent.click(screen.getByText('missing-target'));
     expect(onTaskClick).not.toHaveBeenCalled();
   });
 
@@ -414,7 +455,7 @@ describe('QueueView', () => {
 
     const relsSection = screen.getByTestId('rels-wf-1/build');
     expect(relsSection.textContent).toContain('downstream:');
-    expect(relsSection.textContent).toContain('deploy');
+    expect(relsSection.textContent).toContain('Deploy after build');
 
     const deployChip = relsSection.querySelector('button');
     expect(deployChip).not.toBeNull();
@@ -448,7 +489,7 @@ describe('QueueView', () => {
       buildTask.id,
     );
 
-    const selectedRow = screen.getByText('Fix With Agent · Build the project').closest('[data-row-id]');
+    const selectedRow = screen.getByText('Build the project').closest('[data-row-id]');
     expect(selectedRow?.className).toContain('bg-cyan-950/30');
 
     fireEvent.click(screen.getByLabelText('Expand relationships'));
