@@ -1193,10 +1193,18 @@ export class TaskRunner {
    * Resolve a merge conflict by re-creating the merge state and spawning an agent to fix it.
    * After resolution, the task is restarted so it can proceed normally.
    */
-  async resolveConflict(taskId: string, savedError?: string, agentName?: string): Promise<void> {
+  async resolveConflict(
+    taskId: string,
+    savedError?: string,
+    agentName?: string,
+    executionModel?: string,
+  ): Promise<void> {
     const task = this.orchestrator.getTask(taskId);
-    const executionModel = task ? this.resolveExecutionModel(task) : undefined;
-    return this.withAttemptHeartbeat(taskId, () => resolveConflictImpl(this, taskId, savedError, agentName, executionModel));
+    const explicitModel = executionModel?.trim();
+    const resolvedModel = explicitModel && explicitModel.length > 0
+      ? explicitModel
+      : (task ? this.resolveExecutionModel(task) : undefined);
+    return this.withAttemptHeartbeat(taskId, () => resolveConflictImpl(this, taskId, savedError, agentName, resolvedModel));
   }
 
   /**

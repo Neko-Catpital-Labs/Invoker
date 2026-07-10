@@ -326,6 +326,58 @@ describe('TaskRunner', () => {
       // All git calls should use the task's workspacePath
       expect(gitCwds.every(c => c === workspacePath)).toBe(true);
     });
+
+    it('passes explicit executionModel to spawnAgentFix over task model', async () => {
+      const workspacePath = createTempWorkspace();
+      const conflictError = JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'invoker/dep-task',
+        conflictFiles: ['shared.ts'],
+      });
+
+      const tasks = new Map<string, TaskState>();
+      tasks.set('conflict-task', makeTask({
+        id: 'conflict-task',
+        status: 'failed',
+        config: { executionAgent: 'codex', executionModel: 'gpt-5.2' },
+        execution: {
+          error: conflictError,
+          branch: 'invoker/conflict-task',
+          workspacePath,
+        },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: { logEvent: vi.fn() } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      (executor as any).execGitIn = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge') throw new Error('conflict');
+        return '';
+      };
+      let capturedModel: string | undefined;
+      (executor as any).spawnAgentFix = async (
+        _prompt: string,
+        _cwd: string,
+        _agent?: string,
+        executionModel?: string,
+      ) => {
+        capturedModel = executionModel;
+        return { stdout: '', sessionId: 'sess-conflict-model' };
+      };
+
+      await executor.resolveConflict('conflict-task', undefined, 'codex', 'gpt-5-mini');
+      expect(capturedModel).toBe('gpt-5-mini');
+    });
   });
 
   describe('fixWithAgent', () => {
