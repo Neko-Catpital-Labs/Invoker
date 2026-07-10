@@ -3,7 +3,7 @@ import { act, render, screen, fireEvent, waitFor, within } from '@testing-librar
 import { vi } from 'vitest';
 import { useState } from 'react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
-import type { WorkflowMeta } from '../types.js';
+import type { TaskState, WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -80,6 +80,52 @@ describe('Invoker terminal (component)', () => {
     if (!payload) throw new Error(`Missing ${metric} perf payload`);
     return payload;
   }
+
+  function makeManyWorkflowTypingBaseline(
+    workflowCount = 8,
+    messagesPerWorkflow = 12,
+  ): { tasks: TaskState[]; workflows: WorkflowMeta[] } {
+    const tasks: TaskState[] = [];
+    const workflows: WorkflowMeta[] = [];
+
+    for (let workflowIndex = 0; workflowIndex < workflowCount; workflowIndex += 1) {
+      const workflowId = `wf-chat-${workflowIndex}`;
+      workflows.push({
+        id: workflowId,
+        name: `Planning Chat ${workflowIndex}`,
+        status: 'running',
+      });
+
+      for (let messageIndex = 0; messageIndex < messagesPerWorkflow; messageIndex += 1) {
+        const messageId = `message-${String(messageIndex).padStart(2, '0')}`;
+        const previousMessageId = `message-${String(messageIndex - 1).padStart(2, '0')}`;
+        tasks.push(makeUITask({
+          id: `${workflowId}/${messageId}`,
+          description: `Planning transcript message ${workflowIndex}.${messageIndex}`,
+          status: 'pending',
+          workflowId,
+          dependencies: messageIndex === 0 ? [] : [`${workflowId}/${previousMessageId}`],
+          prompt: [
+            `session=${workflowIndex}`,
+            `message=${messageIndex}`,
+            `content=${'planning-context '.repeat(8)}${workflowIndex}-${messageIndex}`,
+          ].join('\n'),
+          execution: {
+            agentSessionId: `session-${workflowIndex}`,
+          },
+        }));
+      }
+    }
+
+    return { tasks, workflows };
+  }
+
+  function expectedTranscriptMessageCount(tasks: TaskState[]): number {
+    return tasks.reduce((total, task) => (
+      total + (task.config.prompt?.split(/\n+/).filter((line) => line.trim().length > 0).length ?? 0)
+    ), 0);
+  }
+
   it('generates a planning reply from plain language', async () => {
     render(<App />);
     await openPlanningTerminal();
@@ -409,6 +455,65 @@ describe('Invoker terminal (component)', () => {
     const transcriptCommitsAfterTyping = vi.mocked(mock.api.reportUiPerf).mock.calls
       .filter(([metric]) => metric === 'planning_chat_transcript_commit');
     expect(transcriptCommitsAfterTyping).toHaveLength(0);
+  });
+
+  it('reports a many-workflow planning typing lag baseline from the task prompt editor', async () => {
+    const { tasks, workflows } = makeManyWorkflowTypingBaseline();
+    render(<App />);
+
+    act(() => mock.setTasks(tasks, workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-chat-0')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('workflow-node-wf-chat-0'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-wf-chat-0/message-00')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('rf__node-wf-chat-0/message-00'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('prompt-command-display')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('prompt-command-display'));
+
+    const promptInput = await screen.findByTestId('edit-prompt-input') as HTMLTextAreaElement;
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+    reportUiPerf.mockClear();
+
+    const nextPrompt = `${promptInput.value}\noperator typed follow-up`;
+    fireEvent.change(promptInput, { target: { value: nextPrompt } });
+
+    await waitFor(() => {
+      expect(reportUiPerf.mock.calls.some(([metric]) => metric === 'planning_typing_lag_baseline')).toBe(true);
+    });
+
+    const payload = lastPerfPayload('planning_typing_lag_baseline');
+    expect(payload).toEqual(expect.objectContaining({
+      scenario: 'many-chats-many-messages-typing',
+      sessionCount: workflows.length,
+      transcriptMessageCount: expectedTranscriptMessageCount(tasks),
+      taskCount: tasks.length,
+      workflowCount: workflows.length,
+      taskStatusCounts: { pending: tasks.length },
+      activeSurface: 'planning',
+      activeState: 'dag:task_selected:terminal-minimized',
+      viewMode: 'dag',
+      terminalDrawerState: 'minimized',
+      selectionState: 'task_selected',
+      selectedTaskId: 'wf-chat-0/message-00',
+      selectedWorkflowId: 'wf-chat-0',
+      targetName: 'edit-prompt-input',
+      targetTagName: 'textarea',
+      targetValueLength: nextPrompt.length,
+      targetReadOnly: false,
+      targetDisabled: false,
+      targetIsComposing: false,
+      eventType: 'change',
+      lagMs: expect.any(Number),
+    }));
+    expect(payload.transcriptSizeBytes).toBeGreaterThan(10_000);
   });
 
   it('hydrates restored planning chats and keeps the restored session editable', async () => {
