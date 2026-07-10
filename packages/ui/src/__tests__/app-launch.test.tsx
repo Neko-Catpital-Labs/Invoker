@@ -128,12 +128,13 @@ describe('App launch (component)', () => {
     expect(screen.getByRole('heading', { name: 'Workflows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('sidebar-home'));
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(screen.getByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
     expect(sidebar.className).toContain('w-16');
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
-  it('keeps the manual app sidebar width while switching left rail surfaces', async () => {
+  it('keeps the manual app sidebar width while switching left rail surfaces and dismissing browser panels', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
 
     render(<App />);
@@ -149,6 +150,11 @@ describe('App launch (component)', () => {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-16');
     }
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(screen.getByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-16');
 
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-60');
@@ -157,6 +163,11 @@ describe('App launch (component)', () => {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-60');
     }
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(screen.getByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
+    expect(sidebar.className).toContain('w-60');
   });
 
 
