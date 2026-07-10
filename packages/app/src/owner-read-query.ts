@@ -1,6 +1,14 @@
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { WorkerActionHistoryRequest, WorkerActionHistoryResponse, WorkerDecisionsRequest, WorkerDecisionsResponse, WorkerStatusSnapshot } from '@invoker/contracts';
+import type {
+  GetEventsOptions,
+  WorkerActionHistoryRequest,
+  WorkerActionHistoryResponse,
+  WorkerDecisionsRequest,
+  WorkerDecisionsResponse,
+  WorkerStatusSnapshot,
+} from '@invoker/contracts';
+import { getEventsPage } from './get-events-page.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
 import { isHeadlessReadOnlyCommand } from './headless-command-classification.js';
 import { runReadOnlyHeadlessQueryToString, type HeadlessQueryDeps } from './headless-query-list.js';
@@ -38,7 +46,7 @@ export interface OwnerReadQueryHandlers {
   listWorkflows: () => unknown[];
   loadWorkflowBundle: (workflowId: string) => Record<string, unknown>;
   getReviewGate: (workflowId: string) => unknown;
-  getEvents: (taskId: string) => unknown[];
+  getEvents: (taskId: string, options: GetEventsOptions) => unknown[];
   getTaskById: (taskId: string) => unknown;
   getTaskOutput: (taskId: string) => string;
   getOutputChunks: (taskId: string) => unknown[];
@@ -63,6 +71,9 @@ export function answerOwnerReadQuery(
     reason?: string;
     limit?: number;
     offset?: number;
+    beforeId?: number;
+    sortBy?: 'asc' | 'desc';
+    options?: GetEventsOptions;
   };
   const { kind, reset } = body;
   handlers.onActivity?.();
@@ -120,8 +131,16 @@ export function answerOwnerReadQuery(
       return handlers.loadWorkflowBundle(requiredString(body.workflowId, 'workflowId'));
     case 'review-gate':
       return { reviewGate: handlers.getReviewGate(requiredString(body.workflowId, 'workflowId')) ?? null };
-    case 'events':
-      return { events: handlers.getEvents(requiredString(body.taskId, 'taskId')) };
+    case 'events': {
+      const options: GetEventsOptions = body.options ?? {
+        limit: body.limit as number,
+        ...(body.sortBy !== undefined ? { sortBy: body.sortBy } : {}),
+        ...(body.beforeId !== undefined ? { beforeId: body.beforeId } : {}),
+      };
+      return {
+        events: handlers.getEvents(requiredString(body.taskId, 'taskId'), options),
+      };
+    }
     case 'task-by-id':
       return { task: handlers.getTaskById(requiredString(body.taskId, 'taskId')) ?? null };
     case 'task-output':
@@ -235,7 +254,8 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
       if (!workflow) return null;
       return buildReviewGateQueryResponse({ workflowId, workflow, tasks: persistence.loadTasks(workflowId) });
     },
-    getEvents: (taskId: string) => persistence.getEvents(taskId),
+    getEvents: (taskId: string, options: GetEventsOptions) =>
+      getEventsPage(persistence, taskId, options),
     getTaskById: (taskId: string) => persistence.loadTask(taskId),
     getTaskOutput: (taskId: string) => persistence.getTaskOutput(taskId),
     getOutputChunks: (taskId: string) => persistence.getOutputChunks(taskId),
