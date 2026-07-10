@@ -110,6 +110,49 @@ describe('buildCanonicalPrBody', () => {
     expect(body).toContain(visualProof);
   });
 
+  it('renders worker action pipeline rows in chronological order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Worker visibility',
+      workflowSummary: 'Show worker actions.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'late',
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'queued',
+            subjectType: 'review',
+            subjectId: '123',
+            taskId: 'wf-1/merge',
+            summary: 'Queued CI repair',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:10:00.000Z',
+          },
+          {
+            id: 'early',
+            workerKind: 'autofix',
+            actionType: 'auto-fix',
+            status: 'completed',
+            subjectType: 'task',
+            subjectId: 'wf-1/task-1',
+            taskId: 'wf-1/task-1',
+            summary: 'Fixed task',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    const early = body.indexOf('| 2026-01-01T00:01:00.000Z | autofix | auto-fix | wf-1/task-1 | completed | Fixed task |');
+    const late = body.indexOf('| 2026-01-01T00:10:00.000Z | ci-failure | fix-ci-failure | wf-1/merge | queued | Queued CI repair |');
+    expect(early).toBeGreaterThan(-1);
+    expect(late).toBeGreaterThan(-1);
+    expect(early).toBeLessThan(late);
+  });
+
   it('canonical body passes validation', () => {
     const body = buildCanonicalPrBody({
       title: 'Anything',

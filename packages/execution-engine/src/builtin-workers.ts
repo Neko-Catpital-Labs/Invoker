@@ -7,6 +7,7 @@ import { registerE2eAutoFixWorker } from './workers/e2e-autofix-worker.js';
 import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
 import { registerPrMaintenanceWorkers } from './workers/pr-maintenance-workers.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
+import { registerPrSummaryRefreshWorker } from './workers/pr-summary-refresh-worker.js';
 import { registerRequeueWorker } from './workers/requeue-worker.js';
 import { registerWorkflowResumeWorker } from './workers/workflow-resume-worker.js';
 
@@ -18,6 +19,7 @@ export function registerBuiltinWorkers(
   registerRequeueWorker(registry);
   registerWorkflowResumeWorker(registry);
   registerPrStatusWorker(registry);
+  registerPrSummaryRefreshWorker(registry);
   registerCiFailureWorker(registry);
   registerDiskHeadroomWorker(registry);
   registerAutoApproveWorker(registry);

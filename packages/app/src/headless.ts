@@ -14,12 +14,15 @@ import { makeEnvelope } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import {
   AUTO_FIX_WORKER_KIND,
+  GitHubMergeGateProvider,
+  ReviewProviderRegistry,
   TaskRunner,
   acquireWorkerLock,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
   registerAutoFixWorker,
   registerPrMaintenanceWorkers,
+  registerPrSummaryRefreshWorker,
   resolveInvokerHomeRoot,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
@@ -423,7 +426,9 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
     registerPrMaintenanceWorkers(
-      registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+      registerPrSummaryRefreshWorker(
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+      ),
     ),
   );
 
@@ -436,7 +441,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
 
   if (subCommand === 'status') {
-    await renderWorkerStatus(args.slice(1), deps);
+    await renderWorkerStatus(args.slice(1), deps, registry);
     return;
   }
 
@@ -466,6 +471,11 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         ),
       },
       logger: deps.logger,
+      reviewProviderRegistry: (() => {
+        const providerRegistry = new ReviewProviderRegistry();
+        providerRegistry.register(new GitHubMergeGateProvider());
+        return providerRegistry;
+      })(),
       autoFix: {
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
         attemptLedger: autoFixAttemptLedger,
@@ -929,4 +939,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-

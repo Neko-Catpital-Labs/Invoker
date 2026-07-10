@@ -7,6 +7,7 @@ import type {
 export interface WorkerDecisionStore {
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
   upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
+  logEvent?(taskId: string, eventType: string, payload?: unknown): void;
 }
 
 const TERMINAL_ACTION_STATUSES: Record<string, true> = {
@@ -73,7 +74,7 @@ export function recordWorkerDecisionRow(
   const attemptCount = row.incrementAttempt
     ? (existing?.attemptCount ?? 0) + 1
     : existing?.attemptCount ?? 0;
-  return store.upsertWorkerAction({
+  const saved = store.upsertWorkerAction({
     id: existing?.id ?? `${row.workerKind}:${row.externalKey}`,
     workerKind: row.workerKind,
     actionType: row.actionType,
@@ -96,4 +97,21 @@ export function recordWorkerDecisionRow(
     updatedAt: now,
     ...(TERMINAL_ACTION_STATUSES[row.status] ? { completedAt: now } : {}),
   });
+  if (row.taskId && store.logEvent) {
+    try {
+      store.logEvent(row.taskId, 'task.worker_action', {
+        workerKind: row.workerKind,
+        actionType: row.actionType,
+        status: row.status,
+        summary: row.summary,
+        ...(row.reason !== undefined ? { reason: row.reason } : {}),
+        externalKey: row.externalKey,
+        workerActionId: saved.id,
+      });
+    } catch {
+      // Worker action rows are the source of truth; task events are best-effort
+      // visibility for timeline and inspector surfaces.
+    }
+  }
+  return saved;
 }

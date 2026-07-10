@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import { killProcessGroup, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import type {
@@ -58,9 +61,11 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
         '-f', `base=${ghBase}`,
         '-f', `title=${title}`,
       ];
-      if (body) apiArgs.push('-f', `body=${body}`);
       const ghResult = await retryTransientGitHubCli(() => this.exec('gh', apiArgs, cwd));
       console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview update existing gh_result=${ghResult}`);
+      if (body !== undefined) {
+        await this.updateReviewBody({ identifier: String(existing[0].number), cwd, body });
+      }
 
       return { url: existing[0].url, identifier: String(existing[0].number) };
     }
@@ -102,6 +107,27 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       '--jq', '.body',
     ], cwd));
     return stdout.trim();
+  }
+
+  async updateReviewBody(opts: {
+    identifier: string;
+    cwd: string;
+    body: string;
+  }): Promise<void> {
+    const { identifier, cwd, body } = opts;
+    const targetRepo = await this.resolveTargetRepo(cwd);
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-gh-pr-body-'));
+    const bodyPath = join(dir, 'body.md');
+    try {
+      writeFileSync(bodyPath, body, 'utf8');
+      await retryTransientGitHubCli(() => this.exec('gh', [
+        'pr', 'edit', identifier,
+        '--repo', targetRepo,
+        '--body-file', bodyPath,
+      ], cwd));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   async checkApproval(opts: {

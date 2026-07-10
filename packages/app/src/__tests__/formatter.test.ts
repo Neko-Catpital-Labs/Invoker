@@ -5,6 +5,7 @@ import {
   formatEventLog,
   formatWorkerActions,
   formatWorkerDecisions,
+  formatWorkerStatusSnapshot,
   serializeWorkflow,
   serializeTask,
   serializeEvent,
@@ -15,7 +16,7 @@ import {
 } from '../formatter.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { WorkerActionSummary } from '@invoker/contracts';
+import type { WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -269,6 +270,52 @@ describe('formatWorkerDecisions', () => {
     expect(output).toContain('agent=codex');
     expect(output).toContain('task=wf-1/task-1');
     expect(output).toContain('reason=worker-retry-budget-exhausted');
+  });
+});
+
+// ── formatWorkerStatusSnapshot ───────────────────────────────
+
+describe('formatWorkerStatusSnapshot', () => {
+  it('renders recent worker actions under each worker', () => {
+    const snapshot: WorkerStatusSnapshot = {
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workers: [
+        {
+          kind: 'pr-summary-refresh',
+          note: 'Refresh PR summaries',
+          lifecycle: 'stopped',
+          policy: 'enabled',
+          autoStarts: true,
+          startable: false,
+          stoppable: false,
+          recentActions: [
+            {
+              id: 'wa-summary',
+              workerKind: 'pr-summary-refresh',
+              actionType: 'refresh-pr-summary',
+              workflowId: 'wf-1',
+              taskId: 'wf-1/__merge__',
+              subjectType: 'review',
+              subjectId: '123',
+              externalKey: 'wf-1:wf-1/__merge__:github:123',
+              status: 'completed',
+              attemptCount: 1,
+              summary: 'Updated PR summary with pipeline actions',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:05:00.000Z',
+              completedAt: '2026-01-01T00:05:00.000Z',
+            },
+          ],
+        },
+      ],
+    };
+
+    const output = formatWorkerStatusSnapshot(snapshot);
+    expect(output).toContain('Worker status');
+    expect(output).toContain('pr-summary-refresh');
+    expect(output).toContain('recentActions:');
+    expect(output).toContain('refresh-pr-summary');
+    expect(output).toContain('Updated PR summary with pipeline actions');
   });
 });
 

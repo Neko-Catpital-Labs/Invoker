@@ -299,7 +299,15 @@ describe('GitHubMergeGateProvider', () => {
           '--method', 'PATCH',
           '-f', 'base=main',
           '-f', 'title=Updated PR',
-          '-f', 'body=## Summary',
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr', 'edit', '10',
+          '--repo', 'owner/repo',
+          '--body-file', expect.stringContaining('body.md'),
         ],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
@@ -353,7 +361,15 @@ describe('GitHubMergeGateProvider', () => {
           '--method', 'PATCH',
           '-f', 'base=main',
           '-f', 'title=Updated PR',
-          '-f', 'body=## Summary',
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr', 'edit', '11',
+          '--repo', 'owner/repo',
+          '--body-file', expect.stringContaining('body.md'),
         ],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
@@ -452,6 +468,44 @@ describe('GitHubMergeGateProvider', () => {
           'api', 'repos/owner/repo/pulls/42',
           '--method', 'PATCH',
           '-f', 'state=closed',
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
+  });
+
+  describe('updateReviewBody', () => {
+    it('updates a PR body through a temporary body file', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const { readFileSync } = await import('node:fs');
+      const spawnMock = vi.mocked(spawn);
+      let bodyPath = '';
+      let bodyFileContent = '';
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'edit') {
+          bodyPath = args[args.indexOf('--body-file') + 1] ?? '';
+          bodyFileContent = readFileSync(bodyPath, 'utf8');
+          return mockSpawnResult('', 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await provider.updateReviewBody({
+        identifier: '42',
+        cwd: '/tmp/repo',
+        body: '## Summary\n\nUpdated body',
+      });
+
+      expect(bodyPath).toContain('body.md');
+      expect(bodyFileContent).toBe('## Summary\n\nUpdated body');
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr', 'edit', '42',
+          '--repo', 'owner/repo',
+          '--body-file', bodyPath,
         ],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );

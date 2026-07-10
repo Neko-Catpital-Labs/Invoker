@@ -19,6 +19,7 @@ import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import { PR_SUMMARY_REFRESH_WORKER_KIND } from './workers/pr-summary-refresh-worker.js';
 import { isGitRefLockRace } from './git-utils.js';
 type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
 type ReviewGateArtifact = ReviewGateState['artifacts'][number];
@@ -376,10 +377,27 @@ export async function buildPrAuthoringContext(
     });
   }
 
+  const workerActions = (host.persistence.listWorkerActions?.({ workflowId }) ?? [])
+    .filter((action) => action.workerKind !== PR_SUMMARY_REFRESH_WORKER_KIND)
+    .map((action) => ({
+      id: action.id,
+      workerKind: action.workerKind,
+      actionType: action.actionType,
+      status: action.status,
+      subjectType: action.subjectType,
+      subjectId: action.subjectId,
+      ...(action.taskId ? { taskId: action.taskId } : {}),
+      ...(action.summary ? { summary: action.summary } : {}),
+      createdAt: action.createdAt,
+      updatedAt: action.updatedAt,
+      ...(action.completedAt ? { completedAt: action.completedAt } : {}),
+    }));
+
   return {
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    workerActions,
     visualProofMarkdown,
   };
 }

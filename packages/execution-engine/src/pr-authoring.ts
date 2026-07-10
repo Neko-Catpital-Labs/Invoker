@@ -33,6 +33,21 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence carried into PR summaries. */
+export interface PrAuthoringWorkerActionEntry {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType: string;
+  subjectId: string;
+  taskId?: string;
+  summary?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +61,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker actions that explain automated pipeline decisions. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -463,6 +480,60 @@ export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactO
   return records;
 }
 
+function markdownTableCell(value: string | undefined): string {
+  const normalized = (value ?? '').replace(/\r?\n/g, ' ').trim();
+  return normalized.replaceAll('|', '\\|') || '-';
+}
+
+function workerActionTimestamp(action: PrAuthoringWorkerActionEntry): string {
+  return action.completedAt ?? action.updatedAt ?? action.createdAt ?? '';
+}
+
+function workerActionTarget(action: PrAuthoringWorkerActionEntry): string {
+  return action.taskId ?? `${action.subjectType}:${action.subjectId}`;
+}
+
+function sortWorkerActionsByTime(
+  actions: readonly PrAuthoringWorkerActionEntry[],
+): PrAuthoringWorkerActionEntry[] {
+  return [...actions].sort((a, b) => {
+    const aTime = Date.parse(workerActionTimestamp(a));
+    const bTime = Date.parse(workerActionTimestamp(b));
+    const aComparable = Number.isFinite(aTime) ? aTime : Number.POSITIVE_INFINITY;
+    const bComparable = Number.isFinite(bTime) ? bTime : Number.POSITIVE_INFINITY;
+    if (aComparable !== bComparable) return aComparable - bComparable;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function appendPipelineSection(
+  lines: string[],
+  actions: readonly PrAuthoringWorkerActionEntry[] | undefined,
+): void {
+  lines.push('## Pipeline');
+  lines.push('');
+  const ordered = sortWorkerActionsByTime(actions ?? []);
+  if (ordered.length === 0) {
+    lines.push('- No worker actions recorded.');
+    lines.push('');
+    return;
+  }
+
+  lines.push('| Time | Worker | Action | Target | Status | Summary |');
+  lines.push('| --- | --- | --- | --- | --- | --- |');
+  for (const action of ordered) {
+    lines.push(
+      `| ${markdownTableCell(workerActionTimestamp(action))} `
+        + `| ${markdownTableCell(action.workerKind)} `
+        + `| ${markdownTableCell(action.actionType)} `
+        + `| ${markdownTableCell(workerActionTarget(action))} `
+        + `| ${markdownTableCell(action.status)} `
+        + `| ${markdownTableCell(action.summary)} |`,
+    );
+  }
+  lines.push('');
+}
+
 /**
  * Build a deterministic canonical PR body from structured context.
  * Used as the no-AI escape hatch when all agent-authored attempts fail.
@@ -483,6 +554,8 @@ export function buildCanonicalPrBody(args: {
     lines.push(args.workflowSummary.trim());
   }
   lines.push('');
+
+  appendPipelineSection(lines, args.structuredContext?.workerActions);
 
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
@@ -592,6 +665,19 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    if (ctx.workerActions && ctx.workerActions.length > 0) {
+      lines.push('Worker pipeline actions (oldest first):');
+      for (const action of sortWorkerActionsByTime(ctx.workerActions)) {
+        const timestamp = workerActionTimestamp(action);
+        const summary = action.summary ? ` — ${action.summary}` : '';
+        lines.push(
+          `- ${timestamp || 'unknown time'} ${action.workerKind}/${action.actionType} `
+            + `${workerActionTarget(action)} [${action.status}]${summary}`,
+        );
+      }
+      lines.push('');
     }
 
     if (ctx.visualProofMarkdown) {
