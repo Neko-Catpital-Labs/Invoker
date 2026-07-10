@@ -55,6 +55,7 @@ describe('headless worker autofix', () => {
       _args: unknown[],
       _priority: WorkflowMutationPriority,
     ) => 1);
+    const setWorkerDesiredState = vi.fn();
     const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     // Point the worker lock at a throwaway home so the scan never touches the
     // real Invoker home (the door acquires/releases the cross-process lock).
@@ -87,6 +88,7 @@ describe('headless worker autofix', () => {
           }),
           logEvent: vi.fn(),
           enqueueWorkflowMutationIntent,
+          setWorkerDesiredState,
         },
         invokerConfig: { autoFixRetries: 3, autoFixAgent: 'codex' },
       } as any);
@@ -103,6 +105,7 @@ describe('headless worker autofix', () => {
       ['wf-1/task-1'],
       'normal',
     );
+    expect(setWorkerDesiredState).toHaveBeenCalledWith('autofix', 'running');
   });
 
   it('lists worker kinds from the registry', async () => {
