@@ -130,6 +130,16 @@ describe('App launch (component)', () => {
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(sidebar.className).toContain('w-16');
+    expect(screen.getByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    expect(await screen.findByTestId('browser-rail')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
+    expect(sidebar.className).toContain('w-16');
+    expect(screen.getByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('sidebar-collapse-toggle'));
+    expect(sidebar.className).toContain('w-60');
 
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
@@ -145,18 +155,20 @@ describe('App launch (component)', () => {
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-16');
 
-    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home'] as const) {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-16');
     }
+    expect(screen.getByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
 
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-60');
 
-    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home'] as const) {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-60');
     }
+    expect(screen.getByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
   });
 
 

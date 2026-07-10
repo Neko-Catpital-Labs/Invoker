@@ -811,7 +811,7 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('browser-rail-dismiss').click();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
@@ -882,9 +882,8 @@ test.describe('Visual proof capture', () => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     const sidebar = page.getByTestId('app-sidebar');
 
-    // Capture the full Home -> Workflows -> Home sequence before asserting so a
-    // buggy build still records the width snap (regression: Home expanded, then
-    // Workflows collapsed).
+    // Capture the full Home -> Workflows -> dismissed Home sequence before
+    // asserting so a buggy build still records any navigation-driven width snap.
     await page.getByTestId('sidebar-home').click();
     await captureScreenshot(page, 'sidebar-default-width-1-home');
 
@@ -892,12 +891,12 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
     await captureScreenshot(page, 'sidebar-default-width-2-workflows');
 
-    await page.getByTestId('sidebar-home').click();
+    await page.getByTestId('browser-return-home').click();
     await captureScreenshot(page, 'sidebar-default-width-3-home-return');
 
     await page.getByTestId('sidebar-workflows').click();
     await expect(sidebar).toHaveClass(/w-16/);
-    await page.getByTestId('sidebar-home').click();
+    await page.getByTestId('browser-rail-dismiss').click();
     await expect(sidebar).toHaveClass(/w-16/);
   });
 
