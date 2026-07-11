@@ -1,5 +1,5 @@
 /**
- * Marketing capture: external Claude mock → "submit to invoker" → Invoker Plan graph.
+ * Marketing capture: Claude Code terminal → "submit to invoker" → Invoker Plan graph.
  *
  * Frames land in MARKETING_FRAME_DIR/drive-with-ai for ffmpeg assembly.
  * Poster PNG lands in MARKETING_OUTPUT_DIR/drive-with-ai.png.
@@ -94,7 +94,7 @@ test('drive-with-ai claude submit to invoker graph', async ({ page }) => {
     }
   };
 
-  // --- Part 1: external Claude-like window (Chromium) ---
+  // --- Part 1: Claude Code terminal session (Chromium mock) ---
   const browser = await chromium.launch({
     headless: process.env.INVOKER_E2E_HIDE_WINDOW !== '0',
   });
@@ -108,23 +108,16 @@ test('drive-with-ai claude submit to invoker graph', async ({ page }) => {
     const message = 'submit to invoker';
     for (let i = 0; i < message.length; i += 1) {
       await claude.evaluate((partial) => {
-        const el = document.getElementById('composer');
-        const caretEl = document.getElementById('caret');
-        const send = document.getElementById('send');
-        if (!el || !caretEl || !send) return;
-        el.textContent = '';
-        el.appendChild(document.createTextNode(partial));
-        el.appendChild(caretEl);
-        if (partial.length > 0) send.classList.add('is-ready');
+        const typed = document.getElementById('typed');
+        if (!typed) return;
+        typed.textContent = partial;
       }, message.slice(0, i + 1));
       await hold(claude, 90, 90);
     }
     await hold(claude, 350);
     await claude.evaluate((text) => {
       const api = (window as unknown as {
-        __claudeMock: {
-          commitUserMessage: (t: string) => Promise<void>;
-        };
+        __claudeMock: { commitUserMessage: (t: string) => Promise<void> | void };
       }).__claudeMock;
       return api.commitUserMessage(text);
     }, message);
