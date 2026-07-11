@@ -244,9 +244,16 @@ jobs:
           done
           exit "$missing"
 
+      - name: Generate release notes from CHANGELOG
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          node scripts/extract-changelog-section.mjs "$version" --out release/RELEASE_NOTES.md
+          cat release/RELEASE_NOTES.md
+
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release/RELEASE_NOTES.md
           files: |
             release/*.dmg
             release/*.deb
