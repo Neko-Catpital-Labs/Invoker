@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
-import type { ActionGraphNode } from '@invoker/contracts';
+import { mutationFailureTitle } from '../lib/mutation-failure-display.js';
+import type { ActionGraphNode, WorkflowMutationFailedEvent } from '@invoker/contracts';
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
 type TaskLogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -141,6 +142,7 @@ interface WorkflowInspectorProps {
   executionPools?: string[];
   executionAgents?: string[];
   actionNode?: ActionGraphNode | null;
+  mutationFailure?: WorkflowMutationFailedEvent | null;
   collapsed: boolean;
   advancedExpanded: boolean;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
@@ -246,6 +248,7 @@ export function WorkflowInspector({
   executionPools,
   executionAgents,
   actionNode,
+  mutationFailure,
   collapsed,
   advancedExpanded,
   onEditPool,
@@ -504,6 +507,24 @@ export function WorkflowInspector({
             {workspaceRecreateNotice.workflowId && (
               <p className="mt-2 text-[11px] text-amber-300">Workflow: {workspaceRecreateNotice.workflowId}</p>
             )}
+          </section>
+        )}
+
+        {mutationFailure && (
+          <section
+            data-testid="task-mutation-failure-detail"
+            className="rounded border border-amber-500/40 bg-amber-950/40 p-3"
+          >
+            <h3 className="text-[11px] uppercase tracking-wide text-amber-200">
+              {mutationFailureTitle(mutationFailure)}
+            </h3>
+            <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100">
+              {mutationFailure.message}
+            </pre>
+            <div className="mt-2 text-[10px] text-amber-300">
+              {new Date(mutationFailure.failedAt).toLocaleString()}
+              {mutationFailure.channel && ` · ${mutationFailure.channel}`}
+            </div>
           </section>
         )}
 
