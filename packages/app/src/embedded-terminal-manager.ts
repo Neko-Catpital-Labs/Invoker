@@ -23,6 +23,7 @@ import type { TerminalSessionRecord } from '@invoker/data-store';
 import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
 
 export type EmbeddedTerminalBackendName = 'bash' | 'pty';
+export type EmbeddedTerminalSessionKind = 'task' | 'planning';
 
 const MAX_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
 
@@ -92,9 +93,13 @@ export interface AttachContext {
 
 export interface TerminalSessionPersistenceRecord extends TerminalSessionRecord {
   spec: TerminalSpec;
+  kind: EmbeddedTerminalSessionKind;
+  planningSessionId?: string;
 }
 export interface OpenSessionOptions {
   taskId: string;
+  kind?: EmbeddedTerminalSessionKind;
+  planningSessionId?: string;
   spec: TerminalSpec;
   cwd: string;
   /** When provided, the session attaches to the running executor rather than spawning a child. */
@@ -103,6 +108,8 @@ export interface OpenSessionOptions {
 interface BaseSessionState {
   sessionId: string;
   taskId: string;
+  kind: EmbeddedTerminalSessionKind;
+  planningSessionId?: string;
   targetKey: string;
   spec: TerminalSpec;
   cwd: string;
@@ -139,6 +146,8 @@ function describePersistenceRecord(state: SessionState): TerminalSessionPersiste
   return {
     sessionId: state.sessionId,
     taskId: state.taskId,
+    kind: state.kind,
+    planningSessionId: state.planningSessionId,
     targetKey: state.targetKey,
     status: state.status,
     exitCode: state.exitCode,
@@ -158,6 +167,8 @@ function describeSession(state: SessionState): TerminalSessionDescriptor {
   return {
     sessionId: state.sessionId,
     taskId: state.taskId,
+    kind: state.kind,
+    planningSessionId: state.planningSessionId,
     status: state.status,
     exitCode: state.exitCode,
     cwd: state.cwd,
@@ -299,6 +310,8 @@ export class EmbeddedTerminalManager extends EventEmitter {
     const base = {
       sessionId,
       taskId: opts.taskId,
+      kind: opts.kind ?? 'task',
+      planningSessionId: opts.planningSessionId,
       targetKey,
       spec: opts.spec,
       cwd: opts.cwd,
@@ -368,6 +381,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
     return this.registerSpawnSession({
       sessionId: seed.sessionId,
       taskId: seed.taskId,
+      kind: 'task',
       targetKey: seed.targetKey,
       spec: seed.spec,
       cwd: seed.cwd,
@@ -608,6 +622,8 @@ export class EmbeddedTerminalManager extends EventEmitter {
     const payload: TerminalExitEvent = {
       sessionId: state.sessionId,
       taskId: state.taskId,
+      kind: state.kind,
+      planningSessionId: state.planningSessionId,
       exitCode,
     };
     this.emit('exit', payload);
@@ -619,6 +635,8 @@ export class EmbeddedTerminalManager extends EventEmitter {
     const payload: TerminalOutputEvent = {
       sessionId: state.sessionId,
       taskId: state.taskId,
+      kind: state.kind,
+      planningSessionId: state.planningSessionId,
       data,
     };
     this.emit('output', payload);
@@ -657,7 +675,7 @@ function loadNodePtySpawn(): PtySpawnFn {
 }
 
 function buildTargetKey(opts: OpenSessionOptions): string {
-  return JSON.stringify({
+  const taskTarget = {
     taskId: opts.taskId,
     cwd: opts.cwd,
     command: opts.spec.command ?? null,
@@ -672,5 +690,15 @@ function buildTargetKey(opts: OpenSessionOptions): string {
           branch: opts.attach.handle.branch ?? null,
         }
       : null,
+  };
+
+  if ((opts.kind ?? 'task') !== 'planning') {
+    return JSON.stringify(taskTarget);
+  }
+
+  return JSON.stringify({
+    kind: 'planning',
+    planningSessionId: opts.planningSessionId ?? opts.taskId,
+    ...taskTarget,
   });
 }
