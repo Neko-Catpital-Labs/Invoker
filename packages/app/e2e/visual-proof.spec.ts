@@ -811,7 +811,7 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('browser-rail-dismiss').click();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
