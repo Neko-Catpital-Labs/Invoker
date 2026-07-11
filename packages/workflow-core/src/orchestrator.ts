@@ -608,6 +608,14 @@ export interface OrchestratorConfig {
   /** Resolve the repo default branch. Must throw when no safe branch is known. */
   resolveRepoDefaultBranch?: (repoUrl: string) => string;
   /**
+   * Backoff (ms) before a task deferred for a resource limit (no execution-pool
+   * member capacity) is re-dispatched by the periodic scheduler. Default is an
+   * exponential schedule (15s → 5min cap) so a capacity-starved task waits in
+   * line and heartbeats instead of thrashing the launch outbox every poll.
+   * A fixed number overrides the schedule (primarily for tests).
+   */
+  launchDeferralBackoffMs?: number;
+  /**
    * When the persistence layer implements `enqueueLaunchDispatch`,
    * `drainScheduler` writes a durable `task_launch_dispatch` row for each
    * claimed launch and emits a `task.dispatch_enqueued` event.
@@ -624,6 +632,9 @@ export interface TaskLineageExpectation {
 
 export class Orchestrator {
   private static readonly EXPEDITED_PRIORITY = 100;
+  private static readonly LAUNCH_DEFERRAL_BASE_BACKOFF_MS = 15_000;
+  private static readonly LAUNCH_DEFERRAL_MAX_BACKOFF_MS = 5 * 60_000;
+  private static readonly LAUNCH_DEFERRAL_HEARTBEAT_MS = 30_000;
 
   private readonly stateMachine: TaskStateMachine;
   private readonly responseHandler: ResponseHandler;
@@ -638,10 +649,19 @@ export class Orchestrator {
   private readonly defaultPoolId: string | undefined;
   private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
+  private readonly launchDeferralBackoffMs?: number;
   private readonly resolveRepoDefaultBranch: (repoUrl: string) => string;
 
   private activeWorkflowIds = new Set<string>();
   private deferredTaskIds = new Set<string>();
+  /**
+   * Owner-local backoff for tasks deferred due to execution-pool capacity.
+   * Keyed to `deferredTaskIds` membership: the periodic scheduler skips
+   * re-dispatching a parked task until its `until` elapses, while a freed slot
+   * (completion path) still re-enqueues it immediately. Pruned when the task
+   * leaves the deferred set (retry / cancel / recreate / completion / delete).
+   */
+  private launchDeferrals = new Map<string, { until: number; attempts: number; lastHeartbeatAt: number }>();
   private beforeApproveHook?: (task: TaskState) => Promise<void>;
   private lastInvalidationPlan?: InvalidationPlan;
 
@@ -683,6 +703,7 @@ export class Orchestrator {
     this.defaultPoolId = config.defaultPoolId;
     this.defaultAutoFixRetries = Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0));
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
+    this.launchDeferralBackoffMs = config.launchDeferralBackoffMs;
     this.resolveRepoDefaultBranch = config.resolveRepoDefaultBranch ?? requireDefaultBranchRemote;
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
@@ -1447,6 +1468,7 @@ export class Orchestrator {
    */
   startExecution(): TaskState[] {
     this.refreshFromDb();
+    this.pruneLaunchDeferrals();
 
     const activeAttempts = this.countActivePersistedAttempts();
     const readyTasks = this.stateMachine
@@ -1460,7 +1482,14 @@ export class Orchestrator {
     });
     const started: TaskState[] = [];
 
+    const launchPollNow = Date.now();
     for (const task of readyTasks) {
+      // A task deferred for execution-pool capacity waits in line with a
+      // heartbeat instead of being re-dispatched (and re-deferred) every poll.
+      if (this.isLaunchParked(task.id, launchPollNow)) {
+        this.emitLaunchWaitingHeartbeat(task.id, launchPollNow);
+        continue;
+      }
       this.enqueueIfNotScheduled(task.id);
     }
 
@@ -3577,6 +3606,67 @@ export class Orchestrator {
     },
   ): void {
     deferTaskImpl(this as unknown as CancellationHost, taskId, reason);
+    if (reason?.reason === 'resource-limit') {
+      this.recordLaunchDeferral(taskId);
+    }
+  }
+
+  /**
+   * Record (or extend) the launch backoff for a task deferred because its
+   * execution pool had no member capacity. Attempts drive an exponential
+   * schedule so a persistently starved task backs off toward the cap.
+   */
+  private recordLaunchDeferral(taskId: string): void {
+    const attempts = (this.launchDeferrals.get(taskId)?.attempts ?? 0) + 1;
+    const backoff = this.computeLaunchBackoffMs(attempts);
+    // lastHeartbeatAt=0 forces a heartbeat on the first parked poll.
+    this.launchDeferrals.set(taskId, { until: Date.now() + backoff, attempts, lastHeartbeatAt: 0 });
+  }
+
+  private computeLaunchBackoffMs(attempts: number): number {
+    if (this.launchDeferralBackoffMs !== undefined) {
+      return Math.max(0, this.launchDeferralBackoffMs);
+    }
+    const scaled = Orchestrator.LAUNCH_DEFERRAL_BASE_BACKOFF_MS * 2 ** Math.max(0, attempts - 1);
+    return Math.min(scaled, Orchestrator.LAUNCH_DEFERRAL_MAX_BACKOFF_MS);
+  }
+
+  /**
+   * True when the task is parked for capacity and its backoff has not elapsed.
+   * Gated on `deferredTaskIds` so any lifecycle transition that clears the
+   * deferred set (retry / cancel / recreate / completion re-enqueue) releases
+   * the park immediately, without a per-transition clear at every call site.
+   */
+  private isLaunchParked(taskId: string, now: number): boolean {
+    const deferral = this.launchDeferrals.get(taskId);
+    return deferral !== undefined
+      && this.deferredTaskIds.has(taskId)
+      && deferral.until > now;
+  }
+
+  private pruneLaunchDeferrals(): void {
+    if (this.launchDeferrals.size === 0) return;
+    for (const taskId of [...this.launchDeferrals.keys()]) {
+      if (!this.deferredTaskIds.has(taskId)) {
+        this.launchDeferrals.delete(taskId);
+      }
+    }
+  }
+
+  /**
+   * Emit a throttled `task.launch_waiting` heartbeat proving a parked task is
+   * still alive and in line (replacing the abandon/re-dispatch churn as the
+   * observable signal), carrying the retry attempt count and next retry time.
+   */
+  private emitLaunchWaitingHeartbeat(taskId: string, now: number): void {
+    const deferral = this.launchDeferrals.get(taskId);
+    if (!deferral) return;
+    if (now - deferral.lastHeartbeatAt < Orchestrator.LAUNCH_DEFERRAL_HEARTBEAT_MS) return;
+    deferral.lastHeartbeatAt = now;
+    this.persistence.logEvent?.(taskId, 'task.launch_waiting', {
+      attempts: deferral.attempts,
+      nextRetryAt: new Date(deferral.until),
+    });
   }
 
   getQueueStatus(options?: { refresh?: boolean }): {
