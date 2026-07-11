@@ -9,10 +9,13 @@ export function subscribeVisibilityAwarePoll(
   options?: {
     /** Delay before the visibility-restore refresh (ms). Use to stagger herds. */
     restoreDelayMs?: number;
+    /** Delay before the first poll on subscribe (ms). Heavy readers set this so a click/nav paints before the sync main-process query runs. Default 0 = immediate. */
+    initialDelayMs?: number;
   },
 ): () => void {
   let cancelled = false;
   let restoreTimer: number | undefined;
+  let initialTimer: number | undefined;
 
   const runIfVisible = (): void => {
     if (cancelled) return;
@@ -38,7 +41,15 @@ export function subscribeVisibilityAwarePoll(
     }, delay);
   };
 
-  runIfVisible();
+  const initialDelay = options?.initialDelayMs ?? 0;
+  if (initialDelay > 0) {
+    initialTimer = window.setTimeout(() => {
+      initialTimer = undefined;
+      runIfVisible();
+    }, initialDelay);
+  } else {
+    runIfVisible();
+  }
   const interval = window.setInterval(runIfVisible, pollMs);
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', onVisibilityChange);
@@ -48,6 +59,7 @@ export function subscribeVisibilityAwarePoll(
     cancelled = true;
     window.clearInterval(interval);
     if (restoreTimer !== undefined) window.clearTimeout(restoreTimer);
+    if (initialTimer !== undefined) window.clearTimeout(initialTimer);
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     }
