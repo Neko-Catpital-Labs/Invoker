@@ -47,4 +47,37 @@ describe('subscribeVisibilityAwarePoll', () => {
 
     unsubscribe();
   });
+
+  it('defers the initial poll by initialDelayMs so the mount/click can paint', () => {
+    vi.useFakeTimers();
+    const poll = vi.fn();
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+
+    const unsubscribe = subscribeVisibilityAwarePoll(poll, 1000, { initialDelayMs: 200 });
+    expect(poll).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(199);
+    expect(poll).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(poll).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+  });
+
+  it('cancels a pending initial poll on unsubscribe', () => {
+    vi.useFakeTimers();
+    const poll = vi.fn();
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+
+    const unsubscribe = subscribeVisibilityAwarePoll(poll, 1000, { initialDelayMs: 200 });
+    unsubscribe();
+    vi.advanceTimersByTime(500);
+    expect(poll).not.toHaveBeenCalled();
+  });
 });

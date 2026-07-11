@@ -30,7 +30,7 @@ export function useQueueStatus(pollMs = 2000, enabled = true): QueueStatus | nul
 
     const unsubscribe = subscribeVisibilityAwarePoll(() => {
       void poll();
-    }, pollMs, { restoreDelayMs: 25 });
+    }, pollMs, { restoreDelayMs: 250 });
     return () => {
       cancelled = true;
       unsubscribe();
