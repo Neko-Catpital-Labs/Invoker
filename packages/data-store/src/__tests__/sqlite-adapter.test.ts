@@ -618,7 +618,7 @@ describe('SQLiteAdapter', () => {
       expect(indexNames).toContain('idx_events_task_id_id');
     });
 
-    it('creates execution_model and worker_actions schema objects', () => {
+    it('creates execution_model and worker schema objects', () => {
       expect(tableColumns(adapter, 'tasks')).toContain('execution_model');
       expect(tableColumns(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
         'id',
@@ -649,6 +649,11 @@ describe('SQLiteAdapter', () => {
       expect(tableForeignKeys(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
         'workflows.id:CASCADE',
         'tasks.id:CASCADE',
+      ]));
+      expect(tableColumns(adapter, 'worker_desired_states')).toEqual(expect.arrayContaining([
+        'worker_kind',
+        'desired_state',
+        'updated_at',
       ]));
     });
 
@@ -812,6 +817,48 @@ describe('SQLiteAdapter', () => {
 
       expect(adapter.listWorkerActions({ decision: 'skip' }).map((action) => action.id)).toEqual(['wa-skip']);
       expect(adapter.listWorkerActions({ decision: 'act' }).map((action) => action.id)).toEqual(['wa-done', 'wa-act']);
+    });
+  });
+
+  describe('worker desired state persistence', () => {
+    it('upserts, reads, and lists desired worker states', () => {
+      const first = adapter.setWorkerDesiredState('pr-status', 'running');
+      expect(first).toMatchObject({
+        workerKind: 'pr-status',
+        desiredState: 'running',
+      });
+
+      const updated = adapter.setWorkerDesiredState('pr-status', 'stopped');
+      adapter.setWorkerDesiredState('external-preview', 'running');
+
+      expect(adapter.getWorkerDesiredState('pr-status')).toEqual(updated);
+      expect(adapter.listWorkerDesiredStates().map((state) => ({
+        workerKind: state.workerKind,
+        desiredState: state.desiredState,
+      }))).toEqual([
+        { workerKind: 'external-preview', desiredState: 'running' },
+        { workerKind: 'pr-status', desiredState: 'stopped' },
+      ]);
+    });
+
+    it('persists desired worker states across writable reopens', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-worker-desired-state-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.setWorkerDesiredState('autofix', 'running');
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.getWorkerDesiredState('autofix')).toMatchObject({
+          workerKind: 'autofix',
+          desiredState: 'running',
+        });
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 
