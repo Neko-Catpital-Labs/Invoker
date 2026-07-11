@@ -88,6 +88,7 @@ type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegio
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
+export const SELECTED_WORKFLOW_VANISH_GRACE_MS = 1000;
 const STATUS_KEY_ORDER: readonly WorkflowStatus[] = [
   'completed',
   'running',
@@ -543,6 +544,7 @@ export function App() {
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const graphActionsMenuRef = useRef<HTMLDivElement>(null);
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
+  const contextMenuTaskRef = useRef<TaskState | null>(null);
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -551,6 +553,7 @@ export function App() {
   const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
+  const [selectedWorkflowVanished, setSelectedWorkflowVanished] = useState(false);
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
@@ -808,7 +811,20 @@ export function App() {
 
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
   const selectedWorker = workerStatus?.workers.find((worker) => worker.kind === selectedWorkerKind) ?? null;
-  const contextMenuTask = contextMenu ? tasks.get(contextMenu.taskId) ?? null : null;
+  const liveContextMenuTask = contextMenu ? tasks.get(contextMenu.taskId) ?? null : null;
+  useEffect(() => {
+    if (!contextMenu) {
+      contextMenuTaskRef.current = null;
+      return;
+    }
+    if (liveContextMenuTask) {
+      contextMenuTaskRef.current = liveContextMenuTask;
+    }
+  }, [contextMenu, liveContextMenuTask]);
+  const contextMenuTask = liveContextMenuTask
+    ?? (contextMenu && contextMenuTaskRef.current?.id === contextMenu.taskId
+      ? contextMenuTaskRef.current
+      : null);
   const selectedWorkflowTaskCount = useMemo(() => {
     if (!selectedWorkflowId) return 0;
     let count = 0;
@@ -936,6 +952,17 @@ export function App() {
     }
   }, [selectedWorkflowId, selectedWorkflowTaskCount, workflows]);
 
+  const selectedWorkflowPresent = selectedWorkflowId !== null
+    && (workflows.has(selectedWorkflowId) || selectedWorkflowTaskCount > 0);
+  useEffect(() => {
+    if (selectedWorkflowId === null || selectedWorkflowPresent) {
+      setSelectedWorkflowVanished(false);
+      return;
+    }
+    const timer = setTimeout(() => setSelectedWorkflowVanished(true), SELECTED_WORKFLOW_VANISH_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [selectedWorkflowId, selectedWorkflowPresent]);
+
   useEffect(() => {
     if (selectedTask?.config.workflowId) {
       setWorkflowSelectionDismissed(false);
@@ -948,9 +975,12 @@ export function App() {
     if (workflowSelectionDismissed) {
       return;
     }
+    if (selectedWorkflowId && !selectedWorkflowVanished) {
+      return;
+    }
     const firstWorkflowId = workflows.keys().next().value as string | undefined;
     setSelectedWorkflowId(firstWorkflowId ?? null);
-  }, [selectedTask, selectedWorkflowId, selectedWorkflowTaskCount, workflowSelectionDismissed, workflows]);
+  }, [selectedTask, selectedWorkflowId, selectedWorkflowTaskCount, selectedWorkflowVanished, workflowSelectionDismissed, workflows]);
 
   const handleStatusClick = useCallback((filterKey: WorkflowStatus, event: React.MouseEvent) => {
     setStatusFilters(prev => {
@@ -1481,6 +1511,9 @@ export function App() {
       if (workflowEntries.some((entry) => entry.workflow.id === activeWorkflowId)) {
         return;
       }
+      if (activeWorkflowId !== null && !selectedWorkflowVanished) {
+        return;
+      }
       selectWorkflowById(workflowEntries[0].workflow.id);
       return;
     }
@@ -1523,6 +1556,7 @@ export function App() {
     selectedTaskId,
     selectedWorkflow?.id,
     selectedWorkflowId,
+    selectedWorkflowVanished,
     sidebarSurface,
     workflowEntries,
   ]);

@@ -1,18 +1,11 @@
 /**
- * Repro: two coupled UI bugs with one root cause.
- *
- * When an explicitly-selected workflow briefly drops out of the live graph
- * during transient churn (a snapshot resync, or the task teardown a
- * recreate/rebase kicks off — the workflow goes absent from the map with zero
- * tasks), the renderer overreacts:
- *   - it reassigns the selection to whichever workflow sorts first, so the task
- *     graph "suddenly changes to something else" (bug 2), and
- *   - that reassignment (plus the right-clicked task momentarily leaving the
- *     task map) tears down any open task context menu, so the "More" ->
- *     Recreate/rebase actions become unreachable (bug 1).
- *
- * These assertions capture the CURRENT (buggy) behavior on master so the proof
- * lands green; the fix slice flips them to the corrected behavior.
+ * Regression: an explicitly-selected workflow must keep the task graph focused
+ * on itself. During transient graph churn (a snapshot resync or a task-teardown
+ * storm from recreate/rebase) the selected workflow can briefly drop out of the
+ * live graph. The UI used to react by reassigning the selection to whatever
+ * workflow sorted first — yanking the task graph onto an unrelated workflow and
+ * tearing down any open task context menu. It must instead hold the selection
+ * through the transient gap, and only fall back once the workflow is really gone.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -25,7 +18,8 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
-const { App } = await import('../App.js');
+// The App module and its grace constant must resolve after the mock installs.
+const { App, SELECTED_WORKFLOW_VANISH_GRACE_MS } = await import('../App.js');
 
 const workflowA: WorkflowMeta = { id: 'wf-a', name: 'Workflow A', status: 'running' };
 const workflowB: WorkflowMeta = { id: 'wf-b', name: 'Workflow B', status: 'running' };
@@ -41,7 +35,7 @@ function miniDagText(): string {
   return screen.queryByTestId('selected-workflow-mini-dag')?.textContent ?? '(gone)';
 }
 
-describe('selected workflow selection-steal repro (current behavior)', () => {
+describe('selected workflow selection-steal regression', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
@@ -55,7 +49,7 @@ describe('selected workflow selection-steal repro (current behavior)', () => {
     mock.cleanup();
   });
 
-  it('steals focus to another workflow when the selected one briefly drops out (home surface)', async () => {
+  it('keeps focus on the selected workflow when it briefly drops out of the graph (home surface)', async () => {
     render(<App />);
     const { alpha, gamma } = buildTasks();
     act(() => mock.setTasks([alpha, gamma], [workflowA, workflowB]));
@@ -64,17 +58,20 @@ describe('selected workflow selection-steal repro (current behavior)', () => {
     fireEvent.click(screen.getByTestId('rf__node-wf-a'));
     await waitFor(() => expect(miniDagText()).toContain('Workflow A task DAG'));
 
+    // Transient churn: Workflow A's only task is torn down and A is momentarily
+    // omitted from the workflow list (as during a recreate/rebase resync).
     await act(async () => {
       mock.fireDelta({ type: 'removed', taskId: 'task-alpha', previousTaskStateVersion: 1 });
       mock.fireWorkflowsChanged([workflowB]);
       await new Promise((resolve) => setTimeout(resolve, 150));
     });
 
-    // BUG: the graph jumps to the unrelated workflow.
-    expect(miniDagText()).toContain('Workflow B task DAG');
+    // Focus must NOT jump to Workflow B.
+    expect(miniDagText()).toContain('Workflow A task DAG');
+    expect(miniDagText()).not.toContain('Workflow B task DAG');
   });
 
-  it('steals focus during churn on the workflows browser surface', async () => {
+  it('keeps focus on the selected workflow during churn (workflows browser surface)', async () => {
     render(<App />);
     const { alpha, gamma } = buildTasks();
     act(() => mock.setTasks([alpha, gamma], [workflowA, workflowB]));
@@ -91,11 +88,11 @@ describe('selected workflow selection-steal repro (current behavior)', () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
     });
 
-    // BUG: the graph jumps to the unrelated workflow.
-    expect(miniDagText()).toContain('Workflow B task DAG');
+    expect(miniDagText()).toContain('Workflow A task DAG');
+    expect(miniDagText()).not.toContain('Workflow B task DAG');
   });
 
-  it('tears down the open task context menu during recreate churn', async () => {
+  it('keeps an open task context menu usable through recreate churn', async () => {
     render(<App />);
     const { alpha, beta, gamma } = buildTasks();
     act(() => mock.setTasks([alpha, beta, gamma], [workflowA, workflowB]));
@@ -109,13 +106,45 @@ describe('selected workflow selection-steal repro (current behavior)', () => {
     fireEvent.click(await screen.findByText('More'));
     expect(await screen.findByText('Recreate from Task')).toBeInTheDocument();
 
+    // The right-clicked task is torn down and re-added while A is briefly omitted.
     await act(async () => {
       mock.fireDelta({ type: 'removed', taskId: 'task-alpha', previousTaskStateVersion: 1 });
       mock.fireWorkflowsChanged([workflowB]);
       await new Promise((resolve) => setTimeout(resolve, 120));
     });
 
-    // BUG: the menu blinks shut, so Recreate/rebase becomes unreachable.
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    // The menu (and its Recreate action) must remain available, not blink shut.
+    expect(screen.queryByRole('menu')).toBeInTheDocument();
+    expect(screen.getByText('Recreate from Task')).toBeInTheDocument();
+    expect(miniDagText()).toContain('Workflow A task DAG');
+  });
+
+  it('still moves off the selected workflow once it is genuinely gone (after the grace window)', async () => {
+    render(<App />);
+    const { alpha, gamma } = buildTasks();
+    act(() => mock.setTasks([alpha, gamma], [workflowA, workflowB]));
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    await waitFor(() => expect(miniDagText()).toContain('Workflow A task DAG'));
+
+    // Tear the task down first and let it settle so Workflow A is no longer
+    // task-backed, then drop it from the workflow list. Now it is genuinely gone
+    // (absent from the map with no tasks), not merely mid-churn.
+    await act(async () => {
+      mock.fireDelta({ type: 'removed', taskId: 'task-alpha', previousTaskStateVersion: 1 });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    await act(async () => {
+      mock.fireWorkflowsChanged([workflowB]);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    // Workflow A is now absent from the map with no tasks. Once the grace window
+    // elapses it is treated as gone and focus moves to the remaining workflow.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SELECTED_WORKFLOW_VANISH_GRACE_MS + 400));
+    });
+
+    await waitFor(() => expect(miniDagText()).toContain('Workflow B task DAG'));
   });
 });
