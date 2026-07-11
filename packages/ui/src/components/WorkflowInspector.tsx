@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
+import { subscribeVisibilityAwarePoll } from '../hooks/visibilityAwarePoll.js';
 import type { ActionGraphNode } from '@invoker/contracts';
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
@@ -311,14 +312,20 @@ export function WorkflowInspector({
 
     setTaskLogEvents([]);
     setTaskLogError(null);
-    refreshEvents();
 
     const shouldPoll = task.status === 'running' || task.status === 'fixing_with_ai';
-    const timer = shouldPoll ? window.setInterval(refreshEvents, 2_500) : undefined;
-
+    if (!shouldPoll) {
+      refreshEvents();
+      return () => {
+        cancelled = true;
+      };
+    }
+    // Visibility-gated so the 2.5s log poll pauses while backgrounded and cannot
+    // land in the refocus turn; subscribe fires the initial load immediately.
+    const unsubscribe = subscribeVisibilityAwarePoll(refreshEvents, 2_500, { restoreDelayMs: 350 });
     return () => {
       cancelled = true;
-      if (timer !== undefined) window.clearInterval(timer);
+      unsubscribe();
     };
   }, [task?.id, task?.status]);
 

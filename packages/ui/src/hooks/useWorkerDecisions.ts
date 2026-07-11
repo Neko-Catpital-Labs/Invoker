@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkerActionSummary, WorkerDecisionsRequest } from '../types.js';
+import { subscribeVisibilityAwarePoll } from './visibilityAwarePoll.js';
 
 export function useWorkerDecisions(
   request: WorkerDecisionsRequest | null,
@@ -29,12 +30,15 @@ export function useWorkerDecisions(
   }, [key]);
 
   useEffect(() => {
-    void fetchDecisions();
-    if (!key) return undefined;
-    const interval = window.setInterval(() => {
+    if (!key) {
       void fetchDecisions();
-    }, pollMs);
-    return () => window.clearInterval(interval);
+      return undefined;
+    }
+    // Visibility-gated so the 4s poll does not tick while backgrounded and land
+    // in the refocus turn; initialDelay lets the panel paint before the fetch.
+    return subscribeVisibilityAwarePoll(() => {
+      void fetchDecisions();
+    }, pollMs, { restoreDelayMs: 300, initialDelayMs: 150 });
   }, [fetchDecisions, key, pollMs]);
 
   return [decisions, fetchDecisions] as const;

@@ -36,7 +36,7 @@ export function useWorkerStatus(
     if (!enabled) return;
     return subscribeVisibilityAwarePoll(() => {
       void fetchStatus();
-    }, pollMs, { restoreDelayMs: 0 });
+    }, pollMs, { restoreDelayMs: 100 });
   }, [enabled, fetchStatus, pollMs]);
 
   return [snapshot, fetchStatus] as const;
