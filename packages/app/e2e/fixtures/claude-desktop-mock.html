@@ -18,33 +18,34 @@
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
-      width: 1440px;
-      height: 900px;
+      width: 100%;
+      height: 100%;
       overflow: hidden;
-      background: #000;
+      background: transparent;
       color: var(--text);
       font-family: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, monospace;
     }
     .window {
-      width: 1440px;
-      height: 900px;
+      width: 100%;
+      height: 100%;
       background: var(--bg);
       display: grid;
-      grid-template-rows: 40px 1fr;
-      border: 1px solid var(--border);
+      grid-template-rows: 36px 1fr;
+      border-radius: 10px;
+      overflow: hidden;
     }
     .chrome {
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 0 14px;
+      padding: 0 12px;
       background: var(--chrome);
       border-bottom: 1px solid var(--border);
     }
-    .traffic { display: flex; gap: 7px; }
+    .traffic { display: flex; gap: 6px; }
     .traffic span {
-      width: 11px;
-      height: 11px;
+      width: 10px;
+      height: 10px;
       border-radius: 50%;
       background: #444;
     }
@@ -52,38 +53,38 @@
     .traffic span:nth-child(2) { background: #febc2e; }
     .traffic span:nth-child(3) { background: #28c840; }
     .chrome-title {
-      font-size: 12px;
+      font-size: 11px;
       color: var(--muted);
       letter-spacing: 0.02em;
     }
     .term {
-      padding: 28px 36px 32px;
+      padding: 18px 20px 20px;
       overflow: hidden;
-      font-size: 15px;
-      line-height: 1.55;
+      font-size: 13px;
+      line-height: 1.5;
       white-space: pre-wrap;
     }
-    .line { margin: 0 0 10px; }
+    .line { margin: 0 0 8px; }
     .dim { color: var(--muted); }
     .ok { color: var(--green); }
     .accent { color: var(--amber); }
     .prompt { color: var(--prompt); }
     .user-line { color: var(--user); }
     .block {
-      margin: 14px 0 18px;
-      padding-left: 14px;
+      margin: 10px 0 14px;
+      padding-left: 12px;
       border-left: 2px solid #333;
       color: #cfcbc3;
     }
     .input-row {
       display: flex;
       align-items: baseline;
-      gap: 10px;
-      margin-top: 18px;
+      gap: 8px;
+      margin-top: 14px;
     }
     .caret {
       display: inline-block;
-      width: 8px;
+      width: 7px;
       height: 1.05em;
       background: var(--text);
       vertical-align: -2px;
@@ -102,7 +103,7 @@
     <div class="term" id="term">
       <div class="line dim">$ claude</div>
       <div class="line">Claude Code <span class="dim">v2.0 · checkout</span></div>
-      <div class="line dim">────────────────────────────────────────</div>
+      <div class="line dim">────────────────────────────────</div>
       <div class="line accent">Claude</div>
       <div class="block" id="assistant-1">I drafted a three-task Invoker plan for the checkout handlers work:
   1. implement-handlers
@@ -116,8 +117,8 @@ Say when you want it submitted.</div>
       </div>
       <div class="line user-line hidden" id="committed"><span class="prompt">❯</span> <span id="committed-text"></span></div>
       <div class="hidden" id="assistant-2">
-        <div class="line accent" style="margin-top:16px">Claude</div>
-        <div class="block">Submitting to Invoker now — the workflow chain will show up on your Plan graph.</div>
+        <div class="line accent" style="margin-top:12px">Claude</div>
+        <div class="block">Submitting to Invoker now — watch the Plan graph update behind this window.</div>
         <div class="line ok">✓ Plan submitted to Invoker</div>
       </div>
     </div>
