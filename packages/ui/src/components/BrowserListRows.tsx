@@ -28,6 +28,8 @@ export const BrowserTaskRow = memo(function BrowserTaskRow({
     <button
       type="button"
       onClick={() => onSelect(taskId)}
+      data-testid={`browser-task-row-${taskId}`}
+      data-selected={selected}
       className={`block w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${accent}`}
     >
       <div className="truncate text-body font-medium">{title}</div>
