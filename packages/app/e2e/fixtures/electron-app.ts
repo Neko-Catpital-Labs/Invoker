@@ -80,11 +80,9 @@ export const test = base.extend<ElectronFixtures>({
       // Windows / EPERM: fix path still uses INVOKER_CLAUDE_FIX_COMMAND; prompt tasks may hit real claude.
     }
     const codexStub = path.join(stubDir, 'codex');
-    const codexDemoRenderer = path.resolve(__dirname, 'render-codex-demo-session.mjs');
-    // When INVOKER_E2E_CODEX_DEMO=1 (passed into Electron env below), resume
-    // renders the persisted agent-sessions/<id>.jsonl transcript and holds the
-    // PTY open so marketing captures show that task's real session — not a
-    // hardcoded stub shared across scenes.
+    // When INVOKER_E2E_CODEX_DEMO=1, resume renders agent-sessions/<id>.jsonl.
+    // Prefer INVOKER_E2E_CODEX_DEMO_RENDERER (website capture copies this in);
+    // otherwise use an inline renderer so Invoker CI needs no extra fixture file.
     writeFileSync(codexStub, `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "\${1:-}" == "resume" ]]; then
@@ -95,7 +93,33 @@ if [[ "\${1:-}" == "resume" ]]; then
   session_id="\${@: -1}"
   if [[ "\${INVOKER_E2E_CODEX_DEMO:-}" == "1" ]]; then
     session_file="\${INVOKER_DB_DIR:-}/agent-sessions/\${session_id}.jsonl"
-    node ${JSON.stringify(codexDemoRenderer)} "\$session_file" "\$session_id"
+    if [[ -n "\${INVOKER_E2E_CODEX_DEMO_RENDERER:-}" && -f "\${INVOKER_E2E_CODEX_DEMO_RENDERER}" ]]; then
+      node "\${INVOKER_E2E_CODEX_DEMO_RENDERER}" "\$session_file" "\$session_id"
+    else
+      node - "\$session_file" "\$session_id" <<'NODE'
+const fs = require('node:fs');
+const [sessionFile, sessionId] = process.argv.slice(2);
+if (!sessionFile || !fs.existsSync(sessionFile)) {
+  console.log('› Resumed Codex session ' + (sessionId || '') + ' (no persisted transcript).');
+  console.log('');
+  console.log('Codex session: ' + (sessionId || ''));
+  process.exit(0);
+}
+const raw = fs.readFileSync(sessionFile, 'utf8');
+for (const line of raw.split('\\n')) {
+  if (!line.trim()) continue;
+  let event;
+  try { event = JSON.parse(line); } catch { continue; }
+  const item = event?.item;
+  if (event?.type === 'item.completed' && item?.text) {
+    if (item.type === 'user_message') console.log('> ' + item.text);
+    else if (item.type === 'agent_message') console.log(item.text);
+  }
+}
+console.log('');
+console.log('Codex session: ' + (sessionId || ''));
+NODE
+    fi
     # Hold the PTY open so the drawer looks like a live Codex session.
     sleep "\${INVOKER_E2E_CODEX_DEMO_HOLD_SECS:-20}"
     exit 0
@@ -155,6 +179,9 @@ exit 64
           : {}),
         ...(process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS
           ? { INVOKER_E2E_CODEX_DEMO_HOLD_SECS: process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS }
+          : {}),
+        ...(process.env.INVOKER_E2E_CODEX_DEMO_RENDERER
+          ? { INVOKER_E2E_CODEX_DEMO_RENDERER: process.env.INVOKER_E2E_CODEX_DEMO_RENDERER }
           : {}),
         ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
         ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
