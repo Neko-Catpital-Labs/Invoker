@@ -15,6 +15,22 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const PLANNING_CHAT_RENDER_REPORT_MIN_INTERVAL_MS = 250;
+const PLANNING_CHAT_RENDER_SLOW_MS = 8;
+
+function perfNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
@@ -72,8 +88,19 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const renderStartedAt = perfNowMs();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const lastInputAtRef = useRef<number | null>(null);
+  const inputSequenceRef = useRef(0);
+  const lastRenderReportAtRef = useRef(0);
+  const previousCommitRef = useRef<{
+    activeConversationKey: string;
+    busy: boolean;
+    lineCount: number;
+    readOnly: boolean;
+    valueLength: number;
+  } | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
 
   const scrollTranscriptToBottom = useCallback((): void => {
@@ -105,9 +132,72 @@ export function InvokerTerminal({
     }
   }, [busy, readOnly]);
 
+  useEffect(() => {
+    const endedAt = perfNowMs();
+    const durationMs = endedAt - renderStartedAt;
+    const previous = previousCommitRef.current;
+    const lineCount = lines.length;
+    const valueLength = value.length;
+    const changed = !previous ||
+      previous.activeConversationKey !== activeConversationKey ||
+      previous.busy !== busy ||
+      previous.lineCount !== lineCount ||
+      previous.readOnly !== readOnly ||
+      previous.valueLength !== valueLength;
+    const due = endedAt - lastRenderReportAtRef.current >= PLANNING_CHAT_RENDER_REPORT_MIN_INTERVAL_MS;
+    if (changed && (durationMs >= PLANNING_CHAT_RENDER_SLOW_MS || due)) {
+      lastRenderReportAtRef.current = endedAt;
+      const lastInputAt = lastInputAtRef.current;
+      reportPlanningChatPerf('planning_chat_render_commit', {
+        durationMs: roundMs(durationMs),
+        activeConversationKey,
+        busy,
+        expanded,
+        inputSequence: inputSequenceRef.current,
+        lineCount,
+        readOnly,
+        reasoningLineCount: lines.reduce((count, line) => count + (line.reasoning ? 1 : 0), 0),
+        shouldFollowTranscript,
+        sinceLastInputMs: lastInputAt === null ? undefined : Math.max(0, Math.round(endedAt - lastInputAt)),
+        valueLength,
+      });
+    }
+    previousCommitRef.current = {
+      activeConversationKey,
+      busy,
+      lineCount,
+      readOnly,
+      valueLength,
+    };
+  });
+
   const focusComposer = (): void => {
     inputRef.current?.focus();
   };
+
+  const handleValueChange = useCallback((nextValue: string): void => {
+    const startedAt = perfNowMs();
+    const previousLength = value.length;
+    onValueChange(nextValue);
+    const endedAt = perfNowMs();
+    const previousInputAt = lastInputAtRef.current;
+    const inputSequence = inputSequenceRef.current + 1;
+    inputSequenceRef.current = inputSequence;
+    lastInputAtRef.current = endedAt;
+    reportPlanningChatPerf('planning_chat_input_change', {
+      durationMs: roundMs(endedAt - startedAt),
+      activeConversationKey,
+      busy,
+      deltaChars: nextValue.length - previousLength,
+      expanded,
+      inputSequence,
+      lineCount: lines.length,
+      previousValueLength: previousLength,
+      readOnly,
+      sincePreviousInputMs: previousInputAt === null ? undefined : Math.max(0, Math.round(endedAt - previousInputAt)),
+      valueLength: nextValue.length,
+    });
+  }, [activeConversationKey, busy, expanded, lines.length, onValueChange, readOnly, value.length]);
 
   return (
     <section className="flex h-full min-h-0 flex-col border border-border bg-card">
@@ -279,7 +369,7 @@ export function InvokerTerminal({
             value={value}
             disabled={busy || readOnly}
             rows={expanded ? 8 : 3}
-            onChange={(event) => onValueChange(event.target.value)}
+            onChange={(event) => handleValueChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
                 event.preventDefault();
