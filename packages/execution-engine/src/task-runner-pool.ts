@@ -457,7 +457,12 @@ export function selectExecutor(
   task: TaskState,
   excludedPoolMemberKeys: Set<string> = new Set(),
 ): SelectedExecutor {
-  let effectiveType = task.config.runnerKind ?? (task.config.isMergeNode ? 'merge' : undefined);
+  // Merge nodes must always use MergeGateExecutor. After a successful review-gate
+  // publish, merge-runner persists runnerKind='worktree' for gate-terminal restore;
+  // that must not win over isMergeNode on retry/recreate.
+  let effectiveType = task.config.isMergeNode
+    ? 'merge'
+    : task.config.runnerKind;
   let selectedPoolMemberId: string | undefined;
   const explicitPoolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
   let resolvedExecution: ResolvedExecutionSelection = {
