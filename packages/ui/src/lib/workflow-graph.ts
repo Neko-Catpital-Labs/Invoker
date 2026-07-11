@@ -104,8 +104,8 @@ function addWorkflowEdge(
 
 export function layoutWorkflowGraph(
   graph: WorkflowGraph,
-  horizontalSpacing = 340,
-  verticalSpacing = 124,
+  horizontalSpacing = 380,
+  verticalSpacing = 132,
   componentGap = 72,
 ): Map<string, WorkflowPosition> {
   const positions = new Map<string, WorkflowPosition>();

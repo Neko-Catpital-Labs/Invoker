@@ -73,7 +73,7 @@ export function TaskNode({ data }: TaskNodeProps) {
 
   return (
     <div
-      className={`relative w-[288px] overflow-hidden rounded-xl border px-4 py-3.5 transition-[opacity,box-shadow,border-color] duration-150 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
+      className={`relative w-[312px] overflow-hidden rounded-xl border px-4 py-4 transition-[opacity,box-shadow,border-color] duration-150 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
       title={task.id}
       data-selected={selected ? 'true' : 'false'}
       onDoubleClick={handleDoubleClick}
@@ -86,13 +86,13 @@ export function TaskNode({ data }: TaskNodeProps) {
 
       <span className={`absolute left-0 top-0 bottom-0 w-[3px] ${dotClass}`} />
 
-      <div className={`text-base font-medium leading-snug truncate pl-3 text-card-foreground ${isStale ? 'line-through opacity-70' : ''}`}>
-        {task.description.length > 36
-          ? `${task.description.slice(0, 36)}...`
+      <div className={`text-[20px] font-medium leading-snug truncate pl-3 text-card-foreground ${isStale ? 'line-through opacity-70' : ''}`}>
+        {task.description.length > 40
+          ? `${task.description.slice(0, 40)}...`
           : task.description}
       </div>
 
-      <div className={`mt-1.5 pl-3 text-[13px] tracking-wide ${colors.text}`}>
+      <div className={`mt-1.5 pl-3 text-[15px] tracking-wide ${colors.text}`}>
         {statusLabel}
       </div>
 
