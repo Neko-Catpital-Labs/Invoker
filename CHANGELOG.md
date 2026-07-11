@@ -4,6 +4,8 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+- Attach CHANGELOG section notes to each GitHub Release. The release workflow extracts the matching \`## <version>\` block from CHANGELOG.md into the release body so tagged cuts are not empty.
+
 ## 0.0.7
 
 - Ship Slack as a separate npm-released SEA binary (`@neko-catpital-labs/invoker-slack` / `invoker-slack`), built and archived like the CLI, published from the release workflow, and always included in `scripts/local-macos-release-build.sh` maintainer cuts. The desktop app no longer embeds Slack; GUI relaunch from the manager resolves `INVOKER_GUI_COMMAND`, `invoker-ui`, macOS `open -a Invoker`, then the monorepo xvfb path.
