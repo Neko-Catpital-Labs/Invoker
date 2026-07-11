@@ -41,6 +41,7 @@ import {
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import { formatHeadlessSetSubcommands } from './headless-command-registry.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import { persistWorkerDesiredState } from './worker-control.js';
 
 export {
   DEFAULT_DELEGATION_TIMEOUT_MS,
@@ -458,6 +459,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   }
   const autoFixAttemptLedger = createAutoFixAttemptLedger();
   try {
+    persistWorkerDesiredState(deps.persistence, definition.kind, 'running');
     const worker = definition.factory({
       store: deps.persistence,
       submitter: {
@@ -929,4 +931,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-

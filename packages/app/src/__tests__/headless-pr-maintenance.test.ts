@@ -25,12 +25,15 @@ function writeCronScript(repoRoot: string, scriptRelativePath: string, markerNam
 }
 
 /** Minimal headless deps for a one-shot PR-maintenance worker run. */
-function makeWorkerDeps(repoRoot: string, token: string): unknown {
+function makeWorkerDeps(repoRoot: string, token: string) {
   return {
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), child: vi.fn() },
     // The PR-maintenance tick never touches the store/submitter; provide a stub
     // so the shared factory-deps construction has something to reference.
-    persistence: { enqueueWorkflowMutationIntent: vi.fn(() => 1) },
+    persistence: {
+      enqueueWorkflowMutationIntent: vi.fn(() => 1),
+      setWorkerDesiredState: vi.fn(),
+    },
     invokerConfig: {
       prMaintenance: {
         enabled: true,
@@ -73,22 +76,32 @@ describe('headless worker PR-maintenance', () => {
 
   it('runs the coderabbit-address worker one-shot with the threaded config', async () => {
     writeCronScript(repoRoot, 'scripts/cron-coderabbit-address.sh', 'coderabbit.marker');
+    const deps = makeWorkerDeps(repoRoot, 'cr-token');
 
-    await runHeadless(['worker', CODERABBIT_ADDRESS_WORKER_KIND], makeWorkerDeps(repoRoot, 'cr-token') as never);
+    await runHeadless(['worker', CODERABBIT_ADDRESS_WORKER_KIND], deps as never);
 
     // Marker written under the threaded repoRoot, carrying the threaded env
     // override — proves the launch config reached the shell entrypoint.
     expect(readFileSync(join(repoRoot, 'coderabbit.marker'), 'utf8')).toBe('cr-token');
     expect(stdout).toContain(`${CODERABBIT_ADDRESS_WORKER_KIND} worker scan completed.`);
+    expect(deps.persistence.setWorkerDesiredState).toHaveBeenCalledWith(
+      CODERABBIT_ADDRESS_WORKER_KIND,
+      'running',
+    );
   });
 
   it('runs the pr-conflict-rebase worker one-shot with the threaded config', async () => {
     writeCronScript(repoRoot, 'scripts/cron-pr-conflict-rebase.sh', 'rebase.marker');
+    const deps = makeWorkerDeps(repoRoot, 'rebase-token');
 
-    await runHeadless(['worker', PR_CONFLICT_REBASE_WORKER_KIND], makeWorkerDeps(repoRoot, 'rebase-token') as never);
+    await runHeadless(['worker', PR_CONFLICT_REBASE_WORKER_KIND], deps as never);
 
     expect(readFileSync(join(repoRoot, 'rebase.marker'), 'utf8')).toBe('rebase-token');
     expect(stdout).toContain(`${PR_CONFLICT_REBASE_WORKER_KIND} worker scan completed.`);
+    expect(deps.persistence.setWorkerDesiredState).toHaveBeenCalledWith(
+      PR_CONFLICT_REBASE_WORKER_KIND,
+      'running',
+    );
   });
 
   it('lists both PR-maintenance worker kinds from the manual entrypoint', async () => {
