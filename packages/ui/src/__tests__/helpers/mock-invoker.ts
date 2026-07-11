@@ -240,6 +240,7 @@ export function createMockInvoker(
     ]),
     getExecutionDefaults: vi.fn(async () => ({ executionAgent: 'codex' })),
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
+    reportUiPerf: vi.fn(async () => {}),
     getSystemDiagnostics: vi.fn(async () => ({
       platform: 'linux',
       arch: 'x64',
