@@ -591,5 +591,57 @@ describe('GitHubMergeGateProvider', () => {
         ],
       });
     });
+
+    it('ignores older failed check runs when a newer duplicate check succeeds', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/5',
+            headRefOid: 'def456',
+            headRefName: 'feature/fixed-pr-body',
+            mergeStateStatus: 'CLEAN',
+            statusCheckRollup: [
+              {
+                name: 'PR Body',
+                workflowName: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/1',
+                completedAt: '2026-07-11T08:56:11Z',
+              },
+              {
+                name: 'PR Body',
+                workflowName: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/2',
+                completedAt: '2026-07-11T11:59:48Z',
+              },
+              {
+                name: 'quality / TypeScript Types',
+                workflowName: 'CI',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                completedAt: '2026-07-11T08:57:37Z',
+              },
+            ],
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '5', cwd: '/tmp/repo' });
+
+      expect(result.checks).toEqual({
+        state: 'success',
+        failed: [],
+      });
+    });
   });
 });
