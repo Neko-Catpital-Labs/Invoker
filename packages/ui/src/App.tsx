@@ -1067,6 +1067,8 @@ export function App() {
     if (task.config.workflowId) {
       setSelectedWorkflowId(task.config.workflowId);
     }
+    setInspectorCollapsed(false);
+    setInspectorManualOpen(true);
     setContextMenu(null);
     setWorkflowContextMenu(null);
     recenterForSelection('task', task.id);
@@ -1402,14 +1404,8 @@ export function App() {
 
   // ── DAG interaction ───────────────────────────────────────
   const handleTaskClick = useCallback((task: TaskState) => {
-    setSelectedTaskId(task.id);
-    setWorkflowSelectionDismissed(false);
-    if (task.config.workflowId) {
-      setSelectedWorkflowId(task.config.workflowId);
-    }
-    setWorkflowContextMenu(null);
-    recenterForSelection('task', task.id);
-  }, [recenterForSelection]);
+    selectTaskById(task.id);
+  }, [selectTaskById]);
 
   const openTerminalForTaskId = useCallback(async (taskId: string) => {
     const task = tasks.get(taskId);
