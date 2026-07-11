@@ -22,6 +22,9 @@ export const DEFAULT_WORKFLOW_RESUME_COOLDOWN_MS = 60_000;
 const TERMINAL_TASK_STATUSES: ReadonlySet<TaskState['status']> = new Set<TaskState['status']>([
   'completed' as TaskState['status'],
   'review_ready' as TaskState['status'],
+  'failed' as TaskState['status'],
+  'closed' as TaskState['status'],
+  'stale' as TaskState['status'],
 ]);
 
 export interface WorkflowResumeWorkerStore {
