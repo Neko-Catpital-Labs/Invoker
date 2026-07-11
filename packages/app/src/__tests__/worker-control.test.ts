@@ -110,7 +110,7 @@ function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKE
 }
 
 describe('createWorkerRuntimeController', () => {
-  it('auto-start starts every built-in owner worker except autofix', () => {
+  it('auto-start starts every built-in owner worker except autofix and workflow-resume', () => {
     const setup = controller();
 
     setup.controller.startAutoStartedWorkers();
@@ -120,7 +120,8 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
-    expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.lifecycle).toBe('stopped');
+    expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.startable).toBe(true);
     expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
   });
