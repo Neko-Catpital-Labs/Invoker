@@ -1170,9 +1170,14 @@ test.describe('marketing product demos', () => {
 
       const terminalPane = page.getByTestId(`terminal-pane-${fullTaskId}`);
       await expect(terminalPane).toBeVisible();
-      await expect(terminalPane.getByText('Codex · resumed session')).toBeVisible({ timeout: 15000 });
-      await expect(terminalPane.getByText('Sandbox validation complete')).toBeVisible({ timeout: 5000 });
+      // Match stable footer lines (xterm scroll can hide early header rows).
+      await expect(terminalPane.getByText('Sandbox validation complete')).toBeVisible({ timeout: 15000 });
+      await expect(terminalPane.getByText(`Codex session: ${agentSessionId}`)).toBeVisible({ timeout: 5000 });
+      await expect(terminalPane.getByText('stdin is not a terminal')).toHaveCount(0);
 
+      // Final beat: dense Plan graph + mini-DAG + open session drawer (no Full graph).
+      await minimizeInspectorIfVisible(page);
+      await expandMiniDag(page);
       await capture();
       await page.waitForTimeout(900);
       await capture();
