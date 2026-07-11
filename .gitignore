@@ -20,6 +20,11 @@ packages/app/e2e/test-results/
 packages/app/test-results/
 packages/app/test-results/
 
+# Ephemeral website marketing-capture staging (InvokerWebsite scripts inject here)
+packages/app/e2e/.marketing-capture/
+packages/app/e2e/marketing-demos/
+packages/app/e2e/marketing-frames/
+
 # Generated Docker base image scratch dir produced by
 # scripts/build-agent-base-image.sh in case it is ever expanded locally.
 /docker/agent-base/
