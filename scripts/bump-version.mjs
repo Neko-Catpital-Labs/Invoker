@@ -4,8 +4,9 @@
 //
 //   node scripts/bump-version.mjs 0.0.7
 //
-// Covers the root + four publishable package.json files, the VERSION constant
-// baked into the CLI source, and CHANGELOG.md (renames "## Unreleased" to the
+// Covers the root + publishable package.json files (app, cli, slack-manager,
+// npm-cli, npm-ui, npm-slack), the VERSION constants baked into the CLI and
+// Slack manager sources, and CHANGELOG.md (renames "## Unreleased" to the
 // new version and starts a fresh "## Unreleased"). After this, commit and tag
 // (vX.Y.Z) to trigger the release workflow.
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -42,8 +43,10 @@ function main() {
     'package.json',
     'packages/app/package.json',
     'packages/cli/package.json',
+    'packages/slack-manager/package.json',
     'packages/npm-cli/package.json',
     'packages/npm-ui/package.json',
+    'packages/npm-slack/package.json',
   ];
 
   for (const relPath of packageJsonPaths) {
@@ -55,14 +58,20 @@ function main() {
     console.log(`${relPath}: ${oldVersion} -> ${newVersion}`);
   }
 
-  const cliSourcePath = join(root, 'packages/cli/src/index.ts');
-  const cliSource = readFileSync(cliSourcePath, 'utf8');
-  if (!/^const VERSION = '[^']+';$/m.test(cliSource)) {
-    console.error(`Could not find "const VERSION = '...'" in ${cliSourcePath}`);
-    process.exit(1);
+  const versionConstFiles = [
+    'packages/cli/src/index.ts',
+    'packages/slack-manager/src/index.ts',
+  ];
+  for (const relPath of versionConstFiles) {
+    const absPath = join(root, relPath);
+    const source = readFileSync(absPath, 'utf8');
+    if (!/^const VERSION = '[^']+';$/m.test(source)) {
+      console.error(`Could not find "const VERSION = '...'" in ${absPath}`);
+      process.exit(1);
+    }
+    writeFileSync(absPath, source.replace(/^const VERSION = '[^']+';$/m, `const VERSION = '${newVersion}';`));
+    console.log(`${relPath}: VERSION -> ${newVersion}`);
   }
-  writeFileSync(cliSourcePath, cliSource.replace(/^const VERSION = '[^']+';$/m, `const VERSION = '${newVersion}';`));
-  console.log(`packages/cli/src/index.ts: VERSION -> ${newVersion}`);
 
   const changelogPath = join(root, 'CHANGELOG.md');
   writeFileSync(changelogPath, applyChangelogRelease(readFileSync(changelogPath, 'utf8'), newVersion));

@@ -34,6 +34,7 @@
     "dist:desktop:mac:arm64": "bash scripts/package-desktop.sh --mac --arm64",
     "dist:desktop:mac:x64": "bash scripts/package-desktop.sh --mac --x64",
     "dist:cli": "node scripts/build-cli-standalone.mjs && bash scripts/archive-cli-binary.sh",
+    "dist:slack": "node scripts/build-slack-standalone.mjs && bash scripts/archive-slack-binary.sh",
     "build:tsc": "tsc -b tsconfig.build.json",
     "build:tsc:clean": "tsc -b tsconfig.build.json --clean",
     "clean": "pnpm -r clean",
