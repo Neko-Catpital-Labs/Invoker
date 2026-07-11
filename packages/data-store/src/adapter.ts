@@ -197,6 +197,14 @@ export interface WorkerActionListFilters {
   offset?: number;
 }
 
+export type WorkerDesiredState = 'running' | 'stopped';
+
+export interface WorkerDesiredStateRecord {
+  workerKind: string;
+  desiredState: WorkerDesiredState;
+  updatedAt: string;
+}
+
 export interface TerminalSessionRecord {
   sessionId: string;
   taskId: string;
@@ -289,6 +297,9 @@ export interface PersistenceAdapter {
   getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
   upsertWorkerAction(action: WorkerActionWrite): WorkerActionRecord;
   listWorkerActions(filters?: WorkerActionListFilters): WorkerActionRecord[];
+  getWorkerDesiredState(workerKind: string): WorkerDesiredStateRecord | undefined;
+  setWorkerDesiredState(workerKind: string, desiredState: WorkerDesiredState): WorkerDesiredStateRecord;
+  listWorkerDesiredStates(): WorkerDesiredStateRecord[];
 
   // Conversations (Slack thread-based)
   saveConversation(conversation: Conversation): void;
