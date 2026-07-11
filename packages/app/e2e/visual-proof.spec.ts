@@ -754,7 +754,10 @@ test.describe('Visual proof capture', () => {
       await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'I drafted the stacked plan.' });
     }, { planYaml: plannedYaml, planName: 'Workers Surface' });
 
-    await expect(page.getByRole('heading', { name: 'What do you want to build?' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Planning chat window' })).toBeVisible();
+    await expect(page.getByText('Still discussing')).toBeVisible();
+    await expect(page.getByText('What do you want to build?')).toHaveCount(0);
+    await expect(page.getByText('Ask Invoker what you want to build.')).toHaveCount(0);
     await expect(page.getByTestId('invoker-terminal-input')).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Build the Workers Surface');
     await page.getByRole('button', { name: 'Send' }).click();
