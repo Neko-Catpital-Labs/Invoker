@@ -97,11 +97,6 @@ export function WorkerActivityCard({
 
   return (
     <div data-testid="worker-activity-card">
-      <div className="mb-4">
-        <h3 className="text-lg font-semibold text-foreground">Worker processes ({snapshot?.workers.length ?? 0})</h3>
-        <div className="mt-1 text-sm text-muted-foreground">Process status is separate from queue work. A running process can be idle.</div>
-      </div>
-
       {!snapshot ? (
         <div className="rounded border border-border bg-card/60 px-3 py-2 text-sm text-muted-foreground">Worker status unavailable</div>
       ) : (
