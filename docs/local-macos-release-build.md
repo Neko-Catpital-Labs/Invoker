@@ -1,8 +1,10 @@
 # Local macOS Release Build
 
-Use this when you want a fresh local desktop build from `master` before a tagged GitHub Release exists. This is mainly for maintainer testing and handoff builds.
+Use this when you want a fresh local desktop + Slack-manager build from `master`
+before a tagged GitHub Release exists. This is mainly for maintainer testing and
+handoff builds.
 
-These commands assume Apple Silicon. For Intel Macs, replace `arm64` with `x64`.
+These commands assume Apple Silicon. For Intel Macs, pass `--arch x64`.
 
 ## Prerequisites
 
@@ -25,19 +27,33 @@ npm install -g pnpm@10.31.0 --prefix /opt/homebrew
 pnpm --version
 ```
 
-## Build From Current Master
+## One-shot cut (recommended)
+
+From a clone of this repo:
 
 ```bash
-mkdir -p ~/src
-cd ~/src
-git clone https://github.com/Neko-Catpital-Labs/Invoker.git
-cd Invoker
+bash scripts/local-macos-release-build.sh
+# or, if master is already up to date:
+bash scripts/local-macos-release-build.sh --skip-pull
+```
 
+That script:
+
+1. Fast-forwards local `master` to `upstream/master` (or `origin/master`)
+2. Runs `pnpm install --frozen-lockfile`
+3. Builds the desktop DMG/zip (`dist:desktop:mac:arm64`)
+4. Builds the standalone Slack SEA binary + tarball (`dist:slack`)
+5. Copies commit-named artifacts into `local-builds/<short-sha>/` and prints checksums
+
+## Manual steps (equivalent)
+
+```bash
 git checkout master
-git pull --ff-only origin master
+git pull --ff-only upstream master   # or origin
 
 pnpm install
 pnpm run dist:desktop:mac:arm64
+pnpm run dist:slack
 ```
 
 The build writes:
@@ -45,23 +61,11 @@ The build writes:
 ```text
 release/Invoker-<version>-arm64.dmg
 release/Invoker-<version>-arm64.zip
+release/invoker-slack-<version>-darwin-arm64
+release/invoker-slack-<version>-darwin-arm64.tar.gz
 ```
 
-## Preserve A Commit-Named Copy
-
-The package version may stay the same across several commits on `master`, so the generated filename can repeat. Preserve local builds under the commit SHA:
-
-```bash
-SHA="$(git rev-parse --short HEAD)"
-VERSION="$(node -p "require('./packages/app/package.json').version")"
-mkdir -p "local-builds/$SHA"
-
-cp "release/Invoker-${VERSION}-arm64.dmg" "local-builds/$SHA/Invoker-master-${SHA}-arm64.dmg"
-cp "release/Invoker-${VERSION}-arm64.zip" "local-builds/$SHA/Invoker-master-${SHA}-arm64.zip"
-shasum -a 256 "local-builds/$SHA"/*
-```
-
-## Install A Local Unsigned Build
+## Install A Local Unsigned Desktop Build
 
 Local builds are not Apple-notarized. Remove quarantine attributes before opening the DMG:
 
@@ -77,5 +81,27 @@ Drag `Invoker.app` into `/Applications`, then remove quarantine attributes from 
 xattr -cr /Applications/Invoker.app
 open /Applications/Invoker.app
 ```
+
+## Slack manager
+
+Slack is a **separate** binary, not embedded in the desktop app.
+
+Local cut:
+
+```bash
+SHA="$(git rev-parse --short HEAD)"
+./local-builds/$SHA/invoker-slack-master-${SHA}-darwin-arm64 --version
+```
+
+Published (after a tagged GitHub Release):
+
+```bash
+npm install -g @neko-catpital-labs/invoker-slack
+invoker-slack --version
+```
+
+Credentials: `~/.invoker/.slack-owner.env` (see `invoker-cli setup slack` and
+[slack-native-workflows.md](slack-native-workflows.md)). Supervise with
+`packages/slack-manager/deploy/install.sh`.
 
 For a public release, prefer the tagged GitHub Release workflow so users get the standard release assets and checksums.

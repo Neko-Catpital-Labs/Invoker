@@ -63,15 +63,26 @@ Model strings are passed verbatim to the CLI's `--model`; set exact ids your CLI
 
 ## Environment
 
-The fastest path is the setup wizard. It validates your tools, writes a ready-to-paste Slack app
+Slack runs as a **separate** always-on process (`invoker-slack`), not inside the
+desktop app. Install the published binary with:
+
+```
+npm install -g @neko-catpital-labs/invoker-slack
+```
+
+Or cut a local binary with `bash scripts/local-macos-release-build.sh` (see
+[local-macos-release-build.md](local-macos-release-build.md)).
+
+The fastest credential path is the setup wizard. It validates your tools, writes a ready-to-paste Slack app
 manifest, checks your tokens against the live Slack API, and saves them to `~/.invoker/.env`:
 
 ```
 invoker-cli setup slack
 ```
 
-To configure by hand, put these in `~/.invoker/.env` (canonical, loaded on startup before the Slack
-check) or `<repoRoot>/.env` (fallback), then run `./run.sh`:
+For the Slack manager daemon, also put owner credentials in `~/.invoker/.slack-owner.env`
+(or set `INVOKER_SLACK_OWNER_ENV`). To configure by hand, put these in `~/.invoker/.env` (canonical, loaded on startup before the Slack
+check) or `<repoRoot>/.env` (fallback), then run `invoker-slack` (or `./run.sh` for the desktop app only):
 
 ```
 SLACK_BOT_TOKEN=xoxb-...
