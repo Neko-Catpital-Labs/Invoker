@@ -106,10 +106,14 @@ export function getSortedWorkflows(
 export function getAttentionTaskEntries(
   tasks: Map<string, TaskState>,
   workflows: Map<string, WorkflowMeta>,
+  mutationFailureTaskIds?: Set<string>,
 ): WorkflowTaskEntry[] {
   return [...tasks.values()]
-    .filter(isAttentionTask)
+    .filter((task) => isAttentionTask(task) || mutationFailureTaskIds?.has(task.id))
     .sort((a, b) => {
+      const aHasFailure = mutationFailureTaskIds?.has(a.id) ?? false;
+      const bHasFailure = mutationFailureTaskIds?.has(b.id) ?? false;
+      if (aHasFailure !== bHasFailure) return aHasFailure ? -1 : 1;
       const priority = (ATTENTION_STATUS_PRIORITY[a.status] ?? 99) - (ATTENTION_STATUS_PRIORITY[b.status] ?? 99);
       if (priority !== 0) return priority;
       const workflowA = a.config.workflowId ? workflows.get(a.config.workflowId)?.name ?? a.config.workflowId : '';

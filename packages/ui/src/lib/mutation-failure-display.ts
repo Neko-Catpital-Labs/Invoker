@@ -29,6 +29,12 @@ export function mutationFailureBannerMessage(
   return summarizeBannerMessage(event.message);
 }
 
+export function mutationFailureDetailMessage(
+  event: WorkflowMutationFailedEvent,
+): string {
+  return event.message.replace(/^Error:\s*/, '').trim();
+}
+
 function summarizeBannerMessage(message: string): string {
   let text = message.replace(/^Error:\s*/, '').trim();
   const stackIdx = text.indexOf('\n    at ');

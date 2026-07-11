@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   mutationFailureBannerMessage,
+  mutationFailureDetailMessage,
   mutationFailureTitle,
   shouldShowMutationFailureBanner,
 } from '../lib/mutation-failure-display.js';
@@ -51,5 +52,19 @@ describe('mutationFailureBannerMessage', () => {
       message: 'SSH remote script failed\nSTDOUT:\n{"type":"error"}',
       failedAt: '2026-07-09T00:00:00.000Z',
     })).toBe('SSH remote script failed');
+  });
+});
+
+describe('mutationFailureDetailMessage', () => {
+  it('strips the Error: prefix but preserves the full message body', () => {
+    expect(mutationFailureDetailMessage({
+      intentId: 1,
+      workflowId: 'wf-1',
+      channel: 'headless.exec',
+      headlessCommand: 'fix',
+      taskId: 'wf-1/task-alpha',
+      message: 'Error: SSH remote script failed\nSTDOUT:\n{"type":"error"}',
+      failedAt: '2026-07-09T00:00:00.000Z',
+    })).toBe('SSH remote script failed\nSTDOUT:\n{"type":"error"}');
   });
 });
