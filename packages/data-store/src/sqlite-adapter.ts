@@ -504,6 +504,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private writeTransactionDepth = 0;
   private readonly activityLogMaxRows: number;
   private activityLogWritesSincePrune = 0;
+  private eventCounterFallbackLogged = false;
   private readonly exclusiveLocking: boolean;
   private readonly taskAttemptRepo: SqliteTaskAttemptRepository;
   private readonly workflowRepo: SqliteWorkflowRepository;
@@ -1341,6 +1342,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM worker_actions');
       this.db.run('DELETE FROM execution_resource_leases');
       this.db.run('DELETE FROM events');
+      // The AFTER DELETE trigger keeps event_type_counters exact on row-by-row
+      // deletes, but reset the counters explicitly here so a full wipe is correct
+      // even if SQLite ever applies the truncate optimization to the bare DELETE.
+      this.db.run('DELETE FROM event_type_counters');
       this.db.run('DELETE FROM task_output');
       this.db.run('DELETE FROM attempts');
       this.db.run('DELETE FROM output_spool');
@@ -1465,31 +1470,57 @@ export class SQLiteAdapter implements PersistenceAdapter {
     lastCreatedAt: string | null;
   }> {
     if (eventTypes.length === 0) return [];
-    const placeholders = eventTypes.map(() => '?').join(', ');
-    const rows = this.queryAll(
-      `SELECT event_type AS eventType,
-              COUNT(*) AS count,
-              MAX(created_at) AS lastCreatedAt
-       FROM events
-       WHERE event_type IN (${placeholders})
-       GROUP BY event_type`,
-      [...eventTypes],
-    );
-    const byType = new Map(
-      rows.map((row) => [
-        String(row.eventType),
-        {
-          eventType: String(row.eventType),
-          count: Number(row.count ?? 0),
-          lastCreatedAt: (row.lastCreatedAt as string | null) ?? null,
-        },
-      ]),
-    );
-    return eventTypes.map((eventType) => byType.get(eventType) ?? {
+    const counts = this.readEventTypeCounts(eventTypes);
+    return eventTypes.map((eventType) => ({
       eventType,
-      count: 0,
-      lastCreatedAt: null,
-    });
+      count: counts.get(eventType) ?? 0,
+      lastCreatedAt: this.maxCreatedAtForEventType(eventType),
+    }));
+  }
+
+  // Lifetime count per type in O(types): an indexed lookup into the
+  // trigger-maintained event_type_counters table instead of a COUNT(*) scan of
+  // the events table (linear — ~140ms at 2M rows on the main thread). Falls back
+  // to the exact-but-linear COUNT(*) GROUP BY when the counter table is absent —
+  // a read-only open of a database written before the backfill migration ran.
+  private readEventTypeCounts(eventTypes: readonly string[]): Map<string, number> {
+    const placeholders = eventTypes.map(() => '?').join(', ');
+    try {
+      const rows = this.queryAll(
+        `SELECT event_type AS eventType, count
+         FROM event_type_counters
+         WHERE event_type IN (${placeholders})`,
+        [...eventTypes],
+      );
+      return new Map(rows.map((row) => [String(row.eventType), Number(row.count ?? 0)]));
+    } catch (err) {
+      if (!this.eventCounterFallbackLogged) {
+        this.eventCounterFallbackLogged = true;
+        console.warn(
+          '[SQLiteAdapter] event_type_counters unavailable; falling back to linear COUNT(*). '
+          + `Cause: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      const rows = this.queryAll(
+        `SELECT event_type AS eventType, COUNT(*) AS count
+         FROM events
+         WHERE event_type IN (${placeholders})
+         GROUP BY event_type`,
+        [...eventTypes],
+      );
+      return new Map(rows.map((row) => [String(row.eventType), Number(row.count ?? 0)]));
+    }
+  }
+
+  // MAX(created_at) for a single type is an index seek on idx_events_type_created
+  // (O(log n)); the grouped form (MAX ... GROUP BY) degrades to a full scan, so
+  // resolve one type at a time.
+  private maxCreatedAtForEventType(eventType: string): string | null {
+    const row = this.queryOne(
+      'SELECT MAX(created_at) AS lastCreatedAt FROM events WHERE event_type = ?',
+      [eventType],
+    );
+    return (row?.lastCreatedAt as string | null) ?? null;
   }
 
   private rowToTaskEvent(row: any): TaskEvent {

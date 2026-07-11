@@ -112,6 +112,32 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_events_type_created
         ON events(event_type, created_at);
 
+      -- O(1) lifetime counts per event_type. COUNT(*) GROUP BY over the events
+      -- table is linear in row count (~140ms at 2M rows) and runs on the main
+      -- thread on every recovery-worker status read; the counter makes it a
+      -- single indexed lookup. Triggers keep it exact across all INSERT/DELETE
+      -- paths (their presence also disables the DELETE truncate optimization,
+      -- so a bare DELETE FROM events still decrements row-by-row).
+      CREATE TABLE IF NOT EXISTS event_type_counters (
+        event_type TEXT PRIMARY KEY,
+        count INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE TRIGGER IF NOT EXISTS trg_events_counter_insert
+      AFTER INSERT ON events
+      BEGIN
+        INSERT INTO event_type_counters (event_type, count)
+        VALUES (NEW.event_type, 1)
+        ON CONFLICT(event_type) DO UPDATE SET count = count + 1;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_events_counter_delete
+      AFTER DELETE ON events
+      BEGIN
+        UPDATE event_type_counters SET count = count - 1
+        WHERE event_type = OLD.event_type;
+      END;
+
       CREATE TABLE IF NOT EXISTS activity_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp TEXT NOT NULL DEFAULT (datetime('now')),
