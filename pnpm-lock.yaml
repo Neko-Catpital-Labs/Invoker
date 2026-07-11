@@ -262,6 +262,8 @@ importers:
 
   packages/npm-cli: {}
 
+  packages/npm-slack: {}
+
   packages/npm-ui:
     dependencies:
       '@neko-catpital-labs/invoker-cli':

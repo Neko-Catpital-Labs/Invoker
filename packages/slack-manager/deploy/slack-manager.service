@@ -17,6 +17,8 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=__REPO_ROOT__
 EnvironmentFile=%h/.invoker/.slack-owner.env
+# install.sh rewrites ExecStart to `invoker-slack` when the npm binary is on
+# PATH; the monorepo node entry below is the dev fallback.
 ExecStart=__NODE__ packages/slack-manager/dist/index.js
 Restart=always
 RestartSec=5
