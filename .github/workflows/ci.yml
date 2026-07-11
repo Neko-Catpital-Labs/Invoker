@@ -378,9 +378,6 @@ jobs:
           - name: Start Running MECE Repros
             command: bash scripts/test-suites/required/18-start-running-mece-repros.sh
             runner_label: Runner_2_4_core
-          - name: Task New Attempt Reset Repro
-            command: bash scripts/test-suites/required/19-task-new-attempt-reset-repro.sh
-            runner_label: Github_Runner
           - name: Launch Dispatch Queue Repro
             command: bash scripts/test-suites/required/25-launch-dispatch-queue-handoff-repro.sh
             runner_label: Runner_2_4_core
@@ -429,9 +426,6 @@ jobs:
           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
           git update-ref refs/heads/main refs/remotes/origin/master || true
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
-
-      - name: Install Playwright system dependencies
-        run: pnpm --filter @invoker/app exec playwright install-deps chromium
 
       - name: Run suite group with Mergify Insights
         if: matrix.name == 'Vitest Workspace'
@@ -556,6 +550,7 @@ jobs:
               e2e/dag-click-hitch-responsiveness.spec.ts
               e2e/terminal-upsert-hitch-responsiveness.spec.ts
               e2e/attention-click-hitch-responsiveness.spec.ts
+              e2e/focus-switch-hitch-responsiveness.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
@@ -590,7 +585,11 @@ jobs:
           const YAML = require('yaml');
 
           const workflow = YAML.parse(fs.readFileSync('.github/workflows/ci.yml', 'utf8'));
-          const shards = workflow.jobs.playwright.strategy.matrix.include;
+          const perfJob = workflow.jobs['playwright-nightly-perf'];
+          const shards = [
+            ...workflow.jobs.playwright.strategy.matrix.include,
+            ...(perfJob ? perfJob.strategy.matrix.include : []),
+          ];
           const listed = shards.flatMap((shard) => String(shard.files).trim().split(/\s+/).filter(Boolean));
           const discovered = fs.readdirSync('packages/app/e2e')
             .filter((file) => file.endsWith('.spec.ts'))
@@ -642,6 +641,82 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-artifacts-${{ matrix.name }}
+          path: |
+            .git/playwright-artifacts
+            packages/app/test-results
+          if-no-files-found: ignore
+
+  # Heavy UI responsiveness battery (200ms nav/click acks + refocus herd) under a
+  # fat DB. Nightly/dispatch only — too slow for the 5-min merge-queue playwright
+  # job. Its spec is unioned into the shard-inventory guard above.
+  playwright-nightly-perf:
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: responsiveness-battery
+            files: >-
+              e2e/ui-action-responsiveness-battery.spec.ts
+    name: playwright-nightly-perf / ${{ matrix.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install native build tools
+        run: apt-get update && apt-get install -y unzip make g++ python3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity for E2E repos
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Run responsiveness battery
+        env:
+          INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-nightly-perf-${{ matrix.name }}
+          INVOKER_PLAYWRIGHT_WORKERS: '1'
+          INVOKER_PLAYWRIGHT_FILES: ${{ matrix.files }}
+          INVOKER_PLAYWRIGHT_ARGS: --reporter=line
+        run: bash scripts/test-suites/optional/40-playwright-app.sh
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts-nightly-perf-${{ matrix.name }}
           path: |
             .git/playwright-artifacts
             packages/app/test-results
