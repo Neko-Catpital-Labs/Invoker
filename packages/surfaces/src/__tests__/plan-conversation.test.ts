@@ -816,6 +816,23 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('"automatic"');
   });
 
+  it('system prompt distinguishes plan files, tasks, review-stack intent, and published PRs', () => {
+    const conv = new PlanConversation({});
+    (conv as any).messages.push({ role: 'user', content: 'Plan a review stack for the feature' });
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('Stack semantics');
+    expect(prompt).toContain('One workflow plan file is only the submission envelope');
+    expect(prompt).toContain('Do not reason `one plan file => one PR`');
+    expect(prompt).toContain('Tasks inside a plan are execution steps');
+    expect(prompt).toContain('Do not infer PR count from task count');
+    expect(prompt).toContain('optional `reviewGate.artifacts` intent metadata');
+    expect(prompt).toContain('review-stack vocabulary only');
+    expect(prompt).toContain('actual published GitHub PRs');
+    expect(prompt).toContain('`onFinish: pull_request` only means review output is expected');
+    expect(prompt).toContain('Do not reason `onFinish: pull_request => one PR`');
+  });
+
   it('buildCursorPrompt can prefer stacked workflows', () => {
     const conv = new PlanConversation({
       repoUrl: 'git@github.com:test/repo.git',
