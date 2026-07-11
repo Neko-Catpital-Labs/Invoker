@@ -47,7 +47,7 @@ export function WorkflowNode({
         }
       }}
       className={[
-        'relative w-[300px] rounded-xl border bg-background pl-5 pr-4 py-4 text-left transition-all shadow-sm',
+        'relative w-[300px] rounded-xl border bg-background pl-5 pr-4 py-3.5 text-left transition-all shadow-sm',
         visual.borderClass,
         selected ? 'ring-2 ring-ring/70' : '',
         dimmed ? 'opacity-35' : 'opacity-100',
@@ -68,15 +68,15 @@ export function WorkflowNode({
         </div>
       )}
 
-      <div className={`text-base font-semibold leading-snug text-foreground truncate ${detachedDependencyCount > 0 ? 'pr-16' : ''}`}>
+      <div className={`text-lg font-semibold leading-snug text-foreground truncate ${detachedDependencyCount > 0 ? 'pr-16' : ''}`}>
         {workflow.name || workflow.id}
       </div>
-      <div className="mt-1.5 text-[13px] text-muted-foreground truncate">{workflow.id}</div>
-      <div className={`mt-2.5 text-xs uppercase tracking-wide ${visual.textClass}`}>{statusLabel(workflow.status)}</div>
+      <div className="mt-1 text-sm text-muted-foreground truncate">{workflow.id}</div>
+      <div className={`mt-2 text-[13px] uppercase tracking-wide ${visual.textClass}`}>{statusLabel(workflow.status)}</div>
       {showRunningTaskLine && (
         <div
           data-testid={`workflow-node-${workflow.id}-running-tasks`}
-          className="mt-1 text-xs text-muted-foreground"
+          className="mt-1 text-[13px] text-muted-foreground"
         >
           {runningTaskLabel(runningCount)}
         </div>
@@ -85,7 +85,7 @@ export function WorkflowNode({
         <div
           data-testid={`workflow-node-${workflow.id}-core-activity`}
           className={[
-            'mt-2.5 inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs font-medium',
+            'mt-2 inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[13px] font-medium',
             coreActivity.status === 'running'
               ? 'border-border-strong text-muted-foreground'
               : coreActivity.status === 'pending'

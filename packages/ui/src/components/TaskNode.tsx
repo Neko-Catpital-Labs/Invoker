@@ -86,13 +86,13 @@ export function TaskNode({ data }: TaskNodeProps) {
 
       <span className={`absolute left-0 top-0 bottom-0 w-[3px] ${dotClass}`} />
 
-      <div className={`text-[15px] font-medium leading-snug truncate pl-3 text-card-foreground ${isStale ? 'line-through opacity-70' : ''}`}>
+      <div className={`text-base font-medium leading-snug truncate pl-3 text-card-foreground ${isStale ? 'line-through opacity-70' : ''}`}>
         {task.description.length > 36
           ? `${task.description.slice(0, 36)}...`
           : task.description}
       </div>
 
-      <div className={`mt-1.5 pl-3 text-[12px] tracking-wide ${colors.text}`}>
+      <div className={`mt-1.5 pl-3 text-[13px] tracking-wide ${colors.text}`}>
         {statusLabel}
       </div>
 
