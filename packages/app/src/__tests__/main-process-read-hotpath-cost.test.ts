@@ -144,7 +144,7 @@ describe('main-process read hot-path cost guards', () => {
     queryAll.mockRestore();
   });
 
-  it('builds worker-status via indexed actions and recovery aggregates on every snapshot', () => {
+  it('builds worker-status via indexed actions per snapshot and a memoized recovery aggregate', () => {
     const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
     registry.register({
       kind: AUTO_FIX_WORKER_KIND,
@@ -189,8 +189,11 @@ describe('main-process read hot-path cost guards', () => {
     const first = controller.snapshot();
     const second = controller.snapshot();
     expect(second).not.toBe(first);
+    // Indexed worker_actions read still runs per snapshot (cheap, LIMIT 5)...
     expect(listWorkerActions).toHaveBeenCalledTimes(2);
-    expect(countEventsByTypes).toHaveBeenCalledTimes(2);
+    // ...but the recovery COUNT(*) aggregate is memoized within its TTL, so two
+    // back-to-back snapshots (a 2s poll + refocus refresh) share one query.
+    expect(countEventsByTypes).toHaveBeenCalledTimes(1);
     expect(listWorkerActions).toHaveBeenCalledWith({ workerKind: AUTO_FIX_WORKER_KIND, limit: 5 });
   });
 });

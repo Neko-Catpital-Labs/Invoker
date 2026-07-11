@@ -119,7 +119,40 @@ export function buildRecoveryWorkerAuditPayload(
   };
 }
 
+// Memoize per persistence for a short TTL: the recovery aggregate runs synchronous SQLite on the
+// main thread and is polled every 2s and on refocus, so an uncached recompute stalls the interaction.
+// Counts stay exact, just briefly stale. INV-265 (reads off the main thread) is the durable cure.
+const RECOVERY_STATUS_CACHE_TTL_MS = 10_000;
+
+interface RecoveryStatusCacheEntry {
+  computedAt: number;
+  value: RecoveryWorkerStatus;
+}
+
+const recoveryStatusCache = new WeakMap<object, RecoveryStatusCacheEntry>();
+
 export function collectRecoveryWorkerStatus(
+  persistence: RecoveryWorkerStatusPersistence,
+  options: { now?: number; ttlMs?: number } = {},
+): RecoveryWorkerStatus {
+  const ttlMs = options.ttlMs ?? RECOVERY_STATUS_CACHE_TTL_MS;
+  const now = options.now ?? Date.now();
+
+  if (ttlMs > 0) {
+    const cached = recoveryStatusCache.get(persistence);
+    if (cached && now - cached.computedAt < ttlMs) {
+      return cached.value;
+    }
+  }
+
+  const value = computeRecoveryWorkerStatus(persistence);
+  if (ttlMs > 0) {
+    recoveryStatusCache.set(persistence, { computedAt: now, value });
+  }
+  return value;
+}
+
+function computeRecoveryWorkerStatus(
   persistence: RecoveryWorkerStatusPersistence,
 ): RecoveryWorkerStatus {
   const status = emptyRecoveryWorkerStatus();
