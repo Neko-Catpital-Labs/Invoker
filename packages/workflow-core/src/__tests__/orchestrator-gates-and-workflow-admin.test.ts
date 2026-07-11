@@ -2345,20 +2345,14 @@ describe('Orchestrator', () => {
       });
     });
 
-    // Regression proof for the capacity-defer churn. A task deferred because its
-    // execution pool has no member capacity (`reason: 'resource-limit'`) is reset to
-    // pending and re-dispatched on the very next scheduler poll, defer-looping every
-    // ~4s (hundreds of abandoned `task deferred` launch-dispatch rows in production).
-    // Desired behavior: it waits in line until a slot frees or its backoff elapses.
-    // Marked `it.fails` because the fix does not exist yet; the fix slice flips it to
-    // a passing `it` (plus slot-free / backoff-elapsed coverage).
-    it.fails('parks a resource-limit deferred task instead of re-dispatching it every poll', () => {
+    it('parks a resource-limit deferred task instead of re-dispatching it every poll', () => {
       const parkOrchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
         logger: consoleLogger,
         maxConcurrency: 3,
         deferRunningUntilLaunch: true,
+        launchDeferralBackoffMs: 60_000,
       });
       parkOrchestrator.loadPlan({
         name: 'defer-park',
@@ -2379,6 +2373,74 @@ describe('Orchestrator', () => {
       // The next scheduler poll must leave the parked task in line, not re-dispatch it.
       const restarted = parkOrchestrator.startExecution();
       expect(restarted.map((t) => t.id)).not.toContain(taskId);
+      expect(parkOrchestrator.getTask(taskId)!.status).toBe('pending');
+
+      // A heartbeat proves the task is still alive and waiting in line.
+      const waiting = persistence.events.filter((e) => e.eventType === 'task.launch_waiting');
+      expect(waiting.length).toBeGreaterThan(0);
+      expect(waiting.at(-1)?.payload).toMatchObject({ attempts: 1 });
+    });
+
+    it('re-dispatches a resource-limit parked task when a slot frees, ignoring the backoff', () => {
+      const parkOrchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        logger: consoleLogger,
+        maxConcurrency: 3,
+        launchDeferralBackoffMs: 600_000,
+      });
+      parkOrchestrator.loadPlan({
+        name: 'defer-park-slotfree',
+        tasks: [
+          { id: 'task-a', description: 'Task A' },
+          { id: 'task-b', description: 'Task B' },
+        ],
+      });
+      const started = parkOrchestrator.startExecution();
+      expect(started).toHaveLength(2);
+      const taskAId = started.find((t) => t.id.endsWith('/task-a'))!.id;
+
+      parkOrchestrator.deferTask(taskAId, {
+        reason: 'resource-limit',
+        message: 'Execution pool "pnpm-ssh" has no member capacity available',
+        attemptId: parkOrchestrator.getTask(taskAId)!.execution.selectedAttemptId,
+      });
+      expect(parkOrchestrator.getTask(taskAId)!.status).toBe('pending');
+      // Periodic poll keeps it parked behind the long backoff.
+      expect(parkOrchestrator.startExecution().map((t) => t.id)).not.toContain(taskAId);
+
+      // A real slot-free (task-b completes) re-dispatches it despite the backoff.
+      parkOrchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      expect(parkOrchestrator.getTask(taskAId)!.status).toBe('running');
+    });
+
+    it('re-dispatches a resource-limit deferred task once its backoff elapses', () => {
+      const parkOrchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        logger: consoleLogger,
+        maxConcurrency: 3,
+        deferRunningUntilLaunch: true,
+        launchDeferralBackoffMs: 0,
+      });
+      parkOrchestrator.loadPlan({
+        name: 'defer-elapsed',
+        tasks: [{ id: 'task-a', description: 'Task A' }],
+      });
+      const started = parkOrchestrator.startExecution();
+      const taskId = started[0].id;
+
+      parkOrchestrator.deferTask(taskId, {
+        reason: 'resource-limit',
+        message: 'Execution pool "pnpm-ssh" has no member capacity available',
+        attemptId: parkOrchestrator.getTask(taskId)!.execution.selectedAttemptId,
+        phase: 'launching',
+      });
+
+      // Backoff already elapsed (0ms) → the next poll re-dispatches it.
+      expect(parkOrchestrator.startExecution().map((t) => t.id)).toContain(taskId);
     });
 
     it('clears deferred set on restartTask', () => {
