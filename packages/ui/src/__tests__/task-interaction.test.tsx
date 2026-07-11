@@ -94,6 +94,31 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('clicking a task expands a minimized inspector', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText('Minimize inspector'));
+    expect(await screen.findByLabelText('Maximize inspector')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Minimize inspector')).toBeInTheDocument();
+      expect(screen.getByText('echo hello-alpha')).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText('Maximize inspector')).not.toBeInTheDocument();
+  });
+
   it('clicking workflow graph background dismisses the selected mini DAG', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
