@@ -12,7 +12,7 @@ import {
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 
-import type { WorkerActionRecord } from '@invoker/data-store';
+import type { WorkerActionRecord, WorkerDesiredState } from '@invoker/data-store';
 import {
   AUTO_STARTED_OWNER_WORKER_KINDS,
   createWorkerRuntimeController,
@@ -50,12 +50,28 @@ function runtime(kind: string): TestWorkerRuntime {
   };
 }
 
-function persistence() {
+function persistence(initialDesiredStates: Record<string, WorkerDesiredState> = {}) {
+  const desiredStates = new Map(Object.entries(initialDesiredStates));
   return {
     listWorkerActions: vi.fn(() => []),
     listWorkflows: vi.fn(() => []),
     loadTasks: vi.fn(() => []),
     getEvents: vi.fn(() => []),
+    listWorkerDesiredStates: vi.fn(() => [...desiredStates.entries()].map(([workerKind, desiredState]) => ({
+      workerKind,
+      desiredState,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }))),
+    getWorkerDesiredState: vi.fn((workerKind: string) => {
+      const desiredState = desiredStates.get(workerKind);
+      return desiredState
+        ? { workerKind, desiredState, updatedAt: '2026-01-01T00:00:00.000Z' }
+        : undefined;
+    }),
+    setWorkerDesiredState: vi.fn((workerKind: string, desiredState: WorkerDesiredState) => {
+      desiredStates.set(workerKind, desiredState);
+      return { workerKind, desiredState, updatedAt: '2026-01-01T00:00:00.000Z' };
+    }),
   };
 }
 
@@ -72,7 +88,10 @@ function deps(): WorkerRuntimeDependencies {
   } as WorkerRuntimeDependencies;
 }
 
-function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKER_KINDS) {
+function controller(
+  autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKER_KINDS,
+  store = persistence(),
+) {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
   const runtimes = new Map<string, TestWorkerRuntime[]>();
   const register = (kind: string, note: string, runtimeKind = kind) => {
@@ -103,9 +122,10 @@ function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKE
       registry,
       deps: deps(),
       autoStartKinds,
-      persistence: persistence() as never,
+      persistence: store as never,
       canControl: () => true,
     }),
+    persistence: store,
   };
 }
 
@@ -149,6 +169,57 @@ describe('createWorkerRuntimeController', () => {
 
     expect(row.lifecycle).toBe('running');
     expect(row.runtimeKind).toBe('recovery');
+  });
+
+  it('startup restore honors persisted desired state before default auto-starts', () => {
+    const setup = controller(AUTO_STARTED_OWNER_WORKER_KINDS, persistence({
+      [PR_STATUS_WORKER_KIND]: 'stopped',
+      [AUTO_FIX_WORKER_KIND]: 'running',
+      'removed-external': 'running',
+    }));
+
+    setup.controller.startAutoStartedWorkers();
+    const snapshot = setup.controller.snapshot();
+
+    expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)).toMatchObject({
+      lifecycle: 'stopped',
+      autoStarts: false,
+    });
+    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)).toMatchObject({
+      lifecycle: 'running',
+      autoStarts: true,
+    });
+    expect(setup.runtimes.has('removed-external')).toBe(false);
+    expect(setup.persistence.setWorkerDesiredState).not.toHaveBeenCalled();
+  });
+
+  it('explicit start and stop persist desired state', async () => {
+    const setup = controller();
+
+    setup.controller.start(AUTO_FIX_WORKER_KIND);
+    await setup.controller.stop(AUTO_FIX_WORKER_KIND);
+
+    expect(setup.persistence.setWorkerDesiredState).toHaveBeenNthCalledWith(1, AUTO_FIX_WORKER_KIND, 'running');
+    expect(setup.persistence.setWorkerDesiredState).toHaveBeenNthCalledWith(2, AUTO_FIX_WORKER_KIND, 'stopped');
+    expect(setup.controller.snapshot().workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)).toMatchObject({
+      autoStarts: false,
+      lifecycle: 'stopped',
+    });
+  });
+
+  it('stopAll shutdown does not persist desired state', async () => {
+    const setup = controller();
+
+    setup.controller.start(AUTO_FIX_WORKER_KIND);
+    setup.persistence.setWorkerDesiredState.mockClear();
+
+    await setup.controller.stopAll();
+
+    expect(setup.persistence.setWorkerDesiredState).not.toHaveBeenCalled();
+    expect(setup.controller.snapshot().workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)).toMatchObject({
+      autoStarts: true,
+      lifecycle: 'stopped',
+    });
   });
 
   it('duplicate start is idempotent', () => {
