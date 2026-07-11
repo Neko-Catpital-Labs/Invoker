@@ -80,6 +80,9 @@ export const test = base.extend<ElectronFixtures>({
       // Windows / EPERM: fix path still uses INVOKER_CLAUDE_FIX_COMMAND; prompt tasks may hit real claude.
     }
     const codexStub = path.join(stubDir, 'codex');
+    // When INVOKER_E2E_CODEX_DEMO=1, resume renders agent-sessions/<id>.jsonl.
+    // Prefer INVOKER_E2E_CODEX_DEMO_RENDERER (website capture copies this in);
+    // otherwise use an inline renderer so Invoker CI needs no extra fixture file.
     writeFileSync(codexStub, `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "\${1:-}" == "resume" ]]; then
@@ -88,6 +91,39 @@ if [[ "\${1:-}" == "resume" ]]; then
     exit 12
   fi
   session_id="\${@: -1}"
+  if [[ "\${INVOKER_E2E_CODEX_DEMO:-}" == "1" ]]; then
+    session_file="\${INVOKER_DB_DIR:-}/agent-sessions/\${session_id}.jsonl"
+    if [[ -n "\${INVOKER_E2E_CODEX_DEMO_RENDERER:-}" && -f "\${INVOKER_E2E_CODEX_DEMO_RENDERER}" ]]; then
+      node "\${INVOKER_E2E_CODEX_DEMO_RENDERER}" "\$session_file" "\$session_id"
+    else
+      node - "\$session_file" "\$session_id" <<'NODE'
+const fs = require('node:fs');
+const [sessionFile, sessionId] = process.argv.slice(2);
+if (!sessionFile || !fs.existsSync(sessionFile)) {
+  console.log('› Resumed Codex session ' + (sessionId || '') + ' (no persisted transcript).');
+  console.log('');
+  console.log('Codex session: ' + (sessionId || ''));
+  process.exit(0);
+}
+const raw = fs.readFileSync(sessionFile, 'utf8');
+for (const line of raw.split('\\n')) {
+  if (!line.trim()) continue;
+  let event;
+  try { event = JSON.parse(line); } catch { continue; }
+  const item = event?.item;
+  if (event?.type === 'item.completed' && item?.text) {
+    if (item.type === 'user_message') console.log('> ' + item.text);
+    else if (item.type === 'agent_message') console.log(item.text);
+  }
+}
+console.log('');
+console.log('Codex session: ' + (sessionId || ''));
+NODE
+    fi
+    # Hold the PTY open so the drawer looks like a live Codex session.
+    sleep "\${INVOKER_E2E_CODEX_DEMO_HOLD_SECS:-20}"
+    exit 0
+  fi
   sleep 1
   echo "TTY OK: codex resume \${session_id:-}"
   exit 0
@@ -138,6 +174,15 @@ exit 64
         INVOKER_TEST_FIXED_NOW: '2025-01-01T00:00:00.000Z',
         INVOKER_CLAUDE_COMMAND: claudeMarker,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
+        ...(process.env.INVOKER_E2E_CODEX_DEMO
+          ? { INVOKER_E2E_CODEX_DEMO: process.env.INVOKER_E2E_CODEX_DEMO }
+          : {}),
+        ...(process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS
+          ? { INVOKER_E2E_CODEX_DEMO_HOLD_SECS: process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS }
+          : {}),
+        ...(process.env.INVOKER_E2E_CODEX_DEMO_RENDERER
+          ? { INVOKER_E2E_CODEX_DEMO_RENDERER: process.env.INVOKER_E2E_CODEX_DEMO_RENDERER }
+          : {}),
         ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
         ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
         ...(forceConnectionLostStatus ? { INVOKER_E2E_FORCE_CONNECTION_LOST_STATUS: '1' } : {}),
