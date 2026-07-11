@@ -26,7 +26,7 @@ import { createPlanningCommandBuilder, createPrepareRepoCheckout, createGatherWo
 import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
 
-const VERSION = '0.0.6';
+const VERSION = '0.0.7';
 
 const REQUIRED_ENV = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
 

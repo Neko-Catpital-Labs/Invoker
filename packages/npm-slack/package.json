@@ -1,6 +1,6 @@
 {
   "name": "@neko-catpital-labs/invoker-slack",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Invoker standalone Slack manager installer",
   "type": "module",
   "repository": {

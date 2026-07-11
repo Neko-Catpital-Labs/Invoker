@@ -1,6 +1,6 @@
 {
   "name": "@invoker/slack-manager",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

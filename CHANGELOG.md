@@ -4,6 +4,8 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+## 0.0.7
+
 - Ship Slack as a separate npm-released SEA binary (`@neko-catpital-labs/invoker-slack` / `invoker-slack`), built and archived like the CLI, published from the release workflow, and always included in `scripts/local-macos-release-build.sh` maintainer cuts. The desktop app no longer embeds Slack; GUI relaunch from the manager resolves `INVOKER_GUI_COMMAND`, `invoker-ui`, macOS `open -a Invoker`, then the monorepo xvfb path.
 - Fix Cursor→Invoker macOS beachball on app switch: Action Graph / queue status polls were stalling the Electron main thread. `getQueueStatus` re-queried workflow external-deps once per ready task (~200ms at 200 tasks), and Action Graph re-ran a full `refreshFromDb` after `syncAllFromDb`. Queue status now caches blockers per workflow and accepts `{ refresh: false }` after an explicit sync; Action Graph only loads attempt/event detail for active/attention tasks. Renderer status polls (`useWorkerStatus` / `useQueueStatus` / `useActionGraphSnapshot`) pause while `document.hidden` and refresh once on restore so Cmd-Tab cannot herd deferred timers. Locked by `focus-switch-main-process-cost` unit guards and `focus-switch-hitch-responsiveness` e2e.
 - Show a non-dismissable Connection lost banner when a daemon-backed GUI loses its mutation owner. Previously the window stayed in `daemon-owner` mode (`readOnly: false`) after the owner died, so detach/mutations failed with "No mutation owner is available" and no banner appeared. Owner-loss now publishes `connection-lost` runtime status (still write-blocked) and pushes `invoker:runtime-status` to the renderer, instead of pretending the window entered intentional read-only mode.
