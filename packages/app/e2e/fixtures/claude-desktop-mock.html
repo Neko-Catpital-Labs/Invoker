@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>claude — terminal</title>
+  <style>
+    :root {
+      --bg: #0c0c0c;
+      --chrome: #1a1a1a;
+      --border: #2a2a2a;
+      --text: #e8e6e1;
+      --muted: #8a8780;
+      --green: #7ee787;
+      --amber: #d97757;
+      --prompt: #79c0ff;
+      --user: #f0e6d8;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+      color: var(--text);
+      font-family: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, monospace;
+    }
+    .window {
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      display: grid;
+      grid-template-rows: 36px 1fr;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .chrome {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      background: var(--chrome);
+      border-bottom: 1px solid var(--border);
+    }
+    .traffic { display: flex; gap: 6px; }
+    .traffic span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #444;
+    }
+    .traffic span:nth-child(1) { background: #ff5f57; }
+    .traffic span:nth-child(2) { background: #febc2e; }
+    .traffic span:nth-child(3) { background: #28c840; }
+    .chrome-title {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+    }
+    .term {
+      padding: 18px 20px 20px;
+      overflow: hidden;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .line { margin: 0 0 8px; }
+    .dim { color: var(--muted); }
+    .ok { color: var(--green); }
+    .accent { color: var(--amber); }
+    .prompt { color: var(--prompt); }
+    .user-line { color: var(--user); }
+    .block {
+      margin: 10px 0 14px;
+      padding-left: 12px;
+      border-left: 2px solid #333;
+      color: #cfcbc3;
+    }
+    .input-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .caret {
+      display: inline-block;
+      width: 7px;
+      height: 1.05em;
+      background: var(--text);
+      vertical-align: -2px;
+      animation: blink 1s steps(1, end) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="window" data-claude-mock>
+    <div class="chrome">
+      <div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="chrome-title">claude — ~/checkout · session</div>
+    </div>
+    <div class="term" id="term">
+      <div class="line dim">$ claude</div>
+      <div class="line">Claude Code <span class="dim">v2.0 · checkout</span></div>
+      <div class="line dim">────────────────────────────────</div>
+      <div class="line accent">Claude</div>
+      <div class="block" id="assistant-1">I drafted a three-task Invoker plan for the checkout handlers work:
+  1. implement-handlers
+  2. wire-tests
+  3. review-gate
+
+Say when you want it submitted.</div>
+      <div class="input-row" id="input-row">
+        <span class="prompt">❯</span>
+        <span class="user-line" id="typed"></span><span class="caret" id="caret"></span>
+      </div>
+      <div class="line user-line hidden" id="committed"><span class="prompt">❯</span> <span id="committed-text"></span></div>
+      <div class="hidden" id="assistant-2">
+        <div class="line accent" style="margin-top:12px">Claude</div>
+        <div class="block">Submitting to Invoker now — watch the Plan graph update behind this window.</div>
+        <div class="line ok">✓ Plan submitted to Invoker</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    window.__claudeMock = {
+      async commitUserMessage(text) {
+        document.getElementById("input-row").classList.add("hidden");
+        document.getElementById("committed-text").textContent = text;
+        document.getElementById("committed").classList.remove("hidden");
+      },
+      showAssistantReply() {
+        document.getElementById("assistant-2").classList.remove("hidden");
+      },
+    };
+  </script>
+</body>
+</html>

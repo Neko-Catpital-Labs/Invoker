@@ -60,9 +60,21 @@ test.describe('Embedded terminal PTY', () => {
     const agentSessionId = 'codex-session-e2e-tty';
     const sessionDir = path.join(testDir, 'agent-sessions');
     mkdirSync(sessionDir, { recursive: true });
+    const userPrompt = 'Design the checkout session API contract and OpenAPI types.';
+    const agentReply = 'Checkout session contract drafted with OpenAPI types.';
     writeFileSync(
       path.join(sessionDir, `${agentSessionId}.jsonl`),
-      '{"type":"thread.started","thread_id":"codex-session-e2e-tty"}\n{"type":"task_complete","last_agent_message":"done"}\n',
+      [
+        JSON.stringify({ type: 'thread.started', thread_id: agentSessionId }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { type: 'user_message', text: userPrompt },
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { type: 'agent_message', text: agentReply },
+        }),
+      ].join('\n') + '\n',
       'utf8',
     );
 
@@ -113,7 +125,14 @@ test.describe('Embedded terminal PTY', () => {
     await expect(page.getByTestId('terminal-session-command')).toContainText(agentSessionId);
     const terminalPane = page.getByTestId(`terminal-pane-${fullTaskId}`);
     await expect(terminalPane).toBeVisible();
-    await expect(terminalPane.getByText(`TTY OK: codex resume ${agentSessionId}`)).toBeVisible({ timeout: 10000 });
+    if (process.env.INVOKER_E2E_CODEX_DEMO === '1') {
+      // Demo stub must render THIS session's JSONL, not a shared hardcoded script.
+      await expect(terminalPane.getByText(userPrompt)).toBeVisible({ timeout: 10000 });
+      await expect(terminalPane.getByText(agentReply)).toBeVisible({ timeout: 5000 });
+      await expect(terminalPane.getByText(`Codex session: ${agentSessionId}`)).toBeVisible({ timeout: 5000 });
+    } else {
+      await expect(terminalPane.getByText(`TTY OK: codex resume ${agentSessionId}`)).toBeVisible({ timeout: 10000 });
+    }
     await expect(page.getByText('stdin is not a terminal')).toHaveCount(0);
     await expect(page.getByText('No deferred tool marker found')).toHaveCount(0);
   });

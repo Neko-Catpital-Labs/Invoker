@@ -80,6 +80,11 @@ export const test = base.extend<ElectronFixtures>({
       // Windows / EPERM: fix path still uses INVOKER_CLAUDE_FIX_COMMAND; prompt tasks may hit real claude.
     }
     const codexStub = path.join(stubDir, 'codex');
+    const codexDemoRenderer = path.resolve(__dirname, 'render-codex-demo-session.mjs');
+    // When INVOKER_E2E_CODEX_DEMO=1 (passed into Electron env below), resume
+    // renders the persisted agent-sessions/<id>.jsonl transcript and holds the
+    // PTY open so marketing captures show that task's real session — not a
+    // hardcoded stub shared across scenes.
     writeFileSync(codexStub, `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "\${1:-}" == "resume" ]]; then
@@ -88,6 +93,13 @@ if [[ "\${1:-}" == "resume" ]]; then
     exit 12
   fi
   session_id="\${@: -1}"
+  if [[ "\${INVOKER_E2E_CODEX_DEMO:-}" == "1" ]]; then
+    session_file="\${INVOKER_DB_DIR:-}/agent-sessions/\${session_id}.jsonl"
+    node ${JSON.stringify(codexDemoRenderer)} "\$session_file" "\$session_id"
+    # Hold the PTY open so the drawer looks like a live Codex session.
+    sleep "\${INVOKER_E2E_CODEX_DEMO_HOLD_SECS:-20}"
+    exit 0
+  fi
   sleep 1
   echo "TTY OK: codex resume \${session_id:-}"
   exit 0
@@ -138,6 +150,12 @@ exit 64
         INVOKER_TEST_FIXED_NOW: '2025-01-01T00:00:00.000Z',
         INVOKER_CLAUDE_COMMAND: claudeMarker,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
+        ...(process.env.INVOKER_E2E_CODEX_DEMO
+          ? { INVOKER_E2E_CODEX_DEMO: process.env.INVOKER_E2E_CODEX_DEMO }
+          : {}),
+        ...(process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS
+          ? { INVOKER_E2E_CODEX_DEMO_HOLD_SECS: process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS }
+          : {}),
         ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
         ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
         ...(forceConnectionLostStatus ? { INVOKER_E2E_FORCE_CONNECTION_LOST_STATUS: '1' } : {}),
