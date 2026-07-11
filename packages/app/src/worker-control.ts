@@ -20,7 +20,6 @@ import {
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   REQUEUE_WORKER_KIND,
-  WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRegistry,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
@@ -37,7 +36,6 @@ export const AUTO_STARTED_OWNER_WORKER_KINDS = [
   AUTO_APPROVE_WORKER_KIND,
   CODERABBIT_ADDRESS_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
-  WORKFLOW_RESUME_WORKER_KIND,
 ] as const;
 
 export interface WorkerRuntimeController {
