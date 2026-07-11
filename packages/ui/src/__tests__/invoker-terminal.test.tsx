@@ -37,6 +37,24 @@ describe('Invoker terminal (component)', () => {
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
 
+  it('renders an empty flush planning pane before the first message', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    expect(screen.getByRole('heading', { name: 'Planning chat window' })).toBeInTheDocument();
+    expect(screen.getByText('Still discussing')).toBeInTheDocument();
+    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Talk it through, then submit the plan to Invoker.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ask Invoker what you want to build.')).not.toBeInTheDocument();
+    const transcript = screen.getByTestId('invoker-terminal-transcript');
+    expect(transcript).toBeEmptyDOMElement();
+    const terminalShell = transcript.closest('section');
+    expect(terminalShell).not.toBeNull();
+    expect(terminalShell?.className).not.toContain('border border-border');
+    expect(terminalShell?.className).not.toContain('bg-card');
+    expect(screen.getByTestId('invoker-terminal-input')).toBeEnabled();
+  });
+
   it('generates a planning reply from plain language', async () => {
     render(<App />);
     await openPlanningTerminal();
