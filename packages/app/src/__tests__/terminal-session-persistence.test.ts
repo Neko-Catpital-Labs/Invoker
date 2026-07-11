@@ -5,7 +5,10 @@ import {
   createBashTerminalBackend,
   type BashSpawnFn,
 } from '../embedded-terminal-manager.js';
-import { registerTerminalSessionPersistence } from '../terminal-session-ipc.js';
+import {
+  registerTerminalSessionIpcHandlers,
+  registerTerminalSessionPersistence,
+} from '../terminal-session-ipc.js';
 import {
   createTerminalUiPerfCounters,
   createTerminalUiPerfReporter,
@@ -110,6 +113,72 @@ describe('registerTerminalSessionPersistence coalesce', () => {
     vi.advanceTimersByTime(100);
     expect(upserts).toHaveLength(2);
     expect(upserts[1]?.outputSnapshot).toBe('abc');
+    handle.dispose();
+  });
+
+  it('does not persist planning terminal sessions as task terminal records', () => {
+    const { mgr, upserts, handle } = setup(100);
+
+    mgr.openOrReuse({
+      kind: 'planning',
+      taskId: 'planning:plan-1',
+      planningSessionId: 'plan-1',
+      spec: { cwd: '/repo' },
+      cwd: '/repo',
+    });
+
+    expect(upserts).toHaveLength(0);
+    handle.dispose();
+  });
+
+  it('keeps task terminal IPC routes isolated from planning sessions', async () => {
+    const { mgr, persistence, handle } = setup(100);
+    const handlers = new Map<string, (...args: any[]) => Promise<any>>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, callback: (...args: any[]) => Promise<any>) => {
+        handlers.set(channel, callback);
+      }),
+    };
+    registerTerminalSessionIpcHandlers({
+      ipcMain: ipcMain as any,
+      embeddedTerminalManager: mgr,
+      persistence: persistence as any,
+      uiPerfStats: createTerminalUiPerfCounters(),
+      terminalUiPerf: createTerminalUiPerfReporter({ throttleMs: 0 }),
+      terminalUiPerfSink: createTerminalUiPerfSink(() => {}, createTerminalUiPerfCounters()),
+    });
+
+    const planningSession = mgr.openOrReuse({
+      kind: 'planning',
+      taskId: 'planning:plan-1',
+      planningSessionId: 'plan-1',
+      spec: { cwd: '/repo' },
+      cwd: '/repo',
+    });
+    const taskSession = mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
+
+    await expect(handlers.get('invoker:terminal-list')?.({})).resolves.toEqual([
+      expect.objectContaining({ sessionId: taskSession.sessionId, kind: 'task' }),
+    ]);
+    await expect(
+      handlers.get('invoker:terminal-write')?.({}, planningSession.sessionId, 'x'),
+    ).resolves.toEqual({
+      ok: false,
+      reason: expect.stringContaining('planning terminal session'),
+    });
+    await expect(
+      handlers.get('invoker:terminal-resize')?.({}, planningSession.sessionId, 80, 24),
+    ).resolves.toEqual({
+      ok: false,
+      reason: expect.stringContaining('planning terminal session'),
+    });
+    await expect(
+      handlers.get('invoker:terminal-close')?.({}, planningSession.sessionId),
+    ).resolves.toEqual({
+      ok: false,
+      reason: expect.stringContaining('planning terminal session'),
+    });
+
     handle.dispose();
   });
 });
