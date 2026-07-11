@@ -2345,6 +2345,42 @@ describe('Orchestrator', () => {
       });
     });
 
+    // Regression proof for the capacity-defer churn. A task deferred because its
+    // execution pool has no member capacity (`reason: 'resource-limit'`) is reset to
+    // pending and re-dispatched on the very next scheduler poll, defer-looping every
+    // ~4s (hundreds of abandoned `task deferred` launch-dispatch rows in production).
+    // Desired behavior: it waits in line until a slot frees or its backoff elapses.
+    // Marked `it.fails` because the fix does not exist yet; the fix slice flips it to
+    // a passing `it` (plus slot-free / backoff-elapsed coverage).
+    it.fails('parks a resource-limit deferred task instead of re-dispatching it every poll', () => {
+      const parkOrchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        logger: consoleLogger,
+        maxConcurrency: 3,
+        deferRunningUntilLaunch: true,
+      });
+      parkOrchestrator.loadPlan({
+        name: 'defer-park',
+        tasks: [{ id: 'task-a', description: 'Task A' }],
+      });
+      const firstStarted = parkOrchestrator.startExecution();
+      expect(firstStarted).toHaveLength(1);
+      const taskId = firstStarted[0].id;
+
+      parkOrchestrator.deferTask(taskId, {
+        reason: 'resource-limit',
+        message: 'Execution pool "pnpm-ssh" has no member capacity available',
+        attemptId: parkOrchestrator.getTask(taskId)!.execution.selectedAttemptId,
+        phase: 'launching',
+      });
+      expect(parkOrchestrator.getTask(taskId)!.status).toBe('pending');
+
+      // The next scheduler poll must leave the parked task in line, not re-dispatch it.
+      const restarted = parkOrchestrator.startExecution();
+      expect(restarted.map((t) => t.id)).not.toContain(taskId);
+    });
+
     it('clears deferred set on restartTask', () => {
       orchestrator.loadPlan({
         name: 'defer-restart-test',
