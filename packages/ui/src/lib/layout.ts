@@ -56,10 +56,10 @@ interface ElkLayoutEngine {
   }>;
 }
 
-const NODE_WIDTH = 280;
-const NODE_HEIGHT = 80;
-const HORIZONTAL_GAP = 120;
-const VERTICAL_GAP_BASE = 40;
+const NODE_WIDTH = 167;
+const NODE_HEIGHT = 40;
+const HORIZONTAL_GAP = 80;
+const VERTICAL_GAP_BASE = 24;
 const VERTICAL_GAP_PER_CONNECTION = 12;
 const BARYCENTER_SWEEPS = 4;
 

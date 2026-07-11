@@ -2642,7 +2642,7 @@ export function App() {
           dragHandleTestId="selected-workflow-mini-dag-drag-handle"
           title={`${displayedSelectedWorkflowGraph.workflow.name} task DAG`}
           boundsRef={graphSurfaceRef as unknown as RefObject<HTMLElement>}
-          contentClassName="h-[250px]"
+          contentClassName="h-[180px]"
         >
           {graphBody}
         </FloatingGraphPanel>
