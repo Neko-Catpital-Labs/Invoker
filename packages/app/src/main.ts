@@ -178,6 +178,7 @@ import {
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
+import { headlessQuery, type HeadlessQueryDeps } from './headless-query-list.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
   startStandaloneLaunchDispatcher,
@@ -993,6 +994,28 @@ const YELLOW = '\x1b[33m';
 // HEADLESS MODE
 // ══════════════════════════════════════════════════════════════
 
+function isDatabaseFreeWorkersQuery(args: readonly string[]): boolean {
+  return args[0] === 'query' && args[1] === 'workers';
+}
+
+async function runDatabaseFreeWorkersQuery(args: string[]): Promise<void> {
+  const emptyWorkerQueryDeps: HeadlessQueryDeps = {
+    persistence: {
+      listWorkerActions: () => [],
+      listWorkflows: () => [],
+      loadTasks: () => [],
+      countEventsByTypes: () => [],
+      getEventsByTypes: () => [],
+    } as unknown as HeadlessQueryDeps['persistence'],
+    orchestrator: {} as HeadlessQueryDeps['orchestrator'],
+    executionAgentRegistry: undefined,
+    invokerConfig,
+    getUiPerfStats: () => ({}),
+    resetUiPerfStats: () => {},
+  };
+  await headlessQuery(args.slice(1), emptyWorkerQueryDeps);
+}
+
 function startHeadlessMode(): void {
   const runHeadlessMain = async (): Promise<void> => {
     const agentRegistry = registerBuiltinAgents();
@@ -1073,6 +1096,12 @@ function startHeadlessMode(): void {
         process.exit(1);
         return;
       }
+    }
+
+    if (isDatabaseFreeWorkersQuery(cliArgs) && !existsSync(path.join(resolveInvokerHomeRoot(), 'invoker.db'))) {
+      await runDatabaseFreeWorkersQuery(cliArgs);
+      process.exit(0);
+      return;
     }
 
     let exitCode = 0;
