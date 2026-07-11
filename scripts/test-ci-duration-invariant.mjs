@@ -21,6 +21,7 @@ const EXEMPT_JOBS = new Set([
   'optional-other',
   'docker',
   'scheduled-repros',
+  'playwright-nightly-perf',
 ]);
 
 const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
