@@ -82,6 +82,7 @@ export function createMockInvoker(
     getRemoteTargets: vi.fn(async () => []),
     getExecutionPools: vi.fn(async () => ['mixed-local-ssh', 'pnpm-ssh']),
     getExecutionAgents: vi.fn(async () => ['claude', 'codex']),
+    reportUiPerf: vi.fn(async () => {}),
     getSystemDiagnostics: vi.fn(async () => ({
       platform: 'linux',
       arch: 'x64',
