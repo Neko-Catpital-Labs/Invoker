@@ -6,7 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { NormalizedCostEvent, CostRollup, WorkerActionSummary } from '@invoker/contracts';
+import type { NormalizedCostEvent, CostRollup, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
@@ -205,12 +205,47 @@ export function formatEventLog(events: TaskEvent[]): string {
   }
 
   const lines = events.map((event) => {
+    const workerAction = formatWorkerActionEvent(event);
+    if (workerAction) return workerAction;
     const timestamp = event.createdAt;
     const payload = event.payload ? ` ${event.payload}` : '';
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 
   return lines.join('\n');
+}
+
+function formatWorkerActionEvent(event: TaskEvent): string | undefined {
+  if (event.eventType !== 'task.worker_action') return undefined;
+  const payload = parseJsonObject(event.payload);
+  const workerKind = stringValue(payload?.workerKind) ?? 'worker';
+  const actionType = stringValue(payload?.actionType) ?? 'action';
+  const status = stringValue(payload?.status) ?? 'unknown';
+  const summary = stringValue(payload?.summary);
+  const reason = stringValue(payload?.reason);
+  const subject = stringValue(payload?.subjectId)
+    ?? stringValue(payload?.taskId)
+    ?? event.taskId;
+  return `${DIM}[${event.createdAt}]${RESET} ${BOLD}${event.taskId}${RESET}: worker action ` +
+    `${workerKind}/${actionType} [${status}] subject=${escapeTerminalText(subject)}` +
+    `${reason ? ` reason=${escapeTerminalText(reason)}` : ''}` +
+    `${summary ? ` — ${escapeTerminalText(summary)}` : ''}`;
+}
+
+function parseJsonObject(raw: string | undefined): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 export function formatWorkerActions(actions: WorkerActionRecord[]): string {
@@ -261,6 +296,40 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
       `  ${BOLD}${decision}${RESET} ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
         `${workflow}${subject}${attempts}${agent}${reason}${summary}`,
     );
+  }
+  return lines.join('\n');
+}
+
+export function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  if (snapshot.workers.length === 0) {
+    return `${DIM}No workers registered.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Workers (${snapshot.workers.length})${RESET}`);
+  lines.push(`${DIM}Generated ${escapeTerminalText(snapshot.generatedAt)}${RESET}`);
+  for (const worker of snapshot.workers) {
+    lines.push(
+      `  ${BOLD}${escapeTerminalText(worker.kind)}${RESET} [${worker.lifecycle}] ` +
+        `policy=${worker.policy} autoStarts=${worker.autoStarts ? 'yes' : 'no'}`,
+    );
+    if (worker.note) {
+      lines.push(`    ${DIM}${escapeTerminalText(worker.note)}${RESET}`);
+    }
+    if (worker.recentActions.length > 0) {
+      lines.push('    recentActions:');
+      for (const action of worker.recentActions) {
+        const subject = action.taskId
+          ? `task=${escapeTerminalText(action.taskId)}`
+          : `${escapeTerminalText(action.subjectType)}=${escapeTerminalText(action.subjectId)}`;
+        const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+        const reason = action.reason ? ` reason=${escapeTerminalText(action.reason)}` : '';
+        lines.push(
+          `      ${escapeTerminalText(action.updatedAt)} ${escapeTerminalText(action.actionType)} ` +
+            `[${action.status}] ${subject}${reason}${summary}`,
+        );
+      }
+    }
   }
   return lines.join('\n');
 }

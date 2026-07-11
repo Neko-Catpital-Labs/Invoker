@@ -5,6 +5,7 @@ import {
   formatEventLog,
   formatWorkerActions,
   formatWorkerDecisions,
+  formatWorkerStatusSnapshot,
   serializeWorkflow,
   serializeTask,
   serializeEvent,
@@ -15,7 +16,7 @@ import {
 } from '../formatter.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
-import type { WorkerActionSummary } from '@invoker/contracts';
+import type { WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -169,6 +170,26 @@ describe('formatEventLog', () => {
     const output = formatEventLog([]);
     expect(output).toContain('No events recorded');
   });
+
+  it('renders task.worker_action events as readable worker actions', () => {
+    const output = formatEventLog([{
+      id: 3,
+      taskId: '__merge__wf-1',
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        subjectId: '123',
+        summary: 'Updated PR summary',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    expect(output).toContain('worker action pr-summary-refresh/refresh-pr-summary [completed]');
+    expect(output).toContain('subject=123');
+    expect(output).toContain('Updated PR summary');
+  });
 });
 
 // ── formatWorkerActions ─────────────────────────────────────
@@ -217,6 +238,44 @@ describe('formatWorkerActions', () => {
     expect(output).toContain('auto\\nfix/fix\\ttask');
     expect(output).toContain('task=wf-1/task\\r1');
     expect(output).toContain('Retry\\nnext');
+  });
+});
+
+describe('formatWorkerStatusSnapshot', () => {
+  it('includes worker recentActions in text output', () => {
+    const snapshot: WorkerStatusSnapshot = {
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workers: [{
+        kind: 'pr-summary-refresh',
+        note: 'Refreshes PR summaries.',
+        lifecycle: 'running',
+        policy: 'enabled',
+        autoStarts: true,
+        startable: false,
+        stoppable: true,
+        recentActions: [{
+          id: 'wa-1',
+          workerKind: 'pr-summary-refresh',
+          actionType: 'refresh-pr-summary',
+          workflowId: 'wf-1',
+          taskId: '__merge__wf-1',
+          subjectType: 'review',
+          subjectId: '123',
+          externalKey: 'wf-1:123:pipeline',
+          status: 'completed',
+          attemptCount: 1,
+          summary: 'Updated PR summary',
+          decision: 'act',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:01.000Z',
+        }],
+      }],
+    };
+
+    const output = formatWorkerStatusSnapshot(snapshot);
+    expect(output).toContain('recentActions');
+    expect(output).toContain('refresh-pr-summary [completed]');
+    expect(output).toContain('Updated PR summary');
   });
 });
 

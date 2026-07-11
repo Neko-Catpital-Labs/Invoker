@@ -110,6 +110,46 @@ describe('buildCanonicalPrBody', () => {
     expect(body).toContain(visualProof);
   });
 
+  it('renders worker pipeline actions in chronological order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh PR',
+      workflowSummary: 'Updated the workflow.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci',
+            status: 'completed',
+            subjectType: 'task',
+            subjectId: 'wf/task-b',
+            taskId: 'wf/task-b',
+            summary: 'Fixed CI',
+            updatedAt: '2026-01-01T00:00:03.000Z',
+          },
+          {
+            workerKind: 'autofix',
+            actionType: 'fix-task',
+            status: 'skipped',
+            subjectType: 'task',
+            subjectId: 'wf/task-a',
+            taskId: 'wf/task-a',
+            reason: 'budget-exhausted',
+            summary: 'Skipped fix',
+            updatedAt: '2026-01-01T00:00:01.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    expect(body).toContain('| Time | Worker | Action | Status | Subject | Summary |');
+    expect(body.indexOf('| 2026-01-01T00:00:01.000Z | autofix | fix-task |')).toBeLessThan(
+      body.indexOf('| 2026-01-01T00:00:03.000Z | ci-failure | fix-ci |'),
+    );
+    expect(body).toContain('Skipped fix (budget-exhausted)');
+  });
+
   it('canonical body passes validation', () => {
     const body = buildCanonicalPrBody({
       title: 'Anything',

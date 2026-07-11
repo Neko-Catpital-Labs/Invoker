@@ -94,6 +94,39 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('renders task.worker_action events in the inspector log surface', async () => {
+    const taskWithWorkerEvent = makeUITask({
+      id: 'task-worker-action',
+      description: 'Worker event task',
+      status: 'completed',
+      workflowId: 'wf-a',
+      command: 'echo worker',
+    });
+    mock.setEvents('task-worker-action', [{
+      id: 1,
+      taskId: 'task-worker-action',
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        summary: 'Updated PR 123 pipeline summary',
+        subjectId: '123',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    render(<App />);
+    act(() => mock.setTasks([taskWithWorkerEvent], workflows));
+
+    fireEvent.click(await screen.findByTestId('rf__node-task-worker-action'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('pr-summary-refresh/refresh-pr-summary completed');
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('Updated PR 123 pipeline summary');
+    });
+  });
+
   it('clicking a task expands a minimized inspector', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));

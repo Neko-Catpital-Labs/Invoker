@@ -122,6 +122,7 @@ import {
   DEFAULT_EXECUTION_AGENT,
   registerBuiltinAgents,
   registerBuiltinWorkers,
+  GitHubMergeGateProvider,
   parseRequeueMutationArgs,
   parseRequeueEscalateMutationArgs,
   type AgentRegistry,
@@ -378,6 +379,10 @@ function buildRegisteredOwnerWorkerDeps(
       stallRequeueBackoffMs: invokerConfig.stallRequeueBackoffMs,
     },
     prMaintenance: resolvePrMaintenanceWorkerConfig(invokerConfig),
+    prSummaryRefresh: {
+      reviewProvider: new GitHubMergeGateProvider(),
+      cwd: repoRoot,
+    },
     diskHeadroom: {
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,

@@ -33,6 +33,21 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence carried into PR body summaries. */
+export interface PrAuthoringWorkerActionEntry {
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType: string;
+  subjectId: string;
+  taskId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +61,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker actions that explain what Invoker did around the workflow. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -484,13 +501,38 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  const ctx = args.structuredContext;
+  const workerActions = [...(ctx?.workerActions ?? [])].sort((a, b) =>
+    workerActionTime(a).localeCompare(workerActionTime(b)),
+  );
+  if (workerActions.length > 0) {
+    lines.push('## Pipeline');
+    lines.push('');
+    lines.push('| Time | Worker | Action | Status | Subject | Summary |');
+    lines.push('|------|--------|--------|--------|---------|---------|');
+    for (const action of workerActions) {
+      const time = workerActionTime(action);
+      const subject = action.taskId ?? `${action.subjectType}:${action.subjectId}`;
+      const summary = action.reason ? `${action.summary ?? ''} (${action.reason})`.trim() : action.summary;
+      lines.push([
+        markdownTableCell(time),
+        markdownTableCell(action.workerKind),
+        markdownTableCell(action.actionType),
+        markdownTableCell(action.status),
+        markdownTableCell(subject),
+        markdownTableCell(summary ?? ''),
+      ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+    }
+    lines.push('');
+  }
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
   lines.push('<details>');
   lines.push('<summary>Test Plan</summary>');
   lines.push('');
-  const ctx = args.structuredContext;
+
   const commandTasks = ctx?.tasks.filter((t) => t.command && t.status === 'completed') ?? [];
   if (commandTasks.length > 0) {
     for (const t of commandTasks) {
@@ -551,6 +593,10 @@ export function buildMakePrPrompt(args: {
     '- Ensure the final body satisfies the canonical schema required by this repo.',
   ];
 
+  if ((args.structuredContext?.workerActions?.length ?? 0) > 0) {
+    lines.push('- Include a visible top-level `## Pipeline` section with worker action rows in chronological order.');
+  }
+
   if (args.strictReviewStack) {
     lines.push(
       '- This PR targets the Invoker repo: CI validates the published body with `scripts/validate-pr-body.mjs`.',
@@ -599,9 +645,33 @@ export function buildMakePrPrompt(args: {
       lines.push(ctx.visualProofMarkdown);
       lines.push('');
     }
+
+    if (ctx.workerActions && ctx.workerActions.length > 0) {
+      lines.push('Worker pipeline actions:');
+      for (const action of [...ctx.workerActions].sort((a, b) => workerActionTime(a).localeCompare(workerActionTime(b)))) {
+        const reason = action.reason ? ` reason=${action.reason}` : '';
+        const summary = action.summary ? ` — ${action.summary}` : '';
+        lines.push(
+          `- ${workerActionTime(action)} ${action.workerKind}/${action.actionType} `
+            + `${action.status} ${action.taskId ?? `${action.subjectType}:${action.subjectId}`}${reason}${summary}`,
+        );
+      }
+      lines.push('');
+    }
   }
 
   return lines.join('\n');
+}
+
+function workerActionTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.completedAt ?? action.updatedAt ?? action.createdAt ?? '';
+}
+
+function markdownTableCell(value: string): string {
+  return value
+    .replace(/\r?\n/g, '<br>')
+    .replace(/\|/g, '\\|')
+    .trim();
 }
 
 export function spawnAgentPrAuthorViaRegistry(

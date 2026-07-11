@@ -35,6 +35,9 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'status',
   'reason',
   'route',
+  'actionType',
+  'subjectId',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -83,6 +86,9 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
 
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
+  if (event.eventType === 'task.worker_action') {
+    return workerActionEventToLogEntry(event, payload, index);
+  }
   const payloadMessage = payload?.message;
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
@@ -91,6 +97,32 @@ function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry
       ? payloadMessage
       : event.eventType,
     detail: formatLogDetail(payload),
+    createdAt: event.createdAt,
+  };
+}
+
+function workerActionEventToLogEntry(
+  event: TaskAuditEvent,
+  payload: Record<string, unknown> | undefined,
+  index: number,
+): TaskLogEntry {
+  const workerKind = typeof payload?.workerKind === 'string' ? payload.workerKind : 'worker';
+  const actionType = typeof payload?.actionType === 'string' ? payload.actionType : 'action';
+  const status = typeof payload?.status === 'string' ? payload.status : 'unknown';
+  const summary = typeof payload?.summary === 'string' && payload.summary.trim()
+    ? payload.summary
+    : undefined;
+  const reason = typeof payload?.reason === 'string' && payload.reason.trim()
+    ? payload.reason
+    : undefined;
+  return {
+    id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
+    level: status === 'failed' ? 'warn' : 'info',
+    message: `${workerKind}/${actionType} ${status}${summary ? ` - ${summary}` : ''}`,
+    detail: formatLogDetail({
+      ...(payload ?? {}),
+      ...(reason ? { reason } : {}),
+    }),
     createdAt: event.createdAt,
   };
 }
