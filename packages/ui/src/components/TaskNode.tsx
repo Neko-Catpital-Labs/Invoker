@@ -73,7 +73,7 @@ export function TaskNode({ data }: TaskNodeProps) {
 
   return (
     <div
-      className={`relative w-[264px] overflow-hidden rounded-xl border px-4 py-3 transition-[opacity,box-shadow,border-color] duration-150 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
+      className={`relative w-[288px] overflow-hidden rounded-xl border px-4 py-3.5 transition-[opacity,box-shadow,border-color] duration-150 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
       title={task.id}
       data-selected={selected ? 'true' : 'false'}
       onDoubleClick={handleDoubleClick}
@@ -81,25 +81,25 @@ export function TaskNode({ data }: TaskNodeProps) {
       <Handle
         type="target"
         position={Position.Left}
-        className="!w-2 !h-2 !bg-neutral-500/90 !border !border-background"
+        className="!w-2.5 !h-2.5 !bg-neutral-500/90 !border !border-background"
       />
 
       <span className={`absolute left-0 top-0 bottom-0 w-[3px] ${dotClass}`} />
 
-      <div className={`text-sm font-medium truncate pl-3 text-card-foreground ${isStale ? 'line-through opacity-70' : ''}`}>
-        {task.description.length > 34
-          ? `${task.description.slice(0, 34)}...`
+      <div className={`text-[15px] font-medium leading-snug truncate pl-3 text-card-foreground ${isStale ? 'line-through opacity-70' : ''}`}>
+        {task.description.length > 36
+          ? `${task.description.slice(0, 36)}...`
           : task.description}
       </div>
 
-      <div className={`mt-1 pl-3 text-[11px] tracking-wide ${colors.text}`}>
+      <div className={`mt-1.5 pl-3 text-[12px] tracking-wide ${colors.text}`}>
         {statusLabel}
       </div>
 
       <Handle
         type="source"
         position={Position.Right}
-        className="!w-2 !h-2 !bg-neutral-500/90 !border !border-background"
+        className="!w-2.5 !h-2.5 !bg-neutral-500/90 !border !border-background"
       />
     </div>
   );
