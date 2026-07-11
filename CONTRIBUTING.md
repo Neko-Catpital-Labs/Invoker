@@ -78,7 +78,7 @@ Before requesting review, please confirm:
 
 ## Development setup
 
-See the **Installation** and **Development** sections of the [README](README.md). The short version:
+See the **Installation** and **Development** sections of [Getting started](docs/getting-started.md). The short version:
 
 ```bash
 pnpm install
