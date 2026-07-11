@@ -240,6 +240,14 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:terminal-resize':
       case 'invoker:terminal-close':
         return { ok: false, reason: 'unsupported' };
+      case 'invoker:planning-terminal-open':
+        return { opened: false, reason: 'Planning terminals are not available in the web UI' };
+      case 'invoker:planning-terminal-list':
+        return [];
+      case 'invoker:planning-terminal-write':
+      case 'invoker:planning-terminal-resize':
+      case 'invoker:planning-terminal-close':
+        return { ok: false, reason: 'unsupported' };
 
       // ── Mutations not exposed on the facade / global lifecycle ──
       case 'invoker:select-experiment':
