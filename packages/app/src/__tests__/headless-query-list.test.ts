@@ -147,3 +147,40 @@ describe('headless query worker-decisions', () => {
     ).rejects.toThrow('Invalid --decision');
   });
 });
+
+describe('headless query workers', () => {
+  it('renders the local worker fleet snapshot as JSON', async () => {
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'workers', '--output', 'json'],
+      {
+        persistence: {
+          listWorkerActions: (filters?: unknown) => {
+            const workerKind = (filters as { workerKind?: string } | undefined)?.workerKind;
+            return workerKind === 'autofix' ? workerActions : [];
+          },
+          listWorkflows: () => [],
+          loadTasks: () => [],
+          countEventsByTypes: () => [],
+          getEventsByTypes: () => [],
+        } as unknown as HeadlessQueryDeps['persistence'],
+        orchestrator: {} as unknown as HeadlessQueryDeps['orchestrator'],
+        executionAgentRegistry: undefined,
+        invokerConfig: {} as unknown as HeadlessQueryDeps['invokerConfig'],
+        getUiPerfStats: () => ({}),
+        resetUiPerfStats: () => {},
+      },
+    );
+
+    const parsed = JSON.parse(output) as {
+      generatedAt?: string;
+      workers?: Array<{ kind?: string; lifecycle?: string; policy?: string; recentActions?: unknown[] }>;
+    };
+    expect(typeof parsed.generatedAt).toBe('string');
+    expect(parsed.workers?.length).toBeGreaterThan(0);
+    expect(parsed.workers?.find((worker) => worker.kind === 'autofix')).toMatchObject({
+      lifecycle: 'stopped',
+      policy: 'unknown',
+      recentActions: [expect.objectContaining({ id: 'wa-1' })],
+    });
+  });
+});
