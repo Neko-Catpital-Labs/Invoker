@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, InAppPlanningChatStreamEvent, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -123,6 +123,10 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   busy: boolean;
   conversationKey: string;
 };
+
+interface PlanningStreamPanel {
+  text: string;
+}
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
   return {
@@ -556,6 +560,8 @@ export function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
+  const [planningStreamPanels, setPlanningStreamPanels] = useState<Record<string, PlanningStreamPanel>>({});
+  const activePlanningStreamKeysRef = useRef<Set<string>>(new Set());
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(2);
@@ -571,6 +577,7 @@ export function App() {
   const terminalLines = activePlanningSession.messages;
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
+  const activePlanningStreamPanel = planningStreamPanels[activePlanningSession.id] ?? null;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const activePlanningSessionBusy = activePlanningSession.busy;
@@ -736,6 +743,21 @@ export function App() {
   useEffect(() => {
     const unsubscribe = window.invoker?.onRuntimeStatus?.((status) => {
       setRuntimeStatus(status);
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onPlanningChatStream?.((event: InAppPlanningChatStreamEvent) => {
+      const key = event.clientSessionId || event.sessionId;
+      if (!key || typeof event.chunk !== 'string' || event.chunk.length === 0) return;
+      setPlanningStreamPanels((prev) => {
+        if (!activePlanningStreamKeysRef.current.has(key) && !prev[key]) return prev;
+        return {
+          ...prev,
+          [key]: { text: `${prev[key]?.text ?? ''}${event.chunk}` },
+        };
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -1867,6 +1889,47 @@ export function App() {
     )));
   }, []);
 
+  const clearPlanningStreamPanels = useCallback((...sessionIds: Array<string | null | undefined>) => {
+    const ids = new Set(sessionIds.filter((id): id is string => Boolean(id)));
+    if (ids.size === 0) return;
+    setPlanningStreamPanels((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of ids) {
+        if (Object.prototype.hasOwnProperty.call(next, id)) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
+  const markPlanningStreamActive = useCallback((...sessionIds: Array<string | null | undefined>) => {
+    for (const id of sessionIds) {
+      if (id) activePlanningStreamKeysRef.current.add(id);
+    }
+  }, []);
+
+  const stopPlanningStream = useCallback((...sessionIds: Array<string | null | undefined>) => {
+    for (const id of sessionIds) {
+      if (id) activePlanningStreamKeysRef.current.delete(id);
+    }
+  }, []);
+
+  const movePlanningStreamPanel = useCallback((fromSessionId: string | undefined, toSessionId: string) => {
+    if (!fromSessionId || fromSessionId === toSessionId) return;
+    setPlanningStreamPanels((prev) => {
+      const from = prev[fromSessionId];
+      if (!from) return prev;
+      const to = prev[toSessionId];
+      const next = { ...prev };
+      delete next[fromSessionId];
+      next[toSessionId] = { text: `${to?.text ?? ''}${from.text}` };
+      return next;
+    });
+  }, []);
+
   const updateActivePlanningSession = useCallback((updater: (session: PlanningSessionView) => PlanningSessionView) => {
     updatePlanningSessionById(activePlanningSessionId, updater);
   }, [activePlanningSessionId, updatePlanningSessionById]);
@@ -1989,15 +2052,20 @@ export function App() {
     }
 
     if (!invoker?.planningChatSend) {
+      clearPlanningStreamPanels(activePlanningSessionId, planningSessionId);
+      stopPlanningStream(activePlanningSessionId, planningSessionId);
       appendTerminalLine('Planner is not available.', 'system', 'error');
       return;
     }
 
     const previousSessionId = activePlanningSessionId;
+    clearPlanningStreamPanels(previousSessionId, planningSessionId);
+    markPlanningStreamActive(previousSessionId, planningSessionId);
     updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
     try {
       const request = {
         message: input,
+        clientSessionId: previousSessionId,
         presetKey: selectedPlanningPresetKey || undefined,
         ...(planningSessionId ? { sessionId: planningSessionId } : {}),
       };
@@ -2025,8 +2093,11 @@ export function App() {
         setActivePlanningSessionId((currentSessionId) => (
           currentSessionId === previousSessionId ? result.sessionId : currentSessionId
         ));
+        clearPlanningStreamPanels(previousSessionId, result.sessionId);
+        stopPlanningStream(previousSessionId, result.sessionId);
         setHasLoadedPlan(false);
       } else {
+        movePlanningStreamPanel(result.sessionId, previousSessionId);
         updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
         appendTerminalLine(result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
@@ -2042,15 +2113,19 @@ export function App() {
     activePlanningSessionId,
     activePlanningSessionSubmitted,
     appendTerminalLine,
+    clearPlanningStreamPanels,
     handlePlanningSubmitDraft,
     handleStart,
     hasLoadedPlan,
     hasStarted,
     invoker,
+    markPlanningStreamActive,
     planningInput,
     planningSessionId,
     selectedPlanningPresetKey,
     setPlanningInput,
+    movePlanningStreamPanel,
+    stopPlanningStream,
     updatePlanningSessionById,
   ]);
 
@@ -2895,6 +2970,7 @@ export function App() {
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
+            plannerStreamText={activePlanningStreamPanel?.text ?? ''}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
@@ -3225,6 +3301,7 @@ export function App() {
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
             busy={activePlanningSessionBusy}
+            plannerStreamText={activePlanningStreamPanel?.text ?? ''}
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
@@ -3451,4 +3528,3 @@ export function App() {
     </div>
   );
 }
-

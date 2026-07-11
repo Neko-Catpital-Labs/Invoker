@@ -50,7 +50,7 @@ describe('CodeRabbit PR #3050 — Enter-to-submit ignores IME composition', () =
     // A subsequent plain Enter (composition finished) submits normally.
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => {
-      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'こんにちは', presetKey: 'codex' });
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'こんにちは', clientSessionId: 'local-planning-session-1', presetKey: 'codex' });
     });
   });
 });

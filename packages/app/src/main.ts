@@ -89,6 +89,7 @@ import type {
   InAppPlanRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
+  InAppPlanningChatStreamEvent,
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
   Logger,
@@ -1201,6 +1202,9 @@ function startHeadlessMode(): void {
         warn: (message) => logger.warn(message, { module: 'planning-chat' }),
         error: (message) => logger.error(message, { module: 'planning-chat' }),
       });
+      const emitPlanningChatStream = (event: InAppPlanningChatStreamEvent): void => {
+        messageBus.publish(Channels.PLANNING_CHAT_STREAM, event);
+      };
       await restorePlanningChatSessions(persistence.listInAppPlanningSessions(), {
         config: invokerConfig,
         workingDir: repoRoot,
@@ -1209,6 +1213,7 @@ function startHeadlessMode(): void {
         loadGeneratedPlan,
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
+        onRawPlannerOutput: emitPlanningChatStream,
       });
 
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
@@ -1252,6 +1257,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              onRawPlannerOutput: emitPlanningChatStream,
             });
           }
           case 'invoker:planning-chat-list': {
@@ -1266,6 +1272,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              onRawPlannerOutput: emitPlanningChatStream,
             });
           }
           case 'invoker:planning-chat-submit': {
@@ -3898,6 +3905,12 @@ function createEmbeddedTerminalBackendFromConfig(
       warn: (message) => logger.warn(message, { module: 'planning-chat' }),
       error: (message) => logger.error(message, { module: 'planning-chat' }),
     });
+    const emitPlanningChatStream = (event: InAppPlanningChatStreamEvent): void => {
+      if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
+        mainWindow.webContents.send('invoker:planning-chat-stream', event);
+      }
+      messageBus.publish(Channels.PLANNING_CHAT_STREAM, event);
+    };
     await restorePlanningChatSessions(persistence.listInAppPlanningSessions(), {
       config: invokerConfig,
       workingDir: repoRoot,
@@ -3906,6 +3919,7 @@ function createEmbeddedTerminalBackendFromConfig(
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      onRawPlannerOutput: emitPlanningChatStream,
     });
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     // Two variants: (1) a successful override that returns a canned reply +
@@ -3940,6 +3954,7 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
+        onRawPlannerOutput: emitPlanningChatStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -3964,6 +3979,7 @@ function createEmbeddedTerminalBackendFromConfig(
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
         plannerReplyOverride,
+        onRawPlannerOutput: emitPlanningChatStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {

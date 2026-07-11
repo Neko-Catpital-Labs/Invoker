@@ -5,6 +5,7 @@ import type {
   InAppPlanningChatLine,
   InAppPlanningChatRequest,
   InAppPlanningChatResponse,
+  InAppPlanningChatStreamEvent,
   InAppPlanningCreateSessionRequest,
   InAppPlanningCreateSessionResponse,
   InAppPlanningListSessionsResponse,
@@ -47,6 +48,7 @@ export interface InAppPlannerDeps {
   planningCommandBuilder?: PlanningCommandBuilder;
   conversationRepo?: ConversationRepository;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  onRawPlannerOutput?: (event: InAppPlanningChatStreamEvent) => void;
 }
 
 export interface InAppPlanningChatSession {
@@ -63,6 +65,7 @@ export interface InAppPlanningChatSession {
   createdAt: string;
   updatedAt: string;
   nextMessageId: number;
+  streamClientSessionId?: string;
   pendingSend?: Promise<void>;
   pendingSubmit?: Promise<InAppPlanningSubmitResponse>;
 }
@@ -277,8 +280,9 @@ function formatConversationalPlanningMessage(message: string): string {
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo'>,
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo' | 'onRawPlannerOutput'>,
   threadTs: string,
+  options: { getStreamClientSessionId?: () => string | undefined } = {},
 ): PlanConversationConfig {
   return {
     threadTs,
@@ -294,6 +298,16 @@ function planConversationConfig(
     planningCommandBuilder: deps.planningCommandBuilder,
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
+    onRawPlannerOutput: deps.onRawPlannerOutput
+      ? (chunk) => {
+        const clientSessionId = options.getStreamClientSessionId?.();
+        deps.onRawPlannerOutput?.({
+          sessionId: threadTs,
+          ...(clientSessionId ? { clientSessionId } : {}),
+          chunk,
+        });
+      }
+      : undefined,
   };
 }
 
@@ -318,7 +332,13 @@ async function createSession(
   const { PlanConversation } = await loadPlannerSurfaces();
   const createdAt = new Date().toISOString();
   const id = randomUUID();
-  const session: InAppPlanningChatSession = {
+  let session: InAppPlanningChatSession | undefined;
+  const conversation = new PlanConversation(
+    planConversationConfig(preset, deps, id, {
+      getStreamClientSessionId: () => session?.streamClientSessionId,
+    }),
+  );
+  session = {
     id,
     title: typeof request?.title === 'string' && request.title.trim() ? request.title.trim() : 'Untitled plan',
     presetKey,
@@ -330,7 +350,7 @@ async function createSession(
       tone: 'muted',
       createdAt,
     }],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id)),
+    conversation,
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 2,
@@ -441,6 +461,9 @@ export async function sendPlanningChatMessage(
   if (!message) {
     return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
   }
+  const clientSessionId = typeof rawRequest?.clientSessionId === 'string' && rawRequest.clientSessionId.trim()
+    ? rawRequest.clientSessionId.trim()
+    : undefined;
 
   let sessionId = rawRequest?.sessionId;
   try {
@@ -469,6 +492,8 @@ export async function sendPlanningChatMessage(
       }
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
 
+      const previousStreamClientSessionId = activeSession.streamClientSessionId;
+      activeSession.streamClientSessionId = clientSessionId;
       try {
         const { extractYamlPlan, summarizePlanText } = await loadPlannerSurfaces();
         const formattedMessage = formatConversationalPlanningMessage(message);
@@ -527,6 +552,8 @@ export async function sendPlanningChatMessage(
           sessionId: activeSession.id,
           error: error instanceof Error ? error.message : String(error),
         };
+      } finally {
+        activeSession.streamClientSessionId = previousStreamClientSessionId;
       }
     });
     activeSession.pendingSend = turn.then(() => undefined, () => undefined);
@@ -631,11 +658,16 @@ export async function restorePlanningChatSessions(
     const preset = presets[record.presetKey];
     if (!preset) continue;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id));
+    let session: InAppPlanningChatSession | undefined;
+    const conversation = new PlanConversation(
+      planConversationConfig(preset, deps, record.id, {
+        getStreamClientSessionId: () => session?.streamClientSessionId,
+      }),
+    );
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;
-    const session: InAppPlanningChatSession = {
+    session = {
       id: record.id,
       title: record.title,
       presetKey: record.presetKey,
