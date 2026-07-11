@@ -131,6 +131,9 @@ export function createReactFlowMock() {
     }),
     Background: () => null,
     Controls: () => null,
+    Panel: ({ children }: { children?: React.ReactNode }) => (
+      <div className="react-flow__panel">{children}</div>
+    ),
     MarkerType: { ArrowClosed: 'arrowclosed' },
     Handle: () => null,
     Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
