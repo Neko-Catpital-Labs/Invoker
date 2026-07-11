@@ -1,19 +1,25 @@
 /**
  * Headless "query" command family: the read-only `query <sub>` router
  * (workflows · tasks · task · queue · review-gate · action-graph · audit ·
- * session · worker-actions · cost · cost-events · costs · ui-perf · stats), the cost-event
- * collection/rollup
- * helpers, agent session resolution, and `query-select`.
+ * session · workers · worker-actions · cost · cost-events · costs · ui-perf ·
+ * stats), the cost-event collection/rollup helpers, agent session resolution,
+ * and `query-select`.
  *
  * The deprecated top-level aliases (`list`, `status`, `task-status`, `queue`,
  * `audit`, `session`) route here through the `headless.ts` router. It depends on
- * `headless-shared.ts` and reuses `worker-control.ts` for the worker-decisions view.
+ * `headless-shared.ts` and reuses `worker-control.ts` for worker status/decisions.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
-import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import type { AgentSessionData, NormalizedCostEvent, WorkerStatusSnapshot } from '@invoker/contracts';
+import {
+  createWorkerRegistry,
+  E2E_AUTOFIX_WORKER_KIND,
+  registerBuiltinWorkers,
+  type AgentRegistry,
+  type WorkerRuntimeDependencies,
+} from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import {
@@ -26,7 +32,12 @@ import {
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
-import { listWorkerDecisions } from './worker-control.js';
+import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import {
+  AUTO_STARTED_OWNER_WORKER_KINDS,
+  createLocalWorkerStatusSnapshot,
+  listWorkerDecisions,
+} from './worker-control.js';
 import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
@@ -62,7 +73,7 @@ export type HeadlessQueryDeps = Pick<
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|workers|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -253,6 +264,24 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       await headlessSession(taskId, deps);
       break;
     }
+    case 'workers': {
+      const snapshot = createReadOnlyWorkerStatusSnapshot(deps);
+      switch (flags.output) {
+        case 'label':
+          writeOut(snapshot.workers.map((worker) => worker.kind).join('\n') + '\n');
+          break;
+        case 'json':
+          writeOut(formatAsJson(snapshot) + '\n');
+          break;
+        case 'jsonl':
+          writeOut(formatAsJsonl(snapshot.workers.map((worker) => ({ generatedAt: snapshot.generatedAt, ...worker }))) + '\n');
+          break;
+        default:
+          writeOut(formatWorkerStatusSnapshot(snapshot) + '\n');
+          break;
+      }
+      break;
+    }
     case 'worker-actions': {
       const workflowFilter = flags.workflow ?? flags.positional[0];
       const actions = deps.persistence.listWorkerActions({
@@ -380,7 +409,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, queue, review-gate, action-graph, audit, session, worker-actions, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, cost, cost-events, costs, ui-perf, stats`);
   }
 }
 
@@ -761,6 +790,39 @@ export async function headlessSession(taskId: string | undefined, deps: Pick<Hea
   for (const msg of result.messages) {
     writeOut(`[${msg.role}] ${msg.content}\n`);
   }
+}
+
+function createReadOnlyWorkerStatusSnapshot(
+  deps: Pick<HeadlessQueryDeps, 'persistence' | 'invokerConfig'>,
+): WorkerStatusSnapshot {
+  const registry = registerExternalWorkersFromConfig(
+    deps.invokerConfig.externalWorkers,
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+  );
+  const autoStartKinds = deps.invokerConfig.e2eAutoFixEnabled
+    ? [...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]
+    : AUTO_STARTED_OWNER_WORKER_KINDS;
+  return createLocalWorkerStatusSnapshot({
+    registry,
+    persistence: deps.persistence,
+    autoStartKinds,
+  });
+}
+
+function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  const lines = [
+    `${BOLD}Workers${RESET} (${snapshot.workers.length})`,
+    `  generatedAt: ${snapshot.generatedAt}`,
+  ];
+  for (const worker of snapshot.workers) {
+    const activeActions = worker.recentActions.filter((action) => (
+      action.status === 'queued' || action.status === 'running'
+    )).length;
+    lines.push(
+      `  ${worker.kind}: lifecycle=${worker.lifecycle} policy=${worker.policy} autoStarts=${worker.autoStarts ? 'yes' : 'no'} activeActions=${activeActions}`,
+    );
+  }
+  return lines.join('\n');
 }
 
 function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
