@@ -35,6 +35,7 @@ packages/app/test-results/
 .claude.json.backup*
 tmp/plans/
 release/
+local-builds/
 
 # Local pipeline secrets/config
 config/nightly-usage.env
