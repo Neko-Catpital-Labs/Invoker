@@ -296,6 +296,19 @@ tasks:
     expect(prompt).toContain('before writing workflow YAML');
   });
 
+  it('teaches MCP handoff users stack semantics before PR count claims', () => {
+    const prompt = handoffPrompt('how many PRs will this plan create?');
+
+    expect(prompt).toContain('workflow plan file is not itself a PR stack');
+    expect(prompt).toContain('tasks are execution steps inside a workflow');
+    expect(prompt).toContain('reviewGate.artifacts is the intended review-stack metadata');
+    expect(prompt).toContain('actual published GitHub PRs are external publication evidence');
+    expect(prompt).toContain('Do not derive PR count or PR order claims from onFinish: pull_request');
+    expect(prompt).toContain('or from a lone plan file');
+    expect(prompt).toContain('PR count or PR order claims must use reviewGate.artifacts when present');
+    expect(prompt).toContain('otherwise inspect actual GitHub PR evidence before answering');
+  });
+
   it('describes PR skill triggers in the MCP prompt metadata', () => {
     expect(HANDOFF_PROMPT_DESCRIPTION).toContain('trigger PR skills for PR/stack work');
   });
