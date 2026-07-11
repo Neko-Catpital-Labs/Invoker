@@ -321,14 +321,67 @@ function stringProp(value: Record<string, unknown>, ...keys: string[]): string |
   return undefined;
 }
 
+type StatusCheckRollupItem = {
+  check: Record<string, unknown>;
+  index: number;
+  timestamp?: number;
+};
+type TimestampedStatusCheckRollupItem = StatusCheckRollupItem & { timestamp: number };
+
+function statusCheckIdentity(check: Record<string, unknown>): string | undefined {
+  const context = stringProp(check, 'context');
+  if (context) return `status:${context}`;
+
+  const name = stringProp(check, 'name');
+  const workflowName = stringProp(check, 'workflowName');
+  if (name) return `check:${workflowName ?? ''}:${name}`;
+  if (workflowName) return `check:${workflowName}`;
+
+  return undefined;
+}
+
+function statusCheckTimestamp(check: Record<string, unknown>): number | undefined {
+  for (const key of ['completedAt', 'startedAt', 'updatedAt']) {
+    const raw = stringProp(check, key);
+    if (!raw) continue;
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function latestStatusCheckRollupItems(items: unknown[]): StatusCheckRollupItem[] {
+  const latestByIdentity = new Map<string, TimestampedStatusCheckRollupItem>();
+  const passthrough: StatusCheckRollupItem[] = [];
+
+  items.forEach((item, index) => {
+    if (!item || typeof item !== 'object') return;
+    const check = item as Record<string, unknown>;
+    const timestamp = statusCheckTimestamp(check);
+    const identity = statusCheckIdentity(check);
+
+    if (!identity || timestamp === undefined) {
+      passthrough.push({ check, index, timestamp });
+      return;
+    }
+
+    const candidate = { check, index, timestamp };
+    const current = latestByIdentity.get(identity);
+    if (!current || timestamp > current.timestamp || (timestamp === current.timestamp && index > current.index)) {
+      latestByIdentity.set(identity, candidate);
+    }
+  });
+
+  return [...passthrough, ...latestByIdentity.values()]
+    .sort((a, b) => a.index - b.index);
+}
+
 function summarizeStatusChecks(items: unknown[] | undefined): MergeGateApprovalStatus['checks'] {
   if (!Array.isArray(items) || items.length === 0) return undefined;
 
   let hasPending = false;
   const failed: MergeGateFailedCheck[] = [];
-  for (const item of items) {
-    if (!item || typeof item !== 'object') continue;
-    const check = item as Record<string, unknown>;
+  for (const { check } of latestStatusCheckRollupItems(items)) {
     const name = stringProp(check, 'name', 'workflowName', 'context') ?? 'unknown check';
     const status = stringProp(check, 'status')?.toUpperCase();
     const conclusion = stringProp(check, 'conclusion')?.toUpperCase();
