@@ -125,6 +125,43 @@ describe('buildCanonicalPrBody', () => {
     const errors = validateCanonicalPrBody(body);
     expect(errors).toEqual([]);
   });
+
+  it('renders worker actions in a Pipeline section sorted by action time', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Worker summary',
+      workflowSummary: 'Updated PR visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            id: 'late',
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            taskId: 'wf/t2',
+            status: 'completed',
+            summary: 'Queued and completed CI repair',
+            createdAt: '2026-01-01T00:02:00.000Z',
+          },
+          {
+            id: 'early',
+            workerKind: 'autofix',
+            actionType: 'auto-fix',
+            taskId: 'wf/t1',
+            status: 'skipped',
+            reason: 'worker-retry-budget-exhausted',
+            createdAt: '2026-01-01T00:01:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain('## Pipeline');
+    const earlyIndex = body.indexOf('autofix');
+    const lateIndex = body.indexOf('ci-failure');
+    expect(earlyIndex).toBeGreaterThan(0);
+    expect(lateIndex).toBeGreaterThan(earlyIndex);
+    expect(body).toContain('Reason: worker-retry-budget-exhausted');
+  });
 });
 
 // ── validateReviewStackPrBody ────────────────────────────

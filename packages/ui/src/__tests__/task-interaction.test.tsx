@@ -94,6 +94,45 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('renders task.worker_action events in the task log surface', async () => {
+    render(<App />);
+    mock.setEvents('task-alpha', [
+      {
+        id: 1,
+        taskId: 'task-alpha',
+        eventType: 'task.worker_action',
+        payload: JSON.stringify({
+          workerKind: 'pr-summary-refresh',
+          actionType: 'refresh-pr-summary',
+          status: 'completed',
+          summary: 'Updated PR body with pipeline summary',
+          reviewId: '42',
+          bodyChanged: true,
+        }),
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent(
+        'Worker pr-summary-refresh/refresh-pr-summary: Updated PR body with pipeline summary',
+      );
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('"reviewId":"42"');
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('"bodyChanged":true');
+    });
+  });
+
   it('clicking a task expands a minimized inspector', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));

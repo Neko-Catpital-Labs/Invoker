@@ -6,6 +6,7 @@ import {
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
   PR_CONFLICT_REBASE_WORKER_KIND,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRuntime,
@@ -93,6 +94,7 @@ function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKE
   register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
   register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
   register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
+  register(PR_SUMMARY_REFRESH_WORKER_KIND, 'Refreshes PR summaries.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
   register('external-preview', 'External preview worker.');
@@ -120,6 +122,7 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_SUMMARY_REFRESH_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.startable).toBe(true);
     expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
@@ -183,6 +186,7 @@ describe('createWorkerRuntimeController', () => {
       CI_FAILURE_WORKER_KIND,
       CODERABBIT_ADDRESS_WORKER_KIND,
       PR_CONFLICT_REBASE_WORKER_KIND,
+      PR_SUMMARY_REFRESH_WORKER_KIND,
     ] as const) {
       expect(setup.controller.start(kind)).toMatchObject({
         kind,
