@@ -6,6 +6,7 @@ on:
   pull_request:
   schedule:
     - cron: '17 9 * * *'
+    - cron: '17 21 * * *'
   workflow_dispatch:
 
 concurrency:
