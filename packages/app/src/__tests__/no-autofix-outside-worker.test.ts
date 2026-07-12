@@ -56,6 +56,15 @@ const TRIGGER_SIGNALS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
   { name: "'--auto-fix' flag", pattern: /['"]--auto-fix['"]/ },
   // Usage of the shared recovery channel constant.
   { name: 'AUTO_FIX_RECOVERY_CHANNEL', pattern: /\bAUTO_FIX_RECOVERY_CHANNEL\b/ },
+  // An automatic (worker-initiated) fix intent, marked by `{ autoFix: true }`.
+  // Only the event-driven worker engine may construct one; the app must never
+  // build an automatic fix — it publishes a task-failed event and lets the
+  // recovery worker react (incident 2026-07-12: main.ts scheduled fixes directly).
+  { name: 'autoFix: true marker', pattern: /\bautoFix:\s*true\b/ },
+  // Passing 'auto-fix' as a fix *source* argument, e.g.
+  // `executeFixWithAgentMutation(taskId, agent, 'auto-fix')`. The type union
+  // `'ipc' | 'auto-fix'` and `source === 'auto-fix'` comparisons do not match.
+  { name: "'auto-fix' source arg", pattern: /['"]auto-fix['"]\s*\)/ },
 ];
 
 /**
@@ -73,6 +82,7 @@ const ALLOWLIST: ReadonlySet<string> = new Set([
   'packages/execution-engine/src/auto-fix-recovery.ts',
   'packages/execution-engine/src/worker-runtime.ts',
   'packages/execution-engine/src/auto-fix-intents.ts',
+  'packages/execution-engine/src/workers/ci-failure-worker.ts',
   // (B) shared fix action + operator command route in @invoker/app
   // (`workers/auto-fix-recovery.ts` is the thin re-export shim for the engine).
   'packages/app/src/workers/auto-fix-recovery.ts',
@@ -235,11 +245,42 @@ describe('no auto-fix outside the shared worker engine', () => {
       { content: "const f = '--auto-fix';", signal: "'--auto-fix' flag" },
       { content: 'bus.publish(AUTO_FIX_RECOVERY_CHANNEL);', signal: 'AUTO_FIX_RECOVERY_CHANNEL' },
       { content: 'await autoFixOnFailure(taskId);', signal: 'autoFixOnFailure()' },
+      { content: 'enqueue(wf, buildFixWithAgentMutationArgs(t, a, { autoFix: true }));', signal: 'autoFix: true marker' },
+      { content: "await executeFixWithAgentMutation(taskId, agent, 'auto-fix');", signal: "'auto-fix' source arg" },
     ];
     for (const c of cases) {
       const file: SourceFile = { path: 'packages/app/src/rogue.ts', content: c.content };
       const violations = findAutoFixViolations([file], ALLOWLIST);
       expect(violations.map((v) => v.signal)).toContain(c.signal);
     }
+  });
+
+  it('catches the incident-2026-07-12 pattern: app scheduling an automatic fix', () => {
+    // The removed main.ts scheduleAutoFix built an automatic fix intent and
+    // enqueued it directly on a failed-task delta — bypassing the worker.
+    const planted: SourceFile = {
+      path: 'packages/app/src/main.ts',
+      content: [
+        'const scheduleAutoFix = (taskId: string): void => {',
+        "  void runWorkflowMutation(wf, 'normal', 'invoker:fix-with-agent',",
+        "    buildFixWithAgentMutationArgs(taskId, agent, { autoFix: true }));",
+        '};',
+      ].join('\n'),
+    };
+    const violations = findAutoFixViolations([planted], ALLOWLIST);
+    expect(violations.map((v) => v.signal)).toContain('autoFix: true marker');
+  });
+
+  it('does NOT flag the retained executeFixWithAgentMutation source type/compare', () => {
+    // main.ts still hosts the shared command handler whose source union and
+    // comparison mention 'auto-fix' but never construct an automatic fix.
+    const retained: SourceFile = {
+      path: 'packages/app/src/main.ts',
+      content: [
+        "  source: 'ipc' | 'auto-fix' = 'ipc',",
+        "  context: source === 'auto-fix' ? 'ipc.fix-with-agent.auto-fix' : 'ipc.fix-with-agent',",
+      ].join('\n'),
+    };
+    expect(findAutoFixViolations([retained], ALLOWLIST)).toEqual([]);
   });
 });
