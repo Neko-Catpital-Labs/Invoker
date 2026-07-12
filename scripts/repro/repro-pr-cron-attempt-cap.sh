@@ -7,12 +7,12 @@
 # nothing and re-fired every tick indefinitely. The fix records an attempt on
 # every real try and caps on that ledger.
 #
-# This drives the REAL (non-dry) failure paths offline with fakes:
+# This drives the native worker REAL (non-dry) failure paths offline with fakes:
 #   Job 2: fake `node` accepts the dispatch; CONFIRM_TIMEOUT=0 means it never
 #          confirms -> each run records one rebase-recreate-attempt and exits 1.
 #   Job 1: fake `gh repo clone` fails -> prepare_checkout fails after the
 #          attempt is recorded -> each run records one coderabbit-attempt, exits 1.
-# After MAX attempts the next run hits the cap instead of dispatching again.
+# After MAX attempts the next worker run hits the cap instead of dispatching again.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -22,6 +22,53 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/repro-attempt-cap.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 fail() { echo "[repro] FAIL: $1"; [ -n "${2:-}" ] && echo "----- output -----" && echo "$2"; exit 1; }
+
+REAL_NODE="$(command -v node)"
+WORKER_SOURCE="$ROOT/packages/execution-engine/src/workers/pr-maintenance-workers.ts"
+WORKER_RUNNER_SRC="$TMP/run-native-worker.ts"
+WORKER_RUNNER_DIR="$TMP/worker-runner-dist"
+WORKER_RUNNER="$WORKER_RUNNER_DIR/run-native-worker.mjs"
+
+write_native_worker_runner() {
+  mkdir -p "$WORKER_RUNNER_DIR"
+  cat > "$WORKER_RUNNER_SRC" <<TS
+import { createCoderabbitAddressWorker, createPrConflictRebaseWorker } from '${WORKER_SOURCE}';
+
+const kind = process.argv[2];
+const logger = {
+  info: (message: string) => console.log(message),
+  warn: (message: string) => console.log(message),
+  error: (message: string) => console.log(message),
+  debug: () => {},
+  child: () => logger,
+};
+const factories = {
+  'coderabbit-address': createCoderabbitAddressWorker,
+  'pr-conflict-rebase': createPrConflictRebaseWorker,
+};
+const factory = factories[kind as keyof typeof factories];
+if (!factory) throw new Error(\`unknown PR-maintenance worker kind: \${kind}\`);
+const worker = factory({
+  logger,
+  repoRoot: process.cwd(),
+  lockPath: process.env.INVOKER_PR_CRON_LOCK,
+  installSignalHandlers: false,
+});
+try {
+  await worker.tick('manual');
+} finally {
+  await worker.stop();
+}
+console.log(\`\${kind} worker scan completed.\`);
+TS
+  pnpm exec tsup "$WORKER_RUNNER_SRC" --format esm --platform node --out-dir "$WORKER_RUNNER_DIR" >/dev/null
+}
+
+run_native_worker() {
+  "$REAL_NODE" "$WORKER_RUNNER" "$1" 2>&1
+}
+
+write_native_worker_runner
 
 mkdir -p "$TMP/bin"
 
@@ -56,7 +103,7 @@ run_job2() {
   INVOKER_PR_CRON_LOCK="$TMP/j2.lock" \
   INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh" \
   INVOKER_PR_REBASE_CONFIRM_TIMEOUT=0 \
-  bash scripts/cron-pr-conflict-rebase.sh 2>&1
+  run_native_worker pr-conflict-rebase
 }
 
 for i in 1 2 3; do
@@ -111,7 +158,7 @@ run_job1() {
   INVOKER_PR_CRON_LOCK="$TMP/j1.lock" \
   INVOKER_PR_CRON_WORKDIR="$TMP/work" \
   INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate-empty.sh" \
-  bash scripts/cron-coderabbit-address.sh 2>&1
+  run_native_worker coderabbit-address
 }
 
 for i in 1 2 3; do

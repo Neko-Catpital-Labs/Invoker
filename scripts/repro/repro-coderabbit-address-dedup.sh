@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Dedup proof for Job 1 (scripts/cron-coderabbit-address.sh):
+# Dedup proof for the native CodeRabbit PR-maintenance worker path:
 #   1. a PR with a coderabbitai[bot] comment updated at T -> "would launch omp ... at T"
 #   2. once T is in the ledger -> "no new CodeRabbit comments since T; skip"
 #   3. a newer comment T2 -> "would launch omp ... at T2" again
 #   4. once the per-PR attempt cap is reached -> "hit cap"
 #
-# Runs fully offline in dry-run with a fake `gh` serving captured comment JSON;
-# touches only a temp ledger/lock.
+# Runs fully offline through `--headless worker coderabbit-address` in dry-run
+# with a fake `gh` serving captured comment JSON; touches only temp state.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -16,6 +16,53 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/repro-coderabbit.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 fail() { echo "[repro] FAIL: $1"; [ -n "${2:-}" ] && echo "----- output -----" && echo "$2"; exit 1; }
+
+REAL_NODE="$(command -v node)"
+WORKER_SOURCE="$ROOT/packages/execution-engine/src/workers/pr-maintenance-workers.ts"
+WORKER_RUNNER_SRC="$TMP/run-native-worker.ts"
+WORKER_RUNNER_DIR="$TMP/worker-runner-dist"
+WORKER_RUNNER="$WORKER_RUNNER_DIR/run-native-worker.mjs"
+
+write_native_worker_runner() {
+  mkdir -p "$WORKER_RUNNER_DIR"
+  cat > "$WORKER_RUNNER_SRC" <<TS
+import { createCoderabbitAddressWorker, createPrConflictRebaseWorker } from '${WORKER_SOURCE}';
+
+const kind = process.argv[2];
+const logger = {
+  info: (message: string) => console.log(message),
+  warn: (message: string) => console.log(message),
+  error: (message: string) => console.log(message),
+  debug: () => {},
+  child: () => logger,
+};
+const factories = {
+  'coderabbit-address': createCoderabbitAddressWorker,
+  'pr-conflict-rebase': createPrConflictRebaseWorker,
+};
+const factory = factories[kind as keyof typeof factories];
+if (!factory) throw new Error(\`unknown PR-maintenance worker kind: \${kind}\`);
+const worker = factory({
+  logger,
+  repoRoot: process.cwd(),
+  lockPath: process.env.INVOKER_PR_CRON_LOCK,
+  installSignalHandlers: false,
+});
+try {
+  await worker.tick('manual');
+} finally {
+  await worker.stop();
+}
+console.log(\`\${kind} worker scan completed.\`);
+TS
+  pnpm exec tsup "$WORKER_RUNNER_SRC" --format esm --platform node --out-dir "$WORKER_RUNNER_DIR" >/dev/null
+}
+
+run_native_worker() {
+  "$REAL_NODE" "$WORKER_RUNNER" "$1" 2>&1
+}
+
+write_native_worker_runner
 
 LEDGER="$TMP/ledger.tsv"; : > "$LEDGER"
 
@@ -49,7 +96,7 @@ export INVOKER_PR_CRON_DRY_RUN=1
 export INVOKER_PR_CODERABBIT_STATE_FILE="$LEDGER"
 export INVOKER_PR_CRON_LOCK="$TMP/crons.lock"
 
-run() { bash scripts/cron-coderabbit-address.sh 2>&1; }
+run() { run_native_worker coderabbit-address; }
 
 T1="2026-06-25T08:00:00Z"
 T2="2026-06-25T09:30:00Z"
