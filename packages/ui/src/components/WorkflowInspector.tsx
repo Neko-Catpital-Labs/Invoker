@@ -3,7 +3,7 @@ import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMe
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import { subscribeVisibilityAwarePoll } from '../hooks/visibilityAwarePoll.js';
-import type { ActionGraphNode } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption } from '@invoker/contracts';
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
 type TaskLogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -140,13 +140,15 @@ interface WorkflowInspectorProps {
   reviewGate?: ReviewGateQueryResponse | null;
   remoteTargets?: string[];
   executionPools?: string[];
-  executionAgents?: string[];
+  executionHarnesses?: ExecutionHarnessOption[];
+  executionDefaults?: ExecutionDefaults | null;
   actionNode?: ActionGraphNode | null;
   collapsed: boolean;
   advancedExpanded: boolean;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
   onEditPool?: (taskId: string, poolId: string) => void;
   onEditAgent?: (taskId: string, agentName: string) => void;
+  onEditModel?: (taskId: string, executionModel: string | null) => void;
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onApprove?: (task: TaskState) => void;
@@ -245,12 +247,14 @@ export function WorkflowInspector({
   workflowTasks,
   reviewGate,
   executionPools,
-  executionAgents,
+  executionHarnesses,
+  executionDefaults,
   actionNode,
   collapsed,
   advancedExpanded,
   onEditPool,
   onEditAgent,
+  onEditModel,
   onEditPrompt,
   onEditCommand,
   onApprove,
@@ -344,12 +348,30 @@ export function WorkflowInspector({
   const nodeTitle = task?.description ?? workflowTitle ?? 'No node selected';
   const showsWorkflowMergeDetails = Boolean(!task && workflow?.id && workflow.onFinish === 'pull_request');
   const isMergeNode = Boolean((task?.config.isMergeNode || showsWorkflowMergeDetails) && workflow?.id);
-  const currentAgent = task?.config.executionAgent ?? task?.execution.agentName ?? 'claude';
+  const currentAgent = task?.config.executionAgent ?? task?.execution.agentName ?? executionDefaults?.executionAgent ?? 'codex';
+  const selectedHarness = useMemo(
+    () => executionHarnesses?.find((harness) => harness.name === currentAgent) ?? null,
+    [currentAgent, executionHarnesses],
+  );
+  const currentModel = task?.config.executionModel ?? '';
   const agentOptions = useMemo(() => {
-    const names = new Set(executionAgents ?? []);
+    const names = new Set((executionHarnesses ?? []).map((harness) => harness.name));
     names.add(currentAgent);
     return [...names].filter(Boolean);
-  }, [currentAgent, executionAgents]);
+  }, [currentAgent, executionHarnesses]);
+  const modelOptions = useMemo(() => {
+    const models = new Map((selectedHarness?.supportedModels ?? []).map((model) => [model.id, model]));
+    if (currentModel && !models.has(currentModel)) {
+      models.set(currentModel, { id: currentModel, label: currentModel });
+    }
+    return [...models.values()];
+  }, [currentModel, selectedHarness]);
+  const defaultModelLabel = useMemo(() => {
+    if (currentAgent !== executionDefaults?.executionAgent || !executionDefaults.executionModel) return 'Default';
+    const label = selectedHarness?.supportedModels.find((model) => model.id === executionDefaults.executionModel)?.label
+      ?? executionDefaults.executionModel;
+    return `Default (${label})`;
+  }, [currentAgent, executionDefaults, selectedHarness]);
   const poolOptions = useMemo(() => {
     const ids = new Set(executionPools ?? []);
     if (task?.config.poolId) ids.add(task.config.poolId);
@@ -600,6 +622,25 @@ export function WorkflowInspector({
               >
                 {agentOptions.map((agentName) => (
                   <option key={agentName} value={agentName}>{capitalize(agentName)}</option>
+                ))}
+              </select>
+            </label>
+          </section>
+        )}
+        {task?.config.prompt && onEditModel && modelOptions.length > 0 && (
+          <section className="rounded border border-border bg-secondary/70 p-3">
+            <label className="flex items-center justify-between gap-3">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">AI Model</span>
+              <select
+                value={currentModel}
+                onChange={(event) => onEditModel(task.id, event.target.value || null)}
+                disabled={isTaskBusy}
+                className="min-w-0 max-w-[190px] rounded border border-border-strong bg-muted px-2 py-1 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                data-testid="execution-model-select"
+              >
+                <option value="">{defaultModelLabel}</option>
+                {modelOptions.map((model) => (
+                  <option key={model.id} value={model.id}>{model.label}</option>
                 ))}
               </select>
             </label>
