@@ -235,7 +235,7 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
-import { evaluateExecutingStall } from './executing-stall.js';
+import { evaluateExecutingStall, taskNeedsExecutingStallCheck } from './executing-stall.js';
 
 
 import {
@@ -3267,7 +3267,7 @@ function createEmbeddedTerminalBackendFromConfig(
               persistence,
               logger,
             });
-            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows);
+            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows, true);
           },
           deleteWorkflow: performDeleteWorkflow,
           detachWorkflow: performDetachWorkflow,
@@ -3331,7 +3331,7 @@ function createEmbeddedTerminalBackendFromConfig(
                 let task = loadedTask;
                 const now = new Date();
                 const previousHeartbeat = parseExecutionDate(task.execution.lastHeartbeatAt);
-                const selectedAttempt = task.execution.selectedAttemptId
+                const selectedAttempt = taskNeedsExecutingStallCheck(task) && task.execution.selectedAttemptId
                   ? persistence.loadAttempt?.(task.execution.selectedAttemptId)
                   : undefined;
                 const leaseExpiresAt = parseExecutionDate(selectedAttempt?.leaseExpiresAt);
@@ -4168,6 +4168,7 @@ function createEmbeddedTerminalBackendFromConfig(
         ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
         snapshot.tasks,
         snapshot.workflows,
+        true,
       );
       recordStartupDuration('refresh-task-graph.return', startedAtMs, {
         taskCount: snapshot.tasks.length,
