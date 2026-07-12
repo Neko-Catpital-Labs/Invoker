@@ -59,6 +59,9 @@ export class QwenExecutionAgent implements ExecutionAgent {
       sessionId,
     };
   }
+  supportsModel(executionModel: string): boolean {
+    return executionModel.trim().toLowerCase().includes('qwen');
+  }
 
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {
     return { cmd: this.command, args: ['--resume', sessionId] };

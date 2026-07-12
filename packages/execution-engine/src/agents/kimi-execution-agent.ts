@@ -52,6 +52,10 @@ export class KimiExecutionAgent implements ExecutionAgent {
       sessionId,
     };
   }
+  supportsModel(executionModel: string): boolean {
+    const normalized = executionModel.trim().toLowerCase();
+    return normalized.includes('kimi') || normalized.includes('moonshot');
+  }
 
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {
     return { cmd: this.command, args: ['--session', sessionId] };
