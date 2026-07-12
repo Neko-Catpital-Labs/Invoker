@@ -468,35 +468,21 @@ describe('auto-fix recovery scan submission', () => {
     );
   });
 
-  it('exhausts a worker memory budget for the same task lineage without writing task attempts', async () => {
+  it('caps total worker retries at the durable budget for the same task lineage', async () => {
     const task = makeTask();
     const harness = makeRecoveryPolicyHarness(task);
     harness.options.defaultAutoFixRetries = 1;
     const tick = createAutoFixRecoveryTick(harness.options);
 
-    await tick({
-      identity: { kind: 'recovery', instanceId: 'test' },
-      reason: 'startup',
-      tickNumber: 1,
-    });
-    await tick({
-      identity: { kind: 'recovery', instanceId: 'test' },
-      reason: 'startup',
-      tickNumber: 2,
-    });
+    await tick({ identity: { kind: 'recovery', instanceId: 'test' }, reason: 'startup', tickNumber: 1 });
+    await tick({ identity: { kind: 'recovery', instanceId: 'test' }, reason: 'startup', tickNumber: 2 });
     harness.intents.length = 0;
+    await tick({ identity: { kind: 'recovery', instanceId: 'test' }, reason: 'startup', tickNumber: 3 });
 
-    await tick({
-      identity: { kind: 'recovery', instanceId: 'test' },
-      reason: 'startup',
-      tickNumber: 3,
-    });
-
-    expect(harness.submit).toHaveBeenCalledTimes(2);
-    expect(harness.submit.mock.calls.map((call) => call[2])).toEqual([
-      'invoker:restart-task',
-      'invoker:fix-with-agent',
-    ]);
+    // budget=1 → exactly one automatic retry total (the bare restart counts),
+    // then the durable per-task cap exhausts.
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.submit.mock.calls.map((call) => call[2])).toEqual(['invoker:restart-task']);
     expect(task.execution).not.toHaveProperty(attemptStateKey);
     expect(harness.logEvent).toHaveBeenCalledWith(
       'wf-1/task-1',
@@ -509,38 +495,30 @@ describe('auto-fix recovery scan submission', () => {
     );
   });
 
-  it('allows a fresh in-memory budget when task generation or attempt lineage changes', async () => {
+  it('holds the durable budget across task generation / attempt lineage changes', async () => {
     const task = makeTask();
     const harness = makeRecoveryPolicyHarness(task);
     harness.options.defaultAutoFixRetries = 1;
     const tick = createAutoFixRecoveryTick(harness.options);
 
-    await tick({
-      identity: { kind: 'recovery', instanceId: 'test' },
-      reason: 'startup',
-      tickNumber: 1,
-    });
+    await tick({ identity: { kind: 'recovery', instanceId: 'test' }, reason: 'startup', tickNumber: 1 });
     harness.intents.length = 0;
     harness.tasks.set(task.id, {
       ...task,
-      execution: {
-        ...task.execution,
-        generation: 2,
-        selectedAttemptId: 'attempt-2',
-      },
+      execution: { ...task.execution, generation: 2, selectedAttemptId: 'attempt-2' },
       taskStateVersion: 5,
     });
 
-    await tick({
-      identity: { kind: 'recovery', instanceId: 'test' },
-      reason: 'startup',
-      tickNumber: 2,
-    });
+    await tick({ identity: { kind: 'recovery', instanceId: 'test' }, reason: 'startup', tickNumber: 2 });
 
-    expect(harness.submit).toHaveBeenCalledTimes(2);
-    expect(harness.submit.mock.calls.map((call) => call[2])).toEqual([
-      'invoker:restart-task',
-      'invoker:restart-task',
-    ]);
+    // The generation bump must NOT reset the budget (incident 2026-07-12): the
+    // durable per-task counter already spent its single retry, so no second one.
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.submit.mock.calls.map((call) => call[2])).toEqual(['invoker:restart-task']);
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({ phase: 'worker-autofix-skip', reason: 'worker-retry-budget-exhausted' }),
+    );
   });
 });

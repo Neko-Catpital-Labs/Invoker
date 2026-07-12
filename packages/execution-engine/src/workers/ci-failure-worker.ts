@@ -25,6 +25,7 @@ import {
   type AutoFixAttemptLedger,
 } from '../auto-fix-attempt-ledger.js';
 import { normalizeAutoFixRetryBudget } from '../auto-fix-gating.js';
+import { checkAutoFixRetryCap, recordAutoFixRetryConsumed } from '../auto-fix-retry-cap.js';
 import { recordWorkerDecisionRow } from '../worker-decision-ledger.js';
 import type {
   ReviewGateCiFailedLifecycleEvent,
@@ -464,6 +465,19 @@ async function handleCiFailureEvent(
     return;
   }
 
+  const retryCap = checkAutoFixRetryCap(options.store, event.taskId, workerRetryBudget);
+  if (!retryCap.allowed) {
+    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because retry budget is exhausted', {
+      reason: 'worker-retry-budget-exhausted',
+      workerRetryBudget: retryBudgetLabel(retryCap.budget),
+    });
+    logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
+      reason: 'worker-retry-budget-exhausted',
+      workerRetryBudget: retryBudgetLabel(retryCap.budget),
+    });
+    return;
+  }
+
   const attemptDecision = options.attemptLedger.consume(
     autoFixAttemptLedgerKeyFromLifecycleEvent(event),
     workerRetryBudget,
@@ -525,6 +539,7 @@ async function handleCiFailureEvent(
     executionModel: executionModel ?? null,
     workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
   });
+  recordAutoFixRetryConsumed(options.store, event.taskId, { workflowId: event.workflowId });
 }
 
 export function createCiFailureTick(options: CiFailureWorkerPolicyOptions): WorkerTick {
