@@ -6,7 +6,6 @@ on:
   pull_request:
   schedule:
     - cron: '17 9 * * *'
-    - cron: '17 21 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -382,6 +381,9 @@ jobs:
           - name: Launch Dispatch Queue Repro
             command: bash scripts/test-suites/required/25-launch-dispatch-queue-handoff-repro.sh
             runner_label: Runner_2_4_core
+          - name: Dispatch Invariants
+            command: pnpm --filter @invoker/app test
+            runner_label: Runner_2_4_core
           - name: Reset Rulebook Repro
             command: bash scripts/test-suites/required/26-reset-rulebook-proof.sh
             runner_label: Runner_1
@@ -664,7 +666,7 @@ jobs:
           - name: responsiveness-battery
             files: >-
               e2e/ui-action-responsiveness-battery.spec.ts
-    name: playwright-nightly-perf / ${{ matrix.name }}
+              e2e/storm-scale-responsiveness.spec.ts
 
     steps:
       - name: Checkout
