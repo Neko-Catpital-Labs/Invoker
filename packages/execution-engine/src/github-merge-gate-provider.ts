@@ -321,15 +321,72 @@ function stringProp(value: Record<string, unknown>, ...keys: string[]): string |
   return undefined;
 }
 
+type StatusCheckObservation = {
+  check: Record<string, unknown>;
+  order: number;
+  observedAtMs: number | undefined;
+};
+
+function statusCheckDisplayName(check: Record<string, unknown>): string {
+  return stringProp(check, 'name', 'workflowName', 'context') ?? 'unknown check';
+}
+
+function statusCheckKey(check: Record<string, unknown>, order: number): string {
+  const name = stringProp(check, 'name', 'context');
+  const workflowName = stringProp(check, 'workflowName');
+  if (name && workflowName && workflowName !== name) return `${workflowName}\0${name}`;
+  if (name) return name;
+  if (workflowName) return workflowName;
+  return `unknown check:${order}`;
+}
+
+function statusCheckObservedAtMs(check: Record<string, unknown>): number | undefined {
+  for (const key of ['completedAt', 'startedAt', 'updatedAt', 'createdAt']) {
+    const value = stringProp(check, key);
+    if (!value) continue;
+    const timestamp = Date.parse(value);
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return undefined;
+}
+
+function statusCheckIsNewer(candidate: StatusCheckObservation, current: StatusCheckObservation): boolean {
+  if (candidate.observedAtMs !== undefined || current.observedAtMs !== undefined) {
+    if (candidate.observedAtMs === undefined) return false;
+    if (current.observedAtMs === undefined) return true;
+    if (candidate.observedAtMs !== current.observedAtMs) {
+      return candidate.observedAtMs > current.observedAtMs;
+    }
+  }
+  return candidate.order > current.order;
+}
+
+function latestStatusCheckObservations(items: unknown[]): StatusCheckObservation[] {
+  const latest = new Map<string, StatusCheckObservation>();
+  for (const [order, item] of items.entries()) {
+    if (!item || typeof item !== 'object') continue;
+    const check = item as Record<string, unknown>;
+    const observation: StatusCheckObservation = {
+      check,
+      order,
+      observedAtMs: statusCheckObservedAtMs(check),
+    };
+    const key = statusCheckKey(check, order);
+    const current = latest.get(key);
+    if (!current || statusCheckIsNewer(observation, current)) {
+      latest.set(key, observation);
+    }
+  }
+  return [...latest.values()].sort((a, b) => a.order - b.order);
+}
+
 function summarizeStatusChecks(items: unknown[] | undefined): MergeGateApprovalStatus['checks'] {
   if (!Array.isArray(items) || items.length === 0) return undefined;
 
   let hasPending = false;
   const failed: MergeGateFailedCheck[] = [];
-  for (const item of items) {
-    if (!item || typeof item !== 'object') continue;
-    const check = item as Record<string, unknown>;
-    const name = stringProp(check, 'name', 'workflowName', 'context') ?? 'unknown check';
+  for (const { check } of latestStatusCheckObservations(items)) {
+    const name = statusCheckDisplayName(check);
     const status = stringProp(check, 'status')?.toUpperCase();
     const conclusion = stringProp(check, 'conclusion')?.toUpperCase();
     const state = stringProp(check, 'state')?.toUpperCase();
