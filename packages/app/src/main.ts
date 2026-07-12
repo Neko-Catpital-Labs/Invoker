@@ -120,7 +120,12 @@ import { resolveBundledCliPath } from './cli-helper.js';
 import { buildAppMenuTemplate } from './app-menu.js';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
+<<<<<<< HEAD
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
+=======
+import { WorkflowRollupProjection } from './workflow-rollup-projection.js';
+import { seedTaskCachesFromSnapshot } from './viewer-cache-hydration.js';
+>>>>>>> d1c6b1ada ((2) Recover only via the event-driven worker, never a direct fix-with-agent call)
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import { submitWorkflowMutationOrAcknowledgeDeleted } from './workflow-mutation-submit.js';
@@ -133,7 +138,16 @@ import {
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
 import { dispatchStartedTasksWithGlobalTopup } from './global-topup.js';
 
+<<<<<<< HEAD
 import { buildFixWithAgentMutationArgs, buildHeadlessFixArgs, listOpenFixIntentsForTask, parseFixWithAgentMutationArgs } from './auto-fix-intents.js';
+=======
+
+import {
+  buildHeadlessFixArgs,
+  parseFixWithAgentMutationArgs,
+  type ReviewGateCiContext,
+} from './auto-fix-intents.js';
+>>>>>>> d1c6b1ada ((2) Recover only via the event-driven worker, never a direct fix-with-agent call)
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { createGuiMutationTaskActions } from './ipc/gui-mutation-handlers.js';
@@ -167,7 +181,10 @@ import {
   registerTerminalSessionPersistence,
 } from './terminal-session-ipc.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
+<<<<<<< HEAD
 import { buildRecoveryWorkerAuditPayload, classifyAutoFixRecoveryPhase, recoveryWorkerEventType } from './recovery-worker-observability.js';
+=======
+>>>>>>> d1c6b1ada ((2) Recover only via the event-driven worker, never a direct fix-with-agent call)
 import { seedMainProcessHitchFixture } from './main-process-hitch-fixture.js';
 import { seedStressFixture, type StressFixtureOptions } from './stress-fixture.js';
 import {
@@ -1486,188 +1503,6 @@ function startHeadlessMode(): void {
           );
         }
 
-        const buildStandaloneAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
-          const workflowId = standaloneWorkflowIdForTaskArg(taskId);
-          if (!workflowId) {
-            return {
-              workflowId: null,
-              openIntentCountForWorkflow: 0,
-              openFixIntentCountForWorkflow: 0,
-              openFixIntentCountForTask: 0,
-              openFixIntentForTask: false,
-              openFixIntentHead: null,
-              openFixIntentPreview: [],
-            };
-          }
-          const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-          const openFixIntents = openIntents.filter((intent) => (
-            intent.channel === 'invoker:fix-with-agent' || intent.channel === 'headless.exec'
-          ));
-          const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-          return {
-            workflowId,
-            openIntentCountForWorkflow: openIntents.length,
-            openFixIntentCountForWorkflow: openFixIntents.length,
-            openFixIntentCountForTask: openTaskFixIntents.length,
-            openFixIntentForTask: openTaskFixIntents.length > 0,
-            openFixIntentHead: openTaskFixIntents[0]
-              ? {
-                id: openTaskFixIntents[0].id,
-                status: openTaskFixIntents[0].status,
-                channel: openTaskFixIntents[0].channel,
-              }
-              : null,
-            openFixIntentPreview: openTaskFixIntents.slice(0, 5).map((intent) => ({
-              id: intent.id,
-              status: intent.status,
-              channel: intent.channel,
-            })),
-          };
-        };
-
-        const logStandaloneAutoFixDebug = (
-          taskId: string,
-          phase: string,
-          details: Record<string, unknown> = {},
-        ): void => {
-          const task = orchestrator.getTask(taskId);
-          const payload = {
-            phase,
-            status: task?.status ?? 'missing',
-            ...buildStandaloneAutoFixQueueSnapshot(taskId),
-            ...details,
-          };
-          persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
-          const recoveryAction = classifyAutoFixRecoveryPhase(phase, payload);
-          if (recoveryAction) {
-            persistence.logEvent?.(
-              taskId,
-              recoveryWorkerEventType(recoveryAction),
-              buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
-            );
-          }
-          logger.info(
-            `[auto-fix-debug][standalone] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
-            { module: 'auto-fix' },
-          );
-        };
-
-        const scheduleStandaloneAutoFix = (taskId: string): void => {
-          logStandaloneAutoFixDebug(taskId, 'schedule-enter');
-          if (!workflowMutationCoordinator) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-workflow-mutation-coordinator' });
-            return;
-          }
-          if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', { reason: 'fix-handler-not-ready' });
-            return;
-          }
-          const workflowId = standaloneWorkflowIdForTaskArg(taskId);
-          if (!workflowId) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
-            return;
-          }
-          const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-          if (!shouldAutoFixNow) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', {
-              reason: 'shouldAutoFix-false',
-              shouldAutoFix: shouldAutoFixNow,
-            });
-            return;
-          }
-          const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-          const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-          if (openTaskFixIntents.length > 0) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', {
-              reason: 'already-queued-intent',
-              existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-            });
-            return;
-          }
-          const configuredAgent = loadConfig().autoFixAgent?.trim();
-          const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
-          logStandaloneAutoFixDebug(taskId, 'schedule-enqueue');
-          logStandaloneAutoFixDebug(taskId, 'schedule-enqueued');
-          void workflowMutationCoordinator.enqueue(
-            workflowId,
-            'normal',
-            'invoker:fix-with-agent',
-            buildFixWithAgentMutationArgs(taskId, selectedAgent, { autoFix: true }),
-          )
-            .then(() => {
-              logStandaloneAutoFixDebug(taskId, 'schedule-dispatch-finished');
-            })
-            .catch((err) => {
-              if (err instanceof StaleLineageError) {
-                logger.info(`auto-fix discarded stale result for "${taskId}": ${err.message}`, { module: 'auto-fix' });
-                return;
-              }
-              logStandaloneAutoFixDebug(taskId, 'schedule-dispatch-error', {
-                error: err instanceof Error ? err.stack ?? err.message : String(err),
-              });
-            });
-        };
-
-        const maybeScheduleStandaloneAutoFix = (
-          task: TaskState,
-          trigger: 'delta' | 'poll',
-        ): boolean => {
-          if (task.status !== 'failed') return false;
-          const cancellationError = shouldSkipAutoFixForError(task.execution.error);
-          const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(task.id);
-          logStandaloneAutoFixDebug(task.id, `${trigger}-failed`, {
-            shouldSkipForCancellation: cancellationError,
-            shouldAutoFixFromOrchestrator,
-          });
-          if (!cancellationError && shouldAutoFixFromOrchestrator) {
-            logStandaloneAutoFixDebug(task.id, `${trigger}-trigger-schedule`);
-            scheduleStandaloneAutoFix(task.id);
-            return true;
-          }
-          logStandaloneAutoFixDebug(task.id, `${trigger}-skip`, {
-            reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
-            shouldSkipForCancellation: cancellationError,
-            shouldAutoFixFromOrchestrator,
-          });
-          return false;
-        };
-
-        const startStandaloneAutoFixRecoveryPoll = (workflowId: string): void => {
-          const startedAtMs = Date.now();
-          const maxPollMs = 90_000;
-          const poll = setInterval(() => {
-            if (Date.now() - startedAtMs > maxPollMs) {
-              clearInterval(poll);
-              return;
-            }
-            try {
-              orchestrator.syncFromDb(workflowId);
-              const scheduled = orchestrator
-                .getAllTasks()
-                .filter((task) => task.config.workflowId === workflowId)
-                .some((task) => maybeScheduleStandaloneAutoFix(task, 'poll'));
-              if (scheduled) {
-                clearInterval(poll);
-              }
-            } catch (err) {
-              logger.warn(
-                `standalone auto-fix recovery poll failed for "${workflowId}": ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-                { module: 'auto-fix' },
-              );
-            }
-          }, 1_000);
-          poll.unref?.();
-        };
-
-        messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
-          const d = delta as TaskDelta;
-          if (d.type !== 'updated' || d.changes.status !== 'failed') return;
-          const task = orchestrator.getTask(d.taskId);
-          if (task) maybeScheduleStandaloneAutoFix(task, 'delta');
-        });
-
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
         ): Promise<{ workflowId: string; tasks: TaskState[] }> => {
@@ -1678,7 +1513,6 @@ function startHeadlessMode(): void {
           orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
           const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
           const started = orchestrator.startExecution();
-          startStandaloneAutoFixRecoveryPoll(workflowId);
           logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
           return { workflowId, tasks };
@@ -2107,6 +1941,7 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataPublisher?.requestPublish(reason);
   };
 
+<<<<<<< HEAD
   const rendererTaskFeed = createRendererTaskFeed({
     logger,
     persistence,
@@ -2130,6 +1965,55 @@ function createEmbeddedTerminalBackendFromConfig(
       }
     },
   });
+=======
+  const executeFixWithAgentMutation = async (
+    taskId: string,
+    agentName?: string,
+    source: 'ipc' | 'auto-fix' = 'ipc',
+    reviewGateContext?: ReviewGateCiContext,
+  ): Promise<TaskState[]> => {
+    const task = orchestrator.getTask(taskId);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+    const savedError = task.execution.error ?? '';
+    const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
+    logger.info(
+      `fix-with-agent: "${taskId}" agent=${agentName ?? DEFAULT_EXECUTION_AGENT} source=${source} route=${recoveryRoute.kind}`,
+      { module: 'ipc' },
+    );
+
+    const result = await fixWithAgentAction(
+      taskId,
+      {
+        logger,
+        orchestrator,
+        persistence,
+        commandService,
+        taskExecutor: requireTaskExecutor(),
+        mutationTiming: activeMutationContext?.mutationTiming,
+        autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
+      },
+      {
+        agentName,
+        recoveryRoute,
+        recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
+        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Codex'}`,
+        reviewGateContext,
+        signal: activeMutationContext?.signal,
+      },
+    );
+    return result.started;
+  };
+
+  const parseExecutionDate = (value: unknown): Date | undefined => {
+    if (!value) return undefined;
+    if (value instanceof Date) return value;
+    if (typeof value !== 'string') return undefined;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  };
+>>>>>>> d1c6b1ada ((2) Recover only via the event-driven worker, never a direct fix-with-agent call)
 
   function assertFatalExecutionCapacity(label: string): void {
     if (!shouldFatalOnExecutionCapacityOvercommit()) return;
@@ -2278,6 +2162,76 @@ function createEmbeddedTerminalBackendFromConfig(
     });
   }
 
+<<<<<<< HEAD
+=======
+  function seedUiSnapshotCache(): void {
+    lastKnownWorkflowCount = persistence.listWorkflows().length;
+    seedTaskCachesFromSnapshot(orchestrator.getAllTasks(), { lastKnownTaskStates, workflowRollupProjection });
+  }
+
+  // Detached viewer: the local DB is empty, so seed the delta caches and
+  // bootstrap snapshot from the owner. Without this, the empty cache quarantines
+  // every `updated` delta for a task the viewer has not seen (dropping live
+  // updates), and bootstrap getters return nothing. Failures are non-fatal — the
+  // renderer's delegated reads still populate the view.
+  async function hydrateDetachedViewerFromOwner(): Promise<void> {
+    try {
+      const snapshot = await messageBus.request<{ kind: string }, { tasks?: TaskState[]; workflows?: unknown[] }>(
+        'headless.query',
+        { kind: 'tasks' },
+      );
+      const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks : [];
+      const workflows = Array.isArray(snapshot?.workflows) ? snapshot.workflows : [];
+      detachedViewerWorkflows = workflows;
+      seedTaskCachesFromSnapshot(tasks, { lastKnownTaskStates, workflowRollupProjection });
+      lastKnownWorkflowCount = workflows.length;
+      startupWorkflowId = [...workflows]
+        .map((wf) => wf as { id?: string; updatedAt?: string; createdAt?: string })
+        .sort((left, right) => (Date.parse(right.updatedAt ?? '') || 0) - (Date.parse(left.updatedAt ?? '') || 0))[0]?.id ?? null;
+      logger.info(
+        `[init] Hydrated detached viewer from owner: ${tasks.length} tasks across ${workflows.length} workflows`,
+        { module: 'init' },
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn(`detached viewer hydration from owner failed; relying on delegated reads: ${message}`, { module: 'init' });
+    } finally {
+      // Resume direct delta processing and replay anything buffered during
+      // hydration (in arrival order). Always runs, so a hydration failure can
+      // never leave deltas buffered forever.
+      const buffered = detachedDeltaBuffer ?? [];
+      detachedDeltaBuffer = null;
+      for (const delta of buffered) processIncomingTaskDelta(delta);
+    }
+  }
+
+  // Current task states for the detached viewer's bootstrap getter, derived from
+  // the live delta cache so a renderer reload never sees the stale hydration
+  // snapshot.
+  function detachedViewerTasks(): TaskState[] {
+    return [...lastKnownTaskStates.keys()].map(
+      (taskId) => JSON.parse(lastKnownTaskStates.get(taskId) ?? '{}') as TaskState,
+    );
+  }
+
+  // Apply one owner task delta to the local cache and forward results to the
+  // renderer (and drive owner-side auto-fix). Extracted so the detached viewer
+  // can replay deltas that were buffered during hydration.
+  function processIncomingTaskDelta(d: TaskDelta): void {
+    uiPerfStats.mainDeltaToUi += 1;
+    if (traceUiDeltaFlow) {
+      logger.debug(`delta→ui: ${JSON.stringify(d)}`, { module: 'ui' });
+    }
+    for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
+      publishTaskDeltaToRenderer(rendererDelta);
+    }
+  }
+
+  function loadTaskByIdFromPersistence(taskId: string): TaskState | undefined {
+    return persistence.loadTask(taskId);
+  }
+
+>>>>>>> d1c6b1ada ((2) Recover only via the event-driven worker, never a direct fix-with-agent call)
   workflowMetadataPublisher = new CoalescedWorkflowMetadataPublisher({
     listWorkflows: () => persistence.listWorkflows(),
     publish: (workflows, stats) => {
