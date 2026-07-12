@@ -506,7 +506,10 @@ describe('WorkflowInspector', () => {
       <WorkflowInspector
         workflow={workflow}
         task={makeTask()}
-        executionAgents={['claude', 'codex']}
+        executionHarnesses={[
+          { name: 'claude', supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }] },
+          { name: 'codex', supportedModels: [{ id: 'gpt-5-codex', label: 'GPT-5 Codex' }] },
+        ]}
         collapsed={false}
         advancedExpanded={false}
         onEditAgent={onEditAgent}
@@ -517,6 +520,38 @@ describe('WorkflowInspector', () => {
 
     fireEvent.change(screen.getByTestId('execution-agent-select'), { target: { value: 'claude' } });
     expect(onEditAgent).toHaveBeenCalledWith('task-1', 'claude');
+  });
+
+  it('renders the default model label and edits the selected model', () => {
+    const onEditModel = vi.fn();
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({
+          status: 'pending',
+          config: { workflowId: 'wf-1', prompt: 'Fix failing tests', executionAgent: 'omp' },
+        })}
+        executionHarnesses={[
+          {
+            name: 'omp',
+            supportedModels: [
+              { id: 'chatgpt-5.4', label: 'ChatGPT 5.4' },
+              { id: 'openai/gpt-5-codex', label: 'OpenAI GPT-5 Codex' },
+            ],
+          },
+        ]}
+        executionDefaults={{ executionAgent: 'omp', executionModel: 'chatgpt-5.4' }}
+        collapsed={false}
+        advancedExpanded={false}
+        onEditModel={onEditModel}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('option', { name: 'Default (ChatGPT 5.4)' })).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('execution-model-select'), { target: { value: 'openai/gpt-5-codex' } });
+    expect(onEditModel).toHaveBeenCalledWith('task-1', 'openai/gpt-5-codex');
   });
 
   it('double-click edits prompt and saves through callback', () => {

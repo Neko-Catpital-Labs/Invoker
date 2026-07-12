@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -589,7 +589,8 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionPools, setExecutionPools] = useState<string[]>([]);
-  const [executionAgents, setExecutionAgents] = useState<string[]>([]);
+  const [executionHarnesses, setExecutionHarnesses] = useState<ExecutionHarnessOption[]>([]);
+  const [executionDefaults, setExecutionDefaults] = useState<ExecutionDefaults | null>(null);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(
     () => (typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__?.runtimeStatus ?? null : null),
@@ -684,7 +685,8 @@ export function App() {
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
-    window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+    window.invoker?.getExecutionHarnesses?.().then(setExecutionHarnesses).catch(() => {});
+    window.invoker?.getExecutionDefaults?.().then(setExecutionDefaults).catch(() => {});
     window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
     window.invoker?.getPlanningPresets?.()
       .then((options) => {
@@ -2393,6 +2395,18 @@ export function App() {
     },
     [invoker, trackAcceptedMutation],
   );
+  const handleEditModel = useCallback(
+    async (taskId: string, executionModel: string | null) => {
+      if (!invoker) return;
+      try {
+        const result = await invoker.editTaskModel(taskId, executionModel);
+        trackAcceptedMutation(result);
+      } catch (err) {
+        notifyMutationError('Failed to edit task model:', err);
+      }
+    },
+    [invoker, trackAcceptedMutation],
+  );
 
   const handleSetExternalGatePolicies = useCallback(
     async (taskId: string, updates: ExternalGatePolicyUpdate[]) => {
@@ -3232,7 +3246,10 @@ export function App() {
                   advancedExpanded={advancedMetadataExpanded}
                   remoteTargets={remoteTargets}
                   executionPools={executionPools}
-                  executionAgents={executionAgents}
+                  executionHarnesses={executionHarnesses}
+                  executionDefaults={executionDefaults}
+                  onEditAgent={handleEditAgent}
+                  onEditModel={handleEditModel}
                   onApprove={openApprovalModal}
                   onReject={openRejectModal}
                   onSetMergeBranch={handleSetMergeBranch}
