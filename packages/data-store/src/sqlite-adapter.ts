@@ -2943,16 +2943,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
   listAbandonableLaunchDispatchLeases(options: {
     nowIso?: string;
     maxAttempts: number;
+    maxLaunchAgeMs?: number;
   }): TaskLaunchDispatch[] {
     const now = options.nowIso ?? new Date().toISOString();
+    const maxLaunchAgeMs = options.maxLaunchAgeMs;
+    const ageCutoff = maxLaunchAgeMs === undefined
+      ? null
+      : new Date(new Date(now).getTime() - maxLaunchAgeMs).toISOString();
     const rows = this.queryAll(
       `SELECT * FROM task_launch_dispatch
          WHERE state = 'leased'
            AND fenced_until IS NOT NULL
            AND fenced_until < ?
-           AND attempts_count >= ?
+           AND (
+             attempts_count >= ?
+             OR (? IS NOT NULL AND enqueued_at <= ?)
+           )
          ORDER BY id ASC`,
-      [now, options.maxAttempts],
+      [now, options.maxAttempts, ageCutoff, ageCutoff],
     );
     return rows.map((row) => this.rowToTaskLaunchDispatch(row));
   }
