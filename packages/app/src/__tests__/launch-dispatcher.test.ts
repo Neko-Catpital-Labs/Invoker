@@ -467,9 +467,9 @@ describe('LaunchDispatcher', () => {
       const pastIso = new Date(Date.now() - 60_000).toISOString();
       (adapter as any).db.run(
         `UPDATE task_launch_dispatch
-           SET state = 'leased', fenced_until = ?, attempts_count = 1
+           SET state = 'leased', fenced_until = ?, attempts_count = 1, enqueued_at = ?
          WHERE id = ?`,
-        [pastIso, underAttemptRow.id],
+        [pastIso, new Date().toISOString(), underAttemptRow.id],
       );
 
       const prepare = vi.fn();
