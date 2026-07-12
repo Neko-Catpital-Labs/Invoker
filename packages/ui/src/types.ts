@@ -89,6 +89,7 @@ export interface TaskConfig {
   readonly poolMemberId?: string;
   readonly isMergeNode?: boolean;
   readonly executionAgent?: string;
+  readonly executionModel?: string;
   readonly autoFixRetries?: number;
   readonly summary?: string;
   readonly problem?: string;

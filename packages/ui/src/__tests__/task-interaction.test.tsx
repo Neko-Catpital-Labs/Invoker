@@ -93,6 +93,47 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('prompt-command-display')).toHaveTextContent('exit 1');
     });
   });
+  it('lets prompt tasks change harness and model from the inspector', async () => {
+    const promptTask = makeUITask({
+      id: 'task-ai',
+      description: 'AI task',
+      status: 'pending',
+      workflowId: 'wf-a',
+      prompt: 'Write a test',
+      config: {
+        workflowId: 'wf-a',
+        prompt: 'Write a test',
+        executionAgent: 'omp',
+      },
+    });
+    vi.mocked(mock.api.getExecutionDefaults).mockResolvedValue({
+      executionAgent: 'omp',
+      executionModel: 'chatgpt-5.4',
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([promptTask], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(await screen.findByTestId('rf__node-task-ai'));
+    await waitFor(() => {
+      expect(screen.getByTestId('execution-agent-select')).toBeInTheDocument();
+      expect(screen.getByTestId('execution-model-select')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('execution-agent-select'), { target: { value: 'codex' } });
+    await waitFor(() => {
+      expect(mock.api.editTaskAgent).toHaveBeenCalledWith('task-ai', 'codex');
+    });
+
+    fireEvent.change(screen.getByTestId('execution-model-select'), { target: { value: 'openai/gpt-5-codex' } });
+    await waitFor(() => {
+      expect(mock.api.editTaskModel).toHaveBeenCalledWith('task-ai', 'openai/gpt-5-codex');
+    });
+  });
 
   it('clicking a task expands a minimized inspector', async () => {
     render(<App />);
