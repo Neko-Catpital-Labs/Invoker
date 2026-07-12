@@ -51,7 +51,6 @@ interface TerminalSessionPaneProps {
 
 type SeededOutputSnapshot = {
   sessionId: string;
-  snapshot: string;
   term: XTermTerminal;
 };
 
@@ -60,30 +59,33 @@ function seedTerminalOutputSnapshot(
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
 ): void {
-  const outputSnapshot = session.outputSnapshot;
+  const outputSnapshot = session.outputSnapshot ?? '';
   const seededSnapshot = seededSnapshotRef.current;
   if (
-    outputSnapshot &&
-    (
-      !seededSnapshot ||
-      seededSnapshot.sessionId !== session.sessionId ||
-      seededSnapshot.snapshot !== outputSnapshot ||
-      seededSnapshot.term !== term
-    )
+    seededSnapshot &&
+    seededSnapshot.sessionId === session.sessionId &&
+    seededSnapshot.term === term
   ) {
-    try {
-      term.write(outputSnapshot);
-      seededSnapshotRef.current = {
-        sessionId: session.sessionId,
-        snapshot: outputSnapshot,
-        term,
-      };
-    } catch (err) {
-      console.warn(
-        `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
-        err,
-      );
-    }
+    return;
+  }
+
+  const nextSeededSnapshot = {
+    sessionId: session.sessionId,
+    term,
+  };
+  if (!outputSnapshot) {
+    seededSnapshotRef.current = nextSeededSnapshot;
+    return;
+  }
+
+  try {
+    term.write(outputSnapshot);
+    seededSnapshotRef.current = nextSeededSnapshot;
+  } catch (err) {
+    console.warn(
+      `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
+      err,
+    );
   }
 }
 

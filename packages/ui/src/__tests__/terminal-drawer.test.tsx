@@ -156,7 +156,7 @@ describe('Terminal drawer (component)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
       expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
-      expect(xtermMock.writeLog).toContain('restored before restart\n');
+      expect(xtermMock.writeLog).toEqual(['restored before restart\n']);
     });
   });
 
@@ -393,7 +393,7 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
-  it('does not duplicate the replay snapshot when the same session re-renders', async () => {
+  it('does not duplicate the replay snapshot when the same mounted session gets a refreshed snapshot', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',
     });
@@ -416,7 +416,7 @@ describe('Terminal drawer (component)', () => {
       <TerminalDrawer
         state="partial"
         onCycle={vi.fn()}
-        sessions={[{ ...session }]}
+        sessions={[{ ...session, outputSnapshot: 'replayed once\nnew live output\n' }]}
         activeSessionId={session.sessionId}
         onSelectSession={vi.fn()}
         onCloseSession={vi.fn()}
@@ -424,6 +424,46 @@ describe('Terminal drawer (component)', () => {
     );
 
     expect(xtermMock.writeLog).toEqual(['replayed once\n']);
+  });
+
+  it('seeds the replay snapshot again for a new session identity', async () => {
+    const firstSession = makeTerminalSession('task-alpha', {
+      sessionId: 'mock-session-alpha-first',
+      outputSnapshot: 'first session replay\n',
+    });
+    const nextSession = makeTerminalSession('task-alpha', {
+      sessionId: 'mock-session-alpha-next',
+      outputSnapshot: 'next session replay\n',
+    });
+
+    const { rerender } = render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[firstSession]}
+        activeSessionId={firstSession.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['first session replay\n']);
+    });
+
+    rerender(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[nextSession]}
+        activeSessionId={nextSession.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['first session replay\n', 'next session replay\n']);
+    });
   });
 
   it('keeps live output, input, resize, close, and tab selection intact without a preview row', async () => {
