@@ -9,6 +9,11 @@ export interface InvokerTerminalLine {
   tone?: 'muted' | 'error' | 'success';
 }
 
+export interface InvokerTerminalPlanningStream {
+  text: string;
+  status: 'streaming' | 'failed';
+}
+
 interface PlanningPresetOptionView {
   key: string;
   label: string;
@@ -28,6 +33,7 @@ interface InvokerTerminalProps {
   presetOptions: PlanningPresetOptionView[];
   draftPlanAvailable: boolean;
   draftPlanSummary?: { name: string; taskCount: number; workflowCount?: number };
+  planningStream?: InvokerTerminalPlanningStream | null;
   submitError?: SubmitErrorView | null;
   readOnly?: boolean;
   expanded?: boolean;
@@ -60,6 +66,7 @@ export function InvokerTerminal({
   presetOptions,
   draftPlanAvailable,
   draftPlanSummary,
+  planningStream,
   submitError,
   readOnly = false,
   expanded = false,
@@ -91,7 +98,7 @@ export function InvokerTerminal({
     if (shouldFollowTranscript) {
       scrollTranscriptToBottom();
     }
-  }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+  }, [lines.length, planningStream?.text, scrollTranscriptToBottom, shouldFollowTranscript]);
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -193,6 +200,27 @@ export function InvokerTerminal({
             </div>
           );
         })}
+        {planningStream && planningStream.text ? (
+          <div
+            data-testid="invoker-terminal-planner-stream"
+            data-state={planningStream.status}
+            className={`rounded-sm border px-3 py-2 ${
+              planningStream.status === 'failed'
+                ? 'border-destructive/50 bg-destructive/10'
+                : 'border-border-strong bg-card/70'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[11px] text-muted-foreground">planner stream ›</div>
+              <div className={`text-[11px] ${planningStream.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>
+                {planningStream.status === 'failed' ? 'failed' : 'live'}
+              </div>
+            </div>
+            <div className={`mt-2 whitespace-pre-wrap ${planningStream.status === 'failed' ? 'text-destructive' : 'text-foreground'}`}>
+              {planningStream.text}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {submitError && !readOnly && (

@@ -90,6 +90,7 @@ import type {
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
   InAppPlanningResetRequest,
+  InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   Logger,
   WorkflowMeta,
@@ -2110,6 +2111,12 @@ function createEmbeddedTerminalBackendFromConfig(
     maxTaskDeltaBatchSize: 0,
     ...createTerminalUiPerfCounters(),
   };
+  const emitPlanningChatStream = (event: InAppPlanningStreamEvent): void => {
+    if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
+      mainWindow.webContents.send('invoker:planning-chat-stream', event);
+    }
+    webBridge?.broadcast('invoker:planning-chat-stream', event);
+  };
   const terminalUiPerf = createTerminalUiPerfReporter();
   const terminalUiPerfSink = createTerminalUiPerfSink(
     (source, level, message) => {
@@ -3916,6 +3923,7 @@ function createEmbeddedTerminalBackendFromConfig(
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      onRawPlannerOutput: emitPlanningChatStream,
     });
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     // Two variants: (1) a successful override that returns a canned reply +
@@ -3950,6 +3958,7 @@ function createEmbeddedTerminalBackendFromConfig(
         loadGeneratedPlan: loadGeneratedPlanPreview,
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
+        onRawPlannerOutput: emitPlanningChatStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -3974,6 +3983,7 @@ function createEmbeddedTerminalBackendFromConfig(
         conversationRepo: planningConversationRepo,
         planningSessionStore: ownerMode ? persistence : undefined,
         plannerReplyOverride,
+        onRawPlannerOutput: emitPlanningChatStream,
       });
     });
     registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
