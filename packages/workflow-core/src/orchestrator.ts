@@ -112,6 +112,22 @@ import {
 } from './orchestrator/cancellation.js';
 import type { CancellationHost } from './orchestrator/cancellation.js';
 import {
+  EXPEDITED_PRIORITY as LIFECYCLE_EXPEDITED_PRIORITY,
+  applyRecreateResetImpl,
+  bumpWorkflowGenerationImpl,
+  collectSubgraphTaskIdsImpl,
+  dispatchPostMutationImpl,
+  invalidateLaunchArtifactsForTasksImpl,
+  recreateDownstreamImpl,
+  recreateTaskImpl,
+  recreateWorkflowImpl,
+  resetSubgraphToPendingImpl,
+  restartTaskImpl,
+  retryTaskImpl,
+  retryWorkflowImpl,
+} from './orchestrator/lifecycle.js';
+import type { LifecycleHost } from './orchestrator/lifecycle.js';
+import {
   editTaskCommandImpl,
   editTaskPromptImpl,
   editTaskTypeImpl,
@@ -138,7 +154,6 @@ import { buildPlanLocalToScopedIdMap, scopePlanTaskId } from './task-id-scope.js
 import type { TaskRepository } from './task-repository.js';
 import {
   planInvalidation,
-  withSchedulerEnqueueCandidates,
   type InvalidationPlan,
 } from './invalidation-plan.js';
 import {
@@ -176,10 +191,6 @@ function workflowTimestamp(): Date {
   }
   return new Date();
 }
-/** Recreate-class reset: fresh lineage, cleared attempt/session/container metadata. */
-const RECREATE_RESET_CHANGES: TaskStateChanges = buildTaskResetChanges('recreate', {
-  config: { summary: undefined },
-});
 
 const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
 const TRACE_WORKER_RESPONSE = process.env.INVOKER_TRACE_WORKER_RESPONSE === '1';
@@ -631,7 +642,7 @@ export interface TaskLineageExpectation {
 }
 
 export class Orchestrator {
-  private static readonly EXPEDITED_PRIORITY = 100;
+  private static readonly EXPEDITED_PRIORITY = LIFECYCLE_EXPEDITED_PRIORITY;
   private static readonly LAUNCH_DEFERRAL_BASE_BACKOFF_MS = 15_000;
   private static readonly LAUNCH_DEFERRAL_MAX_BACKOFF_MS = 5 * 60_000;
   private static readonly LAUNCH_DEFERRAL_HEARTBEAT_MS = 30_000;
@@ -841,26 +852,7 @@ export class Orchestrator {
    * The returned list is de-duplicated and preserves first-seen order.
    */
   private collectSubgraphTaskIds(rootTaskIds: string[]): string[] {
-    const allTasks = this.stateMachine.getAllTasks();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const seen = new Set<string>();
-    const ids: string[] = [];
-
-    for (const rootId of rootTaskIds) {
-      if (!taskMap.has(rootId)) continue;
-      if (!seen.has(rootId)) {
-        seen.add(rootId);
-        ids.push(rootId);
-      }
-      const descendantIds = getTransitiveDependents(rootId, taskMap, () => false);
-      for (const id of descendantIds) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        ids.push(id);
-      }
-    }
-
-    return ids;
+    return collectSubgraphTaskIdsImpl(this as unknown as LifecycleHost, rootTaskIds);
   }
 
   private invalidateLaunchArtifactsForTasks(
@@ -868,37 +860,7 @@ export class Orchestrator {
     reason: string,
     now: Date = new Date(),
   ): void {
-    const ids = Array.from(new Set(taskIds.filter((id) => typeof id === 'string' && id.length > 0)));
-    if (ids.length === 0) return;
-
-    const invalidatedAt = now.toISOString();
-    const invalidatedDispatches =
-      this.persistence.abandonLaunchDispatchesForTasks?.(ids, reason, invalidatedAt) ?? [];
-    const releasedLeases =
-      this.persistence.releaseExecutionResourceLeasesForTasks?.(ids, reason, invalidatedAt) ?? [];
-
-    for (const row of invalidatedDispatches) {
-      this.persistence.logEvent?.(row.taskId, 'task.launch_dispatch_invalidated', {
-        dispatchId: row.id,
-        attemptId: row.attemptId,
-        workflowId: row.workflowId,
-        previousState: row.state,
-        generation: row.generation,
-        reason,
-        invalidatedAt,
-      });
-    }
-
-    for (const row of releasedLeases) {
-      if (!row.taskId) continue;
-      this.persistence.logEvent?.(row.taskId, 'task.execution_resource_lease_released', {
-        resourceKey: row.resourceKey,
-        resourceType: row.resourceType,
-        holderId: row.holderId,
-        reason,
-        invalidatedAt,
-      });
-    }
+    return invalidateLaunchArtifactsForTasksImpl(this as unknown as LifecycleHost, taskIds, reason, now);
   }
 
   /**
@@ -911,61 +873,7 @@ export class Orchestrator {
     resetChanges: TaskStateChanges,
     opts?: { forceResetIds?: Set<string> },
   ): { affectedIds: string[]; readyIds: string[] } {
-    const forceResetIds = opts?.forceResetIds ?? new Set<string>();
-    const affectedIds = this.collectSubgraphTaskIds(rootTaskIds);
-    const affectedSet = new Set(affectedIds);
-    const workflowsToSync = new Set<string>();
-    const pendingTaskDeltas: TaskDelta[] = [];
-
-    this.taskRepository.runInTransaction(() => {
-      this.invalidateLaunchArtifactsForTasks(affectedIds, 'task subgraph reset to pending');
-
-      for (const id of affectedIds) {
-        const current = this.stateGetTask(id);
-        if (!current) continue;
-        if (current.config.workflowId) {
-          workflowsToSync.add(current.config.workflowId);
-        }
-
-        const selectedAttempt = this.getSelectedAttempt(current);
-        const shouldReset =
-          forceResetIds.has(id)
-          || current.status !== 'pending'
-          || this.isAttemptLeaseActive(selectedAttempt);
-        this.deferredTaskIds.delete(id);
-        if (!shouldReset) {
-          this.clearQueuedSchedulerEntries(id, current.execution.selectedAttemptId);
-          continue;
-        }
-
-        const changesWithGeneration = this.withBumpedExecutionGenerationAndDiscardedReviewGate(
-          current,
-          resetChanges,
-          'task subgraph reset to pending',
-        );
-        const updated = this.writeResetAndSync(current, kind, changesWithGeneration, { skipWorkflowStatusSync: true });
-        const priorAttemptId = current.execution.selectedAttemptId;
-        this.replaceSelectedAttempt(current, {}, { skipWorkflowStatusSync: true });
-        this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
-        pendingTaskDeltas.push(this.buildUpdateDelta(current, updated, changesWithGeneration));
-
-        this.clearQueuedSchedulerEntries(id, priorAttemptId);
-      }
-
-      for (const workflowId of workflowsToSync) {
-        this.touchWorkflow(workflowId);
-      }
-    });
-
-    for (const delta of pendingTaskDeltas) {
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-    }
-
-    const readyIds = this.stateMachine
-      .getReadyTasks()
-      .map((t) => t.id)
-      .filter((id) => affectedSet.has(id));
-    return { affectedIds, readyIds };
+    return resetSubgraphToPendingImpl(this as unknown as LifecycleHost, rootTaskIds, kind, resetChanges, opts);
   }
 
   /**
@@ -2107,473 +2015,37 @@ export class Orchestrator {
   }
 
   restartTask(taskId: string): TaskState[] {
-    this.logger.warn(
-      '[orchestrator] restartTask is deprecated. Routing to recreateTask. Use retryTask() for lineage-preserving reset or recreateTask() for fresh-lineage reset explicitly.',
-      { taskId },
-    );
-    return this.recreateTask(taskId);
+    return restartTaskImpl(this as unknown as LifecycleHost, taskId);
   }
 
   retryTask(taskId: string): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    const id = task.id;
-
-    // Step 18 (`docs/architecture/task-invalidation-roadmap.md`,
-    // Hard Invariant): cancel any active attempt on this task or its
-    // downstream subgraph BEFORE the reset writes pending state.
-    // Defense-in-depth for direct callers (CommandService.retryTask
-    // wired in Step 17) that bypass `applyInvalidation`'s upstream
-    // cancel; a no-op when invoked through `applyInvalidation`.
-    this.cancelActiveBeforeInvalidation('task', id);
-    let plan = planInvalidation({
-      action: 'retryTask',
-      targetId: id,
-      tasks: this.stateMachine.getAllTasks(),
-    });
-    this.lastInvalidationPlan = plan;
-
-    const prevStatus = task.status;
-    this.logger.info('[orchestrator] retryTask', { taskId: id, previousStatus: prevStatus });
-    if (task.config.isMergeNode) {
-      this.logger.info('[merge-gate-workspace] retryTask before reset', {
-        mergeNode: id,
-        workspacePath: task.execution.workspacePath ?? 'none',
-        note: 'retryTask does not clear workspacePath',
-      });
-      mergeTrace('GATE_WS_RETRY_TASK_MERGE', {
-        taskId: id,
-        workspacePathBefore: task.execution.workspacePath ?? null,
-      });
-    }
-
-    const resetChanges: TaskStateChanges = buildTaskResetChanges('retryTask', {
-      config: { summary: undefined },
-    });
-    const t0 = this.stateGetTask(id)!;
-    this.logger.info('[agent-session-trace] retryTask: before writeAndSync', {
-      taskId: id,
-      agentSessionId: t0.execution.agentSessionId ?? 'null',
-      note: 'reset clears agentSessionId/containerId; branch/workspacePath unchanged',
-    });
-    const { affectedIds } = this.resetSubgraphToPending([id], 'retryTask', resetChanges, {
-      forceResetIds: new Set([id]),
-    });
-    this.lastInvalidationPlan = plan;
-    const afterRt = this.stateGetTask(id)!;
-    this.logger.info('[agent-session-trace] retryTask: after writeAndSync', {
-      taskId: id,
-      agentSessionId: afterRt.execution.agentSessionId ?? 'null',
-    });
-    if (afterRt.config.isMergeNode) {
-      this.logger.info('[merge-gate-workspace] retryTask after reset', {
-        mergeNode: id,
-        workspacePath: afterRt.execution.workspacePath ?? 'none',
-      });
-      mergeTrace('GATE_WS_RETRY_TASK_MERGE_AFTER', {
-        taskId: id,
-        workspacePathAfter: afterRt.execution.workspacePath ?? null,
-      });
-    }
-    if (affectedIds.length > 1) {
-      this.logger.info('[orchestrator] retryTask invalidated downstream tasks', {
-        taskId: id,
-        invalidatedCount: affectedIds.length - 1,
-      });
-    }
-
-    const readyTasks = this.stateMachine.getReadyTasks();
-    const isReady = readyTasks.some((t) => t.id === id);
-    this.logger.info('[orchestrator] retryTask ready check', { taskId: id, ready: isReady });
-    if (isReady) {
-      const started = this.autoStartReadyTasks([id], Orchestrator.EXPEDITED_PRIORITY);
-      if (started.some((t) => t.id === id)) return started;
-
-      const current = this.stateGetTask(id);
-      if (current) {
-        const blocker = this.getExternalDependencyBlocker(current);
-        if (blocker !== undefined) {
-          const blockedChanges: TaskStateChanges = {
-            status: 'blocked',
-            execution: { blockedBy: blocker },
-          };
-          const blockedUpdated = this.writeAndSync(id, blockedChanges);
-          const blockedDelta: TaskDelta = this.buildUpdateDelta(current, blockedUpdated, blockedChanges);
-          this.persistence.logEvent?.(id, 'task.blocked', blockedChanges);
-          this.messageBus.publish(TASK_DELTA_CHANNEL, blockedDelta);
-          return [this.stateGetTask(id)!];
-        }
-      }
-    }
-
-    return [this.stateGetTask(id)!];
+    return retryTaskImpl(this as unknown as LifecycleHost, taskId);
   }
 
-  /**
-   * Incremental retry: reset only failed/stuck tasks to pending, preserve completed.
-   * Merge nodes are always reset (they depend on all leaf tasks).
-   * After reset, startExecution() finds newly-ready tasks via getReadyNodes().
-   */
   retryWorkflow(workflowId: string): TaskState[] {
-    const retryStartMs = Date.now();
-    this.refreshWorkflowFromDb(workflowId);
-    const afterRefreshMs = Date.now();
-
-    let allTasks = this.stateMachine.getAllTasks().filter(
-      (t) => t.config.workflowId === workflowId,
-    );
-    if (allTasks.length === 0) throw new Error(`No tasks found for workflow ${workflowId}`);
-
-    // Step 18 cancel-first invariant: interrupt any active task in
-    // the workflow scope BEFORE the retry reset. Defense-in-depth
-    // for direct callers (CommandService.retryWorkflow wired in
-    // Step 17); a no-op when invoked through `applyInvalidation`.
-    // Re-snapshot tasks afterwards so the retry filter (which
-    // includes 'failed' in `retryStatuses`) re-picks any newly
-    // cancelled tasks for reset to pending.
-    this.cancelActiveBeforeInvalidation('workflow', workflowId);
-    allTasks = this.stateMachine.getAllTasks().filter(
-      (t) => t.config.workflowId === workflowId,
-    );
-
-    const retryStatuses: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
-      'failed',
-      'needs_input',
-      'blocked',
-      'stale',
-      'fixing_with_ai',
-      'awaiting_approval',
-      'review_ready',
-    ]);
-    let plan = planInvalidation({
-      action: 'retryWorkflow',
-      targetId: workflowId,
-      tasks: this.stateMachine.getAllTasks(),
-      retryStatuses,
-    });
-    this.lastInvalidationPlan = plan;
-
-    const resetChanges: TaskStateChanges = buildTaskResetChanges('retryWorkflow', {
-      config: { summary: undefined },
-    });
-
-    const retryRootIds = allTasks
-      .filter((task) => retryStatuses.has(task.status))
-      .map((task) => task.id);
-    const { affectedIds } = this.resetSubgraphToPending(retryRootIds, 'retryWorkflow', resetChanges);
-    plan = withSchedulerEnqueueCandidates(plan, affectedIds);
-    this.lastInvalidationPlan = plan;
-    const afterResetMs = Date.now();
-
-    this.logger.info('[orchestrator] retryWorkflow invalidation', {
-      workflowId,
-      roots: retryRootIds,
-      affected: affectedIds.length,
-    });
-    this.logger.info('[orchestrator] retryWorkflow reset summary', {
-      workflowId,
-      resetCount: affectedIds.length,
-      totalTasks: allTasks.length,
-      rootCount: retryRootIds.length,
-      note: 'preserved completed outside invalidated subgraphs',
-    });
-
-    const readyIds = this.stateMachine
-      .getReadyTasks()
-      .map((t) => t.id)
-      .filter((id) => {
-        const task = this.stateGetTask(id);
-        return !!task
-          && task.config.workflowId === workflowId;
-      });
-    const started = this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
-    const retryEndMs = Date.now();
-    this.logger.info('[orchestrator] retryWorkflow timing', {
-      workflowId,
-      refreshMs: afterRefreshMs - retryStartMs,
-      resetMs: afterResetMs - afterRefreshMs,
-      enqueueDrainMs: retryEndMs - afterResetMs,
-      totalMs: retryEndMs - retryStartMs,
-      started: started.length,
-    });
-    return started;
+    return retryWorkflowImpl(this as unknown as LifecycleHost, workflowId);
   }
 
-  /**
-   * Task-scoped recreate: reset the target task and all downstream dependents
-   * to pending with recreate-style execution clearing, then auto-start newly
-   * ready tasks within that affected subgraph.
-   */
   recreateTask(taskId: string): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-
-    const rootId = task.id;
-
-    // Step 18 cancel-first invariant: interrupt active attempts on
-    // this task / downstream subgraph BEFORE the recreate reset.
-    // Defense-in-depth for direct callers (CommandService.recreateTask
-    // wired in Step 17); a no-op when invoked through `applyInvalidation`.
-    this.cancelActiveBeforeInvalidation('task', rootId);
-    const plan = planInvalidation({
-      action: 'recreateTask',
-      targetId: rootId,
-      tasks: this.stateMachine.getAllTasks(),
-    });
-    this.lastInvalidationPlan = plan;
-    this.logger.info('[orchestrator] recreateTask reset', {
-      taskId: rootId,
-      resetCount: plan.affectedTaskIds.length,
-    });
-    return this.applyRecreateReset(plan, 'task recreation reset');
+    return recreateTaskImpl(this as unknown as LifecycleHost, taskId);
   }
 
-  /**
-   * Shared tail of the recreate-class mutations: apply `RECREATE_RESET_CHANGES`
-   * to every task in `plan.affectedTaskIds`, then auto-start the ones that
-   * become ready.
-   */
   private applyRecreateReset(plan: InvalidationPlan, artifactReason: string): TaskState[] {
-    const toResetIds = plan.affectedTaskIds;
-    const toResetSet = new Set(toResetIds);
-    this.invalidateLaunchArtifactsForTasks(toResetIds, artifactReason);
-
-    for (const id of toResetIds) {
-      const current = this.stateGetTask(id);
-      if (!current) continue;
-      const changesWithGeneration = this.withBumpedExecutionGenerationAndDiscardedReviewGate(
-        current,
-        RECREATE_RESET_CHANGES,
-        artifactReason,
-      );
-      const recreateUpdated = this.writeResetAndSync(current, 'recreate', changesWithGeneration);
-      const priorAttemptId = current.execution.selectedAttemptId;
-      this.replaceSelectedAttempt(current);
-      this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(current, recreateUpdated, changesWithGeneration));
-
-      this.deferredTaskIds.delete(id);
-      this.clearQueuedSchedulerEntries(id, priorAttemptId);
-    }
-
-    const readyIds = this.stateMachine
-      .getReadyTasks()
-      .map((t) => t.id)
-      .filter((id) => toResetSet.has(id));
-    this.lastInvalidationPlan = withSchedulerEnqueueCandidates(plan, readyIds);
-    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+    return applyRecreateResetImpl(this as unknown as LifecycleHost, plan, artifactReason);
   }
 
-  /**
-   * Reset a task's transitive downstream dependents to pending (recreate-style)
-   * and auto-start the ones that become ready, leaving the task itself untouched.
-   * Calling it on a leaf is a no-op.
-   */
   recreateDownstream(taskId: string): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-
-    const rootId = task.id;
-
-    const plan = planInvalidation({
-      action: 'recreateDownstream',
-      targetId: rootId,
-      tasks: this.stateMachine.getAllTasks(),
-    });
-    this.lastInvalidationPlan = plan;
-    const toResetIds = plan.affectedTaskIds;
-
-    if (toResetIds.length === 0) {
-      this.logger.info('[orchestrator] recreateDownstream no-op (leaf)', { taskId: rootId });
-      return [];
-    }
-
-    // Cancel only descendants so the preserved target's active attempt is never interrupted.
-    const descendants = toResetIds
-      .map((id) => this.stateGetTask(id))
-      .filter((t): t is TaskState => !!t);
-    this.cancelActiveCandidates(descendants, 'task');
-
-    this.logger.info('[orchestrator] recreateDownstream reset', {
-      taskId: rootId,
-      resetCount: toResetIds.length,
-    });
-    return this.applyRecreateReset(plan, 'downstream recreation reset');
+    return recreateDownstreamImpl(this as unknown as LifecycleHost, taskId);
   }
 
   private bumpWorkflowGeneration(workflowId: string): void {
-    if (!this.persistence.updateWorkflow) return;
-    if (!this.persistence.loadWorkflow) {
-      return;
-    }
-    const workflow = this.persistence.loadWorkflow(workflowId);
-    const nextGeneration = (workflow?.generation ?? 0) + 1;
-    this.persistence.updateWorkflow(workflowId, { generation: nextGeneration });
-    this.logger.info('[orchestrator] bumped workflow generation for recreate', {
-      workflowId,
-      generation: nextGeneration,
-    });
+    return bumpWorkflowGenerationImpl(this as unknown as LifecycleHost, workflowId);
   }
 
-  /**
-   * Reset ALL tasks in a workflow to pending and auto-start ready ones.
-   * Used when a rebase conflicts and the entire DAG needs to re-execute.
-   */
   recreateWorkflow(workflowId: string): TaskState[] {
-    this.refreshFromDb();
-
-    const allTasks = this.stateMachine.getAllTasks().filter(
-      (t) => t.config.workflowId === workflowId,
-    );
-    if (allTasks.length === 0) throw new Error(`No tasks found for workflow ${workflowId}`);
-
-    // Step 18 cancel-first invariant: interrupt any active task in
-    // the workflow scope BEFORE the recreate reset. Defense-in-depth
-    // for direct callers (CommandService.recreateWorkflow and
-    // recreateWorkflowFromFreshBase wired in Step 17); a no-op when
-    // invoked through `applyInvalidation`.
-    this.cancelActiveBeforeInvalidation('workflow', workflowId);
-    let plan = planInvalidation({
-      action: 'recreateWorkflow',
-      targetId: workflowId,
-      tasks: this.stateMachine.getAllTasks(),
-    });
-    this.lastInvalidationPlan = plan;
-
-    this.bumpWorkflowGeneration(workflowId);
-
-    const resetChanges: TaskStateChanges = buildTaskResetChanges('recreate', {
-      config: { summary: undefined, poolMemberId: undefined },
-    });
-
-    this.logger.info('[orchestrator] recreateWorkflow reset', {
-      workflowId,
-      resetCount: allTasks.length,
-    });
-    this.logger.info(
-      '[agent-session-trace] recreateWorkflow: resetChanges.execution clears agentSessionId/containerId (DB NULL before next run)',
-    );
-    this.invalidateLaunchArtifactsForTasks(
-      allTasks.map((task) => task.id),
-      'workflow recreation reset',
-    );
-    for (const task of allTasks) {
-      const prevSess = task.execution.agentSessionId ?? null;
-      const prevCt = task.execution.containerId ?? null;
-      if (task.config.isMergeNode) {
-        this.logger.info('[merge-gate-workspace] recreateWorkflow', {
-          mergeNode: task.id,
-          workspacePath: task.execution.workspacePath ?? 'NULL',
-          note: 'will clear workspace_path',
-        });
-        mergeTrace('GATE_WS_RESTART_WORKFLOW_MERGE', {
-          taskId: task.id,
-          workspacePathBefore: task.execution.workspacePath ?? null,
-        });
-      }
-      this.logger.info('[orchestrator] recreateWorkflow task reset', {
-        taskId: task.id,
-        previousStatus: task.status,
-        branch: task.execution.branch ?? 'none',
-        commit: task.execution.commit?.slice(0, 7) ?? 'none',
-      });
-      this.logger.info('[agent-session-trace] recreateWorkflow: before writeAndSync', {
-        taskId: task.id,
-        agentSessionId: prevSess ?? 'null',
-        containerId: prevCt ?? 'null',
-      });
-      const changesWithGeneration = this.withBumpedExecutionGenerationAndDiscardedReviewGate(
-        task,
-        resetChanges,
-        'workflow recreation reset',
-      );
-      const after = this.writeResetAndSync(task, 'recreate', changesWithGeneration);
-      const priorAttemptId = task.execution.selectedAttemptId;
-      this.replaceSelectedAttempt(task);
-    this.logger.info('[agent-session-trace] recreateWorkflow: after writeAndSync', {
-      taskId: task.id,
-      agentSessionId: after.execution.agentSessionId ?? 'null',
-      containerId: after.execution.containerId ?? 'null',
-    });
-      const delta: TaskDelta = this.buildUpdateDelta(task, after, changesWithGeneration);
-      this.persistence.logEvent?.(task.id, 'task.pending', changesWithGeneration);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-      this.clearQueuedSchedulerEntries(task.id, priorAttemptId);
-    }
-
-    const readyIds = this.stateMachine
-      .getReadyTasks()
-      .map((t) => t.id)
-      .filter((id) => this.stateGetTask(id)?.config.workflowId === workflowId);
-    plan = withSchedulerEnqueueCandidates(plan, readyIds);
-    this.lastInvalidationPlan = plan;
-    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+    return recreateWorkflowImpl(this as unknown as LifecycleHost, workflowId);
   }
 
-  /**
-   * Workflow-scope **fresh-base** recreate (Step 12 of
-   * `docs/architecture/task-invalidation-roadmap.md`, Decision Table
-   * row "Rebase and retry" + "Repo/base invalidation inconsistency"
-   * in `docs/architecture/task-invalidation-chart.md`).
-   *
-   * This is strictly stronger than `recreateWorkflow`:
-   *
-   *   recreateWorkflow                 — full reset; preserves the
-   *                                      workflow's currently-known
-   *                                      upstream base.
-   *   recreateWorkflowFromFreshBase    — full reset PLUS refreshes
-   *                                      the upstream base (HEAD of
-   *                                      `baseBranch`) before reset.
-   *
-   * The chart's "Repo/base invalidation inconsistency" section called
-   * this distinction out as previously hidden: today the only
-   * primitive carrying the fresh-base semantic is the composite
-   * `rebaseAndRetry()` flow in `packages/app/src/workflow-actions.ts`
-   * (`preparePoolForRebaseRetry → recreateWorkflowFromFreshBase`).
-   * Step 12 promotes the fresh-base step to a
-   * first-class orchestrator method so the three workflow-scope
-   * paths (`retryWorkflow`, `recreateWorkflow`,
-   * `recreateWorkflowFromFreshBase`) are individually testable and
-   * routed through `applyInvalidation` from
-   * `packages/workflow-core/src/invalidation-policy.ts`.
-   *
-   * The orchestrator deliberately does NOT touch git itself: the
-   * `refreshBase` callback (wired by the app layer to
-   * `taskExecutor.preparePoolForRebaseRetry`) is what actually
-   * refreshes the pool mirror and removes managed branches. The
-   * orchestrator only:
-   *
-   *   1. awaits the optional `refreshBase` callback, and
-   *   2. records any returned `commit` in `knownFreshBaseCommits` and
-   *      any returned `branch` in persistence (`baseBranch`) so the
-   *      effect of the refresh is observable from orchestrator state.
-   *   3. delegates the actual reset to `recreateWorkflow` so all
-   *      lineage-discard behavior (workspace path, branch, commit,
-   *      agent session, container, merge gate workspace, etc.) stays
-   *      single-sourced.
-   *
-   * Cancel-first invariant (`docs/architecture/task-invalidation-chart.md`
-   * → "Hard Invariant"): the chart requires every retry/recreate
-   * route to interrupt and cancel any in-flight work in the affected
-   * scope BEFORE authoritative reset. Two layers cooperate:
-   *
-   *   1. `applyInvalidation`'s `cancelInFlight` dep (built by
-   *      `buildCancelInFlight` in
-   *      `packages/app/src/workflow-actions.ts`) calls
-   *      `Orchestrator.cancelWorkflow` and awaits
-   *      `taskExecutor.killActiveExecution` for each running attempt.
-   *   2. `recreateWorkflow` (delegated to below) additionally invokes
-   *      `cancelActiveBeforeInvalidation('workflow', …)` so direct
-   *      callers (`CommandService.recreateWorkflowFromFreshBase`
-   *      wired in Step 17) that bypass `applyInvalidation` still
-   *      observe the invariant. The helper is idempotent — already
-   *      cancelled tasks are skipped, so layer (2) is a no-op when
-   *      layer (1) ran first. See Step 18 of
-   *      `docs/architecture/task-invalidation-roadmap.md`.
-   */
   async recreateWorkflowFromFreshBase(
     workflowId: string,
     options?: {
@@ -2585,29 +2057,10 @@ export class Orchestrator {
     return recreateWorkflowFromFreshBaseImpl(this as unknown as MergeHost, workflowId, options);
   }
 
-  /**
-   * Most recently observed upstream base commit for `workflowId`,
-   * recorded by `recreateWorkflowFromFreshBase` when its `refreshBase`
-   * callback returns a SHA. Returns `undefined` when no fresh-base
-   * recreate has run for the workflow yet.
-   *
-   * This is the orchestrator-side observable for the chart's
-   * `recreateWorkflowFromFreshBase` semantic — see the comment on
-   * `knownFreshBaseCommits` for why this lives on the orchestrator
-   * rather than the executor pool. Tests assert on this getter to
-   * prove the fresh-base step actually advanced.
-   */
   getKnownFreshBaseCommit(workflowId: string): string | undefined {
     return getKnownFreshBaseCommitImpl(this as unknown as MergeHost, workflowId);
   }
 
-  /**
-   * Begin a fix session from an explicit resting state (`failed`,
-   * `review_ready`, or `awaiting_approval`). Records the entry status on the
-   * task so `revertFixSession` — possibly running after a restart, from an
-   * approve/reject surface — restores exactly where the session started.
-   * Refuses to begin while a pending fix is parked awaiting approval.
-   */
   beginFixSession(
     taskId: string,
     opts: { savedError?: string; expectedLineage?: TaskLineageExpectation } = {},
@@ -2615,11 +2068,6 @@ export class Orchestrator {
     return beginFixSessionImpl(this as unknown as MergeHost, taskId, opts);
   }
 
-  /**
-   * Revert a fix session to its recorded entry status. Sessions with no
-   * recorded entry (legacy rows) restore `failed`; a revert with no session
-   * evidence is an idempotent no-op.
-   */
   revertFixSession(
     taskId: string,
     opts: {
@@ -2631,10 +2079,6 @@ export class Orchestrator {
     revertFixSessionImpl(this as unknown as MergeHost, taskId, opts);
   }
 
-  /**
-   * Reclaim a fix session orphaned by owner death: revert it to its entry
-   * status. Driven by the stalled-fix-session watchdog.
-   */
   reclaimStalledFixSession(
     taskId: string,
     opts: { reason: string; expectedLineage?: TaskLineageExpectation },
@@ -2642,38 +2086,11 @@ export class Orchestrator {
     return reclaimStalledFixSessionImpl(this as unknown as MergeHost, taskId, opts);
   }
 
-  /**
-   * Sync dispatch for an edit primitive's post-cancel reset stage.
-   *
-   * Each `editTask*` method shares the same shape: validate, optional
-   * cancel-first when the task is active, persist the new spec, then
-   * apply the post-edit invalidation primitive (`recreateTask` or
-   * `retryTask`) selected by `MUTATION_POLICIES`. Routing the final
-   * dispatch through this helper keeps the action source-of-truth in
-   * the policy table rather than hard-coded literals at each site, so
-   * a chart change (e.g. flipping `command` from `recreateTask` to
-   * `retryTask`) propagates without touching `editTask*` bodies.
-   *
-   * Sync by design: the public `editTask*` API is sync and most
-   * callers (api-server, headless, tests) consume the returned
-   * `TaskState[]` synchronously. The async `applyInvalidation`
-   * pipeline is reserved for the higher-level CommandService /
-   * facade routing where cross-workflow cascade fires.
-   */
   private dispatchPostMutation(
     action: InvalidationAction,
     taskId: string,
   ): TaskState[] {
-    switch (action) {
-      case 'recreateTask':
-        return this.recreateTask(taskId);
-      case 'retryTask':
-        return this.retryTask(taskId);
-      default:
-        throw new Error(
-          `dispatchPostMutation: unsupported action '${action}' for orchestrator edit primitives`,
-        );
-    }
+    return dispatchPostMutationImpl(this as unknown as LifecycleHost, action, taskId);
   }
 
   editTaskCommand(taskId: string, newCommand: string): TaskState[] {
