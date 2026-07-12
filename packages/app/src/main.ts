@@ -87,6 +87,7 @@ import type {
   ActionGraphResponse,
   BundledSkillsInstallMode,
   InAppPlanRequest,
+  InAppPlanningChatStreamEvent,
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
   InAppPlanningResetRequest,
@@ -1201,6 +1202,9 @@ function startHeadlessMode(): void {
         warn: (message) => logger.warn(message, { module: 'planning-chat' }),
         error: (message) => logger.error(message, { module: 'planning-chat' }),
       });
+      const publishPlanningChatStream = (event: InAppPlanningChatStreamEvent): void => {
+        messageBus.publish(Channels.PLANNING_CHAT_STREAM, event);
+      };
       await restorePlanningChatSessions(persistence.listInAppPlanningSessions(), {
         config: invokerConfig,
         workingDir: repoRoot,
@@ -1209,6 +1213,7 @@ function startHeadlessMode(): void {
         loadGeneratedPlan,
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
+        onPlannerOutput: publishPlanningChatStream,
       });
 
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
@@ -1252,6 +1257,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              onPlannerOutput: publishPlanningChatStream,
             });
           }
           case 'invoker:planning-chat-list': {
@@ -1266,6 +1272,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              onPlannerOutput: publishPlanningChatStream,
             });
           }
           case 'invoker:planning-chat-submit': {

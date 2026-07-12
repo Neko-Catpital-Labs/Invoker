@@ -6,6 +6,7 @@ import type {
   InAppPlanningChatRequest,
   InAppPlanningChatResponse,
   InAppPlanningCreateSessionRequest,
+  InAppPlanningChatStreamEvent,
   InAppPlanningCreateSessionResponse,
   InAppPlanningListSessionsResponse,
   InAppPlanningPlanSummary,
@@ -47,6 +48,7 @@ export interface InAppPlannerDeps {
   planningCommandBuilder?: PlanningCommandBuilder;
   conversationRepo?: ConversationRepository;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  onPlannerOutput?: (event: InAppPlanningChatStreamEvent) => void;
 }
 
 export interface InAppPlanningChatSession {
@@ -277,8 +279,9 @@ function formatConversationalPlanningMessage(message: string): string {
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo'>,
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo' | 'onPlannerOutput'>,
   threadTs: string,
+  clientSessionId?: string,
 ): PlanConversationConfig {
   return {
     threadTs,
@@ -294,6 +297,13 @@ function planConversationConfig(
     planningCommandBuilder: deps.planningCommandBuilder,
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
+    onRawPlannerOutput: deps.onPlannerOutput
+      ? (chunk) => deps.onPlannerOutput?.({
+        sessionId: threadTs,
+        ...(clientSessionId ? { clientSessionId } : {}),
+        chunk,
+      })
+      : undefined,
   };
 }
 
@@ -330,7 +340,7 @@ async function createSession(
       tone: 'muted',
       createdAt,
     }],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id)),
+    conversation: new PlanConversation(planConversationConfig(preset, deps, id, request?.clientSessionId)),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 2,
