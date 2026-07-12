@@ -468,6 +468,10 @@ export type InAppPlanningListSessionsResponse = {
   sessions: InAppPlanningSessionSummary[];
 };
 
+export interface InAppPlanningStreamEvent {
+  sessionId: string;
+  chunk: string;
+}
 
 export interface InAppPlanningChatRequest {
   sessionId?: string;
@@ -1188,6 +1192,9 @@ export const IpcEventChannels = {
   },
   'invoker:runtime-status': {} as {
     payload: RuntimeStatus;
+  },
+  'invoker:planning-chat-stream': {} as {
+    payload: InAppPlanningStreamEvent;
   },
 } as const;
 
