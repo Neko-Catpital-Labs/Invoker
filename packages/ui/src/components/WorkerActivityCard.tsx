@@ -96,16 +96,16 @@ export function WorkerActivityCard({
   }, [snapshot, optimisticByKind]);
 
   return (
-    <div data-testid="worker-activity-card">
-      <div className="mb-4">
+    <div data-testid="worker-activity-card" className="flex min-h-0 flex-1 flex-col">
+      <div className="mb-4 shrink-0">
         <h3 className="text-lg font-semibold text-foreground">Worker processes ({snapshot?.workers.length ?? 0})</h3>
         <div className="mt-1 text-sm text-muted-foreground">Process status is separate from queue work. A running process can be idle.</div>
       </div>
 
       {!snapshot ? (
-        <div className="rounded border border-border bg-card/60 px-3 py-2 text-sm text-muted-foreground">Worker status unavailable</div>
+        <div className="shrink-0 rounded border border-border bg-card/60 px-3 py-2 text-sm text-muted-foreground">Worker status unavailable</div>
       ) : (
-        <div className="space-y-3">
+        <div data-testid="worker-process-rows" className="min-h-0 flex-1 space-y-3">
           {snapshot.workers.map((worker) => {
             const copy = getWorkerDisplayCopy(worker.kind);
             const disabledTitle = readOnly ? 'Read-only window' : worker.controlDisabledReason;
