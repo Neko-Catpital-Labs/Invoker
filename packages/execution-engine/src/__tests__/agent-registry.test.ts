@@ -1,7 +1,34 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AgentRegistry } from '../agent-registry.js';
 import { registerBuiltinAgents } from '../agents/index.js';
-import type { ExecutionAgent } from '../agent.js';
+import { assertExecutionModelSupported, type ExecutionAgent } from '../agent.js';
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawnSync: vi.fn(() => ({
+      status: 1,
+      stdout: '',
+      stderr: '',
+      output: [],
+      pid: 0,
+      signal: null,
+    })),
+  };
+});
+
+beforeEach(() => {
+  vi.mocked(spawnSync).mockReset();
+  vi.mocked(spawnSync).mockReturnValue({
+    status: 1,
+    stdout: '',
+    stderr: '',
+    output: [],
+    pid: 0,
+    signal: null,
+  } as any);
+});
 
 function makeExecutionAgent(name: string, opts?: {
   bundledSkillRoot?: string;
@@ -68,6 +95,30 @@ describe('registerBuiltinAgents', () => {
       }),
     ]));
   });
+  it('prefers Codex models discovered from the CLI', () => {
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      status: 0,
+      stdout: JSON.stringify({
+        models: [
+          { slug: 'gpt-5.5', display_name: 'GPT-5.5' },
+          { slug: 'gpt-5.4-mini', display_name: 'GPT-5.4 Mini' },
+          { slug: 'gpt-5.5', display_name: 'Duplicate GPT-5.5' },
+        ],
+      }),
+      stderr: '',
+      output: [],
+      pid: 1,
+      signal: null,
+    } as any);
+
+    const codexAgent = registerBuiltinAgents().getOrThrow('codex');
+
+    expect(codexAgent.supportedModels).toEqual([
+      { id: 'gpt-5.5', label: 'GPT-5.5' },
+      { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+    ]);
+    expect(() => assertExecutionModelSupported(codexAgent, 'gpt-5.5')).not.toThrow();
+  });
 
 
   it('registers cursor, omp, and codex planning agents', () => {
@@ -130,6 +181,29 @@ describe('AgentRegistry', () => {
   it('still throws for real unknown execution agent names', () => {
     expect(() => registry.getOrThrow('cluade')).toThrow(
       'No execution agent registered with name "cluade". Available: [claude, codex]',
+    );
+  });
+  it('accepts versioned OpenAI-style models for codex', () => {
+    const codexAgent = registerBuiltinAgents().getOrThrow('codex');
+    expect(() => assertExecutionModelSupported(codexAgent, 'gpt-5.1-codex-max')).not.toThrow();
+  });
+
+  it('rejects clearly foreign models for codex', () => {
+    const codexAgent = registerBuiltinAgents().getOrThrow('codex');
+    expect(() => assertExecutionModelSupported(codexAgent, 'claude')).toThrow(
+      'Execution model "claude" is not supported for execution agent "codex".',
+    );
+  });
+  it('accepts Claude aliases and versioned Claude model ids', () => {
+    const claudeAgent = registerBuiltinAgents().getOrThrow('claude');
+    expect(() => assertExecutionModelSupported(claudeAgent, 'sonnet')).not.toThrow();
+    expect(() => assertExecutionModelSupported(claudeAgent, 'anthropic/claude-opus-4-8-20260528')).not.toThrow();
+  });
+
+  it('rejects plain claude as an execution model for Claude', () => {
+    const claudeAgent = registerBuiltinAgents().getOrThrow('claude');
+    expect(() => assertExecutionModelSupported(claudeAgent, 'claude')).toThrow(
+      'Execution model "claude" is not supported for execution agent "claude".',
     );
   });
 
