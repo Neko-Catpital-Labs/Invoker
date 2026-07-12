@@ -76,6 +76,16 @@ describe('installWebInvoker', () => {
     expect(cb).toHaveBeenCalledWith(payload);
   });
 
+  it('onPlanningChatStream receives raw planner stream SSE payloads', () => {
+    installWebInvoker({});
+    const cb = vi.fn();
+    window.invoker.onPlanningChatStream(cb as never);
+    const es = FakeEventSource.instances[0];
+    const payload = { sessionId: 'session-1', chunk: 'raw planner text' };
+    es.fire('invoker:planning-chat-stream', payload);
+    expect(cb).toHaveBeenCalledWith(payload);
+  });
+
   it('approve POSTs the approve channel with args', async () => {
     fetchResult = undefined;
     installWebInvoker({});

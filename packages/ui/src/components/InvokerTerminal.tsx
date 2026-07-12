@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
@@ -13,6 +13,11 @@ export interface InvokerTerminalLine {
 }
 
 export type PlanningTerminalMode = 'chat' | 'tmux';
+
+export interface InvokerTerminalPlanningStream {
+  text: string;
+  status: 'streaming' | 'failed';
+}
 
 interface PlanningPresetOptionView {
   key: string;
@@ -45,6 +50,7 @@ interface InvokerTerminalProps {
   presetOptions: PlanningPresetOptionView[];
   draftPlanAvailable: boolean;
   draftPlanSummary?: { name: string; taskCount: number; workflowCount?: number };
+  planningStream?: InvokerTerminalPlanningStream | null;
   submitError?: SubmitErrorView | null;
   readOnly?: boolean;
   expanded?: boolean;
@@ -270,6 +276,7 @@ export function InvokerTerminal({
   presetOptions,
   draftPlanAvailable,
   draftPlanSummary,
+  planningStream,
   submitError,
   readOnly = false,
   expanded = false,
@@ -330,7 +337,7 @@ export function InvokerTerminal({
     if (shouldFollowTranscript) {
       scrollTranscriptToBottom('line_change', lines.length);
     }
-  }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+  }, [lines.length, planningStream?.text, scrollTranscriptToBottom, shouldFollowTranscript]);
 
   useLayoutEffect(() => {
     const pending = pendingInputRef.current;
@@ -441,6 +448,61 @@ export function InvokerTerminal({
     }
   };
 
+  const transcriptContent = useMemo(() => (
+    <>
+      {lines.map((line) => {
+        const toneClass = line.tone === 'error'
+          ? 'text-destructive'
+          : line.tone === 'success'
+            ? 'text-emerald-400'
+            : line.tone === 'muted'
+              ? 'text-muted-foreground'
+              : line.role === 'assistant'
+                ? 'text-foreground'
+                : 'text-muted-foreground';
+        return (
+          <div key={line.id} className="space-y-1">
+            <div className="text-[11px] text-muted-foreground">{rolePrompt(line.role)}</div>
+            {line.reasoning ? (
+              <details
+                data-testid="invoker-terminal-thinking"
+                className="rounded-sm border border-border/60 bg-background/40 px-2 py-1 text-muted-foreground"
+              >
+                <summary className="cursor-pointer select-none text-[11px] text-muted-foreground">
+                  Thinking
+                </summary>
+                <div className="mt-1 whitespace-pre-wrap text-[12px] leading-5 text-muted-foreground">
+                  {line.reasoning}
+                </div>
+              </details>
+            ) : null}
+            <div className={`whitespace-pre-wrap ${toneClass}`}>{line.text}</div>
+          </div>
+        );
+      })}
+      {planningStream && planningStream.text ? (
+        <div
+          data-testid="invoker-terminal-planner-stream"
+          data-state={planningStream.status}
+          className={`rounded-sm border px-3 py-2 ${
+            planningStream.status === 'failed'
+              ? 'border-destructive/50 bg-destructive/10'
+              : 'border-border-strong bg-card/70'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[11px] text-muted-foreground">planner stream ›</div>
+            <div className={`text-[11px] ${planningStream.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>
+              {planningStream.status === 'failed' ? 'failed' : 'live'}
+            </div>
+          </div>
+          <div className={`mt-2 whitespace-pre-wrap ${planningStream.status === 'failed' ? 'text-destructive' : 'text-foreground'}`}>
+            {planningStream.text}
+          </div>
+        </div>
+      ) : null}
+    </>
+  ), [lines, planningStream]);
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex items-center justify-end gap-2 border-b border-border bg-background px-4 py-2.5">
@@ -525,36 +587,7 @@ export function InvokerTerminal({
             onScroll={handleTranscriptScroll}
             className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background px-4 py-4 font-mono text-[13px] leading-6"
           >
-            {lines.map((line) => {
-              const toneClass = line.tone === 'error'
-                ? 'text-destructive'
-                : line.tone === 'success'
-                  ? 'text-emerald-400'
-                  : line.tone === 'muted'
-                    ? 'text-muted-foreground'
-                    : line.role === 'assistant'
-                      ? 'text-foreground'
-                      : 'text-muted-foreground';
-              return (
-                <div key={line.id} className="space-y-1">
-                  <div className="text-[11px] text-muted-foreground">{rolePrompt(line.role)}</div>
-                  {line.reasoning ? (
-                    <details
-                      data-testid="invoker-terminal-thinking"
-                      className="rounded-sm border border-border/60 bg-background/40 px-2 py-1 text-muted-foreground"
-                    >
-                      <summary className="cursor-pointer select-none text-[11px] text-muted-foreground">
-                        Thinking
-                      </summary>
-                      <div className="mt-1 whitespace-pre-wrap text-[12px] leading-5 text-muted-foreground">
-                        {line.reasoning}
-                      </div>
-                    </details>
-                  ) : null}
-                  <div className={`whitespace-pre-wrap ${toneClass}`}>{line.text}</div>
-                </div>
-              );
-            })}
+            {transcriptContent}
           </div>
 
           {submitError && !readOnly && (
