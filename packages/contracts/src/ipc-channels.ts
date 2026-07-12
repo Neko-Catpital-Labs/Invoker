@@ -84,6 +84,7 @@ export type TaskGraphEvent =
       workflows: WorkflowMeta[];
       reason: string;
       streamSequence: number;
+      forced?: boolean;
     };
 
 
