@@ -83,14 +83,14 @@ Branches, merges, conflicts, and pull requests are part of the execution model �
 <tr>
 <td width="50%" valign="top">
 
-### Control cloud and remote agents
+### Control cloud and owner-host workers
 
-Spread work across SSH targets and remote machines you already manage — same actions from desktop, CLI, or Slack.
+Run one owner host with built-in recovery and maintenance workers, and spread task execution across SSH targets you manage — same control plane from desktop, CLI, or Slack.
 
 </td>
 <td width="50%">
 
-<img src="docs/assets/readme/control-cloud-agents.png" alt="Control cloud and remote agents" />
+<img src="docs/assets/readme/control-cloud-agents.png" alt="Control cloud and owner-host workers" />
 
 </td>
 </tr>
@@ -116,7 +116,7 @@ Or grab desktop builds and standalone binaries from [GitHub Releases](https://gi
 - [Contributing](CONTRIBUTING.md)
 - [License](LICENSE)
 
-More: [local macOS release build](docs/local-macos-release-build.md), [remote SSH targets](docs/remote-ssh-targets.md), [Docker executor](docs/docker-executor.md), [web surface](docs/web-surface.md), [product story](docs/invoker-medium-article.md).
+More: [local macOS release build](docs/local-macos-release-build.md), [remote SSH targets and owner-host workers](docs/remote-ssh-targets.md), [Docker executor](docs/docker-executor.md), [web surface](docs/web-surface.md), [product story](docs/invoker-medium-article.md).
 
 ## License
 
