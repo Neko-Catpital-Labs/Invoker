@@ -10,7 +10,7 @@
 import type { SQLiteAdapter, TaskLaunchDispatch } from '@invoker/data-store';
 import type { LaunchOutboxAck } from '@invoker/execution-engine';
 import type { TaskLaunchReadiness, TaskState } from '@invoker/workflow-core';
-import { DISPATCH_MAX_ATTEMPTS, type Logger } from '@invoker/contracts';
+import { DISPATCH_MAX_ATTEMPTS, LAUNCH_STUCK_ABANDON_MS, type Logger } from '@invoker/contracts';
 
 
 export type LaunchDispatcherPersistence = Pick<
@@ -307,6 +307,7 @@ export class LaunchDispatcher {
     const candidates = this.persistence.listAbandonableLaunchDispatchLeases({
       nowIso,
       maxAttempts: this.maxAttempts,
+      maxLaunchAgeMs: LAUNCH_STUCK_ABANDON_MS,
     });
     if (candidates.length === 0) return 0;
     let abandoned = 0;
