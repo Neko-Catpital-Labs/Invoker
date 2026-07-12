@@ -33,6 +33,22 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence carried into PR summaries. */
+export interface PrAuthoringWorkerActionEntry {
+  id?: string;
+  workerKind: string;
+  actionType: string;
+  status: string;
+  taskId?: string;
+  subjectType?: string;
+  subjectId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +62,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Worker-owned action rows that explain what Invoker did around this PR. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -463,6 +481,67 @@ export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactO
   return records;
 }
 
+function actionSortTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.createdAt ?? action.updatedAt ?? action.completedAt ?? '';
+}
+
+function actionDisplayTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.createdAt ?? action.updatedAt ?? action.completedAt ?? 'unknown';
+}
+
+function markdownTableCell(value: string | undefined): string {
+  const normalized = (value ?? '').trim();
+  if (!normalized) return '-';
+  return normalized
+    .replaceAll('|', '\\|')
+    .replace(/\r?\n/g, '<br>');
+}
+
+function actionTargetLabel(action: PrAuthoringWorkerActionEntry): string {
+  if (action.taskId) return action.taskId;
+  if (action.subjectType && action.subjectId) return `${action.subjectType}:${action.subjectId}`;
+  return '-';
+}
+
+function actionSummary(action: PrAuthoringWorkerActionEntry): string {
+  if (action.summary?.trim()) return action.summary.trim();
+  if (action.reason?.trim()) return `Reason: ${action.reason.trim()}`;
+  return '-';
+}
+
+function renderPipelineSection(actions: readonly PrAuthoringWorkerActionEntry[]): string[] {
+  const lines: string[] = [];
+  lines.push('## Pipeline');
+  lines.push('');
+
+  if (actions.length === 0) {
+    lines.push('- No worker actions recorded.');
+    lines.push('');
+    return lines;
+  }
+
+  const ordered = [...actions].sort((a, b) => {
+    const byTime = actionSortTime(a).localeCompare(actionSortTime(b));
+    if (byTime !== 0) return byTime;
+    return (a.id ?? `${a.workerKind}:${a.actionType}`).localeCompare(b.id ?? `${b.workerKind}:${b.actionType}`);
+  });
+
+  lines.push('| Time | Target | Worker | Action | Status | Summary |');
+  lines.push('| --- | --- | --- | --- | --- | --- |');
+  for (const action of ordered) {
+    lines.push([
+      markdownTableCell(actionDisplayTime(action)),
+      markdownTableCell(actionTargetLabel(action)),
+      markdownTableCell(action.workerKind),
+      markdownTableCell(action.actionType),
+      markdownTableCell(action.status),
+      markdownTableCell(actionSummary(action)),
+    ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+  }
+  lines.push('');
+  return lines;
+}
+
 /**
  * Build a deterministic canonical PR body from structured context.
  * Used as the no-AI escape hatch when all agent-authored attempts fail.
@@ -473,6 +552,7 @@ export function buildCanonicalPrBody(args: {
   structuredContext?: PrAuthoringContext;
 }): string {
   const lines: string[] = [];
+  const ctx = args.structuredContext;
 
   // ## Summary
   lines.push('## Summary');
@@ -484,13 +564,16 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  if (ctx?.workerActions) {
+    lines.push(...renderPipelineSection(ctx.workerActions));
+  }
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
   lines.push('<details>');
   lines.push('<summary>Test Plan</summary>');
   lines.push('');
-  const ctx = args.structuredContext;
   const commandTasks = ctx?.tasks.filter((t) => t.command && t.status === 'completed') ?? [];
   if (commandTasks.length > 0) {
     for (const t of commandTasks) {
@@ -592,6 +675,11 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    if (ctx.workerActions !== undefined) {
+      lines.push('Worker actions for the ## Pipeline section, already in canonical table shape:');
+      lines.push(...renderPipelineSection(ctx.workerActions));
     }
 
     if (ctx.visualProofMarkdown) {
