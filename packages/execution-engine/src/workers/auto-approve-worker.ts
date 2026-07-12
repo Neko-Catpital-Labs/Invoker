@@ -24,6 +24,7 @@ type AutoApproveActionStatus = WorkerActionStatus;
 
 export interface AutoApproveWorkerStore {
   listWorkflows(): ReadonlyArray<{ id: string }>;
+  loadWorkflow?(workflowId: string): { mergeMode?: string | null; onFinish?: string | null } | undefined;
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   listWorkflowMutationIntents?(
@@ -136,14 +137,27 @@ function candidateFromTask(task: TaskState): AutoApproveCandidate | undefined {
   return { ...ref, source: 'scan' };
 }
 
+function shouldAutoApproveReviewReadyTask(
+  options: Pick<AutoApproveWorkerPolicyOptions, 'store'>,
+  task: TaskState,
+): boolean {
+  if (!task.config.isMergeNode) return false;
+  const workflowId = workflowIdForTask(task);
+  if (!workflowId) return false;
+  const workflow = options.store.loadWorkflow?.(workflowId);
+  if (!workflow) return false;
+  return (workflow.mergeMode ?? 'manual') === 'automatic' && (workflow.onFinish ?? 'none') === 'merge';
+}
+
 export function listAutoApproveScanCandidates(
   options: Pick<AutoApproveWorkerPolicyOptions, 'store'>,
 ): AutoApproveCandidate[] {
   const candidates: AutoApproveCandidate[] = [];
   for (const workflow of options.store.listWorkflows()) {
     for (const task of options.store.loadTasks(workflow.id)) {
-      if (task.status !== 'awaiting_approval') continue;
-      if (task.execution.pendingFixError === undefined) continue;
+      const awaitingApprovalFix = task.status === 'awaiting_approval' && task.execution.pendingFixError !== undefined;
+      const reviewReadyAutomaticGate = task.status === 'review_ready' && shouldAutoApproveReviewReadyTask(options, task);
+      if (!awaitingApprovalFix && !reviewReadyAutomaticGate) continue;
       const candidate = candidateFromTask(task);
       if (candidate) candidates.push(candidate);
     }
@@ -360,16 +374,19 @@ function validateAutoApproveCandidate(
   }
 
   if (latest.status === 'review_ready') {
-    skipAutoApproveCandidate(options, candidate, 'review-ready-ambiguous');
-    return undefined;
-  }
-  if (latest.status !== 'awaiting_approval') {
-    skipAutoApproveCandidate(options, candidate, 'status-changed', { status: latest.status });
-    return undefined;
-  }
-  if (latest.execution.pendingFixError === undefined) {
-    skipAutoApproveCandidate(options, candidate, 'no-pending-fix');
-    return undefined;
+    if (!shouldAutoApproveReviewReadyTask(options, latest)) {
+      skipAutoApproveCandidate(options, candidate, 'review-ready-ambiguous');
+      return undefined;
+    }
+  } else {
+    if (latest.status !== 'awaiting_approval') {
+      skipAutoApproveCandidate(options, candidate, 'status-changed', { status: latest.status });
+      return undefined;
+    }
+    if (latest.execution.pendingFixError === undefined) {
+      skipAutoApproveCandidate(options, candidate, 'no-pending-fix');
+      return undefined;
+    }
   }
 
   if (hasAlreadyRecordedAction(options, candidate)) return undefined;

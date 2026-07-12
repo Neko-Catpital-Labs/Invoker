@@ -71,11 +71,17 @@ function wakeup(overrides: Partial<RecoveryWorkerWakeupHint> = {}): RecoveryWork
   };
 }
 
-function makeStore(tasks: TaskState[], openIntents: WorkflowMutationIntent[] = []) {
+function makeStore(
+  tasks: TaskState[],
+  openIntents: WorkflowMutationIntent[] = [],
+  workflows: Array<{ id: string; mergeMode?: string | null; onFinish?: string | null }> = [{ id: 'wf-1' }],
+) {
+  const workflowMap = new Map(workflows.map((workflow) => [workflow.id, workflow]));
   const actions = new Map<string, WorkerActionRecord>();
   const writes: WorkerActionWrite[] = [];
   const store: AutoApproveWorkerStore = {
-    listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+    listWorkflows: vi.fn(() => workflows.map(({ id }) => ({ id }))),
+    loadWorkflow: vi.fn((workflowId: string) => workflowMap.get(workflowId)),
     loadTasks: vi.fn(() => tasks),
     loadTask: vi.fn((taskId: string) => tasks.find((candidate) => candidate.id === taskId)),
     listWorkflowMutationIntents: vi.fn(() => openIntents),
@@ -140,6 +146,38 @@ describe('autoapprove worker', () => {
 
     expect(collectValidatedAutoApproveCandidates({ store, submitter: { submit: vi.fn() }, logger, enabled: true }, [candidate()])).toEqual([]);
     expect(writes[0]).toMatchObject({ status: 'skipped', summary: 'Skipped AI fix approval: review-ready-ambiguous' });
+  });
+  it('scans review-ready automatic merge gates', () => {
+    const reviewReadyGate = task({
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: { pendingFixError: undefined },
+    });
+    const { store } = makeStore([reviewReadyGate], [], [{ id: 'wf-1', mergeMode: 'automatic', onFinish: 'merge' }]);
+
+    expect(listAutoApproveScanCandidates({ store })).toEqual([
+      expect.objectContaining({ taskId: 'wf-1/task-1', workflowId: 'wf-1', generation: 1, taskStateVersion: 4 }),
+    ]);
+  });
+
+  it('submits review-ready automatic merge gates for approval', async () => {
+    const reviewReadyGate = task({
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: { pendingFixError: undefined },
+    });
+    const { store, writes } = makeStore([reviewReadyGate], [], [{ id: 'wf-1', mergeMode: 'automatic', onFinish: 'merge' }]);
+    const submitter = { submit: vi.fn(() => 42) };
+
+    await createAutoApproveTick({ store, submitter, logger, enabled: true })({
+      identity: { kind: 'autoapprove', instanceId: 'test' },
+      reason: 'manual',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    expect(submitter.submit).toHaveBeenCalledWith('wf-1', 'normal', 'invoker:approve', ['wf-1/task-1']);
+    expect(writes[0]).toMatchObject({ status: 'queued', summary: 'Queued AI fix approval' });
   });
 
   it('skips stale workflow, generation, task-state version, and attempt snapshots', () => {
