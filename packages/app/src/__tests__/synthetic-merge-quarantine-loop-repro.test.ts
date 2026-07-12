@@ -7,7 +7,7 @@
  * the selected workflow's mini-DAG renders blank until the user reloads.
  *
  * Owner-side root cause (current production code at
- * packages/app/src/main.ts:2896–2904):
+ * packages/app/src/window/renderer-task-feed.ts:141–157):
  *
  *   const { quarantined } = applyDelta(d, lastKnownTaskStates);
  *   for (const taskId of quarantined) {
@@ -72,7 +72,7 @@ function makeMergeNode(workflowId: string, taskStateVersion: number): TaskState 
 
 /**
  * Faithful mirror of the production main-process recovery loop
- * (packages/app/src/main.ts:2896–2906): apply the delta, then for each
+ * (packages/app/src/window/renderer-task-feed.ts:141–159): apply the delta, then for each
  * quarantined id, run the shared `recoverQuarantinedTask` helper and
  * collect every renderer delta it returns.
  *
