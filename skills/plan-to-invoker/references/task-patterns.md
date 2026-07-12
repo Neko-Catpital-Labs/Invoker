@@ -101,10 +101,12 @@ requires them. Split optional cleanup, special cases, behavior-plus-rename,
 default-flip-plus-deletion, benchmark-before-fix proof, refactor-before-fields,
 and product-code-plus-policy/docs follow-ups.
 
-Decomposition refactors split one move per workflow: create one module, move
-ONE cohesive unit (function/class/phase/command family), re-point references,
-keep the public surface stable; the next unit is the next workflow. A file that
-yields six helper modules is six chained workflows, not one "extract phases"
+Decomposition refactors split one refactor per workflow: create one module, move
+exactly ONE top-level symbol (one function, or one class with its methods — not
+method-by-method), re-point references in the same workflow, keep the public
+surface stable; the next symbol is the next workflow. Move a private helper the
+symbol depends on only when splitting them would break the build. A file that
+yields six extracted symbols is six chained workflows, not one "extract phases"
 task. See the **Decomposition & Extraction Refactors** section of
 `../review-compression/SKILL.md`.
 

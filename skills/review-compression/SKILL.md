@@ -95,15 +95,17 @@ Split changes when they introduce a different claim:
 - benchmark/repro/proof harness plus the fix it is meant to justify
 - product code plus planning/policy/docs updates
 - broad mechanical moves too large to inspect comfortably
-- multiple distinct extractions from one file (one move per slice)
+- multiple distinct extractions from one file (one top-level symbol move per slice)
 
 ## Decomposition & Extraction Refactors
 
-When you split a large file by extracting cohesive units (functions, classes,
-phases, command families) into new modules, treat each extraction as its own
-slice: create the target file, move ONE cohesive unit, re-point its references,
-and keep the public surface (facade, exports, dispatcher) stable. Do not batch
-several distinct extractions into one diff.
+When you split a large file by extracting units into new modules, do one
+refactor at a time: one PR moves exactly ONE top-level symbol. A function move
+is its own PR. A class moves as one PR with its methods riding along — one
+top-level symbol per PR, not method-by-method. Create the target file, move
+that one symbol, re-point its references in the same PR so behavior is
+preserved, and keep the public surface (facade, exports, dispatcher) stable. Do
+not batch several distinct extractions into one diff.
 
 Each move is a separate review claim. Every extraction has its own seam and its
 own "is behavior preserved?" question, so the reviewer checks one move at a
@@ -115,13 +117,20 @@ many files." That rule is one transformation applied to N call sites (one
 claim). Decomposition is N distinct transformations (N claims): different code,
 different seams, different risk.
 
+Dependency-cluster exception: if the moved symbol depends on a private helper in
+the same file that is not part of the public surface, and moving the symbol
+alone would break the build or force a throwaway re-export shim, move that
+minimal helper cluster together in the same PR. Keep the cluster as small as the
+build requires — this is still one cohesive move, not a licence to batch
+unrelated extractions.
+
 Slice shape for one move:
 
 - `Review claim:` "Move <unit> out of <file> into <new module>, behavior
   unchanged."
-- create the new module and move exactly one cohesive unit into it
-- update imports/facade so the public surface is byte-for-byte identical to
-  callers
+- create the new module and move exactly one top-level symbol into it
+- update imports/facade in the same PR so the public surface is byte-for-byte
+  identical to callers
 - keep directly affected tests with the move; they prove behavior is preserved
 - no behavior change in a move slice (Fowler's "two hats": never refactor and
   change behavior in the same diff)
