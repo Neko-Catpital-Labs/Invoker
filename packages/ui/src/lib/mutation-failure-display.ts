@@ -29,10 +29,21 @@ export function mutationFailureBannerMessage(
   return summarizeBannerMessage(event.message);
 }
 
-function summarizeBannerMessage(message: string): string {
+export function mutationFailureDetailMessage(
+  event: WorkflowMutationFailedEvent,
+): string {
+  return cleanMutationFailureMessage(event.message);
+}
+
+function cleanMutationFailureMessage(message: string): string {
   let text = message.replace(/^Error:\s*/, '').trim();
   const stackIdx = text.indexOf('\n    at ');
   if (stackIdx >= 0) text = text.slice(0, stackIdx).trim();
+  return text;
+}
+
+function summarizeBannerMessage(message: string): string {
+  const text = cleanMutationFailureMessage(message);
   const firstLine = text.split('\n').find((line) => line.trim().length > 0)?.trim() ?? text;
   if (firstLine.length <= 160) return firstLine;
   return `${firstLine.slice(0, 159).trimEnd()}…`;

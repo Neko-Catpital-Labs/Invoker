@@ -848,4 +848,73 @@ describe('WorkflowInspector', () => {
       delete (window as unknown as { invoker?: unknown }).invoker;
     }
   });
+
+  it('renders a mutation failure detail panel for the selected task', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        mutationFailure={{
+          intentId: 1,
+          workflowId: 'wf-1',
+          channel: 'invoker:approve',
+          taskId: 'task-1',
+          message: 'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"',
+          failedAt: '2026-07-08T10:00:00.000Z',
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const detail = screen.getByTestId('inspector-mutation-failure');
+    expect(detail).toHaveTextContent('Approve failed');
+    expect(detail).toHaveTextContent('cannot run codex');
+    expect(detail).toHaveTextContent('missing execution harness "codex"');
+    expect(detail).toHaveTextContent('invoker:approve');
+  });
+
+  it('renders a headless fix mutation failure with the command label', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed' })}
+        mutationFailure={{
+          intentId: 2,
+          workflowId: 'wf-1',
+          channel: 'headless.exec',
+          headlessCommand: 'fix',
+          taskId: 'task-1',
+          message: 'SSH remote script failed (exit=1, phase=remote_agent_fix)\nSTDOUT:\n{"type":"error"}',
+          failedAt: '2026-07-08T10:00:00.000Z',
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const detail = screen.getByTestId('inspector-mutation-failure');
+    expect(detail).toHaveTextContent('Fix failed');
+    expect(detail).toHaveTextContent('SSH remote script failed');
+    expect(detail).toHaveTextContent('headless.exec · fix');
+  });
+
+  it('hides the mutation failure detail panel when no failure is provided', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'failed' })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('inspector-mutation-failure')).not.toBeInTheDocument();
+  });
 });

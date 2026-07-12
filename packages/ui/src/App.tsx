@@ -15,11 +15,7 @@ import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppP
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
-import {
-  mutationFailureBannerMessage,
-  mutationFailureTitle,
-  shouldShowMutationFailureBanner,
-} from './lib/mutation-failure-display.js';
+
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
 import { useWorkerStatus } from './hooks/useWorkerStatus.js';
@@ -598,7 +594,7 @@ export function App() {
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
-  const [mutationFailure, setMutationFailure] = useState<WorkflowMutationFailedEvent | null>(null);
+  const [mutationFailureByTaskId, setMutationFailureByTaskId] = useState<Map<string, WorkflowMutationFailedEvent>>(new Map());
   const [installSkillsPending, setInstallSkillsPending] = useState(false);
   const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
   const [updateCliPending, setUpdateCliPending] = useState(false);
@@ -1109,31 +1105,33 @@ export function App() {
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
-      // Task/workflow mutation failures belong in the task panel, not the top banner.
-      if (!shouldShowMutationFailureBanner(event)) {
-        if (event.taskId) {
-          // Set selection from the event ids directly so the inspector opens even
-          // if the task map has not hydrated this id yet.
-          setSelectedTaskId(event.taskId);
-          setWorkflowSelectionDismissed(false);
-          if (event.workflowId) {
-            setSelectedWorkflowId(event.workflowId);
-          }
-          setContextMenu(null);
-          setWorkflowContextMenu(null);
-          focusKeyboardRegion('taskGraph');
-        } else if (event.workflowId) {
+      // Mutation failures are surfaced through the Needs Attention workflow/task
+      // browser instead of a global top banner. Persist the latest failure per
+      // task so the inspector can always show it when the operator navigates back.
+      if (event.taskId) {
+        setMutationFailureByTaskId((prev) => new Map(prev).set(event.taskId!, event));
+        setSelectedTaskId(event.taskId);
+        setWorkflowSelectionDismissed(false);
+        if (event.workflowId) {
           setSelectedWorkflowId(event.workflowId);
-          setSelectedTaskId(null);
-          setWorkflowSelectionDismissed(false);
-          setContextMenu(null);
-          setWorkflowContextMenu(null);
-          focusKeyboardRegion('workflowGraph');
         }
-        setMutationFailure(null);
-        return;
+        setSidebarSurface('attention');
+        setInspectorCollapsed(false);
+        setInspectorManualOpen(true);
+        setContextMenu(null);
+        setWorkflowContextMenu(null);
+        focusKeyboardRegion('taskGraph');
+      } else if (event.workflowId) {
+        setSelectedWorkflowId(event.workflowId);
+        setSelectedTaskId(null);
+        setWorkflowSelectionDismissed(false);
+        setSidebarSurface('attention');
+        setInspectorCollapsed(false);
+        setInspectorManualOpen(true);
+        setContextMenu(null);
+        setWorkflowContextMenu(null);
+        focusKeyboardRegion('workflowGraph');
       }
-      setMutationFailure(event);
     });
     return () => { unsubscribe?.(); };
   }, [focusKeyboardRegion]);
@@ -3150,37 +3148,6 @@ export function App() {
           This window can browse workflows, but it cannot make changes until the write owner is available.
         </div>
       ) : null}
-      {mutationFailure && (
-        <div
-          role="alert"
-          aria-live="assertive"
-          data-testid="workflow-mutation-failed-banner"
-          className="px-4 py-3 border-b border-amber-700 bg-amber-950/60 flex items-start justify-between gap-4"
-        >
-          <div className="text-sm text-amber-100 min-w-0">
-            <div className="font-semibold text-amber-50">
-              {mutationFailureTitle(mutationFailure)}
-            </div>
-            <div
-              data-testid="workflow-mutation-failed-message"
-              className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100/90"
-            >
-              {mutationFailureBannerMessage(mutationFailure)}
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <Button
-              size="sm"
-              variant="ghost"
-              data-testid="workflow-mutation-failed-dismiss"
-              className="text-amber-200 hover:text-white"
-              onClick={() => setMutationFailure(null)}
-            >
-              Dismiss
-            </Button>
-          </div>
-        </div>
-      )}
 
 
       {/* Main content */}
@@ -3247,6 +3214,7 @@ export function App() {
                   workflowTasks={displayedSelectedWorkflowGraph?.tasks ?? miniDagTasks}
                   reviewGate={selectedWorkflow ? reviewGateByWorkflowId[selectedWorkflow.id] ?? null : null}
                   actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
+                  mutationFailure={selectedTaskId ? mutationFailureByTaskId.get(selectedTaskId) ?? null : null}
                   collapsed={effectiveInspectorCollapsed}
                   advancedExpanded={advancedMetadataExpanded}
                   remoteTargets={remoteTargets}
