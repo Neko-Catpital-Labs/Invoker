@@ -3724,6 +3724,16 @@ function createEmbeddedTerminalBackendFromConfig(
         });
         return results;
       });
+      messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
+        const payload = req as GuiMutationPayload;
+        const handler = guiMutationHandlers.get(payload.channel);
+        if (!handler) {
+          throw new Error(`No GUI mutation handler registered for channel: ${payload.channel}`);
+        }
+        const mutationArgs = Array.isArray(payload.args) ? payload.args : [];
+        logger.info(`headless.gui-mutation received channel=${payload.channel} mode=gui`, { module: 'ipc-delegate' });
+        return handler(...mutationArgs);
+      });
       logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
       recordStartupMark('owner-ipc-ready');
     }
