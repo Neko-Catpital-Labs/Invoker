@@ -322,6 +322,35 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
   });
 
+  it('wraps long planning session rail titles and previews instead of one-line truncating them', async () => {
+    const title = 'Plan planning session rail wrapping for verbose previews';
+    const reply = 'Use a preview that is long enough to wrap across multiple rail lines while preserving the fixed planning rail width and remaining scannable.';
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply,
+      draftPlanAvailable: false,
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText(title);
+
+    const list = screen.getByTestId('planning-session-list');
+    await waitFor(() => {
+      expect(within(list).getByText(title)).toBeInTheDocument();
+      expect(within(list).getByText(reply)).toBeInTheDocument();
+    });
+
+    const railTitle = within(list).getByText(title);
+    const railPreview = within(list).getByText(reply);
+    expect(railTitle).not.toHaveClass('truncate');
+    expect(railTitle).toHaveClass('line-clamp-2', 'break-words');
+    expect(railPreview).not.toHaveClass('truncate');
+    expect(railPreview).toHaveClass('line-clamp-3', 'break-words');
+  });
+
   it('keeps a new planning chat editable while another session is working', async () => {
     let resolveFirstSend: ((value: any) => void) | null = null;
     mock.api.planningChatSend = vi.fn((request: any) => {
