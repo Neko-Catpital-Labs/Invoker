@@ -203,7 +203,16 @@ export function editTaskAgentImpl(host: TaskEditHost, taskId: string, agentName:
     host.cancelTask(taskId);
   }
 
-  const agentChanges: TaskStateChanges = { config: { executionAgent: agentName } };
+  const normalizedAgent = agentName.trim();
+  const preservedExecutionModel = task.config.executionAgent?.trim() === normalizedAgent
+    ? task.config.executionModel
+    : undefined;
+  const agentChanges: TaskStateChanges = {
+    config: {
+      executionAgent: agentName,
+      executionModel: preservedExecutionModel,
+    },
+  };
   const agentBefore = host.stateGetTask(taskId)!;
   const agentUpdated = host.writeAndSync(taskId, agentChanges);
   const agentDelta: TaskDelta = host.buildUpdateDelta(agentBefore, agentUpdated, agentChanges);

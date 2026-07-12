@@ -11,7 +11,7 @@ import { planManagedWorktree } from './managed-worktree-controller.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import type { AgentRegistry } from './agent-registry.js';
-import { DEFAULT_EXECUTION_AGENT } from './agent.js';
+import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
@@ -423,8 +423,9 @@ ${runProvisionSection}stop_bootstrap_heartbeat
       bench('SshExecutor.payload.built', { command: true });
     } else if (request.actionType === 'ai_task') {
       if (this.agentRegistry) {
-        const agentName = request.inputs.executionAgent ?? 'claude';
+        const agentName = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
         const agent = this.agentRegistry.getOrThrow(agentName);
+        assertExecutionModelSupported(agent, request.inputs.executionModel);
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         agentSessionId = spec.sessionId;

@@ -5,7 +5,7 @@ import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec, Unsubsc
 import { bashPreserveOrReset, bashMergeUpstreams, bashFetchNodeRemotes, parsePreserveResult, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
-import { DEFAULT_EXECUTION_AGENT } from './agent.js';
+import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { checkStaleness } from './git-staleness-detector.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
 import { childProcessHasExited, terminateChildProcessGroup } from './process-utils.js';
@@ -926,6 +926,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       if (opts?.agentRegistry) {
         const agentName = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
         const agent = opts.agentRegistry.getOrThrow(agentName);
+        assertExecutionModelSupported(agent, request.inputs.executionModel);
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };

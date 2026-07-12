@@ -133,6 +133,7 @@ import type { TaskOutputData } from './types.js';
 import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
+  resolveAutoFixExecutionModel,
   resolveConfigFileState,
   resolveDefaultTaskExecutionSettings,
   resolveEmbeddedTerminalBackendConfig,
@@ -235,7 +236,7 @@ import {
   isDispatchableLaunch,
 } from './global-topup.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
-import { evaluateExecutingStall, taskNeedsExecutingStallCheck } from './executing-stall.js';
+import { evaluateExecutingStall } from './executing-stall.js';
 
 
 import {
@@ -371,7 +372,7 @@ function buildRegisteredOwnerWorkerDeps(
       defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
       attemptLedger: autoFixAttemptLedger,
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
-      getAutoFixExecutionModel: () => invokerConfig.defaultExecutionModel,
+      getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
     },
     requeue: {
       stallRequeueRetries: invokerConfig.stallRequeueRetries,
@@ -3267,7 +3268,7 @@ function createEmbeddedTerminalBackendFromConfig(
               persistence,
               logger,
             });
-            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows, true);
+            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows);
           },
           deleteWorkflow: performDeleteWorkflow,
           detachWorkflow: performDetachWorkflow,
@@ -3331,7 +3332,7 @@ function createEmbeddedTerminalBackendFromConfig(
                 let task = loadedTask;
                 const now = new Date();
                 const previousHeartbeat = parseExecutionDate(task.execution.lastHeartbeatAt);
-                const selectedAttempt = taskNeedsExecutingStallCheck(task) && task.execution.selectedAttemptId
+                const selectedAttempt = task.execution.selectedAttemptId
                   ? persistence.loadAttempt?.(task.execution.selectedAttemptId)
                   : undefined;
                 const leaseExpiresAt = parseExecutionDate(selectedAttempt?.leaseExpiresAt);
@@ -3723,16 +3724,6 @@ function createEmbeddedTerminalBackendFromConfig(
           module: 'ipc-delegate',
         });
         return results;
-      });
-      messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
-        const payload = req as GuiMutationPayload;
-        const handler = guiMutationHandlers.get(payload.channel);
-        if (!handler) {
-          throw new Error(`No GUI mutation handler registered for channel: ${payload.channel}`);
-        }
-        const mutationArgs = Array.isArray(payload.args) ? payload.args : [];
-        logger.info(`headless.gui-mutation received channel=${payload.channel} mode=gui`, { module: 'ipc-delegate' });
-        return handler(...mutationArgs);
       });
       logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
       recordStartupMark('owner-ipc-ready');
@@ -4178,7 +4169,6 @@ function createEmbeddedTerminalBackendFromConfig(
         ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
         snapshot.tasks,
         snapshot.workflows,
-        true,
       );
       recordStartupDuration('refresh-task-graph.return', startedAtMs, {
         taskCount: snapshot.tasks.length,
