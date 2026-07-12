@@ -78,6 +78,8 @@ export function createReactFlowMock() {
             <div
               key={node.id}
               data-testid={`rf__node-${node.id}`}
+              data-x={(node as { position?: { x?: number } }).position?.x}
+              data-y={(node as { position?: { y?: number } }).position?.y}
               className="react-flow__node"
               onClick={(e) => onNodeClick?.(e, node)}
               onContextMenu={(e) => onNodeContextMenu?.(e, node)}
