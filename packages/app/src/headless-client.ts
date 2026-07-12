@@ -27,6 +27,7 @@ import {
   isStandaloneCapable,
 } from './owner-endpoint.js';
 import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
+import { resolveWorkerControlMutation } from './worker-control-delegation.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -200,6 +201,32 @@ async function delegateGenericReadQuery(
   }
 
   throw new Error('Live owner is present but did not serve cli-query');
+}
+
+async function delegateWorkerControl(
+  args: string[],
+  bus: MessageBus,
+  refreshMessageBus?: () => Promise<MessageBus>,
+): Promise<boolean> {
+  const mutation = resolveWorkerControlMutation(args);
+  if (!mutation) return false;
+
+  let messageBus = bus;
+  let owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
+  if (!owner && refreshMessageBus) {
+    messageBus = await refreshMessageBus();
+    owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
+  }
+  if (!owner) {
+    throw new Error(`No running Invoker owner found to ${mutation.action} the "${mutation.kind}" worker. Start the app first.`);
+  }
+
+  const result = await messageBus.request('headless.gui-mutation', {
+    channel: mutation.channel,
+    args: [mutation.kind],
+  });
+  process.stdout.write(`[headless] worker ${mutation.action} "${mutation.kind}" accepted by owner: ${JSON.stringify(result)}\n`);
+  return true;
 }
 
 function shouldBootstrapStandaloneReadQuery(
@@ -454,6 +481,11 @@ export async function runHeadlessClientCommand(
   const { args, waitForApproval, noTrack } = parseArgs(argv);
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
+
+  if (!internalOwnerServe && await delegateWorkerControl(args, deps.messageBus, deps.refreshMessageBus)) {
+    const exitCode = process.exitCode;
+    return typeof exitCode === 'number' ? exitCode : 0;
+  }
 
   if (!internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
