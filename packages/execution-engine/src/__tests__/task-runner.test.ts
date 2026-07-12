@@ -12,6 +12,7 @@ import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody } from '../pr-authoring.js';
 import type { PrAuthoringContext } from '../pr-authoring.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 /**
  * Creates a mock executor that auto-completes on start().
@@ -231,6 +232,19 @@ describe('TaskRunner', () => {
       outputs: { exitCode: 0 },
     });
     await done;
+  });
+  it('rejects incompatible fix models before spawning the agent', async () => {
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: { getDefault: vi.fn(), get: vi.fn(), getAll: vi.fn(() => []) } as any,
+      executionAgentRegistry: registerBuiltinAgents(),
+      cwd: '/tmp',
+    });
+
+    expect(() => runner.spawnAgentFix('Fix the bug', '/tmp', 'codex', 'claude')).toThrow(
+      'Execution model "claude" is not supported for execution agent "codex".',
+    );
   });
 
   it('sends attemptId and executionGeneration in work requests and preserves them in responses', async () => {
