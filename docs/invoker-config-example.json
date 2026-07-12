@@ -16,13 +16,13 @@
       "comment": "DockerExecutor configuration"
     },
     "ssh": {
-      "comment": "SshExecutor uses per-target settings from remoteTargets"
+      "comment": "SshExecutor runs task work on SSH targets; owner-host automation stays in built-in workers"
     }
   },
 
   "remoteTargets": {
     "staging-server": {
-      "comment": "Managed SSH target configuration for remote execution",
+      "comment": "Managed SSH execution target for task work; not a background worker host",
       "host": "192.168.1.100",
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_staging",
@@ -34,7 +34,7 @@
       "remoteHeartbeatIntervalSeconds": 30
     },
     "build-server-b": {
-      "comment": "Second SSH target for running different tasks on a different host",
+      "comment": "Second managed SSH execution target for task work",
       "host": "192.168.1.101",
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_build_b",
@@ -49,7 +49,7 @@
 
   "executionPools": {
     "mixed-local-ssh": {
-      "comment": "Pool routes tasks across mixed SSH/local members with shared queue/drain semantics",
+      "comment": "Pool routes task execution across mixed SSH/local members with shared queue/drain semantics",
       "members": [
         { "type": "ssh", "id": "staging-server" },
         { "type": "ssh", "id": "build-server-b" },
@@ -59,7 +59,7 @@
       "maxConcurrentTasksPerMember": 1
     },
     "pnpm-ssh": {
-      "comment": "Pool for pnpm commands that should run only on SSH machines",
+      "comment": "Pool for pnpm task commands that should run only on SSH execution targets",
       "members": [
         { "type": "ssh", "id": "staging-server" },
         { "type": "ssh", "id": "build-server-b" }
@@ -94,14 +94,23 @@
   "defaultRepoUrl": "git@github.com:acme/web.git",
 
   "autoFixRetries": 3,
+  "autoFixAgent": "codex",
   "autoApproveAIFixes": true,
   "autoFixCi": false,
+  "e2eAutoFixEnabled": false,
+  "e2eAutoFixIntervalMs": 43200000,
+  "prMaintenance": {
+    "comment": "Owner-host built-in PR-maintenance workers. Enable on exactly one owner process; no separate host scheduler is required.",
+    "enabled": true,
+    "intervalMs": 300000
+  },
 
   "webToken": "change-me-to-a-long-random-secret",
   "webHost": "127.0.0.1",
   "webPort": 4200,
 
   "notes": {
+    "owner_host_workers": "Run recovery and maintenance from the owner process (desktop owner or headless owner-serve). Built-in workers are the supported operator path; external host schedulers should not be configured.",
     "web_surface": "webToken enables the browser UI + Slack live status card surfaces. Env vars INVOKER_WEB_TOKEN / INVOKER_WEB_HOST / INVOKER_WEB_PORT override these. Set webHost to 0.0.0.0 to reach it from another machine (e.g. the DigitalOcean host); open http://<host>:<webPort>/?token=<webToken>.",
     "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
     "config_locations": [
@@ -111,7 +120,7 @@
     "runner_kinds": [
       "worktree - Git worktree isolation (default)",
       "docker - Docker container execution",
-      "ssh - Remote SSH execution"
+      "ssh - Remote SSH task execution"
     ]
   }
 }

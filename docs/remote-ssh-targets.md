@@ -1,18 +1,18 @@
-# Remote SSH Targets
+# Remote SSH Targets and Owner-Host Workers
 
-Execute Invoker tasks on remote machines via SSH key-based authentication.
+Run Invoker task execution on remote machines via SSH, while operator automation runs inside the single Invoker owner process.
 
 ## Overview
 
 The SSH executor (`runnerKind: ssh`) runs task commands on remote hosts over SSH. Authentication is exclusively key-based — no password auth or `sshpass` dependency is required.
 
-Each remote target is defined in the Invoker config with a host, user, and path to an SSH private key. Tasks reference targets by ID.
+Remote targets are execution substrates only. Recovery, PR maintenance, CI-failure repair, disk-headroom checks, and workflow resume automation are built-in owner-host workers. Run them from the owner process; do not configure a separate host scheduler against the workflow database.
 
 ## Configuration
 
-Add remote targets to `~/.invoker/config.json`.
+Add remote execution targets and owner-host worker settings to `~/.invoker/config.json`.
 
-If you want to use a repo-specific config file, launch Invoker with `INVOKER_REPO_CONFIG_PATH=/path/to/config.json`.
+If you want to use a repo-specific config file, launch the owner with `INVOKER_REPO_CONFIG_PATH=/path/to/config.json`.
 
 ```json
 {
@@ -36,11 +36,18 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "provisionCommand": "pnpm install --frozen-lockfile",
       "remoteHeartbeatIntervalSeconds": 30
     }
+  },
+  "autoFixRetries": 3,
+  "autoFixAgent": "codex",
+  "autoFixCi": true,
+  "prMaintenance": {
+    "enabled": true,
+    "intervalMs": 300000
   }
 }
 ```
 
-### Fields
+### Remote target fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -52,6 +59,27 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
 | `provisionCommand` | string | no | Command run after worktree creation in managed mode |
 | `remoteHeartbeatIntervalSeconds` | number | no | Interval (seconds) for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
+
+### Owner-host worker fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `autoFixRetries` | number | no | Per-task retry budget consumed by the built-in auto-fix worker; `0` disables task auto-fix |
+| `autoFixAgent` | string | no | Preferred agent for built-in auto-fix submissions |
+| `autoFixCi` | boolean | no | Enables the built-in CI-failure worker to submit fixes for failed review-gate checks |
+| `prMaintenance.enabled` | boolean | no | Enables built-in PR-maintenance workers on the owner host |
+| `prMaintenance.intervalMs` | number | no | Poll cadence for built-in PR-maintenance workers |
+
+Only one owner process should enable owner-host workers for a shared workflow database. Use the Workers tab or `./run.sh --headless worker status --output text` to inspect worker ownership and recent decisions.
+
+## Owner-Host Worker Setup
+
+1. Start exactly one writable owner: the desktop app, or a headless owner such as `./run.sh --headless owner-serve`.
+2. Put recovery and maintenance settings in that owner's Invoker config.
+3. Let the owner auto-start built-in workers, or start/stop them from the Workers tab. Headless `worker` commands use the same worker implementations for explicit operator scans.
+4. Configure `remoteTargets` only for task execution capacity. SSH targets do not own recovery or PR-maintenance decisions.
+
+This is the supported owner-host path. The owner owns SQLite writes, workers read durable state through the owner process, and worker actions are recorded for status/audit queries.
 
 ## Multiple SSH Targets
 
@@ -115,7 +143,7 @@ Both fields are required for SSH tasks. The executor validates at runtime that t
 2. When `TaskRunner.selectExecutor()` sees `runnerKind: ssh`, it looks up the `poolMemberId` in the `remoteTargets` config map.
 3. An `SshExecutor` instance is created with the target's connection details.
 4. The runner spawns: `ssh -i <keyPath> -p <port> -o StrictHostKeyChecking=accept-new -o BatchMode=yes user@host <command>`
-5. For `claude` action types, the Claude CLI command is shell-quoted and executed remotely.
+5. Built-in workers run separately inside the owner process and submit normal owner commands when recovery or maintenance is needed.
 
 ### SSH options
 
