@@ -1,33 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  mutationFailureBannerMessage,
-  mutationFailureTitle,
-  shouldShowMutationFailureBanner,
-} from '../lib/mutation-failure-display.js';
-
-describe('shouldShowMutationFailureBanner', () => {
-  it('hides the banner for task-scoped failures', () => {
-    expect(shouldShowMutationFailureBanner({
-      intentId: 1,
-      workflowId: 'wf-1',
-      channel: 'headless.exec',
-      headlessCommand: 'fix',
-      taskId: 'wf-1/task-alpha',
-      message: 'SSH remote script failed',
-      failedAt: '2026-07-09T00:00:00.000Z',
-    })).toBe(false);
-  });
-
-  it('hides the banner for workflow-scoped failures', () => {
-    expect(shouldShowMutationFailureBanner({
-      intentId: 1,
-      workflowId: 'wf-1',
-      channel: 'invoker:recreate',
-      message: 'recreate failed',
-      failedAt: '2026-07-09T00:00:00.000Z',
-    })).toBe(false);
-  });
-});
+import { mutationFailureTitle } from '../lib/mutation-failure-display.js';
 
 describe('mutationFailureTitle', () => {
   it('maps headless fix failures to a friendly title', () => {
@@ -40,16 +12,24 @@ describe('mutationFailureTitle', () => {
       failedAt: '2026-07-09T00:00:00.000Z',
     })).toBe('Fix failed');
   });
-});
 
-describe('mutationFailureBannerMessage', () => {
-  it('keeps only a short first-line summary', () => {
-    expect(mutationFailureBannerMessage({
+  it('maps approve channel failures to a friendly title', () => {
+    expect(mutationFailureTitle({
       intentId: 1,
-      workflowId: '',
-      channel: 'unknown',
-      message: 'SSH remote script failed\nSTDOUT:\n{"type":"error"}',
+      workflowId: 'wf-1',
+      channel: 'invoker:approve',
+      message: 'approve failed',
       failedAt: '2026-07-09T00:00:00.000Z',
-    })).toBe('SSH remote script failed');
+    })).toBe('Approve failed');
+  });
+
+  it('falls back to the channel name for unknown channels', () => {
+    expect(mutationFailureTitle({
+      intentId: 1,
+      workflowId: 'wf-1',
+      channel: 'unknown-channel',
+      message: 'unknown failure',
+      failedAt: '2026-07-09T00:00:00.000Z',
+    })).toBe('Mutation failed (unknown-channel)');
   });
 });

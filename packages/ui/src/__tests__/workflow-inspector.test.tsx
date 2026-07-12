@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import type { WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { WorkflowInspector } from '../components/WorkflowInspector.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
 
@@ -847,5 +848,85 @@ describe('WorkflowInspector', () => {
     } finally {
       delete (window as unknown as { invoker?: unknown }).invoker;
     }
+  });
+
+  it('renders a persistent mutation failure detail for the selected task', () => {
+    const mutationFailure: WorkflowMutationFailedEvent = {
+      intentId: 42,
+      workflowId: 'wf-1',
+      channel: 'invoker:approve',
+      taskId: 'task-1',
+      message: 'Error: SSH target "remote" cannot run codex: missing execution harness "codex"',
+      failedAt: '2026-07-08T10:00:00.000Z',
+    };
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        mutationFailure={mutationFailure}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const panel = screen.getByTestId('inspector-mutation-failure');
+    expect(panel).toHaveTextContent('Approve failed');
+    expect(panel).toHaveTextContent('Error: SSH target "remote" cannot run codex');
+  });
+
+  it('does not render mutation failure detail when it belongs to a different task', () => {
+    const mutationFailure: WorkflowMutationFailedEvent = {
+      intentId: 42,
+      workflowId: 'wf-1',
+      channel: 'invoker:approve',
+      taskId: 'other-task',
+      message: 'approve failed',
+      failedAt: '2026-07-08T10:00:00.000Z',
+    };
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        mutationFailure={mutationFailure}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('inspector-mutation-failure')).not.toBeInTheDocument();
+  });
+
+  it('calls onDismissMutationFailure when the mutation failure dismiss button is clicked', () => {
+    const onDismiss = vi.fn();
+    const mutationFailure: WorkflowMutationFailedEvent = {
+      intentId: 42,
+      workflowId: 'wf-1',
+      channel: 'invoker:fix-with-agent',
+      taskId: 'task-1',
+      message: 'fix failed',
+      failedAt: '2026-07-08T10:00:00.000Z',
+    };
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        mutationFailure={mutationFailure}
+        collapsed={false}
+        advancedExpanded={false}
+        onDismissMutationFailure={onDismiss}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('inspector-mutation-failure-dismiss'));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });
