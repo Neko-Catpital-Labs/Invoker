@@ -55,9 +55,22 @@ function replaceWorkflowMapPreservingTaskBackedEntries(
   return next;
 }
 
+function workflowHasBackingTask(
+  tasks: Map<string, TaskState>,
+  workflowId: string,
+): boolean {
+  for (const task of tasks.values()) {
+    if (task.config.workflowId === workflowId) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function applyWorkflowRollupPatches(
   previous: Map<string, WorkflowMeta>,
   patches: readonly WorkflowRollupPatch[],
+  tasks: Map<string, TaskState>,
 ): Map<string, WorkflowMeta> {
   if (patches.length === 0) {
     return previous;
@@ -65,8 +78,9 @@ function applyWorkflowRollupPatches(
   const next = new Map(previous);
   for (const patch of patches) {
     if (patch.removed) {
-      // Safety invariant: drop, never patch — patching resurrects a ghost node.
-      next.delete(patch.workflowId);
+      if (!workflowHasBackingTask(tasks, patch.workflowId)) {
+        next.delete(patch.workflowId);
+      }
       continue;
     }
     const existing = next.get(patch.workflowId);
@@ -132,6 +146,8 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
   const reportedStartupSnapshotRef = useRef(false);
   const uiTaskGraphStreamWatermarkRef = useRef<number>(bootstrapState?.streamSequence ?? 0);
   const isResyncInFlightRef = useRef<boolean>(false);
+  const workflowMetadataRefreshInFlightRef = useRef<boolean>(false);
+  const workflowMetadataRefreshPendingRef = useRef<boolean>(false);
 
   const invalidateStartupSnapshot = useCallback(() => {
     startupSnapshotGenerationRef.current += 1;
@@ -186,24 +202,47 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
   }, []);
   const refreshWorkflowMetadata = useCallback((): Promise<void> => {
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
-    const requestedAt = performance.now();
-    const request = window.invoker.listWorkflows().then((wfList) => {
-      setWorkflows((previous) => {
-        const nextWorkflows = replaceWorkflowMapPreservingTaskBackedEntries(
-          previous,
-          wfList,
-          tasksRef.current,
-        );
-        workflowsRef.current = nextWorkflows;
-        return nextWorkflows;
-      });
-      void window.invoker.reportUiPerf?.('useTasks_workflow_metadata_refresh', {
-        workflowCount: wfList.length,
-        requestDurationMs: performance.now() - requestedAt,
-        jsonSizeBytes: new Blob([JSON.stringify(wfList)]).size,
-      });
-    });
-    return request.then(() => undefined);
+    const invoker = window.invoker;
+    if (workflowMetadataRefreshInFlightRef.current) {
+      workflowMetadataRefreshPendingRef.current = true;
+      return Promise.resolve();
+    }
+    const runOnce = (): Promise<void> => {
+      workflowMetadataRefreshInFlightRef.current = true;
+      const requestedAt = performance.now();
+      return invoker
+        .listWorkflows()
+        .then((wfList) => {
+          setWorkflows((previous) => {
+            const nextWorkflows = replaceWorkflowMapPreservingTaskBackedEntries(
+              previous,
+              wfList,
+              tasksRef.current,
+            );
+            workflowsRef.current = nextWorkflows;
+            return nextWorkflows;
+          });
+          void invoker.reportUiPerf?.('useTasks_workflow_metadata_refresh', {
+            workflowCount: wfList.length,
+            requestDurationMs: performance.now() - requestedAt,
+            jsonSizeBytes: new Blob([JSON.stringify(wfList)]).size,
+          });
+        })
+        .catch((error: unknown) => {
+          void invoker.reportUiPerf?.('useTasks_workflow_metadata_refresh_error', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .then(() => {
+          workflowMetadataRefreshInFlightRef.current = false;
+          if (workflowMetadataRefreshPendingRef.current) {
+            workflowMetadataRefreshPendingRef.current = false;
+            return runOnce();
+          }
+          return undefined;
+        });
+    };
+    return runOnce();
   }, []);
   const refreshTaskGraph = useCallback((): Promise<void> => {
     if (typeof window === 'undefined' || !window.invoker) return Promise.resolve();
@@ -307,24 +346,31 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
               );
             }
           }
-          if (
-            delta.type === 'created' &&
-            delta.task?.config.workflowId &&
-            !nextWorkflows.has(delta.task.config.workflowId)
-          ) {
-            shouldRefreshWorkflows = true;
-          }
           if (!hasAppliedTaskDelta) {
             nextTasks = new Map(nextTasks);
             hasAppliedTaskDelta = true;
           }
           applyDeltaInPlace(nextTasks, delta);
           for (const patch of event.workflowRollups) {
-            if (patch.removed && nextWorkflows.has(patch.workflowId)) {
+            if (
+              patch.removed &&
+              nextWorkflows.has(patch.workflowId) &&
+              !workflowHasBackingTask(nextTasks, patch.workflowId)
+            ) {
               removedWorkflowIds.push(patch.workflowId);
             }
           }
-          nextWorkflows = applyWorkflowRollupPatches(nextWorkflows, event.workflowRollups);
+          nextWorkflows = applyWorkflowRollupPatches(nextWorkflows, event.workflowRollups, nextTasks);
+        }
+
+        if (!shouldRefreshWorkflows) {
+          for (const task of nextTasks.values()) {
+            const workflowId = task.config.workflowId;
+            if (workflowId && !nextWorkflows.has(workflowId)) {
+              shouldRefreshWorkflows = true;
+              break;
+            }
+          }
         }
 
         const dt = performance.now() - t0;
@@ -353,7 +399,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       if (event.type === 'snapshot') {
         const snapshotStreamSequence = event.streamSequence;
         const currentStreamSequence = uiTaskGraphStreamWatermarkRef.current;
-        if (snapshotStreamSequence < currentStreamSequence) {
+        if (snapshotStreamSequence < currentStreamSequence && !event.forced) {
           window.invoker.reportUiPerf?.('ui_task_graph_stale_snapshot_ignored', {
             current: currentStreamSequence,
             snapshot: snapshotStreamSequence,
