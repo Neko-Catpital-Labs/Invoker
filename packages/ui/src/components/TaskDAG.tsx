@@ -166,6 +166,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const initFitFrameRef = useRef(0);
   const nodesRef = useRef<typeof nodes>([]);
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
+  const lastLayoutRef = useRef<TaskGraphLayout | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const onInitHandler = useCallback(() => {
     initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
@@ -266,6 +267,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
 
     void layoutTaskGraph(layoutTasks, layoutEdges).then((result) => {
       if (!stale) {
+        lastLayoutRef.current = result;
         setLayoutState({ key: rawGraph.layoutKey, result });
       }
     });
@@ -279,7 +281,22 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     if (layoutState && layoutHasAllTasks(layoutState.result, rawGraph.taskArray)) {
       return layoutState.result;
     }
-    return rawGraph.fallbackLayout;
+    const priorPositions = layoutState?.result.positions ?? lastLayoutRef.current?.positions;
+    if (!priorPositions) {
+      return rawGraph.fallbackLayout;
+    }
+    const positions = new Map<string, { x: number; y: number }>();
+    let usedFallback = false;
+    for (const task of rawGraph.taskArray) {
+      const prior = priorPositions.get(task.id);
+      if (prior) {
+        positions.set(task.id, prior);
+      } else {
+        positions.set(task.id, rawGraph.fallbackLayout.positions.get(task.id) ?? { x: 0, y: 0 });
+        usedFallback = true;
+      }
+    }
+    return { positions, edgePoints: new Map(), usedFallback };
   }, [layoutState, rawGraph.fallbackLayout, rawGraph.taskArray]);
 
   const emptyEdgePoints = useMemo(() => new Map<string, { x: number; y: number }[]>(), []);

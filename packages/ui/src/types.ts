@@ -208,6 +208,7 @@ export type TaskGraphEvent =
       readonly workflows: readonly WorkflowMeta[];
       readonly reason: string;
       readonly streamSequence: number;
+      readonly forced?: boolean;
     };
 
 
