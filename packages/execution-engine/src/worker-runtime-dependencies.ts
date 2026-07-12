@@ -13,6 +13,8 @@ import type {
   AutoApproveWorkerConfig,
 } from './workers/auto-approve-worker.js';
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
+import type { MergeGateProvider } from './merge-gate-provider.js';
+import type { PrSummaryRefreshWorkerConfig } from './workers/pr-summary-refresh-worker.js';
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
@@ -35,12 +37,16 @@ export interface WorkerRuntimeDependencies {
   messageBus?: MessageBus;
   /** Review-gate polling surface owned by the task runner. */
   reviewGate?: PrStatusReviewGate;
+  /** Provider IO used by PR body refresh workers. */
+  mergeGateProvider?: MergeGateProvider;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
   /** Requeue worker tuning (stall requeue budget / backoff). */
   requeue?: RequeueWorkerConfig;
   /** PR-maintenance shell worker launch configuration. */
   prMaintenance?: PrMaintenanceWorkerConfig;
+  /** PR body summary refresh worker configuration. */
+  prSummaryRefresh?: PrSummaryRefreshWorkerConfig;
   /** Disk-headroom worker configuration (local/remote paths and thresholds). */
   diskHeadroom?: DiskHeadroomWorkerConfig;
   /** Auto-approval tuning for worker-owned AI fix approvals. */

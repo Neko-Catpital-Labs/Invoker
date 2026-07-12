@@ -265,6 +265,30 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
   return lines.join('\n');
 }
 
+export function formatRecentWorkerActions(actions: WorkerActionSummary[]): string {
+  if (actions.length === 0) {
+    return `${DIM}No recent worker actions.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Recent worker actions${RESET}`);
+  for (const action of actions) {
+    const id = escapeTerminalText(action.id);
+    const workerKind = escapeTerminalText(action.workerKind);
+    const actionType = escapeTerminalText(action.actionType);
+    const target = action.taskId
+      ? ` task=${escapeTerminalText(action.taskId)}`
+      : ` ${escapeTerminalText(action.subjectType)}=${escapeTerminalText(action.subjectId)}`;
+    const workflow = action.workflowId ? ` workflow=${escapeTerminalText(action.workflowId)}` : '';
+    const summary = action.summary ? ` — ${escapeTerminalText(action.summary)}` : '';
+    lines.push(
+      `  ${BOLD}${id}${RESET} [${action.status}] ${workerKind}/${actionType}` +
+        `${workflow}${target}${summary}`,
+    );
+  }
+  return lines.join('\n');
+}
+
 /**
  * Format queue status showing concurrency and running/queued tasks.
  *
