@@ -1,9 +1,9 @@
 /**
  * Integration test: workflow-mutation-failed handling in <App />.
  *
- * Task-scoped and workflow-scoped mutation failures must not open the top
- * banner. Task failures select the task so the right-hand panel can show the
- * error.
+ * Task-scoped and workflow-scoped mutation failures are surfaced through the
+ * existing Needs Attention / workflow browser instead of a global top banner.
+ * The selected task's inspector shows the failure details.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -55,17 +55,18 @@ describe('Workflow mutation failed banner', () => {
     });
   }
 
-  it('does not show the banner for task-scoped approve failures and opens the task instead', async () => {
+  it('does not show the banner for task-scoped approve failures and opens Needs Attention', async () => {
     render(<App />);
     await settleTasks();
 
+    const message = 'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"';
     act(() => {
       mock.fireWorkflowMutationFailed({
         intentId: 42,
         workflowId: 'wf-1',
         channel: 'invoker:approve',
         taskId: 'wf-1/verify-worker-summary-surface',
-        message: 'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"',
+        message,
         failedAt: '2026-07-08T10:00:00.000Z',
       });
     });
@@ -76,12 +77,22 @@ describe('Workflow mutation failed banner', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Verify worker summary surface');
     });
+    await waitFor(() => {
+      const rail = screen.getByTestId('browser-rail');
+      expect(rail).toHaveTextContent('Needs Attention');
+    });
+    await waitFor(() => {
+      const panel = screen.getByTestId('inspector-mutation-failure');
+      expect(panel).toHaveTextContent('Approve failed');
+      expect(panel).toHaveTextContent(message);
+    });
   });
 
-  it('does not show the banner for headless fix failures', async () => {
+  it('does not show the banner for headless fix failures and opens Needs Attention', async () => {
     render(<App />);
     await settleTasks();
 
+    const message = 'SSH remote script failed (exit=1, phase=remote_agent_fix)\nSTDOUT:\n{"type":"thread.started"}\n{"type":"error","message":"model unsupported"}';
     act(() => {
       mock.fireWorkflowMutationFailed({
         intentId: 46,
@@ -89,7 +100,7 @@ describe('Workflow mutation failed banner', () => {
         channel: 'headless.exec',
         headlessCommand: 'fix',
         taskId: 'wf-1/verify-worker-summary-surface',
-        message: 'SSH remote script failed (exit=1, phase=remote_agent_fix)\nSTDOUT:\n{"type":"thread.started"}\n{"type":"error","message":"model unsupported"}',
+        message,
         failedAt: '2026-07-08T10:00:00.000Z',
       });
     });
@@ -100,9 +111,19 @@ describe('Workflow mutation failed banner', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Verify worker summary surface');
     });
+    await waitFor(() => {
+      const rail = screen.getByTestId('browser-rail');
+      expect(rail).toHaveTextContent('Needs Attention');
+    });
+    await waitFor(() => {
+      const panel = screen.getByTestId('inspector-mutation-failure');
+      expect(panel).toHaveTextContent('Fix failed');
+      expect(panel).toHaveTextContent('SSH remote script failed (exit=1, phase=remote_agent_fix)');
+      expect(panel).toHaveTextContent('"type":"error","message":"model unsupported"');
+    });
   });
 
-  it('does not show the banner for workflow-scoped failures', async () => {
+  it('does not show the banner for workflow-scoped failures and opens the workflow browser', async () => {
     render(<App />);
     await settleTasks();
 
@@ -118,6 +139,11 @@ describe('Workflow mutation failed banner', () => {
 
     await waitFor(() => {
       expect(screen.queryByTestId('workflow-mutation-failed-banner')).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      const rail = screen.getByTestId('browser-rail');
+      expect(rail).toHaveTextContent('Workflows');
+      expect(rail).toHaveTextContent('Local test plan');
     });
   });
 });

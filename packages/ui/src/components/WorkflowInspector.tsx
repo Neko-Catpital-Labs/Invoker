@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
+import { mutationFailureTitle } from '../lib/mutation-failure-display.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import { subscribeVisibilityAwarePoll } from '../hooks/visibilityAwarePoll.js';
 import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption } from '@invoker/contracts';
@@ -143,6 +145,7 @@ interface WorkflowInspectorProps {
   executionHarnesses?: ExecutionHarnessOption[];
   executionDefaults?: ExecutionDefaults | null;
   actionNode?: ActionGraphNode | null;
+  mutationFailure?: WorkflowMutationFailedEvent | null;
   collapsed: boolean;
   advancedExpanded: boolean;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
@@ -157,6 +160,7 @@ interface WorkflowInspectorProps {
   onSetMergeMode?: (workflowId: string, mergeMode: MergeMode) => Promise<void>;
   onToggleCollapsed: () => void;
   onToggleAdvanced: () => void;
+  onDismissMutationFailure?: () => void;
 }
 
 function formatStatus(value: string | undefined): string {
@@ -250,6 +254,7 @@ export function WorkflowInspector({
   executionHarnesses,
   executionDefaults,
   actionNode,
+  mutationFailure,
   collapsed,
   advancedExpanded,
   onEditPool,
@@ -263,6 +268,7 @@ export function WorkflowInspector({
   onSetMergeMode,
   onToggleCollapsed,
   onToggleAdvanced,
+  onDismissMutationFailure,
 }: WorkflowInspectorProps): JSX.Element {
   const [isEditingPrompt, setIsEditingPrompt] = useState(false);
   const [editPromptValue, setEditPromptValue] = useState('');
@@ -522,6 +528,31 @@ export function WorkflowInspector({
               >
                 {isFixApproval ? 'Reject Fix' : task.config.isMergeNode ? 'Reject Merge' : 'Reject'}
               </button>
+            </div>
+          )}
+          {mutationFailure && mutationFailure.taskId === task?.id && (
+            <div
+              data-testid="inspector-mutation-failure"
+              className="mt-3 rounded border border-amber-500/40 bg-amber-950/40 p-2"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="text-[11px] uppercase tracking-wide text-amber-200">
+                  {mutationFailureTitle(mutationFailure)}
+                </h3>
+                {onDismissMutationFailure && (
+                  <button
+                    type="button"
+                    onClick={onDismissMutationFailure}
+                    data-testid="inspector-mutation-failure-dismiss"
+                    className="text-[10px] text-amber-200 hover:text-amber-100"
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </div>
+              <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100">
+                {mutationFailure.message}
+              </pre>
             </div>
           )}
         </section>
