@@ -283,6 +283,8 @@ export function formatWorkerDecisions(actions: WorkerActionSummary[]): string {
 export function formatQueueStatus(status: {
   maxConcurrency: number;
   runningCount: number;
+  activeExecutionCount: number;
+  launchingCount: number;
   running: Array<{ taskId: string; description: string }>;
   queued: Array<{ taskId: string; priority: number; description: string }>;
 }): string {
@@ -290,12 +292,11 @@ export function formatQueueStatus(status: {
 
   // Concurrency header
   lines.push(
-    `${BOLD}Concurrency:${RESET} ${status.runningCount} / ${status.maxConcurrency} running`,
+    `${BOLD}Concurrency:${RESET} running=${status.activeExecutionCount} launching=${status.launchingCount} slots=${status.runningCount}/${status.maxConcurrency} queued=${status.queued.length}`,
   );
   lines.push('');
 
-  // Running section
-  lines.push(`${BOLD}${YELLOW}Running (${status.running.length}):${RESET}`);
+  lines.push(`${BOLD}${YELLOW}Active slots (${status.running.length}):${RESET}`);
   if (status.running.length === 0) {
     lines.push(`${DIM}  (none)${RESET}`);
   } else {
