@@ -3672,6 +3672,8 @@ export class Orchestrator {
   getQueueStatus(options?: { refresh?: boolean }): {
     maxConcurrency: number;
     runningCount: number;
+    activeExecutionCount: number;
+    launchingCount: number;
     running: Array<{ taskId: string; attemptId?: string; description: string }>;
     queued: Array<{ taskId: string; priority: number; description: string }>;
   } {
@@ -3720,9 +3722,14 @@ export class Orchestrator {
       })
       .sort((a, b) => (b.priority - a.priority) || (a.createdAt - b.createdAt));
 
+    const activeExecutionCount = activeAttempts.filter(({ task }) =>
+      task.status === 'running' || task.status === 'fixing_with_ai',
+    ).length;
     return {
       maxConcurrency: this.maxConcurrency,
       runningCount: activeAttempts.length,
+      activeExecutionCount,
+      launchingCount: activeAttempts.length - activeExecutionCount,
       running: activeAttempts.map(({ task, attemptId }) => ({
         taskId: task.id,
         attemptId,
