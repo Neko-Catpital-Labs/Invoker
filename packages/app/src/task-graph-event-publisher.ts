@@ -10,7 +10,7 @@ type SnapshotTaskStates = Extract<TaskGraphEvent, { type: 'snapshot' }>['tasks']
 
 export interface TaskGraphEventPublisher {
   publishDelta(delta: TaskDelta, workflowRollups: readonly WorkflowRollupPatch[]): void;
-  publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[]): void;
+  publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[], forced?: boolean): void;
 }
 
 export interface CreateTaskGraphEventPublisherOptions {
@@ -77,13 +77,14 @@ export function createTaskGraphEventPublisher(
         workflowRollups: [...workflowRollups],
       });
     },
-    publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[]): void {
+    publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[], forced?: boolean): void {
       publishEvent({
         type: 'snapshot',
         tasks: tasks as SnapshotTaskStates,
         workflows,
         reason,
         streamSequence: options.getStreamSequence(),
+        ...(forced ? { forced: true } : {}),
       });
     },
   };
