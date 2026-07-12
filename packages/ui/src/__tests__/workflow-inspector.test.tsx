@@ -848,4 +848,54 @@ describe('WorkflowInspector', () => {
       delete (window as unknown as { invoker?: unknown }).invoker;
     }
   });
+
+  it('renders a persistent mutation failure detail surface for the selected task', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        mutationFailure={{
+          intentId: 42,
+          workflowId: 'wf-1',
+          channel: 'invoker:approve',
+          taskId: 'task-1',
+          message: 'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"',
+          failedAt: '2026-07-08T10:00:00.000Z',
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const detail = screen.getByTestId('mutation-failure-detail');
+    expect(detail).toHaveTextContent('Approve failed');
+    expect(detail).toHaveTextContent('missing execution harness "codex"');
+    expect(detail).toHaveTextContent('invoker:approve');
+  });
+
+  it('renders a workflow-scoped mutation failure detail when no task is selected', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={null}
+        mutationFailure={{
+          intentId: 47,
+          workflowId: 'wf-1',
+          channel: 'invoker:recreate',
+          message: 'recreate failed',
+          failedAt: '2026-07-08T10:00:00.000Z',
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const detail = screen.getByTestId('mutation-failure-detail');
+    expect(detail).toHaveTextContent('Mutation failed (invoker:recreate)');
+    expect(detail).toHaveTextContent('recreate failed');
+  });
 });

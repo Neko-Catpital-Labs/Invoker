@@ -3,7 +3,8 @@ import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMe
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import { subscribeVisibilityAwarePoll } from '../hooks/visibilityAwarePoll.js';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import { mutationFailureTitle } from '../lib/mutation-failure-display.js';
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
 type TaskLogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -143,6 +144,7 @@ interface WorkflowInspectorProps {
   executionHarnesses?: ExecutionHarnessOption[];
   executionDefaults?: ExecutionDefaults | null;
   actionNode?: ActionGraphNode | null;
+  mutationFailure?: WorkflowMutationFailedEvent | null;
   collapsed: boolean;
   advancedExpanded: boolean;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
@@ -250,6 +252,7 @@ export function WorkflowInspector({
   executionHarnesses,
   executionDefaults,
   actionNode,
+  mutationFailure,
   collapsed,
   advancedExpanded,
   onEditPool,
@@ -525,6 +528,23 @@ export function WorkflowInspector({
             </div>
           )}
         </section>
+
+        {mutationFailure && (
+          <section
+            data-testid="mutation-failure-detail"
+            className="rounded border border-amber-700 bg-amber-950/40 p-3"
+          >
+            <h3 className="text-[11px] uppercase tracking-wide text-amber-200">
+              {mutationFailureTitle(mutationFailure)}
+            </h3>
+            <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100">
+              {mutationFailure.message}
+            </pre>
+            {mutationFailure.channel && (
+              <p className="mt-2 text-[11px] text-amber-300">Channel: {mutationFailure.channel}</p>
+            )}
+          </section>
+        )}
 
         {workspaceRecreateNotice && (
           <section data-testid="workspace-recreate-notice" className="rounded border border-amber-700 bg-amber-950/40 p-3">
