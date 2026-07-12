@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Cross-job mutual exclusion proof: while the shared lock is held, EACH PR
-# maintenance worker tick script must print "another PR maintenance operation in
-# progress" and exit 0 (clean no-op), so only one operation ever runs at a time.
+# Cross-job mutual exclusion proof: while the shared PR-maintenance lock is
+# held, EACH native PR-maintenance worker must report the held lock and exit 0
+# (clean no-op), so only one operation ever runs at a time.
 #
-# Holds the lock the same way the lib acquires it (flock if available, else the
-# atomic mkdir fallback), then runs each worker. Fully offline; cron_lock is the
-# first thing each worker does, so no `gh` is reached.
+# Holds the lock the same way the shell lib acquires it (flock if available,
+# else the atomic mkdir fallback), then runs each native worker. Fully offline;
+# the native lock probe runs before the shell entrypoint, so no `gh` is reached.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -22,6 +22,53 @@ cleanup() {
 trap cleanup EXIT
 
 fail() { echo "[repro] FAIL: $1"; [ -n "${2:-}" ] && echo "----- output -----" && echo "$2"; exit 1; }
+
+REAL_NODE="$(command -v node)"
+WORKER_SOURCE="$ROOT/packages/execution-engine/src/workers/pr-maintenance-workers.ts"
+WORKER_RUNNER_SRC="$TMP/run-native-worker.ts"
+WORKER_RUNNER_DIR="$TMP/worker-runner-dist"
+WORKER_RUNNER="$WORKER_RUNNER_DIR/run-native-worker.mjs"
+
+write_native_worker_runner() {
+  mkdir -p "$WORKER_RUNNER_DIR"
+  cat > "$WORKER_RUNNER_SRC" <<TS
+import { createCoderabbitAddressWorker, createPrConflictRebaseWorker } from '${WORKER_SOURCE}';
+
+const kind = process.argv[2];
+const logger = {
+  info: (message: string) => console.log(message),
+  warn: (message: string) => console.log(message),
+  error: (message: string) => console.log(message),
+  debug: () => {},
+  child: () => logger,
+};
+const factories = {
+  'coderabbit-address': createCoderabbitAddressWorker,
+  'pr-conflict-rebase': createPrConflictRebaseWorker,
+};
+const factory = factories[kind as keyof typeof factories];
+if (!factory) throw new Error(\`unknown PR-maintenance worker kind: \${kind}\`);
+const worker = factory({
+  logger,
+  repoRoot: process.cwd(),
+  lockPath: process.env.INVOKER_PR_CRON_LOCK,
+  installSignalHandlers: false,
+});
+try {
+  await worker.tick('manual');
+} finally {
+  await worker.stop();
+}
+console.log(\`\${kind} worker scan completed.\`);
+TS
+  pnpm exec tsup "$WORKER_RUNNER_SRC" --format esm --platform node --out-dir "$WORKER_RUNNER_DIR" >/dev/null
+}
+
+run_native_worker() {
+  "$REAL_NODE" "$WORKER_RUNNER" "$1" 2>&1
+}
+
+write_native_worker_runner
 
 # Acquire and hold the lock out-of-band, mirroring cron-pr-lib.sh's mechanism.
 if command -v flock >/dev/null 2>&1; then
@@ -48,12 +95,12 @@ export INVOKER_PR_CRON_DRY_RUN=1
 export INVOKER_PR_CONFLICT_STATE_FILE="$TMP/conflict.tsv"
 export INVOKER_PR_CODERABBIT_STATE_FILE="$TMP/coderabbit.tsv"
 
-for worker in cron-coderabbit-address cron-pr-conflict-rebase; do
+for worker in coderabbit-address pr-conflict-rebase; do
   set +e
-  out="$(bash "scripts/$worker.sh" 2>&1)"
+  out="$(run_native_worker "$worker" 2>&1)"
   code=$?
   set -e
-  echo "$out" | grep -q "another PR maintenance operation in progress" \
+  echo "$out" | grep -q "shared PR maintenance lock held; skipping tick" \
     || fail "$worker did not report the lock as held" "$out"
   [ "$code" -eq 0 ] || fail "$worker exited $code (expected 0 clean no-op)" "$out"
 done
