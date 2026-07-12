@@ -20,14 +20,33 @@ import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vite
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
+import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import * as ReactFlowModule from '@xyflow/react';
 
 // vitest hoists vi.mock above imports and its factory cannot close over
 // top-level bindings, so the mock module is loaded dynamically here — a test
 // module-loading boundary, the sanctioned exception to static-import-only.
+const workflowGraphSpy = vi.hoisted(() => ({
+  commands: [] as Array<GraphCameraCommand | null | undefined>,
+  reset() {
+    this.commands.length = 0;
+  },
+}));
+
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
+});
+
+vi.mock('../components/WorkflowGraph.js', async () => {
+  const actual = await vi.importActual<typeof import('../components/WorkflowGraph.js')>('../components/WorkflowGraph.js');
+  return {
+    ...actual,
+    WorkflowGraph(props: Parameters<typeof actual.WorkflowGraph>[0]) {
+      workflowGraphSpy.commands.push(props.cameraCommand);
+      return actual.WorkflowGraph(props);
+    },
+  };
 });
 
 const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
@@ -100,6 +119,7 @@ describe('Browser-surface camera (component)', () => {
     setCenterMock.mockClear();
     getZoomMock.mockReset();
     getZoomMock.mockReturnValue(1);
+    workflowGraphSpy.reset();
   });
 
   afterEach(() => {
@@ -146,7 +166,7 @@ describe('Browser-surface camera (component)', () => {
     expect(setCenterMock).not.toHaveBeenCalled();
     expect(fitViewMock).not.toHaveBeenCalled();
   });
-  it('clicking the left-nav home icon returns to the workflow graph and fits the whole graph', async () => {
+  it('clicking the left-nav home icon returns to the workflow graph and issues the Home fit command', async () => {
     mock.setTasks(tasks, workflows);
     render(<App />);
 
@@ -155,10 +175,19 @@ describe('Browser-surface camera (component)', () => {
     await settleCamera();
     fitViewMock.mockClear();
     setCenterMock.mockClear();
+    workflowGraphSpy.reset();
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
 
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
+    await waitFor(() => {
+      const matchingCommands = workflowGraphSpy.commands.filter((command): command is GraphCameraCommand => (
+        command?.kind === 'fitInitial'
+        && command.scope === 'workflow'
+        && command.reason === 'sidebar-home'
+      ));
+      expect(matchingCommands.length).toBeGreaterThan(0);
+    });
     await flushFrames(4);
 
     expect(fitViewMock).toHaveBeenCalled();
