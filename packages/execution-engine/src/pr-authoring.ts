@@ -33,6 +33,22 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence surfaced in PR Pipeline summaries. */
+export interface PrAuthoringWorkerActionEntry {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType: string;
+  subjectId: string;
+  taskId?: string;
+  workflowId?: string;
+  summary?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +62,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker actions that changed or skipped work for this PR/workflow. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -84,6 +102,50 @@ function getPrAuthoringTimeoutMs(): number {
   const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed) || parsed < 0) return DEFAULT_PR_AUTHORING_TIMEOUT_MS;
   return parsed;
+}
+
+function escapeMarkdownTableCell(value: string | undefined): string {
+  return (value ?? '')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('|', '\\|')
+    .replace(/\r?\n/g, '<br>');
+}
+
+function workerActionSortTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.completedAt ?? action.updatedAt ?? action.createdAt;
+}
+
+function workerActionTarget(action: PrAuthoringWorkerActionEntry): string {
+  return action.taskId ?? `${action.subjectType}:${action.subjectId}`;
+}
+
+function renderPipelineRows(workerActions: readonly PrAuthoringWorkerActionEntry[] | undefined): string[] {
+  const lines: string[] = [];
+  lines.push('## Pipeline');
+  lines.push('');
+  if (!workerActions || workerActions.length === 0) {
+    lines.push('No worker actions recorded.');
+    lines.push('');
+    return lines;
+  }
+
+  lines.push('| Time | Worker | Action | Target | Status | Summary |');
+  lines.push('| --- | --- | --- | --- | --- | --- |');
+  for (const action of [...workerActions].sort((a, b) => {
+    const byTime = workerActionSortTime(a).localeCompare(workerActionSortTime(b));
+    return byTime !== 0 ? byTime : a.id.localeCompare(b.id);
+  })) {
+    lines.push(
+      `| ${escapeMarkdownTableCell(workerActionSortTime(action))} `
+        + `| ${escapeMarkdownTableCell(action.workerKind)} `
+        + `| ${escapeMarkdownTableCell(action.actionType)} `
+        + `| ${escapeMarkdownTableCell(workerActionTarget(action))} `
+        + `| ${escapeMarkdownTableCell(action.status)} `
+        + `| ${escapeMarkdownTableCell(action.summary)} |`,
+    );
+  }
+  lines.push('');
+  return lines;
 }
 
 /** True when `heading` appears as a real Markdown heading line, not as prose/code text. */
@@ -484,6 +546,8 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  lines.push(...renderPipelineRows(args.structuredContext?.workerActions));
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
@@ -597,6 +661,21 @@ export function buildMakePrPrompt(args: {
     if (ctx.visualProofMarkdown) {
       lines.push('Visual proof (include verbatim in PR body if present):');
       lines.push(ctx.visualProofMarkdown);
+      lines.push('');
+    }
+
+    if (ctx.workerActions && ctx.workerActions.length > 0) {
+      lines.push('Worker pipeline actions (render a ## Pipeline section in chronological order):');
+      for (const action of [...ctx.workerActions].sort((a, b) => {
+        const byTime = workerActionSortTime(a).localeCompare(workerActionSortTime(b));
+        return byTime !== 0 ? byTime : a.id.localeCompare(b.id);
+      })) {
+        lines.push(
+          `- ${workerActionSortTime(action)} — ${action.workerKind}/${action.actionType} `
+            + `${workerActionTarget(action)} [${action.status}]`
+            + (action.summary ? ` — ${action.summary}` : ''),
+        );
+      }
       lines.push('');
     }
   }

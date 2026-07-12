@@ -380,6 +380,20 @@ export async function buildPrAuthoringContext(
     workflowName: workflow?.name,
     workflowDescription: workflow?.description,
     tasks,
+    workerActions: host.persistence.listWorkerActions({ workflowId }).map((action) => ({
+      id: action.id,
+      workerKind: action.workerKind,
+      actionType: action.actionType,
+      status: action.status,
+      subjectType: action.subjectType,
+      subjectId: action.subjectId,
+      ...(action.taskId ? { taskId: action.taskId } : {}),
+      ...(action.workflowId ? { workflowId: action.workflowId } : {}),
+      ...(action.summary ? { summary: action.summary } : {}),
+      createdAt: action.createdAt,
+      updatedAt: action.updatedAt,
+      ...(action.completedAt ? { completedAt: action.completedAt } : {}),
+    })),
     visualProofMarkdown,
   };
 }
