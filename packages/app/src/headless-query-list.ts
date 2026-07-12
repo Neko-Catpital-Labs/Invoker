@@ -26,7 +26,7 @@ import {
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
-import { listWorkerDecisions } from './worker-control.js';
+import { listWorkerDecisions, toWorkerActionSummary } from './worker-control.js';
 import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
@@ -793,20 +793,25 @@ export async function renderWorkerStatus(
 ): Promise<void> {
   const flags = parseQueryFlags(flagArgs);
   const status = collectRecoveryWorkerStatus(deps.persistence);
-  const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
+  const recentActions = (deps.persistence.listWorkerActions?.({ limit: 5 }) ?? []).map(toWorkerActionSummary);
+  const statusWithActions = { ...status, recentActions };
+  const { formatAsJson, formatAsJsonl, formatRecentWorkerActions } = await import('./formatter.js');
   switch (flags.output) {
     case 'label':
       writeOut(`${status.workerId}\n`);
       break;
     case 'json':
-      writeOut(formatAsJson(status) + '\n');
+      writeOut(formatAsJson(statusWithActions) + '\n');
       break;
     case 'jsonl':
-      writeOut(formatAsJsonl([status]) + '\n');
+      writeOut(formatAsJsonl([statusWithActions]) + '\n');
       break;
-    default:
+    default: {
       writeOut(formatRecoveryWorkerStatus(status) + '\n');
+      writeOut('\n');
+      writeOut(formatRecentWorkerActions(recentActions) + '\n');
       break;
+    }
   }
 }
 

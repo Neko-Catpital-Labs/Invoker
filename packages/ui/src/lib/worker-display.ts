@@ -98,6 +98,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No e2e auto-fix runs recorded yet.',
     };
   }
+  if (kind === 'pr-summary-refresh') {
+    return {
+      name: 'PR summary refresh',
+      idleText: 'Idle. Waiting for merge-gate pull requests whose bodies need a pipeline summary refresh.',
+      noActionText: 'No PR summary refresh actions recorded yet.',
+    };
+  }
   return {
     name: formatWorkerValue(kind),
     idleText: 'Idle. Waiting for worker-owned work.',
