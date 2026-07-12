@@ -4520,6 +4520,27 @@ describe('Orchestrator', () => {
       expect(persisted).toBeDefined();
       expect(persisted?.task.config.executionAgent).toBe('codex');
     });
+    it('clears executionModel when the execution agent changes', () => {
+      orchestrator.loadPlan({
+        name: 'edit-agent-clears-model',
+        tasks: [{
+          id: 't1',
+          description: 'Task 1',
+          command: 'echo old',
+          executionAgent: 'claude',
+          executionModel: 'opus',
+        }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'oops' } }),
+      );
+
+      orchestrator.editTaskAgent('t1', 'codex');
+
+      expect(orchestrator.getTask('t1')?.config.executionAgent).toBe('codex');
+      expect(orchestrator.getTask('t1')?.config.executionModel).toBeUndefined();
+    });
 
     it('idempotence — two consecutive agent edits trigger two cancel-first cycles and two generation bumps', () => {
       orchestrator.loadPlan({

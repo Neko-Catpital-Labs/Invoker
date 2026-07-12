@@ -5,10 +5,13 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
 import type { Writable, Readable } from 'node:stream';
 
-// Mock child_process before importing WorktreeExecutor
-vi.mock('node:child_process', () => ({
-  spawn: vi.fn(),
-}));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: vi.fn(),
+  };
+});
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -20,6 +23,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { WorktreeExecutor, computeContentHash } from '../worktree-executor.js';
 import { BaseExecutor } from '../base-executor.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 const mockedSpawn = vi.mocked(spawn);
 
@@ -1062,6 +1066,32 @@ describe('WorktreeExecutor', () => {
       });
 
       await expect(executor.start(request)).rejects.toThrow();
+    });
+  });
+
+  describe('agent registry validation', () => {
+    it('rejects incompatible executionModel values before spawning the agent', async () => {
+      const executorWithRegistry = new WorktreeExecutor({
+        cacheDir: '/fake/cache',
+        worktreeBaseDir: '/fake/worktrees',
+        agentRegistry: registerBuiltinAgents(),
+      });
+      mockPool(executorWithRegistry);
+      setupSpawnMock();
+
+      const request = makeRequest({
+        actionType: 'ai_task',
+        inputs: {
+          prompt: 'test prompt',
+          executionAgent: 'codex',
+          executionModel: 'claude',
+        },
+      });
+
+      await expect(executorWithRegistry.start(request)).rejects.toThrow(
+        'Execution model "claude" is not supported for execution agent "codex".',
+      );
+      expect(mockedSpawn.mock.calls.some(([cmd]) => cmd === 'codex')).toBe(false);
     });
   });
 

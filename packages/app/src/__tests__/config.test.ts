@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
 import {
   loadConfig,
+  resolveAutoFixExecutionModel,
   resolveConfigFilePath,
   resolveDefaultExecutionAgent,
   resolveDefaultTaskExecutionSettings,
@@ -169,6 +170,22 @@ describe('loadConfig', () => {
       executionModel: 'chatgpt-5.4',
     });
   });
+  it('only reuses the default model when auto-fix stays on the default agent', () => {
+    expect(resolveAutoFixExecutionModel({
+      autoFixAgent: 'omp',
+      defaultExecutionAgent: 'omp',
+      defaultExecutionModel: 'chatgpt-5.4',
+    })).toBe('chatgpt-5.4');
+    expect(resolveAutoFixExecutionModel({
+      autoFixAgent: 'codex',
+      defaultExecutionAgent: 'omp',
+      defaultExecutionModel: 'chatgpt-5.4',
+    })).toBeUndefined();
+    expect(resolveAutoFixExecutionModel({
+      defaultExecutionAgent: 'omp',
+      defaultExecutionModel: 'chatgpt-5.4',
+    })).toBeUndefined();
+  });
 
   it('reads conflict resolution settings from user config', () => {
     writeUserConfig({
@@ -333,6 +350,22 @@ describe('loadConfig', () => {
       },
     });
     expect(() => loadConfig()).toThrow('defaultExecution.executionModel requires defaultExecution.executionAgent');
+  });
+  it('rejects flat defaultExecutionModel without an agent', () => {
+    writeUserConfig({
+      defaultExecutionModel: 'claude',
+    });
+    expect(() => loadConfig()).toThrow('defaultExecutionModel requires defaultExecutionAgent');
+  });
+
+  it('rejects mismatched flat default execution pairs for builtin agents', () => {
+    writeUserConfig({
+      defaultExecutionAgent: 'codex',
+      defaultExecutionModel: 'claude',
+    });
+    expect(() => loadConfig()).toThrow(
+      'Execution model "claude" is not supported for execution agent "codex".',
+    );
   });
 
 
