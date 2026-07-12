@@ -195,6 +195,8 @@ export interface TaskHistoryEntry extends TaskState {
 export interface QueueStatus {
   maxConcurrency: number;
   runningCount: number;
+  activeExecutionCount?: number;
+  launchingCount?: number;
   running: Array<{ taskId: string; description: string }>;
   queued: Array<{ taskId: string; priority: number; description: string }>;
 }
@@ -1157,6 +1159,25 @@ export const IpcTestOnlyChannels = {
       taskCount: number;
       eventCount: number;
       workerActionCount: number;
+    };
+  },
+  'invoker:seed-stress-fixture': {} as {
+    request: [options?: {
+      workflowCount?: number;
+      tasksPerWorkflow?: number;
+      eventsPerTask?: number;
+      nowIso?: string;
+      stuckLaunchingSlots?: number;
+      launchAgeMs?: number;
+    }];
+    response: {
+      workflowCount: number;
+      taskCount: number;
+      running: number;
+      launching: number;
+      fixing: number;
+      pending: number;
+      failed: number;
     };
   },
 } as const;
