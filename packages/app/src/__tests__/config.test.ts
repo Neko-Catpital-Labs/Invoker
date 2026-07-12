@@ -228,14 +228,22 @@ describe('loadConfig', () => {
   });
 
   it('reads external worker launch config from user config', () => {
-    const externalWorkers = [{
-      kind: 'preview',
-      launch: {
-        executable: '/usr/local/bin/invoker-preview-worker',
-        args: ['--stdio', '--log-level=info'],
-        cwd: '/srv/invoker',
+    const externalWorkers = [
+      {
+        kind: 'preview',
+        launch: {
+          executable: '/usr/local/bin/invoker-preview-worker',
+          args: ['--stdio', '--log-level=info'],
+          cwd: '/srv/invoker',
+        },
       },
-    }];
+      {
+        kind: 'metrics',
+        launch: {
+          executable: 'invoker-metrics-worker',
+        },
+      },
+    ];
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({ externalWorkers }),

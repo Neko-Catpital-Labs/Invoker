@@ -10,25 +10,11 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
 import { validateInvokerConfig } from './config-validation.js';
-import type { PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
+import type { ExternalWorkerConfig, PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
 
 const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
 
-export interface ExternalWorkerLaunchConfig {
-  /** Executable used to start the external worker process. */
-  executable: string;
-  /** Optional argv passed after the executable. */
-  args?: string[];
-  /** Optional process working directory for the worker launch. */
-  cwd?: string;
-}
-
-export interface ExternalWorkerConfig {
-  /** Stable worker registry kind declared by the operator. */
-  kind: string;
-  /** Process invocation used by the loader to start the external worker. */
-  launch: ExternalWorkerLaunchConfig;
-}
+export type { ExternalWorkerConfig } from '@invoker/execution-engine';
 export interface DefaultExecutionConfig {
   /**
    * Default task execution harness when a task omits executionAgent.
