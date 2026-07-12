@@ -2246,6 +2246,14 @@ export function App() {
     setInspectorCollapsed((prev) => !prev);
   }, [autoCollapseInspector]);
 
+  const navigateHomeAndFitWorkflowGraph = useCallback((reason: string) => {
+    cameraSuppressedRef.current = false;
+    setSidebarSurface('home');
+    setInspectorManualOpen(false);
+    setViewMode('dag');
+    issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason });
+  }, [issueCameraCommand]);
+
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
     reportUiNavigation(window.invoker?.reportUiPerf, {
@@ -2262,16 +2270,15 @@ export function App() {
       setViewMode('queue');
       return;
     }
-    setViewMode('dag');
     if (nextSurface === 'home') {
-      setSidebarSurface('home');
-      setInspectorManualOpen(false);
+      navigateHomeAndFitWorkflowGraph('sidebar-home');
       return;
     }
+    setViewMode('dag');
     setSidebarSurface(nextSurface);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, [sidebarSurface, viewMode]);
+  }, [navigateHomeAndFitWorkflowGraph, sidebarSurface, viewMode]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
@@ -2282,10 +2289,8 @@ export function App() {
       viewMode,
       dismiss: true,
     });
-    setSidebarSurface('home');
-    setInspectorManualOpen(false);
-    setViewMode('dag');
-  }, [sidebarSurface, viewMode]);
+    navigateHomeAndFitWorkflowGraph('browser-return-home');
+  }, [navigateHomeAndFitWorkflowGraph, sidebarSurface, viewMode]);
 
   // ── Task actions ──────────────────────────────────────────
   const handleProvideInput = useCallback(

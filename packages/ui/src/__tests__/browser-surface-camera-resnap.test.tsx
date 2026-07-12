@@ -146,4 +146,21 @@ describe('Browser-surface camera (component)', () => {
     expect(setCenterMock).not.toHaveBeenCalled();
     expect(fitViewMock).not.toHaveBeenCalled();
   });
+  it('clicking the left-nav home icon returns to the workflow graph and fits the whole graph', async () => {
+    mock.setTasks(tasks, workflows);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    await screen.findByTestId('selected-workflow-mini-dag');
+    await settleCamera();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
+    await flushFrames(4);
+
+    expect(fitViewMock).toHaveBeenCalled();
+  });
 });
