@@ -1241,6 +1241,8 @@ describe('Crabbox SSH terminal restore', () => {
     expect(argsJson).toContain('/home/me/.ssh/fresh');
     expect(argsJson).toContain('2200');
     expect(argsJson).toContain('runner@203.0.113.9');
+    // Stale persisted host must not leak through alongside the refreshed one.
+    expect(argsJson).not.toContain('10.0.0.1');
     expect(argsJson).not.toContain('/home/me/.ssh/old');
     expect(argsJson).not.toContain('2222');
 
