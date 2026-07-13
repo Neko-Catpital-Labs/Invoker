@@ -101,6 +101,8 @@ describe('SQLiteAdapter', () => {
       },
       submittedWorkflowId: 'wf-planning',
       submittedPlanName: 'README plan',
+      terminalMode: 'chat',
+      terminalOutputSnapshot: '',
       pendingResponse: true,
       createdAt: '2026-07-07T00:00:00.000Z',
       updatedAt: '2026-07-07T00:00:03.000Z',
@@ -419,6 +421,12 @@ describe('SQLiteAdapter', () => {
         'draft_plan_summary_json',
         'submitted_workflow_id',
         'submitted_plan_name',
+        'terminal_mode',
+        'terminal_session_id',
+        'terminal_status',
+        'terminal_exit_code',
+        'terminal_output_snapshot',
+        'terminal_updated_at',
         'pending_response',
         'created_at',
         'updated_at',
@@ -452,10 +460,44 @@ describe('SQLiteAdapter', () => {
       }
     });
 
+    it('round-trips planning tmux ownership across adapter reopen', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-tmux-sessions-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.upsertInAppPlanningSession(makePlanningSession('planning-tmux', {
+          terminalMode: 'tmux',
+          terminalSessionId: 'term-planning-tmux',
+          terminalStatus: 'running',
+          terminalExitCode: undefined,
+          terminalOutputSnapshot: 'tmux transcript\n',
+          terminalUpdatedAt: '2026-07-07T00:00:04.000Z',
+        }));
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.loadInAppPlanningSession('planning-tmux')).toMatchObject({
+          terminalMode: 'tmux',
+          terminalSessionId: 'term-planning-tmux',
+          terminalStatus: 'running',
+          terminalOutputSnapshot: 'tmux transcript\n',
+          terminalUpdatedAt: '2026-07-07T00:00:04.000Z',
+        });
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('updates planning sessions and replaces visible messages', () => {
       adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
       adapter.updateInAppPlanningSession('planning-1', {
         status: 'still_discussing',
+        terminalMode: 'tmux',
+        terminalSessionId: 'planning-terminal-1',
+        terminalStatus: 'running',
+        terminalOutputSnapshot: 'tmux output\n',
+        terminalUpdatedAt: '2026-07-07T00:00:04.500Z',
         messages: [{
           id: 7,
           role: 'system',
@@ -471,6 +513,11 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadInAppPlanningSession('planning-1');
       expect(loaded).toMatchObject({
         status: 'still_discussing',
+        terminalMode: 'tmux',
+        terminalSessionId: 'planning-terminal-1',
+        terminalStatus: 'running',
+        terminalOutputSnapshot: 'tmux output\n',
+        terminalUpdatedAt: '2026-07-07T00:00:04.500Z',
         messages: [{
           id: 7,
           role: 'system',

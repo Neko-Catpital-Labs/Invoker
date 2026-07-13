@@ -244,6 +244,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return { opened: false, reason: 'Planning terminals are not available in the web UI' };
       case 'invoker:planning-terminal-list':
         return [];
+      case 'invoker:planning-chat-set-terminal-mode':
+        return { ok: false, error: 'Planning tmux is not available in the web UI' };
       case 'invoker:planning-terminal-write':
       case 'invoker:planning-terminal-resize':
       case 'invoker:planning-terminal-close':
