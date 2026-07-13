@@ -136,6 +136,10 @@ export interface TaskExecution {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
+  readonly crashPreservedAt?: Date;
+  readonly crashPreservedOwnerPid?: number;
+  readonly crashPreservedReportPath?: string;
+  readonly crashPreservedDiagnosticSummary?: string;
 }
 
 // ── Task State ──────────────────────────────────────────────

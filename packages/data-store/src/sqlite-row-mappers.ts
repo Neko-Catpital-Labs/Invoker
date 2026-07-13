@@ -125,6 +125,13 @@ export function mapRowToTask(row: any): TaskState {
       launchStartedAt: row.launch_started_at ? new Date(row.launch_started_at) : undefined,
       launchCompletedAt: row.launch_completed_at ? new Date(row.launch_completed_at) : undefined,
       generation: row.execution_generation ?? 0,
+      crashPreservedAt: row.crash_preserved_at ? new Date(row.crash_preserved_at) : undefined,
+      crashPreservedOwnerPid:
+        row.crash_preserved_owner_pid === null || row.crash_preserved_owner_pid === undefined
+          ? undefined
+          : Number(row.crash_preserved_owner_pid),
+      crashPreservedReportPath: row.crash_preserved_report_path ?? undefined,
+      crashPreservedDiagnosticSummary: row.crash_preserved_diagnostic_summary ?? undefined,
       selectedAttemptId: row.selected_attempt_id ?? undefined,
     },
     taskStateVersion: row.task_state_version ?? 1,

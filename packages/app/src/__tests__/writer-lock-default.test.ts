@@ -37,6 +37,7 @@ describe('writer lock default-on', () => {
     try {
       expect(result.acquired).toBe(true);
       expect(result.bypassed).toBe(false);
+      expect(result.reclaimedDeadOwner).toBeNull();
     } finally {
       result.release();
     }
@@ -135,6 +136,13 @@ describe('writer lock default-on', () => {
       expect(result.acquired).toBe(true);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('Stale lock from dead PID 2147483647'));
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('signal=SIGBUS'));
+      expect(result.reclaimedDeadOwner).toMatchObject({
+        pid: deadPid,
+        diagnostic: expect.objectContaining({
+          reportPath: join(reportDir, 'Electron-stale-owner.ips'),
+          exceptionSignal: 'SIGBUS',
+        }),
+      });
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('Bus error: 10'));
     } finally {
       result.release();

@@ -8,7 +8,7 @@
  * transactions. Row mapping keeps coming from sqlite-row-mappers.ts; the
  * adapter retains one-line delegates for every method here.
  */
-import type { TaskState, TaskStateChanges, Attempt } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges, Attempt, TaskExecution } from '@invoker/workflow-core';
 import {
   assertTaskConsistent,
   isDiscardedAttempt,
@@ -40,6 +40,71 @@ export class SqliteTaskAttemptRepository {
     private readonly exec: SqliteExecutor,
     private readonly mutators: TaskAttemptMutators,
   ) {}
+
+  private hasCrashPreservationTableCache: boolean | null = null;
+
+  private hasCrashPreservationTable(): boolean {
+    if (this.hasCrashPreservationTableCache !== null) return this.hasCrashPreservationTableCache;
+    const row = this.exec.queryOne(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'task_crash_preservation'",
+    ) as { present?: number } | undefined;
+    this.hasCrashPreservationTableCache = row?.present === 1;
+    return this.hasCrashPreservationTableCache;
+  }
+
+  private syncCrashPreservationState(
+    taskId: string,
+    beforeTask: TaskState | undefined,
+    changes: Partial<TaskExecution>,
+  ): void {
+    const crashKeys = [
+      'crashPreservedAt',
+      'crashPreservedOwnerPid',
+      'crashPreservedReportPath',
+      'crashPreservedDiagnosticSummary',
+    ] as const satisfies readonly (keyof TaskExecution)[];
+    if (!crashKeys.some((key) => key in changes)) return;
+    const next = { ...(beforeTask?.execution ?? {}), ...changes };
+    if (next.crashPreservedAt instanceof Date) {
+      this.exec.execRun(
+        `INSERT INTO task_crash_preservation (
+            task_id,
+            preserved_at,
+            owner_pid,
+            diagnostic_report_path,
+            diagnostic_summary
+          ) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(task_id) DO UPDATE SET
+            preserved_at = excluded.preserved_at,
+            owner_pid = excluded.owner_pid,
+            diagnostic_report_path = excluded.diagnostic_report_path,
+            diagnostic_summary = excluded.diagnostic_summary`,
+        [
+          taskId,
+          next.crashPreservedAt.toISOString(),
+          next.crashPreservedOwnerPid ?? null,
+          next.crashPreservedReportPath ?? null,
+          next.crashPreservedDiagnosticSummary ?? null,
+        ],
+      );
+      return;
+    }
+    this.exec.execRun('DELETE FROM task_crash_preservation WHERE task_id = ?', [taskId]);
+  }
+
+  private taskSelectColumns(alias: string): string {
+    if (!this.hasCrashPreservationTable()) return `${alias}.*`;
+    return `${alias}.*,
+             cp.preserved_at AS crash_preserved_at,
+             cp.owner_pid AS crash_preserved_owner_pid,
+             cp.diagnostic_report_path AS crash_preserved_report_path,
+             cp.diagnostic_summary AS crash_preserved_diagnostic_summary`;
+  }
+
+  private taskSelectJoin(alias: string): string {
+    if (!this.hasCrashPreservationTable()) return '';
+    return ` LEFT JOIN task_crash_preservation cp ON cp.task_id = ${alias}.id`;
+  }
 
   // ── Task CRUD ────────────────────────────────────────────
 
@@ -154,9 +219,13 @@ export class SqliteTaskAttemptRepository {
       exec.agentName ?? null,
       task.taskStateVersion ?? 1,
     ]);
+    this.syncCrashPreservationState(task.id, undefined, task.execution);
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
+    const beforeTask = this.loadTask(taskId);
+    if (!beforeTask) return;
+
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -226,6 +295,7 @@ export class SqliteTaskAttemptRepository {
     }
 
     if (changes.execution) {
+      this.syncCrashPreservationState(taskId, beforeTask, changes.execution);
       const execution = changes.execution as Record<string, unknown>;
       const execMap: Record<string, string> = {
         blockedBy: 'blocked_by',
@@ -304,8 +374,6 @@ export class SqliteTaskAttemptRepository {
     }
 
 
-    const beforeTask = this.loadTask(taskId);
-    if (!beforeTask) return;
     assertTaskConsistent({
       ...beforeTask,
       ...changes,
@@ -349,12 +417,22 @@ export class SqliteTaskAttemptRepository {
   }
 
   loadTasks(workflowId: string): TaskState[] {
-    const rows = this.exec.queryAll('SELECT * FROM tasks WHERE workflow_id = ?', [workflowId]);
+    const rows = this.exec.queryAll(
+      `SELECT ${this.taskSelectColumns('t')}
+       FROM tasks t${this.taskSelectJoin('t')}
+       WHERE t.workflow_id = ?`,
+      [workflowId],
+    );
     return rows.map((row) => this.reconcileTaskFromSelectedAttempt(mapRowToTask(row)));
   }
 
   loadTask(taskId: string): TaskState | undefined {
-    const row = this.exec.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    const row = this.exec.queryOne(
+      `SELECT ${this.taskSelectColumns('t')}
+       FROM tasks t${this.taskSelectJoin('t')}
+       WHERE t.id = ?`,
+      [taskId],
+    );
     if (!row) return undefined;
     return this.reconcileTaskFromSelectedAttempt(mapRowToTask(row));
   }
@@ -373,8 +451,9 @@ export class SqliteTaskAttemptRepository {
 
   loadAllCompletedTasks(): Array<TaskState & { workflowName: string }> {
     const rows = this.exec.queryAll(`
-      SELECT t.*, w.name AS workflow_name
-      FROM tasks t
+      SELECT ${this.taskSelectColumns('t')},
+             w.name AS workflow_name
+      FROM tasks t${this.taskSelectJoin('t')}
       JOIN workflows w ON w.id = t.workflow_id
       WHERE t.status = 'completed'
       ORDER BY t.completed_at DESC
@@ -387,11 +466,11 @@ export class SqliteTaskAttemptRepository {
 
   loadAllHistoryTasks(): Array<TaskState & { workflowName: string; lastEventAt: string | null; eventCount: number }> {
     const rows = this.exec.queryAll(`
-      SELECT t.*,
+      SELECT ${this.taskSelectColumns('t')},
              w.name AS workflow_name,
              e.max_created_at AS last_event_at,
              COALESCE(e.event_count, 0) AS event_count
-      FROM tasks t
+      FROM tasks t${this.taskSelectJoin('t')}
       JOIN workflows w ON w.id = t.workflow_id
       LEFT JOIN (
         SELECT task_id, MAX(created_at) AS max_created_at, COUNT(*) AS event_count

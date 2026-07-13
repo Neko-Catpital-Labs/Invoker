@@ -1,4 +1,4 @@
-import type { RunnerKind, TaskState } from '@invoker/workflow-core';
+import { isCrashPreservedExecution, type RunnerKind, type TaskState } from '@invoker/workflow-core';
 
 export interface ExecutingStallEvaluationInput {
   now: Date;
@@ -60,6 +60,7 @@ export function evaluateExecutingStall(input: ExecutingStallEvaluationInput): Ex
 export function taskNeedsExecutingStallCheck(
   task: Pick<TaskState, 'status' | 'execution'>,
 ): boolean {
+  if (isCrashPreservedExecution(task.execution)) return false;
   if (task.status === 'running' || task.status === 'fixing_with_ai') {
     return true;
   }

@@ -1512,4 +1512,33 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
     const runningTasks = h.getAllTasks().filter(t => t.status === 'running');
     expect(status.runningCount).toBe(runningTasks.length);
   });
+  it('crash-preserved running task does not consume scheduler capacity on restart', () => {
+    h = createTestHarness({ maxConcurrency: 1 });
+    h.loadAndStart({
+      name: 'Crash Preservation Plan',
+      onFinish: 'none',
+      tasks: [
+        { id: 'A', description: 'Task A', command: 'sleep 30' },
+        { id: 'B', description: 'Task B', command: 'echo b' },
+      ],
+    });
+
+    expect(h.getTask('A')!.status).toBe('running');
+    expect(h.getTask('B')!.status).toBe('pending');
+
+    h.persistence.updateTask('A', {
+      execution: {
+        crashPreservedAt: new Date('2026-07-13T01:02:03.000Z'),
+        crashPreservedOwnerPid: 46301,
+        crashPreservedDiagnosticSummary: 'previous owner pid=46301; no matching crash report found',
+      },
+    });
+    const wfId = h.orchestrator.getWorkflowIds()[0]!;
+    h.orchestrator.syncFromDb(wfId);
+
+    const started = h.orchestrator.startExecution();
+    expect(started.some((task) => task.id.endsWith('/B') && task.status === 'running')).toBe(true);
+    const queue = h.orchestrator.getQueueStatus();
+    expect(queue.running.every((entry) => entry.taskId.endsWith('/B'))).toBe(true);
+  });
 });
