@@ -710,6 +710,8 @@ describe('DockerExecutor', () => {
         'DASHSCOPE_API_KEY=sk-dashscope-secret',
         'KIMI_API_KEY=sk-kimi-direct-secret',
         'GITHUB_TOKEN=ghp_multi_github_token_value',
+        'GH_ENTERPRISE_TOKEN=ghe_multi_github_token_value',
+        'GITHUB_ENTERPRISE_TOKEN=ghe_multi_github_enterprise_token_value',
         'AWS_SECRET_ACCESS_KEY=aws-multi-secret-access',
       ]);
 
@@ -733,6 +735,8 @@ describe('DockerExecutor', () => {
       expect(allLogs).not.toContain('sk-dashscope-secret');
       expect(allLogs).not.toContain('sk-kimi-direct-secret');
       expect(allLogs).not.toContain('ghp_multi_github_token_value');
+      expect(allLogs).not.toContain('ghe_multi_github_token_value');
+      expect(allLogs).not.toContain('ghe_multi_github_enterprise_token_value');
       expect(allLogs).not.toContain('aws-multi-secret-access');
 
       // Each secret key must appear in redacted form
@@ -746,6 +750,8 @@ describe('DockerExecutor', () => {
       expect(allLogs).toContain('DASHSCOPE_API_KEY=***REDACTED***');
       expect(allLogs).toContain('KIMI_API_KEY=***REDACTED***');
       expect(allLogs).toContain('GITHUB_TOKEN=***REDACTED***');
+      expect(allLogs).toContain('GH_ENTERPRISE_TOKEN=***REDACTED***');
+      expect(allLogs).toContain('GITHUB_ENTERPRISE_TOKEN=***REDACTED***');
       expect(allLogs).toContain('AWS_SECRET_ACCESS_KEY=***REDACTED***');
     });
   });
