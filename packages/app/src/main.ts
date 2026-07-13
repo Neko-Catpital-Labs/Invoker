@@ -1169,7 +1169,7 @@ function startHeadlessMode(): void {
                   workflowId: upstream.workflowId,
                   taskId: '__merge__',
                   requiredStatus: 'completed',
-                  gatePolicy: 'completed',
+                  gatePolicy: 'review_ready',
                 } as const,
               ],
             };
@@ -3886,7 +3886,7 @@ function createEmbeddedTerminalBackendFromConfig(
                 workflowId: upstream.workflowId,
                 taskId: '__merge__',
                 requiredStatus: 'completed',
-                gatePolicy: 'completed',
+                gatePolicy: 'review_ready',
               } as const,
             ],
           };
