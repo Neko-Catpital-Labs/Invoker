@@ -594,6 +594,7 @@ describe('Terminal drawer (component)', () => {
 
     render(<Harness />);
     await waitFor(() => expect(xtermMock.instances).toHaveLength(2));
+    const initialWriteCount = xtermMock.writeLog.length;
     vi.mocked(mock.api.reportUiPerf).mockClear();
 
     act(() => {
@@ -606,7 +607,7 @@ describe('Terminal drawer (component)', () => {
       }
     });
 
-    await waitFor(() => expect(xtermMock.writeLog).toHaveLength(80));
+    await waitFor(() => expect(xtermMock.writeLog).toHaveLength(initialWriteCount + 80));
     expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
 
     fireEvent.click(screen.getByRole('tab', { name: /Beta description/i }));
