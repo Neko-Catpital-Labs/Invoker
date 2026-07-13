@@ -315,6 +315,8 @@ import {
   restorePlanningChatSessions,
   sendPlanningChatMessage,
   submitPlanningChatDraft,
+  isPlanningChatSessionReadOnly,
+  updatePlanningChatTerminalMode,
 } from './in-app-planner.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
 import {
@@ -5313,6 +5315,16 @@ function createEmbeddedTerminalBackendFromConfig(
       embeddedTerminalManager,
       logger,
       repoRoot,
+      isPlanningSessionReadOnly: (planningSessionId) => (
+        computeRuntimeStatus().readOnly
+        || isPlanningChatSessionReadOnly(planningSessionId, { sessions: planningChatSessions })
+      ),
+      onPlanningTerminalOpened: (planningSessionId, terminalSessionId) => {
+        updatePlanningChatTerminalMode(
+          { sessionId: planningSessionId, mode: 'tmux', terminalSessionId },
+          { sessions: planningChatSessions, planningSessionStore: ownerMode ? persistence : undefined },
+        );
+      },
     });
 
     registerTerminalSessionIpcHandlers({

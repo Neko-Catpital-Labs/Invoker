@@ -4,11 +4,13 @@ import {
   createInAppPlanningChatSessions,
   createPlanningCommandBuilderFromRegistry,
   listInAppPlanningPresets,
+  listPlanningChatSessions,
   planFromGoal,
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
   submitPlanningChatDraft,
+  updatePlanningChatTerminalMode,
   type LoadedGeneratedPlan,
 } from '../in-app-planner.js';
 import { ConversationRepository, SQLiteAdapter, type InAppPlanningSessionRecord } from '@invoker/data-store';
@@ -739,7 +741,94 @@ tasks:
       });
 
       expect(sessions.get('planning-submitted')?.messages).toHaveLength(1);
+      expect(listPlanningChatSessions({ sessions }).sessions[0]).toMatchObject({
+        id: 'planning-submitted',
+        readOnly: true,
+      });
       expect(adapter.loadInAppPlanningSession('planning-submitted')?.pendingResponse).toBe(false);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('restores tmux mode and planning terminal session ownership', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-tmux',
+        title: 'Tmux plan',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        messages: [
+          { id: 1, role: 'user', text: 'Open tmux', createdAt: '2026-07-07T00:00:00.000Z' },
+        ],
+        mode: 'tmux',
+        terminalSessionId: 'planning-terminal-1',
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:01.000Z',
+      };
+      const sessions = createInAppPlanningChatSessions();
+
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo: new ConversationRepository(adapter),
+        planningSessionStore: adapter,
+      });
+
+      expect(sessions.get('planning-tmux')).toMatchObject({
+        mode: 'tmux',
+        terminalSessionId: 'planning-terminal-1',
+      });
+      expect(listPlanningChatSessions({ sessions }).sessions[0]).toMatchObject({
+        id: 'planning-tmux',
+        mode: 'tmux',
+        terminalSessionId: 'planning-terminal-1',
+        readOnly: false,
+      });
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('persists tmux mode when a planning terminal is attached', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const sessions = createInAppPlanningChatSessions();
+      const created = await sendPlanningChatMessage({
+        message: 'hello',
+        presetKey: 'codex',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        plannerReplyOverride: async () => 'I can help.',
+        conversationRepo: new ConversationRepository(adapter),
+        planningSessionStore: adapter,
+      });
+      if (!created.ok) throw new Error(created.error);
+
+      updatePlanningChatTerminalMode({
+        sessionId: created.sessionId,
+        mode: 'tmux',
+        terminalSessionId: 'planning-terminal-1',
+      }, {
+        sessions,
+        planningSessionStore: adapter,
+      });
+
+      expect(adapter.loadInAppPlanningSession(created.sessionId)).toMatchObject({
+        mode: 'tmux',
+        terminalSessionId: 'planning-terminal-1',
+      });
+      expect(listPlanningChatSessions({ sessions }).sessions[0]).toMatchObject({
+        mode: 'tmux',
+        terminalSessionId: 'planning-terminal-1',
+      });
     } finally {
       adapter.close();
     }

@@ -6,6 +6,7 @@ import {
   type BashSpawnFn,
 } from '../embedded-terminal-manager.js';
 import {
+  registerPlanningTerminalSessionIpcHandlers,
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
 } from '../terminal-session-ipc.js';
@@ -39,14 +40,15 @@ describe('registerTerminalSessionPersistence coalesce', () => {
     const mgr = new EmbeddedTerminalManager({
       backend: createBashTerminalBackend({ spawnFn: (() => child) as unknown as BashSpawnFn }),
     });
-    const upserts: Array<{ status: string; outputSnapshot: string }> = [];
+    const upserts: Array<any> = [];
     const persistence = {
       listTerminalSessions: () => [],
       loadTask: () => ({ id: 'task-1' }),
+      loadInAppPlanningSession: () => ({ id: 'plan-1' }),
       deleteTerminalSession: vi.fn(),
       updateTerminalSession: vi.fn(),
-      upsertTerminalSession: vi.fn((record: { status: string; outputSnapshot: string }) => {
-        upserts.push({ status: record.status, outputSnapshot: record.outputSnapshot });
+      upsertTerminalSession: vi.fn((record: any) => {
+        upserts.push(record);
       }),
     };
     const handle = registerTerminalSessionPersistence({
@@ -116,7 +118,7 @@ describe('registerTerminalSessionPersistence coalesce', () => {
     handle.dispose();
   });
 
-  it('does not persist planning terminal sessions as task terminal records', () => {
+  it('persists planning terminal sessions as planning terminal records', () => {
     const { mgr, upserts, handle } = setup(100);
 
     mgr.openOrReuse({
@@ -127,7 +129,14 @@ describe('registerTerminalSessionPersistence coalesce', () => {
       cwd: '/repo',
     });
 
-    expect(upserts).toHaveLength(0);
+    expect(upserts).toEqual([
+      expect.objectContaining({
+        status: 'running',
+        kind: 'planning',
+        taskId: 'planning:plan-1',
+        planningSessionId: 'plan-1',
+      }),
+    ]);
     handle.dispose();
   });
 
@@ -180,5 +189,58 @@ describe('registerTerminalSessionPersistence coalesce', () => {
     });
 
     handle.dispose();
+  });
+
+  it('keeps read-only planning terminal sessions non-editable', async () => {
+    const child = createFakeChild();
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: (() => child) as unknown as BashSpawnFn }),
+    });
+    const handlers = new Map<string, (...args: any[]) => Promise<any>>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, callback: (...args: any[]) => Promise<any>) => {
+        handlers.set(channel, callback);
+      }),
+    };
+    registerPlanningTerminalSessionIpcHandlers({
+      ipcMain: ipcMain as any,
+      embeddedTerminalManager: mgr,
+      logger: { info: vi.fn(), warn: vi.fn() },
+      repoRoot: '/repo',
+      isPlanningSessionReadOnly: (planningSessionId) => planningSessionId === 'plan-1',
+    });
+
+    await expect(
+      handlers.get('invoker:planning-terminal-open')?.({}, 'plan-1'),
+    ).resolves.toEqual({
+      opened: false,
+      reason: 'This planning session is read-only.',
+    });
+
+    const existing = mgr.openOrReuse({
+      kind: 'planning',
+      taskId: 'planning:plan-1',
+      planningSessionId: 'plan-1',
+      spec: { cwd: '/repo' },
+      cwd: '/repo',
+    });
+
+    await expect(
+      handlers.get('invoker:planning-terminal-open')?.({}, 'plan-1'),
+    ).resolves.toEqual({
+      opened: true,
+      session: expect.objectContaining({
+        sessionId: existing.sessionId,
+        kind: 'planning',
+        planningSessionId: 'plan-1',
+      }),
+    });
+    await expect(
+      handlers.get('invoker:planning-terminal-write')?.({}, existing.sessionId, 'x'),
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'This planning session is read-only.',
+    });
+    expect(child.stdin.write).not.toHaveBeenCalled();
   });
 });

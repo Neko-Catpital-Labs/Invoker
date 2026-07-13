@@ -48,6 +48,7 @@ describe('SQLiteAdapter', () => {
     return {
       sessionId,
       taskId,
+      kind: 'task',
       targetKey: `target-${sessionId}`,
       status: 'running',
       cwd: '/tmp/invoker-terminal-test',
@@ -99,6 +100,7 @@ describe('SQLiteAdapter', () => {
         workflowCount: 1,
         steps: ['Update README'],
       },
+      mode: 'chat',
       submittedWorkflowId: 'wf-planning',
       submittedPlanName: 'README plan',
       pendingResponse: true,
@@ -228,6 +230,8 @@ describe('SQLiteAdapter', () => {
       expect(tableColumns(adapter, 'terminal_sessions')).toEqual([
         'session_id',
         'task_id',
+        'kind',
+        'planning_session_id',
         'target_key',
         'status',
         'exit_code',
@@ -265,6 +269,11 @@ describe('SQLiteAdapter', () => {
       )).toThrow();
       expect(() => (adapter as any).db.run(
         `INSERT INTO terminal_sessions (
+          session_id, task_id, kind, target_key, status, mode, attached, output_snapshot, created_at, updated_at
+        ) VALUES ('term-bad-kind', 't1', 'other', 'target-bad-kind', 'running', 'spawn', 0, '', '2026-07-07T00:00:00.000Z', '2026-07-07T00:00:00.000Z')`,
+      )).toThrow();
+      expect(() => (adapter as any).db.run(
+        `INSERT INTO terminal_sessions (
           session_id, task_id, target_key, status, mode, attached, output_snapshot, created_at, updated_at, args_json
         ) VALUES ('term-bad-args', 't1', 'target-bad-args', 'running', 'spawn', 0, '', '2026-07-07T00:00:00.000Z', '2026-07-07T00:00:00.000Z', 'not-json')`,
       )).toThrow();
@@ -297,6 +306,7 @@ describe('SQLiteAdapter', () => {
         expect(reopened.loadTerminalSession('term-1')).toEqual({
           sessionId: 'term-1',
           taskId: 't1',
+          kind: 'task',
           targetKey: 'target-1',
           status: 'running',
           exitCode: undefined,
@@ -314,6 +324,26 @@ describe('SQLiteAdapter', () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+
+    it('round-trips planning terminal sessions without a task row', async () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
+      adapter.upsertTerminalSession(makeTerminalSession('planning-term-1', 'planning:planning-1', {
+        kind: 'planning',
+        planningSessionId: 'planning-1',
+        targetKey: 'target-planning-1',
+        command: undefined,
+        args: [],
+        outputSnapshot: 'planning shell\n',
+      }));
+
+      expect(adapter.loadTerminalSession('planning-term-1')).toMatchObject({
+        sessionId: 'planning-term-1',
+        taskId: 'planning:planning-1',
+        kind: 'planning',
+        planningSessionId: 'planning-1',
+        outputSnapshot: 'planning shell\n',
+      });
     });
 
     it('reconciles duplicate running terminal targets before enforcing the unique running-target index', async () => {
@@ -417,6 +447,8 @@ describe('SQLiteAdapter', () => {
         'preset_key',
         'status',
         'draft_plan_summary_json',
+        'terminal_mode',
+        'terminal_session_id',
         'submitted_workflow_id',
         'submitted_plan_name',
         'pending_response',
@@ -456,6 +488,8 @@ describe('SQLiteAdapter', () => {
       adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
       adapter.updateInAppPlanningSession('planning-1', {
         status: 'still_discussing',
+        mode: 'tmux',
+        terminalSessionId: 'planning-term-1',
         messages: [{
           id: 7,
           role: 'system',
@@ -471,6 +505,8 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadInAppPlanningSession('planning-1');
       expect(loaded).toMatchObject({
         status: 'still_discussing',
+        mode: 'tmux',
+        terminalSessionId: 'planning-term-1',
         messages: [{
           id: 7,
           role: 'system',
@@ -486,10 +522,15 @@ describe('SQLiteAdapter', () => {
 
     it('deletes planning sessions and their visible messages', () => {
       adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
+      adapter.upsertTerminalSession(makeTerminalSession('planning-term-1', 'planning:planning-1', {
+        kind: 'planning',
+        planningSessionId: 'planning-1',
+      }));
 
       adapter.deleteInAppPlanningSession('planning-1');
 
       expect(adapter.loadInAppPlanningSession('planning-1')).toBeUndefined();
+      expect(adapter.loadTerminalSession('planning-term-1')).toBeUndefined();
       expect(sqliteScalar(adapter, "SELECT COUNT(*) FROM in_app_planning_messages WHERE session_id = 'planning-1'")).toBe(0);
     });
   });

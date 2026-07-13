@@ -422,6 +422,7 @@ export interface InAppPlanningPlanSummary {
   workflowCount?: number;
   steps: string[];
 }
+export type InAppPlanningTerminalMode = 'chat' | 'tmux';
 export type InAppPlanningSessionStatus =
   | 'still_discussing'
   | 'waiting_for_answer'
@@ -444,6 +445,9 @@ export interface InAppPlanningSessionSummary {
   messages: InAppPlanningChatLine[];
   draftPlanAvailable: boolean;
   draftPlanSummary?: InAppPlanningPlanSummary;
+  mode?: InAppPlanningTerminalMode;
+  terminalSessionId?: string;
+  readOnly?: boolean;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   createdAt: string;
