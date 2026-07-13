@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowInspector } from '../components/WorkflowInspector.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { WorkflowMutationFailedEvent } from '@invoker/contracts';
 
 function makeTask(partial?: Partial<TaskState>): TaskState {
   return {
@@ -847,5 +848,77 @@ describe('WorkflowInspector', () => {
     } finally {
       delete (window as unknown as { invoker?: unknown }).invoker;
     }
+  });
+
+  it('renders a persistent mutation failure detail panel for the selected task', () => {
+    const mutationFailure: WorkflowMutationFailedEvent = {
+      intentId: 42,
+      workflowId: 'wf-1',
+      channel: 'invoker:approve',
+      taskId: 'task-1',
+      message: 'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"',
+      failedAt: '2026-07-08T10:00:00.000Z',
+    };
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        mutationFailure={mutationFailure}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const detail = screen.getByTestId('task-mutation-failure-detail');
+    expect(detail).toBeInTheDocument();
+    expect(detail).toHaveTextContent('Approve failed');
+    expect(detail).toHaveTextContent('missing execution harness "codex"');
+    expect(detail).toHaveTextContent('Channel: invoker:approve');
+  });
+
+  it('renders headless command metadata in the mutation failure detail panel', () => {
+    const mutationFailure: WorkflowMutationFailedEvent = {
+      intentId: 46,
+      workflowId: 'wf-1',
+      channel: 'headless.exec',
+      headlessCommand: 'fix',
+      taskId: 'task-1',
+      message: 'SSH remote script failed (exit=1, phase=remote_agent_fix)',
+      failedAt: '2026-07-08T10:00:00.000Z',
+    };
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        mutationFailure={mutationFailure}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const detail = screen.getByTestId('task-mutation-failure-detail');
+    expect(detail).toHaveTextContent('Fix failed');
+    expect(detail).toHaveTextContent('Command: fix');
+  });
+
+  it('does not render the mutation failure detail panel when no failure is provided', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('task-mutation-failure-detail')).not.toBeInTheDocument();
   });
 });
