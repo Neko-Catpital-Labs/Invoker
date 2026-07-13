@@ -426,6 +426,53 @@ describe('Terminal drawer (component)', () => {
     expect(xtermMock.writeLog).toEqual(['replayed once\n']);
   });
 
+  it('does not replay a refreshed restored snapshot into the same live mounted session', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'restored before restart\n',
+    });
+
+    const { rerender } = render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(xtermMock.instances).toHaveLength(1);
+      expect(xtermMock.writeLog).toEqual(['restored before restart\n']);
+    });
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'after restart\n',
+      });
+    });
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['restored before restart\n', 'after restart\n']);
+    });
+
+    await act(async () => {
+      rerender(
+        <TerminalDrawer
+          state="partial"
+          onCycle={vi.fn()}
+          sessions={[{ ...session, outputSnapshot: 'restored before restart\nafter restart\n' }]}
+          activeSessionId={session.sessionId}
+          onSelectSession={vi.fn()}
+          onCloseSession={vi.fn()}
+        />,
+      );
+    });
+
+    expect(xtermMock.writeLog).toEqual(['restored before restart\n', 'after restart\n']);
+  });
+
   it('keeps live output, input, resize, close, and tab selection intact without a preview row', async () => {
     (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockImplementation(async (taskId: string) => ({
       opened: true,
