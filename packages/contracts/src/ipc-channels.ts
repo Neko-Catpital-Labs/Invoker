@@ -428,6 +428,8 @@ export type InAppPlanningSessionStatus =
   | 'draft_ready'
   | 'submitted';
 
+export type PlanningTerminalMode = 'chat' | 'tmux';
+
 export interface InAppPlanningChatLine {
   id: number;
   role: 'user' | 'assistant' | 'system';
@@ -446,6 +448,12 @@ export interface InAppPlanningSessionSummary {
   draftPlanSummary?: InAppPlanningPlanSummary;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
+  terminalMode?: PlanningTerminalMode;
+  terminalSessionId?: string;
+  terminalStatus?: 'running' | 'exited';
+  terminalExitCode?: number;
+  terminalOutputSnapshot?: string;
+  terminalUpdatedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -513,6 +521,15 @@ export interface InAppPlanningResetRequest {
 }
 
 export type InAppPlanningResetResponse = { ok: true };
+
+export interface InAppPlanningSetTerminalModeRequest {
+  sessionId: string;
+  mode: PlanningTerminalMode;
+}
+
+export type InAppPlanningSetTerminalModeResponse =
+  | { ok: true }
+  | { ok: false; error: string };
 
 
 
@@ -781,6 +798,10 @@ export const IpcChannels = {
   'invoker:planning-chat-reset': {} as {
     request: [request: InAppPlanningResetRequest];
     response: InAppPlanningResetResponse;
+  },
+  'invoker:planning-chat-set-terminal-mode': {} as {
+    request: [request: InAppPlanningSetTerminalModeRequest];
+    response: InAppPlanningSetTerminalModeResponse;
   },
   'invoker:planning-terminal-open': {} as {
     request: [planningSessionId: string];
