@@ -591,5 +591,57 @@ describe('GitHubMergeGateProvider', () => {
         ],
       });
     });
+
+    it('ignores stale duplicate check failures when a newer run for the same check passed', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/4239',
+            headRefOid: '026ae544da8626101519b92d20d35f1c63c59c81',
+            headRefName: 'stack/user/feature',
+            mergeStateStatus: 'CLEAN',
+            statusCheckRollup: [
+              {
+                name: 'PR Body',
+                workflowName: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                completedAt: '2026-07-12T17:41:01Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/old/job/1',
+              },
+              {
+                name: 'quality / TypeScript Types',
+                workflowName: 'CI',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                completedAt: '2026-07-12T17:41:54Z',
+              },
+              {
+                name: 'PR Body',
+                workflowName: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                completedAt: '2026-07-12T17:56:20Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/new/job/2',
+              },
+            ],
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '4239', cwd: '/tmp/repo' });
+
+      expect(result.checks).toEqual({
+        state: 'success',
+        failed: [],
+      });
+    });
   });
 });
