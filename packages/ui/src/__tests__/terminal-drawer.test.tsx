@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
+import { useState } from 'react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
@@ -80,6 +81,8 @@ vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
 
 const { App } = await import('../App.js');
 const { TerminalDrawer } = await import('../components/TerminalDrawer.js');
+
+const COMPONENT_TERMINAL_INTERACTION_BUDGET_MS = 50;
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'completed' }];
 const taskAlpha = makeUITask({
@@ -424,6 +427,92 @@ describe('Terminal drawer (component)', () => {
           sessionId: session.sessionId,
           taskId: session.taskId,
           bytes: 'live line\n'.length,
+          active: true,
+        }),
+      );
+    });
+  });
+
+  it('keeps live output, input, and tab switching responsive under terminal pressure', async () => {
+    const alpha = makeTerminalSession('task-alpha', {
+      command: 'sh',
+      args: ['-lc', 'alpha'],
+    });
+    const beta = makeTerminalSession('task-beta', {
+      command: 'sh',
+      args: ['-lc', 'beta'],
+    });
+
+    function Harness(): JSX.Element {
+      const [activeSessionId, setActiveSessionId] = useState(alpha.sessionId);
+      return (
+        <TerminalDrawer
+          state="partial"
+          onCycle={vi.fn()}
+          sessions={[alpha, beta]}
+          activeSessionId={activeSessionId}
+          onSelectSession={setActiveSessionId}
+          onCloseSession={vi.fn()}
+          taskLabels={new Map([
+            [alpha.taskId, 'Alpha description'],
+            [beta.taskId, 'Beta description'],
+          ])}
+        />
+      );
+    }
+
+    render(<Harness />);
+    await waitFor(() => expect(xtermMock.instances).toHaveLength(2));
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+
+    act(() => {
+      for (let index = 0; index < 80; index += 1) {
+        mock.fireTerminalOutput({
+          sessionId: alpha.sessionId,
+          taskId: alpha.taskId,
+          data: `alpha pressure output ${index}\n`,
+        });
+      }
+    });
+
+    await waitFor(() => expect(xtermMock.writeLog).toHaveLength(80));
+    expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
+
+    fireEvent.click(screen.getByRole('tab', { name: /Beta description/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'true');
+    });
+
+    act(() => {
+      xtermMock.instances[1]?.emitData('printf beta\n');
+    });
+    expect(mock.api.terminalWrite).toHaveBeenCalledWith(beta.sessionId, 'printf beta\n');
+
+    const outputPayloads = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([metric]) => metric === 'embedded_terminal_output_write')
+      .map(([, data]) => data as Record<string, any>);
+    expect(outputPayloads).toHaveLength(80);
+    expect(Math.max(...outputPayloads.map((payload) => payload.durationMs))).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
+    expect(outputPayloads.every((payload) => payload.active === true)).toBe(true);
+
+    const inputPayload = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([metric]) => metric === 'embedded_terminal_input')
+      .map(([, data]) => data as Record<string, any>)
+      .at(-1);
+    expect(inputPayload).toEqual(expect.objectContaining({
+      sessionId: beta.sessionId,
+      taskId: beta.taskId,
+      active: true,
+    }));
+    expect(inputPayload?.durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_resize',
+        expect.objectContaining({
+          source: 'active_session',
+          sessionId: beta.sessionId,
+          taskId: beta.taskId,
           active: true,
         }),
       );

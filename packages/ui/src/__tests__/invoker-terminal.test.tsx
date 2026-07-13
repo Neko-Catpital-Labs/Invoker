@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { useState } from 'react';
+import { createMockInvoker, makePlanningSessionSummary, type MockInvoker } from './helpers/mock-invoker.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -12,6 +13,9 @@ vi.mock('@xyflow/react', async () => {
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
+
+const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
+const COMPONENT_INPUT_COMMIT_BUDGET_MS = 50;
 
 describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
@@ -35,6 +39,15 @@ describe('Invoker terminal (component)', () => {
   function submitPlanningText(text: string) {
     fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+  }
+
+  function lastPerfPayload(metric: string): Record<string, any> {
+    const payload = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([name]) => name === metric)
+      .map(([, data]) => data as Record<string, any>)
+      .at(-1);
+    if (!payload) throw new Error(`Missing ${metric} perf payload`);
+    return payload;
   }
 
   it('generates a planning reply from plain language', async () => {
@@ -158,6 +171,120 @@ describe('Invoker terminal (component)', () => {
           lastLineRole: 'assistant',
         }),
       );
+    });
+  });
+
+  it('keeps typing responsive under a large existing transcript', async () => {
+    const largeTranscript = Array.from({ length: 360 }, (_, index) => ({
+      id: index + 1,
+      text: `pressure transcript line ${index + 1}: ${'renderer output '.repeat(12)}`,
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+    }));
+
+    function Harness(): JSX.Element {
+      const [value, setValue] = useState('');
+      return (
+        <InvokerTerminal
+          activeConversationKey="large-chat"
+          lines={largeTranscript}
+          busy={false}
+          value={value}
+          selectedPresetKey="codex"
+          presetOptions={[{ key: 'codex', label: 'Codex' }]}
+          draftPlanAvailable={false}
+          onValueChange={setValue}
+          onSubmit={vi.fn()}
+          onSubmitDraft={vi.fn()}
+          onPresetChange={vi.fn()}
+          onExpand={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+
+    const nextValue = 'tighten terminal responsiveness assertions';
+    const input = screen.getByTestId('invoker-terminal-input');
+    fireEvent.change(input, { target: { value: nextValue } });
+
+    await waitFor(() => expect(input).toHaveValue(nextValue));
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_commit',
+        expect.objectContaining({
+          valueLength: nextValue.length,
+          previousValueLength: 0,
+          conversationKey: 'large-chat',
+          transcriptLineCount: largeTranscript.length,
+        }),
+      );
+    });
+
+    const changePayload = lastPerfPayload('planning_chat_input_change');
+    expect(changePayload.handlerDurationMs).toBeLessThanOrEqual(COMPONENT_INPUT_HANDLER_BUDGET_MS);
+    expect(changePayload.transcriptLineCount).toBe(largeTranscript.length);
+
+    const commitPayload = lastPerfPayload('planning_chat_input_commit');
+    expect(commitPayload.durationMs).toBeLessThanOrEqual(COMPONENT_INPUT_COMMIT_BUDGET_MS);
+    expect(commitPayload.transcriptLineCount).toBe(largeTranscript.length);
+
+    const transcriptCommitsAfterTyping = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([metric]) => metric === 'planning_chat_transcript_commit');
+    expect(transcriptCommitsAfterTyping).toHaveLength(0);
+  });
+
+  it('hydrates restored planning chats and keeps the restored session editable', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'saved-pressure-chat',
+          title: 'Saved pressure chat',
+          status: 'still_discussing',
+          presetKey: 'codex',
+          messages: [
+            {
+              id: 1,
+              role: 'system',
+              text: 'Ask Invoker what you want to build.',
+              tone: 'muted',
+              createdAt: '2026-07-07T00:00:00.000Z',
+            },
+            {
+              id: 2,
+              role: 'user',
+              text: 'Keep this restored transcript editable',
+              createdAt: '2026-07-07T00:00:01.000Z',
+            },
+            {
+              id: 3,
+              role: 'assistant',
+              text: 'The restored transcript is ready.',
+              createdAt: '2026-07-07T00:00:02.000Z',
+            },
+          ],
+          draftPlanAvailable: false,
+        }),
+      ],
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('The restored transcript is ready.');
+    });
+    expect(screen.getByTestId('invoker-terminal-input')).toBeEnabled();
+
+    submitPlanningText('continue the restored session');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        sessionId: 'saved-pressure-chat',
+        message: 'continue the restored session',
+        presetKey: 'codex',
+      });
     });
   });
 

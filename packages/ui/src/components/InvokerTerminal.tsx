@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { Button } from './primitives/index.js';
 
 export interface InvokerTerminalLine {
@@ -63,6 +63,64 @@ function rolePrompt(role: InvokerTerminalLine['role']): string {
   if (role === 'assistant') return 'invoker ›';
   return 'system ›';
 }
+
+const PlanningTranscriptLine = memo(function PlanningTranscriptLine({
+  line,
+}: {
+  line: InvokerTerminalLine;
+}): JSX.Element {
+  const toneClass = line.tone === 'error'
+    ? 'text-destructive'
+    : line.tone === 'success'
+      ? 'text-emerald-400'
+      : line.tone === 'muted'
+        ? 'text-muted-foreground'
+        : line.role === 'assistant'
+          ? 'text-foreground'
+          : 'text-muted-foreground';
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] text-muted-foreground">{rolePrompt(line.role)}</div>
+      {line.reasoning ? (
+        <details
+          data-testid="invoker-terminal-thinking"
+          className="rounded-sm border border-border/60 bg-background/40 px-2 py-1 text-muted-foreground"
+        >
+          <summary className="cursor-pointer select-none text-[11px] text-muted-foreground">
+            Thinking
+          </summary>
+          <div className="mt-1 whitespace-pre-wrap text-[12px] leading-5 text-muted-foreground">
+            {line.reasoning}
+          </div>
+        </details>
+      ) : null}
+      <div className={`whitespace-pre-wrap ${toneClass}`}>{line.text}</div>
+    </div>
+  );
+});
+
+const PlanningTranscript = memo(function PlanningTranscript({
+  lines,
+  transcriptRef,
+  onScroll,
+}: {
+  lines: InvokerTerminalLine[];
+  transcriptRef: { current: HTMLDivElement | null };
+  onScroll: () => void;
+}): JSX.Element {
+  return (
+    <div
+      ref={transcriptRef}
+      data-testid="invoker-terminal-transcript"
+      onScroll={onScroll}
+      className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background px-4 py-4 font-mono text-[13px] leading-6"
+    >
+      {lines.map((line) => (
+        <PlanningTranscriptLine key={line.id} line={line} />
+      ))}
+    </div>
+  );
+});
 
 export function InvokerTerminal({
   lines,
@@ -286,43 +344,11 @@ export function InvokerTerminal({
         </div>
       </div>
 
-      <div
-        ref={transcriptRef}
-        data-testid="invoker-terminal-transcript"
+      <PlanningTranscript
+        lines={lines}
+        transcriptRef={transcriptRef}
         onScroll={handleTranscriptScroll}
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background px-4 py-4 font-mono text-[13px] leading-6"
-      >
-        {lines.map((line) => {
-          const toneClass = line.tone === 'error'
-            ? 'text-destructive'
-            : line.tone === 'success'
-              ? 'text-emerald-400'
-              : line.tone === 'muted'
-                ? 'text-muted-foreground'
-                : line.role === 'assistant'
-                  ? 'text-foreground'
-                  : 'text-muted-foreground';
-          return (
-            <div key={line.id} className="space-y-1">
-              <div className="text-[11px] text-muted-foreground">{rolePrompt(line.role)}</div>
-              {line.reasoning ? (
-                <details
-                  data-testid="invoker-terminal-thinking"
-                  className="rounded-sm border border-border/60 bg-background/40 px-2 py-1 text-muted-foreground"
-                >
-                  <summary className="cursor-pointer select-none text-[11px] text-muted-foreground">
-                    Thinking
-                  </summary>
-                  <div className="mt-1 whitespace-pre-wrap text-[12px] leading-5 text-muted-foreground">
-                    {line.reasoning}
-                  </div>
-                </details>
-              ) : null}
-              <div className={`whitespace-pre-wrap ${toneClass}`}>{line.text}</div>
-            </div>
-          );
-        })}
-      </div>
+      />
 
       {submitError && !readOnly && (
         <div
