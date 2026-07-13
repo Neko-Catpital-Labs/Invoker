@@ -2704,7 +2704,7 @@ export function App() {
           dragHandleTestId="selected-workflow-mini-dag-drag-handle"
           title={`${displayedSelectedWorkflowGraph.workflow.name} task DAG`}
           boundsRef={graphSurfaceRef as unknown as RefObject<HTMLElement>}
-          contentClassName="h-[250px]"
+          contentClassName="min-h-0 h-[250px] overflow-hidden"
         >
           {graphBody}
         </FloatingGraphPanel>
@@ -2735,7 +2735,7 @@ export function App() {
       data-keyboard-region="workflowGraph"
       tabIndex={0}
       data-keyboard-active={keyboardRegion === 'workflowGraph' ? 'true' : 'false'}
-      className={`flex-1 relative overflow-hidden border-r border-border bg-background outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
+      className={`relative min-h-0 flex-1 overflow-hidden border-r border-border bg-background outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
       onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
     >
       {viewMode === 'queue' ? (
@@ -2787,7 +2787,7 @@ export function App() {
   );
 
   const renderGraphWorkspace = (title: string, subtitle: string, showMoreMenu: boolean): JSX.Element => (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-border bg-card/50 px-4 py-2">
         <div>
           <h2 className="text-sm font-semibold text-foreground">{title}</h2>
@@ -2928,7 +2928,7 @@ export function App() {
   const planningReadyCount = planningSessions.filter((session) => session.status === 'draft_ready').length;
 
   const renderPlanningTerminalSurface = (): JSX.Element => (
-    <div className="flex-1 flex overflow-hidden">
+    <div className="flex min-h-0 flex-1 overflow-hidden">
       <div data-testid="planning-session-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-card">
         <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5">
           <div className="min-w-0">
@@ -3199,7 +3199,7 @@ export function App() {
 
 
       {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <LeftStatusColumn
           workflows={workflows}
           tasks={tasks}
@@ -3218,14 +3218,14 @@ export function App() {
           onToggleTheme={toggleTheme}
         />
 
-        <div className="flex-1 flex overflow-hidden">
-          <main className="flex-1 flex flex-col overflow-hidden bg-background">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
             {sidebarSurface === 'home' ? (
               renderGraphWorkspace('Plan graph', homeSubtitle, true)
             ) : sidebarSurface === 'planning' ? (
               renderPlanningTerminalSurface()
             ) : (
-              <div className="flex-1 flex overflow-hidden">
+              <div className="flex min-h-0 flex-1 overflow-hidden">
                 {renderBrowserRail()}
                 {renderBrowserDetailWorkspace()}
               </div>
