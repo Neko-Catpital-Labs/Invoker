@@ -46,7 +46,7 @@ import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalD
 import { LeftStatusColumn } from './components/LeftStatusColumn.js';
 import { BrowserTaskRow, BrowserWorkflowRow } from './components/BrowserListRows.js';
 import { useTheme } from './lib/theme.js';
-import { InvokerTerminal, type InvokerTerminalLine } from './components/InvokerTerminal.js';
+import { InvokerTerminal, type InvokerTerminalLine, type PlanningTerminalMode } from './components/InvokerTerminal.js';
 import { Toaster, toast } from 'sonner';
 import { Button } from './components/primitives/index.js';
 import { CommandPalette } from './components/CommandPalette.js';
@@ -125,7 +125,34 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   input: string;
   busy: boolean;
   conversationKey: string;
+  mode: PlanningTerminalMode;
+  terminalSession?: TerminalSessionDescriptor | null;
+  terminalBusy?: boolean;
+  terminalError?: string | null;
 };
+
+function planningSessionFromSummary(
+  summary: InAppPlanningSessionSummary,
+  overrides: Partial<PlanningSessionView> = {},
+): PlanningSessionView {
+  return {
+    ...summary,
+    messages: summary.messages.map((line) => ({
+      id: line.id,
+      text: line.text,
+      role: line.role,
+      tone: line.tone,
+    })),
+    input: '',
+    busy: false,
+    conversationKey: summary.id,
+    mode: 'chat',
+    terminalSession: null,
+    terminalBusy: false,
+    terminalError: null,
+    ...overrides,
+  };
+}
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
   return {
@@ -140,6 +167,10 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     createdAt: now,
     updatedAt: now,
     conversationKey: 'local-planning-session-1',
+    mode: 'chat',
+    terminalSession: null,
+    terminalBusy: false,
+    terminalError: null,
   };
 }
 
@@ -588,6 +619,10 @@ export function App() {
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
+  const activePlanningMode = activePlanningSession.mode ?? 'chat';
+  const activePlanningTerminalSession = activePlanningSession.terminalSession ?? null;
+  const activePlanningTerminalBusy = Boolean(activePlanningSession.terminalBusy);
+  const activePlanningTerminalError = activePlanningSession.terminalError ?? null;
   const [graphMaximized, setGraphMaximized] = useState(false);
   const { theme, toggleTheme } = useTheme();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -743,6 +778,20 @@ export function App() {
             ? { ...session, status: 'exited', exitCode: event.exitCode }
             : session,
         ),
+      );
+      setPlanningSessions((prev) =>
+        prev.map((session) => (
+          session.terminalSession?.sessionId === event.sessionId
+            ? {
+                ...session,
+                terminalSession: {
+                  ...session.terminalSession,
+                  status: 'exited',
+                  exitCode: event.exitCode,
+                },
+              }
+            : session
+        )),
       );
     });
     return () => { unsubscribe?.(); };
@@ -2116,6 +2165,128 @@ export function App() {
     setSidebarSurface('planning');
   }, [selectedPlanningPresetKey]);
 
+  const handlePlanningModeChange = useCallback(async (mode: PlanningTerminalMode) => {
+    const sourceSession = activePlanningSession;
+    if (mode === 'chat') {
+      updatePlanningSessionById(sourceSession.id, (session) => ({ ...session, mode: 'chat' }));
+      return;
+    }
+    if (sourceSession.mode === 'tmux' && (sourceSession.terminalBusy || sourceSession.terminalSession)) {
+      return;
+    }
+
+    updatePlanningSessionById(sourceSession.id, (session) => ({
+      ...session,
+      mode: 'tmux',
+      terminalBusy: !session.terminalSession,
+      terminalError: null,
+    }));
+
+    let targetSessionId = sourceSession.id;
+    let terminalSession = sourceSession.terminalSession ?? null;
+
+    if (sourceSession.id.startsWith('local-')) {
+      if (!invoker?.planningChatCreate) {
+        updatePlanningSessionById(sourceSession.id, (session) => ({
+          ...session,
+          terminalBusy: false,
+          terminalError: 'Planner is not available.',
+        }));
+        return;
+      }
+
+      try {
+        const result = await invoker.planningChatCreate({
+          presetKey: sourceSession.presetKey || selectedPlanningPresetKey || undefined,
+          title: sourceSession.title,
+        });
+        if (!result.ok) {
+          updatePlanningSessionById(sourceSession.id, (session) => ({
+            ...session,
+            terminalBusy: false,
+            terminalError: result.error,
+          }));
+          return;
+        }
+
+        targetSessionId = result.session.id;
+        terminalSession = null;
+        setPlanningSessions((prev) => prev.map((session) => (
+          session.id === sourceSession.id
+            ? planningSessionFromSummary(result.session, {
+                input: session.input,
+                busy: false,
+                mode: 'tmux',
+                terminalBusy: true,
+                terminalError: null,
+              })
+            : session
+        )));
+        setActivePlanningSessionId((currentSessionId) => (
+          currentSessionId === sourceSession.id ? targetSessionId : currentSessionId
+        ));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to create a planning session.';
+        updatePlanningSessionById(sourceSession.id, (session) => ({
+          ...session,
+          terminalBusy: false,
+          terminalError: message,
+        }));
+        return;
+      }
+    }
+
+    if (terminalSession) {
+      updatePlanningSessionById(targetSessionId, (session) => ({
+        ...session,
+        terminalBusy: false,
+        terminalError: null,
+      }));
+      return;
+    }
+
+    if (!invoker?.planningTerminalOpen) {
+      updatePlanningSessionById(targetSessionId, (session) => ({
+        ...session,
+        terminalBusy: false,
+        terminalError: 'Planning tmux is not available.',
+      }));
+      return;
+    }
+
+    try {
+      const result = await invoker.planningTerminalOpen(targetSessionId);
+      if (result.opened && result.session) {
+        updatePlanningSessionById(targetSessionId, (session) => ({
+          ...session,
+          mode: 'tmux',
+          terminalSession: result.session,
+          terminalBusy: false,
+          terminalError: null,
+          updatedAt: new Date().toISOString(),
+        }));
+      } else {
+        updatePlanningSessionById(targetSessionId, (session) => ({
+          ...session,
+          terminalBusy: false,
+          terminalError: result.reason ?? 'Failed to open planning tmux.',
+        }));
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to open planning tmux.';
+      updatePlanningSessionById(targetSessionId, (session) => ({
+        ...session,
+        terminalBusy: false,
+        terminalError: message,
+      }));
+    }
+  }, [
+    activePlanningSession,
+    invoker,
+    selectedPlanningPresetKey,
+    updatePlanningSessionById,
+  ]);
+
 
   const handleStop = useCallback(async () => {
     if (!invoker) return;
@@ -2970,10 +3141,15 @@ export function App() {
             draftPlanSummary={draftPlanSummary}
             submitError={planningSubmitError}
             readOnly={activePlanningSessionSubmitted}
+            mode={activePlanningMode}
+            terminalSession={activePlanningTerminalSession}
+            terminalBusy={activePlanningTerminalBusy}
+            terminalError={activePlanningTerminalError}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
             onSubmitDraft={() => void handlePlanningSubmitDraft()}
             onPresetChange={setSelectedPlanningPresetKey}
+            onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
           />
         </div>
@@ -3303,11 +3479,16 @@ export function App() {
             draftPlanSummary={draftPlanSummary}
             submitError={planningSubmitError}
             expanded
+            mode={activePlanningMode}
+            terminalSession={activePlanningTerminalSession}
+            terminalBusy={activePlanningTerminalBusy}
+            terminalError={activePlanningTerminalError}
             onValueChange={setPlanningInput}
             readOnly={activePlanningSessionSubmitted}
             onSubmit={() => void handlePlanningSubmit()}
             onSubmitDraft={() => void handlePlanningSubmitDraft()}
             onPresetChange={setSelectedPlanningPresetKey}
+            onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
             onCloseExpanded={() => setPlanningTerminalExpanded(false)}
           />
