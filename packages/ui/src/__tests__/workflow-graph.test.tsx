@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -513,6 +513,75 @@ describe('WorkflowGraph', () => {
     // A manual move must never autofocus the graph.
     expect(setCenterMock).not.toHaveBeenCalled();
     expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('does not fit during pre-recovery watchdog misses after manual pan and workflow data changes', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const onManualViewport = vi.fn();
+      const { rerender } = render(
+        <WorkflowGraph
+          workflows={new Map([
+            ['wf-a', wf('wf-a', 'running')],
+            ['wf-b', wf('wf-b', 'pending')],
+          ])}
+          selectedWorkflowId="wf-a"
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+          onManualViewport={onManualViewport}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+      });
+      expect(fitViewMock).toHaveBeenCalledTimes(1);
+      fitViewMock.mockClear();
+      setCenterMock.mockClear();
+
+      fireEvent.wheel(screen.getByTestId('rf__pane'));
+      expect(onManualViewport).toHaveBeenCalledTimes(1);
+
+      // Simulate React Flow's transient hidden-node state during a routine data
+      // refresh. App is not mounted and no cameraCommand is supplied, so a camera
+      // move here can only come from the workflow graph watchdog.
+      screen.getByTestId('rf__node-wf-a').style.visibility = 'hidden';
+      screen.getByTestId('rf__node-wf-b').style.visibility = 'hidden';
+
+      rerender(
+        <WorkflowGraph
+          workflows={new Map([
+            ['wf-a', wf('wf-a', 'completed')],
+            ['wf-b', wf('wf-b', 'pending')],
+          ])}
+          selectedWorkflowId="wf-a"
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+          onManualViewport={onManualViewport}
+        />,
+      );
+
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(fitViewMock).not.toHaveBeenCalled();
+      expect(setCenterMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(fitViewMock).not.toHaveBeenCalled();
+      expect(setCenterMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(fitViewMock).toHaveBeenCalledTimes(1);
+      expect(setCenterMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('uses a scoped bounded watchdog for React Flow recovery', () => {
