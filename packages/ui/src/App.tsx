@@ -111,6 +111,8 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] textarea',
 ].join(',');
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
+const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
+const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -2852,7 +2854,7 @@ export function App() {
 
   const renderWorkflowsList = (): JSX.Element => (
     workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
-      <div className="overflow-y-auto p-3">
+      <div data-testid="workflows-rail-list" className={`${RAIL_SCROLL_BODY_CLASS} p-3`}>
         <div className="space-y-1">
           {workflowEntries.map((entry) => (
             <BrowserWorkflowRow
@@ -2872,7 +2874,7 @@ export function App() {
 
   const renderTaskList = (entries: typeof attentionEntries, emptyTitle: string, emptyCopy: string, tone: 'attention' | 'running'): JSX.Element => (
     entries.length === 0 ? renderBrowserEmptyState(emptyTitle, emptyCopy) : (
-      <div className="overflow-y-auto p-3">
+      <div data-testid={`${tone}-rail-list`} className={`${RAIL_SCROLL_BODY_CLASS} p-3`}>
         <div className="space-y-1">
           {entries.map((entry) => (
             <BrowserTaskRow
@@ -2893,7 +2895,7 @@ export function App() {
 
 
   const renderPlanningSessionList = (): JSX.Element => (
-    <div data-testid="planning-session-list" className="h-full overflow-y-auto py-1">
+    <div data-testid="planning-session-list" className={`${RAIL_SCROLL_BODY_CLASS} py-1`}>
       <div className="space-y-0.5">
         {planningSessions.map((session) => {
           const selected = session.id === activePlanningSession.id;
@@ -2944,7 +2946,7 @@ export function App() {
             New
           </Button>
         </div>
-        <div className="min-h-0 flex-1">{renderPlanningSessionList()}</div>
+        <div className={RAIL_LIST_FRAME_CLASS}>{renderPlanningSessionList()}</div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2.5">
@@ -2995,7 +2997,7 @@ export function App() {
           Close
         </button>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className={RAIL_LIST_FRAME_CLASS}>
         {sidebarSurface === 'workflows'
           ? renderWorkflowsList()
           : sidebarSurface === 'attention'
@@ -3520,4 +3522,3 @@ export function App() {
     </div>
   );
 }
-
