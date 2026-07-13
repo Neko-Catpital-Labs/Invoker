@@ -5,10 +5,13 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
 import type { Writable, Readable } from 'node:stream';
 
-// Mock child_process before importing WorktreeExecutor
-vi.mock('node:child_process', () => ({
-  spawn: vi.fn(),
-}));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: vi.fn(),
+  };
+});
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -20,8 +23,19 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { WorktreeExecutor, computeContentHash } from '../worktree-executor.js';
 import { BaseExecutor } from '../base-executor.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 const mockedSpawn = vi.mocked(spawn);
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   const { inputs: inputOverrides, ...restOverrides } = overrides;
@@ -38,11 +52,11 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
 
 /**
  * Mock the RepoPool on a WorktreeExecutor instance so that
- * pool.ensureClone / pool.acquireWorktree bypass real git.
+ * pool.ensureCloneThroughRepoQueue / pool.acquireWorktree bypass real git.
  */
 function mockPool(fam: WorktreeExecutor) {
   const pool = {
-    ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+    ensureCloneThroughRepoQueue: vi.fn().mockResolvedValue('/fake/cache/clone'),
     reconcileActiveWorktrees: vi.fn(),
     acquireWorktree: vi.fn().mockImplementation((_repoUrl: string, branch: string) => {
       const sanitized = branch.replace(/\//g, '-');
@@ -267,6 +281,35 @@ describe('WorktreeExecutor', () => {
     taskProcess.emit('close', 0, null);
   });
 
+  it('uses provided base commit without resolving the base ref again', async () => {
+    const { taskProcess } = setupSpawnMock();
+    const baseCommit = '1234567890abcdef1234567890abcdef12345678';
+
+    await executor.start(makeRequest({
+      inputs: {
+        command: 'echo hello',
+        baseBranch: 'master',
+        baseCommit,
+      },
+    }));
+
+    const pool = (executor as any).pool;
+    expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
+    expect(pool.acquireWorktree.mock.calls[0][2]).toBe(baseCommit);
+
+    const gitCalls = mockedSpawn.mock.calls
+      .filter(([cmd]) => cmd === 'git')
+      .map(([, args]) => args as string[]);
+    expect(gitCalls.some((args) => args[0] === 'fetch')).toBe(false);
+    expect(gitCalls.some((args) =>
+      args[0] === 'rev-parse'
+      && args.includes('--verify')
+      && args.some((arg) => arg.includes('master')),
+    )).toBe(false);
+
+    taskProcess.emit('close', 0, null);
+  });
+
   it('task runs in worktree directory, not main repo', async () => {
     const { taskProcess } = setupSpawnMock();
 
@@ -367,6 +410,21 @@ describe('WorktreeExecutor', () => {
     expect(removeCalls.length).toBe(0);
 
     vi.mocked(process.kill).mockRestore();
+  });
+
+  it('kill returns when process close already fired during finalization', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const request = makeRequest({ inputs: { command: 'echo done' } });
+    const handle = await executor.start(request);
+
+    (taskProcess as any).exitCode = 0;
+    taskProcess.emit('close', 0, null);
+
+    await expect(Promise.race([
+      executor.kill(handle).then(() => 'resolved'),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('kill hung')), 50)),
+    ])).resolves.toBe('resolved');
   });
 
   it('destroyAll kills processes without removing worktrees', async () => {
@@ -734,7 +792,7 @@ describe('WorktreeExecutor', () => {
     const branch = 'experiment/action-1-abc12345';
     const worktreePath = '/fake/worktrees/experiment-action-1-abc12345';
     const pool = {
-      ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+      ensureCloneThroughRepoQueue: vi.fn().mockResolvedValue('/fake/cache/clone'),
       reconcileActiveWorktrees: vi.fn(),
       acquireWorktree: vi.fn().mockResolvedValue({
         clonePath: '/fake/cache/clone',
@@ -1008,6 +1066,32 @@ describe('WorktreeExecutor', () => {
       });
 
       await expect(executor.start(request)).rejects.toThrow();
+    });
+  });
+
+  describe('agent registry validation', () => {
+    it('rejects incompatible executionModel values before spawning the agent', async () => {
+      const executorWithRegistry = new WorktreeExecutor({
+        cacheDir: '/fake/cache',
+        worktreeBaseDir: '/fake/worktrees',
+        agentRegistry: registerBuiltinAgents(),
+      });
+      mockPool(executorWithRegistry);
+      setupSpawnMock();
+
+      const request = makeRequest({
+        actionType: 'ai_task',
+        inputs: {
+          prompt: 'test prompt',
+          executionAgent: 'codex',
+          executionModel: 'claude',
+        },
+      });
+
+      await expect(executorWithRegistry.start(request)).rejects.toThrow(
+        'Execution model "claude" is not supported for execution agent "codex".',
+      );
+      expect(mockedSpawn.mock.calls.some(([cmd]) => cmd === 'codex')).toBe(false);
     });
   });
 
@@ -1725,6 +1809,35 @@ describe('WorktreeExecutor', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('keeps heartbeats alive while close finalization is pending', async () => {
+      (executor as any).heartbeatIntervalMs = 20;
+      const finalizeDeferred = createDeferred<string | null>();
+      vi.spyOn(executor as any, 'recordTaskResult').mockImplementation(() => finalizeDeferred.promise);
+
+      const { taskProcess } = setupSpawnMock();
+      const request = makeRequest();
+      const handle = await executor.start(request);
+
+      let heartbeatCount = 0;
+      let completed = false;
+      executor.onHeartbeat(handle, () => {
+        heartbeatCount += 1;
+      });
+      executor.onComplete(handle, () => {
+        completed = true;
+      });
+
+      (taskProcess as any).exitCode = 0;
+      taskProcess.emit('close', 0, null);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      expect(completed).toBe(false);
+      expect(heartbeatCount).toBeGreaterThan(0);
+
+      finalizeDeferred.resolve('abc123');
+      await waitForCondition(() => completed);
     });
 
     it('heartbeat stops after completion to prevent duplicate events', async () => {

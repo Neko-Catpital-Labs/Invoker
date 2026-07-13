@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   Background,
   Controls,
@@ -15,6 +15,8 @@ import type { ActionGraphNode, ActionGraphResponse } from '@invoker/contracts';
 import { BundledEdge } from './BundledEdge.js';
 
 interface ActionGraphViewProps {
+  graph: ActionGraphResponse | null;
+  error: string | null;
   selectedNodeId: string | null;
   onSelectNode: (node: ActionGraphNode | null) => void;
 }
@@ -26,12 +28,12 @@ const EDGE_SPACING = 18;
 
 const statusClasses: Record<ActionGraphNode['status'], string> = {
   queued: 'border-amber-500/70 bg-amber-950/35 text-amber-100',
-  pending: 'border-gray-600 bg-gray-800 text-gray-200',
-  running: 'border-blue-500/70 bg-blue-950/35 text-blue-100',
+  pending: 'border-border-strong bg-secondary text-foreground',
+  running: 'border-border-strong/70 bg-secondary/80 text-foreground',
   waiting: 'border-violet-500/70 bg-violet-950/35 text-violet-100',
   stalled: 'border-orange-500/80 bg-orange-950/45 text-orange-100',
   failed: 'border-red-500/80 bg-red-950/45 text-red-100',
-  cancelled: 'border-gray-600 bg-gray-800/60 text-gray-400',
+  cancelled: 'border-border-strong bg-secondary/60 text-muted-foreground',
   completed: 'border-green-500/70 bg-green-950/35 text-green-100',
 };
 
@@ -39,6 +41,7 @@ const typeOrder: Record<ActionGraphNode['type'], number> = {
   'user-action': 0,
   'mutation-intent': 1,
   'mutation-lease': 2,
+  'launch-dispatch': 2,
   'scheduler-job': 2,
   'task-attempt': 3,
   blocker: 4,
@@ -77,7 +80,7 @@ function ActionNode({ data }: { data: { node: ActionGraphNode; selected: boolean
       <Handle
         type="target"
         position={Position.Left}
-        className="!h-2.5 !w-2.5 !border !border-gray-950 !bg-slate-300"
+        className="!h-2.5 !w-2.5 !border !border-background !bg-muted-foreground/40"
       />
       <div className="flex items-center justify-between gap-2">
         <div className="truncate text-xs font-semibold">{node.label}</div>
@@ -95,7 +98,7 @@ function ActionNode({ data }: { data: { node: ActionGraphNode; selected: boolean
       <Handle
         type="source"
         position={Position.Right}
-        className="!h-2.5 !w-2.5 !border !border-gray-950 !bg-slate-300"
+        className="!h-2.5 !w-2.5 !border !border-background !bg-muted-foreground/40"
       />
     </div>
   );
@@ -175,31 +178,7 @@ function layoutGraph(graph: ActionGraphResponse | null, selectedNodeId: string |
   return { nodes, edges };
 }
 
-function ActionGraphInner({ selectedNodeId, onSelectNode }: ActionGraphViewProps): JSX.Element {
-  const [graph, setGraph] = useState<ActionGraphResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    const load = () => {
-      window.invoker?.getActionGraph?.()
-        .then((response) => {
-          if (!alive) return;
-          setGraph(response);
-          setError(null);
-        })
-        .catch((err) => {
-          if (!alive) return;
-          setError(err instanceof Error ? err.message : String(err));
-        });
-    };
-    load();
-    const interval = setInterval(load, 5_000);
-    return () => {
-      alive = false;
-      clearInterval(interval);
-    };
-  }, []);
+function ActionGraphInner({ graph, error, selectedNodeId, onSelectNode }: ActionGraphViewProps): JSX.Element {
 
   const rendered = useMemo(() => layoutGraph(graph, selectedNodeId), [graph, selectedNodeId]);
 
@@ -207,10 +186,10 @@ function ActionGraphInner({ selectedNodeId, onSelectNode }: ActionGraphViewProps
     return <div className="h-full p-4 text-sm text-red-300">Action Graph failed to load: {error}</div>;
   }
   if (!graph) {
-    return <div className="h-full flex items-center justify-center text-sm text-gray-500">Loading Action Graph</div>;
+    return <div className="h-full flex items-center justify-center text-sm text-muted-foreground">Loading Action Graph</div>;
   }
   if (graph.nodes.length === 0) {
-    return <div className="h-full flex items-center justify-center text-sm text-gray-500">No actions recorded</div>;
+    return <div className="h-full flex items-center justify-center text-sm text-muted-foreground">No actions recorded</div>;
   }
 
   return (

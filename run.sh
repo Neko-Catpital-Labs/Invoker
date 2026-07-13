@@ -5,18 +5,39 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
 
+# Workspaces are durable task/attempt artifacts. Disable destructive cleanup
+# from this launcher even if the caller's environment opts into it.
+export INVOKER_ENABLE_WORKSPACE_CLEANUP=0
+
+BOOTSTRAP_STAMP="$REPO_ROOT/node_modules/.invoker-bootstrap-stamp"
+
 has_bootstrap_artifacts() {
   [ -f "$REPO_ROOT/node_modules/.modules.yaml" ] \
     && [ -x "$REPO_ROOT/packages/app/node_modules/.bin/electron" ]
 }
 
+bootstrap_tools_are_healthy() {
+  "$REPO_ROOT/node_modules/.bin/tsup" --version >/dev/null 2>&1
+}
+
+# An existing install goes stale when the lockfile changes (e.g. a git pull
+# adds a dependency) but node_modules is left untouched. The artifacts check
+# above only proves *some* install exists, so without this check run.sh would
+# skip the reinstall and then fail the build on the now-missing package. Treat
+# the install as stale when we have no record of it, or when pnpm-lock.yaml is
+# newer than the stamp written after the last successful install.
+workspace_install_is_stale() {
+  [ ! -f "$BOOTSTRAP_STAMP" ] || [ "$REPO_ROOT/pnpm-lock.yaml" -nt "$BOOTSTRAP_STAMP" ]
+}
+
 ensure_workspace_bootstrapped() {
-  if has_bootstrap_artifacts && [ "${INVOKER_FORCE_BOOTSTRAP:-0}" != "1" ]; then
+  if has_bootstrap_artifacts && bootstrap_tools_are_healthy && ! workspace_install_is_stale && [ "${INVOKER_FORCE_BOOTSTRAP:-0}" != "1" ]; then
     return 0
   fi
 
   echo "Bootstrapping workspace dependencies..." >&2
   pnpm install --frozen-lockfile >&2
+  touch "$BOOTSTRAP_STAMP"
 }
 
 expand_home_path() {
@@ -84,12 +105,16 @@ if [ "$1" = "--headless" ]; then
       exit 1
     fi
   fi
+  if [ "${2:-}" = "retry-tasks" ]; then
+    shift 2
+    exec bash "$REPO_ROOT/scripts/retry-tasks-by-status.sh" "$@"
+  fi
 
   # Build app and dependencies if headless entry point is missing (e.g. fresh worktree).
   if [ ! -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
     pnpm --filter @invoker/core build >&2
     pnpm --filter @invoker/persistence build >&2
-    pnpm --filter @invoker/executors build >&2
+    pnpm --filter @invoker/execution-engine build >&2
     pnpm --filter @invoker/surfaces build >&2
     pnpm --filter @invoker/ui build >&2
     pnpm --filter @invoker/app build >&2
@@ -105,8 +130,12 @@ if [ "$1" = "--headless" ]; then
   exec node ./packages/app/dist/headless-client.js "$@"
 fi
 
-# Kill any stale Electron/tsup processes from previous runs so we
-# always start from a clean state.
+# Kill any orphaned Puppeteer/automation Chrome left behind by crashed browser
+# sessions, then clear stale Electron/tsup processes so we always start from a
+# clean state.
+if ! node ./scripts/cleanup-orphaned-automation-chrome.mjs; then
+  echo "WARN: orphaned automation Chrome cleanup failed; continuing launch" >&2
+fi
 pkill -f "electron.*packages/app/dist/main.js" 2>/dev/null || true
 pkill -f "tsup.*packages/app" 2>/dev/null || true
 sleep 0.2
@@ -114,7 +143,7 @@ sleep 0.2
 # Clean build all packages (tsup.config has clean: true)
 pnpm --filter @invoker/core build
 pnpm --filter @invoker/persistence build
-pnpm --filter @invoker/executors build
+pnpm --filter @invoker/execution-engine build
 pnpm --filter @invoker/surfaces build
 pnpm --filter @invoker/ui build
 pnpm --filter @invoker/app build

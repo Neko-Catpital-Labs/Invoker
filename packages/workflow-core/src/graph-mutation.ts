@@ -37,7 +37,16 @@ export interface GraphMutationHost {
   getMergeNode(workflowId: string): TaskState | undefined;
 }
 
+// INV-77 selected boundary: workflow-core owns structural graph changes and
+// proves them with in-memory mutation tests, independent of provider/UI state.
+
 // ── Extracted Functions ─────────────────────────────────────
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  return leftSet.size === rightSet.size && [...leftSet].every((value) => rightSet.has(value));
+}
 
 /**
  * Recompute the merge node's dependencies from the actual graph state.
@@ -60,15 +69,12 @@ export function assertMergeLeavesInvariantImpl(host: GraphMutationHost, workflow
   if (!mergeNode) return;
   const leafIds = getExpectedMergeLeafIds(host, workflowId);
 
-  const currentDeps = new Set(mergeNode.dependencies);
-  const newDepsSet = new Set(leafIds);
-  if (
-    currentDeps.size === newDepsSet.size &&
-    [...currentDeps].every((d) => newDepsSet.has(d))
-  ) {
+  if (sameStringSet(mergeNode.dependencies, leafIds)) {
     return;
   }
 
+  const currentDeps = new Set(mergeNode.dependencies);
+  const newDepsSet = new Set(leafIds);
   const missing = leafIds.filter((id) => !currentDeps.has(id));
   const extra = mergeNode.dependencies.filter((id) => !newDepsSet.has(id));
   throw new Error(
@@ -98,17 +104,12 @@ export function assertMergeExperimentDependenciesInvariantImpl(
   }
 }
 
-export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: string): void {
+export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: string): TaskDelta | undefined {
   const mergeNode = host.getMergeNode(workflowId);
   if (!mergeNode) return;
   const leafIds = getExpectedMergeLeafIds(host, workflowId);
 
-  const currentDeps = new Set(mergeNode.dependencies);
-  const newDepsSet = new Set(leafIds);
-  if (
-    currentDeps.size === newDepsSet.size &&
-    [...currentDeps].every((d) => newDepsSet.has(d))
-  ) {
+  if (sameStringSet(mergeNode.dependencies, leafIds)) {
     return;
   }
 
@@ -118,13 +119,15 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
     execution: {},
   };
   const updated = host.writeAndSync(mergeNode.id, changes);
-  host.messageBus.publish(TASK_DELTA_CHANNEL, {
+  const delta: TaskDelta = {
     type: 'updated',
     taskId: mergeNode.id,
     changes,
     taskStateVersion: updated.taskStateVersion,
     previousTaskStateVersion: mergeNode.taskStateVersion,
-  });
+  };
+  host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+  return delta;
 }
 
 /**
@@ -137,6 +140,8 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
  */
 export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphMutation): TaskDelta[] {
   const allDeltas: TaskDelta[] = [];
+  const sourceTaskBefore = host.stateMachine.getTask(mutation.sourceNodeId);
+  const sourceWorkflowId = sourceTaskBefore?.config.workflowId;
 
   // 1. Remap downstream dependencies: sourceNode → outputNode
   const allTasks = host.stateMachine.getAllTasks();
@@ -167,7 +172,6 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
     config: { ...baseChanges.config, ...mutation.sourceChanges?.config },
     execution: { ...baseChanges.execution, ...mutation.sourceChanges?.execution },
   } as TaskStateChanges;
-  const sourceTaskBefore = host.stateMachine.getTask(mutation.sourceNodeId);
   const updatedSource = host.writeAndSync(mutation.sourceNodeId, sourceChanges);
   const sourceDelta: TaskDelta = {
     type: 'updated',
@@ -220,9 +224,10 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
   }
 
   // 4. Reconcile merge leaves now that new nodes exist in the graph
-  const sourceTask = host.stateMachine.getTask(mutation.sourceNodeId);
-  if (sourceTask?.config.workflowId) {
-    reconcileMergeLeavesImpl(host, sourceTask.config.workflowId);
+  if (sourceWorkflowId) {
+    const mergeDelta = reconcileMergeLeavesImpl(host, sourceWorkflowId);
+    if (mergeDelta) allDeltas.push(mergeDelta);
+    assertMergeLeavesInvariantImpl(host, sourceWorkflowId);
   }
 
   return allDeltas;

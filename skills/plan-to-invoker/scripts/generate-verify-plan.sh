@@ -61,7 +61,7 @@ EOF
   done
 fi
 
-# Generate package test checks
+# Generate package existence checks without running package test suites.
 if command -v jq &>/dev/null; then
   pkgs=$(echo "$assumptions" | jq -r '.packages[]' 2>/dev/null || true)
 else
@@ -70,12 +70,11 @@ fi
 
 while IFS= read -r pkg; do
   [[ -z "$pkg" ]] && continue
-  # Only generate test task if packages/<pkg> directory exists reference
-  task_id="verify-tests-${pkg}"
+  task_id="verify-package-${pkg}"
   cat <<EOF
   - id: ${task_id}
-    description: "Verify tests pass for package: ${pkg}"
-    command: "cd packages/${pkg} && pnpm test"
+    description: "Verify package directory exists: ${pkg}"
+    command: "test -d packages/${pkg}"
     dependencies: []
 
 EOF

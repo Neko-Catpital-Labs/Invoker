@@ -269,7 +269,7 @@ describe('TaskPanel double-click editing', () => {
       );
 
       const commandDisplay = screen.getByTestId('command-display');
-      expect(commandDisplay).toHaveClass('hover:border-gray-600');
+      expect(commandDisplay).toHaveClass('hover:border-border-strong');
       expect(commandDisplay).toHaveClass('transition-colors');
     });
   });
@@ -619,13 +619,12 @@ describe('TaskPanel double-click editing', () => {
     });
   });
 
-  describe('Executor dropdown for merge nodes', () => {
-    it('does not render executor dropdown when task is a merge node', () => {
-      const task = {
-        ...makeTask({ command: 'echo test', status: 'pending' }),
-        config: { command: 'echo test', isMergeNode: true },
-      } as TaskState;
-      const mockOnEditType = vi.fn();
+  describe('Executor controls', () => {
+    it('does not expose executor selection to end users', () => {
+      const task = makeTask({
+        command: 'echo test',
+        status: 'pending',
+      });
       render(
         <TaskPanel
           task={task}
@@ -634,180 +633,11 @@ describe('TaskPanel double-click editing', () => {
           onReject={mockOnReject}
           onSelectExperiment={mockOnSelectExperiment}
           onEditCommand={mockOnEditCommand}
-          onEditType={mockOnEditType}
         />,
       );
 
       expect(screen.queryByTestId('runner-kind-select')).not.toBeInTheDocument();
-    });
-
-    it('renders executor dropdown for non-merge nodes when onEditType is provided', () => {
-      const task = makeTask({
-        command: 'echo test',
-        status: 'pending',
-      });
-      const mockOnEditType = vi.fn();
-      render(
-        <TaskPanel
-          task={task}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditCommand={mockOnEditCommand}
-          onEditType={mockOnEditType}
-        />,
-      );
-
-      expect(screen.getByTestId('runner-kind-select')).toBeInTheDocument();
-    });
-
-    it('defaults executor select to worktree for prompt-only task when runnerKind unset (orchestrator default)', () => {
-      const task = makeTask({
-        prompt: 'Write a test',
-        status: 'pending',
-      });
-      render(
-        <TaskPanel
-          task={task}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditCommand={mockOnEditCommand}
-          onEditType={vi.fn()}
-        />,
-      );
-
-      expect(screen.getByTestId('runner-kind-select')).toHaveValue('worktree');
-    });
-
-    it('defaults executor select to worktree for command task when runnerKind unset (orchestrator default)', () => {
-      const task = makeTask({
-        command: 'echo test',
-        status: 'pending',
-      });
-      render(
-        <TaskPanel
-          task={task}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditCommand={mockOnEditCommand}
-          onEditType={vi.fn()}
-        />,
-      );
-
-      expect(screen.getByTestId('runner-kind-select')).toHaveValue('worktree');
-    });
-
-    it('renders SSH remote target options when remoteTargets are provided', () => {
-      const task = makeTask({ command: 'echo test', status: 'pending' });
-      render(
-        <TaskPanel
-          task={task}
-          remoteTargets={['do-droplet', 'aws-instance']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditCommand={mockOnEditCommand}
-          onEditType={vi.fn()}
-        />,
-      );
-
-      const select = screen.getByTestId('runner-kind-select');
-      const options = select.querySelectorAll('option');
-      expect(options).toHaveLength(4);
-      expect(options[2]).toHaveValue('ssh:do-droplet');
-      expect(options[2]).toHaveTextContent('SSH: do-droplet');
-      expect(options[3]).toHaveValue('ssh:aws-instance');
-      expect(options[3]).toHaveTextContent('SSH: aws-instance');
-    });
-
-    it('does not render SSH options when remoteTargets is empty', () => {
-      const task = makeTask({ command: 'echo test', status: 'pending' });
-      render(
-        <TaskPanel
-          task={task}
-          remoteTargets={[]}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditCommand={mockOnEditCommand}
-          onEditType={vi.fn()}
-        />,
-      );
-
-      const select = screen.getByTestId('runner-kind-select');
-      const options = select.querySelectorAll('option');
-      expect(options).toHaveLength(2);
-    });
-
-    it('selects SSH target when task has runnerKind=ssh and poolMemberId', () => {
-      const task = makeTask({
-        command: 'echo test',
-        status: 'pending',
-        config: { command: 'echo test', runnerKind: 'ssh', poolMemberId: 'do-droplet' } as TaskState['config'],
-      });
-      render(
-        <TaskPanel
-          task={task}
-          remoteTargets={['do-droplet']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditCommand={mockOnEditCommand}
-          onEditType={vi.fn()}
-        />,
-      );
-
-      expect(screen.getByTestId('runner-kind-select')).toHaveValue('ssh:do-droplet');
-    });
-
-    it('calls onEditType with ssh and poolMemberId when SSH option selected', () => {
-      const task = makeTask({ command: 'echo test', status: 'pending' });
-      const mockOnEditType = vi.fn();
-      render(
-        <TaskPanel
-          task={task}
-          remoteTargets={['do-droplet']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditCommand={mockOnEditCommand}
-          onEditType={mockOnEditType}
-        />,
-      );
-
-      const select = screen.getByTestId('runner-kind-select');
-      fireEvent.change(select, { target: { value: 'ssh:do-droplet' } });
-      expect(mockOnEditType).toHaveBeenCalledWith('test-task-1', 'ssh', 'do-droplet');
-    });
-
-    it('calls onEditType without poolMemberId when non-SSH option selected', () => {
-      const task = makeTask({ command: 'echo test', status: 'pending' });
-      const mockOnEditType = vi.fn();
-      render(
-        <TaskPanel
-          task={task}
-          remoteTargets={['do-droplet']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditCommand={mockOnEditCommand}
-          onEditType={mockOnEditType}
-        />,
-      );
-
-      const select = screen.getByTestId('runner-kind-select');
-      fireEvent.change(select, { target: { value: 'docker' } });
-      expect(mockOnEditType).toHaveBeenCalledWith('test-task-1', 'docker');
+      expect(screen.queryByText('Run on')).not.toBeInTheDocument();
     });
   });
 

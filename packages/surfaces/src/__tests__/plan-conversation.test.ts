@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PlanConversation, extractYamlPlan, rewritePnpmTestCommand, globToRegex, isDangerousCommand, isConfirmation } from '../slack/plan-conversation.js';
+import { PlanConversation, extractYamlPlan, globToRegex, isDangerousCommand, isConfirmation } from '../slack/plan-conversation.js';
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -134,13 +134,14 @@ describe('extractYamlPlan', () => {
     expect(plan.onFinish).toBeUndefined();
   });
 
-  it('preserves explicit fields from YAML', () => {
+  it('preserves explicit supported fields and strips legacy auto-fix fields from planner YAML', () => {
     const text = `\`\`\`yaml
 name: "Full"
 onFinish: merge
 baseBranch: develop
 featureBranch: feature/test
 mergeMode: automatic
+autoFixRetries: 3
 tasks:
   - id: t1
     description: "test"
@@ -148,6 +149,7 @@ tasks:
     dependencies: []
     pivot: true
     autoFix: true
+    autoFixRetries: 2
     requiresManualApproval: true
 \`\`\``;
     const result = extractYamlPlan(text);
@@ -156,39 +158,77 @@ tasks:
     expect(plan.baseBranch).toBe('develop');
     expect(plan.featureBranch).toBe('feature/test');
     expect(plan.mergeMode).toBe('automatic');
+    expect(plan.autoFixRetries).toBeUndefined();
     expect(plan.tasks[0].pivot).toBe(true);
-    expect(plan.tasks[0].autoFix).toBe(true);
+    expect(plan.tasks[0].autoFix).toBeUndefined();
+    expect(plan.tasks[0].autoFixRetries).toBeUndefined();
     expect(plan.tasks[0].requiresManualApproval).toBe(true);
   });
 
-  it('rewrites npx vitest run to pnpm test in task commands', () => {
+  it('accepts stacked workflow YAML and strips legacy fields recursively', () => {
     const text = `\`\`\`yaml
-name: "Rewrite Test"
-tasks:
-  - id: run-tests
-    description: "Run tests"
-    command: "cd packages/surfaces && npx vitest run"
-    dependencies: []
+name: "Workers Surface"
+repoUrl: git@github.com:test/repo.git
+autoFixRetries: 3
+workflows:
+  - name: "Workers Surface Contracts"
+    autoFixRetries: 2
+    tasks:
+      - id: define-worker-contracts
+        description: "Define worker contracts"
+        prompt: "Update shared contracts for workers"
+        dependencies: []
+        autoFix: true
+      - id: verify-worker-contracts
+        description: "Verify worker contracts"
+        command: "pnpm test packages/contracts"
+        dependencies: [define-worker-contracts]
+  - name: "Workers Surface UI"
+    tasks:
+      - id: build-workers-ui
+        description: "Build workers UI"
+        prompt: "Implement the workers surface"
+        dependencies: []
 \`\`\``;
     const result = extractYamlPlan(text);
     expect(result).not.toBeNull();
     const plan = parsePlanText(result!);
-    expect(plan.tasks[0].command).toBe('cd packages/surfaces && pnpm test');
+    expect(plan.name).toBe('Workers Surface');
+    expect(plan.tasks).toBeUndefined();
+    expect(plan.workflows.map((workflow: any) => workflow.name)).toEqual([
+      'Workers Surface Contracts',
+      'Workers Surface UI',
+    ]);
+    expect(plan.autoFixRetries).toBeUndefined();
+    expect(plan.workflows[0].autoFixRetries).toBeUndefined();
+    expect(plan.workflows[0].tasks[0].autoFix).toBeUndefined();
   });
 
-  it('rewrites pnpm test packages/... to cd packages/... && pnpm test', () => {
+  it('preserves discovered repo commands without rewriting them', () => {
     const text = `\`\`\`yaml
-name: "Rewrite Root Test"
+name: "Preserve Commands"
 tasks:
-  - id: run-tests
-    description: "Run tests"
-    command: "pnpm test packages/protocol/src/__tests__/validation.test.ts"
+  - id: run-vitest
+    description: "Run Vitest"
+    command: "cd packages/surfaces && npx vitest run"
     dependencies: []
+  - id: run-root-package-test
+    description: "Run package test"
+    command: "pnpm test packages/protocol/src/__tests__/validation.test.ts"
+    dependencies:
+      - run-vitest
+  - id: run-npm-test
+    description: "Run npm test"
+    command: "npm test -- src/foo.test.ts"
+    dependencies:
+      - run-root-package-test
 \`\`\``;
     const result = extractYamlPlan(text);
     expect(result).not.toBeNull();
     const plan = parsePlanText(result!);
-    expect(plan.tasks[0].command).toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
+    expect(plan.tasks[0].command).toBe('cd packages/surfaces && npx vitest run');
+    expect(plan.tasks[1].command).toBe('pnpm test packages/protocol/src/__tests__/validation.test.ts');
+    expect(plan.tasks[2].command).toBe('npm test -- src/foo.test.ts');
   });
 
   it('extracts correctly when YAML contains nested triple backticks', () => {
@@ -224,10 +264,23 @@ Let me know if you'd like changes!`;
     expect(plan.tasks[0].prompt).toContain('```typescript');
   });
 
-  it('returns null for truncated YAML with no closing fence', () => {
-    const text = '```yaml\nname: "Truncated"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []';
+  it('recovers a valid final YAML plan that ends at EOF without a closing fence', () => {
+    const text = '```yaml\nname: "Recoverable"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []';
     const result = extractYamlPlan(text);
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    const plan = parsePlanText(result!);
+    expect(plan.name).toBe('Recoverable');
+    expect(plan.tasks[0].id).toBe('t1');
+  });
+
+  it('returns null for incomplete YAML with no closing fence', () => {
+    const text = '```yaml\nname: "Incomplete"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: [';
+    expect(extractYamlPlan(text)).toBeNull();
+  });
+
+  it('returns null for an invalid plan shape with no closing fence', () => {
+    const text = '```yaml\nname: "Invalid"\ntasks:\n  - id: t1';
+    expect(extractYamlPlan(text)).toBeNull();
   });
 
   it('extracts from the last YAML block when multiple exist', () => {
@@ -299,11 +352,9 @@ Does this look better?`;
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
-    it('logs when no closing fence found', () => {
-      extractYamlPlan('```yaml\nname: "Truncated"\ntasks:\n  - id: t1\n    description: "test"');
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('no closing fence found'),
-      );
+    it('does not log when a missing closing fence is recovered at EOF', () => {
+      extractYamlPlan('```yaml\nname: "Recovered"\ntasks:\n  - id: t1\n    description: "test"');
+      expect(warnSpy).not.toHaveBeenCalled();
     });
 
     it('logs on YAML parse error', () => {
@@ -333,33 +384,6 @@ Does this look better?`;
         expect.stringContaining('task missing id or description'),
       );
     });
-  });
-});
-
-describe('rewritePnpmTestCommand', () => {
-  it('rewrites pnpm test packages/<pkg>/<path> to cd + pnpm test -- <relpath>', () => {
-    expect(rewritePnpmTestCommand('pnpm test packages/protocol/src/__tests__/validation.test.ts'))
-      .toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
-  });
-
-  it('rewrites pnpm test -- packages/<pkg>/<path>', () => {
-    expect(rewritePnpmTestCommand('pnpm test -- packages/surfaces/src/__tests__/slack.test.ts'))
-      .toBe('cd packages/surfaces && pnpm test -- src/__tests__/slack.test.ts');
-  });
-
-  it('rewrites pnpm test packages/<pkg> (no file)', () => {
-    expect(rewritePnpmTestCommand('pnpm test packages/protocol'))
-      .toBe('cd packages/protocol && pnpm test');
-  });
-
-  it('preserves trailing suffixes like 2>&1', () => {
-    expect(rewritePnpmTestCommand('pnpm test packages/ui/src/__tests__/foo.test.ts 2>&1'))
-      .toBe('cd packages/ui && pnpm test -- src/__tests__/foo.test.ts 2>&1');
-  });
-
-  it('returns already-correct commands unchanged', () => {
-    expect(rewritePnpmTestCommand('cd packages/protocol && pnpm test'))
-      .toBe('cd packages/protocol && pnpm test');
   });
 });
 
@@ -411,6 +435,31 @@ describe('PlanConversation', () => {
     expect(reply).toBe('What kind of project is this?');
   });
 
+  it('formats Codex JSONL into agent message and exposes reasoning', async () => {
+    const jsonl = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'tid-1' }),
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'item_0', type: 'reasoning', text: 'Greet the user and ask what to plan.' },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'item_1', type: 'agent_message', text: 'Hello. What should we plan?' },
+      }),
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } }),
+    ].join('\n');
+    mockCursorResponse(jsonl);
+    const reply = await conversation.sendMessage('hello');
+    expect(reply).toBe('Hello. What should we plan?');
+    expect(reply).not.toContain('thread.started');
+    expect(conversation.lastTurnReasoning).toEqual(['Greet the user and ask what to plan.']);
+    expect(conversation.history[1]).toEqual({
+      role: 'assistant',
+      content: 'Hello. What should we plan?',
+    });
+  });
+
   it('tracks conversation history', async () => {
     mockCursorResponse('Tell me more.');
     await conversation.sendMessage('Build a REST API');
@@ -450,13 +499,53 @@ describe('PlanConversation', () => {
     expect(mockSpawn).toHaveBeenCalledWith('/usr/local/bin/cursor', expect.any(Array), expect.any(Object));
   });
 
+  it('routes spawn through an injected planningCommandBuilder', async () => {
+    const builder = vi.fn((o: { tool: string; model?: string; prompt: string }) => ({
+      command: 'omp',
+      args: ['--no-title', '--auto-approve', '--model', 'claude', '-p', o.prompt],
+    }));
+    const conv = new PlanConversation({ tool: 'omp', model: 'claude', planningCommandBuilder: builder });
+    mockCursorResponse('Hi');
+    await conv.sendMessage('Hello');
+    expect(builder).toHaveBeenCalledWith(
+      expect.objectContaining({ tool: 'omp', model: 'claude', prompt: expect.any(String) }),
+    );
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'omp',
+      ['--no-title', '--auto-approve', '--model', 'claude', '-p', expect.any(String)],
+      expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'] }),
+    );
+  });
+
+  it('falls back to cursor --print shape when no builder is injected', async () => {
+    const conv = new PlanConversation({ cursorCommand: 'agent', model: 'sonnet' });
+    mockCursorResponse('Hi');
+    await conv.sendMessage('Hello');
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'agent',
+      ['--print', '--model', 'sonnet', expect.any(String)],
+      expect.any(Object),
+    );
+  });
+
   it('includes system prompt in cursor prompt', async () => {
     mockCursorResponse('Hi');
     await conversation.sendMessage('Hello');
     const prompt = mockSpawn.mock.calls[0][1][1] as string;
     expect(prompt).toContain('YAML task plan');
     expect(prompt).toContain('Hello');
-    expect(prompt).toContain('pnpm run test:all');
+    expect(prompt).toContain('Use the package manager and test runner the target repo already uses');
+  });
+
+  it('instructs ambiguous implementation requests to include assumptions before YAML', async () => {
+    mockCursorResponse('Hi');
+    await conversation.sendMessage('quick nit: turn lint warnings into pre-commit errors');
+    const prompt = mockSpawn.mock.calls[0][1][1] as string;
+
+    expect(prompt).toContain('For ambiguous implementation requests, tiny nits');
+    expect(prompt).toContain('State concise assumptions');
+    expect(prompt).toContain('Show a short plan preview');
+    expect(prompt).not.toContain('generate the YAML plan directly');
   });
 
   it('submittedPlanText is null before confirmation', async () => {
@@ -466,7 +555,7 @@ describe('PlanConversation', () => {
     expect(conversation.submittedPlanText).toBeNull();
   });
 
-  it('confirmation extracts and submits the latest plan as text', async () => {
+  it('getDraftedPlan returns the latest valid plan text drafted across turns', async () => {
     const firstYaml = '```yaml\nname: "First"\ntasks:\n  - id: t1\n    description: "one"\n    dependencies: []\n```';
     const secondYaml = '```yaml\nname: "Second"\ntasks:\n  - id: t2\n    description: "two"\n    dependencies: []\n```';
 
@@ -475,36 +564,34 @@ describe('PlanConversation', () => {
     mockCursorResponse(secondYaml);
     await conversation.sendMessage('Change the name');
 
-    const reply = await conversation.sendMessage('yes');
-    expect(reply).toContain('Second');
-    expect(typeof conversation.submittedPlanText).toBe('string');
-    const plan = parsePlanText(conversation.submittedPlanText!);
+    const drafted = conversation.getDraftedPlan();
+    expect(typeof drafted).toBe('string');
+    const plan = parsePlanText(drafted!);
     expect(plan.name).toBe('Second');
-    expect(conversation.planSubmitted).toBe(true);
-    expect(mockSpawn).toHaveBeenCalledTimes(2); // not called for confirmation
-  });
-
-  it('confirmation without plan returns explicit error', async () => {
-    const reply = await conversation.sendMessage('yes');
-    expect(reply).toContain("couldn't find a complete YAML plan");
-    expect(reply).toContain('regenerate the plan');
     expect(conversation.planSubmitted).toBe(false);
-    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(conversation.submittedPlanText).toBeNull();
   });
 
-  it('confirmation with broken YAML returns error, does not call Cursor', async () => {
-    // Simulate an assistant message with invalid YAML
+  it('getDraftedPlan returns null when history has no plan', async () => {
+    expect(conversation.getDraftedPlan()).toBeNull();
+
+    // "yes" no longer auto-submits — it takes the normal planner path and spawns the CLI.
+    mockCursorResponse('What would you like to build?');
+    await conversation.sendMessage('yes');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(conversation.planSubmitted).toBe(false);
+    expect(conversation.getDraftedPlan()).toBeNull();
+  });
+
+  it('getDraftedPlan returns null when the latest plan YAML is broken', async () => {
     mockCursorResponse('Here is a plan:\n```yaml\nname: "Broken\ntasks: [invalid');
     await conversation.sendMessage('Generate a plan');
 
-    const reply = await conversation.sendMessage('yes');
-    expect(reply).toContain("couldn't find a complete YAML plan");
+    expect(conversation.getDraftedPlan()).toBeNull();
     expect(conversation.planSubmitted).toBe(false);
-    // Only 1 spawn call for the first message, not the confirmation
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
-  it('does not pick up illustrative YAML from earlier assistant messages', async () => {
+  it('getDraftedPlan does not pick up illustrative YAML from earlier assistant messages', async () => {
     const illustrativeYaml = '```yaml\nname: "Example Plan"\ntasks:\n  - id: example\n    description: "illustrative example"\n    dependencies: []\n```';
     mockCursorResponse(`Here is an example of the format:\n\n${illustrativeYaml}\n\nWant me to generate a real plan?`);
     await conversation.sendMessage('How do plans work?');
@@ -512,10 +599,9 @@ describe('PlanConversation', () => {
     mockCursorResponse('Sure, what feature would you like to build?');
     await conversation.sendMessage('Tell me more');
 
-    const reply = await conversation.sendMessage('yes');
-    expect(reply).toContain("couldn't find a complete YAML plan");
+    // The latest assistant message has no plan, so nothing complete is drafted.
+    expect(conversation.getDraftedPlan()).toBeNull();
     expect(conversation.planSubmitted).toBe(false);
-    expect(mockSpawn).toHaveBeenCalledTimes(2);
   });
 
   it('planSubmitted starts as false', () => {
@@ -525,12 +611,12 @@ describe('PlanConversation', () => {
   it('reset clears history and submitted plan text', async () => {
     mockCursorResponse(VALID_YAML_PLAN);
     await conversation.sendMessage('Generate plan');
-    await conversation.sendMessage('yes');
 
     conversation.reset();
     expect(conversation.history).toHaveLength(0);
     expect(conversation.submittedPlanText).toBeNull();
     expect(conversation.planSubmitted).toBe(false);
+    expect(conversation.getDraftedPlan()).toBeNull();
   });
 
   it('includes conversation history in prompt for multi-turn', async () => {
@@ -546,9 +632,86 @@ describe('PlanConversation', () => {
     expect(secondPrompt).toContain('A REST API');
   });
 
+  it('emits raw stdout chunks in order before the planner closes', async () => {
+    const chunks: string[] = [];
+    const conv = new PlanConversation({ onRawPlannerOutput: (chunk) => chunks.push(chunk) });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await Promise.resolve();
+
+    proc.stdout.emit('data', Buffer.from('chunk1'));
+    expect(chunks).toEqual(['chunk1']);
+
+    proc.stdout.emit('data', Buffer.from('chunk2'));
+    expect(chunks).toEqual(['chunk1', 'chunk2']);
+
+    proc.emit('close', 0);
+    await expect(promise).resolves.toBe('chunk1chunk2');
+  });
+
+  it('keeps the final reply and assistant history as the assembled stdout', async () => {
+    const chunks: string[] = [];
+    const conv = new PlanConversation({ onRawPlannerOutput: (chunk) => chunks.push(chunk) });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await Promise.resolve();
+
+    proc.stdout.emit('data', Buffer.from('  final '));
+    proc.stdout.emit('data', Buffer.from('reply  '));
+    proc.emit('close', 0);
+
+    await expect(promise).resolves.toBe('final reply');
+    expect(chunks).toEqual(['  final ', 'reply  ']);
+    expect(conv.history).toEqual([
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'final reply' },
+    ]);
+  });
+
+  it('emits partial stdout before planner failure without persisting assistant history', async () => {
+    const chunks: string[] = [];
+    const repo = {
+      loadConversation: vi.fn(),
+      saveConversation: vi.fn(),
+      deleteConversation: vi.fn(),
+    };
+    const conv = new PlanConversation({
+      threadTs: 'ts-stream-fail',
+      conversationRepo: repo as any,
+      onRawPlannerOutput: (chunk) => chunks.push(chunk),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    await Promise.resolve();
+
+    proc.stdout.emit('data', Buffer.from('partial '));
+    proc.stdout.emit('data', Buffer.from('reply'));
+    proc.emit('close', 1);
+
+    await expect(promise).rejects.toThrow('agent exited with code 1: partial reply');
+    expect(chunks).toEqual(['partial ', 'reply']);
+    expect(conv.history).toEqual([{ role: 'user', content: 'Hello' }]);
+    expect(repo.saveConversation).not.toHaveBeenCalled();
+  });
+
   it('handles Cursor CLI error', async () => {
     mockSpawn.mockReturnValueOnce(createErrorProcess('Command not found'));
-    await expect(conversation.sendMessage('Hello')).rejects.toThrow('Failed to spawn Cursor CLI');
+    await expect(conversation.sendMessage('Hello')).rejects.toThrow('Failed to spawn agent');
   });
 
   it('handles non-zero exit code', async () => {
@@ -565,7 +728,29 @@ describe('PlanConversation', () => {
       proc.emit('close', 1);
     }, 0);
 
-    await expect(promise).rejects.toThrow('Cursor CLI exited with code 1');
+    await expect(promise).rejects.toThrow('agent exited with code 1');
+  });
+
+  it('names the planner tool (omp), not "Cursor", on non-zero exit', async () => {
+    const conv = new PlanConversation({
+      tool: 'omp',
+      planningCommandBuilder: () => ({ command: 'omp', args: ['--no-title', '--auto-approve', '-p', 'x'] }),
+    });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    setTimeout(() => {
+      proc.stderr.emit('data', Buffer.from('No models available'));
+      proc.emit('close', 1);
+    }, 0);
+
+    const err = await promise.then(() => null, (e) => e as Error);
+    expect(err?.message).toContain('omp exited with code 1');
+    expect(err?.message).not.toContain('Cursor');
   });
 });
 
@@ -606,6 +791,62 @@ describe('PlanConversation prompt construction', () => {
     (conv as any).messages.push({ role: 'user', content: 'Hello' });
     const prompt = conv.buildCursorPrompt();
     expect(prompt).toContain('repoUrl: "git@github.com:user/repo.git"');
+  });
+
+  it('system prompt requires discovered verification commands for target repos', () => {
+    const conv = new PlanConversation({});
+    (conv as any).messages.push({ role: 'user', content: 'Add a small pre-commit lint gate' });
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('Inspect repo manifests and existing docs/scripts before choosing commands');
+    expect(prompt).toContain('do not impose Invoker-specific commands on external repos');
+    expect(prompt).toContain('reserve broad/full-suite commands for the final gate only when the target repo documents such a command');
+  });
+
+  it('system prompt advertises external_review as the GitHub-backed review gate', () => {
+    const conv = new PlanConversation({});
+    (conv as any).messages.push({ role: 'user', content: 'Implement a small feature' });
+    const prompt = conv.buildCursorPrompt();
+
+    // The canonical GitHub review gate must be named explicitly for reviewable plans.
+    expect(prompt).toContain('mergeMode: external_review');
+    expect(prompt).toContain('GitHub-backed review gate');
+    // Manual remains the verification-only default; automatic still documented.
+    expect(prompt).toContain('"manual" (default)');
+    expect(prompt).toContain('"automatic"');
+  });
+
+  it('buildCursorPrompt can prefer stacked workflows', () => {
+    const conv = new PlanConversation({
+      repoUrl: 'git@github.com:test/repo.git',
+      preferStackedWorkflows: true,
+    });
+    (conv as any).messages.push({ role: 'user', content: 'Build the Workers Surface' });
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('prefer a workflow stack');
+    expect(prompt).toContain('workflows:');
+    expect(prompt).toContain('Each downstream workflow is based on the previous workflow');
+    expect(prompt).toContain('Build the Workers Surface');
+  });
+
+  it('agent mode refuses Invoker YAML and redirects to plan:', () => {
+    // Agent threads can never submit a plan — handleLobbySubmit rejects a submit
+    // unless conversationMode === 'plan'. So the agent prompt must not offer to
+    // draft Invoker YAML (which would be an un-submittable dead end); it must
+    // steer the user to a `plan:` thread instead.
+    const conv = new PlanConversation({ mode: 'agent' });
+    (conv as any).messages.push({ role: 'user', content: 'Make me an Invoker plan to add a REST API' });
+    const prompt = conv.buildCursorPrompt();
+
+    // Never the plan-mode system prompt in an agent thread.
+    expect(prompt).not.toContain('Invoker orchestrator');
+    // Agent mode must refuse YAML unconditionally and point at `plan:`.
+    expect(prompt).toContain('Do NOT generate Invoker YAML');
+    expect(prompt).toContain('plan:');
+    // The old loophole permitted YAML "unless the user explicitly asks" — that
+    // produced drafts Slack silently rejects on submit.
+    expect(prompt).not.toContain('unless the user explicitly asks');
   });
 });
 
@@ -654,23 +895,26 @@ describe('PlanConversation instrumentation', () => {
     expect(perfLines[0]).toMatch(/total=\d+ms/);
   });
 
-  it('emits [PERF] sendMessage summary on confirmation path', async () => {
+  it('emits [PERF] sendMessage summary when a "yes" takes the normal planner path', async () => {
     const conv = createInstrumentedConversation();
     mockCursorResponse(VALID_YAML_PLAN);
     await conv.sendMessage('Generate plan');
+    mockCursorResponse('Anything else?');
     await conv.sendMessage('yes');
 
-    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage (confirmation):'));
-    expect(perfLines).toHaveLength(1);
-    expect(perfLines[0]).toMatch(/init=\d+ms/);
-    expect(perfLines[0]).toMatch(/total=\d+ms/);
+    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage:'));
+    expect(perfLines).toHaveLength(2);
+    expect(perfLines[1]).toMatch(/init=\d+ms/);
+    expect(perfLines[1]).toMatch(/cursor=\d+ms/);
+    expect(perfLines[1]).toMatch(/total=\d+ms/);
   });
 
-  it('emits [PERF] sendMessage summary on failed confirmation path', async () => {
+  it('emits [PERF] sendMessage summary for a "yes" with no drafted plan', async () => {
     const conv = createInstrumentedConversation();
+    mockCursorResponse('What would you like to build?');
     await conv.sendMessage('yes');
 
-    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage (confirmation-failed):'));
+    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage:'));
     expect(perfLines).toHaveLength(1);
     expect(perfLines[0]).toMatch(/init=\d+ms/);
     expect(perfLines[0]).toMatch(/total=\d+ms/);
@@ -753,16 +997,17 @@ describe('PlanConversation instrumentation', () => {
     expect(exitLines[0]).toMatch(/elapsed=\d+ms/);
   });
 
-  it('does not emit [CONV] on confirmation path', async () => {
+  it('emits [CONV] for a "yes" message on the normal planner path', async () => {
     const conv = createInstrumentedConversation();
     mockCursorResponse(VALID_YAML_PLAN);
     await conv.sendMessage('Generate plan');
     logSpy.mockClear();
 
+    mockCursorResponse('Anything else?');
     await conv.sendMessage('yes');
 
     const convLines = logMessages().filter(m => m.startsWith('[CONV]'));
-    expect(convLines).toHaveLength(0);
+    expect(convLines).toHaveLength(2);
   });
 
   it('reports growing historyMsgs across turns', async () => {

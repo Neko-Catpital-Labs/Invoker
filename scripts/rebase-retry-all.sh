@@ -224,14 +224,14 @@ if [ "$FOLLOW" = true ]; then
     if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
       set +e
       cmd_out="$(
-        run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" headless_mutation --no-track recreate-with-rebase "$wf_id" 2>&1
+        run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" headless_mutation --no-track rebase-retry "$wf_id" 2>&1
       )"
       cmd_status=$?
       set -e
     else
       set +e
       cmd_out="$(
-        headless_mutation --no-track recreate-with-rebase "$wf_id" 2>&1
+        headless_mutation --no-track rebase-retry "$wf_id" 2>&1
       )"
       cmd_status=$?
       set -e
@@ -299,13 +299,13 @@ else
     echo "[queue $IDX/$TOTAL_WORKFLOWS] $WF_ID" >&2
 
     if [ "$DRY_RUN" = true ]; then
-      echo "  [DRY RUN] Would dispatch recreate-with-rebase for workflow: $WF_ID" >&2
+      echo "  [DRY RUN] Would dispatch rebase-retry for workflow: $WF_ID" >&2
       DISPATCHED=$((DISPATCHED + 1))
       continue
     fi
 
     log_file="$LOG_DIR/${WF_ID}.log"
-    printf '{"label":"%s","workflowId":"%s","args":["recreate-with-rebase","%s"]}\n' "$WF_ID" "$WF_ID" "$WF_ID" >> "$COMMANDS_FILE"
+    printf '{"label":"%s","workflowId":"%s","args":["rebase-retry","%s"]}\n' "$WF_ID" "$WF_ID" "$WF_ID" >> "$COMMANDS_FILE"
     echo "  queued log=$log_file" >&2
   done <<< "$WORKFLOW_IDS"
 

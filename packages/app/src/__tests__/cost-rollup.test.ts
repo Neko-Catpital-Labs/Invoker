@@ -329,10 +329,10 @@ describe('resolveAgentName', () => {
     })).toBe('codex');
   });
 
-  it('defaults to claude', () => {
+  it('defaults to codex', () => {
     expect(resolveAgentName({
       id: 't1', workflowId: 'wf-1', runnerKind: 'worktree',
-    })).toBe('claude');
+    })).toBe('codex');
   });
 });
 

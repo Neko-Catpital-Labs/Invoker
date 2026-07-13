@@ -36,6 +36,12 @@ describe('agent-mutation invalidation contract', () => {
     expect(MUTATION_POLICIES.executionAgent.invalidateIfActive).toBe(true);
   });
 
+  it('MUTATION_POLICIES.executionModel is recreate-class and invalidates active attempts', () => {
+    expect(MUTATION_POLICIES.executionModel.action).toBe('recreateTask');
+    expect(MUTATION_POLICIES.executionModel.invalidatesExecutionSpec).toBe(true);
+    expect(MUTATION_POLICIES.executionModel.invalidateIfActive).toBe(true);
+  });
+
   it('routes through applyInvalidation with cancelInFlight invoked BEFORE recreateTask dep', async () => {
     const deps = makeDeps();
     const policy = MUTATION_POLICIES.executionAgent;
@@ -105,6 +111,7 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
   return {
     getTask: vi.fn().mockReturnValue({ config: { workflowId: 'wf-1' } }),
     editTaskAgent: vi.fn().mockReturnValue([] as TaskState[]),
+    editTaskModel: vi.fn().mockReturnValue([] as TaskState[]),
     ...overrides,
   } as unknown as Orchestrator;
 }
@@ -132,6 +139,22 @@ describe('CommandService.editTaskAgent (headless integration seam)', () => {
     expect(result).toEqual({ ok: true, data: [] });
     expect(orchestrator.editTaskAgent).toHaveBeenCalledWith('wf-1/t1', 'codex');
     expect(orchestrator.editTaskAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('delegates a model-edit envelope to orchestrator.editTaskModel with the expected payload', async () => {
+    const envelope: CommandEnvelope<{ taskId: string; executionModel: string | null }> = {
+      commandId: 'cmd-model-1',
+      source: 'headless',
+      scope: 'task',
+      idempotencyKey: 'idem-model-1',
+      payload: { taskId: 'wf-1/t1', executionModel: 'openai/gpt-5.2' },
+    };
+
+    const result = await service.editTaskModel(envelope);
+
+    expect(result).toEqual({ ok: true, data: [] });
+    expect(orchestrator.editTaskModel).toHaveBeenCalledWith('wf-1/t1', 'openai/gpt-5.2');
+    expect(orchestrator.editTaskModel).toHaveBeenCalledTimes(1);
   });
 
   it('wraps orchestrator errors in CommandResult instead of throwing', async () => {

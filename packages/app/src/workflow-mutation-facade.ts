@@ -16,20 +16,19 @@
  */
 
 import type { Logger } from '@invoker/contracts';
-import type { Orchestrator, ExternalGatePolicyUpdate, TaskState } from '@invoker/workflow-core';
+import { makeEnvelope } from '@invoker/contracts';
+import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
+import type { CommandService, Orchestrator, ExternalGatePolicyUpdate, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import {
   approveTask as sharedApproveTask,
   rejectTask as sharedRejectTask,
   provideInput as sharedProvideInput,
-  retryTask as sharedRetryTask,
-  retryWorkflow as sharedRetryWorkflow,
-  recreateWorkflow as sharedRecreateWorkflow,
-  recreateTask as sharedRecreateTask,
   recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
-  recreateWithRebase as sharedRecreateWithRebase,
-  rebaseAndRetry as sharedRebaseAndRetry,
+  rebaseRetry as sharedRebaseRetry,
+  rebaseRecreate as sharedRebaseRecreate,
+  resolveWorkflowIdForRebaseTarget,
   cancelWorkflow as sharedCancelWorkflow,
   forkWorkflow as sharedForkWorkflow,
   editTaskCommand as sharedEditTaskCommand,
@@ -37,6 +36,7 @@ import {
   editTaskType as sharedEditTaskType,
   editTaskAgent as sharedEditTaskAgent,
   setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
+  setWorkflowExternalGatePolicies as sharedSetWorkflowExternalGatePolicies,
   setWorkflowMergeMode as sharedSetWorkflowMergeMode,
   selectExperiment as sharedSelectExperiment,
   selectExperiments as sharedSelectExperiments,
@@ -45,18 +45,24 @@ import {
   deleteAllWorkflows as sharedDeleteAllWorkflows,
   type FailureRecoveryRoute,
   type FixWithAgentActionResult,
-  type ActionDeps,
+  type CommandActionDeps,
 } from './workflow-actions.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
   executeGlobalTopup,
   isDispatchableLaunch,
 } from './global-topup.js';
+import {
+  setTaskMetadata as sharedSetTaskMetadata,
+  setWorkflowMetadata as sharedSetWorkflowMetadata,
+  type MetadataSetResult,
+} from './metadata-setter.js';
 
 // ── Result types ─────────────────────────────────────────────
 
 export interface MutationResult {
   started: TaskState[];
+  /** Mutation-primary runnable tasks after facade scope filtering. */
   runnable: TaskState[];
   topup: TaskState[];
 }
@@ -100,6 +106,7 @@ export interface WorkflowMutationFacadeDeps {
   logger?: Logger;
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
+  commandService: CommandService;
   taskExecutor: TaskRunner;
   dispatchMode?: 'await' | 'fire-and-forget';
   autoApproveAIFixes?: boolean;
@@ -144,19 +151,48 @@ export class WorkflowMutationFacade {
   }
 
   async retryTask(taskId: string): Promise<MutationResult> {
-    const started = sharedRetryTask(taskId, { orchestrator: this.deps.orchestrator });
+    await this.closeReviewForTask(taskId);
+    const started = await this.runViaCommandService(
+      (cs) => cs.retryTask(makeEnvelope('facade.retry-task', 'surface', 'task', { taskId })),
+    );
     return this.finalizeWithTopup(started, 'facade.retry-task', { scopedTaskIds: [taskId] });
   }
 
   async recreateTask(taskId: string): Promise<MutationResult> {
-    const started = sharedRecreateTask(taskId, {
-      orchestrator: this.deps.orchestrator,
-      persistence: this.deps.persistence,
-    });
+    await this.closeReviewForTask(taskId);
+    const started = await this.runViaCommandService(
+      (cs) => cs.recreateTask(makeEnvelope('facade.recreate-task', 'surface', 'task', { taskId })),
+    );
     return this.finalizeWithTopup(started, 'facade.recreate-task', { scopedTaskIds: [taskId] });
   }
 
+  async deleteTask(taskId: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
+    if (this.deps.killRunningTask) {
+      const task = this.deps.orchestrator.getTask(taskId);
+      if (task && (task.status === 'running' || task.status === 'fixing_with_ai')) {
+        await this.deps.killRunningTask(task.id);
+      }
+    }
+    const started = await this.runViaCommandService(
+      (cs) => cs.deleteTask(makeEnvelope('facade.delete-task', 'surface', 'task', { taskId })),
+    );
+    return this.finalizeWithTopup(started, 'facade.delete-task', { scopedTaskIds: started.map((task) => task.id) });
+  }
+
+  async recreateDownstream(taskId: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
+    const started = await this.runViaCommandService(
+      (cs) => cs.recreateDownstream(makeEnvelope('facade.recreate-downstream', 'surface', 'task', { taskId })),
+    );
+    // `started` contains only descendants (the target is preserved), so a
+    // [taskId] dispatch scope would filter every launch out.
+    const scopedTaskIds = started.map((task) => task.id);
+    return this.finalizeWithTopup(started, 'facade.recreate-downstream', { scopedTaskIds });
+  }
+
   async selectExperiment(taskId: string, experimentId: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = sharedSelectExperiment(taskId, experimentId, {
       orchestrator: this.deps.orchestrator,
     });
@@ -164,6 +200,7 @@ export class WorkflowMutationFacade {
   }
 
   async selectExperiments(taskId: string, experimentIds: string[]): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = await sharedSelectExperiments(taskId, experimentIds, {
       orchestrator: this.deps.orchestrator,
       taskExecutor: this.deps.taskExecutor,
@@ -172,6 +209,7 @@ export class WorkflowMutationFacade {
   }
 
   async editTaskCommand(taskId: string, newCommand: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = sharedEditTaskCommand(taskId, newCommand, {
       orchestrator: this.deps.orchestrator,
     });
@@ -179,6 +217,7 @@ export class WorkflowMutationFacade {
   }
 
   async editTaskPrompt(taskId: string, newPrompt: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = sharedEditTaskPrompt(taskId, newPrompt, {
       orchestrator: this.deps.orchestrator,
     });
@@ -190,6 +229,7 @@ export class WorkflowMutationFacade {
     runnerKind: string,
     poolMemberId?: string,
   ): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = sharedEditTaskType(
       taskId,
       runnerKind,
@@ -200,6 +240,7 @@ export class WorkflowMutationFacade {
   }
 
   async editTaskAgent(taskId: string, agentName: string): Promise<MutationResult> {
+    await this.closeReviewForTask(taskId);
     const started = sharedEditTaskAgent(taskId, agentName, {
       orchestrator: this.deps.orchestrator,
     });
@@ -216,6 +257,30 @@ export class WorkflowMutationFacade {
     return this.finalizeWithTopup(started, 'facade.set-gate-policy', { scopedTaskIds: [taskId] });
   }
 
+  async setWorkflowExternalGatePolicies(
+    workflowId: string,
+    updates: ExternalGatePolicyUpdate[],
+  ): Promise<MutationResult> {
+    const started = sharedSetWorkflowExternalGatePolicies(workflowId, updates, {
+      orchestrator: this.deps.orchestrator,
+    });
+    return this.finalizeWithTopup(started, 'facade.set-workflow-gate-policy', { scopedWorkflowId: workflowId });
+  }
+
+  async setTaskMetadata(
+    taskId: string,
+    fieldPath: string,
+    value: unknown,
+    options: { raw?: boolean } = {},
+  ): Promise<MetadataSetResult> {
+    if (!this.deps.commandService) throw new Error('Metadata updates require CommandService serialization.');
+    return sharedSetTaskMetadata({
+      commandService: this.deps.commandService,
+      orchestrator: this.deps.orchestrator,
+      persistence: this.deps.persistence,
+    }, taskId, fieldPath, value, options);
+  }
+
   async cancelTask(taskId: string): Promise<CancelMutationResult> {
     const result = this.deps.orchestrator.cancelTask(taskId);
     if (this.deps.killRunningTask) {
@@ -230,39 +295,39 @@ export class WorkflowMutationFacade {
   // ── Workflow-scoped mutations ────────────────────────────
 
   async retryWorkflow(workflowId: string): Promise<MutationResult> {
-    const started = sharedRetryWorkflow(workflowId, {
-      orchestrator: this.deps.orchestrator,
-    });
+    await this.closeReviewForWorkflow(workflowId);
+    const started = await this.runViaCommandService(
+      (cs) => cs.retryWorkflow(makeEnvelope('facade.retry-workflow', 'surface', 'workflow', { workflowId })),
+    );
     return this.finalizeWithTopup(started, 'facade.retry-workflow', { scopedWorkflowId: workflowId });
   }
 
   async recreateWorkflow(workflowId: string): Promise<MutationResult> {
-    const started = sharedRecreateWorkflow(workflowId, {
-      logger: this.deps.logger,
-      persistence: this.deps.persistence,
-      orchestrator: this.deps.orchestrator,
-    });
+    await this.closeReviewForWorkflow(workflowId);
+    const started = await this.runViaCommandService(
+      (cs) => cs.recreateWorkflow(makeEnvelope('facade.recreate-workflow', 'surface', 'workflow', { workflowId })),
+    );
     return this.finalizeWithTopup(started, 'facade.recreate-workflow', { scopedWorkflowId: workflowId });
   }
 
   async recreateWorkflowFromFreshBase(workflowId: string): Promise<MutationResult> {
+    await this.closeReviewForWorkflow(workflowId);
     const started = await sharedRecreateWorkflowFromFreshBase(workflowId, this.actionDeps());
     return this.finalizeWithTopup(started, 'facade.recreate-from-fresh-base', { scopedWorkflowId: workflowId });
   }
 
-  async recreateWithRebase(workflowId: string): Promise<MutationResult> {
-    const started = await sharedRecreateWithRebase(workflowId, this.actionDeps());
-    return this.finalizeWithTopup(started, 'facade.recreate-with-rebase', { scopedWorkflowId: workflowId });
+  async rebaseRetry(target: string): Promise<MutationResult> {
+    const workflowId = resolveWorkflowIdForRebaseTarget(target, this.actionDeps());
+    await this.closeReviewForWorkflow(workflowId);
+    const started = await sharedRebaseRetry(target, this.actionDeps());
+    return this.finalizeWithTopup(started, 'facade.rebase-retry', { scopedWorkflowId: workflowId });
   }
 
-  async rebaseAndRetry(taskId: string): Promise<MutationResult> {
-    const workflowId = this.deps.orchestrator.getTask(taskId)?.config.workflowId;
-    const started = await sharedRebaseAndRetry(taskId, this.actionDeps());
-    return this.finalizeWithTopup(
-      started,
-      'facade.rebase-and-retry',
-      workflowId ? { scopedWorkflowId: workflowId } : { scopedTaskIds: [taskId] },
-    );
+  async rebaseRecreate(target: string): Promise<MutationResult> {
+    const workflowId = resolveWorkflowIdForRebaseTarget(target, this.actionDeps());
+    await this.closeReviewForWorkflow(workflowId);
+    const started = await sharedRebaseRecreate(target, this.actionDeps());
+    return this.finalizeWithTopup(started, 'facade.rebase-recreate', { scopedWorkflowId: workflowId });
   }
 
   async cancelWorkflow(workflowId: string): Promise<CancelMutationResult> {
@@ -291,6 +356,7 @@ export class WorkflowMutationFacade {
         await this.deps.killRunningTask(task.id);
       }
     }
+    await this.deps.taskExecutor?.closeWorkflowReview?.(workflowId);
     this.deps.orchestrator.deleteWorkflow(workflowId);
   }
 
@@ -312,7 +378,6 @@ export class WorkflowMutationFacade {
       logger: this.deps.logger,
     });
     const runnable = result.started.filter(isDispatchableLaunch);
-    await this.deps.taskExecutor.executeTasks(runnable);
     const topup = await this.topupOnly('facade.fork-workflow');
     return {
       forkedWorkflowId: result.forkedWorkflowId,
@@ -329,6 +394,20 @@ export class WorkflowMutationFacade {
       persistence: this.deps.persistence,
       taskExecutor: this.deps.taskExecutor,
     });
+  }
+
+  async setWorkflowMetadata(
+    workflowId: string,
+    fieldPath: string,
+    value: unknown,
+    options: { raw?: boolean } = {},
+  ): Promise<MetadataSetResult> {
+    if (!this.deps.commandService) throw new Error('Metadata updates require CommandService serialization.');
+    return sharedSetWorkflowMetadata({
+      commandService: this.deps.commandService,
+      orchestrator: this.deps.orchestrator,
+      persistence: this.deps.persistence,
+    }, workflowId, fieldPath, value, options);
   }
 
   // ── AI-driven mutations ──────────────────────────────────
@@ -372,8 +451,10 @@ export class WorkflowMutationFacade {
     const detail = await sharedFixWithAgentAction(
       taskId,
       {
+        logger: this.deps.logger,
         orchestrator: this.deps.orchestrator,
         persistence: this.deps.persistence,
+        commandService: this.deps.commandService,
         taskExecutor: this.deps.taskExecutor,
         autoApproveAIFixes: this.deps.autoApproveAIFixes,
       },
@@ -395,11 +476,12 @@ export class WorkflowMutationFacade {
 
   // ── Internal helpers ─────────────────────────────────────
 
-  private actionDeps(): ActionDeps {
+  private actionDeps(): CommandActionDeps {
     return {
       logger: this.deps.logger,
       orchestrator: this.deps.orchestrator,
       persistence: this.deps.persistence,
+      commandService: this.deps.commandService,
       taskExecutor: this.deps.taskExecutor,
       autoApproveAIFixes: this.deps.autoApproveAIFixes,
     };
@@ -410,6 +492,7 @@ export class WorkflowMutationFacade {
     context: string,
     scope: DispatchScope = {},
   ): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
+    this.assertSingleDispatchScope(scope);
     return dispatchStartedTasksWithGlobalTopup({
       orchestrator: this.deps.orchestrator,
       taskExecutor: this.deps.taskExecutor,
@@ -430,6 +513,31 @@ export class WorkflowMutationFacade {
     return { started, runnable, topup };
   }
 
+  /**
+   * Route lifecycle mutations through CommandService so they get mutex
+   * serialization, executor kill on cancel-in-flight, and cross-workflow
+   * cascade. There is intentionally no direct orchestrator fallback.
+   */
+  private async runViaCommandService(
+    routed: (cs: CommandService) => Promise<{ ok: true; data: TaskState[] } | { ok: false; error: { code: string; message: string } }>,
+  ): Promise<TaskState[]> {
+    const result = await routed(this.deps.commandService);
+    if (!result.ok) {
+      const known = (Object.values(OrchestratorErrorCode) as string[]).includes(result.error.code);
+      if (known) {
+        throw new OrchestratorError(result.error.code as OrchestratorErrorCode, result.error.message);
+      }
+      throw new Error(result.error.message);
+    }
+    return result.data;
+  }
+
+  private assertSingleDispatchScope(scope: DispatchScope): void {
+    if (scope.scopedWorkflowId && scope.scopedTaskIds?.length) {
+      throw new Error('WorkflowMutationFacade dispatch scope cannot be both workflow-scoped and task-scoped.');
+    }
+  }
+
   private async topupOnly(context: string): Promise<TaskState[]> {
     return executeGlobalTopup({
       orchestrator: this.deps.orchestrator,
@@ -438,5 +546,14 @@ export class WorkflowMutationFacade {
       context,
       dispatchMode: this.deps.dispatchMode,
     });
+  }
+
+  private async closeReviewForWorkflow(workflowId: string | undefined): Promise<void> {
+    if (workflowId) await this.deps.taskExecutor.closeWorkflowReview?.(workflowId);
+  }
+
+  private async closeReviewForTask(taskId: string): Promise<void> {
+    const workflowId = this.deps.orchestrator.getTask(taskId)?.config.workflowId;
+    await this.closeReviewForWorkflow(workflowId);
   }
 }

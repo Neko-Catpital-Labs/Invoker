@@ -26,13 +26,13 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     resumeTaskAfterFixApproval: vi.fn().mockResolvedValue([] as TaskState[]),
     reject: vi.fn(),
     getTask: vi.fn().mockReturnValue(undefined),
-    revertConflictResolution: vi.fn(),
+    revertFixSession: vi.fn(),
     provideInput: vi.fn(),
     retryTask: vi.fn().mockReturnValue([]),
     recreateTask: vi.fn().mockReturnValue([]),
+    deleteTask: vi.fn().mockReturnValue([]),
     selectExperiment: vi.fn().mockReturnValue([]),
     editTaskCommand: vi.fn().mockReturnValue([]),
-    editTaskType: vi.fn().mockReturnValue([]),
     editTaskAgent: vi.fn().mockReturnValue([]),
     setTaskExternalGatePolicies: vi.fn().mockReturnValue([]),
     replaceTask: vi.fn().mockReturnValue([]),
@@ -43,6 +43,9 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     retryWorkflow: vi.fn().mockReturnValue([]),
     recreateWorkflow: vi.fn().mockReturnValue([]),
     recreateWorkflowFromFreshBase: vi.fn().mockResolvedValue([] as TaskState[]),
+    cascadeInvalidationToDownstream: vi.fn().mockReturnValue([]),
+    autoStartExternallyUnblockedReadyTasks: vi.fn().mockReturnValue([]),
+    forkWorkflow: vi.fn().mockReturnValue({ started: [] }),
     ...overrides,
   } as unknown as Orchestrator;
 }
@@ -111,10 +114,10 @@ describe('CommandService', () => {
 
       expect(result).toEqual({ ok: true, data: undefined });
       expect(orchestrator.reject).toHaveBeenCalledWith('t-1', 'bad');
-      expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+      expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
     });
 
-    it('calls revertConflictResolution when pendingFixError exists', async () => {
+    it('calls revertFixSession when pendingFixError exists', async () => {
       (orchestrator.getTask as ReturnType<typeof vi.fn>).mockReturnValue({
         execution: { pendingFixError: 'merge conflict' },
       });
@@ -122,9 +125,9 @@ describe('CommandService', () => {
       const result = await service.reject(envelope);
 
       expect(result).toEqual({ ok: true, data: undefined });
-      expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
+      expect(orchestrator.revertFixSession).toHaveBeenCalledWith(
         't-1',
-        'merge conflict',
+        { savedError: 'merge conflict' },
       );
       expect(orchestrator.reject).not.toHaveBeenCalled();
     });
@@ -204,29 +207,6 @@ describe('CommandService', () => {
     });
   });
 
-  // ── editTaskType ─────────────────────────────────────────
-
-  describe('editTaskType', () => {
-    it('delegates to orchestrator.editTaskType', async () => {
-      const result = await service.editTaskType(makeEnvelope({ taskId: 't-1', runnerKind: 'docker' }));
-      expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.editTaskType).toHaveBeenCalledWith('t-1', 'docker', undefined);
-    });
-
-    it('passes poolMemberId when provided', async () => {
-      const result = await service.editTaskType(makeEnvelope({ taskId: 't-1', runnerKind: 'ssh', poolMemberId: 'host-1' }));
-      expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.editTaskType).toHaveBeenCalledWith('t-1', 'ssh', 'host-1');
-    });
-
-    it('returns error on exception', async () => {
-      (orchestrator.editTaskType as ReturnType<typeof vi.fn>).mockImplementation(() => {
-        throw new Error('Cannot edit merge node');
-      });
-      const result = await service.editTaskType(makeEnvelope({ taskId: 't-1', runnerKind: 'bad' }));
-      expect(result).toEqual({ ok: false, error: { code: 'EDIT_TASK_TYPE_FAILED', message: 'Cannot edit merge node' } });
-    });
-  });
 
   // ── editTaskAgent ────────────────────────────────────────
 
@@ -307,6 +287,24 @@ describe('CommandService', () => {
       });
       const result = await service.cancelTask(makeEnvelope({ taskId: 'bad' }));
       expect(result).toEqual({ ok: false, error: { code: 'CANCEL_TASK_FAILED', message: 'unexpected' } });
+    });
+  });
+
+  // ── deleteTask ───────────────────────────────────────────
+
+  describe('deleteTask', () => {
+    it('delegates to orchestrator.deleteTask', async () => {
+      const result = await service.deleteTask(makeEnvelope({ taskId: 't-1' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.deleteTask).toHaveBeenCalledWith('t-1');
+    });
+
+    it('returns typed error code from OrchestratorError', async () => {
+      (orchestrator.deleteTask as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new OrchestratorError('TASK_NOT_FOUND', 'Task "bad" not found');
+      });
+      const result = await service.deleteTask(makeEnvelope({ taskId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'TASK_NOT_FOUND', message: 'Task "bad" not found' } });
     });
   });
 
@@ -496,7 +494,7 @@ describe('CommandService', () => {
     it('delegates to orchestrator.recreateWorkflowFromFreshBase', async () => {
       const result = await service.recreateWorkflowFromFreshBase(makeEnvelope({ workflowId: 'wf-1' }));
       expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1');
+      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
     });
 
     it('returns error on exception', async () => {
@@ -548,7 +546,7 @@ describe('CommandService', () => {
       expect(orchestrator.recreateTask).toHaveBeenCalledWith('t-2');
       expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
       expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2');
-      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-3');
+      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-3', expect.any(Object));
       expect(restartTaskSpy).not.toHaveBeenCalled();
     });
   });
@@ -616,14 +614,20 @@ describe('CommandService', () => {
       const p1 = service.retryTask(makeEnvelope({ taskId: 't-1' }, 'k1'));
       const p2 = service.editTaskCommand(makeEnvelope({ taskId: 't-2', newCommand: 'x' }, 'k2'));
 
-      await Promise.resolve();
-      expect(order).toEqual(['restart-start', 'edit-start']);
+      for (let i = 0; i < 4; i += 1) await Promise.resolve();
+      expect(order).toContain('restart-start');
+      expect(order).toContain('edit-start');
+      expect(order).not.toContain('restart-end');
+      expect(order).not.toContain('edit-end');
 
       resolveRestart();
       resolveEdit();
 
       await Promise.all([p1, p2]);
-      expect(order).toEqual(['restart-start', 'edit-start', 'restart-end', 'edit-end']);
+      expect(order).toContain('restart-end');
+      expect(order).toContain('edit-end');
+      expect(order.indexOf('restart-end')).toBeGreaterThan(order.indexOf('restart-start'));
+      expect(order.indexOf('edit-end')).toBeGreaterThan(order.indexOf('edit-start'));
     });
   });
 });

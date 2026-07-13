@@ -1,9 +1,18 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import { defineConfig } from '@playwright/test';
+import { E2E_BROWSER_REGISTRY_ENV } from './e2e/fixtures/browser-process-registry.js';
 
 const workers = Number(process.env.INVOKER_PLAYWRIGHT_WORKERS ?? (process.env.CI ? '1' : '2'));
+process.env[E2E_BROWSER_REGISTRY_ENV] ??= path.join(
+  mkdtempSync(path.join(tmpdir(), 'invoker-e2e-browser-registry-')),
+  'user-data-dirs.txt',
+);
 
 export default defineConfig({
   globalSetup: './e2e/global-setup.ts',
+  globalTeardown: './e2e/global-teardown.ts',
   testDir: './e2e',
   timeout: 120000,
   retries: 0,

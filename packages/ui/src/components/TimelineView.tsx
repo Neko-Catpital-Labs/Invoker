@@ -6,8 +6,8 @@
  * long and understanding execution parallelism.
  */
 
-import { useState, useEffect } from 'react';
 import type { TaskState } from '../types.js';
+import { useNow } from '../hooks/useNow.js';
 import {
   getStatusInlineColors,
   getEffectiveVisualStatus,
@@ -37,10 +37,11 @@ export function sortTasksForTimeline(tasks: TaskState[]): TaskState[] {
     review_ready: 2,
     awaiting_approval: 2,
     failed: 3,
-    completed: 4,
-    pending: 5,
-    blocked: 6,
-    stale: 7,
+    closed: 4,
+    completed: 5,
+    pending: 6,
+    blocked: 7,
+    stale: 8,
   };
 
   return [...tasks].sort((a, b) => {
@@ -109,14 +110,8 @@ interface TimelineViewProps {
 }
 
 export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineViewProps) {
-  const [now, setNow] = useState(Date.now());
-
   const hasRunning = Array.from(tasks.values()).some((t) => t.status === 'running');
-  useEffect(() => {
-    if (!hasRunning) return;
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, [hasRunning]);
+  const now = useNow(1000, hasRunning);
 
   const taskList = sortTasksForTimeline(Array.from(tasks.values()));
   const bars = computeBarWidths(taskList, now);
@@ -124,7 +119,7 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
 
   if (taskList.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-500 text-sm">
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
         No tasks to display
       </div>
     );
@@ -149,10 +144,18 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
             : null;
 
           return (
-            <button
+            <div
               key={task.id}
+              role="button"
+              tabIndex={0}
               data-testid={`timeline-bar-${task.id}`}
               onClick={() => onTaskClick(task)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  if (e.key === ' ') e.preventDefault();
+                  onTaskClick(task);
+                }
+              }}
               className={`w-full text-left rounded transition-all ${
                 isSelected ? 'ring-2 ring-indigo-400 ring-offset-1 ring-offset-gray-900' : ''
               }`}
@@ -160,17 +163,17 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
             >
               <div className="flex items-center gap-3 px-2 py-1.5">
                 {/* Task label */}
-                <div className="w-40 shrink-0 truncate text-xs text-gray-300" title={task.description}>
+                <div className="w-40 shrink-0 truncate text-xs text-muted-foreground select-text cursor-text" title={task.description}>
                   {task.id}
                 </div>
                 {phaseLabel && (
-                  <div className="w-20 shrink-0 text-xs text-amber-300 uppercase">
+                  <div className="w-20 shrink-0 text-xs text-amber-300 uppercase select-text cursor-text">
                     {phaseLabel}
                   </div>
                 )}
 
                 {/* Bar area */}
-                <div className="flex-1 h-6 relative bg-gray-800 rounded overflow-hidden">
+                <div className="flex-1 h-6 relative bg-secondary rounded overflow-hidden">
                   {bar.widthPercent > 0 && (
                     <div
                       className={`absolute top-0 bottom-0 rounded ${
@@ -187,11 +190,11 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
                 </div>
 
                 {/* Duration label */}
-                <div className="w-16 shrink-0 text-right text-xs tabular-nums" style={{ color: colors.bg }}>
+                <div className="w-16 shrink-0 text-right text-xs tabular-nums select-text cursor-text" style={{ color: colors.bg }}>
                   {elapsed ?? '—'}
                 </div>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>

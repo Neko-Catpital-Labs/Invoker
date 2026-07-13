@@ -15,13 +15,9 @@ describe('createWorkflowMutationTiming', () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     const now = new Date();
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: now.toISOString(),
+    updatedAt: now.toISOString(), });
     adapter.saveTask('wf-1', {
       id: '__merge__wf-1',
       description: 'merge',

@@ -1,6 +1,6 @@
 /**
  * Tests for useTasks behaviors:
- * - refreshTasks replaces tasks/workflows from getTasks snapshot (including empty)
+ * - startup snapshot replace clears/rebuilds task maps from getTasks
  * - delta handler should warn when tasks map drops to 0
  */
 
@@ -21,7 +21,7 @@ function makeTask(overrides: Partial<TaskState> & { id: string }): TaskState {
 }
 
 describe('useTasks guard logic', () => {
-  describe('refreshTasks snapshot replace', () => {
+  describe('startup snapshot replace', () => {
     it('simulates empty getTasks snapshot clearing UI state (e.g. after delete workflow)', () => {
       const taskList: TaskState[] = [];
       const next = new Map<string, TaskState>();

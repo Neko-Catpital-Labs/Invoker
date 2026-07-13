@@ -12,9 +12,8 @@ export function parseBooleanSwitch(value) {
 export function parseAuthorList(value) {
   return String(value ?? '')
     .split(/[\s,]+/)
-    .map((author) => author.trim())
-    .filter(Boolean)
-    .map((author) => author.toLowerCase());
+    .map((author) => author.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 export function shouldEnforcePrBody({ author, enforceAll, enforcedAuthors }) {

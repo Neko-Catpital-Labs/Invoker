@@ -1,7 +1,6 @@
-export function shouldSkipAutoFixForError(errorText: unknown): boolean {
-  if (typeof errorText !== 'string') {
-    return false;
-  }
-  return errorText.startsWith('Cancelled by user') || errorText.startsWith('Cancelled:')
-    || errorText.startsWith('Terminated by user') || errorText.startsWith('Terminated:');
-}
+/**
+ * Compatibility shim. Auto-fix gating now lives in
+ * `@invoker/execution-engine`; this re-export keeps `./auto-fix-gating.js`
+ * import paths working for app code and tests unchanged.
+ */
+export * from '@invoker/execution-engine';

@@ -22,6 +22,9 @@ RUNNER="$REPO_ROOT/run.sh"
 ELECTRON="$REPO_ROOT/scripts/electron.cjs"
 MAIN="$REPO_ROOT/packages/app/dist/main.js"
 IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
+if [[ -n "${INVOKER_HEADLESS_IPC_HELPER:-}" ]]; then
+  IPC_HELPER="$INVOKER_HEADLESS_IPC_HELPER"
+fi
 STANDALONE_MODE="${INVOKER_HEADLESS_STANDALONE:-0}"
 
 # ---------------------------------------------------------------------------
@@ -60,6 +63,10 @@ headless_mutation() {
 
 # Extract workflow IDs (label format) from a query.
 headless_workflow_ids() {
+  if [[ -n "${INVOKER_HEADLESS_WORKFLOW_IDS_FILE:-}" ]]; then
+    grep -E '^wf-[0-9]+-[0-9]+$' "$INVOKER_HEADLESS_WORKFLOW_IDS_FILE" || true
+    return
+  fi
   headless_query "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
 }
 
@@ -148,11 +155,14 @@ batch_dispatch() {
     output_jsonl="$(mktemp -t batch-output.XXXXXX)"
     # With `set -u`, `"${extra_batch_args[@]}"` errors when the array is empty
     # (no optional batch-exec args). Branch avoids unbound expansion.
+    local batch_timeout_seconds="${INVOKER_HEADLESS_BATCH_TIMEOUT_SECONDS:-300}"
     if [[ ${#extra_batch_args[@]} -gt 0 ]]; then
-      node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
+      run_with_optional_timeout "$batch_timeout_seconds" \
+        node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
         "${extra_batch_args[@]}" < "$commands_file" > "$output_jsonl"
     else
-      node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
+      run_with_optional_timeout "$batch_timeout_seconds" \
+        node "$IPC_HELPER" batch-exec --no-track --parallel "$parallelism" \
         < "$commands_file" > "$output_jsonl"
     fi
     parse_batch_results "$output_jsonl" "$result_file" "$log_dir"
@@ -184,9 +194,16 @@ for raw in output_jsonl.read_text(encoding="utf-8").splitlines():
         continue
     item = json.loads(raw)
     workflow_id = item.get("workflowId") or item.get("label") or "unknown"
+    response = item.get("response")
+    queued = (
+        item.get("ok") is True
+        and isinstance(response, dict)
+        and response.get("ok") is True
+        and response.get("intentId") not in (None, "")
+    )
     (log_dir / f"{workflow_id}.log").write_text(raw + "\n", encoding="utf-8")
     with result_file.open("a", encoding="utf-8") as handle:
-        handle.write(f"{workflow_id}\t{'SUCCEEDED' if item.get('ok') else 'FAILED'}\n")
+        handle.write(f"{workflow_id}\t{'SUCCEEDED' if queued else 'FAILED'}\n")
 PY
 }
 

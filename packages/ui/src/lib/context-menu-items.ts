@@ -129,6 +129,21 @@ export function getMenuItems(
       separator: !canCancel ? 'danger' : undefined,
     });
 
+    items.push({
+      id: 'recreate-downstream',
+      label: 'Recreate Downstream',
+      enabled: task.status !== 'running',
+      action: 'onRecreateDownstream',
+      variant: 'danger',
+    });
+
+    items.push({
+      id: 'delete-task',
+      label: 'Delete Task',
+      enabled: true,
+      action: 'onDelete',
+      variant: 'danger',
+    });
   }
 
   return items;

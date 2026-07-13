@@ -1,0 +1,35 @@
+{
+  "name": "@invoker/cli",
+  "version": "0.0.7",
+  "description": "Standalone Invoker command-line runner",
+  "type": "module",
+  "bin": {
+    "invoker-cli": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "pnpm run build && vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@invoker/contracts": "workspace:*",
+    "@invoker/data-store": "workspace:*",
+    "@invoker/execution-engine": "workspace:*",
+    "@invoker/transport": "workspace:*",
+    "@invoker/workflow-core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "yaml": "^2.8.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

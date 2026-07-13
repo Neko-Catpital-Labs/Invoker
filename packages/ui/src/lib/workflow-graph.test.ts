@@ -1,88 +1,65 @@
 import { describe, expect, it } from 'vitest';
-import type { TaskState, WorkflowMeta } from '../types.js';
+import type { WorkflowMeta } from '../types.js';
 import { deriveWorkflowGraph, layoutWorkflowGraph, type WorkflowGraph } from './workflow-graph.js';
 
 function makeWorkflow(
   id: string,
   status: WorkflowMeta['status'] = 'running',
   createdAt?: string,
+  externalDependencies: WorkflowMeta['externalDependencies'] = [],
+  externalDependencyChanges: WorkflowMeta['externalDependencyChanges'] = [],
+  detachedExternalDependencies: WorkflowMeta['detachedExternalDependencies'] = [],
 ): WorkflowMeta {
-  return { id, name: id, status, createdAt };
-}
-
-function makeTask(
-  id: string,
-  workflowId: string,
-  externalDependencies: Array<{ workflowId: string; taskId?: string }> = [],
-): TaskState {
   return {
     id,
-    description: id,
-    status: 'pending',
-    dependencies: [],
-    config: {
-      workflowId,
-      externalDependencies: externalDependencies.map((dep) => ({
-        workflowId: dep.workflowId,
-        taskId: dep.taskId,
-        requiredStatus: 'completed' as const,
-      })),
-    },
-    execution: {},
-    taskStateVersion: 1,
+    name: id,
+    status,
+    createdAt,
+    externalDependencies,
+    externalDependencyChanges,
+    detachedExternalDependencies,
   };
 }
+
 
 describe('deriveWorkflowGraph', () => {
   it('derives linear stack edges', () => {
     const workflows = new Map([
       ['A', makeWorkflow('A')],
-      ['B', makeWorkflow('B')],
-      ['C', makeWorkflow('C')],
-    ]);
-    const tasks = new Map<string, TaskState>([
-      ['b1', makeTask('b1', 'B', [{ workflowId: 'A' }])],
-      ['c1', makeTask('c1', 'C', [{ workflowId: 'B' }])],
+      ['B', makeWorkflow('B', 'running', undefined, [{ workflowId: 'A' }])],
+      ['C', makeWorkflow('C', 'running', undefined, [{ workflowId: 'B' }])],
     ]);
 
-    const graph = deriveWorkflowGraph(workflows, tasks);
+    const graph = deriveWorkflowGraph(workflows);
     expect(graph.edges).toEqual([
-      { source: 'A', target: 'B' },
-      { source: 'B', target: 'C' },
+      { source: 'A', target: 'B', kind: 'active' },
+      { source: 'B', target: 'C', kind: 'active' },
     ]);
   });
 
   it('supports fork and fan-in', () => {
     const workflows = new Map([
       ['A', makeWorkflow('A')],
-      ['B', makeWorkflow('B')],
-      ['C', makeWorkflow('C')],
-      ['D', makeWorkflow('D')],
-    ]);
-    const tasks = new Map<string, TaskState>([
-      ['b1', makeTask('b1', 'B', [{ workflowId: 'A' }])],
-      ['c1', makeTask('c1', 'C', [{ workflowId: 'A' }])],
-      ['d1', makeTask('d1', 'D', [{ workflowId: 'B' }, { workflowId: 'C' }])],
+      ['B', makeWorkflow('B', 'running', undefined, [{ workflowId: 'A' }])],
+      ['C', makeWorkflow('C', 'running', undefined, [{ workflowId: 'A' }])],
+      ['D', makeWorkflow('D', 'running', undefined, [{ workflowId: 'B' }, { workflowId: 'C' }])],
     ]);
 
-    const graph = deriveWorkflowGraph(workflows, tasks);
+    const graph = deriveWorkflowGraph(workflows);
     expect(graph.edges).toEqual([
-      { source: 'A', target: 'B' },
-      { source: 'A', target: 'C' },
-      { source: 'B', target: 'D' },
-      { source: 'C', target: 'D' },
+      { source: 'A', target: 'B', kind: 'active' },
+      { source: 'A', target: 'C', kind: 'active' },
+      { source: 'B', target: 'D', kind: 'active' },
+      { source: 'C', target: 'D', kind: 'active' },
     ]);
   });
 
   it('collects missing external dependencies without crashing', () => {
     const workflows = new Map([
-      ['B', makeWorkflow('B')],
-    ]);
-    const tasks = new Map<string, TaskState>([
-      ['b1', makeTask('b1', 'B', [{ workflowId: 'missing' }])],
+      ['B', makeWorkflow('B', 'running', undefined, [{ workflowId: 'missing' }])],
     ]);
 
-    const graph = deriveWorkflowGraph(workflows, tasks);
+    const graph = deriveWorkflowGraph(workflows);
     expect(graph.edges).toEqual([]);
     expect(graph.missingDependencies).toEqual(['missing->B']);
   });
@@ -93,9 +70,178 @@ describe('deriveWorkflowGraph', () => {
       ['B', makeWorkflow('B')],
     ]);
 
-    const graph = deriveWorkflowGraph(workflows, new Map());
+    const graph = deriveWorkflowGraph(workflows);
     expect(graph.nodes.map((node) => node.id)).toEqual(['A', 'B']);
     expect(graph.edges).toEqual([]);
+  });
+
+  it('does not create fallback workflow nodes from task-only state', () => {
+    const graph = deriveWorkflowGraph(new Map());
+    expect(graph.nodes).toEqual([]);
+    expect(graph.edges).toEqual([]);
+  });
+
+  it('derives dependency-change lineage separately from active dependency edges', () => {
+    const workflows = new Map([
+      ['A', makeWorkflow('A')],
+      [
+        'B',
+        makeWorkflow('B', 'running', undefined, [], [
+          {
+            before: {
+              workflowId: 'A',
+              taskId: '__merge__',
+              requiredStatus: 'completed',
+              gatePolicy: 'completed',
+            },
+            changedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ]),
+      ],
+    ]);
+
+    const graph = deriveWorkflowGraph(workflows);
+
+    expect(graph.edges).toEqual([
+      { source: 'A', target: 'B', kind: 'historical' },
+    ]);
+  });
+
+  it('derives detached provenance as a detached lineage edge', () => {
+    const workflows = new Map([
+      ['A', makeWorkflow('A')],
+      [
+        'B',
+        makeWorkflow('B', 'running', undefined, [], [], [
+          {
+            workflowId: 'A',
+            taskId: '__merge__',
+            requiredStatus: 'completed',
+            gatePolicy: 'completed',
+            detachedAt: '2026-01-02T00:00:00.000Z',
+          },
+        ]),
+      ],
+    ]);
+
+    const graph = deriveWorkflowGraph(workflows);
+
+    expect(graph.edges).toEqual([
+      { source: 'A', target: 'B', kind: 'detached' },
+    ]);
+  });
+
+  it('keeps active dependency edges authoritative over detached provenance', () => {
+    const activeDependency = {
+      workflowId: 'A',
+      taskId: '__merge__',
+      requiredStatus: 'completed' as const,
+      gatePolicy: 'completed' as const,
+    };
+    const workflows = new Map([
+      ['A', makeWorkflow('A')],
+      [
+        'B',
+        makeWorkflow('B', 'running', undefined, [activeDependency], [], [
+          {
+            ...activeDependency,
+            detachedAt: '2026-01-02T00:00:00.000Z',
+          },
+        ]),
+      ],
+    ]);
+
+    const graph = deriveWorkflowGraph(workflows);
+
+    expect(graph.edges).toEqual([
+      { source: 'A', target: 'B', kind: 'active' },
+    ]);
+  });
+
+  it('prefers detached provenance over generic dependency-change history', () => {
+    const dependency = {
+      workflowId: 'A',
+      taskId: '__merge__',
+      requiredStatus: 'completed' as const,
+      gatePolicy: 'completed' as const,
+    };
+    const workflows = new Map([
+      ['A', makeWorkflow('A')],
+      [
+        'B',
+        makeWorkflow('B', 'running', undefined, [], [
+          {
+            before: dependency,
+            changedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ], [
+          {
+            ...dependency,
+            detachedAt: '2026-01-02T00:00:00.000Z',
+          },
+        ]),
+      ],
+    ]);
+
+    const graph = deriveWorkflowGraph(workflows);
+
+    expect(graph.edges).toEqual([
+      { source: 'A', target: 'B', kind: 'detached' },
+    ]);
+  });
+
+  it('does not duplicate active edges for dependency addition history', () => {
+    const dependency = {
+      workflowId: 'A',
+      taskId: '__merge__',
+      requiredStatus: 'completed' as const,
+      gatePolicy: 'completed' as const,
+    };
+    const workflows = new Map([
+      ['A', makeWorkflow('A')],
+      [
+        'B',
+        makeWorkflow('B', 'running', undefined, [dependency], [
+          {
+            after: dependency,
+            changedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ]),
+      ],
+    ]);
+
+    const graph = deriveWorkflowGraph(workflows);
+
+    expect(graph.edges).toEqual([
+      { source: 'A', target: 'B', kind: 'active' },
+    ]);
+  });
+
+  it('derives both sides of a dependency replacement history', () => {
+    const before = {
+      workflowId: 'A',
+      taskId: '__merge__',
+      requiredStatus: 'completed' as const,
+      gatePolicy: 'completed' as const,
+    };
+    const after = {
+      workflowId: 'C',
+      taskId: '__merge__',
+      requiredStatus: 'completed' as const,
+      gatePolicy: 'completed' as const,
+    };
+    const workflows = new Map([
+      ['A', makeWorkflow('A')],
+      ['B', makeWorkflow('B', 'running', undefined, [], [{ before, after, changedAt: '2026-01-01T00:00:00.000Z' }])],
+      ['C', makeWorkflow('C')],
+    ]);
+
+    const graph = deriveWorkflowGraph(workflows);
+
+    expect(graph.edges).toEqual([
+      { source: 'A', target: 'B', kind: 'historical' },
+      { source: 'C', target: 'B', kind: 'historical' },
+    ]);
   });
 });
 
@@ -107,7 +253,7 @@ describe('layoutWorkflowGraph', () => {
         makeWorkflow('chain-b', 'running', '2026-01-01T00:00:00.000Z'),
         makeWorkflow('solo', 'running', '2026-02-01T00:00:00.000Z'),
       ],
-      [{ source: 'chain-a', target: 'chain-b' }],
+      [{ source: 'chain-a', target: 'chain-b', kind: 'active' }],
     );
 
     const positions = layoutWorkflowGraph(graph, 100, 50, 25);
@@ -126,8 +272,8 @@ describe('layoutWorkflowGraph', () => {
         makeWorkflow('newer-b', 'running', '2026-03-01T00:00:00.000Z'),
       ],
       [
-        { source: 'older-a', target: 'older-b' },
-        { source: 'newer-a', target: 'newer-b' },
+        { source: 'older-a', target: 'older-b', kind: 'active' },
+        { source: 'newer-a', target: 'newer-b', kind: 'active' },
       ],
     );
 
@@ -166,9 +312,9 @@ describe('layoutWorkflowGraph', () => {
         makeWorkflow('older', 'running', '2026-01-01T00:00:00.000Z'),
       ],
       [
-        { source: 'root', target: 'left' },
-        { source: 'root', target: 'middle' },
-        { source: 'root', target: 'right' },
+        { source: 'root', target: 'left', kind: 'active' },
+        { source: 'root', target: 'middle', kind: 'active' },
+        { source: 'root', target: 'right', kind: 'active' },
       ],
     );
 
@@ -187,7 +333,7 @@ describe('layoutWorkflowGraph', () => {
         makeWorkflow('fix-step-2', 'running', '2026-01-01T00:00:00.000Z'),
         { ...makeWorkflow('cost-query', 'running', '2026-02-01T00:00:00.000Z'), name: 'Cost Query' },
       ],
-      [{ source: 'fix-step-1', target: 'fix-step-2' }],
+      [{ source: 'fix-step-1', target: 'fix-step-2', kind: 'active' }],
     );
 
     const positions = layoutWorkflowGraph(graph, 100, 50, 25);
@@ -207,10 +353,10 @@ describe('layoutWorkflowGraph', () => {
         makeWorkflow('z-join'),
       ],
       [
-        { source: 'a-root', target: 'y-target' },
-        { source: 'b-root', target: 'x-target' },
-        { source: 'x-target', target: 'z-join' },
-        { source: 'y-target', target: 'z-join' },
+        { source: 'a-root', target: 'y-target', kind: 'active' },
+        { source: 'b-root', target: 'x-target', kind: 'active' },
+        { source: 'x-target', target: 'z-join', kind: 'active' },
+        { source: 'y-target', target: 'z-join', kind: 'active' },
       ],
     );
 
@@ -218,6 +364,21 @@ describe('layoutWorkflowGraph', () => {
 
     expect(positions.get('y-target')).toEqual({ x: 180, y: 80 });
     expect(positions.get('x-target')).toEqual({ x: 180, y: 130 });
+  });
+
+  it('uses detached edges to keep former stack relationships grouped', () => {
+    const graph = makeGraph(
+      [
+        makeWorkflow('upstream', 'running', '2026-03-01T00:00:00.000Z'),
+        makeWorkflow('downstream', 'running', '2026-03-01T00:00:00.000Z'),
+      ],
+      [{ source: 'upstream', target: 'downstream', kind: 'detached' }],
+    );
+
+    const positions = layoutWorkflowGraph(graph, 100, 50, 25);
+
+    expect(positions.get('upstream')).toEqual({ x: 80, y: 80 });
+    expect(positions.get('downstream')).toEqual({ x: 180, y: 80 });
   });
 });
 

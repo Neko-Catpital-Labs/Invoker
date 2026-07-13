@@ -1,12 +1,17 @@
 /**
  * ExperimentModal — Modal for selecting which experiment to use.
- *
- * Shows experiment results and lets the user pick one.
- * Used for reconciliation tasks.
  */
 
 import { useState } from 'react';
 import type { TaskState } from '../types.js';
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './primitives/index.js';
 
 interface ExperimentModalProps {
   task: TaskState;
@@ -39,34 +44,35 @@ export function ExperimentModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-lg p-6 border border-gray-700">
-        <h2 className="text-lg font-semibold text-gray-100 mb-2">
-          Select Experiments
-        </h2>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Select Experiments</DialogTitle>
+        </DialogHeader>
 
-        <p className="text-sm text-gray-400 mb-4">
+        <p className="text-sm text-muted-foreground">
           Choose one or more experiment results to use for reconciliation.
         </p>
 
         {results.length === 0 ? (
-          <p className="text-sm text-gray-500 py-4">
+          <p className="text-sm text-muted-foreground py-4">
             No experiment results available yet.
           </p>
         ) : (
-          <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
+          <div className="space-y-2 max-h-64 overflow-y-auto">
             {results.map((result) => (
               <button
                 key={result.id}
+                type="button"
                 onClick={() => toggleExperiment(result.id)}
                 className={`w-full text-left p-3 rounded border transition-colors ${
                   selected.has(result.id)
                     ? 'border-purple-500 bg-purple-900/30'
-                    : 'border-gray-600 bg-gray-700/50 hover:bg-gray-700'
+                    : 'border-border-strong bg-muted/50 hover:bg-muted'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-gray-200">
+                  <span className="text-sm font-medium text-foreground">
                     {selected.has(result.id) ? '\u2611 ' : '\u2610 '}{result.id}
                   </span>
                   <span
@@ -80,10 +86,10 @@ export function ExperimentModal({
                   </span>
                 </div>
                 {result.summary && (
-                  <p className="text-xs text-gray-400 mt-1">{result.summary}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{result.summary}</p>
                 )}
                 {result.exitCode !== undefined && (
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-muted-foreground mt-1">
                     Exit code: {result.exitCode}
                   </p>
                 )}
@@ -92,22 +98,20 @@ export function ExperimentModal({
           </div>
         )}
 
-        <div className="flex gap-3 justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
-          >
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
-          </button>
-          <button
-            onClick={handleConfirm}
+          </Button>
+          <Button
+            type="button"
             disabled={selected.size === 0}
-            className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
+            className="bg-purple-600 text-white hover:bg-purple-500"
+            onClick={handleConfirm}
           >
             Confirm Selection ({selected.size})
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

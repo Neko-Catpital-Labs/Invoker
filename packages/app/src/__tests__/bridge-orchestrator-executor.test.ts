@@ -100,9 +100,7 @@ describe('global top-up dispatch', () => {
       alreadyDispatched: [duplicate],
     });
 
-    expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([newTask]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
     expect(topup.map((task) => task.id)).toEqual(['wf-2/task-b']);
   });
 
@@ -133,11 +131,11 @@ describe('global top-up dispatch', () => {
     });
     (h.orchestrator as any).refreshFromDb();
 
-    const { savedError } = h.orchestrator.beginConflictResolution(taskA.id);
+    const { savedError } = h.orchestrator.beginFixSession(taskA.id);
     expect(h.getTask('A')!.status).toBe('fixing_with_ai');
     expect(h.getTask('B')!.status).toBe('pending');
 
-    h.orchestrator.revertConflictResolution(taskA.id, savedError, 'Remote agent fix timed out after 600000ms');
+    h.orchestrator.revertFixSession(taskA.id, { savedError: savedError, fixError: 'Remote agent fix timed out after 600000ms' });
 
     expect(h.getTask('A')!.status).toBe('failed');
     expect(h.getTask('B')!.status).toBe('pending');
@@ -153,9 +151,7 @@ describe('global top-up dispatch', () => {
     });
 
     expect(topup.map((task) => task.id)).toEqual([taskB.id]);
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([
-      expect.objectContaining({ id: taskB.id, status: 'running' }),
-    ]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
 
@@ -1168,7 +1164,7 @@ describe('Flow 9c: set-merge-mode external_review', () => {
       identifier: 'owner/repo#99',
     }),
     checkApproval: async () => ({
-      approved: false,
+      lifecycle: 'open',
       rejected: false,
       statusText: 'Open',
       url: 'https://github.com/owner/repo/pull/99',
@@ -1479,59 +1475,13 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
     expect(started.length).toBeGreaterThan(0);
   });
 
-  it('scheduler recovers from leaked slot during experiment selection', () => {
-    h.loadAndStart(EXPERIMENT_PLAN);
-
-    h.orchestrator.handleWorkerResponse({
-      requestId: 'spawn-A',
-      actionId: 'A',
-      executionGeneration: h.getTask('A')?.execution.generation ?? 0,
-      status: 'spawn_experiments' as const,
-      outputs: { exitCode: 0 },
-      dagMutation: {
-        spawnExperiments: {
-          description: 'Try',
-          variants: [
-            { id: 'v1', description: 'V1', prompt: 'A' },
-            { id: 'v2', description: 'V2', prompt: 'B' },
-          ],
-        },
-      },
-    });
-
-    const expIds = h.getAllTasks()
-      .filter((t) => t.id.includes('/A-exp-'))
-      .map(t => t.id);
-
-    for (const id of expIds) {
-      h.completeTask(id);
-      h.persistence.updateTask(id, {
-        execution: { branch: `experiment/${id}-hash`, commit: `commit-${id}` },
-      });
-    }
-    (h.orchestrator as any).refreshFromDb();
-
-    // Inject a leaked scheduler slot by manually adding a fake running task.
-    // The persisted queue view should ignore it even if the helper scheduler
-    // still has stale in-memory state.
-    const scheduler = (h.orchestrator as any).scheduler;
-    scheduler.enqueue({ taskId: 'phantom-leaked', priority: 1 });
-    scheduler.dequeue(); // moves phantom to running set
-    expect(scheduler.isRunning('phantom-leaked')).toBe(true);
-
-    const reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'))!;
-    h.orchestrator.selectExperiments(
-      reconTask.id,
-      expIds,
-      'reconciliation/combined',
-      'combined-commit',
-    );
-
-    const queueStatus = h.orchestrator.getQueueStatus();
-    expect(queueStatus.running.some((item: { taskId: string }) => item.taskId === 'phantom-leaked')).toBe(false);
-    const runningTasks = h.getAllTasks().filter(t => t.status === 'running');
-    expect(queueStatus.runningCount).toBe(runningTasks.length);
-  });
+  // CC.3: the "scheduler recovers from leaked slot" case was deleted.
+  // After Phase B + the scheduler reduction, the in-memory running
+  // set is gone and "phantom leaks" of that set are no longer
+  // expressible. Occupancy lives in the durable
+  // `task_launch_dispatch` outbox and is reconciled by the
+  // LaunchDispatcher's reapers (covered in
+  // packages/app/src/__tests__/launch-dispatcher.test.ts).
 
   it('process-dies-silently: orphaned running task does not permanently block scheduler', () => {
     h.loadAndStart({

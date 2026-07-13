@@ -4,7 +4,7 @@
 #
 # WRONG: npx vitest run may not resolve correctly in worktrees
 # Running `npx vitest run` may fail in worktrees where `node_modules/.bin` isn't in PATH.
-# Always use `pnpm test`, which resolves vitest through the package.json `test` script reliably.
+# Use repo-supported scripts or explicit package-local commands instead.
 
 name: "Anti-pattern: npx vitest run"
 repoUrl: git@github.com:example-org/acme-repo.git

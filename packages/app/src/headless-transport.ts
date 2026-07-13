@@ -221,7 +221,7 @@ export class HeadlessTransport {
 
     // Check for an existing standalone owner.
     const owner = await tryPingHeadlessOwner(bus, 2_000);
-    if (owner?.mode === 'standalone') {
+    if (owner?.mode === 'standalone' || owner?.mode === 'gui') {
       const ok = await this.dispatchToOwner(
         args,
         command,
@@ -231,13 +231,13 @@ export class HeadlessTransport {
       if (ok) return { response: { delegated: true } };
     }
 
-    // If a GUI owner responded (not standalone), refresh and look for a
-    // standalone owner (the GUI cannot handle mutations).
-    if (owner && owner.mode !== 'standalone' && this.deps.refreshMessageBus) {
+    // If an unknown owner surface responded, refresh and look for a known
+    // mutation-capable owner.
+    if (owner && owner.mode !== 'standalone' && owner.mode !== 'gui' && this.deps.refreshMessageBus) {
       bus = await this.deps.refreshMessageBus();
       this.messageBus = bus;
       const refreshed = await tryPingHeadlessOwner(bus, 1_000);
-      if (refreshed?.mode === 'standalone') {
+      if (refreshed?.mode === 'standalone' || refreshed?.mode === 'gui') {
         const ok = await this.dispatchToOwner(
           args,
           command,

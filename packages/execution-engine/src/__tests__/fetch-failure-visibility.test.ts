@@ -201,12 +201,13 @@ describe('syncFromRemote - fetch failure handling', () => {
     afterEach(() => {
       rmSync(tmpDir, { recursive: true, force: true });
       rmSync(remoteRepo, { recursive: true, force: true });
+      vi.restoreAllMocks();
     });
 
     it('warns when local branch is behind remote', async () => {
       // Create a second clone and push commits ahead
       const secondClone = mkdtempSync(join(tmpdir(), 'fetch-failure-clone-'));
-      execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+      execSync(`git clone --no-local ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
       execSync('git checkout -B master origin/master', { cwd: secondClone });
       execSync('git config user.email "test@test.com"', { cwd: secondClone });
       execSync('git config user.name "Test"', { cwd: secondClone });
@@ -232,22 +233,30 @@ describe('syncFromRemote - fetch failure handling', () => {
     });
 
     it('emits loud warning when >100 commits behind', async () => {
-      // Create a second clone and push many commits ahead
+      // Create a second clone and push one commit ahead. Mock only the
+      // rev-list count so this test exercises the warning threshold without
+      // manufacturing 101 physical commits in CI's temporary git store.
       const secondClone = mkdtempSync(join(tmpdir(), 'fetch-failure-clone-'));
-      execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+      execSync(`git clone --no-local ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
       execSync('git checkout -B master origin/master', { cwd: secondClone });
       execSync('git config user.email "test@test.com"', { cwd: secondClone });
       execSync('git config user.name "Test"', { cwd: secondClone });
 
-      // Push 101 commits to trigger loud warning
-      for (let i = 1; i <= 101; i++) {
-        writeFileSync(join(secondClone, `file${i}.txt`), `content${i}`);
-        execSync(`git add -A && git commit -m "commit ${i}"`, { cwd: secondClone });
-      }
+      writeFileSync(join(secondClone, 'file101.txt'), 'content101');
+      execSync('git add -A && git commit -m "commit 101"', { cwd: secondClone });
       execSync('git push', { cwd: secondClone });
 
       const executionId = 'test-exec-staleness-loud';
       executor.registerTestEntry(executionId, makeRequest('test-action'));
+      const originalExecGitSimple = (executor as any).execGitSimple.bind(executor);
+      vi.spyOn(executor as any, 'execGitSimple').mockImplementation(
+        async (args: string[], cwd: string, opts?: { signal?: AbortSignal }) => {
+          if (args[0] === 'rev-list' && args[1] === '--count') {
+            return '101';
+          }
+          return originalExecGitSimple(args, cwd, opts);
+        },
+      );
 
       await executor.testSyncFromRemote(tmpDir, executionId);
 
