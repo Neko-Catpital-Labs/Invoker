@@ -354,6 +354,41 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
   });
 
+  it('wraps long planning session rail titles and previews instead of clipping them to one line', async () => {
+    const longPrompt = 'Draft a very long planning session title that needs multiple readable wrapped lines in the fixed planning rail';
+    const longReply = [
+      'This planning preview should remain readable in the rail with several wrapped words,',
+      'including implementation details, verification notes, and follow-up context that used to be hidden by truncate.',
+    ].join(' ');
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: longReply,
+      draftPlanAvailable: false,
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText(longPrompt);
+
+    const rail = screen.getByTestId('planning-session-list');
+    await waitFor(() => {
+      expect(within(rail).getByText(longReply)).toBeInTheDocument();
+    });
+
+    const expectedTitle = `${longPrompt.slice(0, 53).trimEnd()}…`;
+    const title = within(rail).getByText(expectedTitle);
+    const preview = within(rail).getByText(longReply);
+    expect(title).toHaveClass('line-clamp-2', 'break-words');
+    expect(title).not.toHaveClass('truncate');
+    expect(title).toHaveAttribute('title', expectedTitle);
+    expect(preview).toHaveClass('line-clamp-3', 'break-words');
+    expect(preview).not.toHaveClass('truncate');
+    expect(preview).toHaveAttribute('title', longReply);
+    expect(screen.getByTestId('planning-session-rail')).toHaveClass('w-64', 'shrink-0');
+  });
+
   it('keeps a new planning chat editable while another session is working', async () => {
     let resolveFirstSend: ((value: any) => void) | null = null;
     mock.api.planningChatSend = vi.fn((request: any) => {
