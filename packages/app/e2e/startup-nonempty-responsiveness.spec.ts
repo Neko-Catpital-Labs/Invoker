@@ -12,6 +12,10 @@ import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-re
 
 const repoRoot = resolveRepoRoot(__dirname);
 const STARTUP_BUDGET_MS = 12000;
+const PLANNING_PRESSURE_TURNS = 30;
+const PLANNING_INPUT_HANDLER_BUDGET_MS = 50;
+const PLANNING_INPUT_COMMIT_BUDGET_MS = 250;
+const PLANNING_INPUT_FILL_WALL_BUDGET_MS = 1500;
 
 async function launchElectronApp(testDir: string, extraEnv?: Record<string, string>) {
   const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
@@ -70,6 +74,12 @@ function buildPlan(index: number) {
   };
 }
 
+function buildPlanningPressureReply(): string {
+  return Array.from({ length: 60 }, (_, index) => (
+    `planning pressure reply line ${String(index + 1).padStart(2, '0')} keeps realistic transcript output in the renderer.`
+  )).join('\n');
+}
+
 async function waitForWorkflowGraphVisible(page: Page, timeoutMs: number): Promise<number> {
   const startedAt = Date.now();
   await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({
@@ -85,6 +95,19 @@ function parseActivityPayload(message: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+async function activityLogWatermark(page: Page): Promise<number> {
+  const rows = await page.evaluate(async () => window.invoker.getActivityLogs(0, 100000));
+  return rows.at(-1)?.id ?? 0;
+}
+
+async function uiPerfPayloadsSince(page: Page, sinceId: number): Promise<Array<Record<string, unknown>>> {
+  const rows = await page.evaluate(async (watermark) => window.invoker.getActivityLogs(watermark, 5000), sinceId);
+  return rows
+    .filter((row) => row.source === 'ui-perf')
+    .map((row) => parseActivityPayload(row.message))
+    .filter((payload): payload is Record<string, unknown> => payload !== null);
 }
 
 async function dragGraphAndAssertViewportMoves(page: Page): Promise<void> {
@@ -205,6 +228,111 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
 
       expect(result.taskCount).toBe(expectedTaskCount);
       expect(result.perf.dbPollCreated).toBe(0);
+    } finally {
+      await app.close();
+    }
+  } finally {
+    rmSync(testDir, { recursive: true, force: true });
+  }
+});
+
+test('planning chat typing stays responsive with a large restored transcript', async () => {
+  const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-planning-chat-pressure-'));
+  try {
+    const app = await launchElectronApp(testDir, {
+      INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000',
+    });
+    try {
+      const page = await app.firstWindow({ timeout: STARTUP_BUDGET_MS });
+      await page.waitForLoadState('domcontentloaded');
+      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10_000 });
+      await page.evaluate(async () => {
+        await window.invoker.clear();
+        await window.invoker.deleteAllWorkflows();
+      });
+
+      const planYaml = yamlStringify(buildPlan(901));
+      await page.evaluate(async ({ yaml, reply }) => {
+        await window.invoker.setTestPlanningChatResponse?.({
+          planYaml: yaml,
+          planName: 'Planning Pressure Plan',
+          reply,
+        });
+      }, { yaml: planYaml, reply: buildPlanningPressureReply() });
+
+      let sessionId: string | undefined;
+      for (let index = 0; index < PLANNING_PRESSURE_TURNS; index += 1) {
+        const response = await page.evaluate(async ({ currentSessionId, message }) => {
+          return window.invoker.planningChatSend({
+            ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+            message,
+            presetKey: 'codex',
+          });
+        }, {
+          currentSessionId: sessionId,
+          message: `pressure request ${index + 1}`,
+        });
+        expect(response.ok).toBe(true);
+        if (!response.ok) throw new Error(response.error);
+        sessionId = response.sessionId;
+      }
+      expect(sessionId).toBeTruthy();
+
+      await page.reload();
+      await page.waitForLoadState('domcontentloaded');
+      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10_000 });
+      await page.getByTestId('sidebar-planning').click();
+      await expect(page.getByTestId('invoker-terminal-input')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('invoker-terminal-transcript')).toContainText(
+        `pressure request ${PLANNING_PRESSURE_TURNS}`,
+        { timeout: 10000 },
+      );
+      await expect
+        .poll(async () => {
+          const payloads = await uiPerfPayloadsSince(page, 0);
+          return payloads.some((payload) =>
+            payload.metric === 'planning_chat_transcript_commit'
+            && Number(payload.lineCount) >= PLANNING_PRESSURE_TURNS * 2,
+          );
+        }, { timeout: 5000 })
+        .toBe(true);
+
+      const watermark = await activityLogWatermark(page);
+      const typedText = 'keep typing responsive while the transcript is large';
+      const fillStartedAt = Date.now();
+      await page.getByTestId('invoker-terminal-input').fill(typedText);
+      await expect(page.getByTestId('invoker-terminal-input')).toHaveValue(typedText);
+      const fillWallMs = Date.now() - fillStartedAt;
+
+      await expect
+        .poll(async () => {
+          const payloads = await uiPerfPayloadsSince(page, watermark);
+          return payloads.some((payload) =>
+            payload.metric === 'planning_chat_input_commit'
+            && payload.valueLength === typedText.length
+            && Number(payload.transcriptLineCount) >= PLANNING_PRESSURE_TURNS * 2,
+          );
+        }, { timeout: 5000 })
+        .toBe(true);
+
+      const payloads = await uiPerfPayloadsSince(page, watermark);
+      const inputChange = payloads.find((payload) => payload.metric === 'planning_chat_input_change' && payload.valueLength === typedText.length);
+      const inputCommit = payloads.find((payload) => payload.metric === 'planning_chat_input_commit' && payload.valueLength === typedText.length);
+      expect(inputChange).toBeTruthy();
+      expect(inputCommit).toBeTruthy();
+      expect(Number(inputChange?.handlerDurationMs)).toBeLessThanOrEqual(PLANNING_INPUT_HANDLER_BUDGET_MS);
+      expect(Number(inputCommit?.durationMs)).toBeLessThanOrEqual(PLANNING_INPUT_COMMIT_BUDGET_MS);
+      expect(Number(inputCommit?.transcriptLineCount)).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
+      expect(fillWallMs).toBeLessThanOrEqual(PLANNING_INPUT_FILL_WALL_BUDGET_MS);
+      expect(payloads.some((payload) => payload.metric === 'planning_chat_transcript_commit')).toBe(false);
+      expect(payloads.some((payload) => payload.metric === 'renderer_long_task')).toBe(false);
+
+      const perf = await page.evaluate(async () => window.invoker.getUiPerfStats());
+      expect(Number(perf.planningChatInputChangeReports)).toBeGreaterThanOrEqual(1);
+      expect(Number(perf.planningChatInputCommitReports)).toBeGreaterThanOrEqual(1);
+      expect(Number(perf.maxPlanningChatInputHandlerMs)).toBeLessThanOrEqual(PLANNING_INPUT_HANDLER_BUDGET_MS);
+      expect(Number(perf.maxPlanningChatInputCommitMs)).toBeLessThanOrEqual(PLANNING_INPUT_COMMIT_BUDGET_MS);
+      expect(Number(perf.maxPlanningChatTranscriptLines)).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
     } finally {
       await app.close();
     }

@@ -71,5 +71,29 @@ test.describe('Embedded terminal spawn failure', () => {
     expect(dialogs[0]).toContain('Failed to start terminal session');
     expect(dialogs[0]).toContain('posix_spawnp failed');
     await expect(page.getByTestId('terminal-session-command')).toHaveCount(0);
+    await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
+    await expect(page.getByTestId('terminal-drawer-body')).toContainText('Open a terminal from a task to attach.');
+
+    await page.getByRole('button', { name: 'Maximize terminal drawer' }).click();
+    await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'maximized');
+    await page.getByRole('button', { name: 'Minimize terminal drawer' }).click();
+    await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
+
+    const attachCount = await page.evaluate(async () => {
+      const rows = await window.invoker.getActivityLogs();
+      return rows
+        .filter((row) => row.source === 'ui-perf')
+        .map((row) => {
+          try {
+            return JSON.parse(row.message) as { metric?: string };
+          } catch {
+            return null;
+          }
+        })
+        .filter((payload): payload is { metric?: string } => payload !== null)
+        .filter((payload) => payload.metric === 'embedded_terminal_attach')
+        .length;
+    });
+    expect(attachCount).toBe(0);
   });
 });
