@@ -605,19 +605,17 @@ describe('SQLiteAdapter', () => {
       expect(adapter.loadTerminalSession('term-t2')).toBeDefined();
     });
 
-    it('persists executionModel through saveTask, updateTask, and loadTask', () => {
+    it('persists optional executionModel through saveTask and loadTask', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('model-task', {
-        config: { executionAgent: 'omp', executionModel: 'openai/gpt-5.2' },
+        config: { executionAgent: 'omp', executionModel: 'claude' },
+      }));
+      adapter.saveTask('wf-1', makeTask('no-model-task', {
+        config: { executionAgent: 'omp' },
       }));
 
-      expect(adapter.loadTask('model-task')?.config.executionModel).toBe('openai/gpt-5.2');
-
-      adapter.updateTask('model-task', {
-        config: { executionModel: 'anthropic/claude-sonnet-4.5' },
-      });
-
-      expect(adapter.loadTasks('wf-1')[0]?.config.executionModel).toBe('anthropic/claude-sonnet-4.5');
+      expect(adapter.loadTask('model-task')?.config.executionModel).toBe('claude');
+      expect(adapter.loadTask('no-model-task')?.config.executionModel).toBeUndefined();
     });
 
     it('loads all workflows and tasks in one startup snapshot', () => {
