@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
@@ -23,6 +23,18 @@ const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
+}
+
+function reportPlanningChatPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
 }
 
 interface InvokerTerminalProps {
@@ -273,26 +285,91 @@ export function InvokerTerminal({
   onCollapse,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
+  const renderStartedAt = nowMs();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  const inputSequenceRef = useRef(0);
+  const latestLineCountRef = useRef(lines.length);
+  const perfContextRef = useRef({ activeConversationKey, expanded });
+  const pendingInputRef = useRef<{
+    sequence: number;
+    startedAt: number;
+    nextLength: number;
+    previousLength: number;
+  } | null>(null);
+  const transcriptCommitRef = useRef<{ signature: string; lineCount: number } | null>(null);
+  latestLineCountRef.current = lines.length;
+  perfContextRef.current = { activeConversationKey, expanded };
 
-  const scrollTranscriptToBottom = useCallback((): void => {
+  const scrollTranscriptToBottom = useCallback((reason: 'conversation_change' | 'line_change', lineCount: number): void => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
+    const startedAt = nowMs();
+    const context = perfContextRef.current;
     transcript.scrollTop = transcript.scrollHeight;
+    reportPlanningChatPerf('planning_chat_transcript_autoscroll', {
+      reason,
+      durationMs: roundMs(nowMs() - startedAt),
+      conversationKey: context.activeConversationKey,
+      lineCount,
+      scrollHeight: transcript.scrollHeight,
+      clientHeight: transcript.clientHeight,
+      expanded: context.expanded,
+    });
   }, []);
 
   useLayoutEffect(() => {
     setShouldFollowTranscript(true);
-    scrollTranscriptToBottom();
+    scrollTranscriptToBottom('conversation_change', latestLineCountRef.current);
   }, [activeConversationKey, scrollTranscriptToBottom]);
 
   useLayoutEffect(() => {
     if (shouldFollowTranscript) {
-      scrollTranscriptToBottom();
+      scrollTranscriptToBottom('line_change', lines.length);
     }
   }, [lines.length, scrollTranscriptToBottom, shouldFollowTranscript]);
+
+  useLayoutEffect(() => {
+    const pending = pendingInputRef.current;
+    if (!pending || pending.nextLength !== value.length) return;
+    pendingInputRef.current = null;
+    reportPlanningChatPerf('planning_chat_input_commit', {
+      sequence: pending.sequence,
+      durationMs: roundMs(nowMs() - pending.startedAt),
+      valueLength: value.length,
+      previousValueLength: pending.previousLength,
+      deltaLength: value.length - pending.previousLength,
+      conversationKey: activeConversationKey,
+      transcriptLineCount: lines.length,
+      expanded,
+      busy,
+      readOnly,
+    });
+  }, [activeConversationKey, busy, expanded, lines.length, readOnly, value]);
+
+  useLayoutEffect(() => {
+    const lastLine = lines.at(-1);
+    const signature = `${activeConversationKey}:${lines.length}:${lastLine?.id ?? 'none'}:${lastLine?.role ?? 'none'}:${lastLine?.text.length ?? 0}:${lastLine?.reasoning?.length ?? 0}`;
+    const previous = transcriptCommitRef.current;
+    transcriptCommitRef.current = { signature, lineCount: lines.length };
+    if (!previous || previous.signature === signature) return;
+    const transcriptChars = lines.reduce((total, line) => total + line.text.length + (line.reasoning?.length ?? 0), 0);
+    reportPlanningChatPerf('planning_chat_transcript_commit', {
+      durationMs: roundMs(nowMs() - renderStartedAt),
+      conversationKey: activeConversationKey,
+      lineCount: lines.length,
+      lineDelta: lines.length - previous.lineCount,
+      transcriptChars,
+      lastLineRole: lastLine?.role,
+      lastLineChars: lastLine?.text.length ?? 0,
+      hasReasoning: Boolean(lastLine?.reasoning),
+      busy,
+      expanded,
+      draftPlanAvailable,
+      readOnly,
+    });
+  }, [activeConversationKey, busy, draftPlanAvailable, expanded, lines, readOnly]);
 
   const handleTranscriptScroll = useCallback((): void => {
     const transcript = transcriptRef.current;
@@ -308,6 +385,58 @@ export function InvokerTerminal({
 
   const focusComposer = (): void => {
     inputRef.current?.focus();
+  };
+
+  const handleValueChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
+    const startedAt = nowMs();
+    const nextValue = event.target.value;
+    const sequence = inputSequenceRef.current + 1;
+    inputSequenceRef.current = sequence;
+    pendingInputRef.current = {
+      sequence,
+      startedAt,
+      nextLength: nextValue.length,
+      previousLength: value.length,
+    };
+    onValueChange(nextValue);
+    reportPlanningChatPerf('planning_chat_input_change', {
+      sequence,
+      handlerDurationMs: roundMs(nowMs() - startedAt),
+      valueLength: nextValue.length,
+      previousValueLength: value.length,
+      deltaLength: nextValue.length - value.length,
+      conversationKey: activeConversationKey,
+      transcriptLineCount: lines.length,
+      expanded,
+      busy,
+      readOnly,
+    });
+  };
+
+  const submitFromComposer = (source: 'form' | 'enter'): void => {
+    if (!value.trim() || busy || readOnly) return;
+    reportPlanningChatPerf('planning_chat_submit', {
+      source,
+      valueLength: value.length,
+      trimmedLength: value.trim().length,
+      conversationKey: activeConversationKey,
+      transcriptLineCount: lines.length,
+      draftPlanAvailable,
+      expanded,
+    });
+    onSubmit();
+  };
+
+  const handleFormSubmit = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    submitFromComposer('form');
+  };
+
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
+      event.preventDefault();
+      submitFromComposer('enter');
+    }
   };
 
   return (
@@ -496,11 +625,7 @@ export function InvokerTerminal({
 
           <form
             className="border-t border-border bg-background px-4 py-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!value.trim() || busy || readOnly) return;
-              onSubmit();
-            }}
+            onSubmit={handleFormSubmit}
           >
             <div className="flex items-start gap-2">
               <span className="mt-2.5 shrink-0 font-mono text-xs text-muted-foreground" aria-hidden="true">›</span>
@@ -510,13 +635,8 @@ export function InvokerTerminal({
                 value={value}
                 disabled={busy || readOnly}
                 rows={expanded ? 8 : 3}
-                onChange={(event) => onValueChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
-                    event.preventDefault();
-                    onSubmit();
-                  }
-                }}
+                onChange={handleValueChange}
+                onKeyDown={handleInputKeyDown}
                 placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe the change, ask questions, or say “draft the full plan”.'}
                 className="min-h-20 w-full resize-none border-0 bg-transparent py-2 font-mono text-[13px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 disabled:cursor-wait"
               />

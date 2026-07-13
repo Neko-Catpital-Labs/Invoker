@@ -56,10 +56,31 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
+}
+
+function byteLength(value: string): number {
+  try {
+    return new TextEncoder().encode(value).byteLength;
+  } catch {
+    return value.length;
+  }
+}
+
+function reportTerminalPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
+  source: 'attach' | 'session_update',
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
@@ -73,12 +94,22 @@ function seedTerminalOutputSnapshot(
     )
   ) {
     try {
+      const startedAt = nowMs();
       term.write(outputSnapshot);
       seededSnapshotRef.current = {
         sessionId: session.sessionId,
         snapshot: outputSnapshot,
         term,
       };
+      reportTerminalPerf('embedded_terminal_snapshot_write', {
+        source,
+        durationMs: roundMs(nowMs() - startedAt),
+        bytes: byteLength(outputSnapshot),
+        chars: outputSnapshot.length,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        status: session.status,
+      });
     } catch (err) {
       console.warn(
         `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
@@ -94,10 +125,12 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
   const isActiveRef = useRef(isActive);
+  const sessionRef = useRef(session);
   const fitFrameRef = useRef<number | null>(null);
   const secondFitFrameRef = useRef<number | null>(null);
 
   isActiveRef.current = isActive;
+  sessionRef.current = session;
 
   const clearScheduledFit = useCallback(() => {
     if (fitFrameRef.current !== null) {
@@ -152,6 +185,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     let term: XTermTerminal;
     let fit: FitAddon;
     try {
+      const attachStartedAt = nowMs();
       term = new XTermTerminal({
         fontSize: 12,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -163,23 +197,54 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
+      reportTerminalPerf('embedded_terminal_attach', {
+        durationMs: roundMs(nowMs() - attachStartedAt),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        mode: session.mode,
+        status: session.status,
+        active: isActive,
+        hasHeader,
+        hasSnapshot: Boolean(session.outputSnapshot),
+        snapshotBytes: session.outputSnapshot ? byteLength(session.outputSnapshot) : 0,
+      });
     } catch {
       return;
     }
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'attach');
 
     const inputDisposable = term.onData((data) => {
+      const startedAt = nowMs();
       void window.invoker?.terminalWrite?.(session.sessionId, data);
+      reportTerminalPerf('embedded_terminal_input', {
+        durationMs: roundMs(nowMs() - startedAt),
+        bytes: byteLength(data),
+        chars: data.length,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        active: isActiveRef.current,
+      });
     });
 
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const currentSession = sessionRef.current;
+        const startedAt = nowMs();
         term.write(event.data);
+        reportTerminalPerf('embedded_terminal_output_write', {
+          durationMs: roundMs(nowMs() - startedAt),
+          bytes: byteLength(event.data),
+          chars: event.data.length,
+          sessionId: event.sessionId,
+          taskId: event.taskId,
+          active: isActiveRef.current,
+          status: currentSession.status,
+        });
       } catch {
         /* terminal disposed */
       }
@@ -221,7 +286,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'session_update');
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
