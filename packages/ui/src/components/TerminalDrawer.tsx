@@ -8,7 +8,7 @@
  * requiring a real terminal backing.
  */
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
@@ -46,6 +46,7 @@ interface TerminalDrawerProps {
 interface TerminalSessionPaneProps {
   session: TerminalSessionDescriptor;
   isActive: boolean;
+  drawerState: TerminalDrawerState;
   hasHeader: boolean;
 }
 
@@ -87,11 +88,62 @@ function seedTerminalOutputSnapshot(
   }
 }
 
-function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPaneProps): JSX.Element {
+function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: TerminalSessionPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const isActiveRef = useRef(isActive);
+  const fitFrameRef = useRef<number | null>(null);
+  const secondFitFrameRef = useRef<number | null>(null);
+
+  isActiveRef.current = isActive;
+
+  const clearScheduledFit = useCallback(() => {
+    if (fitFrameRef.current !== null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(fitFrameRef.current);
+      }
+      fitFrameRef.current = null;
+    }
+    if (secondFitFrameRef.current !== null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(secondFitFrameRef.current);
+      }
+      secondFitFrameRef.current = null;
+    }
+  }, []);
+
+  const fitVisibleTerminal = useCallback(() => {
+    if (!isActiveRef.current) return;
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit) return;
+    try {
+      fit.fit();
+      if (term.rows > 0) {
+        term.refresh?.(0, term.rows - 1);
+      }
+      void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+    } catch {
+      /* host has zero size, terminal disposed, or fit unsupported */
+    }
+  }, [session.sessionId]);
+
+  const scheduleFit = useCallback(() => {
+    clearScheduledFit();
+    fitVisibleTerminal();
+    if (typeof requestAnimationFrame !== 'function') return;
+
+    fitFrameRef.current = requestAnimationFrame(() => {
+      fitFrameRef.current = null;
+      fitVisibleTerminal();
+      secondFitFrameRef.current = requestAnimationFrame(() => {
+        secondFitFrameRef.current = null;
+        fitVisibleTerminal();
+      });
+    });
+  }, [clearScheduledFit, fitVisibleTerminal]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -133,35 +185,26 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       }
     });
 
-    const tryFit = () => {
-      try {
-        fit.fit();
-        void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
-      } catch {
-        /* host has zero size or fit unsupported */
-      }
-    };
-
-    const raf = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame(tryFit)
-      : null;
-
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       try {
-        resizeObserver = new ResizeObserver(() => {
-          tryFit();
-        });
+        resizeObserver = new ResizeObserver(fitVisibleTerminal);
         resizeObserver.observe(host);
       } catch {
         resizeObserver = null;
       }
     }
+    if (isActiveRef.current) {
+      scheduleFit();
+      try {
+        term.focus();
+      } catch {
+        /* focus unsupported */
+      }
+    }
 
     return () => {
-      if (raf !== null && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(raf);
-      }
+      clearScheduledFit();
       resizeObserver?.disconnect();
       inputDisposable.dispose();
       unsubscribeOutput?.();
@@ -173,7 +216,7 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [session.sessionId]);
+  }, [clearScheduledFit, fitVisibleTerminal, scheduleFit, session.sessionId]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -182,18 +225,19 @@ function TerminalSessionPane({ session, isActive, hasHeader }: TerminalSessionPa
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive) {
+      clearScheduledFit();
+      return;
+    }
     const term = termRef.current;
-    const fit = fitRef.current;
-    if (!term || !fit) return;
+    if (!term) return;
     try {
-      fit.fit();
-      void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      scheduleFit();
       term.focus();
     } catch {
       /* fit failed (e.g., hidden) */
     }
-  }, [isActive, session.sessionId]);
+  }, [clearScheduledFit, drawerState, hasHeader, isActive, scheduleFit, session.sessionId]);
 
   return (
     <div
@@ -320,6 +364,7 @@ export function TerminalDrawer({
               key={session.sessionId}
               session={session}
               isActive={session.sessionId === activeSessionId}
+              drawerState={state}
               hasHeader={Boolean(session.sessionId === activeSessionId && activeCommand)}
             />
           ))}
