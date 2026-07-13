@@ -278,6 +278,7 @@ import {
   resetTerminalUiPerfCounters,
 } from './terminal-ui-perf.js';
 import {
+  registerPlanningTerminalSessionIpcHandlers,
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
 } from './terminal-session-ipc.js';
@@ -5327,6 +5328,13 @@ function createEmbeddedTerminalBackendFromConfig(
         logger.warn(`terminal session spawn failed for task="${taskId}": ${reason}`, { module: 'open-terminal' });
         return { opened: false, reason: `Failed to start terminal session: ${reason}` };
       }
+    });
+
+    registerPlanningTerminalSessionIpcHandlers({
+      ipcMain,
+      embeddedTerminalManager,
+      logger,
+      repoRoot,
     });
 
     registerTerminalSessionIpcHandlers({
