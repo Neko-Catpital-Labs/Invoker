@@ -257,11 +257,14 @@ export interface InvokerConfig {
     /**
      * When true, export agent API keys from the local secrets file into SSH task/fix
      * shells. Default false so remote Claude/Codex CLI account auth is preserved.
+     * GitHub CLI auth tokens are exported from the secrets file regardless of
+     * this flag so command tasks can use `gh` on remote targets.
      */
     use_api_key?: boolean;
     /**
-     * Optional local KEY=value secrets file used when use_api_key is true.
-     * Defaults to docker.secretsFile/fallback when unset.
+     * Optional local KEY=value secrets file. GitHub CLI auth tokens are
+     * forwarded to SSH task/fix shells; agent provider API keys require
+     * use_api_key=true. Defaults to docker.secretsFile/fallback when unset.
      */
     secretsFile?: string;
     /**
