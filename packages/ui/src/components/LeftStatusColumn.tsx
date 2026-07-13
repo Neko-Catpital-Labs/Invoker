@@ -26,6 +26,7 @@ interface LeftStatusColumnProps {
   workerStatus: WorkerStatusSnapshot | null;
   selectedSurface: SidebarSurface;
   collapsed: boolean;
+  attentionTaskIdsWithFailures?: Set<string>;
   onSelectSurface: (surface: SidebarSurface) => void;
   onToggleCollapsed: () => void;
   planningSessionCount: number;
@@ -72,6 +73,7 @@ export function LeftStatusColumn({
   workerStatus,
   selectedSurface,
   collapsed,
+  attentionTaskIdsWithFailures,
   onSelectSurface,
   onToggleCollapsed,
   planningSessionCount,
@@ -80,7 +82,7 @@ export function LeftStatusColumn({
   onToggleTheme,
 }: LeftStatusColumnProps): JSX.Element {
   const workflowEntries = getSortedWorkflows(workflows, tasks);
-  const attentionEntries = getAttentionTaskEntries(tasks, workflows);
+  const attentionEntries = getAttentionTaskEntries(tasks, workflows, attentionTaskIdsWithFailures);
   const runningEntries = getRunningTaskEntries(tasks, workflows, queueStatus);
   const runningWorkers = workerStatus?.workers.filter((worker) => worker.lifecycle === 'running').length ?? 0;
   const registeredWorkers = workerStatus?.workers.length ?? 0;
