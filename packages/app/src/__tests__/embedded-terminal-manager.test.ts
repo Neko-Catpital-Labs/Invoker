@@ -124,6 +124,72 @@ describe('EmbeddedTerminalManager', () => {
     expect(mgr.list()).toHaveLength(1);
   });
 
+  it('opens planning sessions as reusable raw shells distinct from task terminals', () => {
+    const planningChild = createFakeChild();
+    const taskChild = createFakeChild();
+    const bashSpawnFn = vi
+      .fn()
+      .mockReturnValueOnce(planningChild)
+      .mockReturnValueOnce(taskChild) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+      defaultShell: '/bin/manual-shell',
+    });
+    const events: Array<{ kind?: string; planningSessionId?: string; data: string }> = [];
+    mgr.on('output', (event) => {
+      events.push({
+        kind: event.kind,
+        planningSessionId: event.planningSessionId,
+        data: event.data,
+      });
+    });
+
+    const first = mgr.openOrReuse({
+      kind: 'planning',
+      taskId: 'planning:plan-session-1',
+      planningSessionId: 'plan-session-1',
+      spec: { cwd: '/repo' },
+      cwd: '/repo',
+    });
+    const reused = mgr.openOrReuse({
+      kind: 'planning',
+      taskId: 'planning:plan-session-1',
+      planningSessionId: 'plan-session-1',
+      spec: { cwd: '/repo' },
+      cwd: '/repo',
+    });
+    const taskSession = mgr.openOrReuse({
+      taskId: 'planning:plan-session-1',
+      spec: { cwd: '/repo' },
+      cwd: '/repo',
+    });
+    planningChild.stdout.emit('data', Buffer.from('planner shell\n'));
+
+    expect(reused.sessionId).toBe(first.sessionId);
+    expect(taskSession.sessionId).not.toBe(first.sessionId);
+    expect(first).toMatchObject({
+      kind: 'planning',
+      planningSessionId: 'plan-session-1',
+      taskId: 'planning:plan-session-1',
+      cwd: '/repo',
+      command: undefined,
+      args: undefined,
+      mode: 'spawn',
+      attached: false,
+    });
+    expect(taskSession.kind).toBe('task');
+    expect(events).toEqual([
+      { kind: 'planning', planningSessionId: 'plan-session-1', data: 'planner shell\n' },
+    ]);
+    expect(bashSpawnFn).toHaveBeenNthCalledWith(
+      1,
+      '/bin/manual-shell',
+      [],
+      expect.objectContaining({ cwd: '/repo' }),
+    );
+    expect(bashSpawnFn).toHaveBeenCalledTimes(2);
+  });
+
   it('opens and reuses sessions through an injected backend object', () => {
     const spawned = {
       write: vi.fn(),

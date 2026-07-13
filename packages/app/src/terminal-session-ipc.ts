@@ -16,10 +16,16 @@ export const TERMINAL_SESSION_UPSERT_COALESCE_MS = 250;
 
 type TerminalSessionRow = ReturnType<SQLiteAdapter['listTerminalSessions']>[number];
 
+interface PlanningTerminalLogger {
+  info(message: string, context?: Record<string, unknown>): void;
+  warn(message: string, context?: Record<string, unknown>): void;
+}
+
 export function terminalRowToDescriptor(row: TerminalSessionRow): TerminalSessionDescriptor {
   return {
     sessionId: row.sessionId,
     taskId: row.taskId,
+    kind: 'task',
     status: row.status,
     exitCode: row.exitCode,
     cwd: row.cwd,
@@ -159,6 +165,8 @@ export function registerTerminalSessionPersistence(deps: {
   };
 
   const onSessionUpdated = (record: TerminalSessionPersistenceRecord): void => {
+    if (record.kind !== 'task') return;
+
     // Open (empty snapshot) and exit/status boundaries persist immediately so
     // restart restore and final state stay correct. Output while running is
     // coalesced — that is the PTY storm path that blocked Electron main.
@@ -201,7 +209,10 @@ export function registerTerminalSessionIpcHandlers(deps: {
   const { ipcMain, embeddedTerminalManager, persistence, uiPerfStats, terminalUiPerf, terminalUiPerfSink } = deps;
 
   ipcMain.handle('invoker:terminal-list', async () => {
-    const live = new Map(embeddedTerminalManager.list().map((session) => [session.sessionId, session]));
+    const liveSessions = embeddedTerminalManager
+      .list()
+      .filter((session) => session.kind !== 'planning');
+    const live = new Map(liveSessions.map((session) => [session.sessionId, session]));
     const merged = persistence.listTerminalSessions().map((row) => live.get(row.sessionId) ?? terminalRowToDescriptor(row));
     const persistedIds = new Set(merged.map((session) => session.sessionId));
     for (const session of live.values()) {
@@ -213,6 +224,10 @@ export function registerTerminalSessionIpcHandlers(deps: {
   });
 
   ipcMain.handle('invoker:terminal-write', async (_event, sessionId: string, data: string) => {
+    const session = embeddedTerminalManager.get(sessionId);
+    if (session?.kind === 'planning') {
+      return { ok: false, reason: `Session "${sessionId}" is a planning terminal session.` };
+    }
     return timeTerminalWrite(
       () => embeddedTerminalManager.write(sessionId, data),
       uiPerfStats,
@@ -226,6 +241,10 @@ export function registerTerminalSessionIpcHandlers(deps: {
   });
 
   ipcMain.handle('invoker:terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
+    const session = embeddedTerminalManager.get(sessionId);
+    if (session?.kind === 'planning') {
+      return { ok: false, reason: `Session "${sessionId}" is a planning terminal session.` };
+    }
     return timeTerminalResize(
       () => embeddedTerminalManager.resize(sessionId, cols, rows),
       uiPerfStats,
@@ -240,8 +259,77 @@ export function registerTerminalSessionIpcHandlers(deps: {
   });
 
   ipcMain.handle('invoker:terminal-close', async (_event, sessionId: string) => {
+    const session = embeddedTerminalManager.get(sessionId);
+    if (session?.kind === 'planning') {
+      return { ok: false, reason: `Session "${sessionId}" is a planning terminal session.` };
+    }
     const result = embeddedTerminalManager.close(sessionId);
     persistence.deleteTerminalSession(sessionId);
     return result.ok ? result : { ok: true };
+  });
+}
+
+function planningTerminalOnly(
+  embeddedTerminalManager: EmbeddedTerminalManager,
+  sessionId: string,
+): { ok: true } | { ok: false; reason: string } {
+  const session = embeddedTerminalManager.get(sessionId);
+  if (!session) return { ok: false, reason: `Unknown session "${sessionId}".` };
+  if (session.kind !== 'planning') {
+    return { ok: false, reason: `Session "${sessionId}" is not a planning terminal session.` };
+  }
+  return { ok: true };
+}
+
+export function registerPlanningTerminalSessionIpcHandlers(deps: {
+  ipcMain: IpcMain;
+  embeddedTerminalManager: EmbeddedTerminalManager;
+  logger: PlanningTerminalLogger;
+  repoRoot: string;
+}): void {
+  const { ipcMain, embeddedTerminalManager, logger, repoRoot } = deps;
+
+  ipcMain.handle('invoker:planning-terminal-open', async (_event, planningSessionIdArg: string) => {
+    const planningSessionId = String(planningSessionIdArg ?? '').trim();
+    if (!planningSessionId) {
+      return { opened: false, reason: 'Planning session id is required.' };
+    }
+    logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
+    try {
+      const session = embeddedTerminalManager.openOrReuse({
+        kind: 'planning',
+        taskId: `planning:${planningSessionId}`,
+        planningSessionId,
+        spec: { cwd: repoRoot },
+        cwd: repoRoot,
+      });
+      return { opened: true, session };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      logger.warn(`planning terminal spawn failed for session="${planningSessionId}": ${reason}`, { module: 'planning-terminal' });
+      return { opened: false, reason: `Failed to start planning terminal session: ${reason}` };
+    }
+  });
+
+  ipcMain.handle('invoker:planning-terminal-list', async () => {
+    return embeddedTerminalManager.list().filter((session) => session.kind === 'planning');
+  });
+
+  ipcMain.handle('invoker:planning-terminal-write', async (_event, sessionId: string, data: string) => {
+    const allowed = planningTerminalOnly(embeddedTerminalManager, sessionId);
+    if (!allowed.ok) return allowed;
+    return embeddedTerminalManager.write(sessionId, data);
+  });
+
+  ipcMain.handle('invoker:planning-terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
+    const allowed = planningTerminalOnly(embeddedTerminalManager, sessionId);
+    if (!allowed.ok) return allowed;
+    return embeddedTerminalManager.resize(sessionId, cols, rows);
+  });
+
+  ipcMain.handle('invoker:planning-terminal-close', async (_event, sessionId: string) => {
+    const allowed = planningTerminalOnly(embeddedTerminalManager, sessionId);
+    if (!allowed.ok) return allowed;
+    return embeddedTerminalManager.close(sessionId);
   });
 }
