@@ -25,7 +25,8 @@ export function terminalRowToDescriptor(row: TerminalSessionRow): TerminalSessio
   return {
     sessionId: row.sessionId,
     taskId: row.taskId,
-    kind: 'task',
+    kind: row.kind,
+    planningSessionId: row.planningSessionId,
     status: row.status,
     exitCode: row.exitCode,
     cwd: row.cwd,
@@ -39,12 +40,17 @@ export function terminalRowToDescriptor(row: TerminalSessionRow): TerminalSessio
 }
 
 export function restorePersistedTerminalSessions(deps: {
-  persistence: Pick<SQLiteAdapter, 'listTerminalSessions' | 'loadTask' | 'deleteTerminalSession' | 'updateTerminalSession'>;
+  persistence: Pick<SQLiteAdapter, 'listTerminalSessions' | 'loadTask' | 'loadInAppPlanningSession' | 'deleteTerminalSession' | 'updateTerminalSession'>;
   embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'restoreSpawnSession'>;
 }): void {
   const nowIso = () => new Date().toISOString();
   for (const row of deps.persistence.listTerminalSessions()) {
-    if (!deps.persistence.loadTask(row.taskId)) {
+    if (row.kind === 'planning') {
+      if (!row.planningSessionId || !deps.persistence.loadInAppPlanningSession(row.planningSessionId)) {
+        deps.persistence.deleteTerminalSession(row.sessionId);
+        continue;
+      }
+    } else if (!deps.persistence.loadTask(row.taskId)) {
       deps.persistence.deleteTerminalSession(row.sessionId);
       continue;
     }
@@ -57,6 +63,8 @@ export function restorePersistedTerminalSessions(deps: {
       deps.embeddedTerminalManager.restoreSpawnSession({
         sessionId: row.sessionId,
         taskId: row.taskId,
+        kind: row.kind,
+        planningSessionId: row.planningSessionId,
         targetKey: row.targetKey,
         spec: {
           cwd: row.cwd,
@@ -78,6 +86,8 @@ function toUpsertRow(record: TerminalSessionPersistenceRecord) {
   return {
     sessionId: record.sessionId,
     taskId: record.taskId,
+    kind: record.kind,
+    planningSessionId: record.planningSessionId,
     targetKey: record.targetKey,
     status: record.status,
     exitCode: record.exitCode,
@@ -102,7 +112,7 @@ export interface TerminalSessionPersistenceHandle {
 
 export function registerTerminalSessionPersistence(deps: {
   embeddedTerminalManager: EmbeddedTerminalManager;
-  persistence: Pick<SQLiteAdapter, 'upsertTerminalSession' | 'listTerminalSessions' | 'loadTask' | 'deleteTerminalSession' | 'updateTerminalSession'>;
+  persistence: Pick<SQLiteAdapter, 'upsertTerminalSession' | 'listTerminalSessions' | 'loadTask' | 'loadInAppPlanningSession' | 'deleteTerminalSession' | 'updateTerminalSession'>;
   uiPerfStats: TerminalUiPerfCounters;
   terminalUiPerf: TerminalUiPerfReporter;
   terminalUiPerfSink: TerminalUiPerfSink;
@@ -165,8 +175,6 @@ export function registerTerminalSessionPersistence(deps: {
   };
 
   const onSessionUpdated = (record: TerminalSessionPersistenceRecord): void => {
-    if (record.kind !== 'task') return;
-
     // Open (empty snapshot) and exit/status boundaries persist immediately so
     // restart restore and final state stay correct. Output while running is
     // coalesced — that is the PTY storm path that blocked Electron main.
@@ -213,7 +221,10 @@ export function registerTerminalSessionIpcHandlers(deps: {
       .list()
       .filter((session) => session.kind !== 'planning');
     const live = new Map(liveSessions.map((session) => [session.sessionId, session]));
-    const merged = persistence.listTerminalSessions().map((row) => live.get(row.sessionId) ?? terminalRowToDescriptor(row));
+    const merged = persistence
+      .listTerminalSessions()
+      .filter((row) => row.kind !== 'planning')
+      .map((row) => live.get(row.sessionId) ?? terminalRowToDescriptor(row));
     const persistedIds = new Set(merged.map((session) => session.sessionId));
     for (const session of live.values()) {
       if (!persistedIds.has(session.sessionId)) {
@@ -286,6 +297,8 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
   embeddedTerminalManager: EmbeddedTerminalManager;
   logger: PlanningTerminalLogger;
   repoRoot: string;
+  isPlanningSessionReadOnly?: (planningSessionId: string) => boolean;
+  onPlanningTerminalOpened?: (planningSessionId: string, terminalSessionId: string) => void;
 }): void {
   const { ipcMain, embeddedTerminalManager, logger, repoRoot } = deps;
 
@@ -293,6 +306,13 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
     const planningSessionId = String(planningSessionIdArg ?? '').trim();
     if (!planningSessionId) {
       return { opened: false, reason: 'Planning session id is required.' };
+    }
+    if (deps.isPlanningSessionReadOnly?.(planningSessionId)) {
+      const existing = embeddedTerminalManager
+        .list()
+        .find((session) => session.kind === 'planning' && session.planningSessionId === planningSessionId);
+      if (existing) return { opened: true, session: existing };
+      return { opened: false, reason: 'This planning session is read-only.' };
     }
     logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
     try {
@@ -303,6 +323,7 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
         spec: { cwd: repoRoot },
         cwd: repoRoot,
       });
+      deps.onPlanningTerminalOpened?.(planningSessionId, session.sessionId);
       return { opened: true, session };
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -318,6 +339,10 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
   ipcMain.handle('invoker:planning-terminal-write', async (_event, sessionId: string, data: string) => {
     const allowed = planningTerminalOnly(embeddedTerminalManager, sessionId);
     if (!allowed.ok) return allowed;
+    const session = embeddedTerminalManager.get(sessionId);
+    if (session?.planningSessionId && deps.isPlanningSessionReadOnly?.(session.planningSessionId)) {
+      return { ok: false, reason: 'This planning session is read-only.' };
+    }
     return embeddedTerminalManager.write(sessionId, data);
   });
 

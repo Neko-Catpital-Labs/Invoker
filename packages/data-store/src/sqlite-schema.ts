@@ -176,6 +176,8 @@ export const SCHEMA_DDL = `
         preset_key TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted')),
         draft_plan_summary_json TEXT CHECK (draft_plan_summary_json IS NULL OR json_valid(draft_plan_summary_json)),
+        terminal_mode TEXT NOT NULL DEFAULT 'chat' CHECK (terminal_mode IN ('chat', 'tmux')),
+        terminal_session_id TEXT,
         submitted_workflow_id TEXT,
         submitted_plan_name TEXT,
         pending_response INTEGER NOT NULL DEFAULT 0 CHECK (pending_response IN (0, 1)),
@@ -409,6 +411,8 @@ export const SCHEMA_DDL = `
       CREATE TABLE IF NOT EXISTS terminal_sessions (
         session_id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'task' CHECK (kind IN ('task', 'planning')),
+        planning_session_id TEXT,
         target_key TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('running', 'exited')),
         exit_code INTEGER,
@@ -420,8 +424,7 @@ export const SCHEMA_DDL = `
         attached INTEGER NOT NULL DEFAULT 0 CHECK (attached IN (0, 1)),
         output_snapshot TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (task_id) REFERENCES tasks(id)
+        updated_at TEXT NOT NULL
       );
 
       CREATE INDEX IF NOT EXISTS idx_terminal_sessions_task_updated
@@ -502,7 +505,71 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
   'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
   'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
+  "ALTER TABLE terminal_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'task' CHECK (kind IN ('task', 'planning'))",
+  'ALTER TABLE terminal_sessions ADD COLUMN planning_session_id TEXT',
+  "ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_mode TEXT NOT NULL DEFAULT 'chat' CHECK (terminal_mode IN ('chat', 'tmux'))",
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_session_id TEXT',
 ];
+
+export const TERMINAL_SESSIONS_REBUILD_TABLE_DDL = `
+      CREATE TABLE terminal_sessions_new (
+        session_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'task' CHECK (kind IN ('task', 'planning')),
+        planning_session_id TEXT,
+        target_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('running', 'exited')),
+        exit_code INTEGER,
+        cwd TEXT,
+        command TEXT,
+        args_json TEXT CHECK (args_json IS NULL OR json_valid(args_json)),
+        linux_terminal_tail TEXT CHECK (linux_terminal_tail IS NULL OR linux_terminal_tail IN ('exec_bash', 'pause')),
+        mode TEXT NOT NULL CHECK (mode IN ('spawn', 'attached')),
+        attached INTEGER NOT NULL DEFAULT 0 CHECK (attached IN (0, 1)),
+        output_snapshot TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+`;
+
+export const TERMINAL_SESSIONS_REBUILD_INSERT_DDL = `
+      INSERT INTO terminal_sessions_new (
+        session_id,
+        task_id,
+        kind,
+        planning_session_id,
+        target_key,
+        status,
+        exit_code,
+        cwd,
+        command,
+        args_json,
+        linux_terminal_tail,
+        mode,
+        attached,
+        output_snapshot,
+        created_at,
+        updated_at
+      )
+      SELECT
+        session_id,
+        task_id,
+        CASE WHEN kind IN ('task', 'planning') THEN kind ELSE 'task' END,
+        planning_session_id,
+        target_key,
+        status,
+        exit_code,
+        cwd,
+        command,
+        args_json,
+        linux_terminal_tail,
+        mode,
+        attached,
+        output_snapshot,
+        created_at,
+        updated_at
+      FROM terminal_sessions;
+`;
 
 /**
  * Index reconciliation run after the column migrations. Replaces the old

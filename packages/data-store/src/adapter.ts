@@ -6,7 +6,7 @@
  */
 
 import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, InAppPlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
 
 
 export type ConversationMode = 'agent' | 'plan';
@@ -200,6 +200,8 @@ export interface WorkerActionListFilters {
 export interface TerminalSessionRecord {
   sessionId: string;
   taskId: string;
+  kind: 'task' | 'planning';
+  planningSessionId?: string;
   targetKey: string;
   status: 'running' | 'exited';
   exitCode?: number;
@@ -225,6 +227,8 @@ export interface InAppPlanningSessionRecord {
   status: InAppPlanningSessionStatus;
   messages: InAppPlanningChatLine[];
   draftPlanSummary?: InAppPlanningPlanSummary;
+  mode?: InAppPlanningTerminalMode;
+  terminalSessionId?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   pendingResponse: boolean;
@@ -238,6 +242,8 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   | 'status'
   | 'messages'
   | 'draftPlanSummary'
+  | 'mode'
+  | 'terminalSessionId'
   | 'submittedWorkflowId'
   | 'submittedPlanName'
   | 'pendingResponse'

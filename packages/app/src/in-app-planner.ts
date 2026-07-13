@@ -13,6 +13,7 @@ import type {
   InAppPlanningResetResponse,
   InAppPlanningSessionStatus,
   InAppPlanningSessionSummary,
+  InAppPlanningTerminalMode,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
   PlanningPresetOption,
@@ -58,6 +59,8 @@ export interface InAppPlanningChatSession {
   conversation: PlanConversation;
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
+  mode?: InAppPlanningTerminalMode;
+  terminalSessionId?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   createdAt: string;
@@ -184,6 +187,8 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     status: session.status,
     messages: session.messages,
     draftPlanSummary: session.draftPlanSummary,
+    mode: session.mode ?? 'chat',
+    terminalSessionId: session.terminalSessionId,
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
     pendingResponse,
@@ -201,6 +206,9 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     messages: session.messages,
     draftPlanAvailable: Boolean(session.draftPlanSummary),
     draftPlanSummary: session.draftPlanSummary,
+    mode: session.mode ?? 'chat',
+    terminalSessionId: session.terminalSessionId,
+    readOnly: session.status === 'submitted',
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
     createdAt: session.createdAt,
@@ -325,6 +333,7 @@ async function createSession(
     status: 'still_discussing',
     messages: [],
     conversation: new PlanConversation(planConversationConfig(preset, deps, id)),
+    mode: 'chat',
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 1,
@@ -637,6 +646,8 @@ export async function restorePlanningChatSessions(
       messages: [...record.messages],
       conversation,
       draftPlanSummary: record.draftPlanSummary,
+      mode: record.mode ?? 'chat',
+      terminalSessionId: record.terminalSessionId,
       submittedWorkflowId: record.submittedWorkflowId,
       submittedPlanName: record.submittedPlanName,
       createdAt: record.createdAt,
@@ -700,4 +711,25 @@ export async function restorePlanningChatSessions(
       persistPlanningSession(session, deps.planningSessionStore, false);
     }
   }
+}
+
+export function updatePlanningChatTerminalMode(
+  request: { sessionId: string; mode: InAppPlanningTerminalMode; terminalSessionId?: string },
+  deps: { sessions: InAppPlanningChatSessions; planningSessionStore?: InAppPlanningSessionStore },
+): void {
+  const session = deps.sessions.get(request.sessionId);
+  if (!session) return;
+  session.mode = request.mode;
+  if (Object.hasOwn(request, 'terminalSessionId')) {
+    session.terminalSessionId = request.terminalSessionId;
+  }
+  session.updatedAt = new Date().toISOString();
+  persistPlanningSession(session, deps.planningSessionStore, false);
+}
+
+export function isPlanningChatSessionReadOnly(
+  sessionId: string,
+  deps: { sessions: InAppPlanningChatSessions },
+): boolean {
+  return deps.sessions.get(sessionId)?.status === 'submitted';
 }

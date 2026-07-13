@@ -97,6 +97,15 @@ async function submitPlanningText(page: Page, text: string): Promise<void> {
   await page.getByTestId('invoker-terminal-input').press('Enter');
 }
 
+async function openPlanningTmux(page: Page): Promise<string> {
+  await page.getByRole('tab', { name: 'tmux' }).click();
+  const pane = await page.getByTestId('invoker-terminal-tmux-pane');
+  await expect(pane).toBeVisible({ timeout: 10000 });
+  const sessionId = await pane.getAttribute('data-session-id');
+  expect(sessionId).toBeTruthy();
+  return sessionId as string;
+}
+
 base.describe('Planning Terminal restart persistence', () => {
   base('restores a draft-ready planning chat after relaunch', async () => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-planning-restart-'));
@@ -152,6 +161,90 @@ base.describe('Planning Terminal restart persistence', () => {
       await page.screenshot({
         path: path.join(process.cwd(), 'visual-proof-planning-terminal-restart.png'),
         fullPage: true,
+      });
+    } finally {
+      if (app) await closeApp(app).catch(() => undefined);
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  base('restores a tmux-mode planning terminal after relaunch', async () => {
+    const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-planning-tmux-restart-'));
+    const configPath = path.join(testDir, 'e2e-config.json');
+    const userDataDir = path.join(testDir, 'electron-user-data');
+    const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
+    const planYaml = yamlStringify(PLANNING_RESTART_PLAN);
+    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0, disableAutoRunOnStartup: true }), 'utf8');
+
+    let app: ElectronApplication | undefined;
+    let page: Page | undefined;
+    try {
+      ({ app, page } = await launchApp({ dbDir: testDir, userDataDir, ipcSocketPath, configPath }));
+      await page.evaluate(async () => {
+        await window.invoker.clear();
+        await window.invoker.deleteAllWorkflows();
+      });
+      await page.evaluate(async ({ yaml }) => {
+        await window.invoker.setTestPlanningChatResponse({
+          planYaml: yaml,
+          planName: 'Planning Terminal Restart',
+          reply: 'I drafted the restart plan.',
+        });
+      }, { yaml: planYaml });
+
+      await openPlanningTerminal(page);
+      await submitPlanningText(page, 'Add README');
+      await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('draft ready', { timeout: 10000 });
+      const savedSessionId = await page.evaluate(async () => {
+        const list = await window.invoker.planningChatList();
+        return list.sessions[0]?.id;
+      });
+      expect(savedSessionId).toBeTruthy();
+      const savedTerminalSessionId = await openPlanningTmux(page);
+      await expect.poll(async () => page.evaluate(async () => {
+        const list = await window.invoker.planningChatList();
+        return list.sessions[0];
+      })).toMatchObject({
+        id: savedSessionId,
+        mode: 'tmux',
+        terminalSessionId: savedTerminalSessionId,
+        readOnly: false,
+      });
+
+      await closeApp(app);
+      app = undefined;
+      page = undefined;
+      await delay(1500);
+
+      ({ app, page } = await launchApp({ dbDir: testDir, userDataDir, ipcSocketPath, configPath }));
+      const restored = await page.evaluate(async ({ planningSessionId }) => {
+        const list = await window.invoker.planningChatList();
+        const terminals = await window.invoker.planningTerminalList();
+        const opened = await window.invoker.planningTerminalOpen(planningSessionId);
+        return { session: list.sessions[0], terminals, opened };
+      }, { planningSessionId: savedSessionId });
+
+      expect(restored.session).toMatchObject({
+        id: savedSessionId,
+        mode: 'tmux',
+        terminalSessionId: savedTerminalSessionId,
+        readOnly: false,
+      });
+      expect(restored.terminals).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: savedTerminalSessionId,
+          kind: 'planning',
+          planningSessionId: savedSessionId,
+          status: 'running',
+        }),
+      ]));
+      expect(restored.opened).toMatchObject({
+        opened: true,
+        session: expect.objectContaining({
+          sessionId: savedTerminalSessionId,
+          kind: 'planning',
+          planningSessionId: savedSessionId,
+        }),
       });
     } finally {
       if (app) await closeApp(app).catch(() => undefined);

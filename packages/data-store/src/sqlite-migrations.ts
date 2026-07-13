@@ -2,6 +2,8 @@ import type { ExternalDependency } from '@invoker/workflow-core';
 import {
   COLUMN_MIGRATIONS,
   POST_MIGRATION_STATEMENTS,
+  TERMINAL_SESSIONS_REBUILD_INSERT_DDL,
+  TERMINAL_SESSIONS_REBUILD_TABLE_DDL,
   WORKFLOWS_REBUILD_TABLE_DDL,
   WORKFLOWS_REBUILD_INSERT_DDL,
 } from './sqlite-schema.js';
@@ -70,6 +72,7 @@ export function migrate(exec: SqliteExecutor, reconcileTerminalSessionInvariants
   }
   migrateWorkflowStatusColumn(exec);
   dropTaskAutoFixAttemptsColumn(exec);
+  migrateTerminalSessionsTaskForeignKey(exec);
 
   if (!exec.readOnly) {
     reconcileTerminalSessionInvariants();
@@ -356,6 +359,30 @@ export function migrateWorkflowStatusColumn(exec: SqliteExecutor): void {
   exec.run(WORKFLOWS_REBUILD_INSERT_DDL);
   exec.run('DROP TABLE workflows');
   exec.run('ALTER TABLE workflows_new RENAME TO workflows');
+  if (foreignKeysEnabled) {
+    exec.run('PRAGMA foreign_keys = ON');
+  }
+  exec.markDirty();
+}
+
+export function migrateTerminalSessionsTaskForeignKey(exec: SqliteExecutor): void {
+  if (exec.readOnly) return;
+  const foreignKeys = exec.queryAll('PRAGMA foreign_key_list(terminal_sessions)') as Array<{ table?: string }>;
+  if (!foreignKeys.some((foreignKey) => foreignKey.table === 'tasks')) return;
+
+  const pragma = exec.queryOne('PRAGMA foreign_keys') as { foreign_keys?: number } | undefined;
+  const foreignKeysEnabled = pragma?.foreign_keys === 1;
+  if (foreignKeysEnabled) {
+    exec.run('PRAGMA foreign_keys = OFF');
+  }
+  exec.run(TERMINAL_SESSIONS_REBUILD_TABLE_DDL);
+  exec.run(TERMINAL_SESSIONS_REBUILD_INSERT_DDL);
+  exec.run('DROP TABLE terminal_sessions');
+  exec.run('ALTER TABLE terminal_sessions_new RENAME TO terminal_sessions');
+  exec.run(`CREATE INDEX IF NOT EXISTS idx_terminal_sessions_task_updated
+        ON terminal_sessions(task_id, updated_at)`);
+  exec.run(`CREATE INDEX IF NOT EXISTS idx_terminal_sessions_status_updated
+        ON terminal_sessions(status, updated_at)`);
   if (foreignKeysEnabled) {
     exec.run('PRAGMA foreign_keys = ON');
   }
