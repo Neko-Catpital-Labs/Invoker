@@ -616,6 +616,9 @@ export function App() {
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
   const activePlanningMode = activePlanningSession.mode ?? 'chat';
+  const activePlanningDraftPlanAvailable = activePlanningMode === 'chat' && draftPlanAvailable;
+  const activePlanningDraftPlanSummary = activePlanningMode === 'chat' ? draftPlanSummary : undefined;
+  const activePlanningSubmitError = activePlanningMode === 'chat' ? planningSubmitError : null;
   const activePlanningTerminalSession = activePlanningSession.terminalSession ?? null;
   const activePlanningTerminalBusy = Boolean(activePlanningSession.terminalBusy);
   const activePlanningTerminalError = activePlanningSession.terminalError ?? null;
@@ -2021,6 +2024,7 @@ export function App() {
   }, [invoker]);
 
   const handlePlanningSubmitDraft = useCallback(async () => {
+    if (activePlanningMode !== 'chat') return;
     if (!planningSessionId) {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message: 'No planning conversation yet.' });
       appendTerminalLine('Plan could not be submitted:\nNo planning conversation yet.', 'system', 'error');
@@ -2073,7 +2077,7 @@ export function App() {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
       appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
     }
-  }, [appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
+  }, [activePlanningMode, appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
@@ -3160,9 +3164,9 @@ export function App() {
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
-            draftPlanAvailable={draftPlanAvailable}
-            draftPlanSummary={draftPlanSummary}
-            submitError={planningSubmitError}
+            draftPlanAvailable={activePlanningDraftPlanAvailable}
+            draftPlanSummary={activePlanningDraftPlanSummary}
+            submitError={activePlanningSubmitError}
             readOnly={activePlanningSessionSubmitted}
             mode={activePlanningMode}
             terminalSession={activePlanningTerminalSession}
@@ -3467,9 +3471,9 @@ export function App() {
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
-            draftPlanAvailable={draftPlanAvailable}
-            draftPlanSummary={draftPlanSummary}
-            submitError={planningSubmitError}
+            draftPlanAvailable={activePlanningDraftPlanAvailable}
+            draftPlanSummary={activePlanningDraftPlanSummary}
+            submitError={activePlanningSubmitError}
             expanded
             mode={activePlanningMode}
             terminalSession={activePlanningTerminalSession}
