@@ -10,7 +10,7 @@
 import type { SQLiteAdapter, TaskLaunchDispatch } from '@invoker/data-store';
 import type { LaunchOutboxAck } from '@invoker/execution-engine';
 import type { TaskLaunchReadiness, TaskState } from '@invoker/workflow-core';
-import { DISPATCH_MAX_ATTEMPTS, type Logger } from '@invoker/contracts';
+import { DISPATCH_MAX_ATTEMPTS, LAUNCH_STUCK_ABANDON_MS, type Logger } from '@invoker/contracts';
 
 
 export type LaunchDispatcherPersistence = Pick<
@@ -102,14 +102,15 @@ export class LaunchDispatcher {
   /**
    * Single dispatcher tick:
    *
-   *   1. Reap any leased rows whose dispatch lease expired.
-   *   2. Abandon expired rows that exhausted their retry budget.
+   *   1. Abandon leased rows that are out of retries or have sat in
+   *      launch long enough to be treated as stuck.
+   *   2. Reap any remaining leased rows whose dispatch lease expired.
    *   3. Top up ready tasks into the durable launch outbox.
    *   4. Lease and dispatch enqueued rows.
    */
   poll(): void {
-    this.reapExpiredLeases();
     this.abandonStuckLeases();
+    this.reapExpiredLeases();
     this.topUpReadyLaunches();
     this.dispatchActive();
   }
@@ -297,16 +298,18 @@ export class LaunchDispatcher {
   }
 
   /**
-   * For every `leased` row whose fence has expired AND whose
-   * attempts_count has reached `maxAttempts`, transition it to
-   * `abandoned`, ask the orchestrator to prepare a fresh attempt, and
-   * emit a real `task.failed` event with a concrete error message.
+   * For every `leased` row whose fence has expired AND that either
+   * exhausted its retry budget or sat in launching past
+   * `LAUNCH_STUCK_ABANDON_MS`, transition it to `abandoned`, ask the
+   * orchestrator to prepare a fresh attempt, and emit a real
+   * `task.failed` event with a concrete error message.
    * Returns the number of rows abandoned.
    */
   abandonStuckLeases(nowIso?: string): number {
     const candidates = this.persistence.listAbandonableLaunchDispatchLeases({
       nowIso,
       maxAttempts: this.maxAttempts,
+      maxLaunchAgeMs: LAUNCH_STUCK_ABANDON_MS,
     });
     if (candidates.length === 0) return 0;
     let abandoned = 0;
