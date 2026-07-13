@@ -24,6 +24,10 @@ import {
   shouldSkipAutoFixForError,
   isLivenessFailureTask,
 } from './auto-fix-gating.js';
+import {
+  checkAutoFixRetryCap,
+  recordAutoFixRetryConsumed,
+} from './auto-fix-retry-cap.js';
 import { recordWorkerDecisionRow, isMeaningfulSkipReason } from './worker-decision-ledger.js';
 import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from './lifecycle-events.js';
 import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
@@ -496,6 +500,20 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
         continue;
       }
 
+      const retryCap = checkAutoFixRetryCap(
+        options.store,
+        candidate.taskId,
+        retryBudgetForTask(candidate.task, options),
+      );
+      if (!retryCap.allowed) {
+        skipAutoFixCandidate(options, candidate, 'worker-retry-budget-exhausted', {
+          status: candidate.task.status,
+          consumedRetries: retryCap.consumed,
+          workerRetryBudget: retryBudgetLabel(retryCap.budget),
+        });
+        continue;
+      }
+
       if (!hasBareRetryAlreadySubmitted(options, candidate)) {
         const intentId = options.submitter.submit(
           candidate.workflowId,
@@ -519,6 +537,9 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
           extraPayload: {
             channel: AUTO_FIX_BARE_RETRY_CHANNEL,
           },
+        });
+        recordAutoFixRetryConsumed(options.store, candidate.taskId, {
+          workflowId: candidate.workflowId,
         });
         continue;
       }
@@ -570,6 +591,9 @@ export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions)
           channel: AUTO_FIX_COMMAND_CHANNEL,
           workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
         },
+      });
+      recordAutoFixRetryConsumed(options.store, candidate.taskId, {
+        workflowId: candidate.workflowId,
       });
     }
   };

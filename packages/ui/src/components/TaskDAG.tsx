@@ -17,6 +17,7 @@ import {
   type NodeChange,
   Background,
   Controls,
+  Panel,
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -165,9 +166,18 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const initFitFrameRef = useRef(0);
   const nodesRef = useRef<typeof nodes>([]);
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
+  const lastLayoutRef = useRef<TaskGraphLayout | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const onInitHandler = useCallback(() => {
     initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
+  }, [fitView]);
+
+  // Manual "snap to graph" recovery. The auto-fit watchdog only runs in the
+  // browser surface, so on desktop a graph that has been panned/zoomed off
+  // screen (a blank/black canvas) has no way back. This button re-fits every
+  // node into view on demand, independent of the camera-lock preference.
+  const handleSnapToGraph = useCallback(() => {
+    fitView({ padding: 0.2, duration: 300 });
   }, [fitView]);
 
   // Cancel a pending first-fit frame on unmount so it never fires against a
@@ -257,6 +267,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
 
     void layoutTaskGraph(layoutTasks, layoutEdges).then((result) => {
       if (!stale) {
+        lastLayoutRef.current = result;
         setLayoutState({ key: rawGraph.layoutKey, result });
       }
     });
@@ -270,7 +281,22 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     if (layoutState && layoutHasAllTasks(layoutState.result, rawGraph.taskArray)) {
       return layoutState.result;
     }
-    return rawGraph.fallbackLayout;
+    const priorPositions = layoutState?.result.positions ?? lastLayoutRef.current?.positions;
+    if (!priorPositions) {
+      return rawGraph.fallbackLayout;
+    }
+    const positions = new Map<string, { x: number; y: number }>();
+    let usedFallback = false;
+    for (const task of rawGraph.taskArray) {
+      const prior = priorPositions.get(task.id);
+      if (prior) {
+        positions.set(task.id, prior);
+      } else {
+        positions.set(task.id, rawGraph.fallbackLayout.positions.get(task.id) ?? { x: 0, y: 0 });
+        usedFallback = true;
+      }
+    }
+    return { positions, edgePoints: new Map(), usedFallback };
   }, [layoutState, rawGraph.fallbackLayout, rawGraph.taskArray]);
 
   const emptyEdgePoints = useMemo(() => new Map<string, { x: number; y: number }[]>(), []);
@@ -670,6 +696,31 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
             border: '1px solid var(--graph-controls-border)',
           }}
         />
+        <Panel position="top-right">
+          <button
+            type="button"
+            data-testid="snap-to-graph"
+            onClick={handleSnapToGraph}
+            title="Snap view to fit the whole graph"
+            aria-label="Snap view to fit the whole graph"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 10px',
+              background: 'var(--graph-controls)',
+              color: 'var(--graph-controls-button-color, #000)',
+              border: '1px solid var(--graph-controls-border)',
+              borderRadius: '8px',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            <span aria-hidden="true">⤢</span>
+            Snap to graph
+          </button>
+        </Panel>
       </ReactFlow>
     </div>
   );

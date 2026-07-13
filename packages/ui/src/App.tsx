@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -133,7 +133,7 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     title: 'Untitled plan',
     status: 'still_discussing',
     presetKey: '',
-    messages: [{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' }],
+    messages: [],
     input: '',
     draftPlanAvailable: false,
     busy: false,
@@ -150,6 +150,14 @@ function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
 function previewPlanningMessage(session: PlanningSessionView): string {
   const last = [...session.messages].reverse().find((line) => line.role !== 'system') ?? session.messages.at(-1);
   return last?.text.replace(/\s+/g, ' ').trim() || 'No messages yet';
+}
+
+function planningSessionStatusLabel(session: PlanningSessionView): string {
+  if (session.busy) return 'Working';
+  if (session.status === 'draft_ready') return 'Draft ready';
+  if (session.status === 'waiting_for_answer') return 'Waiting for answer';
+  if (session.status === 'submitted') return 'Submitted';
+  return 'Still discussing';
 }
 
 function relativePlanningUpdatedAt(value: string): string {
@@ -563,7 +571,7 @@ export function App() {
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
   const nextPlanningSessionLocalIdRef = useRef(2);
-  const nextTerminalLineIdRef = useRef(2);
+  const nextTerminalLineIdRef = useRef(1);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
@@ -591,7 +599,8 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionPools, setExecutionPools] = useState<string[]>([]);
-  const [executionAgents, setExecutionAgents] = useState<string[]>([]);
+  const [executionHarnesses, setExecutionHarnesses] = useState<ExecutionHarnessOption[]>([]);
+  const [executionDefaults, setExecutionDefaults] = useState<ExecutionDefaults | null>(null);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(
     () => (typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__?.runtimeStatus ?? null : null),
@@ -686,7 +695,8 @@ export function App() {
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
-    window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+    window.invoker?.getExecutionHarnesses?.().then(setExecutionHarnesses).catch(() => {});
+    window.invoker?.getExecutionDefaults?.().then(setExecutionDefaults).catch(() => {});
     window.invoker?.getRuntimeStatus?.().then(setRuntimeStatus).catch(() => {});
     window.invoker?.getPlanningPresets?.()
       .then((options) => {
@@ -2101,7 +2111,6 @@ export function App() {
       conversationKey: localId,
       presetKey: selectedPlanningPresetKey,
     };
-    nextTerminalLineIdRef.current += 1;
     setPlanningSessions((prev) => [session, ...prev]);
     setActivePlanningSessionId(session.id);
     setSidebarSurface('planning');
@@ -2248,6 +2257,14 @@ export function App() {
     setInspectorCollapsed((prev) => !prev);
   }, [autoCollapseInspector]);
 
+  const navigateHomeAndFitWorkflowGraph = useCallback((reason: string) => {
+    cameraSuppressedRef.current = false;
+    setSidebarSurface('home');
+    setInspectorManualOpen(false);
+    setViewMode('dag');
+    issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason });
+  }, [issueCameraCommand]);
+
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
     reportUiNavigation(window.invoker?.reportUiPerf, {
@@ -2264,16 +2281,15 @@ export function App() {
       setViewMode('queue');
       return;
     }
-    setViewMode('dag');
     if (nextSurface === 'home') {
-      setSidebarSurface('home');
-      setInspectorManualOpen(false);
+      navigateHomeAndFitWorkflowGraph('sidebar-home');
       return;
     }
+    setViewMode('dag');
     setSidebarSurface(nextSurface);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, [sidebarSurface, viewMode]);
+  }, [navigateHomeAndFitWorkflowGraph, sidebarSurface, viewMode]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
@@ -2284,10 +2300,8 @@ export function App() {
       viewMode,
       dismiss: true,
     });
-    setSidebarSurface('home');
-    setInspectorManualOpen(false);
-    setViewMode('dag');
-  }, [sidebarSurface, viewMode]);
+    navigateHomeAndFitWorkflowGraph('browser-return-home');
+  }, [navigateHomeAndFitWorkflowGraph, sidebarSurface, viewMode]);
 
   // ── Task actions ──────────────────────────────────────────
   const handleProvideInput = useCallback(
@@ -2391,6 +2405,18 @@ export function App() {
         trackAcceptedMutation(result);
       } catch (err) {
         notifyMutationError('Failed to edit task agent:', err);
+      }
+    },
+    [invoker, trackAcceptedMutation],
+  );
+  const handleEditModel = useCallback(
+    async (taskId: string, executionModel: string | null) => {
+      if (!invoker) return;
+      try {
+        const result = await invoker.editTaskModel(taskId, executionModel);
+        trackAcceptedMutation(result);
+      } catch (err) {
+        notifyMutationError('Failed to edit task model:', err);
       }
     },
     [invoker, trackAcceptedMutation],
@@ -2923,8 +2949,14 @@ export function App() {
         <div className={RAIL_LIST_FRAME_CLASS}>{renderPlanningSessionList()}</div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="border-b border-border bg-card px-4 py-2.5">
-          <h2 className="truncate text-sm font-medium text-foreground">{activePlanningSession.title}</h2>
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2.5">
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-medium text-foreground">Planning chat window</h2>
+            <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{activePlanningSession.title}</p>
+          </div>
+          <span className="shrink-0 rounded-full border border-border bg-background px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
+            {planningSessionStatusLabel(activePlanningSession)}
+          </span>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden bg-background">
           <InvokerTerminal
@@ -3234,7 +3266,10 @@ export function App() {
                   advancedExpanded={advancedMetadataExpanded}
                   remoteTargets={remoteTargets}
                   executionPools={executionPools}
-                  executionAgents={executionAgents}
+                  executionHarnesses={executionHarnesses}
+                  executionDefaults={executionDefaults}
+                  onEditAgent={handleEditAgent}
+                  onEditModel={handleEditModel}
                   onApprove={openApprovalModal}
                   onReject={openRejectModal}
                   onSetMergeBranch={handleSetMergeBranch}

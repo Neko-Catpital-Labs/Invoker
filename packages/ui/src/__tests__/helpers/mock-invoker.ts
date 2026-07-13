@@ -65,19 +65,12 @@ export function makePlanningSessionSummary(
     messages: [
       {
         id: 1,
-        role: 'system',
-        text: 'Ask Invoker what you want to build.',
-        tone: 'muted',
-        createdAt: '2026-07-07T00:00:00.000Z',
-      },
-      {
-        id: 2,
         role: 'user',
         text: 'Add README',
         createdAt: '2026-07-07T00:00:01.000Z',
       },
       {
-        id: 3,
+        id: 2,
         role: 'assistant',
         text: 'Draft plan ready.',
         createdAt: '2026-07-07T00:00:02.000Z',
@@ -180,7 +173,7 @@ export function createMockInvoker(
         title: 'Untitled plan',
         status: 'still_discussing',
         presetKey: 'codex',
-        messages: [{ id: 1, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-01-01T00:00:00.000Z' }],
+        messages: [],
         draftPlanAvailable: false,
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:00:00.000Z',
@@ -217,10 +210,28 @@ export function createMockInvoker(
     editTaskPrompt: vi.fn(async () => accepted('invoker:edit-task-prompt')),
     editTaskPool: vi.fn(async () => accepted('invoker:edit-task-pool')),
     editTaskAgent: vi.fn(async () => accepted('invoker:edit-task-agent')),
+    editTaskModel: vi.fn(async () => accepted('invoker:edit-task-model')),
     setTaskExternalGatePolicies: vi.fn(async () => accepted('invoker:set-task-external-gate-policies')),
     getRemoteTargets: vi.fn(async () => []),
     getExecutionPools: vi.fn(async () => ['mixed-local-ssh', 'pnpm-ssh']),
-    getExecutionAgents: vi.fn(async () => ['claude', 'codex']),
+    getExecutionHarnesses: vi.fn(async () => [
+      {
+        name: 'claude',
+        supportedModels: [{ id: 'sonnet', label: 'Claude Sonnet' }],
+      },
+      {
+        name: 'codex',
+        supportedModels: [{ id: 'gpt-5-codex', label: 'GPT-5 Codex' }],
+      },
+      {
+        name: 'omp',
+        supportedModels: [
+          { id: 'chatgpt-5.4', label: 'ChatGPT 5.4' },
+          { id: 'openai/gpt-5-codex', label: 'OpenAI GPT-5 Codex' },
+        ],
+      },
+    ]),
+    getExecutionDefaults: vi.fn(async () => ({ executionAgent: 'codex' })),
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getSystemDiagnostics: vi.fn(async () => ({
       platform: 'linux',

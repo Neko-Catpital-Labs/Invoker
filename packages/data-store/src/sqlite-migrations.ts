@@ -80,10 +80,36 @@ export function migrate(exec: SqliteExecutor, reconcileTerminalSessionInvariants
   }
 
   if (!exec.readOnly) {
+    backfillEventTypeCounters(exec);
     migrateTestCommands(exec);
     migrateGatePolicyApprovedToCompleted(exec);
     migrateTaskExternalDependenciesToWorkflows(exec);
     runCompatibilityMigration(exec);
+  }
+}
+
+/**
+ * Seed event_type_counters from existing rows exactly once, for databases that
+ * predate the counter table (created empty by SCHEMA_DDL on this open). The
+ * AFTER INSERT/DELETE triggers keep it exact from here on; this one-time
+ * COUNT(*) GROUP BY scan (~140ms at 2M rows, at startup only) closes the gap for
+ * the rows that existed before the triggers did. Idempotent: once the table has
+ * any row it never re-scans, so a later full wipe (which clears the table) is not
+ * re-seeded from an empty events table.
+ */
+export function backfillEventTypeCounters(exec: SqliteExecutor): void {
+  try {
+    const seeded = Number(
+      (exec.queryOne('SELECT COUNT(*) AS c FROM event_type_counters') as { c?: number } | undefined)?.c ?? 0,
+    );
+    if (seeded > 0) return;
+    exec.run(`
+      INSERT INTO event_type_counters (event_type, count)
+      SELECT event_type, COUNT(*) FROM events GROUP BY event_type
+      ON CONFLICT(event_type) DO UPDATE SET count = excluded.count
+    `);
+  } catch (err) {
+    logSwallowedMigrationError('backfillEventTypeCounters', err);
   }
 }
 

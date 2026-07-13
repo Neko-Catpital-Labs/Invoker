@@ -70,6 +70,9 @@ export class OmpExecutionAgent implements ExecutionAgent {
       sessionId,
     };
   }
+  supportsModel(_executionModel: string): boolean {
+    return true;
+  }
 
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {
     return { cmd: this.command, args: ['--session-dir', this.sessionDir(sessionId), '--continue'] };

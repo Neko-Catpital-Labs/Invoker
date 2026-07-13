@@ -15,7 +15,7 @@ import type { Orchestrator } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode, parseMergeConflictError } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { buildAgentExitFailureDetail, cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
-import { DEFAULT_EXECUTION_AGENT, type ExecutionAgent } from './agent.js';
+import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT, type ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { buildWorktreeListScript, createSshRemoteScriptError } from './ssh-git-exec.js';
@@ -756,6 +756,7 @@ export function spawnAgentFixViaRegistry(
   driver?: SessionDriver,
   executionModel?: string,
 ): Promise<{ stdout: string; sessionId: string }> {
+  assertExecutionModelSupported(agent, executionModel);
   const promptTransport = materializeLocalPrompt(prompt);
   const spec = agent.buildFixCommand?.(promptTransport.effectivePrompt, { executionModel });
   if (!spec) {

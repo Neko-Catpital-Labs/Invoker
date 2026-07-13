@@ -104,6 +104,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
       'refresh-task-graph',
       tasks,
       deps.persistence.listWorkflows() as WorkflowMeta[],
+      true,
     );
   };
 

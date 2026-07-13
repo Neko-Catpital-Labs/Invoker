@@ -413,6 +413,12 @@ export function resolveDefaultTaskExecutionSettings(config: InvokerConfig): Defa
     ...(configuredModel && configuredModel.length > 0 ? { executionModel: configuredModel } : {}),
   };
 }
+export function resolveAutoFixExecutionModel(config: InvokerConfig): string | undefined {
+  const autoFixAgent = config.autoFixAgent?.trim();
+  if (!autoFixAgent) return undefined;
+  const defaults = resolveDefaultTaskExecutionSettings(config);
+  return autoFixAgent === defaults.executionAgent ? defaults.executionModel : undefined;
+}
 
 
 

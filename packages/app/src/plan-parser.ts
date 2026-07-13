@@ -205,7 +205,7 @@ function parseExternalDependencies(
       );
     }
     const taskId = dep.taskId?.trim() || '__merge__';
-    const defaultGatePolicy: 'completed' | 'review_ready' = taskId === '__merge__' ? 'completed' : 'review_ready';
+    const defaultGatePolicy: 'completed' | 'review_ready' = 'review_ready';
     return {
       workflowId: dep.workflowId,
       taskId,

@@ -53,7 +53,7 @@ export function useActionGraphSnapshot(pollMs = 2000, enabled = true): {
 
     const unsubscribe = subscribeVisibilityAwarePoll(() => {
       void poll();
-    }, pollMs, { restoreDelayMs: 50 });
+    }, pollMs, { restoreDelayMs: 400, initialDelayMs: 150 });
     return () => {
       cancelled = true;
       unsubscribe();

@@ -282,7 +282,7 @@ tasks:
 `;
     const plan = parsePlan(yaml);
     expect(plan.externalDependencies).toEqual([
-      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
     ]);
   });
 
@@ -326,7 +326,7 @@ tasks:
 `;
     const plan = parsePlan(yaml);
     expect(plan.externalDependencies).toEqual([
-      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
     ]);
     expect(plan.tasks[0].externalDependencies).toBeUndefined();
     expect(plan.tasks[1].externalDependencies).toBeUndefined();
