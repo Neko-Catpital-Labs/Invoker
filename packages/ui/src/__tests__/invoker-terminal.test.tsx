@@ -10,6 +10,65 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+const xtermMock = vi.hoisted(() => {
+  type DataHandler = (data: string) => void;
+
+  const instances: MockTerminal[] = [];
+  const fitInstances: MockFitAddon[] = [];
+  const writeLog: string[] = [];
+
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+    dataHandler: DataHandler | null = null;
+    loadAddon = vi.fn();
+    open = vi.fn((host: HTMLElement) => {
+      const terminalElement = document.createElement('div');
+      terminalElement.className = 'xterm';
+      terminalElement.textContent = 'mock planning terminal';
+      host.appendChild(terminalElement);
+    });
+    write = vi.fn((data: string) => {
+      writeLog.push(data);
+    });
+    onData = vi.fn((cb: DataHandler) => {
+      this.dataHandler = cb;
+      return { dispose: vi.fn() };
+    });
+    focus = vi.fn();
+    refresh = vi.fn();
+    dispose = vi.fn();
+
+    constructor() {
+      instances.push(this);
+    }
+  }
+
+  class MockFitAddon {
+    fit = vi.fn();
+
+    constructor() {
+      fitInstances.push(this);
+    }
+  }
+
+  return {
+    Terminal: MockTerminal,
+    FitAddon: MockFitAddon,
+    instances,
+    fitInstances,
+    writeLog,
+    reset: () => {
+      instances.length = 0;
+      fitInstances.length = 0;
+      writeLog.length = 0;
+    },
+  };
+});
+
+vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
+vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
+
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
@@ -18,6 +77,7 @@ describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    xtermMock.reset();
     mock = createMockInvoker();
     mock.install();
   });
@@ -178,6 +238,49 @@ describe('Invoker terminal (component)', () => {
     fireEvent.click(screen.getByTestId('sidebar-planning'));
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review it, then Run.');
     expect(mock.api.start).not.toHaveBeenCalled();
+  });
+
+  it('renders planning tmux inside the planning surface and hides draft submit controls', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Here is the plan.',
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
+    })) as any;
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft the full plan');
+    await screen.findByTestId('invoker-terminal-ready-bar');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'tmux' }));
+
+    const tmuxPane = await screen.findByTestId('invoker-terminal-tmux-pane');
+    expect(tmuxPane).toHaveAttribute('data-session-id', 'mock-planning-terminal-session-1');
+    expect(screen.getByTestId('planning-session-rail')).toBeInTheDocument();
+    expect(screen.queryByTestId('terminal-drawer')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(mock.api.planningTerminalOpen).toHaveBeenCalledWith('session-1');
+      expect(xtermMock.instances).toHaveLength(1);
+    });
+
+    mock.fireTerminalOutput({
+      sessionId: 'mock-planning-terminal-session-1',
+      taskId: 'planning:session-1',
+      kind: 'planning',
+      planningSessionId: 'session-1',
+      data: 'draft ready from tmux output\n',
+    });
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toContain('draft ready from tmux output\n');
+    });
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('draft ready from tmux output');
   });
 
   it('shows stacked workflow counts and submit messaging', async () => {
