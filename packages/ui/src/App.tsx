@@ -136,6 +136,21 @@ function planningSessionFromSummary(
   summary: InAppPlanningSessionSummary,
   overrides: Partial<PlanningSessionView> = {},
 ): PlanningSessionView {
+  const restoredTerminalSession = summary.terminalSessionId
+    ? {
+        sessionId: summary.terminalSessionId,
+        taskId: `planning:${summary.id}`,
+        kind: 'planning' as const,
+        planningSessionId: summary.id,
+        status: summary.terminalStatus ?? ('running' as const),
+        exitCode: summary.terminalExitCode,
+        cwd: undefined,
+        mode: 'spawn' as const,
+        attached: false,
+        createdAt: summary.terminalUpdatedAt ?? summary.updatedAt,
+        outputSnapshot: summary.terminalOutputSnapshot ?? '',
+      }
+    : null;
   return {
     ...summary,
     messages: summary.messages.map((line) => ({
@@ -147,8 +162,8 @@ function planningSessionFromSummary(
     input: '',
     busy: false,
     conversationKey: summary.id,
-    mode: 'chat',
-    terminalSession: null,
+    mode: summary.terminalMode ?? 'chat',
+    terminalSession: restoredTerminalSession,
     terminalBusy: false,
     terminalError: null,
     ...overrides,
@@ -662,6 +677,7 @@ export function App() {
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(
     () => (typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__?.runtimeStatus ?? null : null),
   );
+  const activePlanningReadOnly = activePlanningSessionSubmitted || runtimeStatus?.readOnly === true;
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
@@ -809,6 +825,47 @@ export function App() {
       }
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydratePlanningSessions = async (): Promise<void> => {
+      const planningChatList = window.invoker?.planningChatList;
+      if (!planningChatList) return;
+      try {
+        const [chatList, terminalList] = await Promise.all([
+          planningChatList(),
+          window.invoker?.planningTerminalList?.().catch(() => [] as TerminalSessionDescriptor[]) ?? Promise.resolve([] as TerminalSessionDescriptor[]),
+        ]);
+        if (cancelled || !chatList.ok || chatList.sessions.length === 0) return;
+        const terminalsByPlanningSession = new Map(
+          terminalList
+            .filter((session) => session.kind === 'planning' && session.planningSessionId)
+            .map((session) => [session.planningSessionId!, session]),
+        );
+        const restored = chatList.sessions.map((summary) => {
+          const liveTerminal = terminalsByPlanningSession.get(summary.id);
+          return liveTerminal
+            ? planningSessionFromSummary(summary, { terminalSession: liveTerminal })
+            : planningSessionFromSummary(summary);
+        });
+        setPlanningSessions(restored);
+        setActivePlanningSessionId((currentSessionId) => (
+          restored.some((session) => session.id === currentSessionId)
+            ? currentSessionId
+            : restored[0]?.id ?? currentSessionId
+        ));
+        const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
+        nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
+      } catch {
+        /* planning chat restore is best-effort */
+      }
+    };
+    void hydratePlanningSessions();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -2134,6 +2191,9 @@ export function App() {
   }, [handleStartReadyAction]);
 
   const handlePlanningSubmitDraft = useCallback(async () => {
+    if (activePlanningReadOnly) {
+      return;
+    }
     if (!planningSessionId) {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message: 'No planning conversation yet.' });
       appendTerminalLine('Plan could not be submitted:\nNo planning conversation yet.', 'system', 'error');
@@ -2186,11 +2246,11 @@ export function App() {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
       appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
     }
-  }, [appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
+  }, [activePlanningReadOnly, appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
-    if (!input || activePlanningSessionBusy || activePlanningSessionSubmitted) return;
+    if (!input || activePlanningSessionBusy || activePlanningReadOnly) return;
     appendTerminalLine(input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
@@ -2271,7 +2331,7 @@ export function App() {
   }, [
     activePlanningSessionBusy,
     activePlanningSessionId,
-    activePlanningSessionSubmitted,
+    activePlanningReadOnly,
     appendTerminalLine,
     handlePlanningSubmitDraft,
     handleStart,
@@ -2305,6 +2365,18 @@ export function App() {
     const sourceSession = activePlanningSession;
     if (mode === 'chat') {
       updatePlanningSessionById(sourceSession.id, (session) => ({ ...session, mode: 'chat' }));
+      if (!activePlanningReadOnly && !sourceSession.id.startsWith('local-')) {
+        void invoker?.planningChatSetTerminalMode?.({ sessionId: sourceSession.id, mode: 'chat' });
+      }
+      return;
+    }
+    if (activePlanningReadOnly) {
+      updatePlanningSessionById(sourceSession.id, (session) => ({
+        ...session,
+        mode: 'tmux',
+        terminalBusy: false,
+        terminalError: session.terminalSession ? null : 'No saved planning tmux session.',
+      }));
       return;
     }
     if (sourceSession.mode === 'tmux' && (sourceSession.terminalBusy || sourceSession.terminalSession)) {
@@ -2375,9 +2447,13 @@ export function App() {
     if (terminalSession) {
       updatePlanningSessionById(targetSessionId, (session) => ({
         ...session,
+        mode: 'tmux',
         terminalBusy: false,
         terminalError: null,
       }));
+      if (!targetSessionId.startsWith('local-')) {
+        void invoker?.planningChatSetTerminalMode?.({ sessionId: targetSessionId, mode: 'tmux' });
+      }
       return;
     }
 
@@ -2417,6 +2493,7 @@ export function App() {
       }));
     }
   }, [
+    activePlanningReadOnly,
     activePlanningSession,
     invoker,
     selectedPlanningPresetKey,
@@ -3326,7 +3403,7 @@ export function App() {
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
             submitError={planningSubmitError}
-            readOnly={activePlanningSessionSubmitted}
+            readOnly={activePlanningReadOnly}
             mode={activePlanningMode}
             terminalSession={activePlanningTerminalSession}
             terminalBusy={activePlanningTerminalBusy}
@@ -3639,7 +3716,7 @@ export function App() {
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
             onValueChange={setPlanningInput}
-            readOnly={activePlanningSessionSubmitted}
+            readOnly={activePlanningReadOnly}
             onSubmit={() => void handlePlanningSubmit()}
             onSubmitDraft={() => void handlePlanningSubmitDraft()}
             onPresetChange={setSelectedPlanningPresetKey}
