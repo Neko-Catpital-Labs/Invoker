@@ -7,6 +7,7 @@ import type {
   AutoFixRecoverySubmitter,
   AutoFixWorkerConfig,
 } from './auto-fix-recovery.js';
+import type { ReviewGateCiRepairStore, ReviewGateCiRepairSubmitter } from './review-gate-ci-repair.js';
 import type { CiFailureWorkerStore, CiFailureWorkerSubmitter } from './workers/ci-failure-worker.js';
 import type {
   AutoApproveWorkerStore,
@@ -34,6 +35,7 @@ export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
   store: AutoFixRecoveryStore
     & CiFailureWorkerStore
+    & ReviewGateCiRepairStore
     & AutoApproveWorkerStore
     & ReviewGateMergeConflictWorkerStore
     & WorkflowResumeWorkerStore
@@ -41,6 +43,7 @@ export interface WorkerRuntimeDependencies {
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
     & CiFailureWorkerSubmitter
+    & ReviewGateCiRepairSubmitter
     & RequeueWorkerSubmitter
     & AutoApproveWorkerSubmitter
     & ReviewGateMergeConflictWorkerSubmitter
