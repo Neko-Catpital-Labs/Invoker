@@ -120,7 +120,6 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 }
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
-  input: string;
   busy: boolean;
   conversationKey: string;
 };
@@ -132,7 +131,6 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
     status: 'still_discussing',
     presetKey: '',
     messages: [{ id: 1, text: 'Ask Invoker what you want to build.', role: 'system', tone: 'muted' }],
-    input: '',
     draftPlanAvailable: false,
     busy: false,
     createdAt: now,
@@ -146,7 +144,16 @@ function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
 }
 
 function previewPlanningMessage(session: PlanningSessionView): string {
-  const last = [...session.messages].reverse().find((line) => line.role !== 'system') ?? session.messages.at(-1);
+  let last: InvokerTerminalLine | undefined;
+  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+    const line = session.messages[index];
+    if (!line) continue;
+    if (!last) last = line;
+    if (line.role !== 'system') {
+      last = line;
+      break;
+    }
+  }
   return last?.text.replace(/\s+/g, ' ').trim() || 'No messages yet';
 }
 
@@ -678,6 +685,7 @@ export function App() {
   const [planName, setPlanName] = useState<string | null>(null);
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
+  const [planningInputBySessionId, setPlanningInputBySessionId] = useState<Record<string, string>>({});
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(2);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
@@ -690,7 +698,7 @@ export function App() {
   );
   const activePlanningConversationKey = activePlanningSession.conversationKey;
   const terminalLines = activePlanningSession.messages;
-  const planningInput = activePlanningSession.input;
+  const planningInput = planningInputBySessionId[activePlanningSession.id] ?? '';
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
@@ -2108,15 +2116,20 @@ export function App() {
     )));
   }, []);
 
-  const updateActivePlanningSession = useCallback((updater: (session: PlanningSessionView) => PlanningSessionView) => {
-    updatePlanningSessionById(activePlanningSessionId, updater);
-  }, [activePlanningSessionId, updatePlanningSessionById]);
-
   const setPlanningInput = useCallback((value: string) => {
-    updateActivePlanningSession((session) => ({ ...session, input: value }));
-  }, [updateActivePlanningSession]);
+    setPlanningInputBySessionId((prev) => {
+      if ((prev[activePlanningSessionId] ?? '') === value) return prev;
+      if (value === '') {
+        const next = { ...prev };
+        delete next[activePlanningSessionId];
+        return next;
+      }
+      return { ...prev, [activePlanningSessionId]: value };
+    });
+  }, [activePlanningSessionId]);
 
-  const appendTerminalLine = useCallback((
+  const appendPlanningSessionLine = useCallback((
+    sessionId: string,
     text: string,
     role: InvokerTerminalLine['role'] = 'system',
     tone?: InvokerTerminalLine['tone'],
@@ -2124,12 +2137,20 @@ export function App() {
     const id = nextTerminalLineIdRef.current;
     nextTerminalLineIdRef.current += 1;
     const updatedAt = new Date().toISOString();
-    updateActivePlanningSession((session) => ({
+    updatePlanningSessionById(sessionId, (session) => ({
       ...session,
       messages: [...session.messages, { id, text, role, tone }],
       updatedAt,
     }));
-  }, [updateActivePlanningSession]);
+  }, [updatePlanningSessionById]);
+
+  const appendTerminalLine = useCallback((
+    text: string,
+    role: InvokerTerminalLine['role'] = 'system',
+    tone?: InvokerTerminalLine['tone'],
+  ) => {
+    appendPlanningSessionLine(activePlanningSessionId, text, role, tone);
+  }, [activePlanningSessionId, appendPlanningSessionLine]);
 
   const handleStart = useCallback(async (): Promise<boolean> => {
     if (!invoker) return false;
@@ -2178,7 +2199,8 @@ export function App() {
           updatedAt: new Date().toISOString(),
         }));
         await refreshTaskGraph();
-        appendTerminalLine(
+        appendPlanningSessionLine(
+          planningSessionId,
           result.workflowCount && result.workflowCount > 1
             ? `Plan "${result.planName}" submitted as ${result.workflowCount} stacked workflows. Review them, then Run.`
             : `Plan "${result.planName}" submitted to Invoker. Review it, then Run.`,
@@ -2188,38 +2210,40 @@ export function App() {
       } else {
         updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: false }));
         setPlanningSubmitError({ title: 'Plan could not be submitted', message: result.error });
-        appendTerminalLine(`Plan could not be submitted:\n${result.error}`, 'system', 'error');
+        appendPlanningSessionLine(planningSessionId, `Plan could not be submitted:\n${result.error}`, 'system', 'error');
       }
     } catch (err) {
       updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: false }));
       const message = err instanceof Error ? err.message : 'Failed to submit the plan.';
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
-      appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
+      appendPlanningSessionLine(planningSessionId, `Plan could not be submitted:\n${message}`, 'system', 'error');
     }
-  }, [appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
+  }, [appendPlanningSessionLine, appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
     if (!input || activePlanningSessionBusy || activePlanningSessionSubmitted) return;
-    appendTerminalLine(input, 'user');
+    const previousSessionId = activePlanningSessionId;
+    appendPlanningSessionLine(previousSessionId, input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
 
     if (input.toLowerCase() === 'run') {
       if (!hasLoadedPlan || hasStarted) {
-        appendTerminalLine(
+        appendPlanningSessionLine(
+          previousSessionId,
           hasStarted ? 'Run already started.' : 'Create or submit a plan before running.',
           'system',
           'error',
         );
         return;
       }
-      updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, busy: true }));
+      updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
       try {
         const started = await handleStart();
-        appendTerminalLine(started ? 'Run started.' : 'Run failed to start.', 'system', started ? 'success' : 'error');
+        appendPlanningSessionLine(previousSessionId, started ? 'Run started.' : 'Run failed to start.', 'system', started ? 'success' : 'error');
       } finally {
-        updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, busy: false }));
+        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
       }
       return;
     }
@@ -2230,11 +2254,10 @@ export function App() {
     }
 
     if (!invoker?.planningChatSend) {
-      appendTerminalLine('Planner is not available.', 'system', 'error');
+      appendPlanningSessionLine(previousSessionId, 'Planner is not available.', 'system', 'error');
       return;
     }
 
-    const previousSessionId = activePlanningSessionId;
     updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
     try {
       const request = {
@@ -2269,20 +2292,20 @@ export function App() {
         setHasLoadedPlan(false);
       } else {
         updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
-        appendTerminalLine(result.error, 'system', 'error');
+        appendPlanningSessionLine(previousSessionId, result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
       updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
       const message = err instanceof Error ? err.message : 'Failed to reach the planner.';
       setPlanningSubmitError({ title: 'Planner could not respond', message });
-      appendTerminalLine(message, 'system', 'error');
+      appendPlanningSessionLine(previousSessionId, message, 'system', 'error');
     }
   }, [
     activePlanningSessionBusy,
     activePlanningSessionId,
     activePlanningSessionSubmitted,
-    appendTerminalLine,
+    appendPlanningSessionLine,
     handlePlanningSubmitDraft,
     handleStart,
     hasLoadedPlan,
@@ -3089,39 +3112,44 @@ export function App() {
     )
   );
 
+  const planningSessionListItems = useMemo(() => planningSessions.map((session) => {
+    const selected = session.id === activePlanningSession.id;
+    return (
+      <button
+        key={session.id}
+        type="button"
+        onClick={() => setActivePlanningSessionId(session.id)}
+        className={`flex w-full items-start gap-2 border-l-2 px-3 py-2 text-left transition-colors ${selected ? 'border-l-foreground bg-accent/40 text-accent-foreground' : 'border-l-transparent text-foreground hover:bg-accent/20'}`}
+      >
+        <PlanningSessionStatusIcon busy={session.busy} status={session.status} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="truncate text-sm font-medium">{session.title}</div>
+            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+              {relativePlanningUpdatedAt(session.updatedAt)}
+            </span>
+          </div>
+          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+            {previewPlanningMessage(session)}
+          </div>
+        </div>
+      </button>
+    );
+  }), [activePlanningSession.id, planningSessions]);
+
+  const planningReadyCount = useMemo(
+    () => planningSessions.reduce((count, session) => count + (session.status === 'draft_ready' ? 1 : 0), 0),
+    [planningSessions],
+  );
+
 
   const renderPlanningSessionList = (): JSX.Element => (
     <div data-testid="planning-session-list" className="h-full overflow-y-auto py-1">
       <div className="space-y-0.5">
-        {planningSessions.map((session) => {
-          const selected = session.id === activePlanningSession.id;
-          return (
-            <button
-              key={session.id}
-              type="button"
-              onClick={() => setActivePlanningSessionId(session.id)}
-              className={`flex w-full items-start gap-2 border-l-2 px-3 py-2 text-left transition-colors ${selected ? 'border-l-foreground bg-accent/40 text-accent-foreground' : 'border-l-transparent text-foreground hover:bg-accent/20'}`}
-            >
-              <PlanningSessionStatusIcon busy={session.busy} status={session.status} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="truncate text-sm font-medium">{session.title}</div>
-                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                    {relativePlanningUpdatedAt(session.updatedAt)}
-                  </span>
-                </div>
-                <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                  {previewPlanningMessage(session)}
-                </div>
-              </div>
-            </button>
-          );
-        })}
+        {planningSessionListItems}
       </div>
     </div>
   );
-
-  const planningReadyCount = planningSessions.filter((session) => session.status === 'draft_ready').length;
 
   const renderPlanningTerminalSurface = (): JSX.Element => (
     <div className="flex-1 flex overflow-hidden">

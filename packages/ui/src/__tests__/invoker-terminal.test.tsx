@@ -322,6 +322,27 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
   });
 
+  it('keeps unsent drafts per planning chat while switching sessions', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'first draft' } });
+    expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('first draft');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('');
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'second draft' } });
+    expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('second draft');
+
+    const sessionList = screen.getByTestId('planning-session-list');
+    fireEvent.click(within(sessionList).getAllByRole('button')[1]);
+    expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('first draft');
+
+    fireEvent.click(within(sessionList).getAllByRole('button')[0]);
+    expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('second draft');
+  });
+
   it('keeps a new planning chat editable while another session is working', async () => {
     let resolveFirstSend: ((value: any) => void) | null = null;
     mock.api.planningChatSend = vi.fn((request: any) => {
