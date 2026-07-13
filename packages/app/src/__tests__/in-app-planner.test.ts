@@ -213,6 +213,12 @@ describe('planning chat', () => {
     expect(result).toMatchObject({ ok: true, reply: 'I can help.', draftPlanAvailable: false });
     expect(result.ok && result.sessionId).toBeTruthy();
     expect(sessions.size).toBe(1);
+    const session = [...sessions.values()][0];
+    expect(session?.messages).toEqual([
+      expect.objectContaining({ id: 1, role: 'user', text: 'hello' }),
+      expect.objectContaining({ id: 2, role: 'assistant', text: 'I can help.' }),
+    ]);
+    expect(session?.messages.some((line) => line.text === 'Ask Invoker what you want to build.')).toBe(false);
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
   });
 
