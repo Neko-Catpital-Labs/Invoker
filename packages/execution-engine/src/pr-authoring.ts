@@ -374,6 +374,18 @@ export function buildMakePrStackPublishPrompt(args: {
   return lines.join('\n');
 }
 
+function parseGitHubPullRequestNumber(url: string): string | undefined {
+  const match = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)(?:[/?#].*)?$/i.exec(url);
+  return match?.[1];
+}
+
+// GitHub-first for now: the public PR URL is the authoritative review-gate key.
+function normalizeReviewArtifactProviderId(url: string, providerId: string | undefined): string | undefined {
+  const githubPrNumber = parseGitHubPullRequestNumber(url);
+  if (githubPrNumber) return githubPrNumber;
+  return providerId;
+}
+
 export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactOutput[] {
   let parsed: unknown;
   try {
@@ -425,11 +437,14 @@ export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactO
         return dependency.trim();
       });
     ids.add(id);
+    const providerId = typeof record.providerId === 'string'
+      ? record.providerId.trim() || undefined
+      : undefined;
     records.push({
       id,
       title: typeof record.title === 'string' ? record.title : undefined,
       url,
-      providerId: typeof record.providerId === 'string' ? record.providerId : undefined,
+      providerId: normalizeReviewArtifactProviderId(url, providerId),
       branch: typeof record.branch === 'string' ? record.branch : undefined,
       baseBranch: typeof record.baseBranch === 'string' ? record.baseBranch : undefined,
       dependsOn: normalizedDependsOn,
