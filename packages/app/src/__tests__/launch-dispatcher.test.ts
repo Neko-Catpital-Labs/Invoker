@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
-import { DISPATCH_LEASE_MS, type Logger } from '@invoker/contracts';
+import { DISPATCH_LEASE_MS, LAUNCH_STUCK_ABANDON_MS, type Logger } from '@invoker/contracts';
 import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator } from '@invoker/workflow-core';
 import { LaunchDispatcher } from '../launch-dispatcher.js';
@@ -467,9 +467,9 @@ describe('LaunchDispatcher', () => {
       const pastIso = new Date(Date.now() - 60_000).toISOString();
       (adapter as any).db.run(
         `UPDATE task_launch_dispatch
-           SET state = 'leased', fenced_until = ?, attempts_count = 1
+           SET state = 'leased', fenced_until = ?, attempts_count = 1, enqueued_at = ?
          WHERE id = ?`,
-        [pastIso, underAttemptRow.id],
+        [pastIso, new Date().toISOString(), underAttemptRow.id],
       );
 
       const prepare = vi.fn();
@@ -487,9 +487,12 @@ describe('LaunchDispatcher', () => {
         generation: 0,
       });
       const pastIso = new Date(Date.now() - 60_000).toISOString();
+      const recentEnqueuedAt = new Date().toISOString();
       (adapter as any).db.run(
-        `UPDATE task_launch_dispatch SET state = 'leased', dispatch_owner = 'owner-x', fenced_until = ? WHERE id = ?`,
-        [pastIso, row.id],
+        `UPDATE task_launch_dispatch
+           SET state = 'leased', dispatch_owner = 'owner-x', fenced_until = ?, attempts_count = 1, enqueued_at = ?
+         WHERE id = ?`,
+        [pastIso, recentEnqueuedAt, row.id],
       );
 
       const dispatcher = new LaunchDispatcher({
@@ -498,6 +501,31 @@ describe('LaunchDispatcher', () => {
       });
       dispatcher.poll();
       expect(adapter.loadLaunchDispatchById(row.id)?.state).toBe('enqueued');
+    });
+    it('poll() abandons age-stale launching leases before reaping them back to enqueued', () => {
+      seed();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-r/t1',
+        attemptId: 'attempt-aged',
+        workflowId: 'wf-r',
+        generation: 0,
+      });
+      const now = new Date('2026-07-01T00:20:00.000Z');
+      const pastIso = new Date(now.getTime() - 60_000).toISOString();
+      const enqueuedAtIso = new Date(now.getTime() - LAUNCH_STUCK_ABANDON_MS - 1_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch
+           SET state = 'leased', dispatch_owner = 'owner-x', fenced_until = ?, attempts_count = 1, enqueued_at = ?
+         WHERE id = ?`,
+        [pastIso, enqueuedAtIso, row.id],
+      );
+
+      const prepare = vi.fn();
+      const { dispatcher } = dispatcherWithOrchestrator({ prepareTaskForNewAttempt: prepare });
+      dispatcher.poll();
+
+      expect(adapter.loadLaunchDispatchById(row.id)?.state).toBe('abandoned');
+      expect(prepare).toHaveBeenCalledWith('wf-r/t1', 'launch-dispatch-abandoned');
     });
   });
 
