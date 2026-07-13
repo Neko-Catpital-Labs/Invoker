@@ -11,7 +11,7 @@
  *   - the PRs form a proper stack (each PR's base is the previous PR's head branch;
  *     the bottom PR's base is the trunk),
  *   - the provided PRs are the complete open stack, not a prefix/suffix slice,
- *   - every PR is OPEN.
+ *   - every PR is OPEN, not draft, and not held with `merge-hold`.
  *
  * Only after ALL checks pass does `--execute` add the `admin-bypass` label to
  * every PR in the verified stack, bottom-to-top. That lets Mergify land the
@@ -51,6 +51,11 @@ export function analyzeStack({ prs, hasLocalCommit, trunk = TRUNK_DEFAULT, stack
   prs.forEach((pr, i) => {
     const n = pr.number;
     add(n, 'open', pr.state === 'OPEN', `state=${pr.state}`);
+
+    const labels = labelNames(pr);
+    add(n, 'not-draft', !pr.isDraft, pr.isDraft ? 'PR is draft' : 'PR is ready for review');
+    add(n, 'no-merge-hold', !labels.includes('merge-hold'),
+      labels.includes('merge-hold') ? 'merge-hold label present' : 'merge-hold label absent');
 
     const shaOk = Boolean(pr.headRefOid) && hasLocalCommit(pr.headRefOid);
     add(n, 'sha-local', shaOk,
@@ -136,7 +141,20 @@ export function analyzeCompleteOpenStack({ selectedPrs, allOpenPrs, trunk = TRUN
 }
 
 export function queueTargets(prs) {
-  return prs.filter((pr) => pr.state === 'OPEN');
+  return prs.filter(isQueueEligiblePr);
+}
+
+export function isQueueEligiblePr(pr) {
+  return pr?.state === 'OPEN' && !pr.isDraft && !labelNames(pr).includes('merge-hold');
+}
+
+export function labelNames(pr) {
+  const labels = pr?.labels;
+  if (!labels) return [];
+  const raw = Array.isArray(labels) ? labels : Array.isArray(labels.nodes) ? labels.nodes : [];
+  return raw
+    .map((label) => typeof label === 'string' ? label : label?.name)
+    .filter((name) => typeof name === 'string');
 }
 
 export function short(sha) {
@@ -149,13 +167,13 @@ function gh(args) {
 
 function fetchPr(num) {
   const out = gh(['pr', 'view', String(num), '--json',
-    'number,headRefOid,headRefName,baseRefName,state,mergeStateStatus,reviewDecision']);
+    'number,headRefOid,headRefName,baseRefName,state,isDraft,labels,mergeStateStatus,reviewDecision']);
   return JSON.parse(out);
 }
 
 function listOpenPrs() {
   const out = gh(['pr', 'list', '--state', 'open', '--limit', '200', '--json',
-    'number,headRefOid,headRefName,baseRefName,state']);
+    'number,headRefOid,headRefName,baseRefName,state,isDraft,labels']);
   return JSON.parse(out);
 }
 
@@ -198,7 +216,8 @@ const HELP = `land-stack — verify and land a Mergify PR stack by confirmed PR 
 Pass confirmed PR numbers bottom-of-stack first. If numbers are missing, broadly
 list open PRs, filter to stack heads, order by base/head links, ask the user to
 confirm the suggested numbers, then run this guard. Verification must pass before
-anything is queued. --execute adds the admin-bypass label to every verified PR.`;
+anything is queued. Draft PRs and PRs labeled merge-hold fail verification.
+--execute adds the admin-bypass label to every verified PR.`;
 
 function printReport(result) {
   const byPr = new Map();

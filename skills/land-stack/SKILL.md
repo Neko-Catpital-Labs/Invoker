@@ -45,8 +45,9 @@ before any write (label, thread-resolve, queue, merge).
    The guard checks, for each PR: head SHA exists in the local clone (it is the
    code you reviewed), head branch is a real `stack/` branch (rejects raw
    workflow branches), the PRs form a proper stack (each base is the previous
-   head; the bottom's base is the trunk), and all are OPEN. If any check FAILs,
-   stop and reconfirm the PR numbers with the user — do not work around it.
+   head; the bottom's base is the trunk), and all are OPEN, non-draft, and not
+   labeled `merge-hold`. If any check FAILs, stop and reconfirm the PR numbers
+   with the user — do not work around it.
 
 3. **Land bottom-up:**
 

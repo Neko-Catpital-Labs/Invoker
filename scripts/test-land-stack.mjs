@@ -93,6 +93,24 @@ test('closed PR fails open check', () => {
   assert.equal(check(res, 2174, 'open').ok, false);
 });
 
+test('draft PR fails before queueing', () => {
+  const res = analyzeStack({
+    hasLocalCommit: hasLocal,
+    prs: [{ ...fullStack[0], isDraft: true }],
+  });
+  assert.equal(res.ok, false);
+  assert.equal(check(res, 2174, 'not-draft').ok, false);
+});
+
+test('merge-hold label fails before queueing', () => {
+  const res = analyzeStack({
+    hasLocalCommit: hasLocal,
+    prs: [{ ...fullStack[0], labels: [{ name: 'merge-hold' }] }],
+  });
+  assert.equal(res.ok, false);
+  assert.equal(check(res, 2174, 'no-merge-hold').ok, false);
+});
+
 test('empty input fails', () => {
   const res = analyzeStack({ hasLocalCommit: hasLocal, prs: [] });
   assert.equal(res.ok, false);
@@ -131,19 +149,31 @@ test('queue targets include the whole open stack in order', () => {
   assert.deepEqual(targets.map((pr) => pr.number), [2174, 2175]);
 });
 
-function runCli(prNumbers) {
+test('queue targets exclude draft and merge-held PRs', () => {
+  const targets = queueTargets([
+    fullStack[0],
+    { ...fullStack[1], isDraft: true },
+    { ...fullStack[1], number: 2176, labels: [{ name: 'merge-hold' }] },
+  ]);
+  assert.deepEqual(targets.map((pr) => pr.number), [2174]);
+});
+
+function runCli(prNumbers, overrides = {}) {
   const tmp = mkdtempSync(join(tmpdir(), 'land-stack-test-'));
   const bin = join(tmp, 'bin');
   const log = join(tmp, 'gh.log');
   mkdirSync(bin);
   writeFileSync(log, '');
+  const overrideJson = JSON.stringify(overrides);
   createExecutable(join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const log = ${JSON.stringify(log)};
-const prs = {
+const overrides = ${overrideJson};
+const basePrs = {
   '2174': { number: 2174, headRefOid: ${JSON.stringify(SHA_2174)}, headRefName: ${JSON.stringify(STACK_BR_BOTTOM)}, baseRefName: 'master', state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
   '2175': { number: 2175, headRefOid: ${JSON.stringify(SHA_2175)}, headRefName: ${JSON.stringify(STACK_BR_TOP)}, baseRefName: ${JSON.stringify(STACK_BR_BOTTOM)}, state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
 };
+const prs = Object.fromEntries(Object.entries(basePrs).map(([number, pr]) => [number, { ...pr, ...(overrides[number] || {}) }]));
 if (process.argv[2] === 'pr' && process.argv[3] === 'view') {
   process.stdout.write(JSON.stringify(prs[process.argv[4]]));
   process.exit(0);
@@ -176,6 +206,20 @@ test('execute refuses to label a partial stack', () => {
   const { res, edits } = runCli(['2174']);
   assert.equal(res.status, 1, `${res.stdout}\n${res.stderr}`);
   assert.match(res.stdout, /complete-stack/);
+  assert.deepEqual(edits, []);
+});
+
+test('execute refuses to label a draft PR', () => {
+  const { res, edits } = runCli(['2174', '2175'], { 2175: { isDraft: true } });
+  assert.equal(res.status, 1, `${res.stdout}\n${res.stderr}`);
+  assert.match(res.stdout, /not-draft/);
+  assert.deepEqual(edits, []);
+});
+
+test('execute refuses to label a merge-held PR', () => {
+  const { res, edits } = runCli(['2174', '2175'], { 2174: { labels: [{ name: 'merge-hold' }] } });
+  assert.equal(res.status, 1, `${res.stdout}\n${res.stderr}`);
+  assert.match(res.stdout, /no-merge-hold/);
   assert.deepEqual(edits, []);
 });
 

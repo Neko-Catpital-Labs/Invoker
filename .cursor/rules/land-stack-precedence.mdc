@@ -18,7 +18,8 @@ When the user asks to **land / merge / ship / queue** a PR or PR stack, treat
 - **Run the guard, which must exit 0:**
   `node scripts/land-stack.mjs <pr> [<pr> ...]`
   It verifies each PR's head SHA exists locally, the head branch is a real
-  `stack/` branch, the PRs form a proper stack, and all are OPEN.
+  `stack/` branch, the PRs form a proper stack, and all are OPEN, non-draft,
+  and not labeled `merge-hold`.
 - **Land only via** `node scripts/land-stack.mjs <pr> ... --execute`. Do not
   hand-add `admin-bypass` or run `gh pr merge` to bypass the guard.
 
