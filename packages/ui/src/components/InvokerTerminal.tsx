@@ -111,10 +111,58 @@ function PlanningTmuxPane({ session, busy, error }: PlanningTmuxPaneProps): JSX.
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const fitFrameRef = useRef<number | null>(null);
+  const secondFitFrameRef = useRef<number | null>(null);
+  const sessionId = session?.sessionId ?? null;
+
+  const clearScheduledFit = useCallback(() => {
+    if (fitFrameRef.current !== null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(fitFrameRef.current);
+      }
+      fitFrameRef.current = null;
+    }
+    if (secondFitFrameRef.current !== null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(secondFitFrameRef.current);
+      }
+      secondFitFrameRef.current = null;
+    }
+  }, []);
+
+  const fitVisibleTerminal = useCallback(() => {
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit || !sessionId) return;
+    try {
+      fit.fit();
+      if (term.rows > 0) {
+        term.refresh?.(0, term.rows - 1);
+      }
+      void window.invoker?.planningTerminalResize?.(sessionId, term.cols, term.rows);
+    } catch {
+      /* host has zero size, terminal disposed, or fit unsupported */
+    }
+  }, [sessionId]);
+
+  const scheduleFit = useCallback(() => {
+    clearScheduledFit();
+    fitVisibleTerminal();
+    if (typeof requestAnimationFrame !== 'function') return;
+
+    fitFrameRef.current = requestAnimationFrame(() => {
+      fitFrameRef.current = null;
+      fitVisibleTerminal();
+      secondFitFrameRef.current = requestAnimationFrame(() => {
+        secondFitFrameRef.current = null;
+        fitVisibleTerminal();
+      });
+    });
+  }, [clearScheduledFit, fitVisibleTerminal]);
 
   useEffect(() => {
     const host = containerRef.current;
-    if (!host || !session) return;
+    if (!host || !session || !sessionId) return;
 
     let term: XTermTerminal;
     let fit: FitAddon;
@@ -139,12 +187,12 @@ function PlanningTmuxPane({ session, busy, error }: PlanningTmuxPaneProps): JSX.
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
 
     const inputDisposable = term.onData((data) => {
-      void window.invoker?.planningTerminalWrite?.(session.sessionId, data);
+      void window.invoker?.planningTerminalWrite?.(sessionId, data);
     });
 
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
-      if (event.sessionId !== session.sessionId) return;
+      if (event.sessionId !== sessionId) return;
       try {
         term.write(event.data);
       } catch {
@@ -152,35 +200,24 @@ function PlanningTmuxPane({ session, busy, error }: PlanningTmuxPaneProps): JSX.
       }
     });
 
-    const tryFit = () => {
-      try {
-        fit.fit();
-        void window.invoker?.planningTerminalResize?.(session.sessionId, term.cols, term.rows);
-      } catch {
-        /* host has zero size or fit unsupported */
-      }
-    };
-
-    const raf = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame(tryFit)
-      : null;
-
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       try {
-        resizeObserver = new ResizeObserver(() => {
-          tryFit();
-        });
+        resizeObserver = new ResizeObserver(scheduleFit);
         resizeObserver.observe(host);
       } catch {
         resizeObserver = null;
       }
     }
+    scheduleFit();
+    try {
+      term.focus();
+    } catch {
+      /* focus unsupported */
+    }
 
     return () => {
-      if (raf !== null && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(raf);
-      }
+      clearScheduledFit();
       resizeObserver?.disconnect();
       inputDisposable.dispose();
       unsubscribeOutput?.();
@@ -192,7 +229,7 @@ function PlanningTmuxPane({ session, busy, error }: PlanningTmuxPaneProps): JSX.
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [session?.sessionId]);
+  }, [clearScheduledFit, scheduleFit, sessionId]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -202,16 +239,14 @@ function PlanningTmuxPane({ session, busy, error }: PlanningTmuxPaneProps): JSX.
 
   useEffect(() => {
     const term = termRef.current;
-    const fit = fitRef.current;
-    if (!term || !fit || !session) return;
+    if (!term || !session) return;
     try {
-      fit.fit();
-      void window.invoker?.planningTerminalResize?.(session.sessionId, term.cols, term.rows);
+      scheduleFit();
       term.focus();
     } catch {
       /* fit failed (e.g., hidden) */
     }
-  }, [session?.sessionId]);
+  }, [scheduleFit, session?.sessionId]);
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
@@ -309,6 +344,7 @@ export function InvokerTerminal({
   const focusComposer = (): void => {
     inputRef.current?.focus();
   };
+  const draftSubmitAvailable = mode === 'chat' && draftPlanAvailable;
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
@@ -434,7 +470,7 @@ export function InvokerTerminal({
               <div className="text-sm font-medium text-destructive">{submitError.title}</div>
               <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-5 text-destructive/90">{submitError.message}</div>
               <div className="mt-3 flex flex-wrap gap-2">
-                {draftPlanAvailable && (
+                {draftSubmitAvailable && (
                   <button
                     type="button"
                     onClick={onSubmitDraft}
@@ -462,7 +498,7 @@ export function InvokerTerminal({
             </div>
           )}
 
-          {draftPlanAvailable && !readOnly && (
+          {draftSubmitAvailable && !readOnly && (
             <div
               data-testid="invoker-terminal-ready-bar"
               className="sticky bottom-0 z-10 border-t border-border bg-background px-4 py-3 text-sm text-foreground"
