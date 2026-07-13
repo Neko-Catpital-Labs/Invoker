@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -201,6 +202,45 @@ class SnapshotFromDetail(unittest.TestCase):
         self.assertEqual(snap.latest_mergify.state, "dequeued")
         self.assertEqual(snap.latest_mergify.head_sha, HEAD)
 
+
+class GhClientLabelEdit(unittest.TestCase):
+    def test_add_label_uses_rest_issue_labels_endpoint(self):
+        client = s.GhClient()
+        with mock.patch("mergify_admin_requeue_snapshot.subprocess.run") as run:
+            client.edit_label("Neko-Catpital-Labs/Invoker", 4157, add="admin-bypass")
+
+        run.assert_called_once_with(
+            [
+                "gh",
+                "api",
+                "--method",
+                "POST",
+                "repos/Neko-Catpital-Labs/Invoker/issues/4157/labels",
+                "-f",
+                "labels[]=admin-bypass",
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+    def test_remove_label_uses_rest_issue_labels_endpoint(self):
+        client = s.GhClient()
+        with mock.patch("mergify_admin_requeue_snapshot.subprocess.run") as run:
+            client.edit_label("Neko-Catpital-Labs/Invoker", 4157, remove="merge-hold")
+
+        run.assert_called_once_with(
+            [
+                "gh",
+                "api",
+                "--method",
+                "DELETE",
+                "repos/Neko-Catpital-Labs/Invoker/issues/4157/labels/merge-hold",
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
