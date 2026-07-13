@@ -36,8 +36,9 @@ export function getMenuItems(
   const { agents = ['claude', 'codex'] } = options;
   const items: MenuItem[] = [];
 
-  const canRestart = task.status !== 'running';
-  const canOpenTerminal = !isExperimentSpawnPivotTask(task);
+  const isCrashPreserved = Boolean(task.execution.crashPreservedAt);
+  const canRestart = task.status !== 'running' || isCrashPreserved;
+  const canOpenTerminal = !isExperimentSpawnPivotTask(task) && !isCrashPreserved;
   const canFix = task.status === 'failed';
   const canCancel = task.status !== 'completed' && task.status !== 'stale';
 
@@ -57,21 +58,38 @@ export function getMenuItems(
 
   // ── Task actions (grouped) ────────────────────────────────────
   if (task.status === 'running') {
-    items.push({
-      id: 'open-terminal',
-      label: 'Open Terminal',
-      enabled: canOpenTerminal,
-      action: 'onOpenTerminal',
-      variant: !canFix ? 'primary' : 'default',
-      separator: 'task',
-    });
+    if (isCrashPreserved) {
+      items.push({
+        id: 'restart',
+        label: 'Restart Task',
+        enabled: canRestart,
+        action: 'onRestart',
+        variant: !canFix ? 'primary' : 'default',
+        separator: 'task',
+      });
+      items.push({
+        id: 'open-terminal',
+        label: 'Open Terminal',
+        enabled: canOpenTerminal,
+        action: 'onOpenTerminal',
+      });
+    } else {
+      items.push({
+        id: 'open-terminal',
+        label: 'Open Terminal',
+        enabled: canOpenTerminal,
+        action: 'onOpenTerminal',
+        variant: !canFix ? 'primary' : 'default',
+        separator: 'task',
+      });
 
-    items.push({
-      id: 'restart',
-      label: 'Restart Task',
-      enabled: canRestart,
-      action: 'onRestart',
-    });
+      items.push({
+        id: 'restart',
+        label: 'Restart Task',
+        enabled: canRestart,
+        action: 'onRestart',
+      });
+    }
   } else if (task.status === 'pending') {
     items.push({
       id: 'restart',
