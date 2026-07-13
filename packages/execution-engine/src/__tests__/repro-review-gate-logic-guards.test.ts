@@ -95,6 +95,20 @@ describe('repro #1757: parseMakePrStackPublishResult normalizes/validates identi
     expect(out[1].id).toBe('b');
     expect(out[1].dependsOn).toEqual(['a']);
   });
+  it.fails('keeps GitHub provider ids aligned with the pull URL number', () => {
+    const out = parseMakePrStackPublishResult(wrap([
+      { id: 'a', url: 'https://github.com/owner/repo/pull/4261', providerId: 'github' },
+      { id: 'b', url: 'https://github.com/owner/repo/pull/4279', providerId: 'github:4279', dependsOn: ['a'] },
+      { id: 'c', url: 'https://github.com/owner/repo/pull/4284', providerId: 'PR_kwXYZ', dependsOn: ['b'] },
+    ]));
+    expect(out.map((artifact) => artifact.providerId)).toEqual(['4261', '4279', '4284']);
+  });
+  it.fails('fills in the GitHub pull number when the agent omits providerId', () => {
+    const out = parseMakePrStackPublishResult(wrap([
+      { id: 'a', url: 'https://github.com/owner/repo/pull/4300' },
+    ]));
+    expect(out[0]?.providerId).toBe('4300');
+  });
 });
 
 // ── #1811: mapReviewGateArtifactStatus ───────────────────
