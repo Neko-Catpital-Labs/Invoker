@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 from typing import Mapping, Sequence
+from urllib.parse import quote
 
 try:
     from .mergify_admin_requeue_model import (
@@ -88,12 +89,20 @@ class GhClient:
         subprocess.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=True, text=True, capture_output=True)
 
     def edit_label(self, repo: str, number: int, add: str | None = None, remove: str | None = None) -> None:
-        args = ["gh", "pr", "edit", str(number), "--repo", repo]
         if add:
-            args.extend(["--add-label", add])
+            subprocess.run(
+                ["gh", "api", "--method", "POST", f"repos/{repo}/issues/{number}/labels", "-f", f"labels[]={add}"],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
         if remove:
-            args.extend(["--remove-label", remove])
-        subprocess.run(args, check=True, text=True, capture_output=True)
+            subprocess.run(
+                ["gh", "api", "--method", "DELETE", f"repos/{repo}/issues/{number}/labels/{quote(remove, safe='')}"],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
 
     def resolve_review_thread(self, thread_id: str) -> None:
         query = "mutation($threadId:ID!) { resolveReviewThread(input:{threadId:$threadId}) { thread { id isResolved } } }"
