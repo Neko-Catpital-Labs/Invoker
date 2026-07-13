@@ -41,6 +41,10 @@ const fullStack = [
   { number: 2174, headRefOid: SHA_2174, headRefName: STACK_BR_BOTTOM, baseRefName: 'master', state: 'OPEN' },
   { number: 2175, headRefOid: SHA_2175, headRefName: STACK_BR_TOP, baseRefName: STACK_BR_BOTTOM, state: 'OPEN' },
 ];
+const mergedRetargetedStack = [
+  { ...fullStack[0], state: 'MERGED' },
+  { ...fullStack[1], baseRefName: 'master', state: 'MERGED' },
+];
 
 test('valid bottom->top stack passes every check', () => {
   const res = analyzeStack({ hasLocalCommit: hasLocal, prs: fullStack });
@@ -93,6 +97,28 @@ test('closed PR fails open check', () => {
   assert.equal(check(res, 2174, 'open').ok, false);
 });
 
+test('read-only verification accepts an already merged stack retargeted to trunk', () => {
+  const res = analyzeStack({
+    allowAlreadyMerged: true,
+    hasLocalCommit: hasLocal,
+    prs: mergedRetargetedStack,
+  });
+  assert.equal(res.ok, true);
+  assert.equal(check(res, 2174, 'open').ok, true);
+  assert.equal(check(res, 2175, 'base-linkage').ok, true);
+  assert.match(check(res, 2175, 'base-linkage').detail, /retargeted to trunk/);
+});
+
+test('read-only already-merged mode rejects mixed open and merged PRs', () => {
+  const res = analyzeStack({
+    allowAlreadyMerged: true,
+    hasLocalCommit: hasLocal,
+    prs: [{ ...fullStack[0], state: 'MERGED' }, fullStack[1]],
+  });
+  assert.equal(res.ok, false);
+  assert.equal(check(res, 2174, 'open').ok, false);
+});
+
 test('empty input fails', () => {
   const res = analyzeStack({ hasLocalCommit: hasLocal, prs: [] });
   assert.equal(res.ok, false);
@@ -124,6 +150,29 @@ test('complete stack check accepts the full bottom-to-top stack', () => {
   const res = analyzeCompleteOpenStack({ selectedPrs: fullStack, allOpenPrs: fullStack });
   assert.equal(res.ok, true);
   assert.deepEqual(res.fullStack.map((pr) => pr.number), [2174, 2175]);
+});
+
+test('complete stack check accepts an already merged stack with no open child', () => {
+  const res = analyzeCompleteOpenStack({
+    allowAlreadyMerged: true,
+    selectedPrs: mergedRetargetedStack,
+    allOpenPrs: [],
+  });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.fullStack.map((pr) => pr.number), [2174, 2175]);
+  assert.match(check(res, 0, 'complete-stack').detail, /already merged/);
+});
+
+test('complete stack check rejects an already merged stack with an open child', () => {
+  const res = analyzeCompleteOpenStack({
+    allowAlreadyMerged: true,
+    selectedPrs: mergedRetargetedStack,
+    allOpenPrs: [
+      { number: 2176, headRefOid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', headRefName: 'stack/next', baseRefName: STACK_BR_TOP, state: 'OPEN' },
+    ],
+  });
+  assert.equal(res.ok, false);
+  assert.match(check(res, 0, 'complete-stack').detail, /open stack child PR\(s\) \[2176\]/);
 });
 
 test('queue targets include the whole open stack in order', () => {

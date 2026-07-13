@@ -11,7 +11,8 @@
  *   - the PRs form a proper stack (each PR's base is the previous PR's head branch;
  *     the bottom PR's base is the trunk),
  *   - the provided PRs are the complete open stack, not a prefix/suffix slice,
- *   - every PR is OPEN.
+ *   - every PR is OPEN, except verify-only replays may pass when every selected
+ *     PR is already MERGED and no open stack child remains above it.
  *
  * Only after ALL checks pass does `--execute` add the `admin-bypass` label to
  * every PR in the verified stack, bottom-to-top. That lets Mergify land the
@@ -39,7 +40,13 @@ import { fileURLToPath } from 'node:url';
 export const TRUNK_DEFAULT = 'master';
 export const STACK_PREFIX_DEFAULT = 'stack/';
 
-export function analyzeStack({ prs, hasLocalCommit, trunk = TRUNK_DEFAULT, stackPrefix = STACK_PREFIX_DEFAULT }) {
+export function analyzeStack({
+  prs,
+  hasLocalCommit,
+  trunk = TRUNK_DEFAULT,
+  stackPrefix = STACK_PREFIX_DEFAULT,
+  allowAlreadyMerged = false,
+}) {
   const checks = [];
   const add = (pr, name, ok, detail) => checks.push({ pr, name, ok, detail });
 
@@ -48,9 +55,13 @@ export function analyzeStack({ prs, hasLocalCommit, trunk = TRUNK_DEFAULT, stack
     return { ok: false, checks };
   }
 
+  const allAlreadyMerged = allowAlreadyMerged && prs.every((pr) => pr?.state === 'MERGED');
+
   prs.forEach((pr, i) => {
     const n = pr.number;
-    add(n, 'open', pr.state === 'OPEN', `state=${pr.state}`);
+    const openOk = pr.state === 'OPEN' || (allAlreadyMerged && pr.state === 'MERGED');
+    add(n, 'open', openOk,
+      `state=${pr.state}${pr.state === 'MERGED' && allAlreadyMerged ? ' (already merged; read-only verification is idempotent)' : ''}`);
 
     const shaOk = Boolean(pr.headRefOid) && hasLocalCommit(pr.headRefOid);
     add(n, 'sha-local', shaOk,
@@ -61,15 +72,27 @@ export function analyzeStack({ prs, hasLocalCommit, trunk = TRUNK_DEFAULT, stack
       `head branch '${pr.headRefName}' ${branchOk ? 'is' : `is NOT`} a '${stackPrefix}' branch`);
 
     const expectedBase = i === 0 ? trunk : prs[i - 1].headRefName;
-    const baseOk = pr.baseRefName === expectedBase;
+    const baseRetargetedAfterMerge = allAlreadyMerged
+      && pr.state === 'MERGED'
+      && i > 0
+      && pr.baseRefName === trunk;
+    const baseOk = pr.baseRefName === expectedBase || baseRetargetedAfterMerge;
     add(n, 'base-linkage', baseOk,
-      `base '${pr.baseRefName}' ${baseOk ? '==' : '!='} expected '${expectedBase}'`);
+      baseRetargetedAfterMerge
+        ? `base '${pr.baseRefName}' was retargeted to trunk after merge; original expected '${expectedBase}'`
+        : `base '${pr.baseRefName}' ${baseOk ? '==' : '!='} expected '${expectedBase}'`);
   });
 
   return { ok: checks.every((c) => c.ok), checks };
 }
 
-export function analyzeCompleteOpenStack({ selectedPrs, allOpenPrs, trunk = TRUNK_DEFAULT, stackPrefix = STACK_PREFIX_DEFAULT }) {
+export function analyzeCompleteOpenStack({
+  selectedPrs,
+  allOpenPrs,
+  trunk = TRUNK_DEFAULT,
+  stackPrefix = STACK_PREFIX_DEFAULT,
+  allowAlreadyMerged = false,
+}) {
   const selectedNumbers = selectedPrs.map((pr) => pr.number);
   const fail = (detail, fullStack = []) => ({
     ok: false,
@@ -78,6 +101,29 @@ export function analyzeCompleteOpenStack({ selectedPrs, allOpenPrs, trunk = TRUN
   });
 
   if (selectedPrs.length === 0) return fail('no PR numbers provided');
+
+  const selectedAlreadyMerged = selectedPrs.every((pr) => pr?.state === 'MERGED');
+  if (allowAlreadyMerged && selectedAlreadyMerged) {
+    const selectedHeads = new Set(selectedPrs.map((pr) => pr.headRefName).filter(Boolean));
+    const openChildren = allOpenPrs
+      .filter((pr) => pr?.state === 'OPEN'
+        && typeof pr.headRefName === 'string'
+        && pr.headRefName.startsWith(stackPrefix)
+        && selectedHeads.has(pr.baseRefName));
+    if (openChildren.length > 0) {
+      return fail(`provided PRs are already merged, but open stack child PR(s) [${openChildren.map((pr) => pr.number).join(', ')}] still depend on the selected stack`, selectedPrs);
+    }
+    return {
+      ok: true,
+      fullStack: selectedPrs,
+      checks: [{
+        pr: 0,
+        name: 'complete-stack',
+        ok: true,
+        detail: `provided PRs are already merged; no open stack remains above [${selectedNumbers.join(', ')}]`,
+      }],
+    };
+  }
 
   const byNumber = new Map();
   for (const pr of allOpenPrs.concat(selectedPrs)) {
@@ -202,7 +248,8 @@ const HELP = `land-stack — verify and land a Mergify PR stack by confirmed PR 
 Pass confirmed PR numbers bottom-of-stack first. If numbers are missing, broadly
 list open PRs, filter to stack heads, order by base/head links, ask the user to
 confirm the suggested numbers, then run this guard. Verification must pass before
-anything is queued. --execute adds the admin-bypass label to every verified PR.`;
+anything is queued. --execute adds the admin-bypass label to every verified PR.
+Verify-only runs are idempotent after the whole selected stack has already merged.`;
 
 function printReport(result) {
   const byPr = new Map();
@@ -247,17 +294,20 @@ function main() {
     process.exit(2);
   }
 
+  const allowAlreadyMerged = !args.execute && prData.every((pr) => pr.state === 'MERGED');
   const structureResult = analyzeStack({
     prs: prData,
     hasLocalCommit: localCommitChecker(),
     trunk: args.trunk,
     stackPrefix: args.stackPrefix,
+    allowAlreadyMerged,
   });
   const completenessResult = analyzeCompleteOpenStack({
     selectedPrs: prData,
     allOpenPrs: openPrData,
     trunk: args.trunk,
     stackPrefix: args.stackPrefix,
+    allowAlreadyMerged,
   });
   const result = {
     ok: structureResult.ok && completenessResult.ok,
@@ -278,6 +328,10 @@ function main() {
   console.log('\nRESULT: verification passed.');
 
   if (!args.execute) {
+    if (allowAlreadyMerged) {
+      console.log('No queue step is needed; the selected PRs are already merged.');
+      return;
+    }
     console.log('Re-run with --execute to queue the whole verified stack via admin-bypass.');
     return;
   }
