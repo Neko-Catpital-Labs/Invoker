@@ -143,10 +143,6 @@ describe('Terminal drawer (component)', () => {
   beforeEach(() => {
     xtermMock.reset();
     mock = createMockInvoker();
-    mock.api.terminalResize = vi.fn(async () => ({ ok: true }));
-    mock.api.terminalWrite = vi.fn(async () => ({ ok: true }));
-    mock.api.terminalClose = vi.fn(async () => ({ ok: true }));
-    mock.api.terminalList = vi.fn(async () => []);
     mock.install();
   });
 

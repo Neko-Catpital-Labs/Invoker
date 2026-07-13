@@ -663,8 +663,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   return (
     <div
       ref={graphRootRef}
-      className="flex w-full flex-1"
-      style={{ minHeight: '300px', height: browserHeight }}
+      className="flex min-h-0 w-full flex-1 overflow-hidden"
+      style={{ height: browserHeight }}
     >
       <ReactFlow
         key={flowInstanceKey}
