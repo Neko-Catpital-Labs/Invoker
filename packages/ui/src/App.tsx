@@ -3973,6 +3973,8 @@ export function App() {
                   onEditCommand={handleEditCommand}
                   onApprove={openApprovalModal}
                   onReject={openRejectModal}
+                  onRestartTask={handleRestartTask}
+                  onRecreateTask={handleRecreateTask}
                   onSetMergeBranch={handleSetMergeBranch}
                   onSetMergeMode={handleSetMergeMode}
                   onToggleCollapsed={handleToggleInspectorCollapsed}

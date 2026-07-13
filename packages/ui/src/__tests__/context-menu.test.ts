@@ -36,6 +36,25 @@ describe('ContextMenu getMenuItems', () => {
       expect(items[0].variant).toBe('primary');
       expect(items[0].action).toBe('onOpenTerminal');
     });
+    it('crash-preserved running task prioritizes restart and disables terminal reopen', () => {
+      const task = makeTask({
+        status: 'running',
+        execution: { crashPreservedAt: new Date('2026-07-13T01:02:03.000Z') },
+      });
+      const items = getMenuItems(task);
+
+      expect(items[0]).toMatchObject({
+        label: 'Restart Task',
+        enabled: true,
+        action: 'onRestart',
+        variant: 'primary',
+      });
+      expect(items[1]).toMatchObject({
+        label: 'Open Terminal',
+        enabled: false,
+        action: 'onOpenTerminal',
+      });
+    });
 
     it('pending task: first item is "Restart Task" (primary)', () => {
       const task = makeTask({ status: 'pending' });
@@ -163,12 +182,23 @@ describe('ContextMenu getMenuItems', () => {
       expect(restartItem?.enabled).toBe(true);
     });
 
-    it('disables restart for running tasks', () => {
+    it('disables restart for ordinary running tasks', () => {
       const task = makeTask({ status: 'running' });
       const items = getMenuItems(task);
 
       const restartItem = items.find((item) => item.id === 'restart');
       expect(restartItem?.enabled).toBe(false);
+    });
+
+    it('re-enables restart for running tasks preserved after a crash', () => {
+      const task = makeTask({
+        status: 'running',
+        execution: { crashPreservedAt: new Date('2026-07-13T01:02:03.000Z') },
+      });
+      const items = getMenuItems(task);
+
+      const restartItem = items.find((item) => item.id === 'restart');
+      expect(restartItem?.enabled).toBe(true);
     });
   });
 
