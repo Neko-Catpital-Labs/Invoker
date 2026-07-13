@@ -166,8 +166,8 @@ async function openContextMenu(page: Page, locator: Locator) {
   return menu;
 }
 
-async function installTerminalTestOpener(page: Page): Promise<void> {
-  await page.evaluate(() => {
+async function installTerminalTestOpener(page: Page, options: { historyLines?: number } = {}): Promise<void> {
+  await page.evaluate(({ historyLines }) => {
     type TerminalSubscriber = (event: { sessionId: string; taskId: string; data: string }) => void;
     const terminalState = window as unknown as {
       __terminalCalls: string[];
@@ -179,6 +179,9 @@ async function installTerminalTestOpener(page: Page): Promise<void> {
     terminalState.__terminalOutputSubscribers = [];
     terminalState.__INVOKER_TEST_OPEN_TERMINAL__ = async (taskId: string) => {
       terminalState.__terminalCalls.push(taskId);
+      const outputSnapshot = typeof historyLines === 'number' && historyLines > 0
+        ? Array.from({ length: historyLines }, (_, index) => `history ${String(index + 1).padStart(3, '0')} ${taskId}\r\n`).join('')
+        : `${taskId} terminal ready\n`;
       return {
         opened: true,
         session: {
@@ -188,7 +191,7 @@ async function installTerminalTestOpener(page: Page): Promise<void> {
           mode: 'spawn',
           attached: false,
           createdAt: '2025-01-01T00:00:00.000Z',
-          outputSnapshot: `${taskId} terminal ready\n`,
+          outputSnapshot,
         },
       };
     };
@@ -199,7 +202,7 @@ async function installTerminalTestOpener(page: Page): Promise<void> {
         if (index >= 0) terminalState.__terminalOutputSubscribers.splice(index, 1);
       };
     };
-  });
+  }, options);
 }
 
 async function openTerminalForTaskNode(page: Page, taskIdSuffix: string): Promise<void> {
@@ -228,6 +231,37 @@ async function expectActiveTerminalPane(page: Page, taskId: string): Promise<voi
   expect(metrics.visibility).not.toBe('hidden');
   expect(metrics.width).toBeGreaterThan(0);
   expect(metrics.height).toBeGreaterThan(0);
+}
+
+async function expectTerminalHostLayout(
+  page: Page,
+  taskId: string,
+  options: { state: 'partial' | 'maximized'; minBodyHeight: number; minPaneHeight: number; expectGraphVisible?: boolean },
+): Promise<void> {
+  await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', options.state);
+  const drawerBox = await page.getByTestId('terminal-drawer').boundingBox();
+  const bodyBox = await page.getByTestId('terminal-drawer-body').boundingBox();
+  const paneBox = await page.locator(`[data-testid^="terminal-pane-"][data-testid$="${taskId}"]`).first().boundingBox();
+  const xtermBox = await page.locator(`[data-testid^="terminal-pane-"][data-testid$="${taskId}"] .xterm`).first().boundingBox();
+  const viewport = page.viewportSize();
+
+  expect(drawerBox).not.toBeNull();
+  expect(bodyBox).not.toBeNull();
+  expect(paneBox).not.toBeNull();
+  expect(xtermBox).not.toBeNull();
+  expect(bodyBox!.height).toBeGreaterThanOrEqual(options.minBodyHeight);
+  expect(paneBox!.height).toBeGreaterThanOrEqual(options.minPaneHeight);
+  expect(xtermBox!.height).toBeGreaterThan(0);
+  if (viewport) {
+    expect(drawerBox!.y + drawerBox!.height).toBeLessThanOrEqual(viewport.height + 1);
+  }
+
+  if (options.expectGraphVisible) {
+    const graphBox = await page.getByTestId('workflow-graph-surface').boundingBox();
+    expect(graphBox).not.toBeNull();
+    expect(graphBox!.height).toBeGreaterThan(80);
+    expect(graphBox!.y + graphBox!.height).toBeLessThanOrEqual(drawerBox!.y + 1);
+  }
 }
 
 async function expectInactiveTerminalPane(page: Page, taskId: string): Promise<void> {
@@ -351,6 +385,7 @@ test.describe('Visual proof capture', () => {
   });
 
   test('terminal tab switches reveal only the active pane while inactive panes are display none', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 700 });
     await loadPlan(page, TEST_PLAN);
     await installTerminalTestOpener(page);
 
@@ -364,8 +399,36 @@ test.describe('Visual proof capture', () => {
     await page.getByRole('tab', { name: 'First test task' }).click();
     await expectActiveTerminalPane(page, 'task-alpha');
     await expectInactiveTerminalPane(page, 'task-beta');
+    await expectTerminalHostLayout(page, 'task-alpha', {
+      state: 'partial',
+      minBodyHeight: 260,
+      minPaneHeight: 240,
+      expectGraphVisible: true,
+    });
 
+    await captureScreenshot(page, 'embedded-tabbed-terminal');
     await captureScreenshot(page, 'terminal-active-pane-tab-switch');
+  });
+
+  test('maximized terminal drawer preserves scrollback/history host height for long output', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 700 });
+    await loadPlan(page, TEST_PLAN);
+    await installTerminalTestOpener(page, { historyLines: 140 });
+
+    await openTerminalForTaskNode(page, 'task-alpha');
+    await expectActiveTerminalPane(page, 'task-alpha');
+    await page.getByRole('button', { name: 'Maximize terminal drawer' }).click();
+    await expectActiveTerminalPane(page, 'task-alpha');
+    await expectTerminalHostLayout(page, 'task-alpha', {
+      state: 'maximized',
+      minBodyHeight: 620,
+      minPaneHeight: 600,
+    });
+    await expect(page.locator('[data-testid^="terminal-pane-"][data-testid$="task-alpha"] .xterm-rows').first()).toContainText('history 140', {
+      timeout: 10000,
+    });
+
+    await captureScreenshot(page, 'maximized-terminal-scrollback-history');
   });
 
   test('terminal returning to an already-open task tab keeps the active pane visible', async ({ page }) => {

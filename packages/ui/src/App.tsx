@@ -1034,7 +1034,7 @@ export function App() {
       )}
 
       {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <nav className="w-24 border-r border-gray-800 bg-gray-950/60 flex flex-col justify-between py-3">
           <input
             ref={fileInputRef}
@@ -1164,12 +1164,12 @@ export function App() {
           </div>
         </nav>
 
-        <div className="flex-1 flex overflow-hidden">
-          <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div
               ref={graphSurfaceRef}
               data-testid="workflow-graph-surface"
-              className="flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900"
+              className="relative min-h-0 flex-1 overflow-hidden border-r border-gray-800 bg-gray-900"
               onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
             >
               {viewMode === 'queue' ? (
@@ -1209,7 +1209,8 @@ export function App() {
                       dragHandleTestId="selected-workflow-mini-dag-drag-handle"
                       title={`${selectedWorkflow.name} task DAG`}
                       boundsRef={graphSurfaceRef}
-                      contentClassName="h-[250px]"
+                      className="flex flex-col"
+                      contentClassName="min-h-0 flex-1 overflow-hidden"
                     >
                       <TaskDAG
                         tasks={miniDagTasks}
