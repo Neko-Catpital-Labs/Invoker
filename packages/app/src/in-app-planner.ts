@@ -11,10 +11,13 @@ import type {
   InAppPlanningPlanSummary,
   InAppPlanningResetRequest,
   InAppPlanningResetResponse,
+  InAppPlanningSetTerminalModeRequest,
+  InAppPlanningSetTerminalModeResponse,
   InAppPlanningSessionStatus,
   InAppPlanningSessionSummary,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
+  PlanningTerminalMode,
   PlanningPresetOption,
 } from '@invoker/contracts';
 import type {
@@ -60,6 +63,12 @@ export interface InAppPlanningChatSession {
   draftPlanText?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
+  terminalMode?: PlanningTerminalMode;
+  terminalSessionId?: string;
+  terminalStatus?: 'running' | 'exited';
+  terminalExitCode?: number;
+  terminalOutputSnapshot?: string;
+  terminalUpdatedAt?: string;
   createdAt: string;
   updatedAt: string;
   nextMessageId: number;
@@ -186,6 +195,12 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     draftPlanSummary: session.draftPlanSummary,
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
+    terminalMode: session.terminalMode ?? 'chat',
+    terminalSessionId: session.terminalSessionId,
+    terminalStatus: session.terminalStatus,
+    terminalExitCode: session.terminalExitCode,
+    terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
+    terminalUpdatedAt: session.terminalUpdatedAt,
     pendingResponse,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -203,6 +218,12 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     draftPlanSummary: session.draftPlanSummary,
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
+    terminalMode: session.terminalMode ?? 'chat',
+    terminalSessionId: session.terminalSessionId,
+    terminalStatus: session.terminalStatus,
+    terminalExitCode: session.terminalExitCode,
+    terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
+    terminalUpdatedAt: session.terminalUpdatedAt,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
@@ -328,6 +349,8 @@ async function createSession(
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 1,
+    terminalMode: 'chat',
+    terminalOutputSnapshot: '',
   };
   deps.sessions.set(session.id, session);
   persistPlanningSession(session, deps.planningSessionStore, false);
@@ -607,6 +630,79 @@ export function resetPlanningChat(
   return { ok: true };
 }
 
+export function setPlanningChatTerminalMode(
+  request: InAppPlanningSetTerminalModeRequest,
+  deps: { sessions: InAppPlanningChatSessions; planningSessionStore?: InAppPlanningSessionStore },
+): InAppPlanningSetTerminalModeResponse {
+  const sessionId = typeof request?.sessionId === 'string' ? request.sessionId.trim() : '';
+  const session = sessionId ? deps.sessions.get(sessionId) : undefined;
+  if (!session) {
+    return { ok: false, error: 'No planning conversation yet.' };
+  }
+  if (request.mode !== 'chat' && request.mode !== 'tmux') {
+    return { ok: false, error: 'Unknown planning terminal mode.' };
+  }
+
+  const updatedAt = new Date().toISOString();
+  session.terminalMode = request.mode;
+  session.updatedAt = updatedAt;
+  deps.planningSessionStore?.updateInAppPlanningSession(session.id, {
+    terminalMode: request.mode,
+    updatedAt,
+  });
+  return { ok: true };
+}
+
+export interface PlanningChatTerminalStatePatch {
+  terminalMode?: PlanningTerminalMode;
+  terminalSessionId?: string;
+  terminalStatus?: 'running' | 'exited';
+  terminalExitCode?: number;
+  terminalOutputSnapshot?: string;
+  terminalUpdatedAt?: string;
+  touchSessionUpdatedAt?: boolean;
+}
+
+export function updatePlanningChatTerminalState(
+  sessionId: string,
+  patch: PlanningChatTerminalStatePatch,
+  deps: { sessions: InAppPlanningChatSessions; planningSessionStore?: InAppPlanningSessionStore },
+): boolean {
+  const session = deps.sessions.get(sessionId);
+  if (!session) return false;
+
+  const terminalUpdatedAt = patch.terminalUpdatedAt ?? new Date().toISOString();
+  const storePatch: InAppPlanningSessionPatch = { terminalUpdatedAt };
+  if (Object.hasOwn(patch, 'terminalMode')) {
+    session.terminalMode = patch.terminalMode;
+    storePatch.terminalMode = patch.terminalMode;
+  }
+  if (Object.hasOwn(patch, 'terminalSessionId')) {
+    session.terminalSessionId = patch.terminalSessionId;
+    storePatch.terminalSessionId = patch.terminalSessionId;
+  }
+  if (Object.hasOwn(patch, 'terminalStatus')) {
+    session.terminalStatus = patch.terminalStatus;
+    storePatch.terminalStatus = patch.terminalStatus;
+  }
+  if (Object.hasOwn(patch, 'terminalExitCode')) {
+    session.terminalExitCode = patch.terminalExitCode;
+    storePatch.terminalExitCode = patch.terminalExitCode;
+  }
+  if (Object.hasOwn(patch, 'terminalOutputSnapshot')) {
+    session.terminalOutputSnapshot = patch.terminalOutputSnapshot;
+    storePatch.terminalOutputSnapshot = patch.terminalOutputSnapshot;
+  }
+  session.terminalUpdatedAt = terminalUpdatedAt;
+  if (patch.touchSessionUpdatedAt) {
+    session.updatedAt = terminalUpdatedAt;
+    storePatch.updatedAt = terminalUpdatedAt;
+  }
+
+  deps.planningSessionStore?.updateInAppPlanningSession(session.id, storePatch);
+  return true;
+}
+
 export async function restorePlanningChatSessions(
   records: InAppPlanningSessionRecord[],
   deps: InAppPlannerDeps & {
@@ -639,6 +735,12 @@ export async function restorePlanningChatSessions(
       draftPlanSummary: record.draftPlanSummary,
       submittedWorkflowId: record.submittedWorkflowId,
       submittedPlanName: record.submittedPlanName,
+      terminalMode: record.terminalMode ?? 'chat',
+      terminalSessionId: record.terminalSessionId,
+      terminalStatus: record.terminalStatus,
+      terminalExitCode: record.terminalExitCode,
+      terminalOutputSnapshot: record.terminalOutputSnapshot ?? '',
+      terminalUpdatedAt: record.terminalUpdatedAt,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       nextMessageId,
