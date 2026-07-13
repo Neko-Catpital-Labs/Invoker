@@ -59,7 +59,10 @@ export interface SshExecutorConfig {
   provisionCommand?: string;
   /** Opt-in: export agent API keys from secretsFile into remote task shells. */
   useApiKey?: boolean;
-  /** Optional local secrets file used when useApiKey is true. */
+  /**
+   * Optional local secrets file. GitHub CLI auth tokens are exported to remote
+   * task shells; agent provider API keys are exported only when useApiKey is true.
+   */
   secretsFile?: string;
   /**
    * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
