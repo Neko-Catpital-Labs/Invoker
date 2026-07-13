@@ -18,7 +18,6 @@ import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import type {
   Attempt,
-  ExternalDependency,
   TaskDelta,
   TaskState,
   TaskStateChanges,
@@ -107,7 +106,7 @@ export interface LifecycleHost {
   buildUpdateDelta(before: TaskState, after: TaskState, changes: TaskStateChanges): TaskDelta;
   touchWorkflow(workflowId: string): void;
   autoStartReadyTasks(taskIds: string[], priority?: number): TaskState[];
-  getExternalDependencyBlocker(task: TaskState): ExternalDependency | undefined;
+  getExternalDependencyBlocker(task: TaskState): string | undefined;
   cancelActiveBeforeInvalidation(scope: 'task' | 'workflow', id: string): string[];
   cancelActiveCandidates(candidates: readonly TaskState[], scope: 'task' | 'workflow'): string[];
   collectSubgraphTaskIds(rootTaskIds: string[]): string[];
