@@ -1,26 +1,24 @@
-/**
- * ClaudeExecutionAgent — ExecutionAgent implementation for Anthropic's Claude CLI.
- *
- * Extracted from BaseExecutor.buildClaudeArgs() / prepareClaudeSession().
- * Agents provide command specs; executors own the spawn lifecycle.
- */
-
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
+import type { ExecutionAgent, AgentCommandSpec, AgentCommandBuildOptions, ExecutionModelOption } from '../agent.js';
 
 export interface ClaudeExecutionAgentConfig {
-  /** Command to invoke the Claude CLI. Default: 'claude'. */
   command?: string;
-  /** Override command used specifically for fix flows. Default: INVOKER_CLAUDE_FIX_COMMAND or `command`. */
   fixCommand?: string;
-  /** Path to the Claude config directory on the host. Default: ~/.claude. */
   configDir?: string;
-  /** Home directory inside Docker containers. Default: '/home/invoker'. */
   containerHomePath?: string;
-  /** ANTHROPIC_API_KEY. Falls back to process.env.ANTHROPIC_API_KEY. */
   apiKey?: string;
+}
+
+const CLAUDE_SUPPORTED_MODELS: readonly ExecutionModelOption[] = [
+  { id: 'sonnet', label: 'Claude Sonnet' },
+  { id: 'opus', label: 'Claude Opus' },
+  { id: 'haiku', label: 'Claude Haiku' },
+];
+
+function normalizeClaudeModel(executionModel: string): string {
+  return executionModel.trim().toLowerCase().replace(/^anthropic[/:]/, '');
 }
 
 export class ClaudeExecutionAgent implements ExecutionAgent {
@@ -29,6 +27,7 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
   readonly linuxTerminalTail = 'exec_bash' as const;
   readonly bundledSkillRoot: string;
   readonly bundledSkills = ['make-pr'] as const;
+  readonly supportedModels = CLAUDE_SUPPORTED_MODELS;
 
   private readonly command: string;
   private readonly fixCommand: string;
@@ -45,23 +44,34 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
     this.bundledSkillRoot = join(this.configDir, 'skills');
   }
 
-  buildCommand(fullPrompt: string): AgentCommandSpec {
+  buildCommand(fullPrompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
     const sessionId = randomUUID();
     return {
       cmd: this.command,
-      args: ['--session-id', sessionId, '--dangerously-skip-permissions', '-p', fullPrompt],
+      args: ['--session-id', sessionId, '--dangerously-skip-permissions', ...this.buildModelArgs(options.executionModel), '-p', fullPrompt],
       sessionId,
       fullPrompt,
     };
   }
 
-  buildFixCommand(prompt: string): AgentCommandSpec {
+  buildFixCommand(prompt: string, options: AgentCommandBuildOptions = {}): AgentCommandSpec {
     const sessionId = randomUUID();
     return {
       cmd: this.fixCommand,
-      args: ['--session-id', sessionId, '-p', prompt, '--dangerously-skip-permissions'],
+      args: ['--session-id', sessionId, ...this.buildModelArgs(options.executionModel), '-p', prompt, '--dangerously-skip-permissions'],
       sessionId,
     };
+  }
+  supportsModel(executionModel: string): boolean {
+    const normalized = normalizeClaudeModel(executionModel);
+    return normalized === 'sonnet'
+      || normalized === 'opus'
+      || normalized === 'haiku'
+      || /^claude-(sonnet|opus|haiku)(?:-|$)/.test(normalized);
+  }
+
+  private buildModelArgs(executionModel?: string): string[] {
+    return executionModel ? ['--model', executionModel] : [];
   }
 
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {

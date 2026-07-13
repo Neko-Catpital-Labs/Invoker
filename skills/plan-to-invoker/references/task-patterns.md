@@ -6,39 +6,58 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 
 | What you see in the plan | Task type | Template |
 |--------------------------|-----------|----------|
-| "Run tests" / "verify" / "check" | `command` | `cd packages/<pkg> && pnpm test` |
-| "Run specific test file" | `command` | `cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts` |
-| "Run final regression suite" | `command` | `pnpm run test:all` |
+| "Run tests" / "verify" / "check" | `command` | Smallest deterministic command that proves the behavior |
+| "Run specific test file" | `command` | Package-local command only when that test is the smallest proof |
+| "Run final regression suite" | `command` | Optional full-suite command only when explicitly requested or risk-justified |
 | "Refactor X" / "Add feature Y" | `prompt` | Detailed instructions with file paths, line numbers, acceptance criteria |
 | "Build/compile" | `command` | `pnpm --filter @invoker/<pkg> build` |
 | "Build all" / "verify compilation" | `command` | `pnpm build` |
 | "Create file X with content Y" | `prompt` | Specify exact path, content structure, what it should export |
-| "Run in Docker" | `command` + `runnerKind: docker` | Command string, set `dockerImage` |
+| "Run in Docker" | `command` + `dockerImage` | Command string, set `dockerImage` |
 | "Lint / type-check" | `command` | `pnpm --filter @invoker/<pkg> lint` or `pnpm --filter @invoker/<pkg> typecheck` |
 | "Check file exists" | `command` | `test -f <path>` |
 | "Check pattern in file" | `command` | `grep -q '<pattern>' <path>` |
-| **Post-fix / regression** (final submitted-plan gate) | `command` | `pnpm run test:all` — keep focused repro commands earlier in the plan, but the final task for implementation plans must be the full-suite gate |
-| "Modify UI component" / "Fix layout" | `prompt` + `visualProof: true` | Set `visualProof: true` at plan level; include `description` |
+| **Post-fix / regression** | `command` | Focused repro or proof command tied to the changed behavior; full-suite gates are optional |
+| "Modify UI component" / "Fix layout" / "Change Electron window UI" | `prompt` + `visualProof: true` | Set `visualProof: true` at plan level; include `description` |
 | **Add visual proof E2E test case** | `prompt` | Add a test to `packages/app/e2e/visual-proof.spec.ts` that sets up the exact UI state being changed and calls `captureScreenshot(page, '<plan-slug>-<state>')`. See `skills/visual-proof/SKILL.md`. |
 | **Capture visual proof (after)** | `command` | `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` — depends on **all** implementation tasks |
-| **Invoker-on-Invoker PR publication** | repo-level workflow note | Keep `onFinish: pull_request` + `mergeMode: github`, then publish/update the commit stack with `mergify stack push` once the branch is ready |
+| **Invoker-on-Invoker PR publication** | repo-level workflow note | Keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the commit stack with `mergify stack push` once the branch is ready |
+
+Command tasks run under the platform default shell unless the command explicitly invokes another shell. Keep commands POSIX-shell portable by default. If a command needs bash-only options such as `set -o pipefail` or `set -euo pipefail`, wrap it explicitly, for example `bash -lc 'set -euo pipefail; ...'`.
 
 ## Dependency Rules
 
 These are constraints, not guidelines. Violating them produces broken plans.
 
+## Workflow Stack Default
+
+For implementation work (`onFinish != none`), default to a stack of workflow YAML
+files. One YAML file is one Invoker workflow; multiple `tasks:` entries inside
+that file are not a workflow stack.
+
+Split into multiple workflow files when the plan has more than one review slice,
+layer, implementation prompt task, package boundary, UI+non-UI boundary, or
+PR-worthy commit. Submit the resulting chain with
+`scripts/submit-workflow-chain.sh`, using `__UPSTREAM_WORKFLOW_ID__` in later
+templates so each workflow depends on the previous workflow's `__merge__` task.
+
+Standalone implementation workflows are exceptions. If a standalone
+implementation workflow contains multiple prompt tasks, it must include
+`Standalone workflow waiver:` in the top-level description with the reason it is
+not split.
+
 ### Must be sequential (add dependency)
 - **Same file modified by two tasks** → one depends on the other. Order by logical sequence.
-- **Test task** → depends on the implementation task it verifies.
+- **Verification task** → depends on the implementation task it verifies.
 - **Build/compile check** → depends on all implementation tasks that change source.
-- **Integration test** → depends on all unit-level tasks it integrates.
-- **Final regression task** → depends on **every earlier task** and runs **last** as `pnpm run test:all`.
+- **Integration check** → depends on all lower-level tasks it integrates.
+- **Terminal verification task** → depends on every task whose output it verifies; use the smallest honest command by default.
 - **Visual proof capture task** → depends on **all** implementation tasks and the E2E test case task (it must run after code changes AND the new Playwright test exist).
 
 ### Can be parallel (no dependency needed)
 - **Independent packages** → tasks touching different packages with no cross-package imports.
 - **Independent files** → tasks creating/modifying unrelated files.
-- **All verification tasks** → file-existence and grep checks are read-only, run them all in parallel — **except** the final regression task, which must depend on every earlier task (see above).
+- **Independent verification tasks** → file-existence and grep checks are read-only; run them in parallel when they do not verify a prior implementation task.
 
 ## Layered decomposition contract (hard requirement for implementation plans)
 
@@ -62,6 +81,34 @@ For plans with `onFinish` set to `pull_request` or `merge`, each task `descripti
    - `dormant`
 
 `onFinish: none` verify-only plans are exempt.
+
+### Review compression contract
+
+Apply `skills/review-compression/SKILL.md` before authoring implementation tasks.
+Each implementation task must include these description headings:
+
+- `Review claim:` the one sentence a reviewer is being asked to approve.
+- `Review lane:` exactly one of `behavior`, `refactor`, `proof`, `cleanup`,
+  `policy`, or `docs`.
+- `Safety invariant:` why this slice is safe to review locally.
+- `Slice rationale:` why this slice is separate from neighboring work.
+- `Architectural effect:` what changes in control flow, data flow, ownership,
+  dependency direction, or public surface.
+- `Non-goals:` what this slice explicitly leaves for later slices.
+
+Keep directly affected tests and compatibility adapters with the change that
+requires them. Split optional cleanup, special cases, behavior-plus-rename,
+default-flip-plus-deletion, benchmark-before-fix proof, refactor-before-fields,
+and product-code-plus-policy/docs follow-ups.
+
+Decomposition refactors split one refactor per workflow: create one module, move
+exactly ONE top-level symbol (one function, or one class with its methods — not
+method-by-method), re-point references in the same workflow, keep the public
+surface stable; the next symbol is the next workflow. Move a private helper the
+symbol depends on only when splitting them would break the build. A file that
+yields six extracted symbols is six chained workflows, not one "extract phases"
+task. See the **Decomposition & Extraction Refactors** section of
+`../review-compression/SKILL.md`.
 
 ### Cross-layer direction
 
@@ -166,6 +213,8 @@ For implementation plans (`onFinish != none`), prompt tasks are hard-gated by `s
 2. **`Change types:`** — Per listed path: `create`, `modify`, `delete`, `rename`, `move`, `config-only`, `test-only`, `docs-only`, `generated`, or `none`.
 3. **`Acceptance criteria:`** — Objective deterministic checks with concrete pass/fail language.
 
+Do not put conceptual work such as "add scan validation and submit behavior" in `Change types:`. Keep `Change types:` to per-file operations, and split implementation tasks when the review claim, slice rationale, or implementation details mix multiple conceptual units.
+
 **`prompt` tasks:** The multiline `prompt` must be self-contained for remote execution with no chat context. Include zero-context framing and deterministic expected outcomes directly in the prompt body.
 
 **`command` tasks:** The same headings are still recommended; for verify-only plans they remain advisory.
@@ -187,7 +236,7 @@ See `SKILL.md` (bugfix repro blurb) and this repo’s `scripts/repro-*.sh` examp
 
 When writing `command` fields:
 
-1. **Package tests must `cd` first**: `cd packages/<pkg> && pnpm test`; reserve root-level `pnpm run test:all` for the final implementation-plan regression gate
+1. **Use focused proof by default**: choose the smallest deterministic command that proves the behavior; package tests and full-suite gates are optional, not required.
 2. **Use `&&` for sequential steps**: ensures early failure stops execution
 3. **Exit codes matter**: the command succeeds (exit 0) or fails (non-zero). Design accordingly.
 4. **No interactive commands**: everything must run non-interactively
@@ -195,7 +244,7 @@ When writing `command` fields:
 
 ## UI Change Plans
 
-Plans that modify UI components (`packages/ui/`) must:
+Plans that modify UI-impacting files (`packages/ui/**`, Electron window lifecycle, preload/main window wiring, or app menu surface) must:
 1. Set `visualProof: true` at the plan level
 2. Include a `description` with architecture context
 3. Include a `prompt` task that adds a **plan-specific** E2E test case to `visual-proof.spec.ts`
@@ -210,7 +259,7 @@ description: |
   Constrains ApprovalModal height to 90vh and adds internal scroll.
   Architecture: uses flex-col + overflow-y-auto pattern.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 visualProof: true
 tasks:
   - id: add-visual-proof-test
@@ -228,25 +277,17 @@ tasks:
     description: "Fix modal CSS"
     prompt: "..."
     dependencies: []
-  - id: run-unit-tests
-    description: "Run UI unit tests"
-    command: "cd packages/ui && pnpm test"
-    dependencies: [fix-layout]
   - id: capture-visual-proof
     description: "Build and capture after-state screenshots"
     command: "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after"
     dependencies: [fix-layout, add-visual-proof-test]
-  - id: regression
-    description: "Final regression — run the full repository test suite"
-    command: "pnpm run test:all"
-    dependencies: [add-visual-proof-test, fix-layout, run-unit-tests, capture-visual-proof]
 ```
 
 ## Anti-Patterns
 
 - **God task**: one `prompt` task that says "implement the whole feature" — split it up.
-- **Test-free plan**: every implementation task needs a corresponding verification. No exceptions.
-- **No final full-suite task**: implementation plans must end with a **command** task that runs `pnpm run test:all`.
+- **Test-free plan**: every implementation task needs a corresponding verification command or proof lane. No exceptions.
+- **Default full-suite gate**: do not add one unless the user asks or it is risk-justified; prefer focused proof tied to the changed behavior.
 - **Circular dependencies**: task A depends on B, B depends on A — validator catches this but don't generate it.
 - **Phantom files**: referencing files that don't exist without a task to create them first.
 - **UI plan without visual proof tasks**: `visualProof: true` without the E2E test case task and capture task means no plan-specific screenshots are captured.
@@ -265,5 +306,6 @@ The validator now enforces atomic/detailed tasks:
 - IDs must avoid generic placeholders (`task-1`, `step-2`); kebab-case is recommended
 - Each task must have exactly one of `command` or `prompt`
 - Descriptions must be specific (minimum detail threshold)
+- Implementation task descriptions must include review-compression headings
 - Command tasks cannot be overloaded with long shell chains
 - Prompt tasks must include concrete file paths and explicit acceptance language

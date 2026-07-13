@@ -35,6 +35,12 @@ if [ -n "$MAC_ARCH" ] && [ "$TARGET" != "mac" ]; then
 fi
 
 pnpm --filter @invoker/ui build
+pnpm --filter @invoker/cli build
+rm -rf release/embedded-cli
+mkdir -p release/embedded-cli
+TARGET_ARCH="${MAC_ARCH:-$(node -p "process.arch")}"
+INVOKER_TARGET_ARCH="$TARGET_ARCH" INVOKER_CLI_STANDALONE_DIR="$ROOT/release/embedded-cli" node scripts/build-cli-standalone.mjs
+mv "release/embedded-cli/invoker-cli-$(node -p "require('./packages/cli/package.json').version")-$(node -p "process.platform")-$TARGET_ARCH" release/embedded-cli/invoker-cli
 pnpm --filter @invoker/app build
 
 rm -rf packages/app/dist/ui
@@ -42,7 +48,7 @@ mkdir -p packages/app/dist/ui
 cp -R packages/ui/dist/. packages/app/dist/ui/
 
 mkdir -p release
-rm -f release/*.dmg release/*.deb release/*.AppImage release/SHA256SUMS
+rm -f release/*.dmg release/*.deb release/*.AppImage release/*.zip release/SHA256SUMS
 
 case "$TARGET" in
   linux)
@@ -50,9 +56,9 @@ case "$TARGET" in
     ;;
   mac)
     if [ -n "$MAC_ARCH" ]; then
-      pnpm --filter @invoker/app exec electron-builder --mac dmg "--$MAC_ARCH" --publish never
+      pnpm --filter @invoker/app exec electron-builder --mac dmg zip "--$MAC_ARCH" --publish never
     else
-      pnpm --filter @invoker/app exec electron-builder --mac dmg --publish never
+      pnpm --filter @invoker/app exec electron-builder --mac dmg zip --publish never
     fi
     ;;
   all)

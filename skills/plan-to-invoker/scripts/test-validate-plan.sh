@@ -305,6 +305,571 @@ EOF
   return 0
 }
 
+# Test: nested shell command strings must not use shell variables
+test_nested_shell_variable_expansion_fails() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: nested-shell-variable-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: unsafe-smoke
+    description: Exact failed nightly command
+    command: >-
+      sh -c "value='Supported: deterministic command-only smoke'; printf '%s\n' \"$value\"; test \"$value\" = 'Supported: deterministic command-only smoke'"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for nested shell variable command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "unsafe_shell_variable_expansion" and .field == "command" and .taskId == "unsafe-smoke")] | length == 1' &>/dev/null; then
+    echo "Expected unsafe_shell_variable_expansion for unsafe-smoke command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: simple literal command-only smoke plans should still validate
+test_literal_smoke_command_validates() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: literal-smoke-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: literal-smoke
+    description: Literal smoke command
+    command: "printf '%s\n' 'Supported: deterministic command-only smoke' && test 1 -eq 1"
+EOF
+
+  local output
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected exit code 0, got $exit_code" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | grep -q '"valid"[[:space:]]*:[[:space:]]*true'; then
+    echo "Expected valid:true in output, got: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: direct shell variables remain valid when no nested sh -c/bash -c is used
+test_direct_shell_variable_command_validates() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: direct-shell-variable-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: direct-variable
+    description: Direct shell variable command
+    command: >-
+      value=ok; printf '%s\n' "$value"
+EOF
+
+  local output
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected exit code 0, got $exit_code" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: command tasks using pipefail must explicitly run through bash
+test_pipefail_without_bash_fails() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: pipefail-portability-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: unsafe-pipefail
+    description: Command uses bash-only pipefail under the default shell
+    command: |
+      set -euo pipefail
+      echo ok | tee /tmp/invoker-pipefail-proof
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for pipefail command without bash" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "non_portable_pipefail" and .field == "command" and .taskId == "unsafe-pipefail")] | length == 1' &>/dev/null; then
+    echo "Expected non_portable_pipefail for unsafe-pipefail command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: bash-wrapped pipefail commands remain valid
+test_pipefail_with_bash_validates() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: pipefail-bash-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: bash-pipefail
+    description: Command explicitly runs bash for pipefail support
+    command: >-
+      bash -lc 'set -euo pipefail; echo ok | tee /tmp/invoker-pipefail-proof'
+EOF
+
+  local output
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected exit code 0, got $exit_code" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | grep -q '"valid"[[:space:]]*:[[:space:]]*true'; then
+    echo "Expected valid:true in output, got: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: experiment variant commands use the same nested shell guard
+test_experiment_variant_nested_shell_variable_expansion_fails() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: experiment-variant-shell-variable-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: experiment-task
+    description: Experiment variant with unsafe command
+    prompt: "Compare variants"
+    experimentVariants:
+      - name: unsafe
+        command: >-
+          bash -lc "value='variant'; printf '%s\n' \"$value\""
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for unsafe experiment variant command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "unsafe_shell_variable_expansion" and .field == "experimentVariants[0].command" and .taskId == "experiment-task")] | length == 1' &>/dev/null; then
+    echo "Expected unsafe_shell_variable_expansion for experiment variant command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: command tasks must not reference missing shell scripts
+test_missing_command_script_fails() {
+  local temp_plan script_path
+  temp_plan=$(mktemp)
+  script_path="scripts/repro/repro-plan-validator-missing-local-$$.sh"
+  rm -f "$REPO_ROOT/$script_path"
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<EOF
+name: missing-command-script-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: repro-proof
+    description: Repro proof references a script that is not checked out
+    command: "bash \${PWD}/$script_path"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for missing command script" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "missing_file_reference" and .field == "command" and .taskId == "repro-proof")] | length == 1' &>/dev/null; then
+    echo "Expected missing_file_reference for repro-proof command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: bare relative shell scripts must be checked into HEAD
+test_missing_bare_command_script_fails() {
+  local temp_plan script_path
+  temp_plan=$(mktemp)
+  script_path="./repro-plan-validator-missing-bare-$$.sh"
+  rm -f "$REPO_ROOT/${script_path#./}"
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<EOF
+name: missing-bare-command-script-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: bare-repro-proof
+    description: Repro proof references a bare script that is not checked out
+    command: "bash $script_path"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for missing bare command script" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "missing_file_reference" and .field == "command" and .taskId == "bare-repro-proof")] | length == 1' &>/dev/null; then
+    echo "Expected missing_file_reference for bare-repro-proof command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+
+# Test: command tasks must not reference local files that are not checked into HEAD
+test_local_only_command_file_fails() {
+  local temp_plan local_path abs_local
+  temp_plan=$(mktemp)
+  local_path="docs/context/plan-validator-local-only-$$.txt"
+  abs_local="$REPO_ROOT/$local_path"
+  trap "rm -f $temp_plan $abs_local" RETURN
+
+  mkdir -p "$REPO_ROOT/docs/context"
+  printf 'local only\n' > "$abs_local"
+
+  cat > "$temp_plan" <<EOF
+name: local-only-command-file-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: repro-proof
+    description: Repro proof references a local-only command input
+    command: "node scripts/read-fixture.mjs --fixture=$local_path"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for local-only command file" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "local_only_file_reference" and .field == "command" and .taskId == "repro-proof")] | length == 1' &>/dev/null; then
+    echo "Expected local_only_file_reference for repro-proof command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: bare relative local shell scripts must not be treated as checked in
+test_local_only_bare_command_script_fails() {
+  local temp_plan script_path abs_local
+  temp_plan=$(mktemp)
+  script_path="repro-plan-validator-local-only-bare-$$.sh"
+  abs_local="$REPO_ROOT/$script_path"
+  trap "rm -f $temp_plan $abs_local" RETURN
+
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$abs_local"
+
+  cat > "$temp_plan" <<EOF
+name: local-only-bare-command-script-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: bare-repro-proof
+    description: Repro proof references a local-only bare command script
+    command: "bash $script_path"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for local-only bare command script" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "local_only_file_reference" and .field == "command" and .taskId == "bare-repro-proof")] | length == 1' &>/dev/null; then
+    echo "Expected local_only_file_reference for bare-repro-proof command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+
+# Test: prompt tasks must not reference local-only files either
+test_local_only_prompt_file_fails() {
+  local temp_plan local_path abs_local
+  temp_plan=$(mktemp)
+  local_path="docs/context/plan-validator-local-only-prompt-$$.md"
+  abs_local="$REPO_ROOT/$local_path"
+  trap "rm -f $temp_plan $abs_local" RETURN
+
+  mkdir -p "$REPO_ROOT/docs/context"
+  printf 'local only\n' > "$abs_local"
+
+  cat > "$temp_plan" <<EOF
+name: local-only-prompt-file-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: implementation-proof
+    description: Review docs/context/plan-validator-local-only-prompt-$$.md before changing code
+    prompt: |
+      Use $local_path as the implementation brief.
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for local-only prompt file" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "local_only_file_reference" and .field == "prompt" and .taskId == "implementation-proof")] | length == 1' &>/dev/null; then
+    echo "Expected local_only_file_reference for implementation-proof prompt" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: experiment variant command files are validated
+test_experiment_variant_missing_command_script_fails() {
+  local temp_plan script_path
+  temp_plan=$(mktemp)
+  script_path="scripts/repro/repro-plan-validator-missing-variant-$$.sh"
+  rm -f "$REPO_ROOT/$script_path"
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<EOF
+name: missing-variant-command-script-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: experiment-proof
+    description: Repro proof variant references a script that is not checked out
+    command: "printf 'base\\n'"
+    experimentVariants:
+      - id: variant-a
+        command: "bash $script_path"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for missing variant command script" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "missing_file_reference" and .field == "experimentVariants[0].command" and .taskId == "experiment-proof")] | length == 1' &>/dev/null; then
+    echo "Expected missing_file_reference for experiment variant command" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Test: upward relative paths are not valid plan file references
+test_upward_relative_path_fails() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: upward-relative-path-test
+repoUrl: git@github.com:user/repo.git
+onFinish: none
+tasks:
+  - id: repro-proof
+    description: Verify a file outside the checkout
+    command: "bash ../../../scripts/repro/local-only.sh && node scripts/../docs/context/local-only.txt"
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for upward relative path" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '
+    [.[] | select(.errorType == "unsupported_relative_file_reference" and .field == "command" and .taskId == "repro-proof")] as $errors |
+    ($errors | length) == 2 and
+    any($errors[]; .message | contains("../../../scripts/repro/local-only.sh")) and
+    any($errors[]; .message | contains("scripts/../docs/context/local-only.txt"))
+  ' &>/dev/null; then
+    echo "Expected unsupported_relative_file_reference for both parent-directory command paths" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+  return 0
+}
+
+
+# Test: Branched review-gate artifacts should fail validation
+test_branched_review_gate_rejected() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: branched-review-gate
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:user/repo.git
+tasks:
+  - id: verify-review-gate
+    description: Verify review gate metadata
+    command: printf 'ok\n'
+    dependencies: []
+reviewGate:
+  artifacts:
+    - id: contracts
+      title: Contracts
+      required: true
+    - id: runtime
+      title: Runtime
+      required: true
+      dependsOn: [contracts]
+    - id: ui
+      title: UI
+      required: true
+      dependsOn: [contracts]
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code for branched review-gate artifacts" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '
+    length == 1 and (
+      .[0].errorType == "invalid_dependency_reference" and
+      .[0].field == "reviewGate.artifacts[2].dependsOn" and
+      .[0].message == "reviewGate.artifacts[2].dependsOn must be [\"runtime\"] to keep the review-gate stack linear"
+    )
+  ' &>/dev/null; then
+    echo "Expected linear review-gate dependency error for reviewGate.artifacts[2].dependsOn" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 # Test: Verify error has required fields with correct types
 test_error_field_structure() {
   local output
@@ -331,24 +896,24 @@ test_error_field_structure() {
 
   return 0
 }
-
+ 
 # Check dependencies
 if ! command -v jq &>/dev/null; then
   fail "jq is required for JSON parsing tests"
 fi
-
+ 
 if [[ ! -f "$VALIDATE_SCRIPT" ]]; then
   fail "Validator script not found: $VALIDATE_SCRIPT"
 fi
-
+ 
 if [[ ! -f "$POSITIVE_FIXTURE" ]]; then
   fail "Positive fixture not found: $POSITIVE_FIXTURE"
 fi
-
+ 
 if [[ ! -f "$NEGATIVE_FIXTURE" ]]; then
   fail "Negative fixture not found: $NEGATIVE_FIXTURE"
 fi
-
+ 
 # Run all tests
 run_test "Positive fixture should pass validation" test_positive_fixture
 run_test "Negative fixture should fail with non-zero exit" test_negative_fixture_fails
@@ -359,6 +924,20 @@ run_test "Minimal invalid plan should report missing fields" test_minimal_invali
 run_test "Command+prompt conflict should be detected" test_command_prompt_conflict
 run_test "Invalid dependency should be detected" test_invalid_dependency
 run_test "Banned pattern (npx vitest run) should be detected" test_banned_pattern
+run_test "Nested shell variable expansion should be rejected" test_nested_shell_variable_expansion_fails
+run_test "Literal smoke command should validate" test_literal_smoke_command_validates
+run_test "Direct shell variable command should validate" test_direct_shell_variable_command_validates
+run_test "Pipefail without bash should be rejected" test_pipefail_without_bash_fails
+run_test "Pipefail with bash should validate" test_pipefail_with_bash_validates
+run_test "Experiment variant nested shell variable expansion should be rejected" test_experiment_variant_nested_shell_variable_expansion_fails
+run_test "Missing command scripts should be rejected" test_missing_command_script_fails
+run_test "Missing bare command scripts should be rejected" test_missing_bare_command_script_fails
+run_test "Local-only command files should be rejected" test_local_only_command_file_fails
+run_test "Local-only bare command scripts should be rejected" test_local_only_bare_command_script_fails
+run_test "Local-only prompt files should be rejected" test_local_only_prompt_file_fails
+run_test "Upward relative paths should be rejected" test_upward_relative_path_fails
+run_test "Experiment variant missing command scripts should be rejected" test_experiment_variant_missing_command_script_fails
+run_test "Branched review gate artifacts should be rejected" test_branched_review_gate_rejected
 run_test "Error objects should have correct field structure" test_error_field_structure
 
 echo ""
@@ -372,3 +951,4 @@ if [[ $pass_count -eq $test_count ]]; then
 else
   fail "Some validator tests failed"
 fi
+

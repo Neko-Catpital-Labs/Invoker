@@ -6,6 +6,7 @@ export type WorkflowDerivedStatus =
   | 'fixing_with_ai'
   | 'completed'
   | 'failed'
+  | 'closed'
   | 'blocked'
   | 'review_ready'
   | 'awaiting_approval'
@@ -63,6 +64,7 @@ export const TASK_STATUSES: readonly TaskStatus[] = [
   'fixing_with_ai',
   'completed',
   'failed',
+  'closed',
   'needs_input',
   'blocked',
   'review_ready',
@@ -85,6 +87,7 @@ export function computeWorkflowStatusFromCounts(
   if (counts.running > 0) return 'running';
   if (counts.awaiting_approval > 0) return 'awaiting_approval';
   if (counts.review_ready > 0) return 'review_ready';
+  if (counts.closed > 0) return 'closed';
   if (counts.blocked > 0 || counts.needs_input > 0) return 'blocked';
   if (counts.pending === total) return 'pending';
   if (counts.pending > 0) return 'running';
@@ -94,7 +97,7 @@ export function computeWorkflowStatusFromCounts(
   return 'running';
 }
 
-function hasFailedDependencyPath(
+export function hasFailedDependencyPath(
   task: WorkflowRollupTaskSummary,
   tasksById: ReadonlyMap<string, WorkflowRollupTaskSummary>,
   seen: Set<string> = new Set(),
@@ -104,7 +107,7 @@ function hasFailedDependencyPath(
     seen.add(dependencyId);
     const dependency = tasksById.get(dependencyId);
     if (!dependency) continue;
-    if (dependency.status === 'failed') return true;
+    if (dependency.status === 'failed' || dependency.status === 'closed') return true;
     if (hasFailedDependencyPath(dependency, tasksById, seen)) return true;
   }
   return false;
@@ -115,7 +118,7 @@ function computeWorkflowStatusFromTaskGraph(
   counts: WorkflowTaskStatusCounts,
 ): WorkflowDerivedStatus {
   const countedStatus = computeWorkflowStatusFromCounts(counts);
-  if (countedStatus !== 'running' || counts.failed === 0 || counts.pending === 0) {
+  if (countedStatus !== 'running' || (counts.failed === 0 && counts.closed === 0) || counts.pending === 0) {
     return countedStatus;
   }
 

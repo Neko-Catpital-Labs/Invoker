@@ -1,5 +1,5 @@
 import { computeWorkflowRollup } from '@invoker/workflow-core';
-import type { TaskState, TaskStateChanges, OrchestratorPersistence, Attempt } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges, OrchestratorPersistence, Attempt, ExternalDependency, ExternalDependencyChange } from '@invoker/workflow-core';
 
 /**
  * In-memory implementation of OrchestratorPersistence for testing.
@@ -9,35 +9,42 @@ export class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, {
     id: string; name: string; status: string;
     createdAt: string; updatedAt: string;
-    onFinish?: string; baseBranch?: string; featureBranch?: string;
+    onFinish?: 'none' | 'merge' | 'pull_request'; baseBranch?: string; featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
 
   saveWorkflow(workflow: {
-    id: string; name: string; status: string;
-    createdAt?: string; updatedAt?: string;
-    onFinish?: string; baseBranch?: string; featureBranch?: string;
+    id: string; name: string;
+    createdAt: string; updatedAt: string;
+    onFinish?: 'none' | 'merge' | 'pull_request'; baseBranch?: string; featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
       ...workflow,
+      status: 'pending',
       createdAt: workflow.createdAt ?? now,
       updatedAt: workflow.updatedAt ?? now,
     });
   }
 
-  updateWorkflow(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void {
+  updateWorkflow(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[] }): void {
     const wf = this.workflows.get(workflowId);
     if (wf) {
       if (changes.updatedAt) wf.updatedAt = changes.updatedAt;
       if (changes.baseBranch !== undefined) wf.baseBranch = changes.baseBranch;
       if (changes.generation !== undefined) wf.generation = changes.generation;
       if (changes.mergeMode !== undefined) wf.mergeMode = changes.mergeMode;
+      if ('externalDependencies' in changes) wf.externalDependencies = changes.externalDependencies;
+      if ('externalDependencyChanges' in changes) wf.externalDependencyChanges = changes.externalDependencyChanges;
     }
   }
 
@@ -85,6 +92,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
         ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
         config: { ...entry.task.config, ...changes.config },
         execution: { ...entry.task.execution, ...changes.execution },
+        taskStateVersion: (entry.task.taskStateVersion ?? 1) + 1,
       } as TaskState;
     }
   }
@@ -104,7 +112,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     return workflow ? this.withDerivedStatus(workflow) as any : undefined;
   }
 
-  private withDerivedStatus<T extends { id: string; status: string }>(workflow: T): T {
+  private withDerivedStatus<T extends { id: string }>(workflow: T): T & { status: string } {
     const tasks = this.loadTasks(workflow.id);
     const rollup = computeWorkflowRollup(tasks);
     return { ...workflow, status: rollup.status, rollup };

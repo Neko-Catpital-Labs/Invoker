@@ -56,6 +56,24 @@ export interface RuntimeServices {
   readonly terminalLauncher: TerminalLauncher;
 }
 
+export const RUNTIME_SERVICE_KEYS = Object.freeze([
+  'workspaceProbe',
+  'containerProbe',
+  'sessionProbe',
+  'terminalLauncher',
+] as const satisfies readonly (keyof RuntimeServices)[]);
+
+function assertRuntimeServiceFacadeShape(services: RuntimeServices): void {
+  const actual = Object.keys(services).sort();
+  const expected = [...RUNTIME_SERVICE_KEYS].sort();
+  if (
+    actual.length !== expected.length ||
+    actual.some((key, index) => key !== expected[index])
+  ) {
+    throw new Error(`RuntimeServices facade keys mismatch: ${actual.join(', ')}`);
+  }
+}
+
 // ── Factory ────────────────────────────────────────────────
 
 /**
@@ -72,7 +90,8 @@ export function composeRuntimeServices(
     containerProbe: deps.containerProbe,
     sessionProbe: deps.sessionProbe,
     terminalLauncher: deps.terminalLauncher,
-  });
+  } satisfies RuntimeServices);
+  assertRuntimeServiceFacadeShape(services);
 
   if (deps.enableDormantBridge === true && deps.dormantBridgeHook) {
     deps.dormantBridgeHook(services);

@@ -158,7 +158,7 @@ describe('TaskPanel error display', () => {
     expect(screen.queryByRole('heading', { name: 'Workspace Setup Failure' })).not.toBeInTheDocument();
     expect(errorHeading.closest('div')).toHaveTextContent('no valid workspace for failed task');
     expect(errorHeading.closest('div')).toHaveTextContent('Worktree provisioning failed');
-    expect(getEvents).toHaveBeenCalledWith(task.id);
+    expect(getEvents).toHaveBeenCalledWith(task.id, { limit: 50, sortBy: 'desc' });
   });
 
   it('renders ERR_PNPM_UNSUPPORTED_ENGINE audit error exactly', async () => {

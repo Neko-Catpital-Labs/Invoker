@@ -6,6 +6,8 @@ import { execSync, execFileSync } from 'node:child_process';
 import type { TaskState } from '@invoker/workflow-core';
 import { publishAfterFixImpl, type MergeRunnerHost } from '../merge-runner.js';
 
+const REAL_GIT_TIMEOUT_MS = 60_000;
+
 /** Shell-based git for simple setup commands (no special chars in args). */
 function git(args: string, cwd: string): string {
   return execSync(`git ${args}`, { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
@@ -91,6 +93,8 @@ function makeHost(hostDir: string, gateDir: string, allTasks: TaskState[]): Merg
       getAllTasks: () => allTasks,
       handleWorkerResponse: vi.fn(),
       setTaskAwaitingApproval: vi.fn(),
+      setTaskReviewReady: vi.fn(),
+      autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
     } as any,
     callbacks: {} as any,
     async execGitReadonly(args: string[]) {
@@ -106,7 +110,6 @@ function makeHost(hostDir: string, gateDir: string, allTasks: TaskState[]): Merg
     async detectDefaultBranch() { return 'master'; },
     async gitLogMessage() { return ''; },
     async gitDiffStat() { return ''; },
-    startPrPolling: vi.fn(),
     async executeTasks() {},
     async buildMergeSummary() { return '## Summary'; },
     async consolidateAndMerge() { return undefined; },
@@ -171,11 +174,77 @@ describe('publishAfterFixImpl integration (real git)', () => {
     // Feature branch should contain Claude's fix file
     expect(existsSync(join(sandbox.hostDir, 'fix.txt'))).toBe(true);
 
-    // orchestrator.setTaskAwaitingApproval should have been called
-    expect(host.orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-int', expect.objectContaining({
+    // orchestrator.setTaskReviewReady should have been called
+    expect(host.orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-int', expect.objectContaining({
       execution: expect.objectContaining({ branch: 'plan/feature' }),
-    }));
-  });
+    }), expect.objectContaining({ generation: 0 }));
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('retries feature branch push after a remote ref lock already-exists race', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    const mergeTask: TaskState = {
+      id: '__merge__wf-int',
+      description: 'Merge gate',
+      status: 'running',
+      dependencies: ['t1'],
+      createdAt: new Date(),
+      config: { isMergeNode: true, workflowId: 'wf-int' } as any,
+      execution: {} as any,
+    };
+
+    const taskT1: TaskState = {
+      id: 't1',
+      description: 'Task 1',
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-int' } as any,
+      execution: { branch: 'invoker/t1' } as any,
+    };
+
+    const host = makeHost(sandbox.hostDir, sandbox.gateDir, [mergeTask, taskT1]);
+    const originalExecGitIn = host.execGitIn.bind(host);
+    let pushAttempts = 0;
+    const gitCalls: string[][] = [];
+    host.execGitIn = vi.fn(async (args: string[], dir: string) => {
+      gitCalls.push(args);
+      if (
+        args[0] === 'push' &&
+        args[1] === '--force' &&
+        args[2] === 'origin' &&
+        args[3] === 'plan/feature:refs/heads/plan/feature'
+      ) {
+        pushAttempts++;
+        if (pushAttempts === 1) {
+          throw new Error(
+            "git push --force origin plan/feature:refs/heads/plan/feature failed (code 1): " +
+              "remote rejected: cannot lock ref 'refs/heads/plan/feature': is at 1111111 but expected 2222222",
+          );
+        }
+      }
+      if (args[0] === 'fetch' && args[2] === '+refs/heads/plan/feature:refs/remotes/origin/plan/feature') {
+        return '';
+      }
+      return originalExecGitIn(args, dir);
+    });
+
+    await publishAfterFixImpl(host, mergeTask);
+
+    expect(host.orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+    expect(pushAttempts).toBe(2);
+    expect(gitCalls).toContainEqual([
+      'fetch',
+      'origin',
+      '+refs/heads/plan/feature:refs/remotes/origin/plan/feature',
+    ]);
+
+    git('fetch origin', sandbox.hostDir);
+    git('checkout plan/feature', sandbox.hostDir);
+    expect(existsSync(join(sandbox.hostDir, 't1.txt'))).toBe(true);
+    expect(existsSync(join(sandbox.hostDir, 'fix.txt'))).toBe(true);
+  }, REAL_GIT_TIMEOUT_MS);
 
   it('uses fixedIntegrationSha anchor when present instead of current gate HEAD', async () => {
     const sandbox = createSandbox();
@@ -213,7 +282,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
     git('checkout plan/feature', sandbox.hostDir);
     expect(existsSync(join(sandbox.hostDir, 'fix.txt'))).toBe(true);
     expect(existsSync(join(sandbox.hostDir, 'late-change.txt'))).toBe(false);
-    expect(host.orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
+    expect(host.orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
       '__merge__wf-int',
       expect.objectContaining({
         execution: expect.objectContaining({
@@ -222,8 +291,9 @@ describe('publishAfterFixImpl integration (real git)', () => {
           fixedIntegrationSource: undefined,
         }),
       }),
+      expect.objectContaining({ generation: 0 }),
     );
-  });
+  }, REAL_GIT_TIMEOUT_MS);
 
   it('fails without detach (regression proof): fetch into checked-out branch is rejected by git', async () => {
     const sandbox = createSandbox();
@@ -236,7 +306,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
     expect(() => {
       git('fetch origin +refs/heads/*:refs/heads/*', sandbox.gateDir);
     }).toThrow(/refusing to fetch into branch.*checked out/);
-  });
+  }, REAL_GIT_TIMEOUT_MS);
 
   it('succeeds with detach (the fix): fetch after detaching HEAD works', async () => {
     const sandbox = createSandbox();
@@ -249,7 +319,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
     expect(() => {
       git('fetch origin +refs/heads/*:refs/heads/*', sandbox.gateDir);
     }).not.toThrow();
-  });
+  }, REAL_GIT_TIMEOUT_MS);
 
   it('merges pre-pushed plan/feature tip in one step when present (avoids re-merging task branches)', async () => {
     const sandbox = createSandbox();
@@ -297,7 +367,7 @@ describe('publishAfterFixImpl integration (real git)', () => {
     const featureSha = git('rev-parse plan/feature', sandbox.hostDir);
     const isAncestor = gitSilent(`merge-base --is-ancestor ${fixCommit} ${featureSha}`, sandbox.hostDir);
     expect(isAncestor).toBe('');
-  });
+  }, REAL_GIT_TIMEOUT_MS);
 
   /**
    * Regression coverage for deleted repro repro-post-fix-merge-conflict (scenario 14):
@@ -363,14 +433,15 @@ describe('publishAfterFixImpl integration (real git)', () => {
     const isAncestor = gitSilent(`merge-base --is-ancestor ${headBeforePublish} ${featureSha}`, sandbox.hostDir);
     expect(isAncestor).toBe('');
 
-    // The merge gate must reach awaiting_approval state.
-    expect(host.orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
+    // The merge gate must reach review_ready state.
+    expect(host.orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
       '__merge__wf-int',
       expect.objectContaining({
         execution: expect.objectContaining({ branch: 'plan/feature' }),
       }),
+      expect.objectContaining({ generation: 0 }),
     );
-  });
+  }, REAL_GIT_TIMEOUT_MS);
 
   it('emits merge_conflict JSON when post-fix consolidation merge conflicts', async () => {
     const sandbox = createSandbox();
@@ -425,5 +496,5 @@ describe('publishAfterFixImpl integration (real git)', () => {
     expect(parsedError.type).toBe('merge_conflict');
     expect(parsedError.failedBranch).toBe('invoker/t2');
     expect(Array.isArray(parsedError.conflictFiles)).toBe(true);
-  });
+  }, REAL_GIT_TIMEOUT_MS);
 });

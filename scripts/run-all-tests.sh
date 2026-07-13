@@ -11,11 +11,36 @@ RESUME="${INVOKER_TEST_ALL_RESUME:-0}"
 FORCE_RERUN="${INVOKER_TEST_ALL_FORCE_RERUN:-0}"
 JOBS="${INVOKER_TEST_ALL_JOBS:-1}"
 PROOF="${INVOKER_TEST_ALL_PROOF:-0}"
+EXCLUDE_RAW="${INVOKER_TEST_ALL_EXCLUDE:-}"
+PROOF_CONTRACT="INV-117"
+PROOF_MANIFEST="${INVOKER_TEST_ALL_PROOF_MANIFEST:-$ROOT/scripts/test-suites/proof-e2e.manifest}"
+SHARD_INDEX="${INVOKER_TEST_ALL_SHARD_INDEX:-}"
+SHARD_TOTAL="${INVOKER_TEST_ALL_SHARD_TOTAL:-1}"
+AGGREGATE="${INVOKER_TEST_ALL_AGGREGATE:-0}"
+SHARDED=0
 
 if [ "$PROOF" = "1" ]; then
   FORCE_RERUN=1
   RESUME=0
   JOBS="${INVOKER_TEST_ALL_JOBS:-1}"
+fi
+
+if [ -n "$SHARD_INDEX" ] || [ "$SHARD_TOTAL" != "1" ]; then
+  if ! [[ "$SHARD_INDEX" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: INVOKER_TEST_ALL_SHARD_INDEX must be a non-negative integer" >&2
+    exit 2
+  fi
+  if ! [[ "$SHARD_TOTAL" =~ ^[0-9]+$ ]] || [ "$SHARD_TOTAL" -lt 1 ]; then
+    echo "ERROR: INVOKER_TEST_ALL_SHARD_TOTAL must be a positive integer" >&2
+    exit 2
+  fi
+  if [ "$SHARD_INDEX" -ge "$SHARD_TOTAL" ]; then
+    echo "ERROR: INVOKER_TEST_ALL_SHARD_INDEX must be less than INVOKER_TEST_ALL_SHARD_TOTAL" >&2
+    exit 2
+  fi
+  if [ "$SHARD_TOTAL" -gt 1 ]; then
+    SHARDED=1
+  fi
 fi
 
 if ! [[ "$JOBS" =~ ^[0-9]+$ ]] || [ "$JOBS" -lt 1 ]; then
@@ -53,24 +78,65 @@ declare -A JOB_PREFLIGHT=()
 declare -A LOG_FILES=()
 declare -a SKIPPED_CHECKPOINT=()
 declare -a SKIPPED_UNAVAILABLE=()
+declare -a SKIPPED_EXCLUDED=()
 declare -a EXECUTED=()
 declare -a FAILED=()
 declare -a SUITES=()
+declare -a EXCLUDE_PATTERNS=()
+DISCOVERED_TOTAL=0
+
+parse_exclusions() {
+  local raw item
+  raw="${EXCLUDE_RAW//,/ }"
+  for item in $raw; do
+    [ -n "$item" ] || continue
+    EXCLUDE_PATTERNS+=( "$item" )
+  done
+}
+
+suite_is_excluded() {
+  local suite="$1"
+  local relpath
+  local pattern
+  relpath="$(suite_relpath "$suite")"
+  for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+    if [ "$relpath" = "$pattern" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+manifest_count() {
+  grep -cvE '^[[:space:]]*(#|$)' "$PROOF_MANIFEST"
+}
+
+proof_manifest_available() {
+  [ "$PROOF" = "1" ] && [ -f "$PROOF_MANIFEST" ]
+}
 
 expected_executed_for_mode() {
+  if proof_manifest_available; then
+    manifest_count
+    return
+  fi
+  printf '%s' "${#SUITES[@]}"
+}
+
+expected_discovered_for_mode() {
+  if proof_manifest_available; then
+    manifest_count
+    return
+  fi
   case "$MODE_KEY" in
     required)
-      printf '16'
-      ;;
-    extended)
       printf '23'
       ;;
+    extended)
+      printf '30'
+      ;;
     dangerous)
-      if [ "${#SKIPPED_UNAVAILABLE[@]}" -eq 1 ] && [ "${SKIPPED_UNAVAILABLE[0]}" = "dangerous/10-docker-comprehensive.sh" ]; then
-        printf '23'
-      else
-        printf '24'
-      fi
+      printf '31'
       ;;
   esac
 }
@@ -121,7 +187,7 @@ suite_name() {
 
 is_parallel_safe() {
   case "$(suite_relpath "$1")" in
-    required/05-delete-all-prod-db-guard.sh|required/07-invalid-config-json.sh|required/10-vitest-workspace.sh|required/15-owner-boundary-policy.sh|required/15-submit-workflow-chain.sh|required/20-e2e-dry-run.sh|required/21-e2e-dry-run-downstream.sh|required/22-e2e-dry-run-github.sh|required/50-verify-executor-routing.sh|optional/40-playwright-app.sh|optional/60-worktree-provisioning.sh|optional/70-ui-visual-proof-validate.sh)
+    required/05-delete-all-prod-db-guard.sh|required/06-large-file-guardrail.sh|required/07-invalid-config-json.sh|required/10-vitest-workspace.sh|required/11-pr-authoring-guardrails.sh|required/15-owner-boundary-policy.sh|required/15-submit-workflow-chain.sh|required/20-e2e-dry-run.sh|required/21-e2e-dry-run-downstream.sh|required/21-e2e-dry-run-downstream-reset.sh|required/22-e2e-dry-run-github.sh|required/50-verify-executor-routing.sh|optional/40-playwright-app.sh|optional/60-worktree-provisioning.sh|optional/70-ui-visual-proof-validate.sh)
       return 0
       ;;
     *)
@@ -145,6 +211,27 @@ suite_preflight() {
       ;;
   esac
   return 0
+}
+cleanup_proof_tmp() {
+  [ "$PROOF" = "1" ] || return 0
+  [ "$JOBS" -eq 1 ] || return 0
+  local tmp_root="${TMPDIR:-/tmp}"
+  [ -d "$tmp_root" ] || return 0
+  local state_real=""
+  if [ -n "${STATE_FILE:-}" ] && [ -e "$STATE_FILE" ]; then
+    state_real="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$STATE_FILE")"
+  fi
+  shopt -s nullglob
+  local path real
+  for path in "$tmp_root"/invoker-* "$tmp_root"/verify-exec-routing.*; do
+    [ -e "$path" ] || continue
+    real="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$path")"
+    if [ -n "$state_real" ] && [ "$real" = "$state_real" ]; then
+      continue
+    fi
+    rm -rf "$path" 2>/dev/null || true
+  done
+  shopt -u nullglob
 }
 
 run_suite() {
@@ -172,10 +259,18 @@ run_suite() {
     return "$preflight_status"
   fi
 
+  set +e
   {
     echo "======== ${relpath} ========"
     bash "$suite"
   } >"$log_file" 2>&1
+  local suite_status=$?
+  set -e
+
+  if [ "$suite_status" -ne 0 ]; then
+    return "$suite_status"
+  fi
+
   printf 'passed'
   return 0
 }
@@ -274,6 +369,27 @@ flush_parallel() {
 
 collect_suites() {
   local dir
+  if proof_manifest_available; then
+    local rel suite
+    while IFS= read -r rel; do
+      rel="${rel%%#*}"
+      rel="$(printf '%s' "$rel" | tr -d '[:space:]')"
+      [ -n "$rel" ] || continue
+      DISCOVERED_TOTAL=$((DISCOVERED_TOTAL + 1))
+      suite="$ROOT/scripts/test-suites/$rel"
+      if [ ! -f "$suite" ]; then
+        echo "ERROR: proof manifest references missing suite: $rel" >&2
+        exit 2
+      fi
+      if suite_is_excluded "$suite"; then
+        SKIPPED_EXCLUDED+=( "$(suite_relpath "$suite")" )
+        continue
+      fi
+      SUITES+=( "$suite" )
+    done < "$PROOF_MANIFEST"
+    return
+  fi
+
   for dir in required optional dangerous; do
     case "$dir" in
       required) ;;
@@ -286,6 +402,11 @@ collect_suites() {
     esac
 
     while IFS= read -r suite; do
+      DISCOVERED_TOTAL=$((DISCOVERED_TOTAL + 1))
+      if suite_is_excluded "$suite"; then
+        SKIPPED_EXCLUDED+=( "$(suite_relpath "$suite")" )
+        continue
+      fi
       SUITES+=( "$suite" )
     done < <(find "$ROOT/scripts/test-suites/$dir" -maxdepth 1 -type f -name '*.sh' ! -name '_*' | LC_ALL=C sort)
   done
@@ -315,6 +436,7 @@ print_summary() {
   echo "Failed: ${#FAILED[@]}"
   echo "Skipped by checkpoint: ${#SKIPPED_CHECKPOINT[@]}"
   echo "Skipped unavailable: ${#SKIPPED_UNAVAILABLE[@]}"
+  echo "Skipped by config: ${#SKIPPED_EXCLUDED[@]}"
 
   if [ "${#SKIPPED_CHECKPOINT[@]}" -gt 0 ]; then
     echo ""
@@ -326,6 +448,12 @@ print_summary() {
     echo ""
     echo "Unavailable skips:"
     printf '  %s\n' "${SKIPPED_UNAVAILABLE[@]}"
+  fi
+
+  if [ "${#SKIPPED_EXCLUDED[@]}" -gt 0 ]; then
+    echo ""
+    echo "Config skips:"
+    printf '  %s\n' "${SKIPPED_EXCLUDED[@]}"
   fi
 
   if [ "${#FAILED[@]}" -gt 0 ]; then
@@ -345,50 +473,108 @@ validate_proof_thresholds() {
   expected_executed="$(expected_executed_for_mode)"
 
   if [ "${#EXECUTED[@]}" -ne "$expected_executed" ]; then
-    echo "ERROR: INV-67 proof expected Executed=$expected_executed, got ${#EXECUTED[@]}" >&2
+    echo "ERROR: $PROOF_CONTRACT proof expected Executed=$expected_executed, got ${#EXECUTED[@]}" >&2
     return 1
   fi
 
   if [ "${#FAILED[@]}" -ne 0 ]; then
-    echo "ERROR: INV-67 proof expected Failed=0, got ${#FAILED[@]}" >&2
+    echo "ERROR: $PROOF_CONTRACT proof expected Failed=0, got ${#FAILED[@]}" >&2
     return 1
   fi
 
   if [ "${#SKIPPED_CHECKPOINT[@]}" -ne 0 ]; then
-    echo "ERROR: INV-67 proof expected Skipped by checkpoint=0, got ${#SKIPPED_CHECKPOINT[@]}" >&2
+    echo "ERROR: $PROOF_CONTRACT proof expected Skipped by checkpoint=0, got ${#SKIPPED_CHECKPOINT[@]}" >&2
     return 1
   fi
 
   case "$MODE_KEY" in
     required|extended)
       if [ "${#SKIPPED_UNAVAILABLE[@]}" -ne 0 ]; then
-        echo "ERROR: INV-67 proof expected Skipped unavailable=0, got ${#SKIPPED_UNAVAILABLE[@]}" >&2
+        echo "ERROR: $PROOF_CONTRACT proof expected Skipped unavailable=0, got ${#SKIPPED_UNAVAILABLE[@]}" >&2
         return 1
       fi
       ;;
     dangerous)
       if [ "${#SKIPPED_UNAVAILABLE[@]}" -gt 1 ]; then
-        echo "ERROR: INV-67 proof expected at most one unavailable skip, got ${#SKIPPED_UNAVAILABLE[@]}" >&2
+        echo "ERROR: $PROOF_CONTRACT proof expected at most one unavailable skip, got ${#SKIPPED_UNAVAILABLE[@]}" >&2
         return 1
       fi
       if [ "${#SKIPPED_UNAVAILABLE[@]}" -eq 1 ] && [ "${SKIPPED_UNAVAILABLE[0]}" != "dangerous/10-docker-comprehensive.sh" ]; then
-        echo "ERROR: INV-67 proof only allows unavailable skip for dangerous/10-docker-comprehensive.sh" >&2
+        echo "ERROR: $PROOF_CONTRACT proof only allows unavailable skip for dangerous/10-docker-comprehensive.sh" >&2
         return 1
       fi
       ;;
   esac
 }
 
+validate_proof_inventory() {
+  [ "$PROOF" = "1" ] || return 0
+
+  local expected_discovered
+  expected_discovered="$(expected_discovered_for_mode)"
+
+  if [ "$DISCOVERED_TOTAL" -ne "$expected_discovered" ]; then
+    echo "ERROR: $PROOF_CONTRACT proof expected suite inventory=$expected_discovered for mode=$MODE_KEY, got $DISCOVERED_TOTAL" >&2
+    return 1
+  fi
+  if [ $(( ${#SUITES[@]} + ${#SKIPPED_EXCLUDED[@]} )) -ne "$DISCOVERED_TOTAL" ]; then
+    echo "ERROR: $PROOF_CONTRACT proof exclusion accounting mismatch" >&2
+    return 1
+  fi
+}
+
 load_state
+parse_exclusions
 collect_suites
 
-echo "==> Running Invoker test suites (mode=$MODE_KEY, jobs=$JOBS, resume=$RESUME)"
+if ! validate_proof_inventory; then
+  exit 1
+fi
+
+if [ "$SHARDED" = "1" ] && [ "$AGGREGATE" != "1" ]; then
+  shard_suites=()
+  for i in "${!SUITES[@]}"; do
+    if [ $(( i % SHARD_TOTAL )) -eq "$SHARD_INDEX" ]; then
+      shard_suites+=( "${SUITES[$i]}" )
+    fi
+  done
+  SUITES=( "${shard_suites[@]+"${shard_suites[@]}"}" )
+fi
+
+if [ "$AGGREGATE" = "1" ]; then
+  for suite in "${SUITES[@]}"; do
+    case "$(state_get "$suite")" in
+      passed)
+        EXECUTED+=( "$suite" )
+        ;;
+      failed)
+        EXECUTED+=( "$suite" )
+        FAILED+=( "$suite" )
+        ;;
+      skipped-unavailable)
+        SKIPPED_UNAVAILABLE+=( "$(suite_relpath "$suite")" )
+        ;;
+      *)
+        ;;
+    esac
+  done
+  print_summary
+  validate_proof_thresholds || exit 1
+  exit 0
+fi
+
+if [ "$PROOF" = "1" ]; then
+  echo "==> Running Invoker test suites ($PROOF_CONTRACT proof, mode=$MODE_KEY, jobs=$JOBS, resume=$RESUME)"
+else
+  echo "==> Running Invoker test suites (mode=$MODE_KEY, jobs=$JOBS, resume=$RESUME)"
+fi
 
 overall_failed=0
 for suite in "${SUITES[@]}"; do
   if should_skip_for_resume "$suite"; then
     continue
   fi
+  cleanup_proof_tmp
 
   if [ "$JOBS" -gt 1 ] && is_parallel_safe "$suite"; then
     while [ "${#JOB_SUITE[@]}" -ge "$JOBS" ]; do
@@ -437,8 +623,10 @@ if [ "${#JOB_SUITE[@]}" -gt 0 ]; then
 fi
 
 print_summary
-if ! validate_proof_thresholds; then
-  exit 1
+if [ "$SHARDED" != "1" ]; then
+  if ! validate_proof_thresholds; then
+    exit 1
+  fi
 fi
 
 if [ "$overall_failed" -ne 0 ]; then

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stub gh CLI for e2e-dry-run: no network, instant responses.
 # Handles the exact calls made by GitHubMergeGateProvider:
-#   - gh pr list --head ... --base ... --state open --json url,number --limit 1
+#   - gh api repos/{owner}/{repo}/pulls --method GET -f head=... -f state=open
 #   - gh api repos/{owner}/{repo}/pulls --method POST -f base=... -f head=... -f title=... -f body=...
 #   - gh api repos/{owner}/{repo}/pulls/N --method PATCH ...
 #   - gh pr view N --json state,reviewDecision,url
@@ -31,9 +31,8 @@ case "$SUBCMD" in
     shift || true
     case "$ACTION" in
       list)
-        # gh pr list --head ... --base ... --state open --json url,number --limit 1
-        # Return empty array (no existing PR)
-        echo '[]'
+        echo "ERROR: gh pr list should not be used; use REST gh api pulls lookup" >&2
+        exit 1
         ;;
       view)
         # gh pr view N --json state,reviewDecision,url
@@ -45,13 +44,25 @@ case "$SUBCMD" in
     esac
     ;;
   api)
-    # gh api repos/{owner}/{repo}/pulls --method POST ...
+    # gh api repos/{owner}/{repo}/pulls --method GET/POST ...
     # or gh api repos/{owner}/{repo}/pulls/N --method PATCH ...
     ENDPOINT="${1:-}"
     shift || true
     if echo "$ENDPOINT" | grep -qE 'pulls$'; then
-      # POST — create new PR
-      echo '{"html_url":"https://github.com/test/repo/pull/99","number":99}'
+      METHOD="GET"
+      prev=""
+      for arg in "$@"; do
+        if [ "$prev" = "--method" ]; then
+          METHOD="$arg"
+          break
+        fi
+        prev="$arg"
+      done
+      if [ "$METHOD" = "GET" ]; then
+        echo '[]'
+      else
+        echo '{"html_url":"https://github.com/test/repo/pull/99","number":99}'
+      fi
     else
       # PATCH — update existing PR
       echo '{}'

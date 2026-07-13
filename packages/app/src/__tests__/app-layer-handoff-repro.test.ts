@@ -44,7 +44,7 @@ describe('app-layer handoff repros', () => {
     h = createTestHarness();
   });
 
-  it('edit-task-command launches restarted task and persists workspacePath', async () => {
+  it('edit-task-command records a runnable launch for the outbox', async () => {
     h.loadAndStart(LINEAR_PLAN);
     h.failTask('A', 'broken');
 
@@ -52,13 +52,15 @@ describe('app-layer handoff repros', () => {
     expect(started.some((task) => task.id.endsWith('/A') && task.status === 'running')).toBe(true);
     expect(h.getTask('A')!.execution.workspacePath).toBeUndefined();
 
-    await dispatchStarted(h, started, 'test.edit-task-command');
+    const result = await dispatchStarted(h, started, 'test.edit-task-command');
 
-    expect(h.getTask('A')!.execution.workspacePath).toBe('/tmp/mock-worktree');
-    expect(h.getTask('A')!.status).toBe('completed');
+    expect(result.runnable.map((task) => task.id)).toEqual([h.getTask('A')!.id]);
+    expect(result.topup).toEqual([]);
+    expect(h.getTask('A')!.execution.workspacePath).toBeUndefined();
+    expect(h.getTask('A')!.status).toBe('running');
   });
 
-  it('edit-task-prompt launches restarted task and persists workspacePath', async () => {
+  it('edit-task-prompt records a runnable launch for the outbox', async () => {
     const PROMPT_PLAN: PlanDefinition = {
       name: 'Prompt Handoff Repro',
       onFinish: 'merge',
@@ -77,27 +79,16 @@ describe('app-layer handoff repros', () => {
     expect(started.some((task) => task.id.endsWith('/A') && task.status === 'running')).toBe(true);
     expect(h.getTask('A')!.config.prompt).toBe('Implement feature Y instead');
 
-    await dispatchStarted(h, started, 'test.edit-task-prompt');
+    const result = await dispatchStarted(h, started, 'test.edit-task-prompt');
 
-    expect(h.getTask('A')!.execution.workspacePath).toBe('/tmp/mock-worktree');
-    expect(h.getTask('A')!.status).toBe('completed');
-  });
-
-  it('edit-task-type launches restarted task and persists workspacePath', async () => {
-    h.loadAndStart(LINEAR_PLAN);
-    h.failTask('A', 'broken');
-
-    const started = h.orchestrator.editTaskType('A', 'worktree');
-    expect(started.some((task) => task.id.endsWith('/A') && task.status === 'running')).toBe(true);
+    expect(result.runnable.map((task) => task.id)).toEqual([h.getTask('A')!.id]);
+    expect(result.topup).toEqual([]);
     expect(h.getTask('A')!.execution.workspacePath).toBeUndefined();
-
-    await dispatchStarted(h, started, 'test.edit-task-type');
-
-    expect(h.getTask('A')!.execution.workspacePath).toBe('/tmp/mock-worktree');
-    expect(h.getTask('A')!.status).toBe('completed');
+    expect(h.getTask('A')!.status).toBe('running');
   });
 
-  it('edit-task-agent launches restarted task and persists workspacePath', async () => {
+
+  it('edit-task-agent records a runnable launch for the outbox', async () => {
     h.loadAndStart(LINEAR_PLAN);
     h.failTask('A', 'broken');
 
@@ -105,13 +96,15 @@ describe('app-layer handoff repros', () => {
     expect(started.some((task) => task.id.endsWith('/A') && task.status === 'running')).toBe(true);
     expect(h.getTask('A')!.execution.workspacePath).toBeUndefined();
 
-    await dispatchStarted(h, started, 'test.edit-task-agent');
+    const result = await dispatchStarted(h, started, 'test.edit-task-agent');
 
-    expect(h.getTask('A')!.execution.workspacePath).toBe('/tmp/mock-worktree');
-    expect(h.getTask('A')!.status).toBe('completed');
+    expect(result.runnable.map((task) => task.id)).toEqual([h.getTask('A')!.id]);
+    expect(result.topup).toEqual([]);
+    expect(h.getTask('A')!.execution.workspacePath).toBeUndefined();
+    expect(h.getTask('A')!.status).toBe('running');
   });
 
-  it('set-task-external-gate-policies launches newly unblocked task and persists workspacePath', async () => {
+  it('set-task-external-gate-policies records the newly unblocked task for the outbox', async () => {
     h.orchestrator.loadPlan({
       name: 'upstream-workflow',
       tasks: [{ id: 'verify', description: 'prereq task', command: 'echo verify' }],
@@ -149,24 +142,18 @@ describe('app-layer handoff repros', () => {
     expect(started.some((task) => task.id === leafId && task.status === 'running')).toBe(true);
     expect(h.getTask('leaf')!.execution.workspacePath).toBeUndefined();
 
-    await dispatchStarted(h, started, 'test.set-task-external-gate-policies');
+    const result = await dispatchStarted(h, started, 'test.set-task-external-gate-policies');
 
-    expect(h.getTask('leaf')!.execution.workspacePath).toBe('/tmp/mock-worktree');
-    expect(h.getTask('leaf')!.status).toBe('completed');
+    expect(result.runnable.map((task) => task.id)).toEqual([leafId]);
+    expect(result.topup).toEqual([]);
+    expect(h.getTask('leaf')!.execution.workspacePath).toBeUndefined();
+    expect(h.getTask('leaf')!.status).toBe('running');
   });
 
-  it('replace-task launches replacement tasks and persists workspacePath', async () => {
+  it('replace-task records replacement launches for the outbox', async () => {
     h.loadAndStart(LINEAR_PLAN);
     h.failTask('A', 'broken');
 
-    // Steps 11 → 14 (`docs/architecture/task-invalidation-roadmap.md`):
-    // `replaceTask` on a *live* workflow now routes through
-    // `forkWorkflow` (Step 14) instead of throwing
-    // `TopologyForkRequired` (Step 11). This test exercises the
-    // **in-place** handoff path on purpose, so it cancels the live
-    // downstream task to make the workflow terminal first; then
-    // `replaceTask` lands in-place on the same workflow and the
-    // workspacePath handoff assertions below are unchanged.
     h.orchestrator.cancelTask('B');
 
     const started = h.orchestrator.replaceTask('A', [
@@ -176,13 +163,15 @@ describe('app-layer handoff repros', () => {
     expect(started.some((task) => task.id.endsWith('/A-fix-1') && task.status === 'running')).toBe(true);
     expect(h.getTask('A-fix-1')!.execution.workspacePath).toBeUndefined();
 
-    await dispatchStarted(h, started, 'test.replace-task');
+    const result = await dispatchStarted(h, started, 'test.replace-task');
 
-    expect(h.getTask('A-fix-1')!.execution.workspacePath).toBe('/tmp/mock-worktree');
-    expect(h.getTask('A-fix-1')!.status).toBe('completed');
+    expect(result.runnable.map((task) => task.id)).toEqual([h.getTask('A-fix-1')!.id]);
+    expect(result.topup).toEqual([]);
+    expect(h.getTask('A-fix-1')!.execution.workspacePath).toBeUndefined();
+    expect(h.getTask('A-fix-1')!.status).toBe('running');
   });
 
-  it('set-merge-branch relaunches merge task and persists workspacePath', async () => {
+  it('set-merge-branch leaves merge relaunch for the outbox', async () => {
     h.loadAndStart(PARALLEL_PLAN);
     h.completeTask('A');
     h.completeTask('B');
@@ -198,14 +187,16 @@ describe('app-layer handoff repros', () => {
     expect(started.some((task) => task.id === mergeTaskId && task.status === 'running')).toBe(true);
     expect(h.getTask(mergeTaskId)!.execution.workspacePath).toBe('/tmp/mock-merge-worktree');
 
-    await dispatchStarted(h, started, 'test.set-merge-branch');
+    const result = await dispatchStarted(h, started, 'test.set-merge-branch');
 
+    expect(result.runnable.map((task) => task.id)).toEqual([mergeTaskId]);
+    expect(result.topup).toEqual([]);
     expect(h.getTask(mergeTaskId)!.execution.workspacePath).toBe('/tmp/mock-merge-worktree');
-    expect(h.getTask(mergeTaskId)!.status).toBe('completed');
+    expect(h.getTask(mergeTaskId)!.status).toBe('running');
     expect(h.persistence.loadWorkflow(workflowId).baseBranch).toBe('develop');
   });
 
-  it('standalone-owner set-merge-branch uses the same handoff and persists workspacePath', async () => {
+  it('standalone-owner set-merge-branch leaves merge relaunch for the outbox', async () => {
     h.loadAndStart(PARALLEL_PLAN);
     h.completeTask('A');
     h.completeTask('B');
@@ -217,10 +208,12 @@ describe('app-layer handoff repros', () => {
 
     h.persistence.updateWorkflow(workflowId, { baseBranch: 'release' });
     const started = h.orchestrator.retryTask(mergeTaskId);
-    await dispatchStarted(h, started, 'test.standalone.set-merge-branch');
+    const result = await dispatchStarted(h, started, 'test.standalone.set-merge-branch');
 
+    expect(result.runnable.map((task) => task.id)).toEqual([mergeTaskId]);
+    expect(result.topup).toEqual([]);
     expect(h.getTask(mergeTaskId)!.execution.workspacePath).toBe('/tmp/mock-merge-worktree');
-    expect(h.getTask(mergeTaskId)!.status).toBe('completed');
+    expect(h.getTask(mergeTaskId)!.status).toBe('running');
     expect(h.persistence.loadWorkflow(workflowId).baseBranch).toBe('release');
   });
 });

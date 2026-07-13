@@ -39,12 +39,24 @@ function registerStandaloneOwner(
 }
 
 /** Register a GUI owner on the given bus. */
-function registerGuiOwner(bus: LocalBus): void {
+function registerGuiOwner(
+  bus: LocalBus,
+  execHandler: (req: unknown) => Promise<unknown> = async () => ({ ok: true }),
+): void {
   bus.onRequest('headless.owner-ping', async () => ({
     ok: true,
     ownerId: 'owner-gui',
     mode: 'gui',
   }));
+  bus.onRequest('headless.exec', execHandler);
+  bus.onRequest('headless.run', async (req: unknown) => {
+    const { planPath } = req as { planPath: string };
+    return { workflowId: `wf-${planPath}`, tasks: [] };
+  });
+  bus.onRequest('headless.resume', async (req: unknown) => {
+    const { workflowId } = req as { workflowId: string };
+    return { workflowId, tasks: [] };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -169,11 +181,12 @@ describe('HeadlessTransport', () => {
   // =========================================================================
 
   describe('exec (shared-owner / GUI owner mode)', () => {
-    it('skips GUI owner for mutations and bootstraps a standalone owner', async () => {
+    it('delegates mutations to a GUI owner without bootstrapping another owner', async () => {
       const firstBus = new LocalBus();
       const secondBus = new LocalBus();
+      const guiExecHandler = vi.fn(async () => ({ ok: true }));
 
-      registerGuiOwner(firstBus);
+      registerGuiOwner(firstBus, guiExecHandler);
       registerStandaloneOwner(secondBus);
 
       const ensureStandaloneOwner = vi.fn(async () => {});
@@ -191,9 +204,12 @@ describe('HeadlessTransport', () => {
       );
 
       expect(result.ok).toBe(true);
-      // The transport should have refreshed the bus after seeing the GUI owner
-      // and then either found a standalone via refresh or bootstrapped one.
-      expect(refreshMessageBus).toHaveBeenCalled();
+      expect(guiExecHandler).toHaveBeenCalledWith(expect.objectContaining({
+        args: ['retry', 'wf-1'],
+        noTrack: true,
+      }));
+      expect(refreshMessageBus).not.toHaveBeenCalled();
+      expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     });
 
     it('bootstraps a standalone owner when no owner is present', async () => {

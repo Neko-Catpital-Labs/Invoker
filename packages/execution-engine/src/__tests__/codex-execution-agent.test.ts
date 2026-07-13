@@ -14,6 +14,19 @@ describe('CodexExecutionAgent', () => {
     const spec = agent.buildCommand('test prompt');
     expect(spec.args).toEqual(['exec', '--json', '--full-auto', 'test prompt']);
   });
+  it('passes executionModel through as --model', () => {
+    const agent = new CodexExecutionAgent();
+    const spec = agent.buildCommand('test prompt', { executionModel: 'gpt-5.2' });
+    expect(spec.args).toEqual([
+      'exec',
+      '--json',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--model',
+      'gpt-5.2',
+      'test prompt',
+    ]);
+  });
+
 
   it('respects custom command', () => {
     const agent = new CodexExecutionAgent({ command: '/usr/bin/codex' });
@@ -34,7 +47,17 @@ describe('CodexExecutionAgent', () => {
     const agent = new CodexExecutionAgent({ command: 'codex-cli' });
     const resume = agent.buildResumeArgs('sess-123');
     expect(resume.cmd).toBe('codex-cli');
-    expect(resume.args).toEqual(['resume', 'sess-123']);
+    expect(resume.args).toEqual([
+      'resume',
+      '--dangerously-bypass-approvals-and-sandbox',
+      'sess-123',
+    ]);
+  });
+
+  it('buildResumeArgs preserves plain resume when bypass is disabled', () => {
+    const agent = new CodexExecutionAgent({ bypassApprovalsAndSandbox: false, fullAuto: true });
+    const resume = agent.buildResumeArgs('sess-plain');
+    expect(resume.args).toEqual(['resume', 'sess-plain']);
   });
 
   it('buildFixCommand uses sandbox/approval bypass by default', () => {
@@ -44,6 +67,19 @@ describe('CodexExecutionAgent', () => {
     expect(spec.args).toEqual(['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', 'fix the bug']);
     expect(spec.sessionId).toBeDefined();
   });
+  it('buildFixCommand passes executionModel through', () => {
+    const agent = new CodexExecutionAgent();
+    const spec = agent.buildFixCommand('fix the bug', { executionModel: 'gpt-5.2' });
+    expect(spec.args).toEqual([
+      'exec',
+      '--json',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--model',
+      'gpt-5.2',
+      'fix the bug',
+    ]);
+  });
+
 
   it('buildFixCommand generates unique session IDs', () => {
     const agent = new CodexExecutionAgent();

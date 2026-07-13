@@ -82,6 +82,43 @@ describe('ResponseHandler (pure parser)', () => {
         reviewStatus: 'Awaiting review',
       });
     });
+
+    it('passes reviewGate through review_ready responses', () => {
+      const reviewGate = {
+        activeGeneration: 1,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [
+          {
+            id: 'contracts',
+            title: 'Define contracts',
+            required: true,
+            status: 'approved',
+            generation: 1,
+          },
+          {
+            id: 'runtime',
+            title: 'Wire runtime',
+            required: true,
+            status: 'open',
+            generation: 1,
+            dependsOn: ['contracts'],
+          },
+        ],
+      } as const;
+      const result = handler.parseResponse(
+        makeResponse({
+          status: 'review_ready',
+          outputs: {
+            exitCode: 0,
+            reviewGate,
+          },
+        }),
+      );
+      expect('type' in result).toBe(true);
+      if (!('type' in result)) return;
+      expect(result.type).toBe('review_ready');
+      expect(result.reviewGate).toEqual(reviewGate);
+    });
   });
 
   // ── failed ─────────────────────────────────────────────

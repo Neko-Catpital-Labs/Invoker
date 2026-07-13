@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { sid } from './scoped-test-helpers.js';
 import { Orchestrator, TopologyForkRequired } from '../orchestrator.js';
 import type { OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
-import type { TaskState, TaskStateChanges, Attempt } from '../task-types.js';
+import { computeWorkflowRollup, type TaskState, type TaskStateChanges, type Attempt } from '../task-types.js';
 import { validateDAG } from '../dag.js';
 
 // ── Mocks ────────────────────────────────────────────────────
@@ -12,18 +12,15 @@ class InMemoryPersistence implements OrchestratorPersistence {
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
 
-  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
+  saveWorkflow(workflow: { id: string; name: string }): void {
     const now = new Date().toISOString();
-    this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
+    this.workflows.set(workflow.id, { ...workflow, status: 'pending', createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
   }
 
-  updateWorkflow(workflowId: string, changes: { status?: string }): void {
-    const wf = this.workflows.get(workflowId);
-    if (wf && changes.status) wf.status = changes.status;
-  }
+  updateWorkflow(_workflowId: string, _changes: { updatedAt?: string }): void {}
 
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
-    return Array.from(this.workflows.values());
+    return Array.from(this.workflows.values()).map((workflow) => ({ ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status }));
   }
 
   saveTask(workflowId: string, task: TaskState): void {
@@ -317,6 +314,41 @@ describe('replaceTask', () => {
     expect(orchestrator.getTask(s('D'))!.status).toBe('stale');
     const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
     expect(mergeNode!.dependencies).toContain(s('fix'));
+  });
+
+  it('a leaf blocked behind a cancelled task is not "live", even under an unsatisfied external dependency', () => {
+    // Upstream workflow (index 0) stays pending, so the downstream external
+    // gate never opens.
+    orchestrator.loadPlan({
+      name: 'upstream',
+      tasks: [{ id: 'up', description: 'Up', command: 'echo up' }],
+    });
+    const upstreamWfId = sid(orchestrator, 0, 'up').split('/')[0];
+
+    // Downstream workflow (index 1) is gated on the upstream, with a root → leaf chain.
+    orchestrator.loadPlan({
+      name: 'downstream',
+      externalDependencies: [{ workflowId: upstreamWfId, requiredStatus: 'completed' }],
+      tasks: [
+        { id: 'root', description: 'Root', command: 'echo root' },
+        { id: 'leaf', description: 'Leaf', command: 'echo leaf', dependencies: ['root'] },
+      ],
+    });
+    const s = (l: string) => sid(orchestrator, 1, l);
+
+    // Cancelling the never-started root leaves root failed and leaf blocked
+    // behind it. The workflow is dead — nothing can progress.
+    orchestrator.cancelTask(s('root'));
+    expect(orchestrator.getTask(s('root'))!.status).toBe('failed');
+    expect(orchestrator.getTask(s('leaf'))!.status).toBe('blocked');
+
+    // replaceTask must mutate in place (leaf → stale), not fork. The old
+    // workflow-scoped heuristic saw the unsatisfied external gate and wrongly
+    // judged the blocked leaf "live", forking and leaving the original leaf blocked.
+    orchestrator.replaceTask(s('root'), [
+      { id: 'fix', description: 'Fix', command: 'echo fix' },
+    ]);
+    expect(orchestrator.getTask(s('leaf'))!.status).toBe('stale');
   });
 
   it('rejects replacing a running task', () => {

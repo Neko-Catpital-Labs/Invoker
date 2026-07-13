@@ -10,6 +10,12 @@ The orchestrator is **`scripts/run-all-tests.sh`**, invoked as **`pnpm run test:
 | **`optional/`** | `pnpm run test:all:extended` or `INVOKER_TEST_ALL_EXTENDED=1` |
 | **`dangerous/`** | Same as extended **and** `INVOKER_TEST_ALL_DANGEROUS=1` (e.g. `pnpm run test:all:destructive`) — can touch real user paths / Docker |
 
+## CI merge queue lane
+
+Mergify queue PRs only run the checks listed in `.mergify.yml` `merge_conditions`.
+
+Keep extra proof, repro, and destructive coverage on normal PRs, pushes, scheduled runs, or manual runs. Do not add those extra jobs to queue PRs unless `.mergify.yml` waits for their check names.
+
 ## Naming
 
 - Use **`NN-meaningful-name.sh`** (`10-`, `20-`, …) so lexicographic order matches run order.
@@ -31,6 +37,7 @@ The orchestrator is **`scripts/run-all-tests.sh`**, invoked as **`pnpm run test:
 | `INVOKER_TEST_ALL_FORCE_RERUN=1` | Ignore saved state and rerun every discovered suite |
 | `INVOKER_TEST_ALL_STATE_FILE=/path/to/state.tsv` | Override the state file location |
 | `INVOKER_TEST_ALL_JOBS=2` | Allow explicitly tagged parallel-safe suites to overlap |
+| `INVOKER_TEST_ALL_EXCLUDE='required/foo.sh,required/bar.sh'` | Skip suites that already run as separate CI jobs while keeping proof inventory accounting |
 | `INVOKER_WORKSPACE_TEST_CONCURRENCY=4` | Override local workspace test concurrency |
 | `INVOKER_PLAYWRIGHT_WORKERS=2` | Override `packages/app` Playwright workers |
 | `INVOKER_PLAYWRIGHT_SHARD=1/4` | Run the Playwright suite wrapper as a specific shard |
@@ -61,5 +68,7 @@ The orchestrator is **`scripts/run-all-tests.sh`**, invoked as **`pnpm run test:
   - `optional/33-e2e-chaos-overload.sh`: generated overload chaos suite for saturation and mixed-operation storms
   - `optional/30-e2e-ssh.sh`: `case-3.1` to `case-3.3`
   - `optional/31-e2e-ssh-merge.sh`: `case-3.4` to `case-3.6`
+  - `optional/40-playwright-app.sh`: full Playwright app suite (also used by CI shards)
+  - `optional/41-ui-action-responsiveness.sh`: UI action responsiveness battery under fat DB (daily/extended only; see `docs/architecture/ui-action-responsiveness-invariant.md`)
 
 Do **not** add ad-hoc top-level `scripts/run-*.sh` loops for tests — add a thin wrapper under `test-suites/` and delegate to existing scripts so discovery stays in one place.

@@ -104,8 +104,14 @@ test.describe('Persistence lifecycle', () => {
 
     const alphaId = await resolveTaskId(page, 'task-alpha');
     const betaId = await resolveTaskId(page, 'task-beta');
-    const alphaEvents = await page.evaluate((id) => window.invoker.getEvents(id), alphaId);
-    const betaEvents = await page.evaluate((id) => window.invoker.getEvents(id), betaId);
+    const alphaEvents = await page.evaluate(
+      (id) => window.invoker.getEvents(id, { limit: 100, sortBy: 'asc' }),
+      alphaId,
+    );
+    const betaEvents = await page.evaluate(
+      (id) => window.invoker.getEvents(id, { limit: 100, sortBy: 'asc' }),
+      betaId,
+    );
 
     const alphaTypes = alphaEvents.map((e: any) => e.eventType);
     const betaTypes = betaEvents.map((e: any) => e.eventType);
@@ -120,7 +126,10 @@ test.describe('Persistence lifecycle', () => {
     await loadPlan(page, PERSISTENCE_PLAN);
     await startPlan(page);
     const mergeNodeId = await waitForWorkflowReviewReady(page);
-    const events = await page.evaluate((id) => window.invoker.getEvents(id), mergeNodeId);
+    const events = await page.evaluate(
+      (id) => window.invoker.getEvents(id, { limit: 100, sortBy: 'asc' }),
+      mergeNodeId,
+    );
     const types = events.map((e: any) => e.eventType);
     expect(types).toContain('task.review_ready');
   });

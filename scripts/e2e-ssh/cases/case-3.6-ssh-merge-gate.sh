@@ -50,12 +50,12 @@ if [ ! -f "$GHLOG" ]; then
   exit 1
 fi
 
-if ! grep -q "pr list" "$GHLOG"; then
-  echo "FAIL case 3.6: gh stub log missing 'pr list' call"
+if ! grep -q "api.*repos.*pulls.*GET" "$GHLOG"; then
+  echo "FAIL case 3.6: gh stub log missing REST PR lookup call"
   cat "$GHLOG"
   exit 1
 fi
-echo "==> case 3.6: confirmed gh pr list was called"
+echo "==> case 3.6: confirmed REST PR lookup was called"
 
 if ! grep -q "api.*repos.*pulls.*POST" "$GHLOG"; then
   echo "FAIL case 3.6: gh stub log missing PR creation API call"

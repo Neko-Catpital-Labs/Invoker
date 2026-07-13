@@ -210,6 +210,7 @@ describe('SessionManager', () => {
       false,
       'C123',
       'U001',
+      'agent',
     );
   });
 

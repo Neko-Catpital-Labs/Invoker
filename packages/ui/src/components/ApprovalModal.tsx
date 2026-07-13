@@ -7,6 +7,14 @@
 
 import { useState, useEffect } from 'react';
 import type { TaskState, ClaudeMessage, AgentSessionData } from '../types.js';
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './primitives/index.js';
 
 interface ApprovalModalProps {
   task: TaskState;
@@ -88,12 +96,13 @@ export function ApprovalModal({
   const [sessionReason, setSessionReason] = useState<string | undefined>(undefined);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (task.execution.agentSessionId || task.execution.lastAgentSessionId || fallbackSessionId) return;
     let cancelled = false;
     window.invoker
-      .getEvents(task.id)
+      .getEvents(task.id, { limit: 50, sortBy: 'desc' })
       .then((events) => {
         if (cancelled) return;
         const recovered = extractSessionFromEvents(events as Array<{ eventType?: string; payload?: string }>);
@@ -148,6 +157,8 @@ export function ApprovalModal({
   }, [sessionId, effectiveAgentName]);
 
   const handleApprove = () => {
+    if (submitting) return;
+    setSubmitting(true);
     onApprove(task.id);
     onClose();
   };
@@ -157,6 +168,8 @@ export function ApprovalModal({
       setShowRejectInput(true);
       return;
     }
+    if (submitting) return;
+    setSubmitting(true);
     onReject(task.id, reason || undefined);
     onClose();
   };
@@ -167,72 +180,75 @@ export function ApprovalModal({
       ? onFinish === 'merge'
         ? 'Confirm Merge'
         : onFinish === 'pull_request'
-          ? 'Confirm Pull Request'
+          ? 'Confirm Create PR'
           : 'Approve Merge'
       : 'Manual Approval Required';
 
   const approveButtonLabel = isFixApproval
     ? 'Approve Fix'
     : isMergeNode
-      ? onFinish === 'pull_request'
-        ? 'Confirm Create PR'
-        : 'Approve Merge'
+      ? onFinish === 'merge'
+        ? 'Confirm Merge'
+        : onFinish === 'pull_request'
+          ? 'Confirm Create PR'
+          : 'Approve Merge'
       : 'Approve';
 
+  const mergeRejectLabel = onFinish === 'pull_request' ? 'Reject PR' : 'Reject Merge';
+  const mergeConfirmRejectLabel =
+    onFinish === 'pull_request' ? 'Confirm Reject PR' : 'Confirm Reject Merge';
   const rejectButtonLabel = showRejectInput
-    ? (isFixApproval ? 'Confirm Reject Fix' : isMergeNode ? 'Confirm Reject Merge' : 'Confirm Reject')
-    : (isFixApproval ? 'Reject Fix' : isMergeNode ? 'Reject Merge' : 'Reject');
+    ? (isFixApproval ? 'Confirm Reject Fix' : isMergeNode ? mergeConfirmRejectLabel : 'Confirm Reject')
+    : (isFixApproval ? 'Reject Fix' : isMergeNode ? mergeRejectLabel : 'Reject');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-700">
-        {/* Header */}
-        <div className="p-6 pb-0 shrink-0">
-          <h2 className="text-lg font-semibold text-gray-100 mb-2 shrink-0">
-            {heading}
-          </h2>
-          <p className="text-sm text-gray-300 mb-1">
-            Task: <span className="font-mono text-gray-200">{task.id}</span>
-          </p>
-          <p className="text-sm text-gray-400">{task.description}</p>
-        </div>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col gap-0 p-0 overflow-hidden">
+        <DialogHeader className="p-6 pb-0 shrink-0">
+          <DialogTitle>{heading}</DialogTitle>
+        </DialogHeader>
 
-        {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
+          <div>
+            <p className="text-sm text-muted-foreground mb-1">
+              Task: <span className="font-mono text-foreground">{task.id}</span>
+            </p>
+            <p className="text-sm text-muted-foreground break-words">{task.description}</p>
+          </div>
           {sessionId && (
-            <div className="bg-gray-700/50 rounded p-3" data-testid="claude-session-context">
-              <h3 className="text-sm font-medium text-gray-300 mb-2">{agentLabel} Session</h3>
-              <p className="text-xs text-gray-500 mb-2 font-mono">{sessionId}</p>
+            <div className="bg-muted/50 rounded p-3" data-testid="claude-session-context">
+              <h3 className="text-sm font-medium text-muted-foreground mb-2">{agentLabel} Session</h3>
+              <p className="text-xs text-muted-foreground mb-2 font-mono">{sessionId}</p>
               {sessionState && (
-                <p className="text-xs text-gray-400 mb-2" data-testid="session-state">
+                <p className="text-xs text-muted-foreground mb-2" data-testid="session-state">
                   State: <span className="font-mono">{sessionState}</span>
                   {sessionSource ? <> {' '}({sessionSource})</> : null}
                 </p>
               )}
-              {sessionLoading && <p className="text-xs text-gray-500" data-testid="session-loading">Loading conversation...</p>}
+              {sessionLoading && <p className="text-xs text-muted-foreground" data-testid="session-loading">Loading conversation...</p>}
               {sessionMessages && (
                 <div className="space-y-2" data-testid="session-messages">
                   {sessionMessages.map((msg, i) => (
                     <div key={i} className="text-xs">
-                      <span className={msg.role === 'user' ? 'text-blue-400' : 'text-green-400'}>
+                      <span className={msg.role === 'user' ? 'text-foreground' : 'text-green-400'}>
                         {msg.role === 'user' ? 'Human' : agentLabel}:
                       </span>
-                      <pre className="text-gray-300 whitespace-pre-wrap mt-0.5">{msg.content}</pre>
+                      <pre className="text-muted-foreground whitespace-pre-wrap mt-0.5">{msg.content}</pre>
                     </div>
                   ))}
                 </div>
               )}
               {sessionReason && !sessionError && (
-                <p className="text-xs text-gray-500 mt-2" data-testid="session-reason">{sessionReason}</p>
+                <p className="text-xs text-muted-foreground mt-2" data-testid="session-reason">{sessionReason}</p>
               )}
               {sessionError && <p className="text-xs text-red-400" data-testid="session-error">Could not load session</p>}
             </div>
           )}
 
           {task.config.summary && (
-            <div className="bg-gray-700/50 rounded p-3">
-              <h3 className="text-sm font-medium text-gray-300 mb-1">Summary</h3>
-              <p className="text-xs text-gray-400 whitespace-pre-wrap max-h-[20vh] overflow-y-auto">
+            <div className="bg-muted/50 rounded p-3">
+              <h3 className="text-sm font-medium text-muted-foreground mb-1">Summary</h3>
+              <p className="text-xs text-muted-foreground whitespace-pre-wrap max-h-[20vh] overflow-y-auto">
                 {task.config.summary}
               </p>
             </div>
@@ -240,7 +256,7 @@ export function ApprovalModal({
 
           {showRejectInput && (
             <div>
-              <label className="block text-sm text-gray-300 mb-1">
+              <label className="block text-sm text-muted-foreground mb-1">
                 Rejection reason (optional)
               </label>
               <textarea
@@ -249,7 +265,7 @@ export function ApprovalModal({
                   setReasonTouched(true);
                   setReason(e.target.value);
                 }}
-                className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-gray-500"
+                className="w-full bg-muted border border-border-strong rounded p-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring"
                 rows={3}
                 placeholder="Why is this being rejected?"
                 autoFocus
@@ -258,32 +274,30 @@ export function ApprovalModal({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="p-6 pt-4 shrink-0 border-t border-gray-700">
-          <div className="flex gap-3 justify-end">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+        <DialogFooter className="p-6 pt-4 shrink-0 border-t border-border sm:justify-end">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={submitting}
+            onClick={handleReject}
+          >
+            {rejectButtonLabel}
+          </Button>
+          {!showRejectInput && (
+            <Button
+              type="button"
+              disabled={submitting}
+              className="bg-green-600 text-white hover:bg-green-500"
+              onClick={handleApprove}
             >
-              Cancel
-            </button>
-            <button
-              onClick={handleReject}
-              className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded text-sm font-medium transition-colors"
-            >
-              {rejectButtonLabel}
-            </button>
-            {!showRejectInput && (
-              <button
-                onClick={handleApprove}
-                className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors"
-              >
-                {approveButtonLabel}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
+              {approveButtonLabel}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

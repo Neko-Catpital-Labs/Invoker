@@ -8,6 +8,7 @@
 
 import type { WorkResponse } from '@invoker/contracts';
 import { validateWorkResponse } from '@invoker/contracts';
+import type { FailureClass, ReviewGateState } from '@invoker/workflow-graph';
 
 /** Plan-local id segment for experiment id prefixing (strip `${workflowId}/` when present). */
 function planLocalFromActionId(actionId: string): string {
@@ -35,10 +36,12 @@ export type ParsedResponse =
       summary?: string;
       commitHash?: string;
       agentSessionId?: string;
+      agentName?: string;
       branch?: string;
       reviewUrl?: string;
       reviewId?: string;
       reviewStatus?: string;
+      reviewGate?: ReviewGateState;
     }
   | {
       type: 'review_ready';
@@ -49,12 +52,15 @@ export type ParsedResponse =
       reviewUrl?: string;
       reviewId?: string;
       reviewStatus?: string;
+      reviewGate?: ReviewGateState;
     }
   | {
       type: 'failed';
       taskId: string;
       exitCode: number;
       error?: string;
+      agentName?: string;
+      failureClass?: FailureClass;
     }
   | {
       type: 'needs_input';
@@ -96,10 +102,12 @@ export class ResponseHandler {
           summary: outputs.summary,
           commitHash: outputs.commitHash,
           agentSessionId: outputs.agentSessionId,
+          agentName: outputs.agentName,
           branch: outputs.branch,
           reviewUrl: outputs.reviewUrl,
           reviewId: outputs.reviewId,
           reviewStatus: outputs.reviewStatus,
+          reviewGate: outputs.reviewGate,
         };
 
       case 'review_ready':
@@ -112,6 +120,7 @@ export class ResponseHandler {
           reviewUrl: outputs.reviewUrl,
           reviewId: outputs.reviewId,
           reviewStatus: outputs.reviewStatus,
+          reviewGate: outputs.reviewGate,
         };
 
       case 'failed':
@@ -120,6 +129,8 @@ export class ResponseHandler {
           taskId: actionId,
           exitCode: outputs.exitCode ?? 1,
           error: outputs.error,
+          agentName: outputs.agentName,
+          failureClass: outputs.failureClass,
         };
 
       case 'needs_input':

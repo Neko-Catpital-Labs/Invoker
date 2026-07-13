@@ -30,43 +30,66 @@ function makeRunningTask(overrides: Record<string, unknown> = {}) {
 }
 
 function makeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): WorkflowMutationFacadeDeps {
+  const orchestrator = {
+    retryTask: vi.fn(() => [makeRunningTask()]),
+    recreateTask: vi.fn(() => [makeRunningTask()]),
+    deleteTask: vi.fn(() => [makeRunningTask({ id: 'task-b' })]),
+    recreateDownstream: vi.fn(() => [makeRunningTask({ id: 'task-b' })]),
+    cancelTask: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: [] })),
+    cancelWorkflow: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
+    deleteWorkflow: vi.fn(),
+    detachWorkflow: vi.fn(),
+    forkWorkflow: vi.fn(() => ({
+      forkedWorkflowId: 'wf-fork',
+      sourceWorkflowId: 'wf-1',
+      started: [makeRunningTask({ id: 'fork-t1' })],
+    })),
+    editTaskCommand: vi.fn(() => [makeRunningTask()]),
+    editTaskPrompt: vi.fn(() => [makeRunningTask()]),
+    editTaskAgent: vi.fn(() => [makeRunningTask()]),
+    setTaskExternalGatePolicies: vi.fn(() => []),
+    selectExperiment: vi.fn(() => [makeRunningTask()]),
+    approve: vi.fn(async () => [makeRunningTask()]),
+    reject: vi.fn(),
+    provideInput: vi.fn(),
+    getTask: vi.fn(),
+    getAllTasks: vi.fn(() => []),
+    startExecution: vi.fn(() => []),
+    retryWorkflow: vi.fn(() => [makeRunningTask()]),
+    recreateWorkflow: vi.fn(() => [makeRunningTask()]),
+    recreateWorkflowFromFreshBase: vi.fn(async () => [makeRunningTask()]),
+    cascadeInvalidationToDownstream: vi.fn(() => []),
+    cancelWorkflowExecution: vi.fn(),
+  };
+  const persistence = {
+    loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1 })),
+    updateWorkflow: vi.fn(),
+    loadTasks: vi.fn(() => []),
+  };
+  const taskExecutor = {
+    executeTasks: vi.fn(),
+    killActiveExecution: vi.fn(),
+    closeWorkflowReview: vi.fn(),
+    preparePoolForRebaseRetry: vi.fn(async () => undefined),
+  };
+  const commandService = {
+    retryTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.retryTask(envelope.payload.taskId) })),
+    recreateTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateTask(envelope.payload.taskId) })),
+    deleteTask: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.deleteTask(envelope.payload.taskId) })),
+    recreateDownstream: vi.fn(async (envelope: { payload: { taskId: string } }) => ({ ok: true as const, data: orchestrator.recreateDownstream(envelope.payload.taskId) })),
+    retryWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => ({ ok: true as const, data: orchestrator.retryWorkflow(envelope.payload.workflowId) })),
+    recreateWorkflow: vi.fn(async (envelope: { payload: { workflowId: string } }) => {
+      const workflow = persistence.loadWorkflow(envelope.payload.workflowId);
+      persistence.updateWorkflow(envelope.payload.workflowId, { generation: (workflow.generation ?? 0) + 1 });
+      return { ok: true as const, data: orchestrator.recreateWorkflow(envelope.payload.workflowId) };
+    }),
+    runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<TaskState[]> | TaskState[]) => ({ ok: true as const, data: await fn() })),
+  };
   return {
-    orchestrator: {
-      retryTask: vi.fn(() => [makeRunningTask()]),
-      recreateTask: vi.fn(() => [makeRunningTask()]),
-      cancelTask: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: [] })),
-      cancelWorkflow: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
-      deleteWorkflow: vi.fn(),
-      detachWorkflow: vi.fn(),
-      forkWorkflow: vi.fn(() => ({
-        forkedWorkflowId: 'wf-fork',
-        sourceWorkflowId: 'wf-1',
-        started: [makeRunningTask({ id: 'fork-t1' })],
-      })),
-      editTaskCommand: vi.fn(() => [makeRunningTask()]),
-      editTaskPrompt: vi.fn(() => [makeRunningTask()]),
-      editTaskType: vi.fn(() => [makeRunningTask()]),
-      editTaskAgent: vi.fn(() => [makeRunningTask()]),
-      setTaskExternalGatePolicies: vi.fn(() => []),
-      selectExperiment: vi.fn(() => [makeRunningTask()]),
-      approve: vi.fn(async () => [makeRunningTask()]),
-      reject: vi.fn(),
-      provideInput: vi.fn(),
-      getTask: vi.fn(),
-      getAllTasks: vi.fn(() => []),
-      startExecution: vi.fn(() => []),
-      retryWorkflow: vi.fn(() => [makeRunningTask()]),
-      recreateWorkflow: vi.fn(() => [makeRunningTask()]),
-    } as unknown as Orchestrator,
-    persistence: {
-      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1 })),
-      updateWorkflow: vi.fn(),
-      loadTasks: vi.fn(() => []),
-    } as unknown as SQLiteAdapter,
-    taskExecutor: {
-      executeTasks: vi.fn(),
-      killActiveExecution: vi.fn(),
-    } as unknown as TaskRunner,
+    orchestrator: orchestrator as unknown as Orchestrator,
+    persistence: persistence as unknown as SQLiteAdapter,
+    commandService: commandService as unknown as WorkflowMutationFacadeDeps['commandService'],
+    taskExecutor: taskExecutor as unknown as TaskRunner,
     ...overrides,
   };
 }
@@ -83,61 +106,108 @@ describe('WorkflowMutationFacade', () => {
   });
 
   describe('retryTask', () => {
-    it('calls orchestrator.retryTask and dispatches runnable tasks', async () => {
+    it('calls orchestrator.retryTask and returns accepted runnable tasks', async () => {
       const result = await facade.retryTask('task-a');
 
       expect(deps.orchestrator.retryTask).toHaveBeenCalledWith('task-a');
       expect(result.started).toHaveLength(1);
       expect(result.started[0].status).toBe('running');
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
+    });
+
+    it('closes the workflow review before task-scoped invalidation', async () => {
+      (deps.orchestrator.getTask as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeTask({ id: 'task-a', config: { workflowId: 'wf-1' } }),
+      );
+
+      await facade.retryTask('task-a');
+
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
+      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
+        (deps.commandService.retryTask as any).mock.invocationCallOrder[0],
+      );
     });
   });
 
   describe('recreateTask', () => {
-    it('calls orchestrator.recreateTask and dispatches runnable tasks', async () => {
+    it('calls orchestrator.recreateTask and returns accepted runnable tasks', async () => {
       const result = await facade.recreateTask('task-a');
 
       expect(deps.orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
       expect(result.started).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
+    });
+
+    it('closes the workflow review before task-scoped recreate', async () => {
+      (deps.orchestrator.getTask as ReturnType<typeof vi.fn>).mockReturnValue(
+        makeTask({ id: 'task-a', config: { workflowId: 'wf-1' } }),
+      );
+
+      await facade.recreateTask('task-a');
+
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
+      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
+        (deps.commandService.recreateTask as any).mock.invocationCallOrder[0],
+      );
+    });
+  });
+
+  describe('deleteTask', () => {
+    it('kills an active target and returns accepted runnable tasks', async () => {
+      const killFn = vi.fn();
+      deps = makeDeps({
+        killRunningTask: killFn,
+        orchestrator: {
+          ...deps.orchestrator,
+          getTask: vi.fn(() => makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } })),
+        } as unknown as Orchestrator,
+      });
+      facade = new WorkflowMutationFacade(deps);
+
+      const result = await facade.deleteTask('task-a');
+
+      expect(killFn).toHaveBeenCalledWith('task-a');
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
+      expect(deps.commandService.deleteTask).toHaveBeenCalledWith(
+        expect.objectContaining({ payload: { taskId: 'task-a' } }),
+      );
+      expect(result.started).toHaveLength(1);
     });
   });
 
   describe('editTaskCommand', () => {
-    it('calls orchestrator.editTaskCommand and dispatches runnable tasks', async () => {
+    it('calls orchestrator.editTaskCommand and returns accepted runnable tasks', async () => {
       const result = await facade.editTaskCommand('task-a', 'new-cmd');
 
       expect(deps.orchestrator.editTaskCommand).toHaveBeenCalledWith('task-a', 'new-cmd');
       expect(result.started).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
   describe('editTaskPrompt', () => {
-    it('calls orchestrator.editTaskPrompt and dispatches runnable tasks', async () => {
+    it('calls orchestrator.editTaskPrompt and returns accepted runnable tasks', async () => {
       const result = await facade.editTaskPrompt('task-a', 'new prompt');
 
       expect(deps.orchestrator.editTaskPrompt).toHaveBeenCalledWith('task-a', 'new prompt');
       expect(result.started).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
-  describe('editTaskType', () => {
-    it('calls orchestrator.editTaskType with optional poolMemberId', async () => {
-      const result = await facade.editTaskType('task-a', 'docker', 'remote-1');
-
-      expect(deps.orchestrator.editTaskType).toHaveBeenCalledWith('task-a', 'docker', 'remote-1');
-      expect(result.started).toHaveLength(1);
-    });
-  });
 
   describe('editTaskAgent', () => {
-    it('calls orchestrator.editTaskAgent and dispatches', async () => {
+    it('calls orchestrator.editTaskAgent and returns accepted runnable tasks', async () => {
       const result = await facade.editTaskAgent('task-a', 'claude');
 
       expect(deps.orchestrator.editTaskAgent).toHaveBeenCalledWith('task-a', 'claude');
       expect(result.started).toHaveLength(1);
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -216,6 +286,7 @@ describe('WorkflowMutationFacade', () => {
 
       expect(killFn).toHaveBeenCalledWith('task-a');
       expect(killFn).not.toHaveBeenCalledWith('task-b');
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
       expect(deps.orchestrator.deleteWorkflow).toHaveBeenCalledWith('wf-1');
     });
   });
@@ -229,14 +300,14 @@ describe('WorkflowMutationFacade', () => {
   });
 
   describe('forkWorkflow', () => {
-    it('forks and dispatches runnable tasks', async () => {
+    it('forks and returns accepted runnable tasks', async () => {
       const result = await facade.forkWorkflow('wf-1');
 
       expect(deps.orchestrator.forkWorkflow).toHaveBeenCalledWith('wf-1');
       expect(result.forkedWorkflowId).toBe('wf-fork');
       expect(result.sourceWorkflowId).toBe('wf-1');
       expect(result.runnable).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 
@@ -252,14 +323,11 @@ describe('WorkflowMutationFacade', () => {
         execution: { pendingFixError: 'merge conflict' },
       });
       (deps.orchestrator.getTask as ReturnType<typeof vi.fn>).mockReturnValue(task);
-      (deps.orchestrator as any).revertConflictResolution = vi.fn();
+      (deps.orchestrator as any).revertFixSession = vi.fn();
 
       facade.rejectTask('task-a');
 
-      expect((deps.orchestrator as any).revertConflictResolution).toHaveBeenCalledWith(
-        'task-a',
-        'merge conflict',
-      );
+      expect((deps.orchestrator as any).revertFixSession).toHaveBeenCalledWith('task-a', { savedError: 'merge conflict' });
     });
   });
 
@@ -289,14 +357,25 @@ describe('WorkflowMutationFacade', () => {
       expect(deps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
       expect(result.started).toHaveLength(1);
     });
+
+    it('closes the workflow review before workflow-scoped recreate', async () => {
+      await facade.recreateWorkflow('wf-1');
+
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
+      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
+        (deps.commandService.recreateWorkflow as any).mock.invocationCallOrder[0],
+      );
+    });
   });
 
   describe('retryWorkflow', () => {
-    it('calls orchestrator.retryWorkflow and dispatches', async () => {
+    it('calls orchestrator.retryWorkflow and returns accepted runnable tasks', async () => {
       const result = await facade.retryWorkflow('wf-1');
 
       expect(deps.orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
       expect(result.started).toHaveLength(1);
+      expect(result.runnable).toHaveLength(1);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
 
     it('can return after launch acceptance without waiting for task runtime', async () => {
@@ -313,7 +392,58 @@ describe('WorkflowMutationFacade', () => {
 
       expect(result.started).toHaveLength(1);
       expect(result.runnable).toHaveLength(1);
-      expect(deps.taskExecutor.executeTasks).toHaveBeenCalled();
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
+    });
+
+    it('closes the workflow review before workflow-scoped invalidation', async () => {
+      await facade.retryWorkflow('wf-1');
+
+      expect(deps.taskExecutor.closeWorkflowReview).toHaveBeenCalledWith('wf-1');
+      expect((deps.taskExecutor.closeWorkflowReview as any).mock.invocationCallOrder[0]).toBeLessThan(
+        (deps.commandService.retryWorkflow as any).mock.invocationCallOrder[0],
+      );
+    });
+  });
+
+  describe('workflow scoped dispatch', () => {
+    it('keeps cross-workflow starts in topup for retry-class workflow mutations', async () => {
+      const scoped = makeRunningTask({
+        id: 'wf-1/task-a',
+        config: { workflowId: 'wf-1' },
+        execution: { selectedAttemptId: 'attempt-a' },
+      });
+      const crossWorkflow = makeRunningTask({
+        id: 'wf-2/task-b',
+        config: { workflowId: 'wf-2' },
+        execution: { selectedAttemptId: 'attempt-b' },
+      });
+      (deps.orchestrator.retryWorkflow as ReturnType<typeof vi.fn>).mockReturnValue([scoped, crossWorkflow]);
+
+      const result = await facade.retryWorkflow('wf-1');
+
+      expect(result.runnable).toEqual([scoped]);
+      expect(result.topup).toEqual([crossWorkflow]);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
+    });
+
+    it('keeps cross-workflow starts in topup for rebase-recreate', async () => {
+      const scoped = makeRunningTask({
+        id: 'wf-1/task-a',
+        config: { workflowId: 'wf-1' },
+        execution: { selectedAttemptId: 'attempt-a' },
+      });
+      const crossWorkflow = makeRunningTask({
+        id: 'wf-2/task-b',
+        config: { workflowId: 'wf-2' },
+        execution: { selectedAttemptId: 'attempt-b' },
+      });
+      (deps.orchestrator.recreateWorkflowFromFreshBase as ReturnType<typeof vi.fn>).mockResolvedValue([scoped, crossWorkflow]);
+
+      const result = await facade.rebaseRecreate('wf-1');
+
+      expect(result.runnable).toEqual([scoped]);
+      expect(result.topup).toEqual([crossWorkflow]);
+      expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
     });
   });
 });

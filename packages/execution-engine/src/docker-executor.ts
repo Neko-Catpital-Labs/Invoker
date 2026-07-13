@@ -4,9 +4,10 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { loadSecretsFile } from './secrets-loader.js';
-import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { killProcessGroup, cleanElectronEnv } from './process-utils.js';
 import { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 import type { AgentRegistry } from './agent-registry.js';
+import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { traceExecution } from './exec-trace.js';
 
 const CONTAINER_STOP_TIMEOUT_S = 5;
@@ -19,7 +20,17 @@ const CONTAINER_CWD = '/app';
  */
 const SECRET_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
+  'CLAUDE_API_KEY',
+  'CODEX_API_KEY',
   'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'OPENAI_MODEL',
+  'OPENROUTER_API_KEY',
+  'BAILIAN_CODING_PLAN_API_KEY',
+  'DASHSCOPE_API_KEY',
+  'QWEN_API_KEY',
+  'MOONSHOT_API_KEY',
+  'KIMI_API_KEY',
   'GITHUB_TOKEN',
   'GH_TOKEN',
   'GITLAB_TOKEN',
@@ -316,7 +327,8 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     }
     log(`${TAG} Container created: ${container.id.slice(0, 12)} image=${this.imageName}`);
 
-    // Determine task command and Claude session before entry registration
+    // Determine task command and agent session before entry registration
+    const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
     const { cmd, args: cmdArgs, agentSessionId } = this.buildCommandAndArgs(request, {
       agentRegistry: this.agentRegistry,
     });
@@ -408,6 +420,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       if (!request.inputs.command && !request.inputs.prompt) {
         await this.handleProcessExit(executionId, request, CONTAINER_CWD, 0, {
           branch: handle.branch,
+          agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
         });
         return handle;
       }
@@ -434,6 +447,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
           outputs: {
             exitCode: 1,
             error: `Failed to spawn docker exec: ${err.message}`,
+            agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
           },
         };
         this.emitComplete(executionId, response);
@@ -450,19 +464,25 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       child.on('close', (code, signal) => {
         void this.containerContext.run(container.id, async () => {
           const exitCode = code ?? (signal ? 1 : 0);
+          entry.finalizingAfterClose = true;
 
-          await this.handleProcessExit(executionId, request, CONTAINER_CWD, exitCode, {
-            signal,
-            branch: handle.branch,
-            agentSessionId: entry.agentSessionId,
-          });
-
-          // Stop the idle container after git finalize completes
           try {
-            const c = docker.getContainer(container.id);
-            await c.stop({ t: CONTAINER_STOP_TIMEOUT_S });
-          } catch {
-            // Container may already be stopped
+            await this.handleProcessExit(executionId, request, CONTAINER_CWD, exitCode, {
+              signal,
+              branch: handle.branch,
+              agentSessionId: entry.agentSessionId,
+              agentName: request.actionType === 'ai_task' ? executionAgent : undefined,
+            });
+
+            // Stop the idle container after git finalize completes
+            try {
+              const c = docker.getContainer(container.id);
+              await c.stop({ t: CONTAINER_STOP_TIMEOUT_S });
+            } catch {
+              // Container may already be stopped
+            }
+          } finally {
+            entry.finalizingAfterClose = false;
           }
         });
       });
@@ -476,30 +496,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
 
-    // Kill the task process (docker exec) if running
-    if (entry.process && !entry.process.killed) {
-      await new Promise<void>((resolve) => {
-        const child = entry.process!;
-        const killTimer = setTimeout(() => {
-          if (!entry.completed) {
-            killProcessGroup(child, 'SIGKILL');
-          }
-        }, SIGKILL_TIMEOUT_MS);
-
-        child.on('close', () => {
-          clearTimeout(killTimer);
-          resolve();
-        });
-
-        if (entry.completed) {
-          clearTimeout(killTimer);
-          resolve();
-          return;
-        }
-
-        killProcessGroup(child, 'SIGTERM');
-      });
-    }
+    await super.kill(handle);
 
     // Stop and remove the container
     const docker = await this.getDocker();
@@ -538,7 +535,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       // Docker containers (see github.com/anthropics/claude-code/issues/20572,
       // #24068, #25286). The --resume terminal may hang after the trust prompt.
       // The automated -p (pipe) execution path is unaffected.
-      const agentName = entry.request.inputs.executionAgent ?? 'claude';
+      const agentName = entry.request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
@@ -568,7 +565,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       // Docker containers (see github.com/anthropics/claude-code/issues/20572,
       // #24068, #25286). The --resume terminal may hang after the trust prompt.
       const resume = this.agentRegistry
-        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? 'claude').buildResumeArgs(meta.agentSessionId)
+        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? DEFAULT_EXECUTION_AGENT).buildResumeArgs(meta.agentSessionId)
         : { cmd: 'claude', args: ['--resume', meta.agentSessionId, '--dangerously-skip-permissions'] };
       const resumeCmd = [resume.cmd, ...resume.args].join(' ');
       console.log(`[DockerExecutor] getRestoredTerminalSpec task="${meta.taskId}" → docker exec ${resumeCmd}`);
