@@ -14,6 +14,7 @@ import { CI_FAILURE_WORKER_KIND } from '../workers/ci-failure-worker.js';
 import { AUTO_APPROVE_WORKER_KIND } from '../workers/auto-approve-worker.js';
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
+  PR_CI_FAILURE_SCAN_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
 } from '../workers/pr-maintenance-workers.js';
 import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
@@ -80,6 +81,7 @@ describe('worker registry', () => {
       AUTO_APPROVE_WORKER_KIND,
       CODERABBIT_ADDRESS_WORKER_KIND,
       PR_CONFLICT_REBASE_WORKER_KIND,
+      PR_CI_FAILURE_SCAN_WORKER_KIND,
       E2E_AUTOFIX_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
