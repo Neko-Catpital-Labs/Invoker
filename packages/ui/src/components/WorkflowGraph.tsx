@@ -318,8 +318,7 @@ function WorkflowGraphInner({
   return (
     <div
       data-testid="workflow-graph-scroll"
-      className="h-full w-full overflow-hidden"
-      style={{ minHeight: '300px' }}
+      className="h-full min-h-0 w-full overflow-hidden"
     >
       <div ref={graphRootRef} data-testid="workflow-graph-react-flow" className="h-full w-full">
         <ReactFlow

@@ -274,10 +274,10 @@ export function TerminalDrawer({
       className={
         isMaximized
           ? 'fixed inset-0 z-40 flex min-h-0 flex-col overflow-hidden border-t border-border bg-card'
-          : 'border-t border-border bg-card'
+          : 'shrink-0 border-t border-border bg-card'
       }
     >
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
         <div
           role="tablist"
           data-testid="terminal-tab-strip"
@@ -340,7 +340,7 @@ export function TerminalDrawer({
       {showBody && (
         <div
           data-testid="terminal-drawer-body"
-          className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-black' : 'relative overflow-hidden bg-black'}
+          className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-black' : 'relative shrink-0 overflow-hidden bg-black'}
           style={isMaximized ? undefined : { height: DRAWER_BODY_HEIGHT_PX }}
         >
           {sessions.length === 0 && (
