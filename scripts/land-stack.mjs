@@ -159,6 +159,12 @@ function listOpenPrs() {
   return JSON.parse(out);
 }
 
+function addAdminBypassLabel(prNumber) {
+  // Avoid `gh pr edit --add-label`: current gh versions query deprecated Projects
+  // Classic fields and can fail before the label mutation is attempted.
+  gh(['api', '--silent', '--method', 'POST', `repos/{owner}/{repo}/issues/${prNumber}/labels`, '-f', 'labels[]=admin-bypass']);
+}
+
 function localCommitChecker() {
   return (sha) => {
     try {
@@ -287,7 +293,7 @@ function main() {
   console.log(`\nExecuting: adding 'admin-bypass' to ${targets.length} verified PR(s), bottom-to-top.`);
   for (const pr of targets) {
     console.log(`  PR #${pr.number} (head ${short(pr.headRefOid)}, base ${pr.baseRefName})`);
-    gh(['pr', 'edit', String(pr.number), '--add-label', 'admin-bypass']);
+    addAdminBypassLabel(pr.number);
   }
   console.log(`Queued ${targets.length} PR(s) as one stack unit.`);
 }
