@@ -147,6 +147,10 @@ function gh(args) {
   return execFileSync('gh', args, { encoding: 'utf8' });
 }
 
+function addLabel(prNumber, label) {
+  gh(['api', '--method', 'POST', `repos/{owner}/{repo}/issues/${prNumber}/labels`, '-f', `labels[]=${label}`]);
+}
+
 function fetchPr(num) {
   const out = gh(['pr', 'view', String(num), '--json',
     'number,headRefOid,headRefName,baseRefName,state,mergeStateStatus,reviewDecision']);
@@ -287,7 +291,7 @@ function main() {
   console.log(`\nExecuting: adding 'admin-bypass' to ${targets.length} verified PR(s), bottom-to-top.`);
   for (const pr of targets) {
     console.log(`  PR #${pr.number} (head ${short(pr.headRefOid)}, base ${pr.baseRefName})`);
-    gh(['pr', 'edit', String(pr.number), '--add-label', 'admin-bypass']);
+    addLabel(pr.number, 'admin-bypass');
   }
   console.log(`Queued ${targets.length} PR(s) as one stack unit.`);
 }
