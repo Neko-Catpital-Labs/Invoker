@@ -86,6 +86,7 @@ import {
   headlessForkWorkflow,
   headlessRebaseRetry,
   headlessRebaseRecreate,
+  headlessRepairReviewGateCi,
   headlessFix,
   headlessResolveConflict,
 } from './headless-run-resume.js';
@@ -302,6 +303,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'rebase-recreate':
       await headlessRebaseRecreate(args[1], deps);
+      break;
+    case 'repair-review-gate-ci':
+      await headlessRepairReviewGateCi(args[1], deps);
       break;
     case 'fix':
       await headlessFix(args, deps);
@@ -540,8 +544,8 @@ ${BOLD}Execute:${RESET}
   detach-workflow <workflowId> <upstreamWorkflowId>  Detach one upstream workflow and void downstream to pending
   rebase-retry <workflowId|mergeTaskId|taskId>        Refresh pool base, then retry incomplete work
   rebase-recreate <workflowId|mergeTaskId|taskId>     Refresh pool base, then recreate workflow
+  repair-review-gate-ci <prNumber|prUrl>              Queue CI repair for one mapped review-gate PR
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
-  resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
 
 ${BOLD}Respond:${RESET}
   approve <taskId>                                    Approve a task

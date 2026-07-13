@@ -179,6 +179,7 @@ import {
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
+import { repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
   startStandaloneLaunchDispatcher,
@@ -1118,6 +1119,19 @@ function startHeadlessMode(): void {
         executionAgentRegistry: agentRegistry,
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
+        repairReviewGateCi: (prArg: string) => repairReviewGateCiByPr(prArg, {
+          persistence,
+          repoRoot,
+          policy: {
+            store: persistence,
+            submitter: { submit: submitRegisteredOwnerWorkerMutation },
+            logger,
+            defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+            getAutoFixAgent: () => invokerConfig.autoFixAgent,
+            getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+            attemptLedger: autoFixAttemptLedger,
+          },
+        }),
         runtimeServices,
         appRootDir: __dirname,
       };
@@ -1512,6 +1526,8 @@ function startHeadlessMode(): void {
             case 'fix':
             case 'resolve-conflict':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'normal' };
+            case 'repair-review-gate-ci':
+              return { workflowId: standaloneWorkflowIdForReviewGatePrArg(arg0), priority: 'normal' };
             default:
               return { priority: 'normal' };
           }
@@ -1519,6 +1535,14 @@ function startHeadlessMode(): void {
 
         const standaloneWorkflowIdForTaskArg = (taskIdArg: unknown): string => {
           return resolveHeadlessTargetWorkflowId(taskIdArg, persistence);
+        };
+        const standaloneWorkflowIdForReviewGatePrArg = (prArg: unknown): string | undefined => {
+          const raw = prArg === undefined ? undefined : String(prArg);
+          if (!raw) return undefined;
+          const fromUrl = raw.match(/\/pull\/(\d+)/);
+          const bare = fromUrl?.[1] ?? raw.replace(/^#/, '');
+          if (!/^\d+$/.test(bare)) return undefined;
+          return persistence.findReviewGateByPr(bare)?.workflowId;
         };
 
         const runStandaloneWorkflowMutation = async <T>(
@@ -2701,6 +2725,19 @@ function createEmbeddedTerminalBackendFromConfig(
         );
         return;
       },
+      repairReviewGateCi: (prArg: string) => repairReviewGateCiByPr(prArg, {
+        persistence,
+        repoRoot,
+        policy: {
+          store: persistence,
+          submitter: { submit: submitRegisteredOwnerWorkerMutation },
+          logger,
+          defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+          getAutoFixAgent: () => invokerConfig.autoFixAgent,
+          getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+          attemptLedger: autoFixAttemptLedger,
+        },
+      }),
       executionAgentRegistry: registerBuiltinAgents(),
     });
     const { workflowId } = classifyHeadlessExecMutation(payload);
@@ -2714,6 +2751,15 @@ function createEmbeddedTerminalBackendFromConfig(
     const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
     return { workflowId, tasks };
   }
+  function workflowIdForReviewGatePrArg(prArg: unknown): string | undefined {
+    const raw = prArg === undefined ? undefined : String(prArg);
+    if (!raw) return undefined;
+    const fromUrl = raw.match(/\/pull\/(\d+)/);
+    const bare = fromUrl?.[1] ?? raw.replace(/^#/, '');
+    if (!/^\d+$/.test(bare)) return undefined;
+    return persistence.findReviewGateByPr(bare)?.workflowId;
+  }
+
 
   function workflowIdForTargetArg(targetArg: unknown): string | undefined {
     if (targetArg === undefined) return undefined;
@@ -2774,6 +2820,8 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'fix':
       case 'resolve-conflict':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'normal' };
+      case 'repair-review-gate-ci':
+        return { workflowId: workflowIdForReviewGatePrArg(arg0), priority: 'normal' };
       default:
         return { priority: 'normal' };
     }

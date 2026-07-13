@@ -31,6 +31,8 @@ import { publishReviewGateCiFailedLifecycleEvent } from './lifecycle-event-bridg
 import type { WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
+import type { ReviewGateCiRepairCommandResult } from './review-gate-ci-repair-command.js';
+
 
 export interface HeadlessDeps {
   logger: Logger;
@@ -55,6 +57,7 @@ export interface HeadlessDeps {
   isStandaloneOwnerIdle?: () => boolean;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  repairReviewGateCi?: (prArg: string) => Promise<ReviewGateCiRepairCommandResult>;
   /** Abort signal from the workflow mutation coordinator, if running inside a coordinated mutation. */
   signal?: AbortSignal;
   mutationTiming?: WorkflowMutationTiming;
