@@ -95,7 +95,7 @@ describe('repro #1757: parseMakePrStackPublishResult normalizes/validates identi
     expect(out[1].id).toBe('b');
     expect(out[1].dependsOn).toEqual(['a']);
   });
-  it.fails('keeps GitHub provider ids aligned with the pull URL number', () => {
+  it('keeps GitHub provider ids aligned with the pull URL number', () => {
     const out = parseMakePrStackPublishResult(wrap([
       { id: 'a', url: 'https://github.com/owner/repo/pull/4261', providerId: 'github' },
       { id: 'b', url: 'https://github.com/owner/repo/pull/4279', providerId: 'github:4279', dependsOn: ['a'] },
@@ -103,7 +103,7 @@ describe('repro #1757: parseMakePrStackPublishResult normalizes/validates identi
     ]));
     expect(out.map((artifact) => artifact.providerId)).toEqual(['4261', '4279', '4284']);
   });
-  it.fails('fills in the GitHub pull number when the agent omits providerId', () => {
+  it('fills in the GitHub pull number when the agent omits providerId', () => {
     const out = parseMakePrStackPublishResult(wrap([
       { id: 'a', url: 'https://github.com/owner/repo/pull/4300' },
     ]));
