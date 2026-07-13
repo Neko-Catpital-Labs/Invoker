@@ -4,6 +4,8 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+- Add UI responsiveness guardrails for planning-chat typing, embedded-terminal pressure, large graph drag/update flow, non-empty startup, headless retry bursts, and UI-stall-relevant chaos scenarios. The new checks reuse the existing `ui-perf` activity-log/query path, emit structured benchmark evidence for failures, and keep shared e2e helpers in the permanent fixture layer.
+
 - Stop a capacity-starved task from thrashing the launch outbox. When a task's execution pool has no free member (`reason: 'resource-limit'`), the old defer path reset it to pending, minted a fresh attempt, and abandoned the launch-dispatch row with `task deferred` on every ~4s scheduler poll — hundreds of abandoned rows per task while an SSH pool was momentarily full. The task now parks in line with an exponential backoff (15s → 5min cap) and emits a throttled `task.launch_waiting` heartbeat instead of re-dispatching. A freed slot (another task completing) still re-dispatches it immediately, so the backoff never strands runnable work; it stays visible in the queue the whole time. Only `resource-limit` defers back off — every other defer path is unchanged. Owner-local backoff keyed to the existing deferred set, so retry / cancel / recreate / completion release the park with no per-call-site cleanup.
 
 - Attach CHANGELOG section notes to each GitHub Release. The release workflow extracts the matching \`## <version>\` block from CHANGELOG.md into the release body so tagged cuts are not empty.

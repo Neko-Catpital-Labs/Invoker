@@ -9,6 +9,12 @@ import type { Page } from '@playwright/test';
 
 import { E2E_REPO_URL } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
+import {
+  activityLogWatermark,
+  numberOrZero,
+  parseActivityPayload,
+  uiPerfPayloadsSince,
+} from './fixtures/ui-perf.js';
 
 const repoRoot = resolveRepoRoot(__dirname);
 const STARTUP_BUDGET_MS = 12000;
@@ -106,31 +112,6 @@ async function waitForWorkflowGraphVisible(page: Page, timeoutMs: number): Promi
     timeout: timeoutMs,
   });
   return Date.now() - startedAt;
-}
-
-function parseActivityPayload(message: string): Record<string, unknown> | null {
-  try {
-    return JSON.parse(message) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function numberOrZero(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
-
-async function activityLogWatermark(page: Page): Promise<number> {
-  const rows = await page.evaluate(async () => window.invoker.getActivityLogs(0, 100000));
-  return rows.at(-1)?.id ?? 0;
-}
-
-async function uiPerfPayloadsSince(page: Page, sinceId: number): Promise<Array<Record<string, unknown>>> {
-  const rows = await page.evaluate(async (watermark) => window.invoker.getActivityLogs(watermark, 5000), sinceId);
-  return rows
-    .filter((row) => row.source === 'ui-perf')
-    .map((row) => parseActivityPayload(row.message))
-    .filter((payload): payload is Record<string, unknown> => payload !== null);
 }
 
 async function dragGraphAndAssertViewportMoves(page: Page): Promise<void> {
