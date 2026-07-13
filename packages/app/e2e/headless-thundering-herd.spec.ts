@@ -21,6 +21,17 @@ test.use({ guiOwnerMode: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'daemon' });
 const execFileAsync = promisify(execFile);
 const repoRoot = resolveRepoRoot(__dirname);
 const RESPONSIVE_INTERACTION_TIMEOUT_MS = 15000;
+const HEADLESS_DELEGATED_WORKFLOW_COUNT = 8;
+const MAX_RENDERER_EVENT_LOOP_LAG_MS = 1000;
+const MAX_RENDERER_LONG_TASK_MS = 1500;
+
+const HEADLESS_HERD_BUDGETS = {
+  maxInspectorToggleMs: RESPONSIVE_INTERACTION_TIMEOUT_MS,
+  delegatedWorkflowCount: HEADLESS_DELEGATED_WORKFLOW_COUNT,
+  minRetryCommandCount: HEADLESS_DELEGATED_WORKFLOW_COUNT + 1,
+  maxRendererEventLoopLagMs: MAX_RENDERER_EVENT_LOOP_LAG_MS,
+  maxRendererLongTaskMs: MAX_RENDERER_LONG_TASK_MS,
+};
 
 async function ensureHeadlessTestConfig(testDir: string): Promise<void> {
   await writeFile(path.join(testDir, 'e2e-config.json'), JSON.stringify({ autoFixRetries: 0 }), 'utf8');
@@ -67,18 +78,27 @@ function parseJsonStdout(stdout: string): Record<string, unknown> {
   return JSON.parse(line) as Record<string, unknown>;
 }
 
-async function assertInspectorToggleResponsive(page: Page, timeoutMs: number): Promise<void> {
+async function measureInspectorToggleResponsive(page: Page, timeoutMs: number, label: string): Promise<number> {
   const minimizeButton = page.getByLabel('Minimize inspector');
   const maximizeButton = page.getByLabel('Maximize inspector');
   const startedAt = Date.now();
-  await expect(async () => {
-    await minimizeButton.click();
-    await expect(maximizeButton).toBeVisible({ timeout: 1000 });
-    await maximizeButton.click();
-    await expect(minimizeButton).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: timeoutMs });
-  const interactionMs = Date.now() - startedAt;
-  expect(interactionMs).toBeLessThan(timeoutMs);
+  try {
+    await expect(async () => {
+      await minimizeButton.click();
+      await expect(maximizeButton).toBeVisible({ timeout: 1000 });
+      await maximizeButton.click();
+      await expect(minimizeButton).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: timeoutMs });
+  } catch (err) {
+    console.log(`HEADLESS_THUNDERING_HERD_INTERACTION_FAILURE=${JSON.stringify({
+      label,
+      durationMs: Date.now() - startedAt,
+      timeoutMs,
+      error: err instanceof Error ? err.message : String(err),
+    })}`);
+    throw err;
+  }
+  return Date.now() - startedAt;
 }
 
 test.describe('Headless thundering herd', () => {
@@ -113,7 +133,7 @@ test.describe('Headless thundering herd', () => {
 
     const workflowIds = new Set<string>();
     workflowIds.add(currentWorkflowId);
-    for (let i = 0; i < 8; i += 1) {
+    for (let i = 0; i < HEADLESS_DELEGATED_WORKFLOW_COUNT; i += 1) {
       const result = await runHeadlessClient(testDir, ['run', planPath, '--no-track']);
       expectDelegated(result.stdout);
       // Use the workflow id echoed by this exact submission. Querying shared
@@ -125,32 +145,53 @@ test.describe('Headless thundering herd', () => {
 
     await page.waitForTimeout(500);
 
+    const retryBurstStartedAt = Date.now();
     const burst = Array.from(workflowIds).map((workflowId) =>
       runHeadlessClient(testDir, ['retry', workflowId, '--no-track']),
     );
 
-    const firstInteractionStartedAt = Date.now();
-    await assertInspectorToggleResponsive(page, RESPONSIVE_INTERACTION_TIMEOUT_MS);
-    expect(Date.now() - firstInteractionStartedAt).toBeLessThan(RESPONSIVE_INTERACTION_TIMEOUT_MS);
+    const firstInteractionMs = await measureInspectorToggleResponsive(
+      page,
+      RESPONSIVE_INTERACTION_TIMEOUT_MS,
+      'during_retry_burst',
+    );
 
     await page.waitForTimeout(1500);
 
-    const secondInteractionStartedAt = Date.now();
-    await assertInspectorToggleResponsive(page, RESPONSIVE_INTERACTION_TIMEOUT_MS);
-    expect(Date.now() - secondInteractionStartedAt).toBeLessThan(RESPONSIVE_INTERACTION_TIMEOUT_MS);
+    const secondInteractionMs = await measureInspectorToggleResponsive(
+      page,
+      RESPONSIVE_INTERACTION_TIMEOUT_MS,
+      'after_retry_burst',
+    );
 
     const retryResults = await Promise.all(burst);
+    const retryBurstWallMs = Date.now() - retryBurstStartedAt;
     for (const result of retryResults) {
       expectDelegated(result.stdout);
     }
 
     const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
-    expect(perf.maxRendererEventLoopLagMs).toBeLessThan(1000);
-    expect(perf.maxRendererLongTaskMs).toBeLessThan(1500);
-
     const delegatedPerf = parseJsonStdout(
       (await runHeadlessClient(testDir, ['query', 'ui-perf', '--output', 'json'])).stdout,
     );
+    const evidence = {
+      workflowCount: workflowIds.size,
+      retryCommandCount: burst.length,
+      retryBurstWallMs,
+      firstInteractionMs,
+      secondInteractionMs,
+      perf,
+      delegatedPerf,
+      budgets: HEADLESS_HERD_BUDGETS,
+    };
+    console.log(`HEADLESS_THUNDERING_HERD_BENCH_RESULT=${JSON.stringify(evidence)}`);
+
+    const evidenceMessage = JSON.stringify(evidence);
+    expect(burst.length, evidenceMessage).toBeGreaterThanOrEqual(HEADLESS_DELEGATED_WORKFLOW_COUNT + 1);
+    expect(firstInteractionMs, evidenceMessage).toBeLessThanOrEqual(RESPONSIVE_INTERACTION_TIMEOUT_MS);
+    expect(secondInteractionMs, evidenceMessage).toBeLessThanOrEqual(RESPONSIVE_INTERACTION_TIMEOUT_MS);
+    expect(Number(perf.maxRendererEventLoopLagMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
+    expect(Number(perf.maxRendererLongTaskMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
     expect(delegatedPerf.ownerMode).toBe('standalone');
   });
 
