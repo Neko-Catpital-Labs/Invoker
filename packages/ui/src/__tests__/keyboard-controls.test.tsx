@@ -87,7 +87,7 @@ describe('Side rail controls (component)', () => {
     });
   });
 
-  it('Refresh button forced-snapshots tasks and refits the workflow graph without remounting it', async () => {
+  it('Refresh button snapshots tasks without moving the workflow graph camera', async () => {
     await renderKeyboardFixture(mock);
     fitViewMock.mockClear();
     setCenterMock.mockClear();
@@ -98,7 +98,8 @@ describe('Side rail controls (component)', () => {
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(fitViewMock.mock.calls.length + setCenterMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(fitViewMock).not.toHaveBeenCalled();
+      expect(setCenterMock).not.toHaveBeenCalled();
     });
     expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
