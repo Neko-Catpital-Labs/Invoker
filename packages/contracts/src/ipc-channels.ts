@@ -697,6 +697,8 @@ export interface RuntimeStatus {
 export interface TerminalSessionDescriptor {
   sessionId: string;
   taskId: string;
+  kind?: 'task' | 'planning';
+  planningSessionId?: string;
   status: 'running' | 'exited';
   exitCode?: number;
   cwd?: string;
@@ -712,12 +714,16 @@ export interface TerminalSessionDescriptor {
 export interface TerminalOutputEvent {
   sessionId: string;
   taskId: string;
+  kind?: 'task' | 'planning';
+  planningSessionId?: string;
   data: string;
 }
 
 export interface TerminalExitEvent {
   sessionId: string;
   taskId: string;
+  kind?: 'task' | 'planning';
+  planningSessionId?: string;
   exitCode?: number;
 }
 
@@ -775,6 +781,26 @@ export const IpcChannels = {
   'invoker:planning-chat-reset': {} as {
     request: [request: InAppPlanningResetRequest];
     response: InAppPlanningResetResponse;
+  },
+  'invoker:planning-terminal-open': {} as {
+    request: [planningSessionId: string];
+    response: OpenTerminalResponse;
+  },
+  'invoker:planning-terminal-list': {} as {
+    request: [];
+    response: TerminalSessionDescriptor[];
+  },
+  'invoker:planning-terminal-write': {} as {
+    request: [sessionId: string, data: string];
+    response: { ok: boolean; reason?: string };
+  },
+  'invoker:planning-terminal-resize': {} as {
+    request: [sessionId: string, cols: number, rows: number];
+    response: { ok: boolean; reason?: string };
+  },
+  'invoker:planning-terminal-close': {} as {
+    request: [sessionId: string];
+    response: { ok: boolean; reason?: string };
   },
   'invoker:get-planning-presets': {} as {
     request: [];

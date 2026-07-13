@@ -192,6 +192,23 @@ export function createMockInvoker(
       workflowId: 'wf-1',
     })),
     planningChatReset: vi.fn(async () => ({ ok: true })),
+    planningTerminalOpen: vi.fn(async (planningSessionId: string) => ({
+      opened: true,
+      session: {
+        sessionId: `mock-planning-terminal-${planningSessionId}`,
+        taskId: `planning:${planningSessionId}`,
+        kind: 'planning',
+        planningSessionId,
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: new Date('2025-01-01T00:00:00Z').toISOString(),
+      },
+    })),
+    planningTerminalList: vi.fn(async () => []),
+    planningTerminalWrite: vi.fn(async () => ({ ok: true })),
+    planningTerminalResize: vi.fn(async () => ({ ok: true })),
+    planningTerminalClose: vi.fn(async () => ({ ok: true })),
     getPlanningPresets: vi.fn(async () => [
       { key: 'codex', label: 'Codex', tool: 'codex', isDefault: true },
       { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: false },
