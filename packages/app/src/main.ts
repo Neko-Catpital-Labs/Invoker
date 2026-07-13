@@ -288,6 +288,7 @@ import {
   recoveryWorkerEventType,
 } from './recovery-worker-observability.js';
 import { seedMainProcessHitchFixture } from './main-process-hitch-fixture.js';
+import { seedStressFixture, type StressFixtureOptions } from './stress-fixture.js';
 import {
   executeNoTrackHeadlessBatch,
   type HeadlessBatchExecRequest,
@@ -1339,6 +1340,15 @@ function startHeadlessMode(): void {
               throw new Error('seed-main-process-hitch-fixture is only available in tests');
             }
             const seeded = seedMainProcessHitchFixture(persistence);
+            orchestrator.syncAllFromDb();
+            return seeded;
+          }
+          case 'invoker:seed-stress-fixture': {
+            if (process.env.NODE_ENV !== 'test') {
+              throw new Error('seed-stress-fixture is only available in tests');
+            }
+            const options = payload.args[0] as StressFixtureOptions | undefined;
+            const seeded = seedStressFixture(persistence, options);
             orchestrator.syncAllFromDb();
             return seeded;
           }
@@ -3725,6 +3735,16 @@ function createEmbeddedTerminalBackendFromConfig(
         });
         return results;
       });
+      messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
+        const payload = req as GuiMutationPayload;
+        const handler = guiMutationHandlers.get(payload.channel);
+        if (!handler) {
+          throw new Error(`No GUI mutation handler registered for channel: ${payload.channel}`);
+        }
+        const mutationArgs = Array.isArray(payload.args) ? payload.args : [];
+        logger.info(`headless.gui-mutation received channel=${payload.channel} mode=gui`, { module: 'ipc-delegate' });
+        return handler(...mutationArgs);
+      });
       logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
       recordStartupMark('owner-ipc-ready');
     }
@@ -4011,16 +4031,10 @@ function createEmbeddedTerminalBackendFromConfig(
         }
         orchestrator.syncAllFromDb();
       };
-      ipcMain.handle(
+      registerGuiMutationHandler(
         'invoker:inject-task-states',
-        async (_event, updates: Array<{ taskId: string; changes: TaskStateChanges }>) => {
-          if (!ownerMode) {
-            await messageBus.request('headless.gui-mutation', {
-              channel: 'invoker:inject-task-states',
-              args: [updates],
-            } satisfies GuiMutationPayload);
-            return;
-          }
+        async (updatesArg: unknown) => {
+          const updates = updatesArg as Array<{ taskId: string; changes: TaskStateChanges }>;
           await injectTaskStates(updates);
         },
       );
@@ -4042,14 +4056,14 @@ function createEmbeddedTerminalBackendFromConfig(
           testPlanningChatResponse = response;
         },
       );
-      ipcMain.handle('invoker:seed-main-process-hitch-fixture', async () => {
-        if (!ownerMode) {
-          return await messageBus.request('headless.gui-mutation', {
-            channel: 'invoker:seed-main-process-hitch-fixture',
-            args: [],
-          } satisfies GuiMutationPayload);
-        }
+      registerGuiMutationHandler('invoker:seed-main-process-hitch-fixture', async () => {
         const seeded = seedMainProcessHitchFixture(persistence);
+        orchestrator.syncAllFromDb();
+        return seeded;
+      });
+      registerGuiMutationHandler('invoker:seed-stress-fixture', async (optionsArg: unknown) => {
+        const options = optionsArg as StressFixtureOptions | undefined;
+        const seeded = seedStressFixture(persistence, options);
         orchestrator.syncAllFromDb();
         return seeded;
       });
