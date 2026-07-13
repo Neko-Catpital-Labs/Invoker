@@ -51,6 +51,14 @@ These packages form the foundation and have no dependencies on other workspace p
 - Circular dependencies are **not** allowed
 - Orphaned modules should be removed
 
+## Plan Parser Boundary
+
+Plan parsing currently has separate entry points across layers. The lower-layer path serves reusable workflow consumers, while the app-layer path serves user-facing surfaces that need app configuration, defaulting, and persistence normalization.
+
+Keep shared YAML semantics aligned across those entry points. Do not move app-specific behavior into a lower layer just to remove duplication.
+
+A future consolidation should extract only pure plan-shape parsing and task normalization into a lower layer, leave app-only defaults in an app-layer wrapper, and add parity tests for the shared fields.
+
 ## Enforcement
 
 The dependency rules are enforced through:

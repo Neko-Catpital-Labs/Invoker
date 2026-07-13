@@ -11,7 +11,7 @@ trap invoker_e2e_cleanup EXIT
 cd "$INVOKER_E2E_REPO_ROOT"
 unset ELECTRON_RUN_AS_NODE
 
-CFG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.XXXXXX.json")"
+CFG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.json.XXXXXX")"
 printf '{\n  "autoFixRetries": 0\n}\n' > "$CFG_FILE"
 export INVOKER_REPO_CONFIG_PATH="$CFG_FILE"
 trap 'rm -f "$CFG_FILE"; invoker_e2e_cleanup' EXIT
@@ -20,7 +20,7 @@ echo "==> case 2.14: delete-all"
 invoker_e2e_run_headless delete-all
 
 PLAN="$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-task/2.14-standalone-timeout-deadlock.yaml"
-SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.14-submit.XXXXXX.log")"
+SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.14-submit.log.XXXXXX")"
 echo "==> case 2.14: submit plan (expect fail after ~3s)"
 invoker_e2e_submit_plan_capture "$PLAN" "$SUBMIT_LOG" || true
 
@@ -39,7 +39,7 @@ if [ "$STA" != "failed" ]; then
 fi
 
 echo "==> case 2.14: run rebase-retry-all with --timeout 1 in standalone mode"
-OUT_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-214.XXXXXX.log")"
+OUT_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-214.log.XXXXXX")"
 START_SEC="$(date +%s)"
 set +e
 INVOKER_HEADLESS_STANDALONE=1 bash "$INVOKER_E2E_REPO_ROOT/scripts/rebase-retry-all.sh" \

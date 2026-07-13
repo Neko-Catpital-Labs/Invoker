@@ -14,7 +14,7 @@ unset ELECTRON_RUN_AS_NODE
 echo "==> case 2.10: delete-all"
 invoker_e2e_run_headless delete-all
 
-SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.10-submit.XXXXXX.log")"
+SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.10-submit.log.XXXXXX")"
 echo "==> case 2.10: submit plan (--no-track)"
 invoker_e2e_submit_plan_no_track_capture \
   "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-task/2.10-cancel-downstream.yaml" \

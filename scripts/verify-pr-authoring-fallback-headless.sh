@@ -8,7 +8,7 @@
 # Asserts:
 #   1. Both command tasks reach "completed".
 #   2. The merge gate reaches "awaiting_approval" or "review_ready".
-#   3. The gh stub was called with "pr list" and a PR creation API call.
+#   3. The gh stub was called with REST PR lookup and a PR creation API call.
 #   4. The PR body passed to gh contains the canonical sections:
 #      ## Summary, ## Test Plan, ## Revert Plan.
 #
@@ -65,7 +65,7 @@ if [ "$STM" != "awaiting_approval" ] && [ "$STM" != "review_ready" ]; then
 fi
 echo "PASS: merge gate status=$STM"
 
-# ── Assert 3: gh stub was invoked for PR list + PR creation ────────
+# ── Assert 3: gh stub was invoked for REST PR lookup + PR creation ────────
 
 GHLOG="$INVOKER_E2E_MARKER_ROOT/gh-calls.log"
 if [ ! -f "$GHLOG" ]; then
@@ -73,12 +73,12 @@ if [ ! -f "$GHLOG" ]; then
   exit 1
 fi
 
-if ! grep -q "pr list" "$GHLOG"; then
-  echo "FAIL: gh stub log missing 'pr list' call"
+if ! grep -q "api.*repos.*pulls.*GET" "$GHLOG"; then
+  echo "FAIL: gh stub log missing REST PR lookup call"
   cat "$GHLOG"
   exit 1
 fi
-echo "PASS: gh pr list was called"
+echo "PASS: REST PR lookup was called"
 
 if ! grep -q "api.*repos.*pulls.*POST" "$GHLOG"; then
   echo "FAIL: gh stub log missing PR creation API call"

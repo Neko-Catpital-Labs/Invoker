@@ -15,7 +15,7 @@ import { ResponseHandler } from '../response-handler.js';
 import { TaskScheduler } from '../scheduler.js';
 import { Orchestrator } from '../orchestrator.js';
 import { topologicalSort } from '../dag.js';
-import { createTaskState } from '../task-types.js';
+import { createTaskState, computeWorkflowRollup } from '../task-types.js';
 import type {
   OrchestratorPersistence,
   OrchestratorMessageBus,
@@ -30,18 +30,15 @@ class InMemoryPersistence implements OrchestratorPersistence {
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
 
-  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
+  saveWorkflow(workflow: { id: string; name: string }): void {
     const now = new Date().toISOString();
-    this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
+    this.workflows.set(workflow.id, { ...workflow, status: 'pending', createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
   }
 
-  updateWorkflow(workflowId: string, changes: { status?: string }): void {
-    const wf = this.workflows.get(workflowId);
-    if (wf && changes.status) wf.status = changes.status;
-  }
+  updateWorkflow(_workflowId: string, _changes: { updatedAt?: string }): void {}
 
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
-    return Array.from(this.workflows.values());
+    return Array.from(this.workflows.values()).map((workflow) => ({ ...workflow, status: computeWorkflowRollup(this.loadTasks(workflow.id)).status }));
   }
 
   saveTask(workflowId: string, task: TaskState): void {

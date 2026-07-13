@@ -38,7 +38,7 @@ PLAN_FILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help)
-      sed -n '2,18p' "$0" | sed 's/^# \?//'
+      sed -n '2,21p' "$0" | sed 's/^# \?//'
       exit 0
       ;;
     --skip-assumptions)
@@ -260,6 +260,13 @@ if [[ "$SKIP_ASSUMPTIONS" == "false" && -f "$ASSUMPTIONS_FILE" ]]; then
     bash "$SCRIPT_DIR/check-policy-coverage.sh" "$ASSUMPTIONS_FILE" "$VERIFY_PLAN_FILE"
 fi
 
+if [[ -n "$SOURCE_FILE" ]]; then
+  run_check \
+    "check-source-plan-coverage" \
+    "Validate generated plan preserves concrete task IDs from source plan" \
+    bash "$SCRIPT_DIR/check-source-plan-coverage.sh" "$SOURCE_FILE" "$PLAN_FILE"
+fi
+
 if [[ "$SKIP_ASSUMPTIONS" == "false" && -f "$ASSUMPTIONS_FILE" ]]; then
   ASSUMPTIONS_SOURCE_KIND="$(jq -r '.sourceKind // "generic"' "$ASSUMPTIONS_FILE" 2>/dev/null || echo generic)"
   if [[ "$ASSUMPTIONS_SOURCE_KIND" == "policy_matrix" && -z "$COVERAGE_MAP_FILE" ]]; then
@@ -303,6 +310,9 @@ fi
 # Check 4: Task atomicity linting (if not skipped)
 if [[ "$SKIP_ATOMICITY" == "false" ]]; then
   atomicity_args=(--strict-delegation)
+  if [[ -n "$STACK_MANIFEST_FILE" ]]; then
+    atomicity_args+=(--stack-manifest "$STACK_MANIFEST_FILE")
+  fi
   if [[ "$WARN_DELEGATION" == "true" ]]; then
     atomicity_args+=(--warn-delegation)
     run_check \
@@ -317,11 +327,19 @@ if [[ "$SKIP_ATOMICITY" == "false" ]]; then
   fi
 fi
 
+# Check 4a: Review unit linting (if atomicity checks are not skipped)
+if [[ "$SKIP_ATOMICITY" == "false" ]]; then
+  run_check \
+    "lint-review-units" \
+    "Lint one-review-unit-per-task enforcement" \
+    node "$SCRIPT_DIR/lint-review-units.mjs" "$PLAN_FILE"
+fi
+
 # Check 5: Validate parse-results.sh with mock execution output
 MOCK_RESULTS=$(cat <<'MOCK_EOF'
 [verify-file-test] completed
 task "verify-pattern-foo" completed
-PASS verify-tests-pkg
+PASS verify-package-pkg
 MOCK_EOF
 )
 run_check \

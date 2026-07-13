@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
-import type { TaskState, WorkflowMeta, WorkflowStatus } from '../types.js';
-import { deriveWorkflowGraph, layoutWorkflowGraph } from '../lib/workflow-graph.js';
+import type { WorkflowMeta, WorkflowStatus } from '../types.js';
+import type { GraphCameraCommand } from '../lib/graph-camera.js';
+import type { WorkflowCoreActivity } from '../lib/workflow-core-activity.js';
+import { deriveWorkflowGraph, layoutWorkflowGraph, type WorkflowGraphEdge } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
 import {
   Background,
@@ -19,23 +21,63 @@ import {
 import '@xyflow/react/dist/style.css';
 
 interface WorkflowGraphProps {
-  tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   selectedWorkflowId: string | null;
+  /**
+   * Latest typed camera command. The graph consumes each command once by
+   * sequence; commands scoped to other graphs are ignored. React Flow keeps
+   * owning x/y/zoom locally — this is intent, not a controlled viewport.
+   */
+  cameraCommand?: GraphCameraCommand | null;
   statusFilters: Set<WorkflowStatus>;
+  coreActivityByWorkflow?: Map<string, WorkflowCoreActivity>;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowContextMenu: (event: MouseEvent, workflowId: string) => void;
+  /** Fired when the user manually pans or zooms the viewport. */
+  onManualViewport?: () => void;
 }
 
 interface WorkflowNodeData extends Record<string, unknown> {
   workflow: WorkflowMeta;
   selected: boolean;
   dimmed: boolean;
+  coreActivity?: WorkflowCoreActivity;
 }
 
 const nodeTypes = {
   workflowNode: WorkflowFlowNode,
 };
+const WATCHDOG_RECOVERY_MISS_COUNT = 3;
+
+
+function workflowEdgeVisual(kind: WorkflowGraphEdge['kind']): {
+  stroke: string;
+  strokeWidth: number;
+  strokeDasharray?: string;
+  ariaLabel: string;
+} {
+  if (kind === 'detached') {
+    return {
+      stroke: 'rgba(217,119,6,0.58)',
+      strokeWidth: 1.5,
+      strokeDasharray: '5 6',
+      ariaLabel: 'Detached workflow lineage',
+    };
+  }
+  if (kind === 'historical') {
+    return {
+      stroke: 'rgba(245,158,11,0.5)',
+      strokeWidth: 1.5,
+      strokeDasharray: '6 6',
+      ariaLabel: 'Historical workflow dependency',
+    };
+  }
+  return {
+    stroke: 'rgba(148,163,184,0.55)',
+    strokeWidth: 2,
+    ariaLabel: 'Active workflow dependency',
+  };
+}
 
 function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Element {
   return (
@@ -43,20 +85,21 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
       <Handle
         type="target"
         position={Position.Left}
-        className="!h-2 !w-2 !border !border-slate-400 !bg-gray-900"
+        className="!h-2 !w-2 !border !border-slate-400 !bg-background"
         isConnectable={false}
       />
       <WorkflowNode
         workflow={data.workflow}
         selected={data.selected}
         dimmed={data.dimmed}
+        coreActivity={data.coreActivity}
         onClick={() => {}}
         onContextMenu={() => {}}
       />
       <Handle
         type="source"
         position={Position.Right}
-        className="!h-2 !w-2 !border !border-slate-400 !bg-gray-900"
+        className="!h-2 !w-2 !border !border-slate-400 !bg-background"
         isConnectable={false}
       />
     </div>
@@ -64,22 +107,30 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
 }
 
 function WorkflowGraphInner({
-  tasks,
   workflows,
   selectedWorkflowId,
+  cameraCommand,
   statusFilters,
+  coreActivityByWorkflow,
   onSelectWorkflow,
   onWorkflowContextMenu,
+  onManualViewport,
 }: WorkflowGraphProps): JSX.Element {
-  const { fitView } = useReactFlow();
+  const { fitView, setCenter, getZoom } = useReactFlow();
+  const graphRootRef = useRef<HTMLDivElement>(null);
   const reportedVisibleRef = useRef(false);
+  const lastHandledCameraSeqRef = useRef(0);
+  const initFitFrameRef = useRef(0);
+  const watchdogMissCountRef = useRef(0);
+  const watchdogRecoveryAttemptedRef = useRef(false);
+  const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
     const startedAt = performance.now();
-    const nextGraph = deriveWorkflowGraph(workflows, tasks);
+    const nextGraph = deriveWorkflowGraph(workflows);
     graphMetricsRef.current.deriveMs = performance.now() - startedAt;
     return nextGraph;
-  }, [workflows, tasks]);
+  }, [workflows]);
   const positions = useMemo(() => {
     const startedAt = performance.now();
     const nextPositions = layoutWorkflowGraph(graph);
@@ -103,41 +154,67 @@ function WorkflowGraphInner({
           workflow: node.workflow,
           selected: selectedWorkflowId === node.id,
           dimmed,
+          coreActivity: coreActivityByWorkflow?.get(node.id),
         },
       };
     });
     graphMetricsRef.current.objectsMs = performance.now() - startedAt;
     return nextNodes;
-  }, [graph.nodes, positions, selectedWorkflowId, statusFilters]);
+  }, [coreActivityByWorkflow, graph.nodes, positions, selectedWorkflowId, statusFilters]);
 
-  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
-    id: `workflow:${edge.source}->${edge.target}`,
-    source: edge.source,
-    target: edge.target,
-    type: 'smoothstep',
-    animated: false,
-    style: {
-      stroke: 'rgba(148,163,184,0.55)',
-      strokeWidth: 2,
-    },
-    zIndex: 0,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: 'rgba(148,163,184,0.55)',
-      width: 16,
-      height: 16,
-    },
-  })), [graph.edges]);
+  const edges = useMemo<Edge[]>(() => graph.edges.map((edge) => {
+    const visual = workflowEdgeVisual(edge.kind);
+    return {
+      id: `workflow:${edge.kind}:${edge.source}->${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      animated: false,
+      style: {
+        stroke: visual.stroke,
+        strokeWidth: visual.strokeWidth,
+        strokeDasharray: visual.strokeDasharray,
+      },
+      data: { kind: edge.kind },
+      ariaLabel: visual.ariaLabel,
+      zIndex: 0,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: visual.stroke,
+        width: 16,
+        height: 16,
+      },
+    };
+  }), [graph.edges]);
 
-  const graphSignature = useMemo(() => {
-    const nodeIds = graph.nodes.map((node) => node.id).join('|');
-    const edgeIds = graph.edges.map((edge) => `${edge.source}->${edge.target}`).join('|');
-    return `${nodeIds}::${edgeIds}`;
-  }, [graph.edges, graph.nodes]);
-
+  // First non-empty render fits the whole graph once. React Flow only mounts
+  // when there is at least one node (the empty state short-circuits below), so
+  // onInit fires exactly on the first non-empty render — no graphSignature key
+  // and no per-update remount are needed.
   const onInitHandler = useCallback(() => {
-    requestAnimationFrame(() => fitView({ padding: 0.2 }));
+    initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
+
+  // Cancel a pending first-fit frame on unmount so it never fires against a
+  // torn-down graph after the component has gone away.
+  useEffect(() => () => cancelAnimationFrame(initFitFrameRef.current), []);
+  useEffect(() => {
+    if (nodes.length > 0) {
+      watchdogMissCountRef.current = 0;
+      watchdogRecoveryAttemptedRef.current = false;
+    }
+  }, [nodes.length]);
+
+
+  // Manual pan/zoom from the user. React Flow passes a non-null DOM event for
+  // user-driven moves and null for programmatic setCenter/fitView, so this only
+  // reports genuine manual interaction.
+  const onMoveStart = useCallback(
+    (event: unknown) => {
+      if (event) onManualViewport?.();
+    },
+    [onManualViewport],
+  );
 
   const onNodeClick = useCallback((_event: MouseEvent, node: Node) => {
     onSelectWorkflow(node.id);
@@ -171,18 +248,69 @@ function WorkflowGraphInner({
     return () => cancelAnimationFrame(frame);
   }, [graph.edges.length, graph.nodes.length]);
 
+  // Consume each workflow-scoped camera command exactly once, by sequence.
+  // Centering preserves the current zoom so ordinary refreshes never zoom the
+  // graph; only an explicit fitInitial command refits.
   useEffect(() => {
-    if (graph.nodes.length === 0 || typeof window === 'undefined') return;
+    const command = cameraCommand;
+    if (!command || command.scope !== 'workflow') return;
+    if (command.sequence <= lastHandledCameraSeqRef.current) return;
+    lastHandledCameraSeqRef.current = command.sequence;
+    if (nodes.length === 0) return;
+
+    if (command.kind === 'fitInitial') {
+      const frame = requestAnimationFrame(() => fitView({ padding: 0.2 }));
+      return () => cancelAnimationFrame(frame);
+    }
+
+    const targetId = command.target;
+    if (!targetId) return;
+    const node = nodes.find((candidate) => candidate.id === targetId);
+    if (!node) return;
     const frame = requestAnimationFrame(() => {
-      requestAnimationFrame(() => fitView({ padding: 0.2 }));
+      if (typeof setCenter === 'function') {
+        const zoom = typeof getZoom === 'function' ? getZoom() : 1;
+        setCenter(node.position.x + 110, node.position.y + 45, { zoom, duration: 180 });
+      } else {
+        fitView({ padding: 0.2 });
+      }
     });
     return () => cancelAnimationFrame(frame);
-  }, [fitView, graph.nodes.length, graphSignature]);
+  }, [cameraCommand, fitView, getZoom, nodes, setCenter]);
+
+  useEffect(() => {
+    if (nodes.length === 0) return;
+    const interval = setInterval(() => {
+      const root = graphRootRef.current;
+      if (!root) return;
+      const renderedNodeElements = root.querySelectorAll('[data-testid^="workflow-node-"]');
+      const missingRenderedNodes = root.querySelectorAll(
+        '.react-flow__node[style*="visibility: hidden"] [data-testid^="workflow-node-"]',
+      );
+      if (
+        (renderedNodeElements.length === 0 && nodes.length > 0) ||
+        (missingRenderedNodes.length > 0 && missingRenderedNodes.length === renderedNodeElements.length)
+      ) {
+        watchdogMissCountRef.current += 1;
+        const shouldRecover =
+          watchdogMissCountRef.current >= WATCHDOG_RECOVERY_MISS_COUNT &&
+          !watchdogRecoveryAttemptedRef.current;
+        fitView({ padding: 0.2 });
+        if (shouldRecover) {
+          watchdogRecoveryAttemptedRef.current = true;
+          setFlowInstanceKey((key) => key + 1);
+        }
+      } else {
+        watchdogMissCountRef.current = 0;
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [fitView, nodes.length]);
 
   if (graph.nodes.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-500 text-sm">
-        Load a plan to render workflow graph
+      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+        Your plan will appear here.
       </div>
     );
   }
@@ -193,14 +321,15 @@ function WorkflowGraphInner({
       className="h-full w-full overflow-hidden"
       style={{ minHeight: '300px' }}
     >
-      <div data-testid="workflow-graph-react-flow" className="h-full w-full">
+      <div ref={graphRootRef} data-testid="workflow-graph-react-flow" className="h-full w-full">
         <ReactFlow
-          key={graphSignature}
+          key={flowInstanceKey}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
           onNodeClick={onNodeClick}
           onNodeContextMenu={onNodeContextMenu}
+          onMoveStart={onMoveStart}
           onInit={onInitHandler}
           zoomOnDoubleClick={false}
           minZoom={0.3}
@@ -210,12 +339,12 @@ function WorkflowGraphInner({
           elementsSelectable
           proOptions={{ hideAttribution: true }}
         >
-          <Background color="#374151" gap={20} />
+          <Background color="var(--graph-grid)" gap={20} />
           <Controls
             style={{
-              background: '#1f2937',
+              background: 'var(--graph-controls)',
               borderRadius: '8px',
-              border: '1px solid #374151',
+              border: '1px solid var(--graph-controls-border)',
             }}
           />
         </ReactFlow>

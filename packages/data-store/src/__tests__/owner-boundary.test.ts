@@ -57,7 +57,7 @@ describe('owner boundary enforcement', () => {
       const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
 
       // Verify mutations are blocked
-      expect(() => reader.saveWorkflow({ ...testWorkflow, status: 'completed' }))
+      expect(() => reader.saveWorkflow(testWorkflow))
         .toThrow(/read-only/i);
       expect(() => reader.updateWorkflow('wf-boundary-test', { generation: 1 }))
         .toThrow(/read-only/i);
@@ -118,9 +118,8 @@ describe('owner boundary enforcement', () => {
       reader.close();
     });
 
-    it('in-memory databases bypass owner check', async () => {
-      // In-memory DBs bypass owner check (no persistent state to guard)
-      const adapter = await SQLiteAdapter.create(':memory:');
+    it('ephemeral databases bypass owner check because they never touch shared state', async () => {
+      const adapter = await SQLiteAdapter.createEphemeral();
 
       // Verify it's writable even without ownerCapability
       expect(() => adapter.saveWorkflow(testWorkflow)).not.toThrow();
@@ -155,61 +154,38 @@ describe('owner boundary enforcement', () => {
   });
 
   describe('mutation isolation', () => {
-    it('owner can mutate while reader holds read-only connection', async () => {
-      // Create initial state
+    it('owner can mutate after a detached read-only snapshot is closed', async () => {
       const owner1 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
       owner1.saveWorkflow(testWorkflow);
       owner1.close();
 
-      // Reader opens read-only
       const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
       const before = reader.loadWorkflow('wf-boundary-test');
       expect(before!.status).toBe('pending');
       expect(before!.generation).toBe(0);
+      reader.close();
 
-      // Owner process reopens and mutates
       const owner2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
       owner2.updateWorkflow('wf-boundary-test', { generation: 1 });
       owner2.close();
 
-      // Reader sees stale data (expected - SQLite isolation)
-      const stillStale = reader.loadWorkflow('wf-boundary-test');
-      expect(stillStale!.generation).toBe(0);
-
-      reader.close();
-
-      // New reader sees updated data
       const reader2 = await SQLiteAdapter.create(dbPath, { readOnly: true });
       const updated = reader2.loadWorkflow('wf-boundary-test');
       expect(updated!.generation).toBe(1);
       reader2.close();
     });
 
-    it('reproduces last-write-wins when two writable adapters bypass owner boundary', async () => {
-      // This is the historical failure mode that justified lock/CAS work:
-      // two writable sql.js handles each hold independent in-memory state and
-      // whichever write reaches disk last can overwrite the other process' state.
+    it('serializes concurrent writable adapters through native SQLite WAL', async () => {
       const writerA = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
       const writerB = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
 
-      writerA.saveWorkflow({
-        id: 'wf-a',
-        name: 'Workflow A',
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-      writerB.saveWorkflow({
-        id: 'wf-b',
-        name: 'Workflow B',
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      writerA.saveWorkflow({ id: 'wf-a',
+      name: 'Workflow A', createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), });
+      writerB.saveWorkflow({ id: 'wf-b',
+      name: 'Workflow B', createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), });
 
-      // Immediate file-backed flushes make the second write visible immediately.
-      // The point of the regression is that bypassing the owner boundary still
-      // produces non-serializable last-write-wins behavior.
       writerB.close();
       writerA.close();
 
@@ -217,7 +193,7 @@ describe('owner boundary enforcement', () => {
       const workflows = reader.listWorkflows();
       reader.close();
 
-      expect(workflows.map((w) => w.id).sort()).toEqual(['wf-b']);
+      expect(workflows.map((w) => w.id).sort()).toEqual(['wf-a', 'wf-b']);
     });
   });
 

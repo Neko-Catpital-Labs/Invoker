@@ -6,7 +6,7 @@ function makeFakeProvider(name: string): MergeGateProvider {
   return {
     name,
     createReview: async () => ({ url: `https://example.com/${name}/1`, identifier: `${name}#1` }),
-    checkApproval: async () => ({ approved: false, rejected: false, statusText: 'pending', url: '' }),
+    checkApproval: async () => ({ lifecycle: 'open' as const, rejected: false, statusText: 'pending', url: '' }),
   };
 }
 

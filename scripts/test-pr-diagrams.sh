@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-pr-diagrams.sh — Generate sample PR summaries with Before/After Mermaid
-# diagrams for PRs #175 and #176 to prove that the updated skill instructions
-# produce architecture diagrams. Does NOT modify actual PR bodies.
+# diagrams for PRs #175 and #176, then prove the PR-body validator can parse
+# and render those diagrams. Does NOT modify actual PR bodies.
 #
 # Usage: bash scripts/test-pr-diagrams.sh
 #
@@ -210,7 +210,7 @@ graph TD
 BODY176
 
 # ─────────────────────────────────────────────────────────────
-# Validation: check that diagrams are present
+# Validation: check that diagrams are present and renderable
 # ─────────────────────────────────────────────────────────────
 
 PASS=0
@@ -226,6 +226,29 @@ for pr in 175 176; do
     PASS=$((PASS + 1))
   else
     echo "FAIL: PR #${pr} has only ${mermaid_count} Mermaid diagram(s) (need >= 2 for before/after)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  if node --input-type=module - "$file" <<'EOF'
+import { readFileSync } from 'node:fs';
+import { validateMermaidBlocks } from './scripts/validate-pr-body.mjs';
+
+const file = process.argv[2];
+const body = readFileSync(file, 'utf8');
+const errors = await validateMermaidBlocks(body, { context: file });
+
+if (errors.length > 0) {
+  for (const error of errors) {
+    console.error(error);
+  }
+  process.exit(1);
+}
+EOF
+  then
+    echo "PASS: PR #${pr} Mermaid blocks parse and render"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: PR #${pr} Mermaid blocks did not validate"
     FAIL=$((FAIL + 1))
   fi
 

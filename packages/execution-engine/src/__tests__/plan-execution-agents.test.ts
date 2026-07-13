@@ -1,14 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { assertPlanExecutionAgentsRegistered } from '../plan-execution-agents.js';
-import { AgentRegistry } from '../agent-registry.js';
-import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
-import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
-function makeRegistry(): AgentRegistry {
-  const registry = new AgentRegistry();
-  registry.registerExecution(new ClaudeExecutionAgent());
-  registry.registerExecution(new CodexExecutionAgent());
-  return registry;
+function makeRegistry() {
+  return registerBuiltinAgents();
 }
 
 describe('assertPlanExecutionAgentsRegistered', () => {
@@ -73,5 +68,22 @@ describe('assertPlanExecutionAgentsRegistered', () => {
       tasks: [{ id: 'a', executionAgent: '  claude  ' }],
     };
     expect(() => assertPlanExecutionAgentsRegistered(plan, makeRegistry())).not.toThrow();
+  });
+  it('rejects incompatible executionModel values for the selected agent', () => {
+    const plan = {
+      tasks: [{ id: 'a', executionAgent: 'codex', executionModel: 'claude' }],
+    };
+    expect(() => assertPlanExecutionAgentsRegistered(plan, makeRegistry())).toThrow(
+      /Task "a" Execution model "claude" is not supported for execution agent "codex"/,
+    );
+  });
+
+  it('rejects incompatible executionModel values for the default codex agent', () => {
+    const plan = {
+      tasks: [{ id: 'a', executionModel: 'claude' }],
+    };
+    expect(() => assertPlanExecutionAgentsRegistered(plan, makeRegistry())).toThrow(
+      /Task "a" Execution model "claude" is not supported for execution agent "codex"/,
+    );
   });
 });

@@ -1,0 +1,32 @@
+{
+  "name": "@neko-catpital-labs/invoker-ui",
+  "version": "0.0.7",
+  "description": "Invoker desktop UI launcher",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Neko-Catpital-Labs/Invoker.git",
+    "directory": "packages/npm-ui"
+  },
+  "bin": {
+    "invoker-ui": "bin/invoker-ui.js",
+    "invoker-cli": "bin/invoker-cli.js"
+  },
+  "files": [
+    "bin/**/*",
+    "scripts/**/*",
+    "vendor/.gitkeep",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js",
+    "test": "node scripts/test-wrapper.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@neko-catpital-labs/invoker-cli": "workspace:*"
+  }
+}

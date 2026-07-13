@@ -50,7 +50,7 @@ GEN_BEFORE="$(generation_for_workflow "$WF_ID")"
 
 (
   set +e
-  invoker_e2e_run_headless rebase "$TASK_ID" >"$TMP_DIR/rebase.out" 2>&1
+  invoker_e2e_run_headless rebase-recreate "$TASK_ID" >"$TMP_DIR/rebase.out" 2>&1
   echo $? >"$TMP_DIR/rebase.code"
 ) &
 for i in 1 2 3 4; do
@@ -79,7 +79,7 @@ done
 echo ""
 
 echo "==> relevant log lines (workflow + reset operations)"
-rg -n "$WF_ID|rebaseAndRetry: taskId=$TASK_ID|headless.exec: \\\"rebase $TASK_ID\\\"|bumped generation to [0-9]+ for $WF_ID|bumpGenerationAndRecreate: calling recreateWorkflow\\($WF_ID\\)" \
+rg -n "$WF_ID|rebaseRecreate: target=$TASK_ID|headless.exec: \\\"rebase-recreate $TASK_ID\\\"|bumped generation to [0-9]+ for $WF_ID|bumpGenerationAndRecreate: calling recreateWorkflow\\($WF_ID\\)" \
   ~/.invoker/invoker.log | tail -n 120 || true
 
 echo ""

@@ -5,7 +5,7 @@
  */
 
 import type { TaskDelta } from '@invoker/workflow-core';
-import type { SurfaceEvent, WorkflowStatus } from '../surface.js';
+import type { SurfaceEvent, WorkflowStatus, WorkflowProgress } from '../surface.js';
 
 // ── Status Display ──────────────────────────────────────────
 
@@ -15,6 +15,7 @@ const STATUS_EMOJI: Record<string, string> = {
   fixing_with_ai: ':hammer_and_wrench:',
   completed: ':white_check_mark:',
   failed: ':x:',
+  closed: ':black_circle:',
   blocked: ':no_entry_sign:',
   needs_input: ':question:',
   awaiting_approval: ':raised_hand:',
@@ -26,6 +27,7 @@ const STATUS_LABEL: Record<string, string> = {
   fixing_with_ai: 'Fixing with AI',
   completed: 'Completed',
   failed: 'Failed',
+  closed: 'Closed',
   blocked: 'Blocked',
   needs_input: 'Needs Input',
   awaiting_approval: 'Awaiting Approval',
@@ -153,6 +155,7 @@ export function formatWorkflowStatus(status: WorkflowStatus): SlackMessage {
     `Total: ${status.total}`,
     `:white_check_mark: Completed: ${status.completed}`,
     `:x: Failed: ${status.failed}`,
+    `:black_circle: Closed: ${status.closed}`,
     `:large_blue_circle: Running: ${status.running}`,
     `:white_circle: Pending: ${status.pending}`,
   ];
@@ -162,6 +165,44 @@ export function formatWorkflowStatus(status: WorkflowStatus): SlackMessage {
     blocks: [
       { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } },
     ],
+  };
+}
+
+// ── Workflow Progress Card ──────────────────────────────────
+
+export function formatWorkflowProgress(p: WorkflowProgress): SlackMessage {
+  const header = `*${p.name}*  ${p.percentComplete}%  ·  ${STATUS_EMOJI.completed}${p.counts.completed} ${STATUS_EMOJI.running}${p.counts.running} ${STATUS_EMOJI.pending}${p.counts.pending} ${STATUS_EMOJI.failed}${p.counts.failed}`;
+
+  const blocks: SlackBlock[] = [
+    { type: 'section', text: { type: 'mrkdwn', text: header } },
+    { type: 'divider' },
+  ];
+
+  const MAX_ROWS = 40;
+  const shown = p.tasks.slice(0, MAX_ROWS);
+  const lines = shown.map((t) => {
+    let line = `${statusEmoji(t.status)} *${t.id}* ${statusLabel(t.status)}`;
+    if (t.status === 'running' && t.phase) line += ` (${t.phase})`;
+    if (t.reviewUrl) line += ` <${t.reviewUrl}|PR>`;
+    return line;
+  });
+  if (p.tasks.length > MAX_ROWS) {
+    lines.push(`…and ${p.tasks.length - MAX_ROWS} more`);
+  }
+  if (lines.length > 0) {
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } });
+  }
+
+  if (p.prUrl || p.reviewState) {
+    const footer = `${p.reviewState ?? ''}${p.prUrl ? ` · <${p.prUrl}|PR>` : ''}`.trim();
+    // Context elements are text objects whose `text` is a plain string, which is
+    // narrower than the shared SlackBlock element shape; cast at this boundary.
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: footer }] } as unknown as SlackBlock);
+  }
+
+  return {
+    text: `${p.name}: ${p.percentComplete}% (${p.counts.completed}/${p.counts.total})`,
+    blocks,
   };
 }
 
@@ -241,6 +282,10 @@ export function formatSurfaceEvent(event: SurfaceEvent): SlackMessage | null {
     }
     case 'workflow_status':
       return formatWorkflowStatus(event.status);
+    case 'workflow_progress':
+      return formatWorkflowProgress(event.progress);
+    case 'workflow_created':
+      return null;
     case 'error':
       return formatError(event.message);
   }

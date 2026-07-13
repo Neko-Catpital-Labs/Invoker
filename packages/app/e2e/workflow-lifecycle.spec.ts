@@ -11,6 +11,7 @@ import {
   TEST_PLAN,
   loadPlan,
   startPlan,
+  waitForTaskStarted,
   waitForTaskStatus,
   findTaskByIdSuffix,
 } from './fixtures/electron-app.js';
@@ -20,11 +21,8 @@ test.describe('Workflow lifecycle', () => {
     await loadPlan(page, TEST_PLAN);
     await startPlan(page);
 
-    // task-alpha should start running (or may have already completed)
-    const result = await page.evaluate(() => window.invoker.getTasks());
-    const tasks = Array.isArray(result) ? result : result.tasks;
-    const alpha = findTaskByIdSuffix(tasks, 'task-alpha');
-    expect(['running', 'completed']).toContain(alpha?.status);
+    const alphaStatus = await waitForTaskStarted(page, 'task-alpha');
+    expect(['running', 'completed']).toContain(alphaStatus);
   });
 
   test('tasks complete in dependency order', async ({ page }) => {

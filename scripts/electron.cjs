@@ -202,6 +202,23 @@ function withLinuxSandboxFallback(binaryPath, args) {
   return ['--no-sandbox', ...args];
 }
 
+function withMacOSPersistenceIgnoreState(args) {
+  if (process.platform !== 'darwin') {
+    return args;
+  }
+  if (args.includes('-ApplePersistenceIgnoreState')) {
+    return args;
+  }
+
+  // AppKit can show a blocking "reopen windows?" crash-recovery modal before
+  // Electron runs our JS, which also stalls headless CLI invocations.
+  //
+  // Keep Electron's app path as argv[1]; putting this flag before the script
+  // prevents Electron from loading dist/main.js.
+  const insertAt = args.length > 0 ? 1 : 0;
+  return [...args.slice(0, insertAt), '-ApplePersistenceIgnoreState', 'YES', ...args.slice(insertAt)];
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -216,7 +233,7 @@ async function main() {
     return;
   }
 
-  const launchArgs = withLinuxSandboxFallback(binaryPath, args);
+  const launchArgs = withMacOSPersistenceIgnoreState(withLinuxSandboxFallback(binaryPath, args));
   const child = spawn(binaryPath, launchArgs, {
     cwd: process.cwd(),
     env: process.env,

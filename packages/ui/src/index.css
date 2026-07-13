@@ -2,18 +2,109 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Edge styling for TaskDAG ──────────────────────────────── */
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
 
-/* Smooth transitions on edge paths */
+:root,
+:root[data-theme='dark'] {
+  --app-font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --app-font-mono:
+    'SF Mono', SFMono-Regular, ui-monospace, 'Cascadia Code', Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  --radius: 10px;
+
+  --background: 10 10 10;
+  --foreground: 250 250 250;
+  --card: 23 23 23;
+  --card-foreground: 250 250 250;
+  --popover: 23 23 23;
+  --popover-foreground: 250 250 250;
+  --primary: 229 229 229;
+  --primary-foreground: 23 23 23;
+  --secondary: 38 38 38;
+  --secondary-foreground: 250 250 250;
+  --muted: 38 38 38;
+  --muted-foreground: 161 161 161;
+  --accent: 64 64 64;
+  --accent-foreground: 250 250 250;
+  --destructive: 255 101 104;
+  --destructive-foreground: 254 226 226;
+  --ring: 115 115 115;
+  --sidebar: 23 23 23;
+  --sidebar-foreground: 250 250 250;
+  --sidebar-accent: 38 38 38;
+  --sidebar-accent-foreground: 250 250 250;
+  --sidebar-ring: 82 82 82;
+
+  --border-color: rgb(255 255 255 / 0.07);
+  --border-color-strong: rgb(255 255 255 / 0.12);
+  --input-color: rgb(255 255 255 / 0.15);
+
+  --graph-canvas: var(--background);
+  --graph-grid: rgb(255 255 255 / 0.06);
+  --graph-controls: rgb(var(--card));
+  --graph-controls-border: var(--border-color);
+}
+
+:root[data-theme='light'] {
+  --background: 250 250 250;
+  --foreground: 23 23 23;
+  --card: 255 255 255;
+  --card-foreground: 23 23 23;
+  --popover: 255 255 255;
+  --popover-foreground: 23 23 23;
+  --primary: 38 38 38;
+  --primary-foreground: 250 250 250;
+  --secondary: 244 244 245;
+  --secondary-foreground: 23 23 23;
+  --muted: 244 244 245;
+  --muted-foreground: 82 82 91;
+  --accent: 228 228 231;
+  --accent-foreground: 23 23 23;
+  --destructive: 220 38 38;
+  --destructive-foreground: 254 226 226;
+  --ring: 82 82 82;
+  --sidebar: 250 250 250;
+  --sidebar-foreground: 23 23 23;
+  --sidebar-accent: 244 244 245;
+  --sidebar-accent-foreground: 23 23 23;
+  --sidebar-ring: 161 161 170;
+
+  --border-color: rgb(0 0 0 / 0.08);
+  --border-color-strong: rgb(0 0 0 / 0.14);
+  --input-color: rgb(0 0 0 / 0.16);
+
+  --graph-grid: rgb(0 0 0 / 0.08);
+  --graph-controls: rgb(var(--card));
+  --graph-controls-border: var(--border-color);
+}
+
+html,
+body {
+  font-family: var(--app-font-family);
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 .react-flow__edge-path {
   transition: stroke 0.2s ease, stroke-width 0.2s ease;
+}
+
+.react-flow {
+  background-color: rgb(var(--background) / 1);
 }
 
 .react-flow__edge {
   transition: opacity 0.2s ease;
 }
 
-/* Animated running edges: dashed flow animation */
 .react-flow__edge.animated .react-flow__edge-path {
   stroke-dasharray: 8 4;
   animation: edge-flow 0.8s linear infinite;
@@ -25,7 +116,6 @@
   }
 }
 
-/* Stronger pulse for DAG node status rails/dots */
 @keyframes pulse-strong {
   0%,
   100% {
@@ -45,19 +135,46 @@
   will-change: transform, opacity, filter;
 }
 
-/* Hover cursor on edge group */
 .bundled-edge-group {
   cursor: pointer;
 }
 
-/* Edge labels fade in */
 .bundled-edge-group text {
   pointer-events: none;
   user-select: none;
 }
 
-/* ── ReactFlow Controls — force black icons on light buttons ── */
 .react-flow__controls-button {
   --xy-controls-button-color: #000;
   --xy-controls-button-color-hover: #000;
+}
+
+.scrollbar-sleek {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--muted-foreground) / 0.34) transparent;
+}
+
+.scrollbar-sleek::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.scrollbar-sleek::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-sleek::-webkit-scrollbar-thumb {
+  background: rgb(var(--muted-foreground) / 0.28);
+  border: 3px solid transparent;
+  border-radius: 0;
+  background-clip: padding-box;
+  min-height: 28px;
+}
+
+.scrollbar-sleek::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--muted-foreground) / 0.48);
+}
+
+.scrollbar-sleek::-webkit-scrollbar-thumb:active {
+  background-color: rgb(var(--foreground) / 0.36);
 }

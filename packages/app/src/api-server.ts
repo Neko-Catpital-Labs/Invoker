@@ -20,6 +20,7 @@
  * Write endpoints:
  *   POST   /api/tasks/:id/cancel
  *   POST   /api/tasks/:id/restart
+ *   POST   /api/tasks/:id/recreate-downstream
  *   POST   /api/tasks/:id/resolve-conflict  body: { agent? }
  *   POST   /api/tasks/:id/approve
  *   POST   /api/tasks/:id/reject       body: { reason? }
@@ -29,9 +30,11 @@
  *   POST   /api/tasks/:id/edit-type    body: { runnerKind, poolMemberId? }
  *   POST   /api/tasks/:id/edit-agent   body: { agent }
  *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
+ *   DELETE /api/tasks/:id
  *   POST   /api/workflows/:id/detach  body: { upstreamWorkflowId }
  *   POST   /api/workflows/:id/restart
- *   POST   /api/workflows/:id/recreate-with-rebase
+ *   POST   /api/workflows/:id/rebase-retry
+ *   POST   /api/workflows/:id/rebase-recreate
  *   POST   /api/workflows/:id/cancel
  *   POST   /api/workflows/:id/merge-mode  body: { mode }
  *   DELETE /api/workflows/:id
@@ -45,11 +48,64 @@ import {
   PlanConflictError,
   TopologyForkRequired,
 } from '@invoker/workflow-core';
-import type { Orchestrator } from '@invoker/workflow-core';
+import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { ExecutorRegistry } from '@invoker/execution-engine';
-import type { WorkflowMutationFacade } from './workflow-mutation-facade.js';
+import type {
+  ApproveMutationResult,
+  CancelMutationResult,
+  ForkMutationResult,
+  MutationResult,
+  ResolveConflictMutationResult,
+} from './workflow-mutation-facade.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
+import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
+import { parseMetadataPatchBody, type MetadataSetResult } from './metadata-setter.js';
+import { getEventsPage } from './get-events-page.js';
+import { buildReviewGateQueryResponse } from './review-gate-query.js';
+
+export interface ApiMutationFacade {
+  cancelTask(taskId: string): Promise<CancelMutationResult>;
+  retryTask(taskId: string): Promise<MutationResult>;
+  recreateTask(taskId: string): Promise<MutationResult>;
+  deleteTask(taskId: string): Promise<MutationResult>;
+  recreateDownstream(taskId: string): Promise<MutationResult>;
+  resolveConflict(taskId: string, agentName?: string): Promise<ResolveConflictMutationResult>;
+  approveTask(taskId: string): Promise<ApproveMutationResult>;
+  rejectTask(taskId: string, reason?: string): void;
+  provideInput(taskId: string, text: string): void;
+  editTaskCommand(taskId: string, newCommand: string): Promise<MutationResult>;
+  editTaskPrompt(taskId: string, newPrompt: string): Promise<MutationResult>;
+  editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): Promise<MutationResult>;
+  editTaskAgent(taskId: string, agentName: string): Promise<MutationResult>;
+  setTaskExternalGatePolicies(
+    taskId: string,
+    updates: ExternalGatePolicyUpdate[],
+  ): Promise<MutationResult>;
+  setWorkflowExternalGatePolicies(
+    workflowId: string,
+    updates: ExternalGatePolicyUpdate[],
+  ): Promise<MutationResult>;
+  setTaskMetadata(
+    taskId: string,
+    fieldPath: string,
+    value: unknown,
+    options?: { raw?: boolean },
+  ): Promise<MetadataSetResult>;
+  recreateWorkflow(workflowId: string): Promise<MutationResult>;
+  retryWorkflow(workflowId: string): Promise<MutationResult>;
+  rebaseRetry(target: string): Promise<MutationResult>;
+  rebaseRecreate(target: string): Promise<MutationResult>;
+  forkWorkflow(workflowId: string): Promise<ForkMutationResult>;
+  cancelWorkflow(workflowId: string): Promise<CancelMutationResult>;
+  setWorkflowMergeMode(workflowId: string, mergeMode: string): Promise<void>;
+  setWorkflowMetadata(
+    workflowId: string,
+    fieldPath: string,
+    value: unknown,
+    options?: { raw?: boolean },
+  ): Promise<MetadataSetResult>;
+}
 
 export interface ApiServerDeps {
   logger?: Logger;
@@ -57,7 +113,14 @@ export interface ApiServerDeps {
   persistence: SQLiteAdapter;
   executorRegistry: ExecutorRegistry;
   /** All write endpoints delegate to the facade for mutation + dispatch + topup. */
-  mutations: WorkflowMutationFacade;
+  mutations: ApiMutationFacade;
+  queueWorkflowMutation?: (
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
+    options?: { deferDrain?: boolean },
+  ) => number;
   deleteWorkflow: (workflowId: string) => Promise<void>;
   detachWorkflow: (workflowId: string, upstreamWorkflowId: string) => Promise<void>;
 }
@@ -195,6 +258,19 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
+      // DELETE /api/tasks/:id
+      const deleteTaskMatch = path.match(/^\/api\/tasks\/([^/]+)$/);
+      if (method === 'DELETE' && deleteTaskMatch) {
+        const taskId = decodeURIComponent(deleteTaskMatch[1]);
+        try {
+          const result = await mutations.deleteTask(taskId);
+          json(res, 200, { ok: true, taskId, action: 'deleted', tasksStarted: result.runnable.length });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
       // POST /api/tasks/:id/cancel
       const cancelMatch = path.match(/^\/api\/tasks\/([^/]+)\/cancel$/);
       if (method === 'POST' && cancelMatch) {
@@ -242,6 +318,19 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         try {
           const result = await mutations.recreateTask(taskId);
           json(res, 200, { ok: true, taskId, action: 'recreated', tasksStarted: result.runnable.length });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
+      // POST /api/tasks/:id/recreate-downstream
+      const recreateDownstreamMatch = path.match(/^\/api\/tasks\/([^/]+)\/recreate-downstream$/);
+      if (method === 'POST' && recreateDownstreamMatch) {
+        const taskId = decodeURIComponent(recreateDownstreamMatch[1]);
+        try {
+          const result = await mutations.recreateDownstream(taskId);
+          json(res, 200, { ok: true, taskId, action: 'recreated_downstream', tasksStarted: result.runnable.length });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
@@ -309,9 +398,34 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       }
 
       // GET /api/workflows
+      // GET /api/workflows/:id/review-gate
+      const reviewGateMatch = path.match(/^\/api\/workflows\/([^/]+)\/review-gate$/);
+      if (method === 'GET' && reviewGateMatch) {
+        const workflowId = decodeURIComponent(reviewGateMatch[1]);
+        const workflow = persistence.loadWorkflow(workflowId);
+        if (!workflow) {
+          json(res, 404, { error: 'Workflow not found' });
+          return;
+        }
+        const tasks = persistence.loadTasks(workflowId);
+        json(res, 200, buildReviewGateQueryResponse({ workflowId, workflow, tasks }));
+        return;
+      }
+
       if (method === 'GET' && path === '/api/workflows') {
         const workflows = persistence.listWorkflows();
         json(res, 200, workflows);
+        return;
+      }
+
+      // GET /api/search
+      if (method === 'GET' && path === '/api/search') {
+        const q = query.q || '';
+        const type = query.type === 'workflows' || query.type === 'tasks' ? query.type : 'all';
+        const limit = query.limit ? Math.min(parseInt(query.limit, 10), 50) : 20;
+        const offset = query.offset ? parseInt(query.offset, 10) : 0;
+        const results = persistence.searchWorkflowsAndTasks(q, { type, limit, offset });
+        json(res, 200, results);
         return;
       }
 
@@ -329,7 +443,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               'true; reason="Use /api/workflows/:id/recreate"',
             );
           }
-          const tasksStarted = result.started.filter(t => t.status === 'running').length;
+          const tasksStarted = result.runnable.length;
           json(res, 200, {
             ok: true,
             workflowId,
@@ -349,7 +463,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const workflowId = decodeURIComponent(wfRetryMatch[1]);
         try {
           const result = await mutations.retryWorkflow(workflowId);
-          const tasksStarted = result.started.filter(t => t.status === 'running').length;
+          const tasksStarted = result.runnable.length;
           json(res, 200, { ok: true, workflowId, action: 'retried', tasksStarted });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
@@ -357,28 +471,51 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/workflows/:id/recreate-with-rebase  (legacy: /api/workflows/:id/rebase-and-retry)
-      const wfRecreateWithRebaseMatch = path.match(/^\/api\/workflows\/([^/]+)\/recreate-with-rebase$/);
-      const wfRebaseAndRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-and-retry$/);
-      if (method === 'POST' && (wfRecreateWithRebaseMatch || wfRebaseAndRetryMatch)) {
-        const isLegacy = !!wfRebaseAndRetryMatch;
-        const workflowTarget = decodeURIComponent((wfRecreateWithRebaseMatch ?? wfRebaseAndRetryMatch)![1]);
+      // POST /api/workflows/:id/rebase-retry
+      const wfRebaseRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-retry$/);
+      if (method === 'POST' && wfRebaseRetryMatch) {
+        const workflowTarget = decodeURIComponent(wfRebaseRetryMatch[1]);
         try {
           const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
-          const result = await mutations.recreateWorkflowFromFreshBase(workflowId);
-          if (isLegacy) {
-            res.setHeader(
-              'Deprecation',
-              'true; reason="Use /api/workflows/:id/recreate-with-rebase"',
-            );
-          }
-          const tasksStarted = result.started.filter(t => t.status === 'running').length;
+          const result = await mutations.rebaseRetry(workflowId);
+          const tasksStarted = result.runnable.length;
           json(res, 200, {
             ok: true,
             workflowId,
-            action: isLegacy ? 'rebase_and_retried' : 'recreated_with_rebase',
+            action: 'rebase_retried',
             tasksStarted,
-            ...(isLegacy ? { deprecated: true, replacement: '/api/workflows/:id/recreate-with-rebase' } : {}),
+          });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
+      // POST /api/workflows/:id/rebase-recreate
+      const wfRebaseRecreateMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-recreate$/);
+      if (method === 'POST' && wfRebaseRecreateMatch) {
+        const workflowTarget = decodeURIComponent(wfRebaseRecreateMatch[1]);
+        try {
+          const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
+          if (deps.queueWorkflowMutation) {
+            const intentId = deps.queueWorkflowMutation(workflowId, 'high', 'invoker:rebase-recreate', [workflowId]);
+            json(res, 202, {
+              ok: true,
+              workflowId,
+              action: 'rebase_recreated',
+              queued: true,
+              intentId,
+              tasksStarted: 0,
+            });
+            return;
+          }
+          const result = await mutations.rebaseRecreate(workflowId);
+          const tasksStarted = result.runnable.length;
+          json(res, 200, {
+            ok: true,
+            workflowId,
+            action: 'rebase_recreated',
+            tasksStarted,
           });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
@@ -424,12 +561,22 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // GET /api/tasks/:id/events
+      // GET /api/tasks/:id/events?limit=&sortBy=&beforeId=
       const eventsMatch = path.match(/^\/api\/tasks\/([^/]+)\/events$/);
       if (method === 'GET' && eventsMatch) {
         const taskId = decodeURIComponent(eventsMatch[1]);
-        const events = persistence.getEvents(taskId);
-        json(res, 200, events);
+        try {
+          const limit = query.limit !== undefined ? Number(query.limit) : NaN;
+          const beforeId = query.beforeId !== undefined ? Number(query.beforeId) : undefined;
+          const events = getEventsPage(persistence, taskId, {
+            limit,
+            ...(query.sortBy === 'asc' || query.sortBy === 'desc' ? { sortBy: query.sortBy } : {}),
+            ...(beforeId !== undefined ? { beforeId } : {}),
+          });
+          json(res, 200, events);
+        } catch (err) {
+          json(res, 400, { error: errorMessage(err) });
+        }
         return;
       }
 
@@ -502,19 +649,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       // POST /api/tasks/:id/edit-type
       const editTypeMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-type$/);
       if (method === 'POST' && editTypeMatch) {
-        const taskId = decodeURIComponent(editTypeMatch[1]);
-        try {
-          const body = await readBody(req);
-          const { runnerKind, poolMemberId } = JSON.parse(body);
-          if (!runnerKind) {
-            json(res, 400, { error: 'Missing "runnerKind" in request body' });
-            return;
-          }
-          const result = await mutations.editTaskType(taskId, runnerKind, poolMemberId);
-          json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: result.runnable.length });
-        } catch (err) {
-          json(res, httpStatusForError(err), { error: errorMessage(err) });
-        }
+        json(res, 410, { error: 'Executor selection is internal; use the headless set pool command instead.' });
         return;
       }
 
@@ -551,6 +686,41 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           }
           const result = await mutations.setTaskExternalGatePolicies(taskId, updates);
           json(res, 200, { ok: true, taskId, action: 'gate_policy_updated', tasksStarted: result.runnable.length });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
+      // POST /api/workflows/:id/gate-policy
+      const workflowGatePolicyMatch = path.match(/^\/api\/workflows\/([^/]+)\/gate-policy$/);
+      if (method === 'POST' && workflowGatePolicyMatch) {
+        const workflowId = decodeURIComponent(workflowGatePolicyMatch[1]);
+        try {
+          const body = await readBody(req);
+          const parsed = JSON.parse(body);
+          const updates = Array.isArray(parsed?.updates) ? parsed.updates : [];
+          if (updates.length === 0) {
+            json(res, 400, { error: 'Missing non-empty "updates" array in request body' });
+            return;
+          }
+          const result = await mutations.setWorkflowExternalGatePolicies(workflowId, updates);
+          json(res, 200, { ok: true, workflowId, action: 'workflow_gate_policy_updated', tasksStarted: result.runnable.length });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
+      // PATCH /api/tasks/:id/metadata
+      const taskMetadataMatch = path.match(/^\/api\/tasks\/([^/]+)\/metadata$/);
+      if (method === 'PATCH' && taskMetadataMatch) {
+        const taskId = decodeURIComponent(taskMetadataMatch[1]);
+        try {
+          const body = await readBody(req);
+          const patch = parseMetadataPatchBody(body);
+          const result = await mutations.setTaskMetadata(taskId, patch.fieldPath, patch.value, { raw: patch.raw });
+          json(res, 200, { ok: true, ...result });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
@@ -607,6 +777,21 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           }
           await mutations.setWorkflowMergeMode(workflowId, mode);
           json(res, 200, { ok: true, workflowId, action: 'merge_mode_set', mode });
+        } catch (err) {
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
+        }
+        return;
+      }
+
+      // PATCH /api/workflows/:id/metadata
+      const wfMetadataMatch = path.match(/^\/api\/workflows\/([^/]+)\/metadata$/);
+      if (method === 'PATCH' && wfMetadataMatch) {
+        const workflowId = decodeURIComponent(wfMetadataMatch[1]);
+        try {
+          const body = await readBody(req);
+          const patch = parseMetadataPatchBody(body);
+          const result = await mutations.setWorkflowMetadata(workflowId, patch.fieldPath, patch.value, { raw: patch.raw });
+          json(res, 200, { ok: true, ...result });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
