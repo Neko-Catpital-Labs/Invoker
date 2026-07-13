@@ -6,7 +6,7 @@
  *   - the drawer has three explicit states: minimized, partial, maximized
  *   - opening a terminal puts the drawer in the partial state
  *   - the single cycling button advances minimized → partial → maximized → minimized
- *   - the same task id reuses a single tab
+ *   - the same task id reuses and focuses a single tab without another IPC call
  *   - failures from openTerminal surface as an alert
  */
 
@@ -323,9 +323,9 @@ describe('Terminal drawer (component)', () => {
     expect(screen.getByTestId('terminal-pane-task-alpha')).toHaveClass('overflow-hidden');
   });
 
-  it('reuses an existing tab when opening the same task twice', async () => {
+  it('focuses an existing running tab when double-clicking the same task again', async () => {
     render(<App />);
-    act(() => mock.setTasks([taskAlpha], workflows));
+    act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
     await selectWorkflow();
 
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
@@ -333,8 +333,14 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
 
-    // Minimize (cycle partial → maximized → minimized), then re-open —
-    // should not duplicate the tab.
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-beta'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'true');
+    });
+    expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
+
+    // Minimize (cycle partial → maximized → minimized), then re-open alpha.
+    // The existing alpha tab should be selected without another open-terminal IPC call.
     fireEvent.click(screen.getByRole('button', { name: 'Maximize terminal drawer' }));
     fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
@@ -343,9 +349,16 @@ describe('Terminal drawer (component)', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
     });
     const tabs = screen.getAllByTestId('terminal-tab-task-alpha');
     expect(tabs).toHaveLength(1);
+    expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'false');
+    expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
+    expect((mock.api.openTerminal as ReturnType<typeof vi.fn>).mock.calls.map(([taskId]) => taskId)).toEqual([
+      'task-alpha',
+      'task-beta',
+    ]);
   });
 
   it('renders distinct tabs for different tasks side by side', async () => {
@@ -420,6 +433,29 @@ describe('Terminal drawer (component)', () => {
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
   });
 
+  it('keeps the context-menu Open Terminal action routed through open-terminal IPC', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const openTerminalItem = await screen.findByRole('menuitem', { name: /Open Terminal/i });
+    fireEvent.click(openTerminalItem);
+
+    await waitFor(() => {
+      expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
+    });
+    expect((mock.api.openTerminal as ReturnType<typeof vi.fn>).mock.calls.map(([taskId]) => taskId)).toEqual([
+      'task-alpha',
+      'task-alpha',
+    ]);
+  });
+
   it('seeds the replay snapshot before live terminal output', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'early line\n',
@@ -456,24 +492,31 @@ describe('Terminal drawer (component)', () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',
     });
-    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValue({
-      opened: true,
-      session,
-    });
 
-    render(<App />);
-    act(() => mock.setTasks([taskAlpha], workflows));
-    await selectWorkflow();
-
-    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    const { rerender } = render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
     await waitFor(() => {
       expect(xtermMock.writeLog).toEqual(['replayed once\n']);
     });
 
-    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
-    await waitFor(() => {
-      expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
-    });
+    rerender(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[{ ...session }]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
 
     expect(xtermMock.writeLog).toEqual(['replayed once\n']);
   });
