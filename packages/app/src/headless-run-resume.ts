@@ -290,6 +290,15 @@ export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Pro
   });
 }
 
+export async function headlessRepairReviewGateCi(prArg: string | undefined, deps: HeadlessDeps): Promise<void> {
+  if (!prArg) throw new Error('Missing PR argument. Usage: --headless repair-review-gate-ci <prNumber|prUrl>');
+  if (!deps.repairReviewGateCi) {
+    throw new Error('Review-gate CI repair is unavailable in this process.');
+  }
+  const result = await deps.repairReviewGateCi(prArg);
+  process.stdout.write(`${result.message}\n`);
+}
+
 export async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promise<void> {
   const parsed = parseHeadlessFixArgs(rawArgs);
   let taskId = parsed.taskId;
