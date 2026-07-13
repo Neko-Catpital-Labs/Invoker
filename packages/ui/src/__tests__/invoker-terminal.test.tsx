@@ -119,6 +119,80 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('reports planning chat input, submit, and transcript render perf markers', async () => {
+    const props = {
+      activeConversationKey: 'chat-1',
+      lines: [{ id: 1, text: 'First line', role: 'system' as const }],
+      busy: false,
+      value: '',
+      selectedPresetKey: 'codex',
+      presetOptions: [{ key: 'codex', label: 'Codex' }],
+      draftPlanAvailable: false,
+      onValueChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onSubmitDraft: vi.fn(),
+      onPresetChange: vi.fn(),
+      onExpand: vi.fn(),
+    };
+    const { rerender } = render(<InvokerTerminal {...props} />);
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: 'hello' } });
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'planning_chat_input_change',
+      expect.objectContaining({
+        valueLength: 5,
+        previousValueLength: 0,
+        deltaLength: 5,
+        conversationKey: 'chat-1',
+        transcriptLineCount: 1,
+      }),
+    );
+
+    rerender(<InvokerTerminal {...props} value="hello" />);
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_commit',
+        expect.objectContaining({
+          valueLength: 5,
+          previousValueLength: 0,
+          deltaLength: 5,
+          conversationKey: 'chat-1',
+          transcriptLineCount: 1,
+        }),
+      );
+    });
+
+    fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'planning_chat_submit',
+      expect.objectContaining({
+        source: 'form',
+        valueLength: 5,
+        trimmedLength: 5,
+        conversationKey: 'chat-1',
+      }),
+    );
+
+    rerender(<InvokerTerminal
+      {...props}
+      value="hello"
+      lines={[...props.lines, { id: 2, text: 'Second line', role: 'assistant' as const }]}
+    />);
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_transcript_commit',
+        expect.objectContaining({
+          conversationKey: 'chat-1',
+          lineCount: 2,
+          lineDelta: 1,
+          transcriptChars: 'First lineSecond line'.length,
+          lastLineRole: 'assistant',
+        }),
+      );
+    });
+  });
+
   it('continues the same planning session', async () => {
     render(<App />);
     await openPlanningTerminal();

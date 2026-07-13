@@ -488,6 +488,79 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('reports embedded terminal attach, snapshot, input, and output perf markers', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'early line\n',
+      command: 'sh',
+      args: ['-lc', 'printf ready'],
+    });
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_attach',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          active: true,
+          hasSnapshot: true,
+        }),
+      );
+    });
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'embedded_terminal_snapshot_write',
+      expect.objectContaining({
+        source: 'attach',
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        bytes: 'early line\n'.length,
+      }),
+    );
+
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+    act(() => {
+      xtermMock.instances[0]?.emitData('pwd\n');
+    });
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'embedded_terminal_input',
+      expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        bytes: 'pwd\n'.length,
+        active: true,
+      }),
+    );
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'live line\n',
+      });
+    });
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_output_write',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          bytes: 'live line\n'.length,
+          active: true,
+        }),
+      );
+    });
+  });
+
   it('does not duplicate the replay snapshot when the same session re-renders', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',
