@@ -35,6 +35,7 @@ const xtermMock = vi.hoisted(() => {
       return { dispose: vi.fn() };
     });
     focus = vi.fn();
+    refresh = vi.fn();
     dispose = vi.fn();
 
     constructor() {
@@ -182,6 +183,12 @@ describe('Terminal drawer rendering regressions', () => {
     expect(screen.getByTestId('terminal-drawer-body')).toHaveStyle({ height: '280px' });
     expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
     await expectPaneReady('task-alpha');
+    await waitFor(() => {
+      expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalled();
+      expect(xtermMock.instances[0]?.refresh).toHaveBeenCalledWith(0, 23);
+    });
+    const partialFitCalls = xtermMock.fitInstances[0].fit.mock.calls.length;
+    const partialRefreshCalls = xtermMock.instances[0].refresh.mock.calls.length;
 
     rerender(<TerminalDrawer state="maximized" {...props} />);
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'maximized');
@@ -191,7 +198,8 @@ describe('Terminal drawer rendering regressions', () => {
     await expectPaneReady('task-alpha');
 
     await waitFor(() => {
-      expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalled();
+      expect(xtermMock.fitInstances[0].fit.mock.calls.length).toBeGreaterThan(partialFitCalls);
+      expect(xtermMock.instances[0].refresh.mock.calls.length).toBeGreaterThan(partialRefreshCalls);
       expect(xtermMock.instances[0]?.focus).toHaveBeenCalled();
     });
   });
@@ -214,6 +222,12 @@ describe('Terminal drawer rendering regressions', () => {
     expect(betaPane).toHaveStyle({ display: 'none' });
     expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
     expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'false');
+    await waitFor(() => {
+      expect(betaPane.querySelector('.xterm')).not.toBeNull();
+      expect(xtermMock.fitInstances).toHaveLength(2);
+    });
+    const betaHiddenFitCalls = xtermMock.fitInstances[1].fit.mock.calls.length;
+    const betaHiddenRefreshCalls = xtermMock.instances[1].refresh.mock.calls.length;
 
     rerender(<TerminalDrawer {...props} activeSessionId={beta.sessionId} />);
     expect(alphaPane).not.toBeVisible();
@@ -221,6 +235,28 @@ describe('Terminal drawer rendering regressions', () => {
     await expectPaneReady('task-beta');
     expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'false');
     expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'true');
+    await waitFor(() => {
+      expect(xtermMock.fitInstances[1].fit.mock.calls.length).toBeGreaterThan(betaHiddenFitCalls);
+      expect(xtermMock.instances[1].refresh.mock.calls.length).toBeGreaterThan(betaHiddenRefreshCalls);
+    });
+  });
+
+  it('fits restored terminal sessions on initial drawer mount', async () => {
+    const session = makeTerminalSession('task-alpha');
+    (mock.api.terminalList as ReturnType<typeof vi.fn>).mockResolvedValue([session]);
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
+    });
+    await expectPaneReady('task-alpha');
+    await waitFor(() => {
+      expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalled();
+      expect(xtermMock.instances[0]?.refresh).toHaveBeenCalledWith(0, 23);
+      expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 80, 24);
+    });
   });
 
   it('returns to an already-open terminal tab with the correct active pane', async () => {
