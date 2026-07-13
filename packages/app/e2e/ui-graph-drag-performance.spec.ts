@@ -1,6 +1,6 @@
 import { expect, test, E2E_REPO_URL } from './fixtures/electron-app.js';
 import { stringify as yamlStringify } from 'yaml';
-import type { Page } from '@playwright/test';
+import type { ElectronApplication, Page } from '@playwright/test';
 
 const WORKFLOW_COUNT = 50;
 const TASKS_PER_WORKFLOW = 8;
@@ -22,6 +22,18 @@ interface DragPerfResult {
   transformChanges: number;
   transformChanged: boolean;
   durationMs: number;
+}
+
+async function showBenchmarkWindow(electronApp: ElectronApplication, page: Page): Promise<void> {
+  await electronApp.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win) throw new Error('no BrowserWindow found');
+    if (win.isMinimized()) win.restore();
+    win.setBounds({ x: 0, y: 0, width: 1200, height: 800 });
+    win.show();
+    win.focus();
+  });
+  await page.waitForFunction(() => document.visibilityState === 'visible', null, { timeout: 5_000 });
 }
 
 declare global {
@@ -185,7 +197,8 @@ function expectSmoothDrag(result: DragPerfResult): void {
   }
 }
 
-test('workflow graph pan stays responsive under a large persisted graph', async ({ page }) => {
+test('workflow graph pan stays responsive under a large persisted graph', async ({ page, electronApp }) => {
+  await showBenchmarkWindow(electronApp, page);
   await seedLargeWorkflowGraph(page);
 
   const result = await recordDragPerformance(
@@ -208,7 +221,8 @@ test('workflow graph pan stays responsive under a large persisted graph', async 
   expectSmoothDrag(result);
 });
 
-test('workflow graph pan stays responsive while task updates arrive', async ({ page }) => {
+test('workflow graph pan stays responsive while task updates arrive', async ({ page, electronApp }) => {
+  await showBenchmarkWindow(electronApp, page);
   await seedLargeWorkflowGraph(page);
 
   let updateCount = 0;
