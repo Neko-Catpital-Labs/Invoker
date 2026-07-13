@@ -125,10 +125,12 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
   const isActiveRef = useRef(isActive);
+  const sessionRef = useRef(session);
   const fitFrameRef = useRef<number | null>(null);
   const secondFitFrameRef = useRef<number | null>(null);
 
   isActiveRef.current = isActive;
+  sessionRef.current = session;
 
   const clearScheduledFit = useCallback(() => {
     if (fitFrameRef.current !== null) {
@@ -223,7 +225,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
         chars: data.length,
         sessionId: session.sessionId,
         taskId: session.taskId,
-        active: activeRef.current,
+        active: isActiveRef.current,
       });
     });
 
@@ -240,7 +242,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
           chars: event.data.length,
           sessionId: event.sessionId,
           taskId: event.taskId,
-          active: activeRef.current,
+          active: isActiveRef.current,
           status: currentSession.status,
         });
       } catch {

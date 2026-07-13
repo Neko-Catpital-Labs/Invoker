@@ -625,11 +625,7 @@ export function InvokerTerminal({
 
           <form
             className="border-t border-border bg-background px-4 py-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!value.trim() || busy || readOnly) return;
-              onSubmit();
-            }}
+            onSubmit={handleFormSubmit}
           >
             <div className="flex items-start gap-2">
               <span className="mt-2.5 shrink-0 font-mono text-xs text-muted-foreground" aria-hidden="true">›</span>
@@ -639,13 +635,8 @@ export function InvokerTerminal({
                 value={value}
                 disabled={busy || readOnly}
                 rows={expanded ? 8 : 3}
-                onChange={(event) => onValueChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !busy && !readOnly && value.trim()) {
-                    event.preventDefault();
-                    onSubmit();
-                  }
-                }}
+                onChange={handleValueChange}
+                onKeyDown={handleInputKeyDown}
                 placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe the change, ask questions, or say “draft the full plan”.'}
                 className="min-h-20 w-full resize-none border-0 bg-transparent py-2 font-mono text-[13px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 disabled:cursor-wait"
               />
