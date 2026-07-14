@@ -1,8 +1,8 @@
 /**
- * Repro: NODE_ENV=test alone rewrites workflow IDs to wf-test-N, which breaks
- * chaos/overload extractors that require wf-<digits>-<digits>.
+ * Workflow test IDs are gated on INVOKER_TEST_WORKFLOW_IDS=1 so chaos runs can
+ * keep NODE_ENV=test without breaking wf-<ms>-<n> extractors.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { Orchestrator, type OrchestratorPersistence, type PlanDefinition } from '../orchestrator.js';
 import type { Attempt, TaskState } from '../task-types.js';
 
@@ -29,13 +29,24 @@ const bus = {
   disconnect() {},
 };
 
-describe('nextWorkflowId NODE_ENV=test rewrite (repro)', () => {
+function loadOneWorkflowId(): string {
+  const orchestrator = new Orchestrator({
+    persistence: new MiniPersistence(),
+    messageBus: bus as never,
+    maxConcurrency: 1,
+  });
+  const plan: PlanDefinition = {
+    name: 'id-shape',
+    onFinish: 'none',
+    tasks: [{ id: 't1', description: 't', command: 'true' }],
+  };
+  orchestrator.loadPlan(plan);
+  return orchestrator.getWorkflowIds()[0]!;
+}
+
+describe('nextWorkflowId INVOKER_TEST_WORKFLOW_IDS gate', () => {
   const previousNodeEnv = process.env.NODE_ENV;
   const previousTestIds = process.env.INVOKER_TEST_WORKFLOW_IDS;
-
-  beforeEach(() => {
-    delete process.env.INVOKER_TEST_WORKFLOW_IDS;
-  });
 
   afterEach(() => {
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
@@ -44,22 +55,15 @@ describe('nextWorkflowId NODE_ENV=test rewrite (repro)', () => {
     else process.env.INVOKER_TEST_WORKFLOW_IDS = previousTestIds;
   });
 
-  it('issue: NODE_ENV=test alone produces wf-test-* workflow ids', () => {
+  it('fixed: NODE_ENV=test alone uses production-shaped workflow ids', () => {
+    delete process.env.INVOKER_TEST_WORKFLOW_IDS;
     process.env.NODE_ENV = 'test';
+    expect(loadOneWorkflowId()).toMatch(/^wf-\d+-\d+$/);
+  });
 
-    const orchestrator = new Orchestrator({
-      persistence: new MiniPersistence(),
-      messageBus: bus as never,
-      maxConcurrency: 1,
-    });
-    const plan: PlanDefinition = {
-      name: 'id-shape',
-      onFinish: 'none',
-      tasks: [{ id: 't1', description: 't', command: 'true' }],
-    };
-    orchestrator.loadPlan(plan);
-    const workflowId = orchestrator.getWorkflowIds()[0];
-
-    expect(workflowId).toMatch(/^wf-test-\d+$/);
+  it('fixed: INVOKER_TEST_WORKFLOW_IDS=1 yields wf-test-* ids', () => {
+    process.env.INVOKER_TEST_WORKFLOW_IDS = '1';
+    process.env.NODE_ENV = 'production';
+    expect(loadOneWorkflowId()).toMatch(/^wf-test-\d+$/);
   });
 });
