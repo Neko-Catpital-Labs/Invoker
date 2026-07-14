@@ -607,7 +607,13 @@ describe('Terminal drawer (component)', () => {
       }
     });
 
-    await waitFor(() => expect(xtermMock.writeLog).toHaveLength(initialWriteCount + 80));
+    await waitFor(() => {
+      const pressureOutput = xtermMock.writeLog.slice(initialWriteCount).join('');
+      expect(pressureOutput).toContain('alpha pressure output 0\n');
+      expect(pressureOutput).toContain('alpha pressure output 79\n');
+    });
+    const pressureWrites = xtermMock.writeLog.slice(initialWriteCount);
+    expect(pressureWrites.length).toBeLessThan(80);
     expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
 
     fireEvent.click(screen.getByRole('tab', { name: /Beta description/i }));
@@ -623,7 +629,8 @@ describe('Terminal drawer (component)', () => {
     const outputPayloads = vi.mocked(mock.api.reportUiPerf).mock.calls
       .filter(([metric]) => metric === 'embedded_terminal_output_write')
       .map(([, data]) => data as Record<string, any>);
-    expect(outputPayloads).toHaveLength(80);
+    expect(outputPayloads.length).toBeGreaterThan(0);
+    expect(outputPayloads.reduce((sum, payload) => sum + Number(payload.eventCount ?? 1), 0)).toBe(80);
     expect(Math.max(...outputPayloads.map((payload) => payload.durationMs))).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
     expect(outputPayloads.every((payload) => payload.active === true)).toBe(true);
 

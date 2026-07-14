@@ -230,6 +230,60 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'attach');
 
+    let pendingOutput = '';
+    let pendingOutputEvents = 0;
+    let outputFlushFrame: number | null = null;
+    let outputFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearScheduledOutputFlush = () => {
+      if (outputFlushFrame !== null) {
+        if (typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(outputFlushFrame);
+        }
+        outputFlushFrame = null;
+      }
+      if (outputFlushTimer !== null) {
+        clearTimeout(outputFlushTimer);
+        outputFlushTimer = null;
+      }
+    };
+
+    const flushPendingOutput = () => {
+      outputFlushFrame = null;
+      outputFlushTimer = null;
+      if (!pendingOutput) return;
+      const data = pendingOutput;
+      const eventCount = pendingOutputEvents;
+      pendingOutput = '';
+      pendingOutputEvents = 0;
+      try {
+        const currentSession = sessionRef.current;
+        const startedAt = nowMs();
+        term.write(data);
+        reportTerminalPerf('embedded_terminal_output_write', {
+          durationMs: roundMs(nowMs() - startedAt),
+          bytes: byteLength(data),
+          chars: data.length,
+          eventCount,
+          sessionId: session.sessionId,
+          taskId: currentSession.taskId,
+          active: isActiveRef.current,
+          status: currentSession.status,
+        });
+      } catch {
+        /* terminal disposed */
+      }
+    };
+
+    const scheduleOutputFlush = () => {
+      if (outputFlushFrame !== null || outputFlushTimer !== null) return;
+      if (typeof requestAnimationFrame === 'function') {
+        outputFlushFrame = requestAnimationFrame(flushPendingOutput);
+      } else {
+        outputFlushTimer = setTimeout(flushPendingOutput, 0);
+      }
+    };
+
     const inputDisposable = term.onData((data) => {
       const startedAt = nowMs();
       void window.invoker?.terminalWrite?.(session.sessionId, data);
@@ -246,22 +300,10 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
-      try {
-        const currentSession = sessionRef.current;
-        const startedAt = nowMs();
-        term.write(event.data);
-        reportTerminalPerf('embedded_terminal_output_write', {
-          durationMs: roundMs(nowMs() - startedAt),
-          bytes: byteLength(event.data),
-          chars: event.data.length,
-          sessionId: event.sessionId,
-          taskId: event.taskId,
-          active: isActiveRef.current,
-          status: currentSession.status,
-        });
-      } catch {
-        /* terminal disposed */
-      }
+      if (!event.data) return;
+      pendingOutput += event.data;
+      pendingOutputEvents += 1;
+      scheduleOutputFlush();
     });
 
     let resizeObserver: ResizeObserver | null = null;
@@ -283,6 +325,8 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     }
 
     return () => {
+      clearScheduledOutputFlush();
+      flushPendingOutput();
       clearScheduledFit();
       resizeObserver?.disconnect();
       inputDisposable.dispose();

@@ -401,6 +401,8 @@ test.describe('Embedded terminal PTY', () => {
     const inputPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_input');
     const outputPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_output_write');
     const resizePayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_resize');
+    const outputEventCount = outputPayloads.reduce((sum, payload) => sum + Number(payload.eventCount ?? 1), 0);
+    const maxOutputBatchEvents = Math.max(0, ...outputPayloads.map((payload) => Number(payload.eventCount ?? 1)));
     const perf = await page.evaluate(async () => window.invoker.getUiPerfStats());
     const terminalEvidence = {
       fullAlphaTaskId,
@@ -409,6 +411,8 @@ test.describe('Embedded terminal PTY', () => {
       attachPayloads,
       inputPayloads,
       outputPayloads,
+      outputEventCount,
+      maxOutputBatchEvents,
       resizePayloads,
       perf,
       budgets: TERMINAL_PRESSURE_BUDGETS,
@@ -419,6 +423,7 @@ test.describe('Embedded terminal PTY', () => {
     expect(attachPayloads.length, terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
     expect(inputPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
     expect(outputPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(outputEventCount, terminalEvidenceMessage).toBeGreaterThanOrEqual(outputPayloads.length);
     expect(
       resizePayloads.some((payload) => payload.source === 'active_session' && payload.taskId === fullAlphaTaskId),
       terminalEvidenceMessage,
