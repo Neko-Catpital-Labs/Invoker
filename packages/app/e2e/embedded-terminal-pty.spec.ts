@@ -8,6 +8,11 @@ import {
   loadPlan,
   test,
 } from './fixtures/electron-app.js';
+import {
+  activityLogWatermark,
+  numberOrZero,
+  uiPerfPayloadsSince,
+} from './fixtures/ui-perf.js';
 
 const TERMINAL_INPUT_BUDGET_MS = 100;
 const TERMINAL_OUTPUT_WRITE_BUDGET_MS = 250;
@@ -88,31 +93,6 @@ const RESPONSIVE_TERMINAL_PLAN = {
     },
   ],
 };
-
-function parseActivityPayload(message: string): Record<string, unknown> | null {
-  try {
-    return JSON.parse(message) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function numberOrZero(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
-
-async function activityLogWatermark(page: Page): Promise<number> {
-  const rows = await page.evaluate(async () => window.invoker.getActivityLogs(0, 100000));
-  return rows.at(-1)?.id ?? 0;
-}
-
-async function uiPerfPayloadsSince(page: Page, sinceId: number): Promise<Array<Record<string, unknown>>> {
-  const rows = await page.evaluate(async (watermark) => window.invoker.getActivityLogs(watermark, 5000), sinceId);
-  return rows
-    .filter((row) => row.source === 'ui-perf')
-    .map((row) => parseActivityPayload(row.message))
-    .filter((payload): payload is Record<string, unknown> => payload !== null);
-}
 
 async function resolveTaskId(page: Page, taskIdSuffix: string): Promise<string> {
   const fullTaskId = await page.evaluate(async (suffix) => {

@@ -7,6 +7,7 @@ import {
   loadPlan,
   test,
 } from './fixtures/electron-app.js';
+import { parseActivityPayload } from './fixtures/ui-perf.js';
 
 const SPAWN_FAIL_PLAN = {
   name: 'Embedded PTY Spawn Failure',
@@ -79,21 +80,12 @@ test.describe('Embedded terminal spawn failure', () => {
     await page.getByRole('button', { name: 'Minimize terminal drawer' }).click();
     await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
 
-    const attachCount = await page.evaluate(async () => {
-      const rows = await window.invoker.getActivityLogs();
-      return rows
-        .filter((row) => row.source === 'ui-perf')
-        .map((row) => {
-          try {
-            return JSON.parse(row.message) as { metric?: string };
-          } catch {
-            return null;
-          }
-        })
-        .filter((payload): payload is { metric?: string } => payload !== null)
-        .filter((payload) => payload.metric === 'embedded_terminal_attach')
-        .length;
-    });
+    const rows = await page.evaluate(async () => window.invoker.getActivityLogs());
+    const attachCount = rows
+      .filter((row) => row.source === 'ui-perf')
+      .map((row) => parseActivityPayload(row.message))
+      .filter((payload) => payload?.metric === 'embedded_terminal_attach')
+      .length;
     expect(attachCount).toBe(0);
   });
 });

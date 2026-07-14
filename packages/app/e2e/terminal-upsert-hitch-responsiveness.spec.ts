@@ -8,6 +8,7 @@ import {
   loadPlan,
   test,
 } from './fixtures/electron-app.js';
+import { parseActivityPayload } from './fixtures/ui-perf.js';
 
 const POLL_WINDOW_MS = 8_000;
 const SAMPLE_INTERVAL_MS = 100;
@@ -136,20 +137,11 @@ test('terminal output upserts keep IPC responsive under a fat DB', async ({ page
   expect(typeof perf.maxTerminalSessionUpsertMs).toBe('number');
   expect(Number(perf.maxTerminalSessionUpsertMs)).toBeGreaterThan(0);
 
-  const slowRows = await page.evaluate(async (sinceId) => {
-    const logs = await window.invoker.getActivityLogs(sinceId, 2000);
-    return logs
+  const slowRows = await page.evaluate(async (sinceId) => window.invoker.getActivityLogs(sinceId, 2000), logWatermark)
+    .then((logs) => logs
       .filter((row) => row.source === 'ui-perf')
-      .map((row) => {
-        try {
-          return JSON.parse(row.message) as { metric?: string };
-        } catch {
-          return null;
-        }
-      })
-      .filter((payload): payload is { metric?: string } => payload !== null)
-      .filter((payload) => payload.metric === 'terminal_session_upsert_slow');
-  }, logWatermark);
+      .map((row) => parseActivityPayload(row.message))
+      .filter((payload) => payload?.metric === 'terminal_session_upsert_slow'));
 
   // Burst/throttle telemetry should observe the flood on a fat DB; allow either a
   // slow-row emit or a non-zero upsert max as proof the path was exercised.
