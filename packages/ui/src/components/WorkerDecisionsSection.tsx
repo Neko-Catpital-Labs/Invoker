@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { WorkerActionSummary } from '../types.js';
 import { useWorkerDecisions } from '../hooks/useWorkerDecisions.js';
 import { displayWorkerTaskId, formatWorkerValue } from '../lib/worker-display.js';
@@ -11,25 +11,44 @@ function decisionClass(action: WorkerActionSummary): 'act' | 'skip' {
   return action.decision ?? (action.status === 'skipped' ? 'skip' : 'act');
 }
 
+function decisionTimestamp(action: WorkerActionSummary): string {
+  const value = action.completedAt ?? action.updatedAt ?? action.createdAt;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return '';
+  return new Date(parsed).toLocaleTimeString();
+}
+
+interface WorkerDecisionsSectionProps {
+  workerKind?: string;
+  workflowId?: string;
+  taskId?: string;
+  title?: string;
+  emptyText?: string;
+}
+
 export function WorkerDecisionsSection({
   workerKind,
   workflowId,
-}: {
-  workerKind: string;
-  workflowId?: string;
-}) {
+  taskId,
+  title = 'Decision timeline',
+  emptyText,
+}: WorkerDecisionsSectionProps) {
   const [filter, setFilter] = useState<DecisionFilter>('all');
   const [decisions] = useWorkerDecisions({
-    workerKind,
+    ...(workerKind ? { workerKind } : {}),
     ...(workflowId ? { workflowId } : {}),
     ...(filter === 'all' ? {} : { decision: filter }),
     limit: 25,
   });
+  const visibleDecisions = useMemo(
+    () => (taskId ? decisions.filter((decision) => decision.taskId === taskId || decision.subjectId === taskId) : decisions),
+    [decisions, taskId],
+  );
 
   return (
     <section className="rounded border border-border bg-card/60 p-3" data-testid="worker-decisions-section">
       <div className="flex items-center justify-between">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Decisions</h3>
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
         <div className="flex gap-1">
           {FILTERS.map((value) => (
             <button
@@ -47,14 +66,15 @@ export function WorkerDecisionsSection({
           ))}
         </div>
       </div>
-      {decisions.length === 0 ? (
+      {visibleDecisions.length === 0 ? (
         <div className="mt-2 text-xs text-muted-foreground">
-          No {filter === 'all' ? '' : `${filter} `}decisions recorded yet.
+          {emptyText ?? `No ${filter === 'all' ? '' : `${filter} `}decisions recorded yet.`}
         </div>
       ) : (
         <ul className="mt-2 space-y-1">
-          {decisions.map((decision) => {
+          {visibleDecisions.map((decision) => {
             const cls = decisionClass(decision);
+            const timestamp = decisionTimestamp(decision);
             return (
               <li
                 key={decision.id}
@@ -75,6 +95,7 @@ export function WorkerDecisionsSection({
                   ) : (
                     <span className="truncate text-muted-foreground">{decision.subjectId}</span>
                   )}
+                  {timestamp ? <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{timestamp}</span> : null}
                 </div>
                 {decision.reason ? <div className="mt-0.5 text-muted-foreground">reason: {decision.reason}</div> : null}
                 {decision.summary ? <div className="mt-0.5 text-muted-foreground">{decision.summary}</div> : null}
