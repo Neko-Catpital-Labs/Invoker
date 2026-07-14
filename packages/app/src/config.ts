@@ -250,8 +250,9 @@ export interface InvokerConfig {
      */
     remoteInvokerHome?: string;
     /**
-     * Optional provision command to run in the worktree after creation (e.g., pnpm install).
-     * Only used in managed mode. Default: pnpm install --frozen-lockfile
+     * Optional isolated setup command to run after worktree creation in managed mode.
+     * Default: run `pnpm install --frozen-lockfile` only when `pnpm-lock.yaml` or
+     * `pnpm-workspace.yaml` exists; otherwise skip provisioning.
      */
     provisionCommand?: string;
     /**

@@ -30,7 +30,6 @@
       "maxConcurrentTasks": 1,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile",
       "remoteHeartbeatIntervalSeconds": 30
     },
     "build-server-b": {
@@ -42,7 +41,6 @@
       "maxConcurrentTasks": 1,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile",
       "remoteHeartbeatIntervalSeconds": 30
     }
   },

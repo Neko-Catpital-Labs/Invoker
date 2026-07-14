@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
@@ -216,7 +219,7 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript).toContain('cat > "$PROVISION_PATH" <<');
     expect(callScript).toContain('start_bootstrap_heartbeat');
     expect(callScript).toContain('stop_bootstrap_heartbeat');
-    expect(callScript.indexOf('start_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('. "$PROVISION_PATH"'));
+    expect(callScript.lastIndexOf('start_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('\n"$PROVISION_PATH"\n'));
     expect(callScript.indexOf('stop_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('"$RUNNER_PATH" "$PAYLOAD_PATH"'));
     expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
     expect(callScript).toContain('rm -rf "$STAGING_DIR"');
@@ -1234,6 +1237,77 @@ describe('SshExecutor entry lifecycle', () => {
     // Let the mock process finish so heartbeat and entry state clean up.
     proc.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
+  });
+  it('managed mode executes provision in a child process and still reaches a Flutter payload', async () => {
+    const ssh2 = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteHeartbeatIntervalSeconds: 1,
+      remoteInvokerHome: '~/.invoker',
+    }) as any;
+
+    vi.spyOn(ssh2, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh2, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: "printf 'ok\\n' > .invoker-flutter-bootstrap-ran",
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh2.start(req);
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as { mock: { calls: unknown[][] } };
+    expect(writeMock.mock.calls.length).toBeGreaterThan(0);
+    const script = writeMock.mock.calls[0]?.[0];
+    expect(typeof script).toBe('string');
+
+    const bootstrapScript = script as string;
+    expect(bootstrapScript).toContain('"$PROVISION_PATH"');
+    expect(bootstrapScript).not.toContain('. "$PROVISION_PATH"');
+
+    const workspaceMatch = bootstrapScript.match(/WT=\$\(normalize_remote_path '([^']+)'\)/);
+    if (!workspaceMatch?.[1]) {
+      throw new Error('Managed SSH bootstrap did not embed a workspace path');
+    }
+
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-flutter-bootstrap-home-'));
+    try {
+      const workspacePath = workspaceMatch[1].replace(/^~(?=\/|$)/, fakeHome);
+      const markerPath = join(workspacePath, '.invoker-flutter-bootstrap-ran');
+      mkdirSync(workspacePath, { recursive: true });
+      writeFileSync(join(workspacePath, 'pubspec.yaml'), 'name: flutter_fixture\n');
+
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('/bin/bash', ['-c', bootstrapScript], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: fakeHome },
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('[provision] No pnpm lock/workspace file found; skipping default pnpm provision');
+      expect(result.stdout).toContain('[SshExecutor] Provisioning remote worktree with:');
+      expect(result.stdout).toContain('[SshExecutor] Running task payload...');
+      expect(existsSync(markerPath)).toBe(true);
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+      proc.emit('close', 0, null);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   });
 
   it('changes managed branch and worktree when request lifecycleTag changes, as recreate does', async () => {

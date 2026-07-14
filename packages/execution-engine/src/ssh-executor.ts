@@ -53,8 +53,9 @@ export interface SshExecutorConfig {
    */
   remoteInvokerHome?: string;
   /**
-   * Optional provision command to run in the worktree after creation (e.g., pnpm install).
-   * Only used in managed mode. Default: pnpm install --frozen-lockfile
+   * Optional isolated setup command to run after worktree creation in managed mode.
+   * Default: run `pnpm install --frozen-lockfile` only when `pnpm-lock.yaml` or
+   * `pnpm-workspace.yaml` exists; otherwise skip provisioning.
    */
   provisionCommand?: string;
   /** Opt-in: export agent API keys from secretsFile into remote task shells. */
@@ -257,7 +258,7 @@ chmod 700 "$PROVISION_PATH"
     );
     const runProvisionSection = provision
       ? `echo ${provisionLogLine}
-. "$PROVISION_PATH"
+"$PROVISION_PATH"
 echo "[SshExecutor] Running task payload..."
 `
       : `echo "[SshExecutor BYO] Running task in user-provided workspace: $WT"

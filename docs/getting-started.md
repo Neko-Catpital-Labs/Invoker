@@ -158,20 +158,19 @@ Minimal example:
       "user": "invoker",
       "sshKeyPath": "/home/you/.ssh/invoker_staging_a",
       "managedWorkspaces": true,
-      "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile"
+      "remoteInvokerHome": "~/.invoker"
     },
     "staging-b": {
       "host": "203.0.113.11",
       "user": "invoker",
       "sshKeyPath": "/home/you/.ssh/invoker_staging_b",
       "managedWorkspaces": true,
-      "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile"
+      "remoteInvokerHome": "~/.invoker"
     }
   }
 }
 ```
+If those repos are pnpm projects with `pnpm-lock.yaml` or `pnpm-workspace.yaml`, managed SSH auto-runs `pnpm install --frozen-lockfile`. Other repos must set `provisionCommand` explicitly.
 
 `autoFixRetries` is a finite per-task cap. `3` means the worker keeps consumed attempts in process memory and can submit at most three auto-fix attempts for the same failed task lineage; `0` disables auto-fix workers.
 
