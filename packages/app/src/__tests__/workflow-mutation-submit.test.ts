@@ -102,6 +102,43 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
     )).toThrow(error);
   });
 
+
+  it('issue: headless retry for a missing workflow still throws FOREIGN KEY', () => {
+    const error = makeForeignKeyError();
+    const submit = vi.fn(() => {
+      throw error;
+    });
+
+    expect(() => submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-missing',
+      'high',
+      'headless.exec',
+      [{ args: ['retry', 'wf-missing'] }],
+      {
+        coordinator: { submit },
+        workflowExists: () => false,
+      },
+    )).toThrow(error);
+  });
+
+  it('issue: headless recreate for a missing workflow still throws FOREIGN KEY', () => {
+    const error = makeForeignKeyError();
+    const submit = vi.fn(() => {
+      throw error;
+    });
+
+    expect(() => submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-missing',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate', 'wf-missing'] }],
+      {
+        coordinator: { submit },
+        workflowExists: () => false,
+      },
+    )).toThrow(error);
+  });
+
   it('still propagates foreign-key failures for non-delete mutations', () => {
     const error = makeForeignKeyError();
     const submit = vi.fn(() => {
