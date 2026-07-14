@@ -8,6 +8,7 @@ import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
 import { registerPrMaintenanceWorkers } from './workers/pr-maintenance-workers.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
 import { registerRequeueWorker } from './workers/requeue-worker.js';
+import { registerReviewGateMergeConflictWorker } from './workers/review-gate-merge-conflict-worker.js';
 import { registerWorkflowResumeWorker } from './workers/workflow-resume-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
@@ -19,6 +20,7 @@ export function registerBuiltinWorkers(
   registerWorkflowResumeWorker(registry);
   registerPrStatusWorker(registry);
   registerCiFailureWorker(registry);
+  registerReviewGateMergeConflictWorker(registry);
   registerDiskHeadroomWorker(registry);
   registerAutoApproveWorker(registry);
   registerPrMaintenanceWorkers(registry);

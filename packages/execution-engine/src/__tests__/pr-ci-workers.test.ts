@@ -8,12 +8,20 @@ import {
   autoFixAttemptLedgerKeyFromLifecycleEvent,
   createAutoFixAttemptLedger,
 } from '../auto-fix-attempt-ledger.js';
-import type { ReviewGateCiFailedLifecycleEvent } from '../lifecycle-events.js';
+import type {
+  ReviewGateCiFailedLifecycleEvent,
+  ReviewGateMergeConflictLifecycleEvent,
+} from '../lifecycle-events.js';
 import {
   CI_FAILURE_WORKER_KIND,
   ciFailureActionKey,
   createCiFailureTick,
 } from '../workers/ci-failure-worker.js';
+import {
+  createReviewGateMergeConflictTick,
+  REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND,
+  reviewGateMergeConflictActionKey,
+} from '../workers/review-gate-merge-conflict-worker.js';
 import {
   DEFAULT_PR_STATUS_WORKER_INTERVAL_MS,
   createPrStatusWorker,
@@ -98,6 +106,41 @@ function makeEvent(overrides: Partial<ReviewGateCiFailedLifecycleEvent> = {}): R
   };
 }
 
+function makeMergeConflictEvent(
+  overrides: Partial<ReviewGateMergeConflictLifecycleEvent> = {},
+): ReviewGateMergeConflictLifecycleEvent {
+  return {
+    eventKey: 'review_gate.merge_conflict|workflow:wf-1|task:wf-1/merge',
+    kind: 'review_gate.merge_conflict',
+    workflowId: 'wf-1',
+    taskId: 'wf-1/merge',
+    status: 'review_ready',
+    taskStateVersion: 10,
+    generation: 2,
+    attemptId: 'attempt-1',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    recoveryWakeup: {
+      eventKey: 'review_gate.merge_conflict|workflow:wf-1|task:wf-1/merge',
+      eventKind: 'review_gate.merge_conflict',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/merge',
+      taskStateVersion: 10,
+      generation: 2,
+      attemptId: 'attempt-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      reason: 'review_gate_failure',
+      authoritative: false,
+    },
+    reviewId: '123',
+    reviewUrl: 'https://github.com/owner/repo/pull/123',
+    headSha: 'sha-1',
+    headRef: 'feature/ci',
+    branch: 'feature/ci',
+    statusText: 'Awaiting review',
+    ...overrides,
+  };
+}
+
 function toRecord(write: WorkerActionWrite): WorkerActionRecord {
   const now = '2026-01-01T00:00:00.000Z';
   return {
@@ -133,6 +176,32 @@ function makeHarness(task = makeTask()) {
   };
   const attemptLedger = createAutoFixAttemptLedger();
   return { actions, store, submit, attemptLedger };
+}
+
+function makeRebaseRecreateHarness(task = makeTask()) {
+  const tasks = new Map<string, TaskState>([[task.id, task]]);
+  const actions = new Map<string, WorkerActionRecord>();
+  const submit = vi.fn((workflowId: string, priority: WorkflowMutationPriority, channel: string, args: unknown[]) => {
+    expect(workflowId).toBe('wf-1');
+    expect(priority).toBe('high');
+    expect(channel).toBe('invoker:rebase-recreate');
+    expect(args).toEqual(['wf-1']);
+    return 99;
+  });
+  const store = {
+    loadTasks: vi.fn((workflowId: string) => workflowId === 'wf-1' ? Array.from(tasks.values()) : []),
+    loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
+    listWorkflowMutationIntents: vi.fn(() => []),
+    getWorkerAction: vi.fn((workerKind: string, externalKey: string) => actions.get(`${workerKind}:${externalKey}`)),
+    upsertWorkerAction: vi.fn((write: WorkerActionWrite) => {
+      const existing = actions.get(`${write.workerKind}:${write.externalKey}`);
+      const saved = toRecord({ ...write, id: existing?.id ?? write.id, createdAt: existing?.createdAt });
+      actions.set(`${write.workerKind}:${write.externalKey}`, saved);
+      return saved;
+    }),
+    logEvent: vi.fn(),
+  };
+  return { actions, store, submit };
 }
 
 describe('PR status and CI failure workers', () => {
@@ -251,6 +320,76 @@ describe('PR status and CI failure workers', () => {
     });
   });
 
+
+  it('queues workflow rebase-recreate for review-gate merge conflict events', async () => {
+    const event = makeMergeConflictEvent();
+    const harness = makeRebaseRecreateHarness();
+    const tick = createReviewGateMergeConflictTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      drainEvents: () => [event],
+    });
+
+    await tick({ identity: { kind: REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.actions.get(`${REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND}:${reviewGateMergeConflictActionKey(event)}`)).toMatchObject({
+      workerKind: REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND,
+      actionType: 'rebase-recreate-review-gate-conflict',
+      status: 'queued',
+      intentId: '99',
+      externalKey: reviewGateMergeConflictActionKey(event),
+    });
+  });
+
+  it('dedupes repeated merge conflict events for the same review head', async () => {
+    const event = makeMergeConflictEvent();
+    const harness = makeRebaseRecreateHarness();
+    const tick = createReviewGateMergeConflictTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      drainEvents: () => [event, makeMergeConflictEvent()],
+    });
+
+    await tick({ identity: { kind: REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips stale merge conflict events when the PR head changed before submit', async () => {
+    const event = makeMergeConflictEvent();
+    const task = makeTask({
+      execution: {
+        reviewGate: {
+          activeGeneration: 2,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-123',
+            providerId: '123',
+            required: true,
+            status: 'open',
+            generation: 2,
+            headSha: 'sha-2',
+          }],
+        },
+      },
+    });
+    const harness = makeRebaseRecreateHarness(task);
+    const tick = createReviewGateMergeConflictTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      drainEvents: () => [event],
+    });
+
+    await tick({ identity: { kind: REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.actions.get(`${REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND}:${reviewGateMergeConflictActionKey(event)}`)).toBeUndefined();
+    expect(harness.store.upsertWorkerAction).not.toHaveBeenCalled();
+  });
   it('rejects stale CI failure events when the PR head changed before submit', async () => {
     const event = makeEvent();
     const task = makeTask({
