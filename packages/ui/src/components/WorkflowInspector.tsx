@@ -26,10 +26,12 @@ interface TaskLogEntry {
 }
 
 const SAFE_LOG_DETAIL_KEYS = new Set([
+  'actionType',
   'agentCount',
   'agentName',
   'artifactCount',
   'attempt',
+  'attemptCount',
   'baseBranch',
   'branch',
   'featureBranch',
@@ -38,6 +40,7 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'status',
   'reason',
   'route',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -84,15 +87,39 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
   return Object.keys(detail).length > 0 ? JSON.stringify(detail) : undefined;
 }
 
+function formatWorkerActionMessage(payload: Record<string, unknown> | undefined): string | undefined {
+  if (!payload) return undefined;
+  const workerKind = typeof payload.workerKind === 'string' && payload.workerKind.trim()
+    ? payload.workerKind
+    : 'worker';
+  const actionType = typeof payload.actionType === 'string' && payload.actionType.trim()
+    ? payload.actionType
+    : 'action';
+  const status = typeof payload.status === 'string' && payload.status.trim()
+    ? payload.status
+    : 'recorded';
+  const summary = typeof payload.summary === 'string' && payload.summary.trim()
+    ? payload.summary
+    : undefined;
+  return summary
+    ? `${workerKind}/${actionType} ${status}: ${summary}`
+    : `${workerKind}/${actionType} ${status}`;
+}
+
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
   const payloadMessage = payload?.message;
+  const workerActionMessage = event.eventType === 'task.worker_action'
+    ? formatWorkerActionMessage(payload)
+    : undefined;
+  const message = workerActionMessage
+    ?? (typeof payloadMessage === 'string' && payloadMessage.trim()
+      ? payloadMessage
+      : event.eventType);
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
     level: inferLogLevel(event, payload),
-    message: typeof payloadMessage === 'string' && payloadMessage.trim()
-      ? payloadMessage
-      : event.eventType,
+    message,
     detail: formatLogDetail(payload),
     createdAt: event.createdAt,
   };

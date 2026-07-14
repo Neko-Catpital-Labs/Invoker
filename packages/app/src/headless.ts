@@ -20,7 +20,9 @@ import {
   createWorkerRegistry,
   registerAutoFixWorker,
   registerPrMaintenanceWorkers,
+  registerPrSummaryRefreshWorker,
   resolveInvokerHomeRoot,
+  GitHubMergeGateProvider,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
@@ -426,8 +428,10 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerPrMaintenanceWorkers(
-      registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerPrSummaryRefreshWorker(
+      registerPrMaintenanceWorkers(
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+      ),
     ),
   );
 
@@ -476,6 +480,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
+      mergeGateProvider: new GitHubMergeGateProvider(),
     });
     await worker.tick('manual');
     await worker.stop();
