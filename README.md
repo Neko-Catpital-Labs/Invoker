@@ -106,6 +106,19 @@ npm install -g @neko-catpital-labs/invoker-slack
 
 Or grab desktop builds and standalone binaries from [GitHub Releases](https://github.com/Neko-Catpital-Labs/Invoker/releases/latest). Full install, config, and source checkout steps: [Getting started](docs/getting-started.md).
 
+Packaged installs bundle the first-party Invoker AI helpers inside the app. Install helpers from System Setup or:
+
+```bash
+invoker-ui --install-skills
+```
+
+Then, in Codex, Claude, Cursor, or OMP, run:
+
+```text
+/invoker-plan-to-invoker "help me plan <change>"
+```
+
+The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 ## Docs
 
 - [Getting started](docs/getting-started.md) — prerequisites, install, config, quick start, troubleshooting
@@ -118,6 +131,7 @@ Or grab desktop builds and standalone binaries from [GitHub Releases](https://gi
 
 More: [local macOS release build](docs/local-macos-release-build.md), [remote SSH targets](docs/remote-ssh-targets.md), [Docker executor](docs/docker-executor.md), [web surface](docs/web-surface.md), [product story](docs/invoker-medium-article.md).
 
+If you need to turn a product or implementation plan into an Invoker workflow, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 ## License
 
 [Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (SPDX: **FSL-1.1-ALv2**). Permitted use, competing use, and the future Apache License 2.0 grant are defined in the license file.
