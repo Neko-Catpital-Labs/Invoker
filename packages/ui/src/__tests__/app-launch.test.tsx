@@ -48,7 +48,7 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
-    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
   });
   it('opens worker status from the left panel', async () => {
@@ -90,7 +90,7 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
-    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
   });
@@ -147,7 +147,7 @@ describe('App launch (component)', () => {
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-16');
 
-    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+    for (const surface of ['workflows', 'attention', 'workers', 'planning', 'home']) {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-16');
     }
@@ -159,7 +159,7 @@ describe('App launch (component)', () => {
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-60');
 
-    for (const surface of ['workflows', 'attention', 'running', 'workers', 'planning', 'home']) {
+    for (const surface of ['workflows', 'attention', 'workers', 'planning', 'home']) {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
       expect(sidebar.className).toContain('w-60');
     }
