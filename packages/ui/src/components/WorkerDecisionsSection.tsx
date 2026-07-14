@@ -17,6 +17,10 @@ function decisionTimestamp(action: WorkerActionSummary): string {
   if (!Number.isFinite(parsed)) return '';
   return new Date(parsed).toLocaleTimeString();
 }
+function decisionLabelClass(decision: 'act' | 'skip'): string {
+  return decision === 'skip' ? 'text-amber-300' : 'text-emerald-300';
+}
+
 
 interface WorkerDecisionsSectionProps {
   workerKind?: string;
@@ -46,7 +50,7 @@ export function WorkerDecisionsSection({
   );
 
   return (
-    <section className="rounded border border-border bg-card/60 p-3" data-testid="worker-decisions-section">
+    <section className="pt-3" data-testid="worker-decisions-section">
       <div className="flex items-center justify-between">
         <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
         <div className="flex gap-1">
@@ -71,22 +75,18 @@ export function WorkerDecisionsSection({
           {emptyText ?? `No ${filter === 'all' ? '' : `${filter} `}decisions recorded yet.`}
         </div>
       ) : (
-        <ul className="mt-2 space-y-1">
-          {visibleDecisions.map((decision) => {
+        <ul className="mt-2">
+          {visibleDecisions.map((decision, index) => {
             const cls = decisionClass(decision);
             const timestamp = decisionTimestamp(decision);
             return (
               <li
                 key={decision.id}
                 data-testid="worker-decision-row"
-                className="rounded border border-border/80 bg-background/40 px-2 py-1 text-xs"
+                className={`${index === 0 ? '' : 'border-t border-border/40'} py-2 text-xs`}
               >
                 <div className="flex items-center gap-2">
-                  <span
-                    className={`rounded px-1 py-0.5 text-[10px] font-semibold uppercase ${
-                      cls === 'skip' ? 'bg-amber-900/50 text-amber-200' : 'bg-emerald-900/50 text-emerald-200'
-                    }`}
-                  >
+                  <span className={`shrink-0 text-[10px] font-medium uppercase ${decisionLabelClass(cls)}`}>
                     {cls}
                   </span>
                   <span className="text-muted-foreground">{formatWorkerValue(decision.status)}</span>
@@ -97,8 +97,8 @@ export function WorkerDecisionsSection({
                   )}
                   {timestamp ? <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{timestamp}</span> : null}
                 </div>
-                {decision.reason ? <div className="mt-0.5 text-muted-foreground">reason: {decision.reason}</div> : null}
-                {decision.summary ? <div className="mt-0.5 text-muted-foreground">{decision.summary}</div> : null}
+                {decision.reason ? <div className="mt-1 text-muted-foreground">reason: {decision.reason}</div> : null}
+                {decision.summary ? <div className="mt-1 text-foreground/85">{decision.summary}</div> : null}
               </li>
             );
           })}
