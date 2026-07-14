@@ -17,7 +17,9 @@ import {
 const TERMINAL_INPUT_BUDGET_MS = 100;
 const TERMINAL_OUTPUT_WRITE_BUDGET_MS = 250;
 const TERMINAL_RESIZE_BUDGET_MS = 250;
+const TERMINAL_OPEN_WALL_BUDGET_MS = 5000;
 const TERMINAL_TAB_SWITCH_WALL_BUDGET_MS = 1000;
+const TERMINAL_SCROLL_WALL_BUDGET_MS = 5000;
 const TERMINAL_SESSION_UPSERT_BUDGET_MS = 250;
 const TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS = 1000;
 const TERMINAL_RENDERER_LONG_TASK_BUDGET_MS = 1500;
@@ -26,7 +28,9 @@ const TERMINAL_PRESSURE_BUDGETS = {
   maxInputMs: TERMINAL_INPUT_BUDGET_MS,
   maxOutputWriteMs: TERMINAL_OUTPUT_WRITE_BUDGET_MS,
   maxResizeMs: TERMINAL_RESIZE_BUDGET_MS,
+  maxOpenWallMs: TERMINAL_OPEN_WALL_BUDGET_MS,
   maxTabSwitchWallMs: TERMINAL_TAB_SWITCH_WALL_BUDGET_MS,
+  maxScrollWallMs: TERMINAL_SCROLL_WALL_BUDGET_MS,
   maxTerminalSessionUpsertMs: TERMINAL_SESSION_UPSERT_BUDGET_MS,
   maxRendererEventLoopLagMs: TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS,
   maxRendererLongTaskMs: TERMINAL_RENDERER_LONG_TASK_BUDGET_MS,
@@ -362,18 +366,22 @@ test.describe('Embedded terminal PTY', () => {
     const fullBetaTaskId = await resolveTaskId(page, 'terminal-pressure-beta');
     const watermark = await activityLogWatermark(page);
 
+    const openAlphaStartedAt = Date.now();
     await openTaskTerminalFromMiniDag(page, 'terminal-pressure-alpha');
     await expect(page.getByTestId('terminal-drawer-body')).toBeVisible({ timeout: 10000 });
     const alphaPane = page.getByTestId(`terminal-pane-${fullAlphaTaskId}`);
     await expect(alphaPane).toBeVisible();
+    const openAlphaWallMs = Date.now() - openAlphaStartedAt;
     await alphaPane.click();
 
     await page.keyboard.type('for i in $(seq 1 140); do printf "term-live-%03d\\n" "$i"; done');
     await page.keyboard.press('Enter');
     await expect(alphaPane.getByText('term-live-140')).toBeVisible({ timeout: 10000 });
 
+    const openBetaStartedAt = Date.now();
     await openTaskTerminalFromMiniDag(page, 'terminal-pressure-beta');
     await expect(page.getByTestId(`terminal-tab-${fullBetaTaskId}`)).toHaveAttribute('data-active', 'true', { timeout: 10000 });
+    const openBetaWallMs = Date.now() - openBetaStartedAt;
 
     const switchStartedAt = Date.now();
     await page.getByRole('tab', { name: /Terminal pressure alpha/i }).click();
@@ -384,12 +392,14 @@ test.describe('Embedded terminal PTY', () => {
     await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'maximized');
     const firstLine = alphaPane.getByText('term-live-001');
     await expect(firstLine).not.toBeVisible();
+    const scrollStartedAt = Date.now();
     await alphaPane.hover();
     for (let index = 0; index < 12; index += 1) {
       await page.mouse.wheel(0, -800);
       if (await firstLine.isVisible()) break;
     }
     await expect(firstLine).toBeVisible({ timeout: 10000 });
+    const scrollWallMs = Date.now() - scrollStartedAt;
 
     await expect
       .poll(async () => {
@@ -407,7 +417,10 @@ test.describe('Embedded terminal PTY', () => {
     const terminalEvidence = {
       fullAlphaTaskId,
       fullBetaTaskId,
+      openAlphaWallMs,
+      openBetaWallMs,
       switchWallMs,
+      scrollWallMs,
       attachPayloads,
       inputPayloads,
       outputPayloads,
@@ -425,7 +438,10 @@ test.describe('Embedded terminal PTY', () => {
       resizePayloads.some((payload) => payload.source === 'active_session' && payload.taskId === fullAlphaTaskId),
       terminalEvidenceMessage,
     ).toBe(true);
+    expect(openAlphaWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_WALL_BUDGET_MS);
+    expect(openBetaWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_WALL_BUDGET_MS);
     expect(switchWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_TAB_SWITCH_WALL_BUDGET_MS);
+    expect(scrollWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLL_WALL_BUDGET_MS);
     expect(Math.max(...inputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
     expect(Math.max(...outputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
     expect(Math.max(...resizePayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);

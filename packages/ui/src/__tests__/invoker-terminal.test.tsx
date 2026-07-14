@@ -355,6 +355,17 @@ describe('Invoker terminal (component)', () => {
     }
 
     render(<Harness />);
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_transcript_commit',
+        expect.objectContaining({
+          conversationKey: 'large-chat',
+          lineCount: largeTranscript.length,
+          lineDelta: largeTranscript.length,
+          initial: true,
+        }),
+      );
+    });
     vi.mocked(mock.api.reportUiPerf).mockClear();
 
     const nextValue = 'tighten terminal responsiveness assertions';
