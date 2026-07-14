@@ -258,6 +258,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:replace-task':
       case 'invoker:load-plan':
       case 'invoker:start':
+      case 'invoker:start-ready':
       case 'invoker:stop':
       case 'invoker:clear':
       case 'invoker:resume-workflow':
