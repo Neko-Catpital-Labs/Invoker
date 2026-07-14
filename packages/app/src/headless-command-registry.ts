@@ -32,6 +32,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'install-skills', kind: 'special' },
   { name: 'watch', kind: 'read' },
   { name: 'run', kind: 'write' },
+  { name: 'start-ready', kind: 'write' },
   { name: 'resume', kind: 'write' },
   { name: 'retry', kind: 'write' },
   { name: 'retry-task', kind: 'write' },

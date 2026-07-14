@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -45,6 +45,7 @@ import { useTheme } from './lib/theme.js';
 import { InvokerTerminal, type InvokerTerminalLine, type PlanningTerminalMode } from './components/InvokerTerminal.js';
 import { Toaster, toast } from 'sonner';
 import { Button } from './components/primitives/index.js';
+import { ChevronDownIcon, PlayIcon } from './components/icons/index.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import {
   getAttentionTaskEntries,
@@ -115,6 +116,10 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
   const title = rawTitle.replace(/[:\s]+$/, '');
   const description = err instanceof Error ? err.message : typeof err === 'string' ? err : undefined;
   toast.error(title, description ? { description } : undefined);
+}
+
+function formatCount(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
@@ -595,6 +600,7 @@ export function App() {
   );
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const graphActionsMenuRef = useRef<HTMLDivElement>(null);
+  const startReadyMenuRef = useRef<HTMLDivElement>(null);
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const contextMenuTaskRef = useRef<TaskState | null>(null);
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
@@ -675,6 +681,9 @@ export function App() {
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
   const [graphActionsMenuOpen, setGraphActionsMenuOpen] = useState(false);
+  const [startReadyMenuOpen, setStartReadyMenuOpen] = useState(false);
+  const [startReadyBusy, setStartReadyBusy] = useState(false);
+  const [startReadyPreview, setStartReadyPreview] = useState<StartReadyResult | null>(null);
   // Transient, user-visible outcome line for a confirmed workflow detach.
   const [detachNotice, setDetachNotice] = useState<string | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
@@ -2067,6 +2076,63 @@ export function App() {
     }
   }, [invoker]);
 
+  const handleStartReadyAction = useCallback(async (
+    request: StartReadyRequest = {},
+  ): Promise<StartReadyResult | null> => {
+    if (!invoker?.startReady) return null;
+    setStartReadyBusy(true);
+    setStartReadyMenuOpen(false);
+    try {
+      const result = await invoker.startReady(request);
+      if (!result.dryRun) {
+        await refreshTaskGraph();
+        void refreshActionGraph();
+        if (result.started.length > 0) setHasStarted(true);
+        if (result.started.length > 0 || result.recreatedWorkflowIds.length > 0) {
+          const descriptionParts = [
+            result.recreatedWorkflowIds.length > 0
+              ? formatCount(result.recreatedWorkflowIds.length, 'workflow')
+              : null,
+            result.preview.recoverableTaskIds.length > 0
+              ? formatCount(result.preview.recoverableTaskIds.length, 'recovered task')
+              : null,
+          ].filter(Boolean);
+          toast.success(
+            `Started ${formatCount(result.started.length, 'task')}`,
+            descriptionParts.length > 0 ? { description: descriptionParts.join(' · ') } : undefined,
+          );
+        } else {
+          toast('No ready work to start');
+        }
+      }
+      return result;
+    } catch (err) {
+      notifyMutationError('Failed to start ready work:', err);
+      return null;
+    } finally {
+      setStartReadyBusy(false);
+    }
+  }, [invoker, refreshActionGraph, refreshTaskGraph]);
+
+  const handleStartReadyPreview = useCallback(async () => {
+    if (!invoker?.startReady) return;
+    setStartReadyBusy(true);
+    setStartReadyMenuOpen(false);
+    try {
+      const result = await invoker.startReady({ dryRun: true, recreateFailed: true });
+      setStartReadyPreview(result);
+    } catch (err) {
+      notifyMutationError('Failed to preview ready work:', err);
+    } finally {
+      setStartReadyBusy(false);
+    }
+  }, [invoker]);
+
+  const handleConfirmStartAndRecreateFailed = useCallback(async () => {
+    const result = await handleStartReadyAction({ recreateFailed: true });
+    if (result) setStartReadyPreview(null);
+  }, [handleStartReadyAction]);
+
   const handlePlanningSubmitDraft = useCallback(async () => {
     if (!planningSessionId) {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message: 'No planning conversation yet.' });
@@ -2424,6 +2490,7 @@ export function App() {
 
   const showStart = hasLoadedPlan && !hasStarted;
   const showStop = hasStarted && !allSettled;
+  const showStartReadyControl = hasLoadedPlan || tasks.size > 0 || workflows.size > 0;
   const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
   const autoCollapseSidebar = viewportWidth < 1440;
   const effectiveSidebarCollapsed = sidebarCollapsed ?? autoCollapseSidebar;
@@ -2438,14 +2505,17 @@ export function App() {
     }
   }, [autoCollapseInspector, sidebarSurface]);
   useEffect(() => {
-    if (!graphActionsMenuOpen) return undefined;
+    if (!graphActionsMenuOpen && !startReadyMenuOpen) return undefined;
     const handlePointerDown = (event: PointerEvent) => {
       if (graphActionsMenuRef.current?.contains(event.target as Node)) return;
+      if (startReadyMenuRef.current?.contains(event.target as Node)) return;
       setGraphActionsMenuOpen(false);
+      setStartReadyMenuOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setGraphActionsMenuOpen(false);
+        setStartReadyMenuOpen(false);
       }
     };
     document.addEventListener('pointerdown', handlePointerDown);
@@ -2454,7 +2524,7 @@ export function App() {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [graphActionsMenuOpen]);
+  }, [graphActionsMenuOpen, startReadyMenuOpen]);
 
   const selectViewMode = useCallback((nextView: 'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph') => {
     setGraphActionsMenuOpen(false);
@@ -2801,6 +2871,46 @@ export function App() {
         >
           Stop
         </button>
+      )}
+      {showStartReadyControl && (
+        <div ref={startReadyMenuRef} className="relative inline-flex">
+          <button
+            type="button"
+            data-testid="rail-start-ready"
+            onClick={() => void handleStartReadyAction()}
+            disabled={startReadyBusy}
+            className="inline-flex h-8 items-center gap-1.5 rounded-l border border-emerald-600 bg-emerald-700 px-3 text-xs font-medium text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <PlayIcon className="h-3.5 w-3.5" />
+            {startReadyBusy ? 'Starting…' : 'Start ready work'}
+          </button>
+          <button
+            type="button"
+            aria-label="Start ready options"
+            aria-expanded={startReadyMenuOpen}
+            data-testid="rail-start-ready-menu"
+            onClick={() => setStartReadyMenuOpen((open) => !open)}
+            disabled={startReadyBusy}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-r border-y border-r border-emerald-600 bg-emerald-800 text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <ChevronDownIcon className="h-3.5 w-3.5" />
+          </button>
+          {startReadyMenuOpen && (
+            <div
+              data-testid="rail-start-ready-options"
+              className="absolute right-0 top-10 z-30 w-56 rounded-lg border border-border bg-card p-1 shadow-xl"
+            >
+              <button
+                type="button"
+                data-testid="rail-start-ready-recreate-failed"
+                onClick={() => void handleStartReadyPreview()}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
+              >
+                Start and recreate failed…
+              </button>
+            </div>
+          )}
+        </div>
       )}
       <button
         type="button"
@@ -3633,6 +3743,59 @@ export function App() {
                   <span className="truncate text-xs text-muted-foreground">{result.subtitle}</span>
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {startReadyPreview && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="start-ready-preview-title"
+          data-testid="start-ready-preview-dialog"
+          className="fixed inset-0 z-40 flex items-start justify-center bg-black/45 px-4 pt-[16vh]"
+          onClick={() => setStartReadyPreview(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-lg border border-border bg-background shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-border px-4 py-3">
+              <h2 id="start-ready-preview-title" className="text-sm font-semibold text-foreground">Start and recreate failed</h2>
+            </div>
+            <div className="space-y-2 px-4 py-4 text-sm">
+              {([
+                ['Ready tasks', startReadyPreview.preview.readyTaskIds.length],
+                ['Recoverable tasks', startReadyPreview.preview.recoverableTaskIds.length],
+                ['Failed workflows', startReadyPreview.preview.failedWorkflowIds.length],
+                ['Awaiting approval', startReadyPreview.preview.skipped.awaitingApproval],
+                ['Review ready', startReadyPreview.preview.skipped.reviewReady],
+                ['Blocked', startReadyPreview.preview.skipped.blocked],
+              ] as Array<[string, number]>).map(([label, value]) => (
+                <div key={label} className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">{label}</span>
+                  <span className="font-medium text-foreground">{value}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+              <button
+                type="button"
+                className="rounded border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary"
+                onClick={() => setStartReadyPreview(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                data-testid="start-ready-preview-confirm"
+                disabled={startReadyBusy}
+                className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void handleConfirmStartAndRecreateFailed()}
+              >
+                {startReadyBusy ? 'Starting…' : 'Start and recreate'}
+              </button>
             </div>
           </div>
         </div>

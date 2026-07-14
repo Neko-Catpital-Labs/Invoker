@@ -8,7 +8,7 @@
  * command-family modules — keeping the import graph acyclic.
  */
 
-import { makeEnvelope } from '@invoker/contracts';
+import { makeEnvelope, type StartReadyRequest } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import {
   remoteFetchForPool,
@@ -48,6 +48,7 @@ import {
   preemptTaskSubgraph,
   preemptWorkflowExecution,
 } from './headless-shared.js';
+import { runStartReady } from './start-ready.js';
 
 export async function headlessWatch(workflowId: string | undefined, deps: HeadlessDeps): Promise<void> {
   const workflows = deps.persistence.listWorkflows();
@@ -210,6 +211,72 @@ export async function headlessResume(
 
   await api.close().catch(() => {});
   await webSurface?.close().catch(() => {});
+}
+
+function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefined): {
+  request: StartReadyRequest;
+  noTrack: boolean;
+} {
+  const request: StartReadyRequest = {};
+  let noTrack = inheritedNoTrack ?? false;
+  for (const arg of args) {
+    switch (arg) {
+      case '--dry-run':
+        request.dryRun = true;
+        break;
+      case '--recreate-failed':
+        request.recreateFailed = true;
+        break;
+      case '--no-track':
+        noTrack = true;
+        break;
+      default:
+        throw new Error(`Unknown start-ready option "${arg}". Usage: --headless start-ready [--dry-run] [--recreate-failed] [--no-track]`);
+    }
+  }
+  return { request, noTrack };
+}
+
+export async function headlessStartReady(args: string[], deps: HeadlessDeps): Promise<void> {
+  const { request, noTrack } = parseStartReadyArgs(args, deps.noTrack);
+  const result = runStartReady(deps.orchestrator, request);
+  const runnable = result.started.filter(isDispatchableLaunch);
+  const preview = result.preview;
+
+  const modeLabel = request.recreateFailed ? 'Start and recreate failed' : 'Start ready work';
+  process.stdout.write(`${modeLabel}: ${result.dryRun ? 'preview' : 'submitted'}\n`);
+  process.stdout.write(`  ready: ${preview.readyTaskIds.length}\n`);
+  process.stdout.write(`  recoverable: ${preview.recoverableTaskIds.length}\n`);
+  process.stdout.write(`  failed workflows: ${preview.failedWorkflowIds.length}\n`);
+  process.stdout.write(`  recreated workflows: ${result.recreatedWorkflowIds.length}\n`);
+  process.stdout.write(`  started: ${runnable.length}\n`);
+
+  if (result.dryRun || runnable.length === 0) {
+    return;
+  }
+
+  if (noTrack) {
+    if (deps.deferRunnableTasks) {
+      deps.deferRunnableTasks(runnable);
+    } else {
+      const taskExecutor = createHeadlessExecutor(deps);
+      const launch = setTimeout(() => {
+        void taskExecutor.executeTasks(runnable).catch((err) => {
+          deps.logger.error(
+            `background no-track start-ready failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+            { module: 'headless' },
+          );
+        });
+      }, 25);
+      launch.unref?.();
+    }
+    process.stdout.write('[headless] --no-track enabled: start-ready accepted; exiting without tracking.\n');
+    return;
+  }
+
+  const taskExecutor = createHeadlessExecutor(deps);
+  wireHeadlessApproveHook(deps, taskExecutor);
+  await taskExecutor.executeTasks(runnable);
 }
 
 export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<void> {
