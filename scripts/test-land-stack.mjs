@@ -93,6 +93,16 @@ test('closed PR fails open check', () => {
   assert.equal(check(res, 2174, 'open').ok, false);
 });
 
+test('dry-run state check accepts an already merged PR', () => {
+  const res = analyzeStack({
+    hasLocalCommit: hasLocal,
+    requireOpen: false,
+    prs: [{ ...fullStack[0], state: 'MERGED' }],
+  });
+  assert.equal(res.ok, true);
+  assert.equal(check(res, 2174, 'state').ok, true);
+});
+
 test('empty input fails', () => {
   const res = analyzeStack({ hasLocalCommit: hasLocal, prs: [] });
   assert.equal(res.ok, false);
@@ -131,25 +141,26 @@ test('queue targets include the whole open stack in order', () => {
   assert.deepEqual(targets.map((pr) => pr.number), [2174, 2175]);
 });
 
-function runCli(prNumbers) {
+function runCli(prNumbers, { execute = true, prs = null } = {}) {
   const tmp = mkdtempSync(join(tmpdir(), 'land-stack-test-'));
   const bin = join(tmp, 'bin');
   const log = join(tmp, 'gh.log');
   mkdirSync(bin);
   writeFileSync(log, '');
+  const prFixture = prs ?? {
+    2174: { number: 2174, headRefOid: SHA_2174, headRefName: STACK_BR_BOTTOM, baseRefName: 'master', state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
+    2175: { number: 2175, headRefOid: SHA_2175, headRefName: STACK_BR_TOP, baseRefName: STACK_BR_BOTTOM, state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
+  };
   createExecutable(join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const log = ${JSON.stringify(log)};
-const prs = {
-  '2174': { number: 2174, headRefOid: ${JSON.stringify(SHA_2174)}, headRefName: ${JSON.stringify(STACK_BR_BOTTOM)}, baseRefName: 'master', state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
-  '2175': { number: 2175, headRefOid: ${JSON.stringify(SHA_2175)}, headRefName: ${JSON.stringify(STACK_BR_TOP)}, baseRefName: ${JSON.stringify(STACK_BR_BOTTOM)}, state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
-};
+const prs = ${JSON.stringify(prFixture)};
 if (process.argv[2] === 'pr' && process.argv[3] === 'view') {
   process.stdout.write(JSON.stringify(prs[process.argv[4]]));
   process.exit(0);
 }
 if (process.argv[2] === 'pr' && process.argv[3] === 'list') {
-  process.stdout.write(JSON.stringify(Object.values(prs)));
+  process.stdout.write(JSON.stringify(Object.values(prs).filter((pr) => pr.state === 'OPEN')));
   process.exit(0);
 }
 if (process.argv[2] === 'api') {
@@ -164,13 +175,39 @@ if [ "$1" = "cat-file" ]; then exit 0; fi
 echo "unexpected git args: $@" >&2
 exit 1
 `);
-  const res = spawnSync(process.execPath, ['scripts/land-stack.mjs', ...prNumbers, '--execute'], {
+  const args = ['scripts/land-stack.mjs', ...prNumbers];
+  if (execute) args.push('--execute');
+  const res = spawnSync(process.execPath, args, {
     cwd: process.cwd(),
     env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` },
     encoding: 'utf8',
   });
   return { res, edits: readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) };
 }
+
+test('dry-run CLI accepts an already merged stack PR without queue guidance', () => {
+  const { res, edits } = runCli(['2174'], {
+    execute: false,
+    prs: {
+      2174: { ...fullStack[0], state: 'MERGED', mergeStateStatus: 'UNKNOWN', reviewDecision: 'REVIEW_REQUIRED' },
+    },
+  });
+  assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
+  assert.match(res.stdout, /PASS\s+state\s+state=MERGED \(already merged\)/);
+  assert.match(res.stdout, /No open PRs to queue; selected stack is already merged\./);
+  assert.deepEqual(edits, []);
+});
+
+test('execute still refuses to label an already merged PR', () => {
+  const { res, edits } = runCli(['2174'], {
+    prs: {
+      2174: { ...fullStack[0], state: 'MERGED', mergeStateStatus: 'UNKNOWN', reviewDecision: 'REVIEW_REQUIRED' },
+    },
+  });
+  assert.equal(res.status, 1, `${res.stdout}\n${res.stderr}`);
+  assert.match(res.stdout, /FAIL\s+open\s+state=MERGED/);
+  assert.deepEqual(edits, []);
+});
 
 test('execute refuses to label a partial stack', () => {
   const { res, edits } = runCli(['2174']);

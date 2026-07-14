@@ -11,7 +11,9 @@
  *   - the PRs form a proper stack (each PR's base is the previous PR's head branch;
  *     the bottom PR's base is the trunk),
  *   - the provided PRs are the complete open stack, not a prefix/suffix slice,
- *   - every PR is OPEN.
+ *   - in execute mode, every PR is OPEN.
+ *
+ * The default dry run also accepts MERGED PRs as already-landed stack members.
  *
  * Only after ALL checks pass does `--execute` add the `admin-bypass` label to
  * every PR in the verified stack, bottom-to-top. That lets Mergify land the
@@ -39,7 +41,13 @@ import { fileURLToPath } from 'node:url';
 export const TRUNK_DEFAULT = 'master';
 export const STACK_PREFIX_DEFAULT = 'stack/';
 
-export function analyzeStack({ prs, hasLocalCommit, trunk = TRUNK_DEFAULT, stackPrefix = STACK_PREFIX_DEFAULT }) {
+export function analyzeStack({
+  prs,
+  hasLocalCommit,
+  trunk = TRUNK_DEFAULT,
+  stackPrefix = STACK_PREFIX_DEFAULT,
+  requireOpen = true,
+}) {
   const checks = [];
   const add = (pr, name, ok, detail) => checks.push({ pr, name, ok, detail });
 
@@ -50,7 +58,10 @@ export function analyzeStack({ prs, hasLocalCommit, trunk = TRUNK_DEFAULT, stack
 
   prs.forEach((pr, i) => {
     const n = pr.number;
-    add(n, 'open', pr.state === 'OPEN', `state=${pr.state}`);
+    const stateOk = requireOpen ? pr.state === 'OPEN' : pr.state === 'OPEN' || pr.state === 'MERGED';
+    const stateName = requireOpen ? 'open' : 'state';
+    const stateDetail = `state=${pr.state}${!requireOpen && pr.state === 'MERGED' ? ' (already merged)' : ''}`;
+    add(n, stateName, stateOk, stateDetail);
 
     const shaOk = Boolean(pr.headRefOid) && hasLocalCommit(pr.headRefOid);
     add(n, 'sha-local', shaOk,
@@ -129,7 +140,7 @@ export function analyzeCompleteOpenStack({ selectedPrs, allOpenPrs, trunk = TRUN
       name: 'complete-stack',
       ok,
       detail: ok
-        ? `provided complete open stack [${expectedNumbers.join(', ')}]`
+        ? `provided complete stack [${expectedNumbers.join(', ')}]`
         : `provided [${selectedNumbers.join(', ')}], but full open stack is [${expectedNumbers.join(', ')}]`,
     }],
   };
@@ -194,7 +205,7 @@ function parseArgs(argv) {
 
 const HELP = `land-stack — verify and land a Mergify PR stack by confirmed PR number
 
-  node scripts/land-stack.mjs <pr> [<pr> ...]              verify confirmed numbers (safe default)
+  node scripts/land-stack.mjs <pr> [<pr> ...]              verify confirmed numbers (safe default; OPEN or MERGED)
   node scripts/land-stack.mjs <pr> [<pr> ...] --execute    re-verify, then queue the whole stack
   node scripts/land-stack.mjs <pr> ... --base <branch>     trunk branch (default: master)
   node scripts/land-stack.mjs <pr> ... --stack-prefix <p>  required head-branch prefix (default: stack/)
@@ -252,6 +263,7 @@ function main() {
     hasLocalCommit: localCommitChecker(),
     trunk: args.trunk,
     stackPrefix: args.stackPrefix,
+    requireOpen: args.execute,
   });
   const completenessResult = analyzeCompleteOpenStack({
     selectedPrs: prData,
@@ -277,12 +289,19 @@ function main() {
   }
   console.log('\nRESULT: verification passed.');
 
+  const targets = queueTargets(prData);
+
   if (!args.execute) {
-    console.log('Re-run with --execute to queue the whole verified stack via admin-bypass.');
+    if (targets.length === prData.length) {
+      console.log('Re-run with --execute to queue the whole verified stack via admin-bypass.');
+    } else if (targets.length === 0) {
+      console.log('No open PRs to queue; selected stack is already merged.');
+    } else {
+      console.log(`${targets.length} PR(s) are open, but --execute requires every selected PR to be OPEN; pass the current complete open stack before queueing.`);
+    }
     return;
   }
 
-  const targets = queueTargets(prData);
   if (targets.length === 0) {
     console.error('\nerror: no open PRs to queue.');
     process.exit(1);
