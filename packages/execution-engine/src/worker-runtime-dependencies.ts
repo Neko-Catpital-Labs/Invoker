@@ -1,6 +1,7 @@
 import type { Logger } from '@invoker/contracts';
 import type { MessageBus } from '@invoker/transport';
 
+import type { MergeGateProvider } from './merge-gate-provider.js';
 import type {
   AutoFixRecoveryStore,
   AutoFixRecoverySubmitter,
@@ -26,6 +27,7 @@ import type {
   WorkflowResumeWorkerStore,
   WorkflowResumeWorkerSubmitter,
 } from './workers/workflow-resume-worker.js';
+import type { PrSummaryRefreshWorkerStore } from './workers/pr-summary-refresh-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
@@ -34,7 +36,8 @@ export interface WorkerRuntimeDependencies {
     & CiFailureWorkerStore
     & AutoApproveWorkerStore
     & ReviewGateMergeConflictWorkerStore
-    & WorkflowResumeWorkerStore;
+    & WorkflowResumeWorkerStore
+    & PrSummaryRefreshWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
     & CiFailureWorkerSubmitter
@@ -48,6 +51,8 @@ export interface WorkerRuntimeDependencies {
   messageBus?: MessageBus;
   /** Review-gate polling surface owned by the task runner. */
   reviewGate?: PrStatusReviewGate;
+  /** Provider IO surface for workers that need to update published reviews. */
+  mergeGateProvider?: MergeGateProvider;
   /** Auto-fix tuning shared by workers that submit fix intents. */
   autoFix?: AutoFixWorkerConfig;
   /** Requeue worker tuning (stall requeue budget / backoff). */
