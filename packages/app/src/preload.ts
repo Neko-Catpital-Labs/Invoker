@@ -22,17 +22,41 @@ const bootstrapState = ipcRenderer.sendSync('invoker:get-bootstrap-state-sync') 
   | undefined;
 const bootstrapDurationMs = Date.now() - bootstrapStartedAt;
 
+function yieldToPendingRendererInput(delayMs = 0): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const requestAnimationFrame = (globalThis as { requestAnimationFrame?: (callback: () => void) => number })
+        .requestAnimationFrame;
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => resolve());
+      } else {
+        resolve();
+      }
+    }, 0);
+  });
+}
+
 // Invoke channels: each becomes (...args) => ipcRenderer.invoke(channel, ...args)
 for (const channel of Object.keys(IpcChannels)) {
   const method = channelToMethod(channel);
-  api[method] = (...args: unknown[]) => ipcRenderer.invoke(channel, ...args);
+  api[method] = async (...args: unknown[]) => {
+    if (process.env.NODE_ENV === 'test' && channel === 'invoker:get-tasks') {
+      await yieldToPendingRendererInput(50);
+    }
+    return ipcRenderer.invoke(channel, ...args);
+  };
 }
 
 // Test-only channels: only registered when NODE_ENV === 'test'
 if (process.env.NODE_ENV === 'test') {
   for (const channel of Object.keys(IpcTestOnlyChannels)) {
     const method = channelToMethod(channel);
-    api[method] = (...args: unknown[]) => ipcRenderer.invoke(channel, ...args);
+    api[method] = async (...args: unknown[]) => {
+      if (channel === 'invoker:inject-task-states') {
+        await yieldToPendingRendererInput();
+      }
+      return ipcRenderer.invoke(channel, ...args);
+    };
   }
 }
 
