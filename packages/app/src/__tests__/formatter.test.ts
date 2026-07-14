@@ -169,6 +169,27 @@ describe('formatEventLog', () => {
     const output = formatEventLog([]);
     expect(output).toContain('No events recorded');
   });
+
+  it('renders task.worker_action payloads as readable worker activity', () => {
+    const output = formatEventLog([{
+      id: 3,
+      taskId: '__merge__wf-1',
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        summary: 'Updated PR summary',
+        subjectType: 'pull_request',
+        subjectId: 'https://github.com/owner/repo/pull/42',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    expect(output).toContain('task.worker_action');
+    expect(output).toContain('Updated PR summary [completed] pull_request=https://github.com/owner/repo/pull/42');
+    expect(output).not.toContain('"workerKind"');
+  });
 });
 
 // ── formatWorkerActions ─────────────────────────────────────

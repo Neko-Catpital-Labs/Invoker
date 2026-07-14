@@ -4,6 +4,7 @@ import {
   CI_FAILURE_WORKER_KIND,
   CODERABBIT_ADDRESS_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
   createWorkerRegistry,
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
@@ -114,6 +115,7 @@ function controller(
   register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
   register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
   register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
+  register(PR_SUMMARY_REFRESH_WORKER_KIND, 'Refreshes PR summaries.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
   register('external-preview', 'External preview worker.');
@@ -242,6 +244,7 @@ describe('createWorkerRuntimeController', () => {
       CI_FAILURE_WORKER_KIND,
       CODERABBIT_ADDRESS_WORKER_KIND,
       PR_CONFLICT_REBASE_WORKER_KIND,
+      PR_SUMMARY_REFRESH_WORKER_KIND,
     ] as const) {
       expect(setup.controller.start(kind)).toMatchObject({
         kind,

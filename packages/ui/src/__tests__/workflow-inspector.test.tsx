@@ -745,6 +745,19 @@ describe('WorkflowInspector', () => {
     }).invoker = {
       getEvents: vi.fn(async () => [
         {
+          id: 4,
+          eventType: 'task.worker_action',
+          payload: JSON.stringify({
+            workerKind: 'pr-summary-refresh',
+            actionType: 'refresh-pr-summary',
+            status: 'completed',
+            summary: 'Updated PR summary',
+            subjectType: 'pull_request',
+            subjectId: 'https://github.com/owner/repo/pull/42',
+          }),
+          createdAt: '2025-01-01T00:00:04.000Z',
+        },
+        {
           id: 3,
           eventType: 'task.failed',
           payload: JSON.stringify({ message: 'Merge gate failed' }),
@@ -819,6 +832,8 @@ describe('WorkflowInspector', () => {
 
       await waitFor(() => expect(screen.getByText('Preparing review workspace')).toBeInTheDocument());
       expect(screen.getByText('Merge gate failed')).toBeInTheDocument();
+      expect(screen.getByText('Updated PR summary')).toBeInTheDocument();
+      expect(screen.getByText(/"workerKind":"pr-summary-refresh"/)).toBeInTheDocument();
       await waitFor(() => expect(screen.getByText('Queued auto-fix with agent')).toBeInTheDocument());
       expect(screen.queryByText('Skipped auto-fix')).not.toBeInTheDocument();
       expect(screen.queryByText('debug detail')).not.toBeInTheDocument();

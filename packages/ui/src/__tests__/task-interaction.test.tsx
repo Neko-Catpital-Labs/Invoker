@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
-import type { WorkflowMeta } from '../types.js';
+import type { TaskEvent, WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -67,6 +67,39 @@ describe('Task interaction (component)', () => {
 
     await waitFor(() => {
       expect(screen.getByText('echo hello-alpha')).toBeInTheDocument();
+    });
+  });
+
+  it('renders worker action task events in the inspector timeline', async () => {
+    const events: TaskEvent[] = [{
+      id: 1,
+      taskId: alpha.id,
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        summary: 'Updated PR summary',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }];
+    mock.setEvents(alpha.id, events);
+
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Updated PR summary')).toBeInTheDocument();
     });
   });
 

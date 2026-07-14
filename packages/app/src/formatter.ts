@@ -90,6 +90,43 @@ function normalizeJsonValue(value: unknown, seen = new WeakSet<object>()): JsonS
     seen.delete(value);
   }
 }
+
+function parseJsonObjectPayload(payload: string | undefined): Record<string, unknown> | undefined {
+  if (!payload) return undefined;
+  try {
+    const parsed = JSON.parse(payload);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringPayloadField(payload: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = payload?.[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function formatWorkerActionEventPayload(payload: string | undefined): string | undefined {
+  const parsed = parseJsonObjectPayload(payload);
+  if (!parsed) return payload;
+  const workerKind = stringPayloadField(parsed, 'workerKind');
+  const actionType = stringPayloadField(parsed, 'actionType');
+  const status = stringPayloadField(parsed, 'status');
+  const summary = stringPayloadField(parsed, 'summary');
+  const reason = stringPayloadField(parsed, 'reason');
+  const subjectType = stringPayloadField(parsed, 'subjectType');
+  const subjectId = stringPayloadField(parsed, 'subjectId');
+  const worker = [workerKind, actionType].filter(Boolean).join('/');
+  const parts = [
+    summary ?? worker,
+    status ? `[${status}]` : undefined,
+    subjectType && subjectId ? `${subjectType}=${subjectId}` : undefined,
+    reason ? `reason=${reason}` : undefined,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(' ') : undefined;
+}
 // ── Status Colors ────────────────────────────────────────────
 
 const STATUS_COLORS: Record<TaskStatus, string> = {
@@ -206,7 +243,10 @@ export function formatEventLog(events: TaskEvent[]): string {
 
   const lines = events.map((event) => {
     const timestamp = event.createdAt;
-    const payload = event.payload ? ` ${event.payload}` : '';
+    const renderedPayload = event.eventType === 'task.worker_action'
+      ? formatWorkerActionEventPayload(event.payload)
+      : event.payload;
+    const payload = renderedPayload ? ` ${escapeTerminalText(renderedPayload)}` : '';
     return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
   });
 

@@ -116,6 +116,7 @@ import {
   ExecutorRegistry, TaskRunner,
   WorktreeExecutor,
   CI_FAILURE_WORKER_KIND,
+  GitHubMergeGateProvider,
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
@@ -379,6 +380,7 @@ function buildRegisteredOwnerWorkerDeps(
     reviewGate: {
       checkMergeGateStatuses,
     },
+    mergeGateProvider: new GitHubMergeGateProvider(),
     autoFix: {
       defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
       attemptLedger: autoFixAttemptLedger,

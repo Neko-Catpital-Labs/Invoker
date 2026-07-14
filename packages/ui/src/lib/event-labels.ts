@@ -32,6 +32,7 @@ const RAW_TO_FRIENDLY: Record<string, string> = {
   'task.launch_claimed': 'Launch claimed',
   'task.metadata.updated': 'Metadata updated',
   'task.log': 'Log',
+  'task.worker_action': 'Worker action',
   'workflow.mutation.timing': 'Workflow mutation timing',
   'debug.auto-fix': 'Autofix debug',
   // Legacy short names (pre-2025-01 event vocabulary):
@@ -92,6 +93,7 @@ export function payloadDetail(payload: string | undefined): string | undefined {
   if (!payload) return undefined;
   try {
     const parsed = JSON.parse(payload) as Record<string, unknown>;
+    if (typeof parsed.summary === 'string') return parsed.summary;
     if (typeof parsed.phase === 'string') return parsed.phase;
     if (typeof parsed.reason === 'string') return parsed.reason;
     return undefined;

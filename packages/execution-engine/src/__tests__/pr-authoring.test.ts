@@ -96,6 +96,43 @@ describe('buildCanonicalPrBody', () => {
     expect(body).not.toContain('pnpm e2e');
   });
 
+  it('renders worker actions in a Pipeline section in chronological order', () => {
+    const body = buildCanonicalPrBody({
+      title: 'Refresh visibility',
+      workflowSummary: 'Added operator visibility.',
+      structuredContext: {
+        tasks: [],
+        workerActions: [
+          {
+            workerKind: 'ci-failure',
+            actionType: 'fix-ci-failure',
+            status: 'completed',
+            taskId: 'wf-1/task-b',
+            summary: 'Queued CI fix',
+            updatedAt: '2026-01-01T00:00:03.000Z',
+          },
+          {
+            workerKind: 'autofix',
+            actionType: 'auto-retry',
+            status: 'skipped',
+            taskId: 'wf-1/task-a',
+            reason: 'retry-budget-disabled',
+            updatedAt: '2026-01-01T00:00:01.000Z',
+          },
+        ],
+      },
+    });
+
+    const pipelineIndex = body.indexOf('## Pipeline');
+    const firstActionIndex = body.indexOf('| 2026-01-01T00:00:01.000Z | autofix | auto-retry | skipped | task wf-1/task-a | retry-budget-disabled |');
+    const secondActionIndex = body.indexOf('| 2026-01-01T00:00:03.000Z | ci-failure | fix-ci-failure | completed | task wf-1/task-b | Queued CI fix |');
+
+    expect(pipelineIndex).toBeGreaterThan(-1);
+    expect(firstActionIndex).toBeGreaterThan(pipelineIndex);
+    expect(secondActionIndex).toBeGreaterThan(firstActionIndex);
+    expect(body.indexOf('## Test Plan')).toBeGreaterThan(secondActionIndex);
+  });
+
   it('preserves visual proof markdown verbatim', () => {
     const visualProof = '## Visual Proof\n\n| Before | After |\n|--------|-------|\n| ![b](b.png) | ![a](a.png) |';
     const body = buildCanonicalPrBody({

@@ -53,6 +53,7 @@ describe('friendlyEventLabel', () => {
     expect(friendlyEventLabel('task.failed')).toBe('Failed');
     expect(friendlyEventLabel('task.pending')).toBe('Pending');
     expect(friendlyEventLabel('task.executor.selected')).toBe('Executor selected');
+    expect(friendlyEventLabel('task.worker_action')).toBe('Worker action');
   });
 
   it('falls back to the last segment title-cased for unknown events', () => {
@@ -85,6 +86,13 @@ describe('payloadDetail / payloadErrorSummary', () => {
 
   it('extracts a reason when phase is absent', () => {
     expect(payloadDetail(JSON.stringify({ reason: 'lease-expired' }))).toBe('lease-expired');
+  });
+
+  it('extracts a worker action summary before lower-priority detail fields', () => {
+    expect(payloadDetail(JSON.stringify({
+      summary: 'Updated PR summary',
+      reason: 'unchanged',
+    }))).toBe('Updated PR summary');
   });
 
   it('returns undefined for missing / unparseable payloads', () => {

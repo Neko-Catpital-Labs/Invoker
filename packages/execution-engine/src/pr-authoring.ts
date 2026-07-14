@@ -33,6 +33,21 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence shown in the PR Pipeline summary. */
+export interface PrAuthoringWorkerActionEntry {
+  workerKind: string;
+  actionType: string;
+  status: string;
+  taskId?: string;
+  subjectType?: string;
+  subjectId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +61,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker actions that affected this workflow/task/PR. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -478,6 +495,45 @@ export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactO
   return records;
 }
 
+function markdownTableCell(value: string | undefined): string {
+  const normalized = (value ?? '').trim();
+  if (!normalized) return '';
+  return normalized
+    .replaceAll('\\', '\\\\')
+    .replaceAll('|', '\\|')
+    .replace(/\s+/g, ' ');
+}
+
+function workerActionTime(action: PrAuthoringWorkerActionEntry): string {
+  return action.completedAt ?? action.updatedAt ?? action.createdAt ?? '';
+}
+
+function workerActionTarget(action: PrAuthoringWorkerActionEntry): string {
+  if (action.taskId) return `task ${action.taskId}`;
+  if (action.subjectType && action.subjectId) return `${action.subjectType} ${action.subjectId}`;
+  return '';
+}
+
+function workerActionDetail(action: PrAuthoringWorkerActionEntry): string {
+  const summary = action.summary?.trim();
+  const reason = action.reason?.trim();
+  if (summary && reason) return `${summary} (${reason})`;
+  return summary ?? reason ?? '';
+}
+
+function sortWorkerActionsByTime(
+  actions: readonly PrAuthoringWorkerActionEntry[],
+): PrAuthoringWorkerActionEntry[] {
+  return [...actions].sort((a, b) => {
+    const aTime = workerActionTime(a);
+    const bTime = workerActionTime(b);
+    if (aTime !== bTime) return aTime.localeCompare(bTime);
+    const aStable = `${a.workerKind}:${a.actionType}:${workerActionTarget(a)}:${workerActionDetail(a)}`;
+    const bStable = `${b.workerKind}:${b.actionType}:${workerActionTarget(b)}:${workerActionDetail(b)}`;
+    return aStable.localeCompare(bStable);
+  });
+}
+
 /**
  * Build a deterministic canonical PR body from structured context.
  * Used as the no-AI escape hatch when all agent-authored attempts fail.
@@ -488,6 +544,7 @@ export function buildCanonicalPrBody(args: {
   structuredContext?: PrAuthoringContext;
 }): string {
   const lines: string[] = [];
+  const ctx = args.structuredContext;
 
   // ## Summary
   lines.push('## Summary');
@@ -499,13 +556,31 @@ export function buildCanonicalPrBody(args: {
   }
   lines.push('');
 
+  const pipelineActions = sortWorkerActionsByTime(ctx?.workerActions ?? []);
+  if (pipelineActions.length > 0) {
+    lines.push('## Pipeline');
+    lines.push('');
+    lines.push('| Time | Worker | Action | Status | Target | Detail |');
+    lines.push('| --- | --- | --- | --- | --- | --- |');
+    for (const action of pipelineActions) {
+      lines.push([
+        markdownTableCell(workerActionTime(action)),
+        markdownTableCell(action.workerKind),
+        markdownTableCell(action.actionType),
+        markdownTableCell(action.status),
+        markdownTableCell(workerActionTarget(action)),
+        markdownTableCell(workerActionDetail(action)),
+      ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+    }
+    lines.push('');
+  }
+
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
   lines.push('');
   lines.push('<details>');
   lines.push('<summary>Test Plan</summary>');
   lines.push('');
-  const ctx = args.structuredContext;
   const commandTasks = ctx?.tasks.filter((t) => t.command && t.status === 'completed') ?? [];
   if (commandTasks.length > 0) {
     for (const t of commandTasks) {
@@ -607,6 +682,20 @@ export function buildMakePrPrompt(args: {
         lines.push(t.fileChangeSummary!);
         lines.push('');
       }
+    }
+
+    const workerActions = sortWorkerActionsByTime(ctx.workerActions ?? []);
+    if (workerActions.length > 0) {
+      lines.push('Worker action pipeline (include as ## Pipeline if useful):');
+      for (const action of workerActions) {
+        const target = workerActionTarget(action);
+        const detail = workerActionDetail(action);
+        lines.push(
+          `- ${workerActionTime(action) || 'unknown time'} — ${action.workerKind}/${action.actionType} ` +
+          `[${action.status}]${target ? ` on ${target}` : ''}${detail ? `: ${detail}` : ''}`,
+        );
+      }
+      lines.push('');
     }
 
     if (ctx.visualProofMarkdown) {
