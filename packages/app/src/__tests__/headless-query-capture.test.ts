@@ -108,8 +108,33 @@ describe('runReadOnlyHeadlessQueryToString', () => {
 
   it('still allows non-destructive `query ui-perf`', async () => {
     const resetUiPerfStats = vi.fn();
-    const deps = { ...makeQueryDeps(() => []), resetUiPerfStats, getUiPerfStats: () => ({ mainDeltaToUi: 1 }) };
-    await expect(runReadOnlyHeadlessQueryToString(['query', 'ui-perf'], deps)).resolves.toContain('mainDeltaToUi');
+    const deps = {
+      ...makeQueryDeps(() => []),
+      resetUiPerfStats,
+      getUiPerfStats: () => ({
+        mainDeltaToUi: 1,
+        maxRendererEventLoopLagMs: 12,
+        maxRendererLongTaskMs: 34,
+        planningTypingLagReports: 3,
+        maxPlanningTypingLagMs: 41,
+        planningChatInputChangeReports: 2,
+        maxPlanningChatInputHandlerMs: 17,
+        planningChatInputCommitReports: 1,
+        maxPlanningChatInputCommitMs: 29,
+      }),
+    };
+    const output = await runReadOnlyHeadlessQueryToString(['query', 'ui-perf', '--output', 'json'], deps);
+    expect(JSON.parse(output)).toMatchObject({
+      mainDeltaToUi: 1,
+      maxRendererEventLoopLagMs: 12,
+      maxRendererLongTaskMs: 34,
+      planningTypingLagReports: 3,
+      maxPlanningTypingLagMs: 41,
+      planningChatInputChangeReports: 2,
+      maxPlanningChatInputHandlerMs: 17,
+      planningChatInputCommitReports: 1,
+      maxPlanningChatInputCommitMs: 29,
+    });
     expect(resetUiPerfStats).not.toHaveBeenCalled();
   });
 
