@@ -51,6 +51,8 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
 | `managedWorkspaces` | boolean | no | When true, Invoker clones/fetches the repo and manages per-task worktrees on the remote host |
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
 | `provisionCommand` | string | no | Command run after worktree creation in managed mode |
+| `secretsFile` | string | no | Local `KEY=value` secrets file. GitHub CLI auth tokens are forwarded to SSH shells; agent provider API keys require `use_api_key: true` |
+| `use_api_key` | boolean | no | Opt in to forwarding agent provider API keys from `secretsFile` to SSH task/fix shells |
 | `remoteHeartbeatIntervalSeconds` | number | no | Interval (seconds) for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
 
 ## Multiple SSH Targets

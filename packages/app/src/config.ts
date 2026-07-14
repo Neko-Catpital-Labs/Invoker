@@ -260,8 +260,10 @@ export interface InvokerConfig {
      */
     use_api_key?: boolean;
     /**
-     * Optional local KEY=value secrets file used when use_api_key is true.
-     * Defaults to docker.secretsFile/fallback when unset.
+     * Optional local KEY=value secrets file. GitHub CLI auth tokens are
+     * forwarded to SSH task/fix shells; agent provider API keys are forwarded
+     * only when use_api_key is true. Defaults to docker.secretsFile/fallback
+     * when unset.
      */
     secretsFile?: string;
     /**

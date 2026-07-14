@@ -15,27 +15,48 @@ const AGENT_ENV_KEYS = new Set([
   'KIMI_API_KEY',
 ]);
 
+const GITHUB_CLI_ENV_KEYS = new Set([
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+]);
+
 function shellQuote(value: string): string {
   return "'" + value.replace(/'/g, "'\\''") + "'";
 }
 
-export function loadRemoteAgentEnv(secretsFile: string | undefined, useApiKey: boolean): Record<string, string> {
-  if (!useApiKey) return {};
-
+export function loadRemoteAgentEnv(
+  secretsFile: string | undefined,
+  useApiKey: boolean,
+  sourceEnv: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
   const env: Record<string, string> = {};
+
+  // GitHub CLI auth belongs to command/tool execution, so remote SSH commands
+  // need it even when agent provider API key forwarding is disabled.
+  for (const key of GITHUB_CLI_ENV_KEYS) {
+    const value = sourceEnv[key];
+    if (value) env[key] = value;
+  }
+
   for (const entry of loadSecretsFile(secretsFile)) {
     const eq = entry.indexOf('=');
     if (eq <= 0) continue;
     const key = entry.slice(0, eq);
-    if (!AGENT_ENV_KEYS.has(key)) continue;
+    if (!GITHUB_CLI_ENV_KEYS.has(key) && !(useApiKey && AGENT_ENV_KEYS.has(key))) continue;
     env[key] = entry.slice(eq + 1);
   }
 
   return env;
 }
 
-export function buildRemoteAgentEnvExports(secretsFile: string | undefined, useApiKey: boolean): string {
-  const entries = Object.entries(loadRemoteAgentEnv(secretsFile, useApiKey));
+export function buildRemoteAgentEnvExports(
+  secretsFile: string | undefined,
+  useApiKey: boolean,
+  sourceEnv: NodeJS.ProcessEnv = process.env,
+): string {
+  const entries = Object.entries(loadRemoteAgentEnv(secretsFile, useApiKey, sourceEnv));
   if (entries.length === 0) return '';
   return entries
     .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
