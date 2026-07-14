@@ -18,6 +18,7 @@ import {
   DISK_HEADROOM_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   PR_SUMMARY_REFRESH_WORKER_KIND,
+  PR_CI_FAILURE_SCAN_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   REQUEUE_WORKER_KIND,
@@ -26,8 +27,6 @@ import {
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
-
-
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
 
 export const AUTO_STARTED_OWNER_WORKER_KINDS = [
@@ -39,6 +38,7 @@ export const AUTO_STARTED_OWNER_WORKER_KINDS = [
   AUTO_APPROVE_WORKER_KIND,
   CODERABBIT_ADDRESS_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
+  PR_CI_FAILURE_SCAN_WORKER_KIND,
 ] as const;
 
 export interface WorkerRuntimeController {
@@ -170,6 +170,7 @@ const BUILT_IN_WORKER_KINDS = new Set<string>([
   CODERABBIT_ADDRESS_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
+  PR_CI_FAILURE_SCAN_WORKER_KIND,
 ]);
 
 export function createWorkerRuntimeController(options: {

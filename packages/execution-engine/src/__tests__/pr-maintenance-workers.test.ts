@@ -16,6 +16,7 @@ import {
   DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
   PR_CONFLICT_REBASE_WORKER_KIND,
   createCoderabbitAddressWorker,
+  createPrCiFailureScanWorker,
   createPrConflictRebaseWorker,
   type PrMaintenanceLockProbeOptions,
 } from '../workers/pr-maintenance-workers.js';
@@ -164,6 +165,26 @@ describe('PR maintenance workers', () => {
     expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
       command: 'bash',
       args: [resolve(repoRoot, 'scripts/cron-pr-conflict-rebase.sh')],
+      options: expect.objectContaining({ cwd: repoRoot }),
+    }));
+  });
+  it('spawns the PR CI scan shell entrypoint', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness();
+    const worker = createPrCiFailureScanWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+    });
+
+    await worker.tick();
+
+    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
+      command: 'bash',
+      args: [resolve(repoRoot, 'packages/execution-engine/scripts/cron-pr-ci-failure.sh')],
       options: expect.objectContaining({ cwd: repoRoot }),
     }));
   });
