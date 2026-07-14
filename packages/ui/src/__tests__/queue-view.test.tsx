@@ -341,7 +341,7 @@ describe('QueueView', () => {
       'worker-row-pr-conflict-rebase',
       'worker-row-pr-ci-failure-scan',
     ]);
-    expect(screen.getByText('Worker processes (6)')).toBeInTheDocument();
+    expect(screen.queryByText('Worker processes (6)')).not.toBeInTheDocument();
     expect(screen.getByText('Autofix')).toBeInTheDocument();
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('CI failure repair')).toBeInTheDocument();
