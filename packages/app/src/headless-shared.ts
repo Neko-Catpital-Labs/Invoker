@@ -34,6 +34,7 @@ import {
 import type { WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
+import type { ReviewGateCiRepairCommandResult } from './review-gate-ci-repair-command.js';
 
 export interface HeadlessDeps {
   logger: Logger;
@@ -76,6 +77,7 @@ export interface HeadlessDeps {
   ownerTaskRunnerProvider?: () => TaskRunner | null;
   /** Main process dist directory (`__dirname` of main.js); used to locate the built web UI. */
   appRootDir?: string;
+  repairReviewGateCi?: (prArg: string) => Promise<ReviewGateCiRepairCommandResult>;
 }
 
 export const RESET = '\x1b[0m';
