@@ -2,28 +2,29 @@
 
 ## Summary
 
-State transitions publish lifecycle events. Recovery behavior is owned by subscriber workers.
+State transitions publish lifecycle events. Recovery behavior is owned by registered workers.
 
-The producer of a persisted workflow or task state change is responsible for publishing a lifecycle wakeup after the durable state change is recorded. The producer must not directly auto-fix, recreate, or launch external recovery scripts as part of handling a failed delta. Auto-fix and external recovery are worker responsibilities, and workers must act through the same normal command routes used by operators.
+The producer of a persisted workflow or task state change is responsible for publishing a lifecycle wakeup after the durable state change is recorded. The producer must not directly auto-fix, recreate, or launch external recovery scripts as part of handling a failed delta. Auto-fix, requeue, and external recovery are worker responsibilities. Workers are discovered through the worker registry and must act through the same normal command routes used by operators.
 
 This note describes the runtime contract.
 
 Worker-status and other main-process poll paths must stay bounded — see
 [Main-Process Read Hot Paths](./main-process-read-hot-paths.md).
 
-## Resolved Overlap (Single Engine)
+## Resolved Overlap (Worker Registry)
 
 Earlier, auto-fix ran from more than one place: a producer could schedule auto-fix directly from failure handling, and a separate worker loop could also act on the same failed state. Two engines could observe the same failure and compete over what recovery meant.
 
-That overlap is now resolved. There is exactly **one** shared auto-fix worker engine, and it lives in `@invoker/execution-engine`.
+That overlap is now resolved by the worker registry. `createWorkerRegistry` owns lookup and registration by stable worker `kind`; `registerBuiltinWorkers` installs built-in definitions in a stable order; app startup layers operator-declared external workers on top with `registerExternalWorkersFromConfig`.
 
-These properties define when the single engine runs and keep it truly single:
+These properties define the registered model:
 
-- **Scan on start.** Starting the worker (the Workers-tab off→on toggle) runs a full scan immediately (`tickOnStart`), so every task that is already failed gets a fix-with-agent intent submitted the moment the worker comes up, not one poll interval later.
-- **Owner auto-start.** Owner processes start the auto-fix worker automatically when `autoFixRetries > 0`, so normal task failures do not need an external bash loop.
-- **Manual one-shot scan.** `./run.sh --headless worker autofix` drives the same engine for an explicit operator scan.
+- **Built-in default auto-fix.** The built-in auto-fix worker is registered as kind `autofix`; its underlying runtime reports recovery ownership as `recovery` and submits normal `fix-with-agent` recovery intents.
+- **Scan on start.** Starting the auto-fix worker runs a full scan immediately (`tickOnStart`), so tasks that are already failed are reconciled when the worker comes up, not one poll interval later.
+- **Manual one-shot scan.** `./run.sh --headless worker autofix` drives the same registered auto-fix worker for an explicit operator scan.
+- **External extension point.** `externalWorkers` config entries add more registry kinds without changing producer code; each entry supplies a supervised process launch boundary.
 
-A **sweep-and-assert guard** test fails the build if auto-fix is triggered from any code path outside the shared worker engine (with an allowlist for the engine itself and the sanctioned operator fix command). This locks the single-engine invariant in against future drift, so a new direct auto-fix call cannot reintroduce a second recovery path.
+A **sweep-and-assert guard** pattern fails the build if a recovery channel is triggered from any code path outside its registered worker engine and sanctioned command/dispatcher routes. This locks the single-owner invariant in against future drift, so a new direct auto-fix or requeue call cannot reintroduce a second recovery path.
 
 ## Achieved Model
 
@@ -32,7 +33,8 @@ Lifecycle events are ephemeral wakeups, not durable truth. Persisted workflow an
 ```mermaid
 flowchart LR
   PersistedChange[Persisted state change] --> Event[Lifecycle event]
-  Event --> Worker[Worker wake]
+  Event --> Registry[Worker registry by kind]
+  Registry --> Worker[Registered worker wake]
   Worker --> Scan[Persisted scan]
   Scan --> Decision[Reconcile recovery need]
   Decision --> Command[Normal command submission]
@@ -45,10 +47,10 @@ The achieved model separates responsibilities:
 | --- | --- | --- |
 | Persist state transition | Producer | Write the authoritative workflow or task state first. |
 | Publish lifecycle wakeup | Producer | Emit an event after the persisted transition so subscribers can re-check state. |
-| Decide recovery action | Worker | Read persisted state and reconcile whether work is still needed. |
-| Execute recovery | Worker through command route | Submit normal commands rather than mutating recovery state directly. |
+| Decide recovery action | Registered worker | Read persisted state and reconcile whether work is still needed. |
+| Execute recovery | Registered worker through command route | Submit normal commands rather than mutating recovery state directly. |
 
-Producers must not directly auto-fix, recreate, or launch external recovery scripts. They publish lifecycle events and leave recovery decisions to subscribers.
+Producers must not directly auto-fix, recreate, requeue, or launch external recovery scripts. They publish lifecycle events and leave recovery decisions to registered workers.
 
 ## Durable State Authority
 
@@ -64,6 +66,19 @@ Required behavior:
 
 This preserves the existing persistence model while allowing the recovery system to become event-driven.
 
+## Worker Registry
+
+The worker registry is a generic catalog of `WorkerDefinition` entries keyed by stable `kind`. A definition has a human-readable note and a factory that builds a `WorkerRuntime` from injected owner dependencies. The registry itself is worker-agnostic: built-in worker wiring lives beside each worker implementation, and app/headless entry points compose the registry they need.
+
+Registered worker kinds are the operator-facing control surface:
+
+- `worker list` prints registered kinds and notes.
+- Desktop and owner status snapshots render rows from `registry.list()`.
+- `start(kind)` and `stop(kind)` require `registry.get(kind)`, so unknown kinds fail before any runtime is created.
+- Manual headless scans acquire `worker-<kind>.lock`, making the single-instance lock per kind rather than global.
+
+The built-in set includes `autofix` as the default recovery worker for failed-task fixes. Operator-declared `externalWorkers` append additional kinds by config, so external automation is selected through the same registry and lifecycle controls as built-ins.
+
 ## Worker Wakeups
 
 A lifecycle event should carry enough context to make wakeups efficient, such as workflow ID, task ID, transition type, and generation where available. That context is an optimization, not authority.
@@ -76,16 +91,16 @@ On wake, a worker should:
 4. Submit a normal command when recovery is still needed.
 5. Record any worker-owned bookkeeping through normal persistence paths.
 
-Workers may subscribe to the same lifecycle event stream. Contention is controlled by persisted state checks and command-route validation, not by assuming one subscriber receives a unique event.
+Registered workers may subscribe to the same lifecycle event stream. Contention is controlled by persisted state checks and command-route validation, not by assuming one subscriber receives a unique event.
 
 ## Auto-Fix Worker
 
-Automatic fix attempts are owned by a **single** shared auto-fix worker engine in `@invoker/execution-engine`. Owner processes auto-start that worker when `autoFixRetries > 0`. The engine subscribes to lifecycle wakeups, scans persisted state, keys consumed attempts in worker runtime memory by task lineage, and decides whether an auto-fix command should be submitted. `./run.sh --headless worker autofix` is only a manual one-shot scan through the same engine.
+Automatic fix attempts are owned by the built-in auto-fix worker registered as kind `autofix` in `@invoker/execution-engine`. The worker's underlying runtime identity remains `recovery` for existing recovery audit events. It subscribes to lifecycle wakeups, scans persisted state, keys consumed attempts in worker runtime memory by task lineage, and decides whether an auto-fix command should be submitted. `./run.sh --headless worker autofix` is only a manual one-shot scan through the same registered definition.
 
-Lifetime and concurrency are constrained so the single engine stays single:
+Lifetime and concurrency are constrained so the registered worker stays single for each explicit start path:
 
-- The worker is **process-owned**: it lives and dies with the owner process that started it.
-- A **single-instance lock** refuses a second concurrent explicit worker start, so manual scans cannot race another explicit worker door.
+- The worker is **process-owned**: it lives and dies with the owner process or headless command that started it.
+- A **single-instance lock per kind** refuses a second concurrent explicit worker start for the same registered kind, so `autofix` manual scans cannot race another explicit `autofix` door while unrelated worker kinds remain independently controllable.
 
 The engine should only act when persisted state shows that:
 
@@ -94,7 +109,7 @@ The engine should only act when persisted state shows that:
 3. `autoFixRetries` leaves in-memory retry budget for the task lineage; `0` disables auto-fix and a finite value such as `3` permits at most three submitted attempts until the worker restarts or the task lineage changes.
 4. No incompatible recovery action is already in progress.
 
-When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition. A sweep-and-assert guard test fails the build if any auto-fix is triggered outside this shared worker engine.
+When those checks pass, the auto-fix worker submits the normal fix command. It must not be invoked directly by the producer that recorded the failed transition. The sweep-and-assert guard fails the build if any auto-fix is triggered outside this shared worker engine and its sanctioned operator command route.
 
 ## Requeue Worker (liveness stalls)
 
@@ -187,33 +202,30 @@ the pr-status worker delegates its decisions to the review gate, and the
 disk-headroom and external-process workers have no task/workflow decision to
 record.
 
-## External Recovery Worker
+## External Workers
 
-The external recovery worker owns integration with external recovery automation. It subscribes to lifecycle wakeups, scans persisted state, and decides whether an external recovery command should be submitted or whether an external process should be coordinated through a command route.
+External worker support is configuration-driven. Each `externalWorkers` entry declares a stable registry `kind` plus a `launch` object with `executable`, optional `args`, and optional `cwd`. The app loader calls `registerExternalWorkersFromConfig`, which registers each configured kind with a note of the form `Supervises external worker process <executable>`.
 
-The worker should only act when persisted state shows that:
+The supervised external-process boundary is deliberately narrow:
 
-1. The workflow or task is in a state eligible for external recovery.
-2. The current generation still matches the observed failure.
-3. External recovery policy selects this workflow or task.
-4. Auto-fix or another recovery path has not already claimed or resolved the state.
+1. Starting or waking the worker launches the configured executable if no child process is already tracked.
+2. The child inherits stdout and stderr, while stdin is ignored.
+3. `stop()` sends `SIGTERM` and escalates to `SIGKILL` after the stop timeout if the child is still alive.
+4. The runtime reports running only while the registered worker has started, has not stopped, and still owns a live child process.
 
-External scripts must not be launched directly by state-transition producers. Any external recovery launch must be initiated by the external recovery worker after it has reconciled persisted state.
+External worker processes are therefore coordinated by the same registry, start/stop controls, and per-kind lock discipline as built-ins. State-transition producers still must not launch scripts directly; they publish lifecycle wakeups, and any external worker process is started by the registered external worker runtime after operator configuration selects that kind.
 
-## Cleanup Of Direct Handlers
+## Guarded Boundaries
 
-Later implementation slices should remove failed-delta handlers that directly schedule auto-fix or directly launch external recovery scripts. Those handlers should become lifecycle publishers only.
+Direct recovery handlers are intentionally outside the design. Failed-delta handlers publish lifecycle wakeups only; workers own action/skip decisions after reading durable state.
 
-Cleanup should preserve these invariants:
+The generalized guard model preserves these invariants:
 
 1. State changes are persisted before lifecycle events are published.
 2. Lifecycle events are wakeups and may be replayed or missed.
 3. Persisted state remains authoritative for all recovery decisions.
 4. Recovery workers submit normal commands instead of bypassing command handling.
-5. Producers do not directly auto-fix, recreate, or launch external recovery scripts.
+5. Producers do not directly auto-fix, recreate, requeue, or launch external recovery scripts.
+6. Source-sweep guards fail when a recovery trigger appears outside the registered worker engine and its allowlisted command or dispatcher route.
 
-## What I Intend To Do
-
-1. Event foundation: add lifecycle-event publication at the relevant persisted state transitions, with producers limited to publishing wakeups after durable state changes.
-2. Auto-fix worker: move automatic fix behavior behind a subscriber worker that wakes on lifecycle events, scans persisted state, and submits normal fix commands.
-3. External recovery cleanup and regression: move external recovery launch behavior behind its worker, remove direct failed-delta launch paths, and add regression coverage that proves producers publish wakeups without owning recovery.
+This makes the registry plus external-worker model the canonical recovery design: producers publish durable transitions and wakeups; registered workers reconcile state; command routes perform the mutation.

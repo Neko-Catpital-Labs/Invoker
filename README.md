@@ -96,6 +96,14 @@ Spread work across SSH targets and remote machines you already manage — same a
 </tr>
 </table>
 
+## Workers
+
+Invoker recovery is driven by a worker registry, not a single hard-coded auto-fix loop. Built-in worker definitions are registered by stable kind; `autofix` remains the built-in default worker for failed-task recovery and submits normal `fix-with-agent` intents after reconciling persisted state.
+
+Manual headless worker runs use the registered kind (`./run.sh --headless worker autofix`) and take a single-instance lock named for that kind, so a second `autofix` scan is refused without blocking other worker kinds. The same registry powers desktop worker status and start/stop controls.
+
+External worker support is configured with `externalWorkers`, where each entry declares a registry `kind` and a `launch` command (`executable`, optional `args`, optional `cwd`). The loader registers each external worker kind and supervises its process boundary: start/wake launches the process, stop terminates it, and producers still only publish lifecycle wakeups rather than launching scripts directly.
+
 ## Install
 
 ```bash
