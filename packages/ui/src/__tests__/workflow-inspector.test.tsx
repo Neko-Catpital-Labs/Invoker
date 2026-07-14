@@ -731,9 +731,17 @@ describe('WorkflowInspector', () => {
     expect(screen.getByTestId('workflow-inspector-action-node')).toHaveTextContent('12000');
   });
 
-  it('shows task logs and filters by minimum level', async () => {
+  it('shows task timeline events and matching worker decisions', async () => {
     (window as unknown as {
-      invoker: { getEvents: (taskId: string, options: { limit: number }) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
+      invoker: {
+        getEvents: (taskId: string, options: { limit: number }) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>>;
+        getWorkerDecisions: () => Promise<{
+          actions: Array<Record<string, unknown>>;
+          limit: number;
+          offset: number;
+          hasMore: boolean;
+        }>;
+      };
     }).invoker = {
       getEvents: vi.fn(async () => [
         {
@@ -755,6 +763,46 @@ describe('WorkflowInspector', () => {
           createdAt: '2025-01-01T00:00:01.000Z',
         },
       ]),
+      getWorkerDecisions: vi.fn(async () => ({
+        actions: [
+          {
+            id: 'wd-1',
+            workerKind: 'autofix',
+            actionType: 'fix-task',
+            workflowId: 'wf-1',
+            taskId: 'task-1',
+            subjectType: 'task',
+            subjectId: 'task-1',
+            externalKey: 'wf-1/task-1:g0:a1',
+            status: 'queued',
+            attemptCount: 1,
+            summary: 'Queued auto-fix with agent',
+            decision: 'act',
+            createdAt: '2025-01-01T00:00:04.000Z',
+            updatedAt: '2025-01-01T00:00:04.000Z',
+          },
+          {
+            id: 'wd-2',
+            workerKind: 'autofix',
+            actionType: 'fix-task',
+            workflowId: 'wf-1',
+            taskId: 'task-2',
+            subjectType: 'task',
+            subjectId: 'task-2',
+            externalKey: 'wf-1/task-2:g0:a1',
+            status: 'skipped',
+            attemptCount: 1,
+            summary: 'Skipped auto-fix',
+            reason: 'retry-budget-disabled',
+            decision: 'skip',
+            createdAt: '2025-01-01T00:00:05.000Z',
+            updatedAt: '2025-01-01T00:00:05.000Z',
+          },
+        ],
+        limit: 25,
+        offset: 0,
+        hasMore: false,
+      })),
     };
 
     try {
@@ -771,6 +819,8 @@ describe('WorkflowInspector', () => {
 
       await waitFor(() => expect(screen.getByText('Preparing review workspace')).toBeInTheDocument());
       expect(screen.getByText('Merge gate failed')).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText('Queued auto-fix with agent')).toBeInTheDocument());
+      expect(screen.queryByText('Skipped auto-fix')).not.toBeInTheDocument();
       expect(screen.queryByText('debug detail')).not.toBeInTheDocument();
 
       fireEvent.change(screen.getByTestId('task-log-level-select'), { target: { value: 'debug' } });
