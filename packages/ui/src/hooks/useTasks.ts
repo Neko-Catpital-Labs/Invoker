@@ -67,10 +67,46 @@ function workflowHasBackingTask(
   return false;
 }
 
+function countTasksByWorkflow(tasks: Map<string, TaskState>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const task of tasks.values()) {
+    const workflowId = task.config.workflowId;
+    if (!workflowId) continue;
+    counts.set(workflowId, (counts.get(workflowId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function workflowHasBackingTaskCount(
+  taskCountsByWorkflow: Map<string, number>,
+  workflowId: string,
+): boolean {
+  return (taskCountsByWorkflow.get(workflowId) ?? 0) > 0;
+}
+
+function moveWorkflowTaskCount(
+  taskCountsByWorkflow: Map<string, number>,
+  beforeWorkflowId: string | undefined,
+  afterWorkflowId: string | undefined,
+): void {
+  if (beforeWorkflowId === afterWorkflowId) return;
+  if (beforeWorkflowId) {
+    const nextCount = (taskCountsByWorkflow.get(beforeWorkflowId) ?? 0) - 1;
+    if (nextCount > 0) {
+      taskCountsByWorkflow.set(beforeWorkflowId, nextCount);
+    } else {
+      taskCountsByWorkflow.delete(beforeWorkflowId);
+    }
+  }
+  if (afterWorkflowId) {
+    taskCountsByWorkflow.set(afterWorkflowId, (taskCountsByWorkflow.get(afterWorkflowId) ?? 0) + 1);
+  }
+}
+
 function applyWorkflowRollupPatches(
   previous: Map<string, WorkflowMeta>,
   patches: readonly WorkflowRollupPatch[],
-  tasks: Map<string, TaskState>,
+  taskCountsByWorkflow: Map<string, number>,
 ): Map<string, WorkflowMeta> {
   if (patches.length === 0) {
     return previous;
@@ -78,7 +114,7 @@ function applyWorkflowRollupPatches(
   const next = new Map(previous);
   for (const patch of patches) {
     if (patch.removed) {
-      if (!workflowHasBackingTask(tasks, patch.workflowId)) {
+      if (!workflowHasBackingTaskCount(taskCountsByWorkflow, patch.workflowId)) {
         next.delete(patch.workflowId);
       }
       continue;
@@ -336,9 +372,16 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
 
         const removedWorkflowIds: string[] = [];
         let hasAppliedTaskDelta = false;
+        let taskCountsByWorkflow: Map<string, number> | null = null;
+        const ensureTaskCountsByWorkflow = () => {
+          taskCountsByWorkflow ??= countTasksByWorkflow(nextTasks);
+          return taskCountsByWorkflow;
+        };
         for (const event of deltaEvents) {
           if (event.type !== 'delta') continue;
           const delta = event.delta;
+          const beforeTask = delta.type === 'created' ? undefined : nextTasks.get(delta.taskId);
+          const beforeWorkflowId = beforeTask?.config.workflowId;
           if (delta.type === 'updated' && !nextTasks.has(delta.taskId)) {
             if (traceTaskDeltas) {
               console.warn(
@@ -351,16 +394,30 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
             hasAppliedTaskDelta = true;
           }
           applyDeltaInPlace(nextTasks, delta);
-          for (const patch of event.workflowRollups) {
-            if (
-              patch.removed &&
-              nextWorkflows.has(patch.workflowId) &&
-              !workflowHasBackingTask(nextTasks, patch.workflowId)
-            ) {
-              removedWorkflowIds.push(patch.workflowId);
-            }
+          const afterTask = delta.type === 'removed'
+            ? undefined
+            : delta.type === 'created'
+              ? delta.task
+              : nextTasks.get(delta.taskId);
+          if (taskCountsByWorkflow) {
+            moveWorkflowTaskCount(taskCountsByWorkflow, beforeWorkflowId, afterTask?.config.workflowId);
           }
-          nextWorkflows = applyWorkflowRollupPatches(nextWorkflows, event.workflowRollups, nextTasks);
+          if (event.workflowRollups.length > 0) {
+            for (const patch of event.workflowRollups) {
+              if (
+                patch.removed &&
+                nextWorkflows.has(patch.workflowId) &&
+                !workflowHasBackingTaskCount(ensureTaskCountsByWorkflow(), patch.workflowId)
+              ) {
+                removedWorkflowIds.push(patch.workflowId);
+              }
+            }
+            nextWorkflows = applyWorkflowRollupPatches(
+              nextWorkflows,
+              event.workflowRollups,
+              ensureTaskCountsByWorkflow(),
+            );
+          }
         }
 
         if (!shouldRefreshWorkflows) {
