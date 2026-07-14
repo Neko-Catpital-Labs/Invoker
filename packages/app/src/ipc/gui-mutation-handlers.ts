@@ -788,6 +788,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:start':
         return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:start-ready':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:stop':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:clear':
