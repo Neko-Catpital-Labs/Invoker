@@ -191,7 +191,7 @@ import {
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
 import { killRunningTaskExecution, rebuildTaskRunner as rebuildTaskRunnerWiring, requireWiredTaskRunner, type TaskHandleMap } from './execution/task-runner-wiring.js';
 import { createMainWindow, registerMainWindowActivateHandler, registerMainWindowSecondInstanceHandler } from './window/window-lifecycle.js';
-import { createRendererTaskFeed, type RendererTaskFeedStopHandle } from './window/renderer-task-feed.js';
+import { createRendererTaskFeed, type RendererTaskFeed, type RendererTaskFeedStopHandle } from './window/renderer-task-feed.js';
 import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
 import { logProcessError } from './process-error-handling.js';
 
@@ -2095,7 +2095,8 @@ function createEmbeddedTerminalBackendFromConfig(
     workflowMetadataPublisher?.requestPublish(reason);
   };
 
-  const rendererTaskFeed = createRendererTaskFeed({
+  let rendererTaskFeed: RendererTaskFeed;
+  const createActiveRendererTaskFeed = (): RendererTaskFeed => createRendererTaskFeed({
     logger,
     persistence,
     messageBus,
@@ -2585,6 +2586,8 @@ function createEmbeddedTerminalBackendFromConfig(
         recordStartupMark('initServices.readOnly.end', { ownerMode: false, ownerId: owner.ownerId });
       }
     }
+
+    rendererTaskFeed = createActiveRendererTaskFeed();
 
     if (ownerMode) {
       registerTerminalSessionPersistence({
@@ -3151,6 +3154,24 @@ function createEmbeddedTerminalBackendFromConfig(
       taskHandles.clear();
       rendererTaskFeed.resetSnapshotState();
       requestWorkflowMetadataPublish('clear');
+    });
+
+    registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
+      logger.info('delete-all-workflows', { module: 'ipc' });
+      assertDeleteAllEnabled();
+      await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
+      taskHandles.clear();
+      rendererTaskFeed.resetSnapshotState();
+      requestWorkflowMetadataPublish('delete-all-workflows');
+    });
+
+    registerGuiMutationHandler('invoker:delete-all-workflows-bulk', async () => {
+      logger.info('delete-all-workflows-bulk', { module: 'ipc' });
+      assertDeleteAllEnabled();
+      await sharedDeleteAllWorkflowsBulk({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
+      taskHandles.clear();
+      rendererTaskFeed.resetSnapshotState();
+      requestWorkflowMetadataPublish('delete-all-workflows-bulk');
     });
 
 
