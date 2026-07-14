@@ -407,6 +407,7 @@ function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependenc
 
 
 
+
 declare const __BUILD_SHA__: string | undefined;
 declare const __BUILD_VERSION__: string | undefined;
 
