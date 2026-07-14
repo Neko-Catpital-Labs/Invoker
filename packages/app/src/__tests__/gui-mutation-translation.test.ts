@@ -48,6 +48,8 @@ describe('GUI mutation translation', () => {
   it.each([
     'invoker:check-pr-statuses',
     'invoker:check-pr-status',
+    'invoker:select-experiment',
+    'invoker:edit-task-pool',
   ])('routes %s to the owner GUI mutation handler', (channel) => {
     const translatorSource = getTranslatorSource();
     expect(translatorSource).toMatch(
