@@ -72,7 +72,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
 
   return (
     <div
-      className={`relative w-[264px] rounded-xl border border-dashed px-5 py-3 transition-[opacity,box-shadow,border-color] duration-75 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}
+      className={`relative w-[167px] rounded-xl border border-dashed px-2 py-2 transition-[opacity,box-shadow,border-color] duration-75 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}
       title={label}
       data-selected={selected ? 'true' : 'false'}
     >
@@ -83,25 +83,25 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
       />
 
       <span
-        className={`absolute left-0 top-0 bottom-0 w-[3px] rounded-l-xl ${colors.dot} ${visualStatus === 'pending' ? 'pulse-strong' : ''}`}
+        className={`absolute left-0 top-0 bottom-0 w-[2px] rounded-l-xl ${colors.dot} ${visualStatus === 'pending' ? 'pulse-strong' : ''}`}
       />
 
-      <div className={`flex items-center gap-2 pl-3 ${colors.text}`}>
-        <IconComponent className="w-3.5 h-3.5" />
-        <span className="font-mono text-[11px] font-semibold uppercase tracking-wide" data-testid="merge-gate-primary-label">
+      <div className={`flex items-center gap-1.5 pl-2 ${colors.text}`}>
+        <IconComponent className="w-3 h-3" />
+        <span className="font-mono text-[8px] font-semibold uppercase tracking-wide" data-testid="merge-gate-primary-label">
           {PRIMARY_LABEL[effectiveGateKind]}
         </span>
       </div>
 
-      <div className={`text-sm font-medium truncate mt-1 pl-3 text-card-foreground`}>
+      <div className={`text-[11px] font-medium truncate mt-0.5 pl-2 text-card-foreground`}>
         {label}
       </div>
 
-      <div className="flex items-center gap-1.5 mt-1 pl-3">
+      <div className="flex items-center gap-1 mt-0.5 pl-2">
         <span
-          className={`w-1.5 h-1.5 rounded-full ${colors.dot} ${visualStatus === 'pending' ? 'pulse-strong' : ''}`}
+          className={`w-1 h-1 rounded-full ${colors.dot} ${visualStatus === 'pending' ? 'pulse-strong' : ''}`}
         />
-        <span className={`text-[11px] tracking-wide ${colors.text}`}>{statusLabel}</span>
+        <span className={`text-[8px] tracking-wide ${colors.text}`}>{statusLabel}</span>
       </div>
 
       <Handle
