@@ -87,6 +87,7 @@ import {
 import { seedMainProcessHitchFixture } from '../main-process-hitch-fixture.js';
 import { seedStressFixture, type StressFixtureOptions } from '../stress-fixture.js';
 import { buildReviewGateQueryResponse } from '../review-gate-query.js';
+import { recordRendererUiPerfMetric, type RendererUiPerfCounters } from '../renderer-ui-perf.js';
 import {
   AUTO_STARTED_OWNER_WORKER_KINDS,
   createLocalWorkerStatusSnapshot,
@@ -224,14 +225,7 @@ export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskAc
   getTaskDeltaStreamSequence: () => number;
   computeRuntimeStatus: () => unknown;
   getUiPerfStats: () => Record<string, unknown>;
-  uiPerfStats: {
-    rendererReports: number;
-    maxRendererHiddenEventLoopLagMs: number;
-    maxRendererEventLoopLagMs: number;
-    maxRendererCumulativeLagMs: number;
-    maxRendererTickDeltaMs: number;
-    maxRendererLongTaskMs: number;
-  };
+  uiPerfStats: RendererUiPerfCounters;
   createRegisteredWorkerRegistry: () => WorkerRegistry<WorkerRuntimeDependencies>;
   buildCliInstallerContext: () => CliInstallerContext;
   resolveSetupCliPath: () => string;
@@ -1719,24 +1713,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     ) {
       logger.info(`ui metric ${metric} ${JSON.stringify(data ?? {})}`, { module: 'ui-state' });
     }
-    if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
-      const hiddenOrUnfocused = data.visibilityState === 'hidden' || data.hasFocus === false;
-      if (hiddenOrUnfocused) {
-        uiPerfStats.maxRendererHiddenEventLoopLagMs = Math.max(uiPerfStats.maxRendererHiddenEventLoopLagMs, data.lagMs);
-      } else {
-        uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
-      }
-      if (typeof data.cumulativeLagMs === 'number') {
-        uiPerfStats.maxRendererCumulativeLagMs = Math.max(uiPerfStats.maxRendererCumulativeLagMs, data.cumulativeLagMs);
-      }
-      if (typeof data.tickDeltaMs === 'number') {
-        uiPerfStats.maxRendererTickDeltaMs = Math.max(uiPerfStats.maxRendererTickDeltaMs, data.tickDeltaMs);
-      }
-    }
-    if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
-      uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
-    }
-    uiPerfStats.rendererReports += 1;
+    recordRendererUiPerfMetric(uiPerfStats, metric, data);
     try {
       persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
     } catch {

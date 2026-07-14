@@ -285,7 +285,6 @@ import {
 } from './terminal-ui-perf.js';
 import {
   createRendererUiPerfCounters,
-  recordRendererUiPerfMetric,
   resetRendererUiPerfCounters,
 } from './renderer-ui-perf.js';
 import {
@@ -1096,12 +1095,7 @@ function startHeadlessMode(): void {
           dbPollCreated: 0,
           dbPollUpdatedAsCreated: 0,
           dbPollUpdatedAsUpdated: 0,
-          rendererReports: 0,
-          maxRendererEventLoopLagMs: 0,
-          maxRendererHiddenEventLoopLagMs: 0,
-          maxRendererCumulativeLagMs: 0,
-          maxRendererTickDeltaMs: 0,
-          maxRendererLongTaskMs: 0,
+          ...createRendererUiPerfCounters(),
         }),
         resetUiPerfStats: () => {},
         waitForApproval,

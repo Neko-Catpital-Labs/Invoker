@@ -22,6 +22,7 @@ describe('renderer ui perf counters', () => {
       hasFocus: false,
     });
     recordRendererUiPerfMetric(counters, 'renderer_long_task', { durationMs: 250 });
+    recordRendererUiPerfMetric(counters, 'planning_typing_lag_baseline', { lagMs: 19 });
     recordRendererUiPerfMetric(counters, 'planning_chat_input_change', { handlerDurationMs: 12 });
     recordRendererUiPerfMetric(counters, 'planning_chat_input_commit', { durationMs: 34 });
     recordRendererUiPerfMetric(counters, 'planning_chat_transcript_commit', {
@@ -37,12 +38,14 @@ describe('renderer ui perf counters', () => {
     recordRendererUiPerfMetric(counters, 'embedded_terminal_resize', { durationMs: 18 });
     recordRendererUiPerfMetric(counters, 'embedded_terminal_snapshot_write', { durationMs: 90, bytes: 8192 });
 
-    expect(counters.rendererReports).toBe(13);
+    expect(counters.rendererReports).toBe(14);
     expect(counters.maxRendererEventLoopLagMs).toBe(300);
     expect(counters.maxRendererHiddenEventLoopLagMs).toBe(900);
     expect(counters.maxRendererCumulativeLagMs).toBe(450);
     expect(counters.maxRendererTickDeltaMs).toBe(1300);
     expect(counters.maxRendererLongTaskMs).toBe(250);
+    expect(counters.planningTypingLagReports).toBe(1);
+    expect(counters.maxPlanningTypingLagMs).toBe(19);
     expect(counters.planningChatInputChangeReports).toBe(1);
     expect(counters.maxPlanningChatInputHandlerMs).toBe(12);
     expect(counters.planningChatInputCommitReports).toBe(1);
@@ -71,6 +74,7 @@ describe('renderer ui perf counters', () => {
     resetRendererUiPerfCounters(counters);
 
     expect(counters.rendererReports).toBe(0);
+    expect(counters.maxPlanningTypingLagMs).toBe(0);
     expect(counters.maxPlanningChatInputCommitMs).toBe(0);
     expect(counters.maxEmbeddedTerminalOutputWriteBytes).toBe(0);
   });
