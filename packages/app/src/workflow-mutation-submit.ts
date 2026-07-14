@@ -18,18 +18,38 @@ export interface SubmitWorkflowMutationOptions {
   deferDrain?: boolean;
 }
 
-function isMissingWorkflowDelete(channel: string, workflowId: string, args: unknown[]): boolean {
-  if (channel === 'invoker:delete-workflow') {
+const MISSING_WORKFLOW_IDEMPOTENT_COMMANDS = new Set([
+  'delete',
+  'delete-workflow',
+  'retry',
+  'recreate',
+  'retry-task',
+  'recreate-task',
+]);
+
+function headlessExecCommand(args: unknown[]): string | undefined {
+  const payload = args[0] as { args?: unknown[] } | undefined;
+  const command = payload?.args?.[0];
+  return typeof command === 'string' ? command : undefined;
+}
+
+function isMissingWorkflowIdempotentMutation(channel: string, workflowId: string, args: unknown[]): boolean {
+  if (
+    channel === 'invoker:delete-workflow'
+    || channel === 'invoker:retry-workflow'
+    || channel === 'invoker:recreate-workflow'
+  ) {
     return args[0] === workflowId;
   }
   if (channel !== 'headless.exec') {
     return false;
   }
   const payload = args[0] as { args?: unknown[] } | undefined;
-  const command = payload?.args?.[0];
-  return Array.isArray(payload?.args)
-    && (command === 'delete' || command === 'delete-workflow')
-    && payload.args[1] === workflowId;
+  const command = headlessExecCommand(args);
+  if (!command || !MISSING_WORKFLOW_IDEMPOTENT_COMMANDS.has(command)) {
+    return false;
+  }
+  return Array.isArray(payload?.args) && payload.args[1] === workflowId;
 }
 
 function isForeignKeyConstraintError(error: unknown): boolean {
@@ -39,12 +59,12 @@ function isForeignKeyConstraintError(error: unknown): boolean {
     || sqliteError.message.includes('FOREIGN KEY constraint failed');
 }
 
-function acceptedAlreadyDeleted(
+function acceptedMissingWorkflow(
   workflowId: string,
   channel: string,
   logger?: Pick<Logger, 'info'>,
 ): WorkflowMutationAcceptedResult {
-  logger?.info(`delete-workflow ignored missing workflow="${workflowId}"`, { module: 'workflow-mutation' });
+  logger?.info(`ignored missing workflow="${workflowId}" for channel=${channel}`, { module: 'workflow-mutation' });
   return { ok: true, accepted: true, intentId: 0, workflowId, channel };
 }
 
@@ -55,8 +75,8 @@ export function submitWorkflowMutationOrAcknowledgeDeleted(
   args: unknown[],
   options: SubmitWorkflowMutationOptions,
 ): WorkflowMutationAcceptedResult {
-  if (isMissingWorkflowDelete(channel, workflowId, args) && !options.workflowExists(workflowId)) {
-    return acceptedAlreadyDeleted(workflowId, channel, options.logger);
+  if (isMissingWorkflowIdempotentMutation(channel, workflowId, args) && !options.workflowExists(workflowId)) {
+    return acceptedMissingWorkflow(workflowId, channel, options.logger);
   }
 
   try {
@@ -66,11 +86,11 @@ export function submitWorkflowMutationOrAcknowledgeDeleted(
     return { ok: true, accepted: true, intentId, workflowId, channel };
   } catch (error) {
     if (
-      isMissingWorkflowDelete(channel, workflowId, args)
+      isMissingWorkflowIdempotentMutation(channel, workflowId, args)
       && isForeignKeyConstraintError(error)
       && !options.workflowExists(workflowId)
     ) {
-      return acceptedAlreadyDeleted(workflowId, channel, options.logger);
+      return acceptedMissingWorkflow(workflowId, channel, options.logger);
     }
     throw error;
   }
