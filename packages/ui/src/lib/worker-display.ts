@@ -84,6 +84,13 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No persisted PR status actions. This worker updates review gates directly.',
     };
   }
+  if (kind === 'pr-summary-refresh') {
+    return {
+      name: 'PR summary refresh',
+      idleText: 'Idle. Refreshes published PR bodies when Invoker pipeline actions change.',
+      noActionText: 'No PR summary refresh actions recorded yet.',
+    };
+  }
   if (kind === 'ci-failure') {
     return {
       name: 'CI failure repair',

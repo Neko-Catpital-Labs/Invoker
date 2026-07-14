@@ -119,13 +119,34 @@ describe('runReadOnlyHeadlessQueryToString', () => {
       listWorkflows: () => [],
       loadTasks: () => [],
       getEvents: () => [],
+      listWorkerActions: () => [{
+        id: 'wa-worker-status',
+        workerKind: 'autofix',
+        actionType: 'fix-task',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/task-1',
+        subjectType: 'task',
+        subjectId: 'wf-1/task-1',
+        externalKey: 'wf-1/task-1:g0:a1',
+        status: 'completed',
+        attemptCount: 1,
+        summary: 'Fixed failing tests',
+        payload: { reason: 'ci-failure' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+        completedAt: '2026-01-01T00:01:00.000Z',
+      }],
     } as unknown as HeadlessQueryDeps['persistence'];
     const writeSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     try {
       const label = await runReadOnlyHeadlessQueryToString(['worker', 'status', '--output', 'label'], deps);
       expect(label).toBe('auto-fix-recovery\n');
       const json = await runReadOnlyHeadlessQueryToString(['worker', 'status', '--output', 'json'], deps);
-      expect(JSON.parse(json).workerId).toBe('auto-fix-recovery');
+      const parsed = JSON.parse(json) as { workerId?: string; recentActions?: Array<{ id?: string; reason?: string }> };
+      expect(parsed.workerId).toBe('auto-fix-recovery');
+      expect(parsed.recentActions).toEqual([
+        expect.objectContaining({ id: 'wa-worker-status', reason: 'ci-failure' }),
+      ]);
       expect(writeSpy).not.toHaveBeenCalled();
     } finally {
       writeSpy.mockRestore();
