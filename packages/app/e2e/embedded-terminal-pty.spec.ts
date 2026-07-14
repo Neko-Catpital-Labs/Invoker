@@ -18,6 +18,7 @@ const TERMINAL_INPUT_BUDGET_MS = 100;
 const TERMINAL_OUTPUT_WRITE_BUDGET_MS = 250;
 const TERMINAL_RESIZE_BUDGET_MS = 250;
 const TERMINAL_TAB_SWITCH_WALL_BUDGET_MS = 1000;
+const TERMINAL_SESSION_UPSERT_BUDGET_MS = 250;
 const TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS = 1000;
 const TERMINAL_RENDERER_LONG_TASK_BUDGET_MS = 1500;
 
@@ -26,6 +27,7 @@ const TERMINAL_PRESSURE_BUDGETS = {
   maxOutputWriteMs: TERMINAL_OUTPUT_WRITE_BUDGET_MS,
   maxResizeMs: TERMINAL_RESIZE_BUDGET_MS,
   maxTabSwitchWallMs: TERMINAL_TAB_SWITCH_WALL_BUDGET_MS,
+  maxTerminalSessionUpsertMs: TERMINAL_SESSION_UPSERT_BUDGET_MS,
   maxRendererEventLoopLagMs: TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS,
   maxRendererLongTaskMs: TERMINAL_RENDERER_LONG_TASK_BUDGET_MS,
 };
@@ -434,6 +436,7 @@ test.describe('Embedded terminal PTY', () => {
     expect(Number(perf.maxEmbeddedTerminalInputMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalOutputWriteMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalResizeMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
+    expect(numberOrZero(perf.maxTerminalSessionUpsertMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SESSION_UPSERT_BUDGET_MS);
     expect(numberOrZero(perf.maxRendererEventLoopLagMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS);
     expect(numberOrZero(perf.maxRendererLongTaskMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_LONG_TASK_BUDGET_MS);
   });
