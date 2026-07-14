@@ -6,6 +6,11 @@ import { SQLiteAdapter } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
 import { LocalBus } from '@invoker/transport';
 import { TaskRunner } from '@invoker/execution-engine';
+import {
+  createUiPerfTelemetryStats,
+  recordUiPerfTelemetryReport,
+  resetUiPerfTelemetryStats,
+} from '../ui-perf-telemetry.js';
 
 /**
  * Tests for headless delegation and owner-boundary behavior.
@@ -97,14 +102,91 @@ describe('headless delegation enforcement', () => {
       expect(mockDeps.orchestrator.syncFromDb).toHaveBeenNthCalledWith(2, 'wf-2');
     });
 
-    it('allows query ui-perf in read-only mode', async () => {
+    it('allows query ui-perf in read-only mode with planning lag evidence', async () => {
+      const stats = createUiPerfTelemetryStats();
+      recordUiPerfTelemetryReport(stats, 'renderer_event_loop_lag', { lagMs: 12 });
+      recordUiPerfTelemetryReport(stats, 'renderer_long_task', { durationMs: 34 });
+      recordUiPerfTelemetryReport(stats, 'planning_typing_lag_baseline', {
+        scenario: 'many-chats-many-messages-typing',
+        sessionCount: 8,
+        transcriptSizeBytes: 12_345,
+        transcriptMessageCount: 80,
+        taskCount: 8,
+        workflowCount: 1,
+        activeSurface: 'planning',
+        activeState: 'dag:task_selected:terminal-collapsed',
+        targetName: 'edit-prompt-input',
+        lagMs: 56,
+      });
       mockDeps.getUiPerfStats = vi.fn(() => ({
+        ownerMode: 'local',
+        ts: '2026-07-13T00:00:00.000Z',
+        ...stats,
+      }));
+      mockDeps.resetUiPerfStats = vi.fn(() => resetUiPerfTelemetryStats(stats));
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      let written = '';
+      try {
+        await expect(
+          runHeadless(['query', 'ui-perf', '--output', 'json'], mockDeps)
+        ).resolves.toBeUndefined();
+        written = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+      } finally {
+        stdout.mockRestore();
+      }
+
+      expect(mockDeps.resetUiPerfStats).not.toHaveBeenCalled();
+      const payload = JSON.parse(written) as Record<string, unknown>;
+      expect(payload).toEqual(expect.objectContaining({
         maxRendererEventLoopLagMs: 12,
         maxRendererLongTaskMs: 34,
+        planningTypingLagReports: 1,
+        maxPlanningTypingLagMs: 56,
+        lastPlanningTypingLagMs: 56,
       }));
-      await expect(
-        runHeadless(['query', 'ui-perf', '--output', 'json'], mockDeps)
-      ).resolves.toBeUndefined();
+      expect(payload.maxPlanningTypingLagContext).toEqual(expect.objectContaining({
+        scenario: 'many-chats-many-messages-typing',
+        sessionCount: 8,
+        transcriptSizeBytes: 12_345,
+        transcriptMessageCount: 80,
+        activeSurface: 'planning',
+        activeState: 'dag:task_selected:terminal-collapsed',
+        targetName: 'edit-prompt-input',
+        lagMs: 56,
+      }));
+    });
+
+    it('resets query ui-perf stats only when --reset is supplied', async () => {
+      const stats = createUiPerfTelemetryStats();
+      recordUiPerfTelemetryReport(stats, 'planning_typing_lag_baseline', {
+        scenario: 'many-chats-many-messages-typing',
+        lagMs: 99,
+      });
+      mockDeps.getUiPerfStats = vi.fn(() => ({
+        ts: '2026-07-13T00:00:00.000Z',
+        ...stats,
+      }));
+      mockDeps.resetUiPerfStats = vi.fn(() => resetUiPerfTelemetryStats(stats));
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      let written = '';
+      try {
+        await expect(
+          runHeadless(['query', 'ui-perf', '--reset', '--output', 'json'], mockDeps)
+        ).resolves.toBeUndefined();
+        written = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+      } finally {
+        stdout.mockRestore();
+      }
+
+      expect(mockDeps.resetUiPerfStats).toHaveBeenCalledTimes(1);
+      const payload = JSON.parse(written) as Record<string, unknown>;
+      expect(payload).toEqual(expect.objectContaining({
+        planningTypingLagReports: 0,
+        maxPlanningTypingLagMs: 0,
+        lastPlanningTypingLagMs: 0,
+        maxPlanningTypingLagContext: null,
+        lastPlanningTypingLagContext: null,
+      }));
     });
 
     it('allows deprecated list command in read-only mode', async () => {

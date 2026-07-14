@@ -58,6 +58,7 @@ import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './work
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
+import { createUiPerfTelemetryStats } from './ui-perf-telemetry.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
@@ -383,7 +384,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
     formatEventLog, formatQueueStatus, formatWorkflowStats,
     serializeWorkflow, serializeTask, serializeEvent,
-    formatAsLabel, formatAsJson, formatAsJsonl,
+    formatAsLabel, formatAsJson, formatAsJsonl, formatUiPerfStats,
   } = await import('./formatter.js');
 
   switch (subCommand) {
@@ -517,28 +518,9 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       const stats = deps.getUiPerfStats?.() ?? {
         ownerMode: 'local',
         ts: new Date().toISOString(),
-        mainDeltaToUi: 0,
-        dbPollCreated: 0,
-        dbPollUpdatedAsCreated: 0,
-        dbPollUpdatedAsUpdated: 0,
-        rendererReports: 0,
-        maxRendererEventLoopLagMs: 0,
-        maxRendererLongTaskMs: 0,
+        ...createUiPerfTelemetryStats(),
       };
-      switch (flags.output) {
-        case 'label':
-          process.stdout.write(String((stats as Record<string, unknown>).maxRendererEventLoopLagMs ?? 0) + '\n');
-          break;
-        case 'json':
-          process.stdout.write(formatAsJson(stats) + '\n');
-          break;
-        case 'jsonl':
-          process.stdout.write(formatAsJsonl([stats]) + '\n');
-          break;
-        default:
-          process.stdout.write(`${JSON.stringify(stats, null, 2)}\n`);
-          break;
-      }
+      process.stdout.write(formatUiPerfStats(stats, flags.output) + '\n');
       break;
     }
     case 'stats': {

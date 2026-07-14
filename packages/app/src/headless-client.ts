@@ -27,6 +27,7 @@ import {
   isStandaloneCapable,
 } from './owner-endpoint.js';
 import { createOwnerResolver } from './owner-resolver.js';
+import { formatUiPerfStats } from './formatter.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -174,7 +175,12 @@ async function delegateReadOnlyQuery(
       : 'Live owner is present but did not serve queue query');
   }
   if (isUiPerf) {
-    process.stdout.write(`${JSON.stringify(response)}\n`);
+    const outputIndex = args.indexOf('--output');
+    const output = outputIndex >= 0 ? args[outputIndex + 1] : undefined;
+    const format = output === 'label' || output === 'json' || output === 'jsonl'
+      ? output
+      : 'text';
+    process.stdout.write(`${formatUiPerfStats(response, format)}\n`);
     return true;
   }
   const outputIndex = args.indexOf('--output');
