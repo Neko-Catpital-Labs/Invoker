@@ -181,7 +181,7 @@ function isReplaceableAttemptStatus(status: Attempt['status']): boolean {
 
 function nextWorkflowId(): string {
   workflowCounter += 1;
-  if (process.env.NODE_ENV === 'test') return `wf-test-${workflowCounter}`;
+  if (process.env.INVOKER_TEST_WORKFLOW_IDS === '1') return `wf-test-${workflowCounter}`;
   return `wf-${Date.now()}-${workflowCounter}`;
 }
 
