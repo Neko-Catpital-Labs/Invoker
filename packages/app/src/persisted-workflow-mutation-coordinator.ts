@@ -238,6 +238,7 @@ export class PersistedWorkflowMutationCoordinator {
 
   async resumePending(): Promise<void> {
     this.persistence.requeueExpiredWorkflowMutationLeases();
+    this.persistence.requeueOrphanedWorkflowMutationIntents();
     const workflowIds = Array.from(
       new Set(
       this.persistence.listWorkflowMutationIntents(undefined, ['queued']).map((intent) => intent.workflowId),
