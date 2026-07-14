@@ -697,6 +697,11 @@ describe('SQLiteAdapter', () => {
         'workflows.id:CASCADE',
         'tasks.id:CASCADE',
       ]));
+      expect(tableColumns(adapter, 'worker_desired_states')).toEqual(expect.arrayContaining([
+        'worker_kind',
+        'desired_enabled',
+        'updated_at',
+      ]));
     });
 
     it('does not create auto_fix_attempts on fresh task tables', () => {
@@ -859,6 +864,26 @@ describe('SQLiteAdapter', () => {
 
       expect(adapter.listWorkerActions({ decision: 'skip' }).map((action) => action.id)).toEqual(['wa-skip']);
       expect(adapter.listWorkerActions({ decision: 'act' }).map((action) => action.id)).toEqual(['wa-done', 'wa-act']);
+    });
+
+    it('persists worker desired states', () => {
+      expect(adapter.getWorkerDesiredState('workflow-resume')).toBeUndefined();
+
+      expect(adapter.setWorkerDesiredState('workflow-resume', true)).toMatchObject({
+        workerKind: 'workflow-resume',
+        desiredEnabled: true,
+      });
+      expect(adapter.getWorkerDesiredState('workflow-resume')).toMatchObject({
+        workerKind: 'workflow-resume',
+        desiredEnabled: true,
+      });
+
+      adapter.setWorkerDesiredState('workflow-resume', false);
+      adapter.setWorkerDesiredState('pr-status', true);
+      expect(adapter.listWorkerDesiredStates()).toEqual([
+        expect.objectContaining({ workerKind: 'pr-status', desiredEnabled: true }),
+        expect.objectContaining({ workerKind: 'workflow-resume', desiredEnabled: false }),
+      ]);
     });
   });
 
