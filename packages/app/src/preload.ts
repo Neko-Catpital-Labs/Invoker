@@ -25,6 +25,8 @@ const bootstrapDurationMs = Date.now() - bootstrapStartedAt;
 function yieldToPendingRendererInput(delayMs = 0): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(() => {
+      const requestAnimationFrame = (globalThis as { requestAnimationFrame?: (callback: () => void) => number })
+        .requestAnimationFrame;
       if (typeof requestAnimationFrame === 'function') {
         requestAnimationFrame(() => resolve());
       } else {
