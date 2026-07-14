@@ -132,7 +132,7 @@ function controller(
 }
 
 describe('createWorkerRuntimeController', () => {
-  it('auto-start starts every built-in owner worker (including autofix) except workflow-resume', () => {
+  it('auto-start starts every built-in owner worker except workflow-resume', () => {
     const setup = controller();
 
     setup.controller.startAutoStartedWorkers();
@@ -144,7 +144,7 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.startable).toBe(true);
-    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
   });
 
@@ -198,15 +198,16 @@ describe('createWorkerRuntimeController', () => {
     expect(ungatedRow?.startable).toBe(true);
   });
 
-  it('auto-starts the recovery (autofix) worker as the sole sanctioned auto-fix path', () => {
+  it('autofix remains stopped until explicitly started', () => {
     const setup = controller();
 
     setup.controller.startAutoStartedWorkers();
-    expect(setup.runtimes.get(AUTO_FIX_WORKER_KIND)).toHaveLength(1);
+    expect(setup.runtimes.get(AUTO_FIX_WORKER_KIND)).toBeUndefined();
 
-    const row = setup.controller.snapshot().workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND);
-    expect(row?.lifecycle).toBe('running');
-    expect(row?.runtimeKind).toBe('recovery');
+    const row = setup.controller.start(AUTO_FIX_WORKER_KIND);
+
+    expect(row.lifecycle).toBe('running');
+    expect(row.runtimeKind).toBe('recovery');
   });
 
   it('duplicate start is idempotent', () => {

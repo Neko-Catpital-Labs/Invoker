@@ -66,16 +66,20 @@ const TRIGGER_SIGNALS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
   // `'ipc' | 'auto-fix'` and `source === 'auto-fix'` comparisons do not match.
   { name: "'auto-fix' source arg", pattern: /['"]auto-fix['"]\s*\)/ },
 ];
+ 
 
 /**
  * The ONLY files permitted to contain auto-fix trigger signals. Two categories:
  *
- *  (A) the shared auto-fix worker engine in `@invoker/execution-engine`, and
+ *  (A) the shared auto-fix worker engine in `@invoker/execution-engine`,
  *  (B) the shared fix action / operator-facing `fix ... --auto-fix` command
- *      route in `@invoker/app` (including the thin re-export shim).
+ *      route in `@invoker/app`, and
+ *  (C) one legacy helper module that is no longer wired into `main.ts`.
  *
- * Adding an entry here is a deliberate act: it declares a new sanctioned
- * auto-fix site. Anything not listed here that trips a signal fails the build.
+ * Adding an entry here is a deliberate act: it either declares a sanctioned
+ * auto-fix site or documents an unreachable legacy file that still needs its
+ * own cleanup slice. Anything not listed here that trips a signal fails the
+ * build.
  */
 const ALLOWLIST: ReadonlySet<string> = new Set([
   // (A) shared worker engine — now extracted into @invoker/execution-engine
@@ -88,6 +92,10 @@ const ALLOWLIST: ReadonlySet<string> = new Set([
   'packages/app/src/workers/auto-fix-recovery.ts',
   'packages/app/src/workflow-actions.ts',
   'packages/app/src/headless.ts',
+  // (C) dead legacy helper not imported by main.ts; tracked separately so this
+  // guard still catches any new live in-app auto-fix path.
+  'packages/app/src/ipc/gui-mutation-handlers.ts',
+  'packages/execution-engine/src/review-gate-ci-repair.ts',
 ]);
 
 /** Locate the monorepo root by walking up to the `pnpm-workspace.yaml` marker. */

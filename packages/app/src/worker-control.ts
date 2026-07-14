@@ -30,7 +30,6 @@ import {
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
 
 export const AUTO_STARTED_OWNER_WORKER_KINDS = [
-  AUTO_FIX_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
