@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
@@ -613,6 +616,68 @@ branch refs/heads/${targetBranch}
     expect(capturedScript).toContain('exit 42');
     // Note: We're testing that the provision command is included in the script.
     // The actual exit code propagation is tested by integration tests with real SSH.
+  });
+
+  it('exports GitHub CLI tokens from secrets into managed task shells when enabled', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-ssh-gh-env-'));
+    const secretsFile = join(dir, 'secrets.env');
+    writeFileSync(
+      secretsFile,
+      [
+        'GITHUB_TOKEN=github-token',
+        'GH_TOKEN=gh-token',
+        'IGNORED_TOKEN=nope',
+        '',
+      ].join('\n'),
+      { mode: 0o600 },
+    );
+
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      useApiKey: true,
+      secretsFile,
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    let capturedScript = '';
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any, script: string) => {
+        capturedScript = script;
+        return handle;
+      },
+    );
+
+    try {
+      const req = makeRequest({
+        actionType: 'command',
+        inputs: {
+          command: 'gh auth status -h github.com',
+          description: 'verify gh auth',
+          repoUrl: 'git@github.com:owner/repo.git',
+        },
+      });
+
+      await ssh.start(req);
+
+      expect(capturedScript).toContain("export GITHUB_TOKEN='github-token'");
+      expect(capturedScript).toContain("export GH_TOKEN='gh-token'");
+      expect(capturedScript).not.toContain('IGNORED_TOKEN');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('does not return a handle until managed remote bootstrap/setup has finished', async () => {
