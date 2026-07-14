@@ -13,6 +13,17 @@ const TERMINAL_INPUT_BUDGET_MS = 100;
 const TERMINAL_OUTPUT_WRITE_BUDGET_MS = 250;
 const TERMINAL_RESIZE_BUDGET_MS = 250;
 const TERMINAL_TAB_SWITCH_WALL_BUDGET_MS = 1000;
+const TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS = 1000;
+const TERMINAL_RENDERER_LONG_TASK_BUDGET_MS = 1500;
+
+const TERMINAL_PRESSURE_BUDGETS = {
+  maxInputMs: TERMINAL_INPUT_BUDGET_MS,
+  maxOutputWriteMs: TERMINAL_OUTPUT_WRITE_BUDGET_MS,
+  maxResizeMs: TERMINAL_RESIZE_BUDGET_MS,
+  maxTabSwitchWallMs: TERMINAL_TAB_SWITCH_WALL_BUDGET_MS,
+  maxRendererEventLoopLagMs: TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS,
+  maxRendererLongTaskMs: TERMINAL_RENDERER_LONG_TASK_BUDGET_MS,
+};
 
 const CODEX_RESUME_PLAN = {
   name: 'Embedded PTY Resume',
@@ -84,6 +95,10 @@ function parseActivityPayload(message: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 async function activityLogWatermark(page: Page): Promise<number> {
@@ -382,7 +397,6 @@ test.describe('Embedded terminal PTY', () => {
     await page.getByRole('tab', { name: /Terminal pressure alpha/i }).click();
     await expect(page.getByTestId(`terminal-tab-${fullAlphaTaskId}`)).toHaveAttribute('data-active', 'true');
     const switchWallMs = Date.now() - switchStartedAt;
-    expect(switchWallMs).toBeLessThanOrEqual(TERMINAL_TAB_SWITCH_WALL_BUDGET_MS);
 
     await page.getByRole('button', { name: 'Maximize terminal drawer' }).click();
     await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'maximized');
@@ -407,20 +421,40 @@ test.describe('Embedded terminal PTY', () => {
     const inputPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_input');
     const outputPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_output_write');
     const resizePayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_resize');
-    expect(attachPayloads.length).toBeGreaterThanOrEqual(2);
-    expect(inputPayloads.length).toBeGreaterThan(0);
-    expect(outputPayloads.length).toBeGreaterThan(0);
-    expect(resizePayloads.some((payload) => payload.source === 'active_session' && payload.taskId === fullAlphaTaskId)).toBe(true);
-    expect(Math.max(...inputPayloads.map((payload) => Number(payload.durationMs)))).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
-    expect(Math.max(...outputPayloads.map((payload) => Number(payload.durationMs)))).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
-    expect(Math.max(...resizePayloads.map((payload) => Number(payload.durationMs)))).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
-
     const perf = await page.evaluate(async () => window.invoker.getUiPerfStats());
-    expect(Number(perf.embeddedTerminalAttachReports)).toBeGreaterThanOrEqual(2);
-    expect(Number(perf.embeddedTerminalInputReports)).toBeGreaterThan(0);
-    expect(Number(perf.embeddedTerminalOutputWriteReports)).toBeGreaterThan(0);
-    expect(Number(perf.maxEmbeddedTerminalInputMs)).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
-    expect(Number(perf.maxEmbeddedTerminalOutputWriteMs)).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
-    expect(Number(perf.maxEmbeddedTerminalResizeMs)).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
+    const terminalEvidence = {
+      fullAlphaTaskId,
+      fullBetaTaskId,
+      switchWallMs,
+      attachPayloads,
+      inputPayloads,
+      outputPayloads,
+      resizePayloads,
+      perf,
+      budgets: TERMINAL_PRESSURE_BUDGETS,
+    };
+    console.log(`EMBEDDED_TERMINAL_PRESSURE_BENCH_RESULT=${JSON.stringify(terminalEvidence)}`);
+    const terminalEvidenceMessage = JSON.stringify(terminalEvidence);
+
+    expect(attachPayloads.length, terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
+    expect(inputPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(outputPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(
+      resizePayloads.some((payload) => payload.source === 'active_session' && payload.taskId === fullAlphaTaskId),
+      terminalEvidenceMessage,
+    ).toBe(true);
+    expect(switchWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_TAB_SWITCH_WALL_BUDGET_MS);
+    expect(Math.max(...inputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
+    expect(Math.max(...outputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
+    expect(Math.max(...resizePayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
+
+    expect(Number(perf.embeddedTerminalAttachReports), terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
+    expect(Number(perf.embeddedTerminalInputReports), terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(Number(perf.embeddedTerminalOutputWriteReports), terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(Number(perf.maxEmbeddedTerminalInputMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
+    expect(Number(perf.maxEmbeddedTerminalOutputWriteMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
+    expect(Number(perf.maxEmbeddedTerminalResizeMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
+    expect(numberOrZero(perf.maxRendererEventLoopLagMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS);
+    expect(numberOrZero(perf.maxRendererLongTaskMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_LONG_TASK_BUDGET_MS);
   });
 });
