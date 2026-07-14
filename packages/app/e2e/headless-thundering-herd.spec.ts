@@ -46,6 +46,7 @@ function headlessTestEnv(testDir: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     NODE_ENV: 'test',
+          INVOKER_TEST_WORKFLOW_IDS: '1',
     TZ: 'UTC',
     INVOKER_DB_DIR: testDir,
     INVOKER_IPC_SOCKET: ipcSocketPath,
