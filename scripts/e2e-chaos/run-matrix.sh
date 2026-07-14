@@ -75,6 +75,7 @@ lines = [line.strip() for line in os.environ["BASE_LINES"].splitlines() if line.
 high_risk = {
     "reset-race-coalesced",
     "timeout-deadlock-guard",
+    "retry-vs-recreate-window",
     "owner-autofix-intent",
     "owner-approve-delegated",
     "owner-reject-delegated",
@@ -240,6 +241,7 @@ fi
 echo ""
 echo "chaos matrix: $passed passed, $failed failed ($total total)"
 echo "ui-stall-relevant scenarios: $ui_stall_total"
+echo "ui-stall-required scenarios:${UI_STALL_REQUIRED_SCENARIOS//$'\n'/ }"
 echo "results jsonl: $RESULTS_FILE"
 
 if [ -z "$SCENARIO_FILTER" ]; then
