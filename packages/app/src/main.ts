@@ -2880,8 +2880,7 @@ function createEmbeddedTerminalBackendFromConfig(
           ? { channel: 'headless.exec', request: { args: ['reject', String(arg0)], noTrack: true } }
           : { channel: 'headless.exec', request: { args: ['reject', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:select-experiment':
-        if (Array.isArray(arg1)) return null;
-        return { channel: 'headless.exec', request: { args: ['select', String(arg0), String(arg1)], noTrack: true } };
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:restart-task':
         return { channel: 'headless.exec', request: { args: ['retry-task', String(arg0)], noTrack: true } };
       case 'invoker:cancel-task':
@@ -2929,7 +2928,7 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'invoker:edit-task-type':
         return { channel: 'headless.exec', request: { args: ['set', 'executor', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:edit-task-pool':
-        return null;
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:edit-task-agent':
         return { channel: 'headless.exec', request: { args: ['set', 'agent', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:edit-task-model':
