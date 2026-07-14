@@ -1379,9 +1379,7 @@ export class Orchestrator {
     this.pruneLaunchDeferrals();
 
     const activeAttempts = this.countActivePersistedAttempts();
-    const readyTasks = this.stateMachine
-      .getReadyTasks()
-      .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
+    const readyTasks = this.getExecutableReadyTasks();
     this.logger.info('[orchestrator] startExecution', {
       ready: readyTasks.length,
       active: activeAttempts,
@@ -2957,6 +2955,12 @@ export class Orchestrator {
 
   getReadyTasks(): TaskState[] {
     return this.stateMachine.getReadyTasks();
+  }
+
+  getExecutableReadyTasks(): TaskState[] {
+    return this.stateMachine
+      .getReadyTasks()
+      .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
   }
 
   /**

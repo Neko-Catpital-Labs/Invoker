@@ -380,6 +380,12 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_worker_actions_kind_updated
         ON worker_actions(worker_kind, updated_at DESC, id);
 
+      CREATE TABLE IF NOT EXISTS worker_desired_states (
+        worker_kind TEXT PRIMARY KEY,
+        desired_enabled INTEGER NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
       CREATE TABLE IF NOT EXISTS execution_resource_leases (
         resource_key TEXT NOT NULL,
         resource_type TEXT NOT NULL,
@@ -530,6 +536,11 @@ export const POST_MIGRATION_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_worker_actions_task_updated ON worker_actions(task_id, updated_at)',
   'CREATE INDEX IF NOT EXISTS idx_worker_actions_workflow_status ON worker_actions(workflow_id, worker_kind, status)',
   'CREATE INDEX IF NOT EXISTS idx_worker_actions_kind_updated ON worker_actions(worker_kind, updated_at DESC, id)',
+  `CREATE TABLE IF NOT EXISTS worker_desired_states (
+    worker_kind TEXT PRIMARY KEY,
+    desired_enabled INTEGER NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+  )`,
   'DROP INDEX IF EXISTS idx_task_launch_dispatch_active_attempt',
   `
       CREATE UNIQUE INDEX IF NOT EXISTS idx_task_launch_dispatch_active_attempt

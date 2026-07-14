@@ -20,6 +20,7 @@ import {
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   REQUEUE_WORKER_KIND,
+  WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRegistry,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
@@ -40,7 +41,7 @@ export const AUTO_STARTED_OWNER_WORKER_KINDS = [
 
 export interface WorkerRuntimeController {
   startAutoStartedWorkers(): void;
-  start(kind: string): WorkerStatusEntry;
+  start(kind: string, options?: { persistDesiredState?: boolean }): WorkerStatusEntry;
   stop(kind: string): Promise<WorkerStatusEntry>;
   stopAll(): Promise<void>;
   snapshot(): WorkerStatusSnapshot;
@@ -49,7 +50,7 @@ export interface WorkerRuntimeController {
 type WorkerStatusPersistence = Pick<
   SQLiteAdapter,
   'listWorkerActions' | 'listWorkflows' | 'loadTasks' | 'getEvents' | 'getEventsByTypes' | 'countEventsByTypes'
->;
+> & Partial<Pick<SQLiteAdapter, 'getWorkerDesiredState' | 'setWorkerDesiredState' | 'listWorkerDesiredStates'>>;
 
 const DEFAULT_WORKER_ACTION_HISTORY_LIMIT = 20;
 const MAX_WORKER_ACTION_HISTORY_LIMIT = 100;
@@ -165,6 +166,7 @@ const BUILT_IN_WORKER_KINDS = new Set<string>([
   AUTO_APPROVE_WORKER_KIND,
   CODERABBIT_ADDRESS_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
+  WORKFLOW_RESUME_WORKER_KIND,
 ]);
 
 export function createWorkerRuntimeController(options: {
@@ -187,17 +189,24 @@ export function createWorkerRuntimeController(options: {
     return definition;
   };
 
+  const desiredEnabledForKind = (kind: string): boolean => {
+    const saved = options.persistence.getWorkerDesiredState?.(kind);
+    return saved?.desiredEnabled ?? options.autoStartKinds.includes(kind);
+  };
+
   const rowForKind = (kind: string): WorkerStatusEntry => {
     const definition = options.registry.get(kind);
     if (!definition) {
       throw new Error(`Unknown worker kind: "${kind}"`);
     }
+    const desiredEnabled = desiredEnabledForKind(kind);
     return buildWorkerStatusEntry({
       definitionKind: definition.kind,
       note: definition.note,
       handle: handles.get(kind),
       stoppedAt: stoppedAtByKind.get(kind),
-      autoStarts: options.autoStartKinds.includes(kind),
+      autoStarts: desiredEnabled,
+      desiredEnabled,
       policy: policyForKind(kind),
       persistence: options.persistence,
       canControl: options.canControl(),
@@ -220,14 +229,17 @@ export function createWorkerRuntimeController(options: {
 
   return {
     startAutoStartedWorkers(): void {
-      for (const kind of options.autoStartKinds) {
-        if (!options.registry.get(kind)) continue;
-        this.start(kind);
+      for (const definition of options.registry.list()) {
+        if (!desiredEnabledForKind(definition.kind)) continue;
+        this.start(definition.kind, { persistDesiredState: false });
       }
     },
 
-    start(kind: string): WorkerStatusEntry {
+    start(kind: string, optionsArg?: { persistDesiredState?: boolean }): WorkerStatusEntry {
       const definition = requireDefinition(kind);
+      if (optionsArg?.persistDesiredState !== false) {
+        options.persistence.setWorkerDesiredState?.(kind, true);
+      }
 
       const existing = handles.get(kind);
       if (existing) {
@@ -249,6 +261,7 @@ export function createWorkerRuntimeController(options: {
     },
     async stop(kind: string): Promise<WorkerStatusEntry> {
       requireDefinition(kind);
+      options.persistence.setWorkerDesiredState?.(kind, false);
       const handle = handles.get(kind);
       if (!handle) {
         return rowForKind(kind);
@@ -282,15 +295,20 @@ export function createLocalWorkerStatusSnapshot(options: {
     : undefined;
   return {
     generatedAt: new Date().toISOString(),
-    workers: options.registry.list().map((definition) => buildWorkerStatusEntry({
-      definitionKind: definition.kind,
-      note: definition.note,
-      autoStarts: options.autoStartKinds.includes(definition.kind),
-      policy: 'unknown',
-      persistence: options.persistence,
-      canControl: false,
-      recovery: definition.kind === AUTO_FIX_WORKER_KIND ? recovery : undefined,
-    })),
+    workers: options.registry.list().map((definition) => {
+      const desiredEnabled = options.persistence.getWorkerDesiredState?.(definition.kind)?.desiredEnabled
+        ?? options.autoStartKinds.includes(definition.kind);
+      return buildWorkerStatusEntry({
+        definitionKind: definition.kind,
+        note: definition.note,
+        autoStarts: desiredEnabled,
+        desiredEnabled,
+        policy: 'unknown',
+        persistence: options.persistence,
+        canControl: false,
+        recovery: definition.kind === AUTO_FIX_WORKER_KIND ? recovery : undefined,
+      });
+    }),
   };
 }
 
@@ -301,6 +319,7 @@ function buildWorkerStatusEntry(args: {
   handle?: RuntimeHandle;
   stoppedAt?: string;
   autoStarts: boolean;
+  desiredEnabled: boolean;
   policy: WorkerPolicyStatus;
   persistence: WorkerStatusPersistence;
   canControl: boolean;
@@ -318,6 +337,7 @@ function buildWorkerStatusEntry(args: {
     lifecycle,
     policy: args.policy,
     autoStarts: args.autoStarts,
+    desiredEnabled: args.desiredEnabled,
     startable: lifecycle !== 'running' && args.policy !== 'disabled' && args.canControl,
     stoppable: lifecycle === 'running' && args.canControl,
     ...(controlDisabledReason ? { controlDisabledReason } : {}),

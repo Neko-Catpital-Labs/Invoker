@@ -741,6 +741,40 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(adapter.listWorkflowMutationIntents('wf-2')).toHaveLength(1);
   });
 
+  it('coalesces duplicate start-ready intents while queued', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
+
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => undefined,
+    );
+
+    const first = coordinator.submit(
+      'wf-1',
+      'normal',
+      'invoker:start-ready',
+      [{}],
+      { deferDrain: true },
+    );
+    const duplicates = Array.from({ length: 5 }, () =>
+      coordinator.submit(
+        'wf-1',
+        'normal',
+        'invoker:start-ready',
+        [{}],
+        { deferDrain: true },
+      ),
+    );
+
+    expect(new Set([first, ...duplicates])).toEqual(new Set([first]));
+    expect(adapter.listWorkflowMutationIntents('wf-1')).toHaveLength(1);
+  });
+
   it('requeues interrupted running workflow mutations on restart and drains persisted queued work', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);

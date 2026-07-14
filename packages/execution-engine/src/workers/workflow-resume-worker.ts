@@ -14,18 +14,10 @@ import type { WorkerRegistry } from '../worker-registry.js';
 
 export const WORKFLOW_RESUME_WORKER_KIND = 'workflow-resume';
 
-export const WORKFLOW_RESUME_COMMAND_CHANNEL = 'invoker:retry-workflow';
+export const WORKFLOW_RESUME_COMMAND_CHANNEL = 'invoker:start-ready';
 
 const DEFAULT_WORKFLOW_RESUME_POLL_INTERVAL_MS = 60_000;
 export const DEFAULT_WORKFLOW_RESUME_COOLDOWN_MS = 60_000;
-
-const TERMINAL_TASK_STATUSES: ReadonlySet<TaskState['status']> = new Set<TaskState['status']>([
-  'completed' as TaskState['status'],
-  'review_ready' as TaskState['status'],
-  'failed' as TaskState['status'],
-  'closed' as TaskState['status'],
-  'stale' as TaskState['status'],
-]);
 
 export interface WorkflowResumeWorkerStore {
   listWorkflows(): ReadonlyArray<{ id: string }>;
@@ -77,11 +69,18 @@ export function createWorkflowResumeCooldownLedger(): WorkflowResumeCooldownLedg
   };
 }
 
-function isWorkflowIncomplete(store: WorkflowResumeWorkerStore, workflowId: string): boolean {
+function hasLocallyReadyPendingTask(store: WorkflowResumeWorkerStore, workflowId: string): boolean {
   const tasks = store.loadTasks(workflowId);
   if (tasks.length === 0) return false;
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
   for (const task of tasks) {
-    if (!TERMINAL_TASK_STATUSES.has(task.status)) return true;
+    if (task.status !== 'pending') continue;
+    const dependencies = task.dependencies ?? [];
+    const localDependenciesSatisfied = dependencies.every((dependencyId) => {
+      const dependency = tasksById.get(dependencyId);
+      return dependency === undefined || dependency.status === 'completed';
+    });
+    if (localDependenciesSatisfied) return true;
   }
   return false;
 }
@@ -95,10 +94,10 @@ function collectWakeupWorkflowIds(hints: RecoveryWorkerWakeupHint[]): string[] {
   return Array.from(seen);
 }
 
-function listAllIncompleteWorkflowIds(store: WorkflowResumeWorkerStore): string[] {
+function listAllWorkflowsWithReadyPendingTasks(store: WorkflowResumeWorkerStore): string[] {
   const targets: string[] = [];
   for (const workflow of store.listWorkflows()) {
-    if (isWorkflowIncomplete(store, workflow.id)) {
+    if (hasLocallyReadyPendingTask(store, workflow.id)) {
       targets.push(workflow.id);
     }
   }
@@ -114,8 +113,8 @@ export function createWorkflowResumeTick(options: WorkflowResumeWorkerPolicyOpti
     const wakeupWorkflowIds = collectWakeupWorkflowIds(wakeups);
 
     const candidateIds = wakeupWorkflowIds.length > 0 && ctx.reason === 'wake'
-      ? wakeupWorkflowIds.filter((id) => isWorkflowIncomplete(options.store, id))
-      : listAllIncompleteWorkflowIds(options.store);
+      ? wakeupWorkflowIds.filter((id) => hasLocallyReadyPendingTask(options.store, id))
+      : listAllWorkflowsWithReadyPendingTasks(options.store);
 
     const submitted = new Set<string>();
     for (const workflowId of candidateIds) {
@@ -134,17 +133,17 @@ export function createWorkflowResumeTick(options: WorkflowResumeWorkerPolicyOpti
         workflowId,
         'normal',
         WORKFLOW_RESUME_COMMAND_CHANNEL,
-        [workflowId],
+        [{}],
       );
       options.ledger.markSubmitted(workflowId, nowMs + cooldownMs);
       options.store.logEvent?.(workflowId, 'recovery.worker.submit', {
         worker: WORKFLOW_RESUME_WORKER_KIND,
-        phase: 'retry-workflow',
+        phase: 'start-ready',
         workflowId,
         intentId,
         channel: WORKFLOW_RESUME_COMMAND_CHANNEL,
       });
-      options.logger.info(`[worker:${WORKFLOW_RESUME_WORKER_KIND}] submitted retry for incomplete workflow`, {
+      options.logger.info(`[worker:${WORKFLOW_RESUME_WORKER_KIND}] submitted start-ready for pending work`, {
         module: 'workflow-resume-worker',
         workflowId,
         intentId,
@@ -225,7 +224,7 @@ export function registerWorkflowResumeWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: WORKFLOW_RESUME_WORKER_KIND,
-    note: 'Submits retry-workflow intents for workflows that have any non-terminal task.',
+    note: 'Submits start-ready intents when workflows have pending work ready to launch.',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createWorkflowResumeWorker({
         logger: deps.logger,

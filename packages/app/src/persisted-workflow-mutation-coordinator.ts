@@ -213,6 +213,9 @@ export class PersistedWorkflowMutationCoordinator {
   }
 
   private coalescibleRetryKey(channel: string, args: unknown[]): string | null {
+    if (channel === 'invoker:start-ready') {
+      return 'start-ready';
+    }
     if (channel === 'invoker:retry-workflow') {
       const target = typeof args[0] === 'string' ? args[0] : '';
       return /^wf-[^/]+$/.test(target) ? `retry-workflow:${target}` : null;
@@ -224,6 +227,9 @@ export class PersistedWorkflowMutationCoordinator {
     const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
     const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
     const target = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
+    if (command === 'start-ready') {
+      return 'start-ready';
+    }
     if (command !== 'retry' || !/^wf-[^/]+$/.test(target)) {
       return null;
     }
