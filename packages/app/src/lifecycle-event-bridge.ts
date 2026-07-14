@@ -2,6 +2,7 @@ import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport'
 import type { TaskDelta, TaskState, TaskStatus } from '@invoker/workflow-core';
 import {
   buildReviewGateCiFailedLifecycleEvent,
+  buildReviewGateMergeConflictLifecycleEvent,
   buildTaskCreatedLifecycleEvent,
   buildTaskRemovedLifecycleEvent,
   buildTaskUpdatedLifecycleEvent,
@@ -44,6 +45,21 @@ export interface ReviewGateCiFailedWakeupInput {
   readonly selectedAttemptId?: string;
   readonly generation: number;
   readonly failedChecks: readonly ReviewGateFailedCheck[];
+  readonly statusText: string;
+}
+
+export interface ReviewGateMergeConflictWakeupInput {
+  readonly workflowId: string;
+  readonly taskId: string;
+  readonly status?: TaskStatus;
+  readonly taskStateVersion?: number;
+  readonly reviewId: string;
+  readonly reviewUrl: string;
+  readonly headSha?: string;
+  readonly headRef?: string;
+  readonly branch?: string;
+  readonly selectedAttemptId?: string;
+  readonly generation: number;
   readonly statusText: string;
 }
 
@@ -94,6 +110,35 @@ export function publishReviewGateCiFailedLifecycleEvent(
     headRef: input.headRef,
     branch: input.branch,
     failedChecks: input.failedChecks,
+    statusText: input.statusText,
+    generation: input.generation,
+    attemptId,
+    createdAt: options.now?.(),
+  });
+  options.messageBus.publish(Channels.WORKFLOW_LIFECYCLE, event);
+  return event;
+}
+
+export function publishReviewGateMergeConflictLifecycleEvent(
+  input: ReviewGateMergeConflictWakeupInput,
+  options: Pick<LifecycleEventBridgeOptions, 'messageBus' | 'getTask' | 'now'>,
+): WorkflowLifecycleEvent | undefined {
+  const currentTask = options.getTask?.(input.taskId);
+  const status = input.status ?? currentTask?.status;
+  const taskStateVersion = input.taskStateVersion ?? currentTask?.taskStateVersion;
+  const attemptId = input.selectedAttemptId ?? currentTask?.execution.selectedAttemptId;
+  if (!status || taskStateVersion == null) return undefined;
+
+  const event = buildReviewGateMergeConflictLifecycleEvent({
+    workflowId: input.workflowId,
+    taskId: input.taskId,
+    status,
+    taskStateVersion,
+    reviewId: input.reviewId,
+    reviewUrl: input.reviewUrl,
+    headSha: input.headSha,
+    headRef: input.headRef,
+    branch: input.branch,
     statusText: input.statusText,
     generation: input.generation,
     attemptId,
