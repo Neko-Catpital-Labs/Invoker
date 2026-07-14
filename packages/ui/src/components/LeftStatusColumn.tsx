@@ -11,7 +11,6 @@ import {
   InvokerIcon,
   MoonIcon,
   PlanningTerminalIcon,
-  RunningIcon,
   SettingsIcon,
   SunIcon,
   WorkerIcon,
@@ -35,8 +34,10 @@ interface LeftStatusColumnProps {
   onToggleTheme: () => void;
 }
 
+type SourceItemKey = Extract<SidebarSurface, 'attention' | 'workers' | 'workflows'>;
+
 interface SourceItem {
-  key: Exclude<SidebarSurface, 'home'>;
+  key: SourceItemKey;
   label: string;
   count: number;
   tone: 'neutral' | 'attention' | 'running';
@@ -90,7 +91,6 @@ export function LeftStatusColumn({
 
   const sources: SourceItem[] = [
     { key: 'attention', label: 'Needs Attention', count: attentionEntries.length, tone: 'attention', icon: <AttentionIcon className={ICON_CLASS} /> },
-    { key: 'running', label: 'Running', count: runningEntries.length, tone: 'running', icon: <RunningIcon className={ICON_CLASS} /> },
     { key: 'workers', label: 'Workers', count: registeredWorkers, tone: activeWorkerActions > 0 ? 'running' : 'neutral', icon: <WorkerIcon className={ICON_CLASS} /> },
     { key: 'workflows', label: 'Workflows', count: workflowEntries.length, tone: 'neutral', icon: <WorkflowsIcon className={ICON_CLASS} /> },
   ];
