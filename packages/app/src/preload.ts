@@ -30,7 +30,7 @@ function yieldToPendingRendererInput(delayMs = 0): Promise<void> {
       } else {
         resolve();
       }
-    }, 0);
+    }, delayMs);
   });
 }
 
