@@ -38,10 +38,7 @@ describe('Visual proof snapshots', () => {
     expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
-    const runningSidebarItem = screen.queryByTestId('sidebar-running');
-    if (runningSidebarItem) {
-      expect(runningSidebarItem).toHaveTextContent('Running');
-    }
+    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
     expect(screen.getByText('Describe the change in the terminal to generate a plan.')).toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
