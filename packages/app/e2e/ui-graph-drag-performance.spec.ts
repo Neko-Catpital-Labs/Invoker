@@ -226,7 +226,7 @@ test('workflow graph pan stays responsive under a large persisted graph', async 
     workflowCount: WORKFLOW_COUNT,
     taskCount: WORKFLOW_COUNT * TASKS_PER_WORKFLOW,
     perf,
-    thresholds: DRAG_PERF_BUDGETS,
+    budgets: DRAG_PERF_BUDGETS,
   })}`);
   expectSmoothDrag(result, perf);
 });
@@ -253,7 +253,7 @@ test('workflow graph pan stays responsive while task updates arrive', async ({ p
     updateBursts: UPDATE_BURSTS,
     updatesPerBurst: UPDATES_PER_BURST,
     perf,
-    thresholds: DRAG_PERF_BUDGETS,
+    budgets: DRAG_PERF_BUDGETS,
   })}`);
   const evidence = JSON.stringify({ ...result, updateCount, perf, budgets: DRAG_PERF_BUDGETS });
   expect(updateCount, evidence).toBe(UPDATE_BURSTS * UPDATES_PER_BURST);
