@@ -12,6 +12,7 @@ import {
   type TaskLifecycleEvent,
   type ReviewGateFailedCheck,
   type ReviewGateCiFailedLifecycleEvent,
+  type ReviewGateMergeConflictLifecycleEvent,
   type WorkflowWakeupLifecycleEvent,
   type RecoveryWorkerWakeupHint,
   type RecoveryWorkerWakeupReason,
@@ -30,12 +31,12 @@ export {
   type TaskLifecycleEvent,
   type ReviewGateFailedCheck,
   type ReviewGateCiFailedLifecycleEvent,
+  type ReviewGateMergeConflictLifecycleEvent,
   type WorkflowWakeupLifecycleEvent,
   type RecoveryWorkerWakeupHint,
   type RecoveryWorkerWakeupReason,
   type WorkflowWakeupReason,
 } from '@invoker/execution-engine';
-
 export interface LifecycleBuildOptions {
   readonly workflowId?: string;
   readonly previousStatus?: TaskStatus;
@@ -69,6 +70,19 @@ export interface ReviewGateCiFailedLifecycleEventInput extends LifecycleBuildOpt
   readonly headRef?: string;
   readonly branch?: string;
   readonly failedChecks: readonly ReviewGateFailedCheck[];
+  readonly statusText: string;
+}
+
+export interface ReviewGateMergeConflictLifecycleEventInput extends LifecycleBuildOptions {
+  readonly workflowId: string;
+  readonly taskId: string;
+  readonly status: TaskStatus;
+  readonly taskStateVersion: number;
+  readonly reviewId: string;
+  readonly reviewUrl: string;
+  readonly headSha?: string;
+  readonly headRef?: string;
+  readonly branch?: string;
   readonly statusText: string;
 }
 
@@ -228,6 +242,52 @@ export function buildReviewGateCiFailedLifecycleEvent(
   };
 }
 
+export function buildReviewGateMergeConflictLifecycleEvent(
+  input: ReviewGateMergeConflictLifecycleEventInput,
+): ReviewGateMergeConflictLifecycleEvent {
+  const generation = input.generation ?? 0;
+  const createdAt = lifecycleCreatedAt(input.createdAt);
+  const eventKey = buildLifecycleEventKey({
+    kind: 'review_gate.merge_conflict',
+    workflowId: input.workflowId,
+    taskId: input.taskId,
+    taskStateVersion: input.taskStateVersion,
+    generation,
+    attemptId: input.attemptId,
+    discriminator: `review:${input.reviewId}:${input.headSha ?? 'no-head-sha'}`,
+  });
+
+  return {
+    eventKey,
+    kind: 'review_gate.merge_conflict',
+    workflowId: input.workflowId,
+    taskId: input.taskId,
+    status: input.status,
+    taskStateVersion: input.taskStateVersion,
+    generation,
+    ...(input.previousStatus ? { previousStatus: input.previousStatus } : {}),
+    ...(input.attemptId ? { attemptId: input.attemptId } : {}),
+    createdAt,
+    recoveryWakeup: buildRecoveryWorkerWakeupHint({
+      eventKey,
+      eventKind: 'review_gate.merge_conflict',
+      workflowId: input.workflowId,
+      taskId: input.taskId,
+      taskStateVersion: input.taskStateVersion,
+      generation,
+      attemptId: input.attemptId,
+      createdAt,
+      reason: 'review_gate_failure',
+    }),
+    reviewId: input.reviewId,
+    reviewUrl: input.reviewUrl,
+    ...(input.headSha ? { headSha: input.headSha } : {}),
+    ...(input.headRef ? { headRef: input.headRef } : {}),
+    ...(input.branch ? { branch: input.branch } : {}),
+    statusText: input.statusText,
+  };
+}
+
 export function buildWorkflowWakeupLifecycleEvent(
   input: WorkflowWakeupLifecycleEventInput,
 ): WorkflowWakeupLifecycleEvent {
@@ -327,6 +387,12 @@ export function isWorkflowLifecycleEvent(value: unknown): value is WorkflowLifec
         && typeof value.reviewId === 'string'
         && typeof value.reviewUrl === 'string'
         && Array.isArray(value.failedChecks)
+        && typeof value.statusText === 'string';
+    case 'review_gate.merge_conflict':
+      return typeof value.taskId === 'string'
+        && typeof value.status === 'string'
+        && typeof value.reviewId === 'string'
+        && typeof value.reviewUrl === 'string'
         && typeof value.statusText === 'string';
     case 'workflow.wakeup':
       return value.reason === 'startup_reconcile'

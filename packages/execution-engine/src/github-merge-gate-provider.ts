@@ -152,6 +152,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       headSha: data.headRefOid,
       headRef: data.headRefName,
       mergeState: normalizeMergeState(data.mergeStateStatus),
+      hasMergeConflict: data.mergeStateStatus === 'DIRTY',
       checks: summarizeStatusChecks(data.statusCheckRollup),
     };
   }
