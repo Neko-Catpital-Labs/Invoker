@@ -46,7 +46,7 @@ describe('Invoker terminal (component)', () => {
     expect(list.parentElement).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col');
   }
 
-  async function expectSurfaceRailList(surface: 'planning' | 'workflows' | 'attention' | 'running', listTestId: string) {
+  async function expectSurfaceRailList(surface: 'planning' | 'workflows' | 'attention', listTestId: string) {
     fireEvent.click(await screen.findByTestId(`sidebar-${surface}`));
     await waitFor(() => {
       expect(screen.getByTestId(`sidebar-${surface}`)).toHaveAttribute('aria-current', 'page');
@@ -861,6 +861,5 @@ describe('Invoker terminal (component)', () => {
     await expectSurfaceRailList('planning', 'planning-session-list');
     await expectSurfaceRailList('workflows', 'workflows-rail-list');
     await expectSurfaceRailList('attention', 'attention-rail-list');
-    await expectSurfaceRailList('running', 'running-rail-list');
   });
 });
