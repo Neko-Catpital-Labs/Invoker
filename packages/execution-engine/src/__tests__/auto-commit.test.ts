@@ -2288,6 +2288,26 @@ describe('BaseExecutor.buildCommandAndArgs', () => {
     expect(result.agentSessionId).toBeUndefined();
   });
 
+  it('normalizes shell-escaped quoted heredoc delimiters for command tasks', () => {
+    const command = [
+      "node --input-type=module <<'\"'\"'NODE'\"'\"'",
+      "console.log('ok');",
+      'NODE',
+    ].join('\n');
+    const req = makeRequest('act', { command });
+    req.actionType = 'command';
+    const result = executor.testBuildCommandAndArgs(req);
+    expect(result.cmd).toBe('/bin/bash');
+    expect(result.args).toEqual([
+      '-c',
+      [
+        "node --input-type=module <<'NODE'",
+        "console.log('ok');",
+        'NODE',
+      ].join('\n'),
+    ]);
+  });
+
   it('throws when actionType=command has no command', () => {
     const req = makeRequest('act', {});
     req.actionType = 'command';

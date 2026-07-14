@@ -756,6 +756,42 @@ branch refs/heads/${targetBranch}
     expect(callScript).toContain('rm -rf "$STAGING_DIR"');
   });
 
+  it('normalizes shell-escaped quoted heredoc delimiters before staging SSH payload scripts', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: false,
+    }) as any;
+
+    let capturedScript = '';
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any, script: string) => {
+        capturedScript = script;
+        return handle;
+      },
+    );
+
+    const command = [
+      "node --input-type=module <<'\"'\"'NODE'\"'\"'",
+      "console.log('ok');",
+      'NODE',
+    ].join('\n');
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command,
+        description: 'quoted heredoc',
+        workspacePath: '/custom/path',
+      },
+    }));
+
+    expect(capturedScript).toContain("node --input-type=module <<'NODE'\n");
+    expect(capturedScript).not.toContain("<<'\"'\"'NODE'\"'\"'");
+    expect(capturedScript).toContain('\nNODE\n');
+  });
+
   it('BYO mode throws when workspacePath is missing', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
