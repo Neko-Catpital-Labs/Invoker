@@ -21,12 +21,15 @@ test.use({ guiOwnerMode: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'daemon' });
 const execFileAsync = promisify(execFile);
 const repoRoot = resolveRepoRoot(__dirname);
 const RESPONSIVE_INTERACTION_TIMEOUT_MS = 15000;
+const MAX_INSPECTOR_TOGGLE_MS = 5000;
 const HEADLESS_DELEGATED_WORKFLOW_COUNT = 8;
+const MAX_RETRY_BURST_WALL_MS = 120000;
 const MAX_RENDERER_EVENT_LOOP_LAG_MS = 1000;
 const MAX_RENDERER_LONG_TASK_MS = 1500;
 
 const HEADLESS_HERD_BUDGETS = {
-  maxInspectorToggleMs: RESPONSIVE_INTERACTION_TIMEOUT_MS,
+  maxInspectorToggleMs: MAX_INSPECTOR_TOGGLE_MS,
+  maxRetryBurstWallMs: MAX_RETRY_BURST_WALL_MS,
   delegatedWorkflowCount: HEADLESS_DELEGATED_WORKFLOW_COUNT,
   minRetryCommandCount: HEADLESS_DELEGATED_WORKFLOW_COUNT + 1,
   maxRendererEventLoopLagMs: MAX_RENDERER_EVENT_LOOP_LAG_MS,
@@ -188,8 +191,9 @@ test.describe('Headless thundering herd', () => {
 
     const evidenceMessage = JSON.stringify(evidence);
     expect(burst.length, evidenceMessage).toBeGreaterThanOrEqual(HEADLESS_DELEGATED_WORKFLOW_COUNT + 1);
-    expect(firstInteractionMs, evidenceMessage).toBeLessThanOrEqual(RESPONSIVE_INTERACTION_TIMEOUT_MS);
-    expect(secondInteractionMs, evidenceMessage).toBeLessThanOrEqual(RESPONSIVE_INTERACTION_TIMEOUT_MS);
+    expect(retryBurstWallMs, evidenceMessage).toBeLessThanOrEqual(MAX_RETRY_BURST_WALL_MS);
+    expect(firstInteractionMs, evidenceMessage).toBeLessThanOrEqual(MAX_INSPECTOR_TOGGLE_MS);
+    expect(secondInteractionMs, evidenceMessage).toBeLessThanOrEqual(MAX_INSPECTOR_TOGGLE_MS);
     expect(Number(perf.maxRendererEventLoopLagMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
     expect(Number(perf.maxRendererLongTaskMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
     expect(delegatedPerf.ownerMode).toBe('standalone');
