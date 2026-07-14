@@ -11,7 +11,6 @@ import {
   InvokerIcon,
   MoonIcon,
   PlanningTerminalIcon,
-  RunningIcon,
   SettingsIcon,
   SunIcon,
   WorkerIcon,
@@ -90,7 +89,6 @@ export function LeftStatusColumn({
 
   const sources: SourceItem[] = [
     { key: 'attention', label: 'Needs Attention', count: attentionEntries.length, tone: 'attention', icon: <AttentionIcon className={ICON_CLASS} /> },
-    { key: 'running', label: 'Running', count: runningEntries.length, tone: 'running', icon: <RunningIcon className={ICON_CLASS} /> },
     { key: 'workers', label: 'Workers', count: registeredWorkers, tone: activeWorkerActions > 0 ? 'running' : 'neutral', icon: <WorkerIcon className={ICON_CLASS} /> },
     { key: 'workflows', label: 'Workflows', count: workflowEntries.length, tone: 'neutral', icon: <WorkflowsIcon className={ICON_CLASS} /> },
   ];
@@ -172,7 +170,7 @@ export function LeftStatusColumn({
 
       {!collapsed && <div className="mt-6 px-2.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">Library</div>}
       <nav className={collapsed ? 'mt-4 space-y-1' : 'mt-2 space-y-0.5'}>
-        {sources.map((source, index) => {
+        {sources.map((source) => {
           const selected = selectedSurface === source.key;
           return (
             <button
