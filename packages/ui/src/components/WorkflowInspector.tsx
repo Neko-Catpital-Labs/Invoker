@@ -4,6 +4,7 @@ import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import { subscribeVisibilityAwarePoll } from '../hooks/visibilityAwarePoll.js';
 import { mutationFailureTitle } from '../lib/mutation-failure-display.js';
+import { WorkerDecisionsSection } from './WorkerDecisionsSection.js';
 import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, WorkflowMutationFailedEvent } from '@invoker/contracts';
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
@@ -403,7 +404,11 @@ export function WorkflowInspector({
   const logEntries = taskLogEvents.map(taskEventToLogEntry);
   const visibleLogEntries = logEntries
     .filter((entry) => LOG_LEVEL_RANK[entry.level] >= LOG_LEVEL_RANK[logLevelFilter]);
-
+  const selectedWorkflowId = workflow?.id ?? task?.config.workflowId;
+  const timelineDecisionTitle = task ? 'Worker decisions' : 'Workflow decisions';
+  const timelineDecisionEmptyText = task
+    ? 'No worker decisions for this task yet.'
+    : 'No workflow-level worker decisions recorded yet.';
   const savePrompt = () => {
     if (task && onEditPrompt && editPromptValue !== (task.config.prompt ?? '')) {
       onEditPrompt(task.id, editPromptValue);
@@ -799,68 +804,85 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {task && (
+        {(task || selectedWorkflowId) && (
           <section className="rounded border border-border bg-secondary/70" data-testid="task-logs-section">
             <div className="flex items-center justify-between gap-3 px-3 py-2">
               <button
                 onClick={() => setShowLogs(!showLogs)}
                 className="text-left text-[11px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
                 data-testid="task-logs-toggle"
-                data-sidebar-nav-item
-                data-sidebar-nav-order="80"
-                data-sidebar-expandable="true"
                 aria-expanded={showLogs}
               >
-                Logs {showLogs ? '▲' : '▼'}
+                Timeline {showLogs ? '▲' : '▼'}
               </button>
-              <label className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
-                Level
-                <select
-                  value={logLevelFilter}
-                  onChange={(event) => setLogLevelFilter(event.target.value as TaskLogLevel)}
-                  className="rounded border border-border-strong bg-muted px-2 py-1 text-xs normal-case text-foreground focus:border-border-strong focus:outline-none"
-                  data-testid="task-log-level-select"
-                >
-                  <option value="debug">Debug+</option>
-                  <option value="info">Info+</option>
-                  <option value="warn">Warn+</option>
-                  <option value="error">Error</option>
-                </select>
-              </label>
+              {task ? (
+                <label className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+                  Level
+                  <select
+                    value={logLevelFilter}
+                    onChange={(event) => setLogLevelFilter(event.target.value as TaskLogLevel)}
+                    className="rounded border border-border-strong bg-muted px-2 py-1 text-xs normal-case text-foreground focus:border-border-strong focus:outline-none"
+                    data-testid="task-log-level-select"
+                  >
+                    <option value="debug">Debug+</option>
+                    <option value="info">Info+</option>
+                    <option value="warn">Warn+</option>
+                    <option value="error">Error</option>
+                  </select>
+                </label>
+              ) : null}
             </div>
             {showLogs && (
-              <div className="border-t border-border px-3 py-2">
-                {taskLogError && (
-                  <p className="mb-2 rounded border border-amber-800 bg-amber-950/30 px-2 py-1 text-xs text-amber-300" data-testid="task-log-error">
-                    {taskLogError}
-                  </p>
-                )}
-                {visibleLogEntries.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No logs at this level.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {visibleLogEntries.slice(0, 20).map((entry) => (
-                      <div key={entry.id} className="rounded border border-border bg-card/60 p-2" data-testid="task-log-entry">
-                        <div className="flex items-start gap-2">
-                          <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${logLevelClass(entry.level)}`}>
-                            {entry.level}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <p className="break-words text-xs text-foreground">{entry.message}</p>
-                              {entry.createdAt && (
-                                <span className="shrink-0 text-[10px] text-muted-foreground">{formatEventTime(entry.createdAt)}</span>
-                              )}
+              <div className="space-y-3 border-t border-border px-3 py-2">
+                <p className="text-xs text-muted-foreground">
+                  {task
+                    ? 'Task events first. Worker decisions below. This is the fastest way to see retries, skips, and AI fix attempts.'
+                    : 'Workflow-level worker decisions. Select a task for the event-by-event task timeline.'}
+                </p>
+                {task ? (
+                  <div>
+                    <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-foreground">Task events</div>
+                    {taskLogError && (
+                      <p className="mb-2 rounded border border-amber-800 bg-amber-950/30 px-2 py-1 text-xs text-amber-300" data-testid="task-log-error">
+                        {taskLogError}
+                      </p>
+                    )}
+                    {visibleLogEntries.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No timeline entries at this level.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {visibleLogEntries.slice(0, 20).map((entry) => (
+                          <div key={entry.id} className="rounded border border-border bg-card/60 p-2" data-testid="task-log-entry">
+                            <div className="flex items-start gap-2">
+                              <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${logLevelClass(entry.level)}`}>
+                                {entry.level}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-baseline justify-between gap-2">
+                                  <p className="break-words text-xs text-foreground">{entry.message}</p>
+                                  {entry.createdAt && (
+                                    <span className="shrink-0 text-[10px] text-muted-foreground">{formatEventTime(entry.createdAt)}</span>
+                                  )}
+                                </div>
+                                {entry.detail && (
+                                  <code className="mt-1 block break-all text-[10px] text-muted-foreground">{entry.detail}</code>
+                                )}
+                              </div>
                             </div>
-                            {entry.detail && (
-                              <code className="mt-1 block break-all text-[10px] text-muted-foreground">{entry.detail}</code>
-                            )}
                           </div>
-                        </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
                   </div>
-                )}
+                ) : null}
+                {selectedWorkflowId ? (
+                  <WorkerDecisionsSection
+                    workflowId={selectedWorkflowId}
+                    taskId={task?.id}
+                    title={timelineDecisionTitle}
+                    emptyText={timelineDecisionEmptyText}
+                  />
+                ) : null}
               </div>
             )}
           </section>
