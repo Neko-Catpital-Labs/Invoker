@@ -33,6 +33,21 @@ export interface PrAuthoringTaskEntry {
   fileChangeSummary?: string;
 }
 
+/** Durable worker action evidence rendered into the PR pipeline summary. */
+export interface PrAuthoringWorkerActionEntry {
+  workerKind: string;
+  actionType: string;
+  status: string;
+  subjectType?: string;
+  subjectId?: string;
+  workflowId?: string;
+  taskId?: string;
+  summary?: string;
+  reason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 /**
  * Structured context that supplements the free-form `workflowSummary` string
  * with machine-readable evidence for PR body authoring.
@@ -46,6 +61,8 @@ export interface PrAuthoringContext {
   workflowDescription?: string;
   /** Per-task entries with verification evidence. */
   tasks: PrAuthoringTaskEntry[];
+  /** Durable worker decisions/actions that explain Invoker pipeline activity. */
+  workerActions?: PrAuthoringWorkerActionEntry[];
   /** Visual-proof markdown block (screenshots / video walkthrough). */
   visualProofMarkdown?: string;
 }
@@ -478,6 +495,69 @@ export function parseMakePrStackPublishResult(raw: string): MakePrStackArtifactO
   return records;
 }
 
+function markdownTableCell(value: string | undefined): string {
+  const normalized = (value ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '-';
+  return normalized.replaceAll('\\', '\\\\').replaceAll('|', '\\|');
+}
+
+function workerActionTimestamp(action: PrAuthoringWorkerActionEntry): string {
+  return action.createdAt ?? action.updatedAt ?? '';
+}
+
+function workerActionTarget(action: PrAuthoringWorkerActionEntry): string {
+  if (action.taskId) return action.taskId;
+  if (action.workflowId && action.subjectId && action.subjectId !== action.workflowId) {
+    return `${action.workflowId}/${action.subjectId}`;
+  }
+  return action.subjectId ?? action.workflowId ?? '-';
+}
+
+function compareWorkerActionsByTime(
+  a: PrAuthoringWorkerActionEntry,
+  b: PrAuthoringWorkerActionEntry,
+): number {
+  const aTime = workerActionTimestamp(a);
+  const bTime = workerActionTimestamp(b);
+  const aMs = Date.parse(aTime);
+  const bMs = Date.parse(bTime);
+  if (Number.isFinite(aMs) && Number.isFinite(bMs) && aMs !== bMs) return aMs - bMs;
+  return aTime.localeCompare(bTime)
+    || a.workerKind.localeCompare(b.workerKind)
+    || a.actionType.localeCompare(b.actionType)
+    || workerActionTarget(a).localeCompare(workerActionTarget(b));
+}
+
+function renderPipelineSection(workerActions: readonly PrAuthoringWorkerActionEntry[]): string[] {
+  const lines: string[] = [];
+  lines.push('## Pipeline');
+  lines.push('');
+
+  if (workerActions.length === 0) {
+    lines.push('_No worker actions recorded._');
+    lines.push('');
+    return lines;
+  }
+
+  lines.push('| Time | Worker | Action | Status | Target | Summary |');
+  lines.push('| --- | --- | --- | --- | --- | --- |');
+  for (const action of [...workerActions].sort(compareWorkerActionsByTime)) {
+    const summary = action.reason
+      ? `${action.summary ?? ''}${action.summary ? ' ' : ''}(${action.reason})`
+      : action.summary;
+    lines.push([
+      markdownTableCell(workerActionTimestamp(action)),
+      markdownTableCell(action.workerKind),
+      markdownTableCell(action.actionType),
+      markdownTableCell(action.status),
+      markdownTableCell(workerActionTarget(action)),
+      markdownTableCell(summary),
+    ].join(' | ').replace(/^/, '| ').replace(/$/, ' |'));
+  }
+  lines.push('');
+  return lines;
+}
+
 /**
  * Build a deterministic canonical PR body from structured context.
  * Used as the no-AI escape hatch when all agent-authored attempts fail.
@@ -498,6 +578,10 @@ export function buildCanonicalPrBody(args: {
     lines.push(args.workflowSummary.trim());
   }
   lines.push('');
+
+  if (args.structuredContext?.workerActions !== undefined) {
+    lines.push(...renderPipelineSection(args.structuredContext.workerActions));
+  }
 
   // ## Test Plan — content collapsed per the canonical schema.
   lines.push('## Test Plan');
@@ -612,6 +696,24 @@ export function buildMakePrPrompt(args: {
     if (ctx.visualProofMarkdown) {
       lines.push('Visual proof (include verbatim in PR body if present):');
       lines.push(ctx.visualProofMarkdown);
+      lines.push('');
+    }
+
+    if (ctx.workerActions !== undefined) {
+      lines.push('Pipeline worker actions (render as a ## Pipeline table in chronological order):');
+      if (ctx.workerActions.length === 0) {
+        lines.push('- No worker actions recorded.');
+      } else {
+        for (const action of [...ctx.workerActions].sort(compareWorkerActionsByTime)) {
+          const target = workerActionTarget(action);
+          const when = workerActionTimestamp(action) || 'unknown-time';
+          const summary = action.summary ? ` — ${action.summary}` : '';
+          const reason = action.reason ? ` (${action.reason})` : '';
+          lines.push(
+            `- ${when} ${action.workerKind}/${action.actionType} ${action.status} target=${target}${summary}${reason}`,
+          );
+        }
+      }
       lines.push('');
     }
   }
