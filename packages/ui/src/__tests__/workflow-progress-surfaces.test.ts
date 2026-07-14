@@ -5,7 +5,7 @@ import { getRunningTaskEntries } from '../lib/workflow-progress-surfaces.js';
 import type { WorkflowMeta } from '../types.js';
 
 describe('workflow progress surfaces', () => {
-  it('repro: drops live running tasks when queue polling points at a missing task', () => {
+  it('keeps live running tasks visible when queue polling points at a missing task', () => {
     const workflow: WorkflowMeta = {
       id: 'wf-alpha',
       name: 'Alpha',
@@ -26,6 +26,8 @@ describe('workflow progress surfaces', () => {
       queued: [],
     };
 
-    expect(getRunningTaskEntries(tasks, workflows, queueStatus)).toEqual([]);
+    const entries = getRunningTaskEntries(tasks, workflows, queueStatus);
+    expect(entries.map(({ task }) => task.id)).toEqual(['task-alpha']);
+    expect(entries[0]?.workflow?.id).toBe('wf-alpha');
   });
 });
