@@ -19,6 +19,7 @@ export const WORKFLOW_LIFECYCLE_EVENT_KINDS = [
   'task.needs_input',
   'task.removed',
   'review_gate.ci_failed',
+  'review_gate.merge_conflict',
   'workflow.wakeup',
 ] as const;
 
@@ -91,6 +92,18 @@ export interface ReviewGateCiFailedLifecycleEvent extends WorkflowLifecycleEvent
   readonly statusText: string;
 }
 
+export interface ReviewGateMergeConflictLifecycleEvent extends WorkflowLifecycleEventBase {
+  readonly kind: 'review_gate.merge_conflict';
+  readonly taskId: string;
+  readonly status: TaskStatus;
+  readonly reviewId: string;
+  readonly reviewUrl: string;
+  readonly headSha?: string;
+  readonly headRef?: string;
+  readonly branch?: string;
+  readonly statusText: string;
+}
+
 export interface WorkflowWakeupLifecycleEvent extends WorkflowLifecycleEventBase {
   readonly kind: 'workflow.wakeup';
   readonly reason: WorkflowWakeupReason;
@@ -100,6 +113,7 @@ export interface WorkflowWakeupLifecycleEvent extends WorkflowLifecycleEventBase
 export type WorkflowLifecycleEvent =
   | TaskLifecycleEvent
   | ReviewGateCiFailedLifecycleEvent
+  | ReviewGateMergeConflictLifecycleEvent
   | WorkflowWakeupLifecycleEvent;
 
 export type WorkflowWakeupReason =
