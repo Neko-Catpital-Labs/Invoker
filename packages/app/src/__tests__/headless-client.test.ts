@@ -368,10 +368,21 @@ describe('headless-client', () => {
   it('delegates query ui-perf to a reachable owner endpoint', async () => {
     const bus = new LocalBus();
     bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
-    bus.onRequest('headless.query', async () => ({
-      maxRendererEventLoopLagMs: 123,
-      maxRendererLongTaskMs: 456,
-    }));
+    let queryPayload: Record<string, unknown> | undefined;
+    bus.onRequest('headless.query', async (payload: unknown) => {
+      queryPayload = payload as Record<string, unknown>;
+      return {
+        maxRendererEventLoopLagMs: 123,
+        maxRendererLongTaskMs: 456,
+        planningTypingLagReports: 2,
+        maxPlanningTypingLagMs: 78,
+        maxPlanningTypingLagContext: {
+          scenario: 'many-chats-many-messages-typing',
+          sessionCount: 6,
+          activeSurface: 'planning',
+        },
+      };
+    });
 
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const runElectronHeadless = vi.fn(async () => 0);
@@ -384,7 +395,41 @@ describe('headless-client', () => {
 
     expect(exitCode).toBe(0);
     expect(runElectronHeadless).not.toHaveBeenCalled();
-    expect(stdout).toHaveBeenCalledWith('{"maxRendererEventLoopLagMs":123,"maxRendererLongTaskMs":456}\n');
+    expect(queryPayload?.kind).toBe('ui-perf');
+    expect(queryPayload?.reset).toBe(false);
+    expect(stdout).toHaveBeenCalledWith(
+      '{"maxRendererEventLoopLagMs":123,"maxRendererLongTaskMs":456,"planningTypingLagReports":2,"maxPlanningTypingLagMs":78,"maxPlanningTypingLagContext":{"scenario":"many-chats-many-messages-typing","sessionCount":6,"activeSurface":"planning"}}\n',
+    );
+    stdout.mockRestore();
+  });
+
+  it('delegates query ui-perf reset and honors delegated label output', async () => {
+    const bus = new LocalBus();
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    let queryPayload: Record<string, unknown> | undefined;
+    bus.onRequest('headless.query', async (payload: unknown) => {
+      queryPayload = payload as Record<string, unknown>;
+      return {
+        maxRendererEventLoopLagMs: 321,
+        maxRendererLongTaskMs: 654,
+        planningTypingLagReports: 1,
+        maxPlanningTypingLagMs: 987,
+      };
+    });
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'ui-perf', '--reset', '--output', 'label'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+    expect(queryPayload).toEqual({ kind: 'ui-perf', reset: true });
+    expect(stdout).toHaveBeenCalledWith('321\n');
     stdout.mockRestore();
   });
 

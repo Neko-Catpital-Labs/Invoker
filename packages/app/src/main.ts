@@ -160,6 +160,11 @@ import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
+import {
+  createUiPerfTelemetryStats,
+  recordUiPerfTelemetryReport,
+  resetUiPerfTelemetryStats,
+} from './ui-perf-telemetry.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -725,16 +730,7 @@ if (isHeadless) {
         commandService,
         getUiPerfStats: () => ({
           ts: new Date().toISOString(),
-          mainDeltaToUi: 0,
-          dbPollCreated: 0,
-          dbPollUpdatedAsCreated: 0,
-          dbPollUpdatedAsUpdated: 0,
-          rendererReports: 0,
-          maxRendererEventLoopLagMs: 0,
-          maxRendererHiddenEventLoopLagMs: 0,
-          maxRendererCumulativeLagMs: 0,
-          maxRendererTickDeltaMs: 0,
-          maxRendererLongTaskMs: 0,
+          ...createUiPerfTelemetryStats(),
         }),
         resetUiPerfStats: () => {},
         waitForApproval,
@@ -1212,18 +1208,7 @@ if (isHeadless) {
     process.env.INVOKER_EXECUTING_STALL_TIMEOUT_MS ?? '180000',
     10,
   ) || 180000;
-  const uiPerfStats = {
-    mainDeltaToUi: 0,
-    dbPollCreated: 0,
-    dbPollUpdatedAsCreated: 0,
-    dbPollUpdatedAsUpdated: 0,
-    rendererReports: 0,
-    maxRendererEventLoopLagMs: 0,
-    maxRendererHiddenEventLoopLagMs: 0,
-    maxRendererCumulativeLagMs: 0,
-    maxRendererTickDeltaMs: 0,
-    maxRendererLongTaskMs: 0,
-  };
+  const uiPerfStats = createUiPerfTelemetryStats();
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
   const recordStartupMark = (phase: string, extra?: Record<string, unknown>): void => {
@@ -1270,16 +1255,7 @@ if (isHeadless) {
   };
 
   const resetUiPerfStats = (): void => {
-    uiPerfStats.mainDeltaToUi = 0;
-    uiPerfStats.dbPollCreated = 0;
-    uiPerfStats.dbPollUpdatedAsCreated = 0;
-    uiPerfStats.dbPollUpdatedAsUpdated = 0;
-    uiPerfStats.rendererReports = 0;
-    uiPerfStats.maxRendererEventLoopLagMs = 0;
-    uiPerfStats.maxRendererHiddenEventLoopLagMs = 0;
-    uiPerfStats.maxRendererCumulativeLagMs = 0;
-    uiPerfStats.maxRendererTickDeltaMs = 0;
-    uiPerfStats.maxRendererLongTaskMs = 0;
+    resetUiPerfTelemetryStats(uiPerfStats);
   };
 
   const getUiPerfStats = (): Record<string, unknown> => ({
@@ -3253,24 +3229,7 @@ if (isHeadless) {
         metric,
         ...(data ?? {}),
       };
-      if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
-        const hiddenOrUnfocused = data.visibilityState === 'hidden' || data.hasFocus === false;
-        if (hiddenOrUnfocused) {
-          uiPerfStats.maxRendererHiddenEventLoopLagMs = Math.max(uiPerfStats.maxRendererHiddenEventLoopLagMs, data.lagMs);
-        } else {
-          uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
-        }
-        if (typeof data.cumulativeLagMs === 'number') {
-          uiPerfStats.maxRendererCumulativeLagMs = Math.max(uiPerfStats.maxRendererCumulativeLagMs, data.cumulativeLagMs);
-        }
-        if (typeof data.tickDeltaMs === 'number') {
-          uiPerfStats.maxRendererTickDeltaMs = Math.max(uiPerfStats.maxRendererTickDeltaMs, data.tickDeltaMs);
-        }
-      }
-      if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
-        uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
-      }
-      uiPerfStats.rendererReports += 1;
+      recordUiPerfTelemetryReport(uiPerfStats, metric, data);
       try {
         persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
       } catch {

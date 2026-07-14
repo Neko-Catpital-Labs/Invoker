@@ -352,6 +352,22 @@ export function formatAsJsonl(items: unknown[]): string {
   return items.map(item => JSON.stringify(item)).join('\n');
 }
 
+export function formatUiPerfStats(
+  stats: Record<string, unknown>,
+  output: 'text' | 'label' | 'json' | 'jsonl' = 'text',
+): string {
+  switch (output) {
+    case 'label':
+      return String(stats.maxRendererEventLoopLagMs ?? 0);
+    case 'json':
+      return formatAsJson(stats);
+    case 'jsonl':
+      return formatAsJsonl([stats]);
+    default:
+      return JSON.stringify(stats, null, 2);
+  }
+}
+
 // ── Cost Formatters ─────────────────────────────────────────
 
 /**
