@@ -2301,6 +2301,29 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'terminate-wording-task-vs-workflow');
     await assertPageScreenshot(page, 'terminate-wording-task-vs-workflow');
   });
+  test('running-surface-queue-skew — running rail stays populated during queue/task skew', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    await injectTaskStates(page, [
+      { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
+    ]);
+
+    await page.evaluate(() => {
+      window.invoker.getQueueStatus = async () => ({
+        maxConcurrency: 5,
+        runningCount: 1,
+        running: [{ taskId: 'ghost-task', description: 'Ghost task' }],
+        queued: [],
+      });
+    });
+    await page.waitForTimeout(2200);
+
+    await page.getByTestId('sidebar-running').click();
+    await expect(page.getByRole('heading', { name: 'Running' })).toBeVisible();
+    await expect(page.getByTestId('running-rail-list').getByRole('button', { name: /First test task/ })).toBeVisible();
+
+    await captureScreenshot(page, 'running-surface-queue-skew');
+  });
 
   test('queue-cancel-control — compact cancel affordance without priority metadata', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
