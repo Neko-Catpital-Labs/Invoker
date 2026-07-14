@@ -170,6 +170,11 @@ function planningSessionFromSummary(
   };
 }
 
+type PlanningStreamState = {
+  text: string;
+  status: 'streaming' | 'failed';
+};
+
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
   return {
     id: 'local-planning-session-1',
@@ -632,10 +637,14 @@ export function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
+  const planningSessionsRef = useRef<PlanningSessionView[]>(planningSessions);
+  const activePlanningSessionIdRef = useRef('local-planning-session-1');
+  const pendingPlanningStreamSessionIdsRef = useRef<Set<string>>(new Set());
+  const planningStreamSessionAliasesRef = useRef<Map<string, string>>(new Map());
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
-  const planningSessionsRef = useRef(planningSessions);
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(1);
+  const [planningStreamBySessionId, setPlanningStreamBySessionId] = useState<Record<string, PlanningStreamState>>({});
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
@@ -644,6 +653,7 @@ export function App() {
     () => planningSessions.find((session) => session.id === activePlanningSessionId) ?? planningSessions[0] ?? makeInitialPlanningSession(),
     [activePlanningSessionId, planningSessions],
   );
+  const activePlanningStream = planningStreamBySessionId[activePlanningSession.id] ?? null;
   const activePlanningConversationKey = activePlanningSession.conversationKey;
   const terminalLines = activePlanningSession.messages;
   const planningInput = activePlanningSession.input;
@@ -767,6 +777,14 @@ export function App() {
       }
     }).catch(() => {});
   }, [cancelPendingSystemSetupAutoOpen, scheduleSystemSetupAutoOpen]);
+
+  useEffect(() => {
+    planningSessionsRef.current = planningSessions;
+  }, [planningSessions]);
+
+  useEffect(() => {
+    activePlanningSessionIdRef.current = activePlanningSessionId;
+  }, [activePlanningSessionId]);
 
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
@@ -909,6 +927,50 @@ export function App() {
   useEffect(() => {
     const unsubscribe = window.invoker?.onRuntimeStatus?.((status) => {
       setRuntimeStatus(status);
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onPlanningChatStream?.((event) => {
+      const sessionId = typeof event.sessionId === 'string' ? event.sessionId.trim() : '';
+      if (!sessionId || typeof event.chunk !== 'string' || !event.chunk) return;
+
+      const sessions = planningSessionsRef.current;
+      const isStreamingTarget = (session: PlanningSessionView): boolean => (
+        session.busy || pendingPlanningStreamSessionIdsRef.current.has(session.id)
+      );
+      const matchingSession = sessions.find((session) => session.id === sessionId);
+      const aliasedSessionId = planningStreamSessionAliasesRef.current.get(sessionId);
+      const aliasedSession = aliasedSessionId
+        ? sessions.find((session) => session.id === aliasedSessionId)
+        : undefined;
+      const activeLocalSession = sessions.find((session) => (
+        session.id === activePlanningSessionIdRef.current
+        && session.id.startsWith('local-')
+        && isStreamingTarget(session)
+      ));
+      const localBusySession = sessions.find((session) => session.id.startsWith('local-') && isStreamingTarget(session));
+      const targetSessionId = matchingSession && isStreamingTarget(matchingSession)
+        ? matchingSession.id
+        : aliasedSession && isStreamingTarget(aliasedSession)
+          ? aliasedSession.id
+          : activeLocalSession?.id ?? localBusySession?.id;
+      if (!targetSessionId) return;
+      if (!matchingSession) {
+        planningStreamSessionAliasesRef.current.set(sessionId, targetSessionId);
+      }
+
+      setPlanningStreamBySessionId((prev) => {
+        const current = prev[targetSessionId];
+        return {
+          ...prev,
+          [targetSessionId]: {
+            text: `${current?.text ?? ''}${event.chunk}`,
+            status: 'streaming',
+          },
+        };
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -2102,6 +2164,49 @@ export function App() {
     updatePlanningSessionById(activePlanningSessionId, updater);
   }, [activePlanningSessionId, updatePlanningSessionById]);
 
+  const clearPlanningStreamForSessionIds = useCallback((sessionIds: Array<string | null | undefined>) => {
+    const ids = new Set(sessionIds.filter((sessionId): sessionId is string => Boolean(sessionId)));
+    if (ids.size === 0) return;
+    setPlanningStreamBySessionId((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of ids) {
+        if (id in next) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
+  const forgetPlanningStreamAliasesForSessionIds = useCallback((sessionIds: Array<string | null | undefined>) => {
+    const ids = new Set(sessionIds.filter((sessionId): sessionId is string => Boolean(sessionId)));
+    if (ids.size === 0) return;
+    for (const [streamSessionId, targetSessionId] of planningStreamSessionAliasesRef.current) {
+      if (ids.has(streamSessionId) || ids.has(targetSessionId)) {
+        planningStreamSessionAliasesRef.current.delete(streamSessionId);
+      }
+    }
+  }, []);
+
+  const keepPlanningStreamFailureForSessionIds = useCallback((sessionIds: Array<string | null | undefined>, message: string) => {
+    const ids = new Set(sessionIds.filter((sessionId): sessionId is string => Boolean(sessionId)));
+    if (ids.size === 0 || !message) return;
+    setPlanningStreamBySessionId((prev) => {
+      const next = { ...prev };
+      for (const id of ids) {
+        const existing = next[id]?.text ?? '';
+        const separator = existing && !existing.endsWith('\n') ? '\n' : '';
+        next[id] = {
+          text: existing ? `${existing}${separator}${message}` : message,
+          status: 'failed',
+        };
+      }
+      return next;
+    });
+  }, []);
+
   const setPlanningInput = useCallback((value: string) => {
     updateActivePlanningSession((session) => ({ ...session, input: value }));
   }, [updateActivePlanningSession]);
@@ -2285,6 +2390,9 @@ export function App() {
     }
 
     const previousSessionId = activePlanningSessionId;
+    pendingPlanningStreamSessionIdsRef.current.add(previousSessionId);
+    clearPlanningStreamForSessionIds([previousSessionId, planningSessionId]);
+    forgetPlanningStreamAliasesForSessionIds([previousSessionId, planningSessionId]);
     updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
     try {
       const request = {
@@ -2316,15 +2424,27 @@ export function App() {
         setActivePlanningSessionId((currentSessionId) => (
           currentSessionId === previousSessionId ? result.sessionId : currentSessionId
         ));
+        clearPlanningStreamForSessionIds([previousSessionId, result.sessionId]);
+        forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
+        pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
+        pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
         setHasLoadedPlan(false);
       } else {
         updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+        keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
+        forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
+        pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
+        if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
         appendTerminalLine(result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
       updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
       const message = err instanceof Error ? err.message : 'Failed to reach the planner.';
+      keepPlanningStreamFailureForSessionIds([previousSessionId, planningSessionId], message);
+      forgetPlanningStreamAliasesForSessionIds([previousSessionId, planningSessionId]);
+      pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
+      if (planningSessionId) pendingPlanningStreamSessionIdsRef.current.delete(planningSessionId);
       setPlanningSubmitError({ title: 'Planner could not respond', message });
       appendTerminalLine(message, 'system', 'error');
     }
@@ -2333,10 +2453,13 @@ export function App() {
     activePlanningSessionId,
     activePlanningReadOnly,
     appendTerminalLine,
+    clearPlanningStreamForSessionIds,
+    forgetPlanningStreamAliasesForSessionIds,
     handlePlanningSubmitDraft,
     handleStart,
     hasLoadedPlan,
     hasStarted,
+    keepPlanningStreamFailureForSessionIds,
     invoker,
     planningInput,
     planningSessionId,
@@ -3402,6 +3525,7 @@ export function App() {
             presetOptions={planningPresetOptions}
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
+            planningStream={activePlanningStream}
             submitError={planningSubmitError}
             readOnly={activePlanningReadOnly}
             mode={activePlanningMode}
@@ -3709,6 +3833,7 @@ export function App() {
             presetOptions={planningPresetOptions}
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
+            planningStream={activePlanningStream}
             submitError={planningSubmitError}
             expanded
             mode={activePlanningMode}
