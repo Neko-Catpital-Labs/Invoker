@@ -27,6 +27,7 @@ import {
 import { resolveDefaultExecutionAgent } from './config.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
 import { listWorkerDecisions, toWorkerActionSummary } from './worker-control.js';
+import { createRendererUiPerfCounters } from './renderer-ui-perf.js';
 import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
@@ -294,9 +295,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         dbPollCreated: 0,
         dbPollUpdatedAsCreated: 0,
         dbPollUpdatedAsUpdated: 0,
-        rendererReports: 0,
-        maxRendererEventLoopLagMs: 0,
-        maxRendererLongTaskMs: 0,
+        ...createRendererUiPerfCounters(),
       };
       switch (flags.output) {
         case 'label':
