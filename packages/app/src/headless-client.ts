@@ -252,6 +252,9 @@ async function delegateReadOnlyQuery(
   if (!isUiPerf && !isQueue && !isActionGraph) {
     return delegateGenericReadQuery(args, bus, refreshMessageBus);
   }
+  if (isUiPerf && args.includes('--reset')) {
+    throw new Error('query ui-perf --reset is not a read-only query');
+  }
 
   // Use the resolver to wait for any reachable owner
   const resolver = createOwnerResolver(

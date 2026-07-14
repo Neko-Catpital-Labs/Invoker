@@ -157,7 +157,6 @@ import {
 } from './terminal-ui-perf.js';
 import {
   createRendererUiPerfCounters,
-  recordRendererUiPerfMetric,
   resetRendererUiPerfCounters,
 } from './renderer-ui-perf.js';
 import {
@@ -981,12 +980,7 @@ function startHeadlessMode(): void {
           dbPollCreated: 0,
           dbPollUpdatedAsCreated: 0,
           dbPollUpdatedAsUpdated: 0,
-          rendererReports: 0,
-          maxRendererEventLoopLagMs: 0,
-          maxRendererHiddenEventLoopLagMs: 0,
-          maxRendererCumulativeLagMs: 0,
-          maxRendererTickDeltaMs: 0,
-          maxRendererLongTaskMs: 0,
+          ...createRendererUiPerfCounters(),
         }),
         resetUiPerfStats: () => {},
         waitForApproval,
@@ -1991,12 +1985,7 @@ function createEmbeddedTerminalBackendFromConfig(
     dbPollCreated: 0,
     dbPollUpdatedAsCreated: 0,
     dbPollUpdatedAsUpdated: 0,
-    rendererReports: 0,
-    maxRendererEventLoopLagMs: 0,
-    maxRendererHiddenEventLoopLagMs: 0,
-    maxRendererCumulativeLagMs: 0,
-    maxRendererTickDeltaMs: 0,
-    maxRendererLongTaskMs: 0,
+    ...createRendererUiPerfCounters(),
     workflowMetadataPublishRequests: 0,
     workflowMetadataPublishes: 0,
     workflowMetadataCoalescedRequests: 0,
@@ -2061,12 +2050,7 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.dbPollCreated = 0;
     uiPerfStats.dbPollUpdatedAsCreated = 0;
     uiPerfStats.dbPollUpdatedAsUpdated = 0;
-    uiPerfStats.rendererReports = 0;
-    uiPerfStats.maxRendererEventLoopLagMs = 0;
-    uiPerfStats.maxRendererHiddenEventLoopLagMs = 0;
-    uiPerfStats.maxRendererCumulativeLagMs = 0;
-    uiPerfStats.maxRendererTickDeltaMs = 0;
-    uiPerfStats.maxRendererLongTaskMs = 0;
+    resetRendererUiPerfCounters(uiPerfStats);
     uiPerfStats.workflowMetadataPublishRequests = 0;
     uiPerfStats.workflowMetadataPublishes = 0;
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
