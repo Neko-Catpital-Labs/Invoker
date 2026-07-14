@@ -8,8 +8,12 @@ import type {
   InAppPlanningChatRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningResetRequest,
+  InAppPlanningSetTerminalModeRequest,
+  InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   Logger,
+  StartReadyRequest,
+  StartReadyResult,
   WorkflowMutationAcceptedResult,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
@@ -77,6 +81,7 @@ import {
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
+  setPlanningChatTerminalMode,
   submitPlanningChatDraft,
 } from '../in-app-planner.js';
 import { seedMainProcessHitchFixture } from '../main-process-hitch-fixture.js';
@@ -107,6 +112,7 @@ import {
   classifyAutoFixRecoveryPhase,
   recoveryWorkerEventType,
 } from '../recovery-worker-observability.js';
+import { recordRendererUiPerfMetric, type RendererUiPerfCounters } from '../renderer-ui-perf.js';
 
 interface HeadlessRunMutationPayload {
   planPath: string;
@@ -208,8 +214,11 @@ export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskAc
   getWorkerRuntimeController: () => WorkerRuntimeController | null;
   registrars: GuiMutationRegistrars;
   actions: GuiMutationTaskActions;
+  executeStartReady: (request?: StartReadyRequest) => StartReadyResult;
   planningChatSessions: ReturnType<typeof createInAppPlanningChatSessions>;
   planningCommandBuilder: ReturnType<typeof createPlanningCommandBuilderFromRegistry>;
+  onRawPlannerOutput: (event: InAppPlanningStreamEvent) => void;
+  restorePersistedPlanningTerminals: () => void;
   taskGraphEventPublisher: TaskGraphEventPublisher;
   loadTaskByIdFromPersistence: (taskId: string) => TaskState | undefined;
   markDaemonOwnerUnavailable: (reason: string) => void;
@@ -217,14 +226,7 @@ export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskAc
   getTaskDeltaStreamSequence: () => number;
   computeRuntimeStatus: () => unknown;
   getUiPerfStats: () => Record<string, unknown>;
-  uiPerfStats: {
-    rendererReports: number;
-    maxRendererHiddenEventLoopLagMs: number;
-    maxRendererEventLoopLagMs: number;
-    maxRendererCumulativeLagMs: number;
-    maxRendererTickDeltaMs: number;
-    maxRendererLongTaskMs: number;
-  };
+  uiPerfStats: RendererUiPerfCounters;
   createRegisteredWorkerRegistry: () => WorkerRegistry<WorkerRuntimeDependencies>;
   buildCliInstallerContext: () => CliInstallerContext;
   resolveSetupCliPath: () => string;
@@ -243,26 +245,6 @@ function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
     || (task.status === 'pending' && task.execution.phase === 'launching');
-}
-
-function isTaskRecoverableOnExplicitResume(task: TaskState): boolean {
-  if (task.status === 'running') return true;
-  if (task.status !== 'pending' || !task.execution.selectedAttemptId) return false;
-  if (task.execution.phase === 'launching') return true;
-
-  return Boolean(
-    task.execution.startedAt
-    || task.execution.launchStartedAt
-    || task.execution.launchCompletedAt
-    || task.execution.lastHeartbeatAt
-    || task.execution.workspacePath
-    || task.execution.agentSessionId
-    || task.execution.containerId
-    || task.execution.error
-    || task.execution.exitCode !== undefined
-    || task.execution.inputPrompt
-    || task.execution.pendingFixError,
-  );
 }
 
 export function createGuiMutationTaskActions(context: GuiMutationTaskActionsContext): GuiMutationTaskActions {
@@ -971,8 +953,11 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     buildCommandServiceInvalidationDeps,
     registrars,
     actions,
+    executeStartReady,
     planningChatSessions,
     planningCommandBuilder,
+    onRawPlannerOutput,
+    restorePersistedPlanningTerminals,
     taskGraphEventPublisher,
     loadTaskByIdFromPersistence,
     markDaemonOwnerUnavailable,
@@ -997,13 +982,8 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     get signal() { return context.getActiveMutationContext()?.signal; },
     get mutationTiming() { return context.getActiveMutationContext()?.mutationTiming; },
   };
-  const mainWindowAvailable = (): boolean => {
-    const mainWindow = context.getMainWindow();
-    return Boolean(mainWindow && !mainWindow.isDestroyed());
-  };
   const ownerMode = getOwnerMode();
   const workerRuntimeController = getWorkerRuntimeController();
-  const launchDispatcher = context.getLaunchDispatcher();
   const workflowIdForTaskArg = actions.workflowIdForTaskArg;
   const workflowIdForTargetArg = actions.workflowIdForTargetArg;
   const performDeleteTask = actions.performDeleteTask;
@@ -1097,7 +1077,11 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     loadGeneratedPlan: loadGeneratedPlanPreview,
     conversationRepo: planningConversationRepo,
     planningSessionStore: ownerMode ? persistence : undefined,
+    onRawPlannerOutput,
   });
+  if (ownerMode) {
+    restorePersistedPlanningTerminals();
+  }
   let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
   // Two variants: (1) a successful override that returns a canned reply +
   // plan YAML, or (2) an error injection that makes the wrapper throw the
@@ -1131,6 +1115,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      onRawPlannerOutput,
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -1155,6 +1140,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
       plannerReplyOverride,
+      onRawPlannerOutput,
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
@@ -1169,6 +1155,12 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
   registerGuiMutationHandler('invoker:planning-chat-reset', async (request: unknown) => {
     return resetPlanningChat(request as InAppPlanningResetRequest, {
+      sessions: planningChatSessions,
+      planningSessionStore: ownerMode ? persistence : undefined,
+    });
+  });
+  registerGuiMutationHandler('invoker:planning-chat-set-terminal-mode', async (request: unknown) => {
+    return setPlanningChatTerminalMode(request as InAppPlanningSetTerminalModeRequest, {
       sessions: planningChatSessions,
       planningSessionStore: ownerMode ? persistence : undefined,
     });
@@ -1246,40 +1238,20 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return started;
   });
 
+  registerGuiMutationHandler('invoker:start-ready', async (requestArg: unknown) => {
+    return executeStartReady(requestArg as StartReadyRequest | undefined);
+  });
+
   registerGuiMutationHandler('invoker:resume-workflow', async () => {
     const workflows = persistence.listWorkflows();
     if (workflows.length === 0) {
       logger.info('resume-workflow: no workflows found', { module: 'ipc' });
       return null;
     }
-    orchestrator.syncAllFromDb();
-
-    const tasksToRecover = orchestrator.getAllTasks().filter(isTaskRecoverableOnExplicitResume);
-    for (const task of tasksToRecover) {
-      orchestrator.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
-    }
-
-    const allStarted = orchestrator.startExecution();
+    const result = executeStartReady({});
     const tasks = orchestrator.getAllTasks();
-    rendererTaskFeed.replaceWorkflowRollups(tasks);
-    for (const task of tasks) {
-      rendererTaskFeed.rememberTaskState(task);
-      if (mainWindowAvailable()) {
-        rendererTaskFeed.publishTaskDeltaToRenderer({ type: 'created', task });
-      }
-    }
-    logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
-    if (allStarted.length > 0 && launchDispatcher) {
-      try {
-        launchDispatcher.poll();
-      } catch (err) {
-        logger.warn(
-          `resume-workflow: launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
-          { module: 'ipc' },
-        );
-      }
-    }
-    return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
+    logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${result.started.length} started`, { module: 'ipc' });
+    return { workflow: workflows[0], taskCount: tasks.length, startedCount: result.started.length };
   });
 
   registerGuiMutationHandler('invoker:stop', async () => {
@@ -1354,6 +1326,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
       snapshot.tasks,
       snapshot.workflows,
+      true,
     );
     recordStartupDuration('refresh-task-graph.return', startedAtMs, {
       taskCount: snapshot.tasks.length,
@@ -1697,24 +1670,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     ) {
       logger.info(`ui metric ${metric} ${JSON.stringify(data ?? {})}`, { module: 'ui-state' });
     }
-    if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
-      const hiddenOrUnfocused = data.visibilityState === 'hidden' || data.hasFocus === false;
-      if (hiddenOrUnfocused) {
-        uiPerfStats.maxRendererHiddenEventLoopLagMs = Math.max(uiPerfStats.maxRendererHiddenEventLoopLagMs, data.lagMs);
-      } else {
-        uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
-      }
-      if (typeof data.cumulativeLagMs === 'number') {
-        uiPerfStats.maxRendererCumulativeLagMs = Math.max(uiPerfStats.maxRendererCumulativeLagMs, data.cumulativeLagMs);
-      }
-      if (typeof data.tickDeltaMs === 'number') {
-        uiPerfStats.maxRendererTickDeltaMs = Math.max(uiPerfStats.maxRendererTickDeltaMs, data.tickDeltaMs);
-      }
-    }
-    if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
-      uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
-    }
-    uiPerfStats.rendererReports += 1;
+    recordRendererUiPerfMetric(uiPerfStats, metric, data);
     try {
       persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
     } catch {
