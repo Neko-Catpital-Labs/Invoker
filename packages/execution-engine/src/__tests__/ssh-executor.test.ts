@@ -225,6 +225,52 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
   });
 
+  it('exports GitHub CLI auth into managed command payloads', async () => {
+    const previousGhToken = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = 'ghs_ssh_command_auth';
+
+    try {
+      const ssh = new SshExecutor({
+        host: 'localhost',
+        user: 'testuser',
+        sshKeyPath: '/dev/null',
+        managedWorkspaces: true,
+      }) as any;
+
+      vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+        if (script.includes('__INVOKER_BASE_REF__=')) {
+          return [
+            '__INVOKER_BASE_REF__=origin/main',
+            '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+          ].join('\n');
+        }
+        if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+        if (script.includes('worktree list --porcelain')) return '';
+        return '';
+      });
+
+      vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+      const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+        (_executionId: string, _request: any, handle: any) => handle,
+      );
+
+      await ssh.start(makeRequest({
+        actionType: 'command',
+        inputs: {
+          command: 'gh api graphql',
+          description: 'verify gh auth',
+          repoUrl: 'git@github.com:owner/repo.git',
+        },
+      }));
+
+      const callScript = spawnStub.mock.calls[0][3] as string;
+      expect(callScript).toContain("export GH_TOKEN='ghs_ssh_command_auth'");
+    } finally {
+      if (previousGhToken === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = previousGhToken;
+    }
+  });
+
   it('reuses a managed SSH worktree by actionId when the old base is still compatible', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
