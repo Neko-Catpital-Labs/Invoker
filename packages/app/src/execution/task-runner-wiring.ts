@@ -12,7 +12,10 @@ import {
 } from '@invoker/execution-engine';
 import type { Logger } from '@invoker/contracts';
 import { loadConfig, resolveDefaultTaskExecutionSettings, resolveSecretsFilePath, type InvokerConfig } from '../config.js';
-import { publishReviewGateCiFailedLifecycleEvent } from '../lifecycle-event-bridge.js';
+import {
+  publishReviewGateCiFailedLifecycleEvent,
+  publishReviewGateMergeConflictLifecycleEvent,
+} from '../lifecycle-event-bridge.js';
 
 export type TaskHandleMap = Map<string, { handle: ExecutorHandle; executor: Executor }>;
 
@@ -94,6 +97,14 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
     reviewGateCiFailurePublisher: {
       publish: (trigger) => {
         publishReviewGateCiFailedLifecycleEvent(trigger, {
+          messageBus: deps.messageBus,
+          getTask: (taskId) => deps.orchestrator.getTask(taskId),
+        });
+      },
+    },
+    reviewGateMergeConflictPublisher: {
+      publish: (trigger) => {
+        publishReviewGateMergeConflictLifecycleEvent(trigger, {
           messageBus: deps.messageBus,
           getTask: (taskId) => deps.orchestrator.getTask(taskId),
         });
