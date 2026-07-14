@@ -1,6 +1,6 @@
 import { loadSecretsFile } from './secrets-loader.js';
 
-const AGENT_ENV_KEYS = new Set([
+const REMOTE_TASK_ENV_KEYS = new Set([
   'ANTHROPIC_API_KEY',
   'CLAUDE_API_KEY',
   'CODEX_API_KEY',
@@ -13,6 +13,8 @@ const AGENT_ENV_KEYS = new Set([
   'QWEN_API_KEY',
   'MOONSHOT_API_KEY',
   'KIMI_API_KEY',
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
 ]);
 
 function shellQuote(value: string): string {
@@ -27,7 +29,7 @@ export function loadRemoteAgentEnv(secretsFile: string | undefined, useApiKey: b
     const eq = entry.indexOf('=');
     if (eq <= 0) continue;
     const key = entry.slice(0, eq);
-    if (!AGENT_ENV_KEYS.has(key)) continue;
+    if (!REMOTE_TASK_ENV_KEYS.has(key)) continue;
     env[key] = entry.slice(eq + 1);
   }
 

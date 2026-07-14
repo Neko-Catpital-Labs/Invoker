@@ -86,6 +86,8 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
         'QWEN_API_KEY=qwen-direct-key',
         'DASHSCOPE_API_KEY=dashscope-key',
         'KIMI_API_KEY=kimi-direct-key',
+        'GITHUB_TOKEN=github-token',
+        'GH_TOKEN=gh-token',
         'IGNORED_TOKEN=nope',
         '',
       ].join('\n'),
@@ -117,6 +119,8 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
       expect(script).toContain("export QWEN_API_KEY='qwen-direct-key'");
       expect(script).toContain("export DASHSCOPE_API_KEY='dashscope-key'");
       expect(script).toContain("export KIMI_API_KEY='kimi-direct-key'");
+      expect(script).toContain("export GITHUB_TOKEN='github-token'");
+      expect(script).toContain("export GH_TOKEN='gh-token'");
       expect(script).not.toContain('IGNORED_TOKEN');
     } finally {
       rmSync(dir, { recursive: true, force: true });
