@@ -52,7 +52,6 @@ interface TerminalSessionPaneProps {
 
 type SeededOutputSnapshot = {
   sessionId: string;
-  snapshot: string;
   term: XTermTerminal;
 };
 
@@ -85,37 +84,42 @@ function seedTerminalOutputSnapshot(
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
   if (
-    outputSnapshot &&
-    (
-      !seededSnapshot ||
-      seededSnapshot.sessionId !== session.sessionId ||
-      seededSnapshot.snapshot !== outputSnapshot ||
-      seededSnapshot.term !== term
-    )
+    seededSnapshot &&
+    seededSnapshot.sessionId === session.sessionId &&
+    seededSnapshot.term === term
   ) {
-    try {
-      const startedAt = nowMs();
-      term.write(outputSnapshot);
-      seededSnapshotRef.current = {
-        sessionId: session.sessionId,
-        snapshot: outputSnapshot,
-        term,
-      };
-      reportTerminalPerf('embedded_terminal_snapshot_write', {
-        source,
-        durationMs: roundMs(nowMs() - startedAt),
-        bytes: byteLength(outputSnapshot),
-        chars: outputSnapshot.length,
-        sessionId: session.sessionId,
-        taskId: session.taskId,
-        status: session.status,
-      });
-    } catch (err) {
-      console.warn(
-        `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
-        err,
-      );
-    }
+    return;
+  }
+
+  if (!outputSnapshot) {
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      term,
+    };
+    return;
+  }
+
+  try {
+    const startedAt = nowMs();
+    term.write(outputSnapshot);
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      term,
+    };
+    reportTerminalPerf('embedded_terminal_snapshot_write', {
+      source,
+      durationMs: roundMs(nowMs() - startedAt),
+      bytes: byteLength(outputSnapshot),
+      chars: outputSnapshot.length,
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      status: session.status,
+    });
+  } catch (err) {
+    console.warn(
+      `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
+      err,
+    );
   }
 }
 
