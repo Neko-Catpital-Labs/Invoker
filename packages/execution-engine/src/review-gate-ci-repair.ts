@@ -277,7 +277,6 @@ function logCiFailureWorkerEvent(
   options.store.logEvent?.(event.taskId, 'debug.ci-failure-worker', payload);
   options.logger.debug?.(`[worker:${CI_FAILURE_WORKER_KIND}] ${phase}`, {
     module: 'review-gate-ci-repair',
-    taskId: event.taskId,
     ...payload,
   });
 }
