@@ -47,6 +47,7 @@ export interface MergeGateApprovalStatus {
   headSha?: string;
   headRef?: string;
   mergeState?: 'clean' | 'dirty' | 'unknown';
+  hasMergeConflict?: boolean;
   checks?: MergeGateCheckSummary;
 }
 
