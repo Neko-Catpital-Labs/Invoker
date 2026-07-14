@@ -27,7 +27,10 @@ import {
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import { trackWorkflow } from './headless-watch.js';
-import { publishReviewGateCiFailedLifecycleEvent } from './lifecycle-event-bridge.js';
+import {
+  publishReviewGateCiFailedLifecycleEvent,
+  publishReviewGateMergeConflictLifecycleEvent,
+} from './lifecycle-event-bridge.js';
 import type { WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
@@ -158,6 +161,14 @@ export function createHeadlessExecutor(
     reviewGateCiFailurePublisher: {
       publish: (trigger) => {
         publishReviewGateCiFailedLifecycleEvent(trigger, {
+          messageBus: deps.messageBus,
+          getTask: (taskId) => deps.orchestrator.getTask(taskId),
+        });
+      },
+    },
+    reviewGateMergeConflictPublisher: {
+      publish: (trigger) => {
+        publishReviewGateMergeConflictLifecycleEvent(trigger, {
           messageBus: deps.messageBus,
           getTask: (taskId) => deps.orchestrator.getTask(taskId),
         });
