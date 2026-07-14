@@ -44,6 +44,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'detach-workflow', kind: 'write' },
   { name: 'rebase-retry', kind: 'write' },
   { name: 'rebase-recreate', kind: 'write' },
+  { name: 'repair-review-gate-ci', kind: 'write' },
   { name: 'fix', kind: 'write' },
   { name: 'resolve-conflict', kind: 'write' },
   { name: 'approve', kind: 'write' },
