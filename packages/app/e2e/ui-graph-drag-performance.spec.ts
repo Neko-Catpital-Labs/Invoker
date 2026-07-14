@@ -14,6 +14,15 @@ const MIN_FRAME_COUNT = 35;
 const MAX_P95_FRAME_GAP_MS = 80;
 const MAX_FRAME_GAP_MS = 250;
 const MIN_TRANSFORM_CHANGES = 12;
+const MAX_FIRST_TRANSFORM_MS = 250;
+
+const DRAG_PERF_BUDGETS = {
+  minFrameCount: MIN_FRAME_COUNT,
+  maxP95FrameGapMs: MAX_P95_FRAME_GAP_MS,
+  maxFrameGapMs: MAX_FRAME_GAP_MS,
+  minTransformChanges: MIN_TRANSFORM_CHANGES,
+  maxFirstTransformMs: MAX_FIRST_TRANSFORM_MS,
+};
 
 interface DragPerfResult {
   frameCount: number;
@@ -21,6 +30,7 @@ interface DragPerfResult {
   p95FrameGapMs: number;
   transformChanges: number;
   transformChanged: boolean;
+  firstTransformMs: number | null;
   durationMs: number;
 }
 
@@ -125,8 +135,12 @@ async function recordDragPerformance(
       gaps.push(state.frames[i] - state.frames[i - 1]);
     }
     let transformChanges = 0;
+    let firstTransformMs: number | null = null;
     for (let i = 1; i < state.transforms.length; i += 1) {
-      if (state.transforms[i] !== state.transforms[i - 1]) transformChanges += 1;
+      if (state.transforms[i] !== state.transforms[i - 1]) {
+        transformChanges += 1;
+        firstTransformMs ??= state.frames[i] - state.startedAt;
+      }
     }
     const sorted = [...gaps].sort((a, b) => a - b);
     const p95Index = sorted.length === 0 ? 0 : Math.ceil(sorted.length * 0.95) - 1;
@@ -136,6 +150,7 @@ async function recordDragPerformance(
       p95FrameGapMs: sorted[p95Index] ?? 0,
       transformChanges,
       transformChanged: new Set(state.transforms).size > 1,
+      firstTransformMs,
       durationMs: state.finishedAt - state.startedAt,
     };
   });
@@ -177,12 +192,13 @@ async function streamTaskUpdatesDuringDrag(page: Page): Promise<number> {
 }
 
 function expectSmoothDrag(result: DragPerfResult): void {
-  expect(result.frameCount, JSON.stringify(result)).toBeGreaterThanOrEqual(MIN_FRAME_COUNT);
-  expect(result.p95FrameGapMs, JSON.stringify(result)).toBeLessThanOrEqual(MAX_P95_FRAME_GAP_MS);
-  expect(result.maxFrameGapMs, JSON.stringify(result)).toBeLessThanOrEqual(MAX_FRAME_GAP_MS);
-  if (result.transformChanged) {
-    expect(result.transformChanges, JSON.stringify(result)).toBeGreaterThanOrEqual(1);
-  }
+  const evidence = JSON.stringify({ ...result, budgets: DRAG_PERF_BUDGETS });
+  expect(result.frameCount, evidence).toBeGreaterThanOrEqual(MIN_FRAME_COUNT);
+  expect(result.p95FrameGapMs, evidence).toBeLessThanOrEqual(MAX_P95_FRAME_GAP_MS);
+  expect(result.maxFrameGapMs, evidence).toBeLessThanOrEqual(MAX_FRAME_GAP_MS);
+  expect(result.transformChanged, evidence).toBe(true);
+  expect(result.transformChanges, evidence).toBeGreaterThanOrEqual(MIN_TRANSFORM_CHANGES);
+  expect(result.firstTransformMs ?? Number.POSITIVE_INFINITY, evidence).toBeLessThanOrEqual(MAX_FIRST_TRANSFORM_MS);
 }
 
 test('workflow graph pan stays responsive under a large persisted graph', async ({ page }) => {
@@ -198,12 +214,7 @@ test('workflow graph pan stays responsive under a large persisted graph', async 
     ...result,
     workflowCount: WORKFLOW_COUNT,
     taskCount: WORKFLOW_COUNT * TASKS_PER_WORKFLOW,
-    thresholds: {
-      minFrameCount: MIN_FRAME_COUNT,
-      maxP95FrameGapMs: MAX_P95_FRAME_GAP_MS,
-      maxFrameGapMs: MAX_FRAME_GAP_MS,
-      minTransformChanges: MIN_TRANSFORM_CHANGES,
-    },
+    thresholds: DRAG_PERF_BUDGETS,
   })}`);
   expectSmoothDrag(result);
 });
@@ -228,12 +239,7 @@ test('workflow graph pan stays responsive while task updates arrive', async ({ p
     updateCount,
     updateBursts: UPDATE_BURSTS,
     updatesPerBurst: UPDATES_PER_BURST,
-    thresholds: {
-      minFrameCount: MIN_FRAME_COUNT,
-      maxP95FrameGapMs: MAX_P95_FRAME_GAP_MS,
-      maxFrameGapMs: MAX_FRAME_GAP_MS,
-      minTransformChanges: MIN_TRANSFORM_CHANGES,
-    },
+    thresholds: DRAG_PERF_BUDGETS,
   })}`);
   expect(updateCount).toBe(UPDATE_BURSTS * UPDATES_PER_BURST);
   expectSmoothDrag(result);

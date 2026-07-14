@@ -16,6 +16,25 @@ const PLANNING_PRESSURE_TURNS = 30;
 const PLANNING_INPUT_HANDLER_BUDGET_MS = 50;
 const PLANNING_INPUT_COMMIT_BUDGET_MS = 250;
 const PLANNING_INPUT_FILL_WALL_BUDGET_MS = 1500;
+const STARTUP_GRAPH_VISIBLE_AFTER_WINDOW_BUDGET_MS = 5000;
+const MAX_STARTUP_RENDERER_EVENT_LOOP_LAG_MS = 1000;
+const MAX_STARTUP_RENDERER_LONG_TASK_MS = 1500;
+const MAX_PLANNING_RENDERER_LONG_TASK_COUNT = 0;
+
+const STARTUP_NONEMPTY_BUDGETS = {
+  maxStartupMs: STARTUP_BUDGET_MS,
+  maxGraphVisibleAfterWindowMs: STARTUP_GRAPH_VISIBLE_AFTER_WINDOW_BUDGET_MS,
+  maxRendererEventLoopLagMs: MAX_STARTUP_RENDERER_EVENT_LOOP_LAG_MS,
+  maxRendererLongTaskMs: MAX_STARTUP_RENDERER_LONG_TASK_MS,
+};
+
+const PLANNING_PRESSURE_BUDGETS = {
+  pressureTurns: PLANNING_PRESSURE_TURNS,
+  maxInputHandlerMs: PLANNING_INPUT_HANDLER_BUDGET_MS,
+  maxInputCommitMs: PLANNING_INPUT_COMMIT_BUDGET_MS,
+  maxInputFillWallMs: PLANNING_INPUT_FILL_WALL_BUDGET_MS,
+  maxRendererLongTaskCount: MAX_PLANNING_RENDERER_LONG_TASK_COUNT,
+};
 
 async function launchElectronApp(testDir: string, extraEnv?: Record<string, string>) {
   const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
@@ -95,6 +114,10 @@ function parseActivityPayload(message: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 async function activityLogWatermark(page: Page): Promise<number> {
@@ -207,16 +230,32 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
           .map((entry) => entry.phase)
           .filter(Boolean),
       );
+      const graphVisibleAfterWindowMs = Number(graphVisible?.processElapsedMs) - Number(windowShow?.elapsedMs);
+      const startupEvidence = {
+        workflowCount,
+        tasksPerWorkflow,
+        expectedTaskCount,
+        elapsedMs,
+        graphVisibleAfterWindowMs,
+        taskCount: result.taskCount,
+        perf: result.perf,
+        startupEntries,
+        budgets: STARTUP_NONEMPTY_BUDGETS,
+      };
+      console.log(`STARTUP_NONEMPTY_BENCH_RESULT=${JSON.stringify(startupEvidence)}`);
+      const startupEvidenceMessage = JSON.stringify(startupEvidence);
 
-      expect(windowShow).toBeTruthy();
-      expect(graphVisible).toBeTruthy();
-      expect(taskGraphVisible).toBeTruthy();
-      expect(backgroundHydration).toBeUndefined();
-      expect(Number(graphVisible?.processElapsedMs) - Number(windowShow?.elapsedMs)).toBeLessThan(5000);
-      expect(Number(graphVisible?.nodeCount)).toBe(workflowCount);
-      expect(Number(taskGraphVisible?.nodeCount)).toBe(tasksPerWorkflow);
-      expect(elapsedMs).toBeLessThan(STARTUP_BUDGET_MS);
-      expect([...phaseNames]).toEqual(expect.arrayContaining([
+      expect(windowShow, startupEvidenceMessage).toBeTruthy();
+      expect(graphVisible, startupEvidenceMessage).toBeTruthy();
+      expect(taskGraphVisible, startupEvidenceMessage).toBeTruthy();
+      expect(backgroundHydration, startupEvidenceMessage).toBeUndefined();
+      expect(graphVisibleAfterWindowMs, startupEvidenceMessage).toBeLessThanOrEqual(STARTUP_GRAPH_VISIBLE_AFTER_WINDOW_BUDGET_MS);
+      expect(Number(graphVisible?.nodeCount), startupEvidenceMessage).toBe(workflowCount);
+      expect(Number(taskGraphVisible?.nodeCount), startupEvidenceMessage).toBe(tasksPerWorkflow);
+      expect(elapsedMs, startupEvidenceMessage).toBeLessThanOrEqual(STARTUP_BUDGET_MS);
+      expect(numberOrZero(result.perf.maxRendererEventLoopLagMs), startupEvidenceMessage).toBeLessThanOrEqual(MAX_STARTUP_RENDERER_EVENT_LOOP_LAG_MS);
+      expect(numberOrZero(result.perf.maxRendererLongTaskMs), startupEvidenceMessage).toBeLessThanOrEqual(MAX_STARTUP_RENDERER_LONG_TASK_MS);
+      expect([...phaseNames], startupEvidenceMessage).toEqual(expect.arrayContaining([
         'listWorkflowsByStartupRecency',
         'orchestrator.restore.full-snapshot',
         'sqlite.workflow-metadata.query',
@@ -226,8 +265,8 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
         'bootstrap-ipc.serialize-return',
       ]));
 
-      expect(result.taskCount).toBe(expectedTaskCount);
-      expect(result.perf.dbPollCreated).toBe(0);
+      expect(result.taskCount, startupEvidenceMessage).toBe(expectedTaskCount);
+      expect(result.perf.dbPollCreated, startupEvidenceMessage).toBe(0);
     } finally {
       await app.close();
     }
@@ -318,21 +357,37 @@ test('planning chat typing stays responsive with a large restored transcript', a
       const payloads = await uiPerfPayloadsSince(page, watermark);
       const inputChange = payloads.find((payload) => payload.metric === 'planning_chat_input_change' && payload.valueLength === typedText.length);
       const inputCommit = payloads.find((payload) => payload.metric === 'planning_chat_input_commit' && payload.valueLength === typedText.length);
-      expect(inputChange).toBeTruthy();
-      expect(inputCommit).toBeTruthy();
-      expect(Number(inputChange?.handlerDurationMs)).toBeLessThanOrEqual(PLANNING_INPUT_HANDLER_BUDGET_MS);
-      expect(Number(inputCommit?.durationMs)).toBeLessThanOrEqual(PLANNING_INPUT_COMMIT_BUDGET_MS);
-      expect(Number(inputCommit?.transcriptLineCount)).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
-      expect(fillWallMs).toBeLessThanOrEqual(PLANNING_INPUT_FILL_WALL_BUDGET_MS);
-      expect(payloads.some((payload) => payload.metric === 'planning_chat_transcript_commit')).toBe(false);
-      expect(payloads.some((payload) => payload.metric === 'renderer_long_task')).toBe(false);
-
       const perf = await page.evaluate(async () => window.invoker.getUiPerfStats());
-      expect(Number(perf.planningChatInputChangeReports)).toBeGreaterThanOrEqual(1);
-      expect(Number(perf.planningChatInputCommitReports)).toBeGreaterThanOrEqual(1);
-      expect(Number(perf.maxPlanningChatInputHandlerMs)).toBeLessThanOrEqual(PLANNING_INPUT_HANDLER_BUDGET_MS);
-      expect(Number(perf.maxPlanningChatInputCommitMs)).toBeLessThanOrEqual(PLANNING_INPUT_COMMIT_BUDGET_MS);
-      expect(Number(perf.maxPlanningChatTranscriptLines)).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
+      const transcriptCommitPayloads = payloads.filter((payload) => payload.metric === 'planning_chat_transcript_commit');
+      const longTaskPayloads = payloads.filter((payload) => payload.metric === 'renderer_long_task');
+      const planningEvidence = {
+        pressureTurns: PLANNING_PRESSURE_TURNS,
+        typedLength: typedText.length,
+        fillWallMs,
+        inputChange,
+        inputCommit,
+        transcriptCommitPayloads,
+        longTaskPayloads,
+        perf,
+        budgets: PLANNING_PRESSURE_BUDGETS,
+      };
+      console.log(`PLANNING_CHAT_PRESSURE_BENCH_RESULT=${JSON.stringify(planningEvidence)}`);
+      const planningEvidenceMessage = JSON.stringify(planningEvidence);
+
+      expect(inputChange, planningEvidenceMessage).toBeTruthy();
+      expect(inputCommit, planningEvidenceMessage).toBeTruthy();
+      expect(Number(inputChange?.handlerDurationMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_HANDLER_BUDGET_MS);
+      expect(Number(inputCommit?.durationMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_COMMIT_BUDGET_MS);
+      expect(Number(inputCommit?.transcriptLineCount), planningEvidenceMessage).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
+      expect(fillWallMs, planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_FILL_WALL_BUDGET_MS);
+      expect(transcriptCommitPayloads.length, planningEvidenceMessage).toBe(0);
+      expect(longTaskPayloads.length, planningEvidenceMessage).toBeLessThanOrEqual(MAX_PLANNING_RENDERER_LONG_TASK_COUNT);
+
+      expect(Number(perf.planningChatInputChangeReports), planningEvidenceMessage).toBeGreaterThanOrEqual(1);
+      expect(Number(perf.planningChatInputCommitReports), planningEvidenceMessage).toBeGreaterThanOrEqual(1);
+      expect(Number(perf.maxPlanningChatInputHandlerMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_HANDLER_BUDGET_MS);
+      expect(Number(perf.maxPlanningChatInputCommitMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_COMMIT_BUDGET_MS);
+      expect(Number(perf.maxPlanningChatTranscriptLines), planningEvidenceMessage).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
     } finally {
       await app.close();
     }
