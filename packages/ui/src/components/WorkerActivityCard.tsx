@@ -96,7 +96,7 @@ export function WorkerActivityCard({
   }, [snapshot, optimisticByKind]);
 
   return (
-    <div data-testid="worker-activity-card">
+    <div data-testid="worker-activity-card" className="flex min-h-0 flex-col">
       {!snapshot ? (
         <div className="rounded border border-border bg-card/60 px-3 py-2 text-sm text-muted-foreground">Worker status unavailable</div>
       ) : (
