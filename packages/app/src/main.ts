@@ -93,7 +93,7 @@ import { WorkspaceProbeAdapter, ContainerProbeAdapter, SessionProbeAdapter, Term
 import { composeRuntimeServices, composeHeadlessStartup } from '@invoker/runtime-service';
 import type { RuntimeServices } from '@invoker/runtime-service';
 import type { MessageBus } from '@invoker/transport';
-import { ExecutorRegistry, TaskRunner, WorktreeExecutor, CI_FAILURE_WORKER_KIND, initializeShellEnvironment, createAutoFixAttemptLedger, createWorkerRegistry, PR_STATUS_WORKER_KIND, E2E_AUTOFIX_WORKER_KIND, registerBuiltinAgents, registerBuiltinWorkers, parseRequeueMutationArgs, parseRequeueEscalateMutationArgs, type AgentRegistry, type WorkerRegistry, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
+import { ExecutorRegistry, TaskRunner, WorktreeExecutor, CI_FAILURE_WORKER_KIND, initializeShellEnvironment, createAutoFixAttemptLedger, createWorkerRegistry, GitHubMergeGateProvider, PR_STATUS_WORKER_KIND, E2E_AUTOFIX_WORKER_KIND, registerBuiltinAgents, registerBuiltinWorkers, parseRequeueMutationArgs, parseRequeueEscalateMutationArgs, type AgentRegistry, type WorkerRegistry, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import { FileAndDbLogger } from './logger.js';
 import { DEFAULT_SLACK_HARNESS_PRESETS, loadConfig, resolveAutoFixExecutionModel, resolveConfigFileState, resolveEmbeddedTerminalBackendConfig, resolvePrMaintenanceWorkerConfig, type EmbeddedTerminalBackendConfig, type InvokerConfig } from './config.js';
 import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from './autofix-defaults.js';
@@ -239,6 +239,7 @@ function buildRegisteredOwnerWorkerDeps(
     reviewGate: {
       checkMergeGateStatuses,
     },
+    mergeGateProvider: new GitHubMergeGateProvider(),
     autoFix: {
       defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
       attemptLedger: autoFixAttemptLedger,
