@@ -242,6 +242,122 @@ function relativePlanningUpdatedAt(value: string): string {
   if (months < 12) return `${months}mo`;
   return `${Math.round(months / 12)}y`;
 }
+const PLANNING_TYPING_LAG_METRIC = 'planning_typing_lag_baseline';
+const PLANNING_TYPING_SCENARIO = 'many-chats-many-messages-typing';
+
+interface PlanningTypingTelemetryState {
+  tasks: Map<string, TaskState>;
+  workflows: Map<string, WorkflowMeta>;
+  viewMode: 'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph';
+  terminalDrawerState: TerminalDrawerState;
+  selectedTaskId: string | null;
+  selectedWorkflowId: string | null;
+  hasLoadedPlan: boolean;
+  hasStarted: boolean;
+}
+
+function utf8Size(value: string): number {
+  if (typeof Blob !== 'undefined') {
+    return new Blob([value]).size;
+  }
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(value).length;
+  }
+  return value.length;
+}
+
+function transcriptPartsForTask(task: TaskState): string[] {
+  return [
+    task.config.prompt,
+    task.config.experimentPrompt,
+    task.config.summary,
+    task.config.problem,
+    task.config.approach,
+    task.config.testPlan,
+    task.execution.inputPrompt,
+    task.execution.pendingFixError,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+}
+
+function transcriptMessageCount(value: string): number {
+  return value.split(/\n+/).filter((line) => line.trim().length > 0).length;
+}
+
+function sessionIdsForTask(task: TaskState): string[] {
+  return [
+    task.execution.agentSessionId,
+    task.execution.lastAgentSessionId,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+}
+
+function selectionState(selectedTaskId: string | null, selectedWorkflowId: string | null): string {
+  if (selectedTaskId) return 'task_selected';
+  if (selectedWorkflowId) return 'workflow_selected';
+  return 'none';
+}
+
+function createPlanningTypingTelemetryContext({
+  tasks,
+  workflows,
+  viewMode,
+  terminalDrawerState,
+  selectedTaskId,
+  selectedWorkflowId,
+  hasLoadedPlan,
+  hasStarted,
+}: PlanningTypingTelemetryState): Record<string, unknown> {
+  const sessions = new Set<string>();
+  const taskStatusCounts: Record<string, number> = {};
+  let transcriptSizeBytes = 0;
+  let transcriptLineCount = 0;
+
+  for (const task of tasks.values()) {
+    taskStatusCounts[task.status] = (taskStatusCounts[task.status] ?? 0) + 1;
+    for (const sessionId of sessionIdsForTask(task)) {
+      sessions.add(sessionId);
+    }
+    for (const part of transcriptPartsForTask(task)) {
+      transcriptSizeBytes += utf8Size(part);
+      transcriptLineCount += transcriptMessageCount(part);
+    }
+  }
+
+  const activeSelectionState = selectionState(selectedTaskId, selectedWorkflowId);
+
+  return {
+    scenario: PLANNING_TYPING_SCENARIO,
+    sessionCount: sessions.size,
+    transcriptSizeBytes,
+    transcriptMessageCount: transcriptLineCount,
+    taskCount: tasks.size,
+    workflowCount: workflows.size,
+    taskStatusCounts,
+    activeSurface: viewMode === 'dag' ? 'planning' : viewMode,
+    activeState: `${viewMode}:${activeSelectionState}:terminal-${terminalDrawerState}`,
+    viewMode,
+    terminalDrawerState,
+    selectionState: activeSelectionState,
+    selectedTaskId,
+    selectedWorkflowId,
+    hasLoadedPlan,
+    hasStarted,
+  };
+}
+
+function isTextInputElement(target: EventTarget | null): target is HTMLInputElement | HTMLTextAreaElement {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLTextAreaElement) return true;
+  if (!(target instanceof HTMLInputElement)) return false;
+  return [
+    'email',
+    'number',
+    'password',
+    'search',
+    'tel',
+    'text',
+    'url',
+  ].includes(target.type);
+}
 
 function PlanningSessionStatusIcon({
   busy,
@@ -618,6 +734,7 @@ export function App() {
     () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
     [queueStatus],
   );
+  const appRootRef = useRef<HTMLDivElement>(null);
   const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const graphActionsMenuRef = useRef<HTMLDivElement>(null);
   const startReadyMenuRef = useRef<HTMLDivElement>(null);
@@ -739,6 +856,9 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchActiveIndex, setSearchActiveIndex] = useState(0);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
+  const planningTypingStateRef = useRef<PlanningTypingTelemetryState | null>(null);
+  const planningTypingSequenceRef = useRef(0);
+  const planningTypingFrameIdsRef = useRef<Set<number>>(new Set());
   const systemSetupAutoOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cancelPendingSystemSetupAutoOpen = useCallback(() => {
@@ -1040,6 +1160,89 @@ export function App() {
       perfObserver?.disconnect();
     };
   }, []);
+  useEffect(() => {
+    planningTypingStateRef.current = {
+      tasks,
+      workflows,
+      viewMode,
+      terminalDrawerState,
+      selectedTaskId,
+      selectedWorkflowId,
+      hasLoadedPlan,
+      hasStarted,
+    };
+  }, [
+    tasks,
+    workflows,
+    viewMode,
+    terminalDrawerState,
+    selectedTaskId,
+    selectedWorkflowId,
+    hasLoadedPlan,
+    hasStarted,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    const scheduleFrame = (callback: FrameRequestCallback): number => {
+      if (typeof window.requestAnimationFrame === 'function') {
+        return window.requestAnimationFrame(callback);
+      }
+      return window.setTimeout(() => callback(performance.now()), 0);
+    };
+    const cancelFrame = (id: number) => {
+      if (typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(id);
+      } else {
+        window.clearTimeout(id);
+      }
+    };
+
+    const reportTypingLag = (event: Event) => {
+      const target = event.target;
+      if (!isTextInputElement(target)) return;
+      if (!appRootRef.current?.contains(target)) return;
+
+      const startedAt = performance.now();
+      const sequence = ++planningTypingSequenceRef.current;
+      const inputEvent = event as InputEvent;
+      const targetTestId = target.getAttribute('data-testid') ?? undefined;
+      const targetAriaLabel = target.getAttribute('aria-label') ?? undefined;
+      const targetName = targetTestId ?? targetAriaLabel ?? target.tagName.toLowerCase();
+      const valueLength = target.value.length;
+
+      const frameId = scheduleFrame(() => {
+        planningTypingFrameIdsRef.current.delete(frameId);
+        const telemetryState = planningTypingStateRef.current;
+        void window.invoker?.reportUiPerf?.(PLANNING_TYPING_LAG_METRIC, {
+          ...(telemetryState ? createPlanningTypingTelemetryContext(telemetryState) : {}),
+          sequence,
+          eventType: event.type,
+          lagMs: Math.round(performance.now() - startedAt),
+          targetName,
+          targetTagName: target.tagName.toLowerCase(),
+          targetValueLength: valueLength,
+          targetReadOnly: target.readOnly,
+          targetDisabled: target.disabled,
+          targetIsComposing: inputEvent.isComposing === true,
+          inputType: typeof inputEvent.inputType === 'string' ? inputEvent.inputType : undefined,
+        });
+      });
+      planningTypingFrameIdsRef.current.add(frameId);
+    };
+
+    document.addEventListener('input', reportTypingLag, true);
+    document.addEventListener('change', reportTypingLag, true);
+    return () => {
+      document.removeEventListener('input', reportTypingLag, true);
+      document.removeEventListener('change', reportTypingLag, true);
+      for (const frameId of planningTypingFrameIdsRef.current) {
+        cancelFrame(frameId);
+      }
+      planningTypingFrameIdsRef.current.clear();
+    };
+  }, [appRootRef]);
 
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
   const selectedWorker = workerStatus?.workers.find((worker) => worker.kind === selectedWorkerKind) ?? null;
@@ -3644,7 +3847,7 @@ export function App() {
       ? `${selectedWorkflow.name} · ${formatWorkflowStatus(selectedWorkflow.status)}`
       : `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'} ready`;
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground font-sans" onClick={() => closeContextMenu()}>
+    <div ref={appRootRef} className="h-screen flex flex-col bg-background text-foreground font-sans" onClick={() => closeContextMenu()}>
       <Toaster
         theme="dark"
         position="bottom-right"
@@ -3801,6 +4004,8 @@ export function App() {
                   executionDefaults={executionDefaults}
                   onEditAgent={handleEditAgent}
                   onEditModel={handleEditModel}
+                  onEditPrompt={handleEditPrompt}
+                  onEditCommand={handleEditCommand}
                   onApprove={openApprovalModal}
                   onReject={openRejectModal}
                   onSetMergeBranch={handleSetMergeBranch}
