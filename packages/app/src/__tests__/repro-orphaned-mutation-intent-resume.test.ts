@@ -1,7 +1,6 @@
 /**
  * Repro: after owner crash, a mutation intent can stay `running` with no live
- * lease. `resumePending()` only requeues expired leases today, so orphaned
- * running intents never become `queued` and never drain.
+ * lease. Fixed: `resumePending()` also requeues orphaned running intents.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
@@ -16,7 +15,7 @@ describe('orphaned workflow mutation intents on resumePending (repro)', () => {
     }
   });
 
-  it('issue: resumePending leaves running intents without a lease stuck running', async () => {
+  it('fixed: resumePending requeues and drains running intents without a lease', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({
@@ -41,8 +40,8 @@ describe('orphaned workflow mutation intents on resumePending (repro)', () => {
 
     await owner2.resumePending();
 
-    expect(drained).toBe(0);
-    expect(adapter.listWorkflowMutationIntents('wf-1', ['running'])).toHaveLength(1);
-    expect(adapter.listWorkflowMutationIntents('wf-1', ['queued'])).toHaveLength(0);
+    expect(drained).toBe(1);
+    expect(adapter.listWorkflowMutationIntents('wf-1', ['running', 'queued'])).toHaveLength(0);
+    expect(adapter.listWorkflowMutationIntents('wf-1', ['completed'])).toHaveLength(1);
   });
 });
