@@ -201,15 +201,48 @@ describe('QueueView', () => {
     const actionSection = screen.getByTestId('action-queue-section');
     const actionList = screen.getByTestId('worker-action-list');
     const workersSection = screen.getByTestId('worker-processes-section');
+    const workersScroll = screen.getByTestId('worker-process-scroll');
 
+    expect(actionSection.parentElement).toHaveClass('grid-rows-[minmax(0,1fr)]');
     expect(actionSection.compareDocumentPosition(workersSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(actionSection.className).toContain('overflow-hidden');
     expect(actionList.className).toContain('overflow-y-auto');
     expect(workersSection.className).toContain('overflow-hidden');
+    expect(workersScroll).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
     expect(within(actionSection).getByText('Worker Actions (1)')).toBeInTheDocument();
     expect(within(workersSection).getByText('Worker processes (1)')).toBeInTheDocument();
     expect(within(workersSection).getByTestId('worker-row-autofix')).toBeInTheDocument();
     expect(within(actionSection).queryByTestId('worker-row-autofix')).not.toBeInTheDocument();
+  });
+
+  it('keeps tall worker-process rows inside the middle pane scroll owner', () => {
+    const workers = Array.from({ length: 24 }, (_, index) =>
+      makeWorker({
+        kind: `worker-${index}`,
+        note: `Worker ${index}`,
+        lifecycle: index % 2 === 0 ? 'running' : 'stopped',
+        autoStarts: false,
+        startable: true,
+        stoppable: false,
+      }),
+    );
+
+    renderQueueView(new Map(), makeWorkerStatus(workers));
+
+    const workersScroll = screen.getByTestId('worker-process-scroll');
+    const workerCard = screen.getByTestId('worker-activity-card');
+    const processList = screen.getByTestId('worker-process-list');
+    const firstRow = screen.getByTestId('worker-row-worker-0');
+    const lastRow = screen.getByTestId('worker-row-worker-23');
+
+    expect(workersScroll).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+    expect(workerCard).toHaveClass('flex', 'min-h-0', 'flex-col');
+    expect(processList).toHaveClass('min-h-0');
+    expect(processList.closest('.overflow-y-auto')).toBe(workersScroll);
+    expect(firstRow.closest('[data-testid="worker-process-scroll"]')).toBe(workersScroll);
+    expect(lastRow.closest('[data-testid="worker-process-scroll"]')).toBe(workersScroll);
+    expect(lastRow.closest('[data-testid="worker-action-list"]')).toBeNull();
+    expect(screen.getAllByTestId(/^worker-row-/)).toHaveLength(24);
   });
 
   it('shows an empty worker-action state without showing unrelated tasks', () => {
