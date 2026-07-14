@@ -88,6 +88,14 @@ const TRANSIENT_GIT_TRANSPORT_ERROR_PATTERNS = [
   /the requested url returned error: 5\d\d/i,
 ];
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasLine(value: string, line: string): boolean {
+  return new RegExp(`(^|\n)${escapeRegExp(line)}(\n|$)`).test(value);
+}
+
 export class MergeConflictError extends Error {
   constructor(
     public readonly failedBranch: string,
@@ -919,7 +927,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
       return {
         cmd: '/bin/bash',
-        args: ['-c', command],
+        args: ['-c', this.normalizeCommandScript(command)],
       };
     }
     if (request.actionType === 'ai_task') {
@@ -937,6 +945,25 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       return { cmd: claudeCommand, args: session.cliArgs, agentSessionId: session.sessionId, fullPrompt: session.fullPrompt };
     }
     return { cmd: '/bin/bash', args: ['-c', 'echo "Unsupported action type"'] };
+  }
+
+  /**
+   * Commands copied through a single-quoted shell context can arrive with
+   * `<<'EOF'` encoded as `<<'"'"'EOF'"'"'`. When executed as source text, bash
+   * then waits for a literal quoted terminator and consumes the rest of the
+   * script. Normalize only that heredoc delimiter form.
+   */
+  protected normalizeCommandScript(command: string): string {
+    const escapedSingleQuote = '\'"\'"\'';
+    const pattern = new RegExp(
+      `<<(\\-?)([ \\t]*)${escapeRegExp(escapedSingleQuote)}([A-Za-z_][A-Za-z0-9_]*)${escapeRegExp(escapedSingleQuote)}`,
+      'g',
+    );
+
+    return command.replace(pattern, (match, stripTabs: string, whitespace: string, delimiter: string) => {
+      if (!hasLine(command, delimiter)) return match;
+      return `<<${stripTabs}${whitespace}'${delimiter}'`;
+    });
   }
 
   /**
