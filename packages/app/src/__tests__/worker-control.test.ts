@@ -134,7 +134,7 @@ function controller(
 }
 
 describe('createWorkerRuntimeController', () => {
-  it('auto-start starts every built-in owner worker except autofix and workflow-resume', () => {
+  it('auto-start starts every built-in owner worker except workflow-resume', () => {
     const setup = controller();
 
     setup.controller.startAutoStartedWorkers();
