@@ -442,6 +442,72 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('counts only attention-worthy planning sessions in the sidebar badge', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'idle-chat',
+          title: 'Idle chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+        }),
+        makePlanningSessionSummary({
+          id: 'draft-chat',
+          title: 'Draft ready chat',
+          status: 'draft_ready',
+          draftPlanAvailable: true,
+        }),
+        makePlanningSessionSummary({
+          id: 'waiting-chat',
+          title: 'Waiting chat',
+          status: 'waiting_for_answer',
+          draftPlanAvailable: false,
+        }),
+        makePlanningSessionSummary({
+          id: 'submitted-chat',
+          title: 'Submitted chat',
+          status: 'submitted',
+          draftPlanAvailable: false,
+        }),
+      ],
+    }));
+
+    render(<App />);
+
+    const planningButton = await screen.findByTestId('sidebar-planning');
+    await waitFor(() => {
+      expect(within(planningButton).getByText('2')).toBeInTheDocument();
+    });
+
+    fireEvent.click(planningButton);
+
+    expect(await screen.findByText('4 planning chats.')).toBeInTheDocument();
+    expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('4 chats');
+  });
+
+  it('keeps the Planning Terminal attention count unchanged when creating an idle chat', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    render(<App />);
+
+    const planningButton = await screen.findByTestId('sidebar-planning');
+    await waitFor(() => {
+      expect(within(planningButton).getByText('0')).toBeInTheDocument();
+    });
+
+    fireEvent.click(planningButton);
+
+    expect(await screen.findByText('1 planning chat.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('2 planning chats.')).toBeInTheDocument();
+    });
+    expect(within(screen.getByTestId('sidebar-planning')).getByText('0')).toBeInTheDocument();
+    expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('2 chats');
+  });
+
   it('continues the same planning session', async () => {
     render(<App />);
     await openPlanningTerminal();

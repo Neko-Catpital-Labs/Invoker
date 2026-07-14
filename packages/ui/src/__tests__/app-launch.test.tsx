@@ -51,6 +51,20 @@ describe('App launch (component)', () => {
     expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
   });
+
+  it('hides the collapsed Planning Terminal badge for the idle initial chat', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+
+    render(<App />);
+    act(() => window.dispatchEvent(new Event('resize')));
+
+    const sidebar = await screen.findByTestId('app-sidebar');
+    expect(sidebar.className).toContain('w-16');
+    expect(screen.getByTestId('sidebar-planning').textContent).toBe('');
+
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+  });
+
   it('opens worker status from the left panel', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
     act(() => window.dispatchEvent(new Event('resize')));

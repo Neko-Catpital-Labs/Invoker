@@ -783,6 +783,10 @@ export function App() {
   const activePlanningTerminalSession = activePlanningSession.terminalSession ?? null;
   const activePlanningTerminalBusy = Boolean(activePlanningSession.terminalBusy);
   const activePlanningTerminalError = activePlanningSession.terminalError ?? null;
+  const planningAttentionCount = useMemo(
+    () => planningSessions.filter((session) => planningNeedsAttention(session.status)).length,
+    [planningSessions],
+  );
 
   useEffect(() => {
     planningSessionsRef.current = planningSessions;
@@ -3938,6 +3942,7 @@ export function App() {
           queueStatus={queueStatus}
           workerStatus={workerStatus}
           planningSessionCount={planningSessions.length}
+          planningAttentionCount={planningAttentionCount}
           selectedSurface={sidebarSurface}
           collapsed={effectiveSidebarCollapsed}
           attentionTaskIdsWithFailures={attentionTaskIdsWithFailures}
