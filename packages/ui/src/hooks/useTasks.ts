@@ -55,18 +55,6 @@ function replaceWorkflowMapPreservingTaskBackedEntries(
   return next;
 }
 
-function workflowHasBackingTask(
-  tasks: Map<string, TaskState>,
-  workflowId: string,
-): boolean {
-  for (const task of tasks.values()) {
-    if (task.config.workflowId === workflowId) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function countTasksByWorkflow(tasks: Map<string, TaskState>): Map<string, number> {
   const counts = new Map<string, number>();
   for (const task of tasks.values()) {
