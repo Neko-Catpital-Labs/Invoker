@@ -92,6 +92,8 @@ import type {
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
   Logger,
+  StartReadyRequest,
+  StartReadyResult,
   WorkflowMeta,
   WorkflowMutationAcceptedResult,
   WorkResponse,
@@ -258,6 +260,7 @@ import {
   createWorkerRuntimeController,
   type WorkerRuntimeController,
 } from './worker-control.js';
+import { runStartReady } from './start-ready.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
@@ -407,26 +410,6 @@ function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
     || (task.status === 'pending' && task.execution.phase === 'launching');
-}
-
-function isTaskRecoverableOnExplicitResume(task: TaskState): boolean {
-  if (task.status === 'running') return true;
-  if (task.status !== 'pending' || !task.execution.selectedAttemptId) return false;
-  if (task.execution.phase === 'launching') return true;
-
-  return Boolean(
-    task.execution.startedAt
-    || task.execution.launchStartedAt
-    || task.execution.launchCompletedAt
-    || task.execution.lastHeartbeatAt
-    || task.execution.workspacePath
-    || task.execution.agentSessionId
-    || task.execution.containerId
-    || task.execution.error
-    || task.execution.exitCode !== undefined
-    || task.execution.inputPrompt
-    || task.execution.pendingFixError,
-  );
 }
 
 declare const __BUILD_SHA__: string | undefined;
@@ -1547,6 +1530,11 @@ function startHeadlessMode(): void {
             });
             return { ok: true };
           });
+        }
+        if (!workflowMutationDispatcher.has('invoker:start-ready')) {
+          workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
+            runStartReady(orchestrator, requestArg as StartReadyRequest | undefined),
+          );
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
           workflowMutationDispatcher.set('invoker:fix-with-agent', async (...fixArgs: unknown[]) => {
@@ -2845,6 +2833,8 @@ function createEmbeddedTerminalBackendFromConfig(
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:start':
         return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:start-ready':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:stop':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:clear':
@@ -3210,6 +3200,28 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       requestWorkflowMetadataPublish('orchestrator-snapshot');
     }
+  }
+
+  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
+    const result = runStartReady(orchestrator, request);
+    if (!result.dryRun) {
+      publishOrchestratorSnapshotToRenderer();
+    }
+    logger.info(
+      `start-ready: ready=${result.preview.readyTaskIds.length} recoverable=${result.preview.recoverableTaskIds.length} failedWorkflows=${result.preview.failedWorkflowIds.length} recreated=${result.recreatedWorkflowIds.length} started=${result.started.length} dryRun=${result.dryRun ? 'true' : 'false'}`,
+      { module: 'ipc' },
+    );
+    if (!result.dryRun && result.started.length > 0 && launchDispatcher) {
+      try {
+        launchDispatcher.poll();
+      } catch (err) {
+        logger.warn(
+          `start-ready: launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'ipc' },
+        );
+      }
+    }
+    return result;
   }
 
   function startDeferredStartupWork(): void {
@@ -3626,6 +3638,9 @@ function createEmbeddedTerminalBackendFromConfig(
       workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
         return executeHeadlessExec(payloadArg as HeadlessExecMutationPayload);
       });
+      workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
+        executeStartReady(requestArg as StartReadyRequest | undefined),
+      );
       workflowMutationDispatcher.set('api:approve-task', async (taskIdArg: unknown) => {
         await performSharedApproveTask(String(taskIdArg), 'api');
       });
@@ -4072,40 +4087,20 @@ function createEmbeddedTerminalBackendFromConfig(
       return started;
     });
 
+    registerGuiMutationHandler('invoker:start-ready', async (requestArg: unknown) => {
+      return executeStartReady(requestArg as StartReadyRequest | undefined);
+    });
+
     registerGuiMutationHandler('invoker:resume-workflow', async () => {
       const workflows = persistence.listWorkflows();
       if (workflows.length === 0) {
         logger.info('resume-workflow: no workflows found', { module: 'ipc' });
         return null;
       }
-      orchestrator.syncAllFromDb();
-
-      const tasksToRecover = orchestrator.getAllTasks().filter(isTaskRecoverableOnExplicitResume);
-      for (const task of tasksToRecover) {
-        orchestrator.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
-      }
-
-      const allStarted = orchestrator.startExecution();
+      const result = executeStartReady({});
       const tasks = orchestrator.getAllTasks();
-      workflowRollupProjection.replaceAll(tasks);
-      for (const task of tasks) {
-        lastKnownTaskStates.set(task.id, JSON.stringify(task));
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          publishTaskDeltaToRenderer({ type: 'created', task });
-        }
-      }
-      logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
-      if (allStarted.length > 0 && launchDispatcher) {
-        try {
-          launchDispatcher.poll();
-        } catch (err) {
-          logger.warn(
-            `resume-workflow: launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
-            { module: 'ipc' },
-          );
-        }
-      }
-      return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
+      logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${result.started.length} started`, { module: 'ipc' });
+      return { workflow: workflows[0], taskCount: tasks.length, startedCount: result.started.length };
     });
 
     registerGuiMutationHandler('invoker:stop', async () => {
