@@ -91,6 +91,7 @@ import type {
   InAppPlanningChatRequest,
   InAppPlanningResetRequest,
   InAppPlanningStreamEvent,
+  InAppPlanningSetTerminalModeRequest,
   InAppPlanningSubmitRequest,
   Logger,
   StartReadyRequest,
@@ -280,6 +281,7 @@ import {
   resetRendererUiPerfCounters,
 } from './renderer-ui-perf.js';
 import {
+  bindPlanningTerminalSessionState,
   registerPlanningTerminalSessionIpcHandlers,
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
@@ -311,6 +313,7 @@ import {
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
+  setPlanningChatTerminalMode,
   submitPlanningChatDraft,
 } from './in-app-planner.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
@@ -1270,6 +1273,12 @@ function startHeadlessMode(): void {
               planningSessionStore: readOnlyMode ? undefined : persistence,
             });
           }
+          case 'invoker:planning-chat-set-terminal-mode': {
+            return setPlanningChatTerminalMode(payload.args[0] as InAppPlanningSetTerminalModeRequest, {
+              sessions: planningChatSessions,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
+            });
+          }
           case 'invoker:load-plan': {
             const planText = String(payload.args[0] ?? '');
             await loadGeneratedPlan(planText);
@@ -2046,6 +2055,14 @@ function createEmbeddedTerminalBackendFromConfig(
       mainWindow.webContents.send('invoker:terminal-exit', payload);
     }
   });
+  const { restorePersistedPlanningTerminals } = bindPlanningTerminalSessionState({
+    embeddedTerminalManager,
+    logger,
+    planningChatSessions,
+    getPlanningSessionStore: () => (ownerMode ? persistence : undefined),
+    repoRoot,
+  });
+
   // CC.5: the legacy `launchingTasks` Set is gone. Per-attempt launch
   // state is tracked durably by `task_launch_dispatch` (Phase B); the
   // TaskRunner's internal `launchingAttemptIds` Set (CB.4) is the
@@ -2782,6 +2799,7 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'invoker:planning-chat-send':
       case 'invoker:planning-chat-submit':
       case 'invoker:planning-chat-reset':
+      case 'invoker:planning-chat-set-terminal-mode':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:load-plan':
         return { channel: 'headless.gui-mutation', request: payload };
@@ -3622,6 +3640,9 @@ function createEmbeddedTerminalBackendFromConfig(
       planningSessionStore: ownerMode ? persistence : undefined,
       onRawPlannerOutput: emitPlanningChatStream,
     });
+    if (ownerMode) {
+      restorePersistedPlanningTerminals();
+    }
     let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
     // Two variants: (1) a successful override that returns a canned reply +
     // plan YAML, or (2) an error injection that makes the wrapper throw the
@@ -3695,6 +3716,12 @@ function createEmbeddedTerminalBackendFromConfig(
     });
     registerGuiMutationHandler('invoker:planning-chat-reset', async (request: unknown) => {
       return resetPlanningChat(request as InAppPlanningResetRequest, {
+        sessions: planningChatSessions,
+        planningSessionStore: ownerMode ? persistence : undefined,
+      });
+    });
+    registerGuiMutationHandler('invoker:planning-chat-set-terminal-mode', async (request: unknown) => {
+      return setPlanningChatTerminalMode(request as InAppPlanningSetTerminalModeRequest, {
         sessions: planningChatSessions,
         planningSessionStore: ownerMode ? persistence : undefined,
       });
@@ -4982,11 +5009,12 @@ function createEmbeddedTerminalBackendFromConfig(
         return { opened: false, reason: `Failed to start terminal session: ${reason}` };
       }
     });
-
     registerPlanningTerminalSessionIpcHandlers({
       ipcMain,
       embeddedTerminalManager,
       logger,
+      planningChatSessions,
+      getPlanningSessionStore: () => (ownerMode ? persistence : undefined),
       repoRoot,
     });
 
