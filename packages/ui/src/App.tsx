@@ -3254,7 +3254,7 @@ export function App() {
           dragHandleTestId="selected-workflow-mini-dag-drag-handle"
           title={`${displayedSelectedWorkflowGraph.workflow.name} task DAG`}
           boundsRef={graphSurfaceRef as unknown as RefObject<HTMLElement>}
-          contentClassName="min-h-0 h-[250px] overflow-hidden"
+          contentClassName="min-h-0 h-[180px] overflow-hidden"
         >
           {graphBody}
         </FloatingGraphPanel>
