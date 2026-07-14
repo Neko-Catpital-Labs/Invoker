@@ -147,33 +147,43 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     }
   }, []);
 
-  const fitVisibleTerminal = useCallback(() => {
+  const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
     if (!isActiveRef.current) return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
     try {
+      const startedAt = nowMs();
       fit.fit();
       if (term.rows > 0) {
         term.refresh?.(0, term.rows - 1);
       }
       void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      reportTerminalPerf('embedded_terminal_resize', {
+        source,
+        durationMs: roundMs(nowMs() - startedAt),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        cols: term.cols,
+        rows: term.rows,
+        active: isActiveRef.current,
+      });
     } catch {
       /* host has zero size, terminal disposed, or fit unsupported */
     }
-  }, [session.sessionId]);
+  }, [session.sessionId, session.taskId]);
 
-  const scheduleFit = useCallback(() => {
+  const scheduleFit = useCallback((source: 'active_session' | 'resize_observer') => {
     clearScheduledFit();
-    fitVisibleTerminal();
+    fitVisibleTerminal(source);
     if (typeof requestAnimationFrame !== 'function') return;
 
     fitFrameRef.current = requestAnimationFrame(() => {
       fitFrameRef.current = null;
-      fitVisibleTerminal();
+      fitVisibleTerminal('followup_frame');
       secondFitFrameRef.current = requestAnimationFrame(() => {
         secondFitFrameRef.current = null;
-        fitVisibleTerminal();
+        fitVisibleTerminal('followup_frame');
       });
     });
   }, [clearScheduledFit, fitVisibleTerminal]);
@@ -253,14 +263,14 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       try {
-        resizeObserver = new ResizeObserver(fitVisibleTerminal);
+        resizeObserver = new ResizeObserver(() => scheduleFit('resize_observer'));
         resizeObserver.observe(host);
       } catch {
         resizeObserver = null;
       }
     }
     if (isActiveRef.current) {
-      scheduleFit();
+      scheduleFit('active_session');
       try {
         term.focus();
       } catch {
@@ -297,7 +307,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     const term = termRef.current;
     if (!term) return;
     try {
-      scheduleFit();
+      scheduleFit('active_session');
       term.focus();
     } catch {
       /* fit failed (e.g., hidden) */
