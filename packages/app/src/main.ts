@@ -2571,6 +2571,8 @@ function createEmbeddedTerminalBackendFromConfig(
   function requireTaskExecutor(): TaskRunner {
     return requireWiredTaskRunner(() => taskExecutor);
   }
+  const loadTaskByIdFromPersistence = (taskId: string): TaskState | undefined =>
+    persistence.loadTask(taskId);
 
 
   async function executeHeadlessRun(payload: HeadlessRunMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
