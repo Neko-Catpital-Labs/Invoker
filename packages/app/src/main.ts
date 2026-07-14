@@ -126,6 +126,10 @@ import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutat
 import { submitWorkflowMutationOrAcknowledgeDeleted } from './workflow-mutation-submit.js';
 import type { WorkflowMutationContext } from './persisted-workflow-mutation-coordinator.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
+import {
+  isTaskInFlightForForcedStop,
+  reconcileOrphanedInFlightTasksOnBoot,
+} from './reconcile-orphaned-running-tasks.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
 import { dispatchStartedTasksWithGlobalTopup } from './global-topup.js';
 
@@ -267,12 +271,6 @@ function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependenc
 }
 
 
-
-function isTaskInFlightForForcedStop(task: TaskState): boolean {
-  return task.status === 'running'
-    || task.status === 'fixing_with_ai'
-    || (task.status === 'pending' && task.execution.phase === 'launching');
-}
 
 function isTaskRecoverableOnExplicitResume(task: TaskState): boolean {
   if (task.status === 'running') return true;
@@ -958,6 +956,19 @@ function startHeadlessMode(): void {
         readOnly: readOnlyMode,
         executionAgentRegistry: agentRegistry,
       });
+
+      if (!readOnlyMode && orchestrator && persistence) {
+        const orphaned = reconcileOrphanedInFlightTasksOnBoot({
+          orchestrator,
+          persistence,
+        });
+        if (orphaned.length > 0) {
+          logger.info(
+            `failed ${orphaned.length} orphaned in-flight task(s) left by a previous owner crash`,
+            { module: 'init', taskIds: orphaned.map((task) => task.id) },
+          );
+        }
+      }
 
       const headlessDeps: HeadlessDeps = {
         logger,
@@ -2797,13 +2808,25 @@ function createEmbeddedTerminalBackendFromConfig(
       });
     }
 
-    // Relaunch orphaned running tasks and start any pending-but-ready tasks.
+    // Fail orphaned in-flight tasks left by a previous crash, then start ready work.
     if (!ownerMode) {
       logger.info('follower mode startup: auto-run disabled', { module: 'init' });
-    } else if (invokerConfig.disableAutoRunOnStartup) {
-      logger.info('auto-run on startup disabled by config', { module: 'init' });
     } else {
-      orchestrator.startExecution();
+      const orphaned = reconcileOrphanedInFlightTasksOnBoot({
+        orchestrator,
+        persistence,
+      });
+      if (orphaned.length > 0) {
+        logger.info(
+          `failed ${orphaned.length} orphaned in-flight task(s) left by a previous owner crash`,
+          { module: 'init', taskIds: orphaned.map((task) => task.id) },
+        );
+      }
+      if (invokerConfig.disableAutoRunOnStartup) {
+        logger.info('auto-run on startup disabled by config', { module: 'init' });
+      } else {
+        orchestrator.startExecution();
+      }
     }
 
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
