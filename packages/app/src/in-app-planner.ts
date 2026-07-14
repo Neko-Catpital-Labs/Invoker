@@ -186,6 +186,17 @@ function appendSessionMessage(
   session.nextMessageId += 1;
   session.updatedAt = createdAt;
 }
+function clearStarterPromptIfUnused(session: InAppPlanningChatSession): void {
+  if (
+    session.messages.length === 1
+    && session.messages[0]?.role === 'system'
+    && session.messages[0]?.tone === 'muted'
+    && session.messages[0]?.text === 'Ask Invoker what you want to build.'
+  ) {
+    session.messages = [];
+    session.nextMessageId = 1;
+  }
+}
 
 function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boolean): InAppPlanningSessionRecord {
   return {
@@ -349,11 +360,17 @@ async function createSession(
     title: typeof request?.title === 'string' && request.title.trim() ? request.title.trim() : 'Untitled plan',
     presetKey,
     status: 'still_discussing',
-    messages: [],
+    messages: [{
+      id: 1,
+      role: 'system',
+      text: 'Ask Invoker what you want to build.',
+      tone: 'muted',
+      createdAt,
+    }],
     conversation: new PlanConversation(planConversationConfig(preset, deps, id)),
     createdAt,
     updatedAt: createdAt,
-    nextMessageId: 1,
+    nextMessageId: 2,
     terminalMode: 'chat',
     terminalOutputSnapshot: '',
   };
@@ -485,6 +502,7 @@ export async function sendPlanningChatMessage(
     const activeSession = session;
     const previousSend = activeSession.pendingSend ?? Promise.resolve();
     const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
+      clearStarterPromptIfUnused(activeSession);
       appendSessionMessage(activeSession, 'user', message);
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);

@@ -10,6 +10,11 @@ import {
   type TerminalUiPerfReporter,
   type TerminalUiPerfSink,
 } from './terminal-ui-perf.js';
+import {
+  updatePlanningChatTerminalState,
+  type InAppPlanningChatSessions,
+  type InAppPlanningSessionStore,
+} from './in-app-planner.js';
 
 /** Coalesce running-session snapshot upserts so PTY output does not 1:1 SQLite-write on main. */
 export const TERMINAL_SESSION_UPSERT_COALESCE_MS = 250;
@@ -272,8 +277,9 @@ export function registerTerminalSessionIpcHandlers(deps: {
 
 function planningTerminalOnly(
   embeddedTerminalManager: EmbeddedTerminalManager,
+  planningChatSessions: InAppPlanningChatSessions,
   sessionId: string,
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true; planningSessionId: string } | { ok: false; reason: string } {
   const session = embeddedTerminalManager.get(sessionId);
   if (!session) return { ok: false, reason: `Unknown session "${sessionId}".` };
   if (session.kind !== 'planning') {
@@ -464,13 +470,13 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
   });
 
   ipcMain.handle('invoker:planning-terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
-    const allowed = planningTerminalOnly(embeddedTerminalManager, sessionId);
+    const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
     if (!allowed.ok) return allowed;
     return embeddedTerminalManager.resize(sessionId, cols, rows);
   });
 
   ipcMain.handle('invoker:planning-terminal-close', async (_event, sessionId: string) => {
-    const allowed = planningTerminalOnly(embeddedTerminalManager, sessionId);
+    const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
     if (!allowed.ok) return allowed;
     return embeddedTerminalManager.close(sessionId);
   });

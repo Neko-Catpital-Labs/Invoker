@@ -288,6 +288,7 @@ import {
   resetRendererUiPerfCounters,
 } from './renderer-ui-perf.js';
 import {
+  bindPlanningTerminalSessionState,
   registerPlanningTerminalSessionIpcHandlers,
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
@@ -321,7 +322,6 @@ import {
   sendPlanningChatMessage,
   setPlanningChatTerminalMode,
   submitPlanningChatDraft,
-  updatePlanningChatTerminalState,
 } from './in-app-planner.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
 import {
@@ -2066,56 +2066,6 @@ function createEmbeddedTerminalBackendFromConfig(
     repoRoot,
   });
 
-  const planningTerminalTargetKey = (planningSessionId: string): string => JSON.stringify({
-    kind: 'planning',
-    planningSessionId,
-    taskId: `planning:${planningSessionId}`,
-    cwd: repoRoot,
-    command: null,
-    args: [],
-    linuxTerminalTail: null,
-    attach: null,
-  });
-
-  const restorePersistedPlanningTerminals = (): void => {
-    for (const session of planningChatSessions.values()) {
-      if (
-        session.terminalMode !== 'tmux'
-        || !session.terminalSessionId
-        || session.terminalStatus === 'exited'
-      ) {
-        continue;
-      }
-      try {
-        embeddedTerminalManager.restoreSpawnSession({
-          sessionId: session.terminalSessionId,
-          taskId: `planning:${session.id}`,
-          kind: 'planning',
-          planningSessionId: session.id,
-          targetKey: planningTerminalTargetKey(session.id),
-          spec: { cwd: repoRoot },
-          cwd: repoRoot,
-          createdAt: session.terminalUpdatedAt ?? session.updatedAt,
-          outputSnapshot: session.terminalOutputSnapshot ?? '',
-        });
-      } catch (err) {
-        logger.warn(
-          `planning terminal restore failed for session="${session.id}": ${err instanceof Error ? err.message : String(err)}`,
-          { module: 'planning-terminal' },
-        );
-        updatePlanningChatTerminalState(session.id, {
-          terminalMode: 'tmux',
-          terminalSessionId: session.terminalSessionId,
-          terminalStatus: 'exited',
-          terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
-          touchSessionUpdatedAt: true,
-        }, {
-          sessions: planningChatSessions,
-          planningSessionStore: ownerMode ? persistence : undefined,
-        });
-      }
-    }
-  };
   // CC.5: the legacy `launchingTasks` Set is gone. Per-attempt launch
   // state is tracked durably by `task_launch_dispatch` (Phase B); the
   // TaskRunner's internal `launchingAttemptIds` Set (CB.4) is the
@@ -5353,89 +5303,6 @@ function createEmbeddedTerminalBackendFromConfig(
     // (or selecting) an embedded session managed in the main process.
     // Headless `open-terminal` still routes to `openExternalTerminalForTask`
     // in `headless.ts` so existing CLI behaviour is preserved.
-    const planningTerminalOnly = (sessionId: string): { ok: true; planningSessionId: string } | { ok: false; reason: string } => {
-      const session = embeddedTerminalManager.get(sessionId);
-      if (!session) return { ok: false, reason: `Unknown session "${sessionId}".` };
-      if (session.kind !== 'planning') {
-        return { ok: false, reason: `Session "${sessionId}" is not a planning terminal session.` };
-      }
-      const planningSessionId = session.planningSessionId ?? '';
-      if (!planningSessionId || !planningChatSessions.has(planningSessionId)) {
-        return { ok: false, reason: `Session "${sessionId}" is not owned by a planning conversation.` };
-      }
-      return { ok: true, planningSessionId };
-    };
-
-    const planningTerminalWritable = (sessionId: string): { ok: true } | { ok: false; reason: string } => {
-      const allowed = planningTerminalOnly(sessionId);
-      if (!allowed.ok) return allowed;
-      if (!ownerMode) {
-        return { ok: false, reason: 'Planning terminal is read-only in this window.' };
-      }
-      const planningSession = planningChatSessions.get(allowed.planningSessionId);
-      if (planningSession?.status === 'submitted') {
-        return { ok: false, reason: 'This planning session was already submitted.' };
-      }
-      return { ok: true };
-    };
-
-    ipcMain.handle('invoker:planning-terminal-open', async (_event, planningSessionIdArg: string) => {
-      const planningSessionId = String(planningSessionIdArg ?? '').trim();
-      if (!planningSessionId) {
-        return { opened: false, reason: 'Planning session id is required.' };
-      }
-      if (!planningChatSessions.has(planningSessionId)) {
-        return { opened: false, reason: 'Planning conversation was not found.' };
-      }
-      logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
-      try {
-        const session = embeddedTerminalManager.openOrReuse({
-          kind: 'planning',
-          taskId: `planning:${planningSessionId}`,
-          planningSessionId,
-          spec: { cwd: repoRoot },
-          cwd: repoRoot,
-        });
-        updatePlanningChatTerminalState(planningSessionId, {
-          terminalMode: 'tmux',
-          terminalSessionId: session.sessionId,
-          terminalStatus: session.status,
-          terminalExitCode: session.exitCode,
-          terminalOutputSnapshot: session.outputSnapshot ?? '',
-          touchSessionUpdatedAt: true,
-        }, {
-          sessions: planningChatSessions,
-          planningSessionStore: ownerMode ? persistence : undefined,
-        });
-        return { opened: true, session };
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        logger.warn(`planning terminal spawn failed for session="${planningSessionId}": ${reason}`, { module: 'planning-terminal' });
-        return { opened: false, reason: `Failed to start planning terminal session: ${reason}` };
-      }
-    });
-
-    ipcMain.handle('invoker:planning-terminal-list', async () => {
-      return embeddedTerminalManager.list().filter((session) => session.kind === 'planning');
-    });
-
-    ipcMain.handle('invoker:planning-terminal-write', async (_event, sessionId: string, data: string) => {
-      const allowed = planningTerminalWritable(sessionId);
-      if (!allowed.ok) return allowed;
-      return embeddedTerminalManager.write(sessionId, data);
-    });
-
-    ipcMain.handle('invoker:planning-terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
-      const allowed = planningTerminalOnly(sessionId);
-      if (!allowed.ok) return allowed;
-      return embeddedTerminalManager.resize(sessionId, cols, rows);
-    });
-
-    ipcMain.handle('invoker:planning-terminal-close', async (_event, sessionId: string) => {
-      const allowed = planningTerminalOnly(sessionId);
-      if (!allowed.ok) return allowed;
-      return embeddedTerminalManager.close(sessionId);
-    });
     ipcMain.handle('invoker:open-terminal', async (_event, taskId: string) => {
       logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
       const liveHandle = taskHandles.get(taskId);
