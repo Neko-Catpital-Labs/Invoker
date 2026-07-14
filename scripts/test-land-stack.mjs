@@ -18,12 +18,16 @@ import { analyzeCompleteOpenStack, analyzeStack, queueTargets } from './land-sta
 const SHA_2174 = 'db05fa18441693b0a51a8f9c2e2e3f0109d8f7a7';
 const SHA_2175 = '1049a6c76c5f788f31ca9cecaf19812c327bd107';
 const SHA_505 = '8f52adfcf94423c55b6b4fc2af95bbd4d6592eb4';
+const MERGE_2174 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const MERGE_2175 = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const STACK_BR_BOTTOM = 'stack/EdbertChan/plan/reduce-large-files-step-3/...--5fb697a6';
 const STACK_BR_TOP = 'stack/EdbertChan/plan/reduce-large-files-step-3/...--8e5f5c84';
 
 const localShas = new Set([SHA_2174, SHA_2175]);
 const hasLocal = (sha) => localShas.has(sha);
+const ancestorPairs = new Set([`${MERGE_2174}:${SHA_2175}`]);
+const isAncestor = (ancestor, descendant) => ancestorPairs.has(`${ancestor}:${descendant}`);
 const check = (res, pr, name) => res.checks.find((c) => c.pr === pr && c.name === name);
 const createExecutable = (path, content) => {
   writeFileSync(path, content);
@@ -75,6 +79,33 @@ test('broken stack linkage fails base-linkage on the upper PR', () => {
   assert.equal(check(res, 2175, 'base-linkage').ok, false);
 });
 
+test('merged retargeted stack passes when local merge ancestry proves the link', () => {
+  const res = analyzeStack({
+    hasLocalCommit: hasLocal,
+    isLocalAncestor: isAncestor,
+    prs: [
+      { ...fullStack[0], state: 'MERGED', mergeCommit: { oid: MERGE_2174 } },
+      { ...fullStack[1], baseRefName: 'master', state: 'MERGED', mergeCommit: { oid: MERGE_2175 } },
+    ],
+  });
+  assert.equal(res.ok, true);
+  assert.equal(check(res, 2174, 'open').ok, true);
+  assert.equal(check(res, 2175, 'base-linkage').ok, true);
+});
+
+test('merged retargeted stack fails without local merge ancestry proof', () => {
+  const res = analyzeStack({
+    hasLocalCommit: hasLocal,
+    isLocalAncestor: () => false,
+    prs: [
+      { ...fullStack[0], state: 'MERGED', mergeCommit: { oid: MERGE_2174 } },
+      { ...fullStack[1], baseRefName: 'master', state: 'MERGED', mergeCommit: { oid: MERGE_2175 } },
+    ],
+  });
+  assert.equal(res.ok, false);
+  assert.equal(check(res, 2175, 'base-linkage').ok, false);
+});
+
 test('bottom PR not based on trunk fails base-linkage', () => {
   const res = analyzeStack({
     hasLocalCommit: hasLocal,
@@ -87,7 +118,7 @@ test('bottom PR not based on trunk fails base-linkage', () => {
 test('closed PR fails open check', () => {
   const res = analyzeStack({
     hasLocalCommit: hasLocal,
-    prs: [{ ...fullStack[0], state: 'MERGED' }],
+    prs: [{ ...fullStack[0], state: 'CLOSED' }],
   });
   assert.equal(res.ok, false);
   assert.equal(check(res, 2174, 'open').ok, false);
@@ -126,24 +157,48 @@ test('complete stack check accepts the full bottom-to-top stack', () => {
   assert.deepEqual(res.fullStack.map((pr) => pr.number), [2174, 2175]);
 });
 
+test('complete stack check accepts an already-merged stack as having no open targets', () => {
+  const res = analyzeCompleteOpenStack({
+    selectedPrs: fullStack.map((pr) => ({ ...pr, state: 'MERGED' })),
+    allOpenPrs: fullStack,
+  });
+  assert.equal(res.ok, true);
+  assert.equal(check(res, 0, 'complete-stack').ok, true);
+  assert.match(check(res, 0, 'complete-stack').detail, /no open PRs left/);
+});
+
+test('complete stack check compares the open remainder when merged PRs are provided too', () => {
+  const retargetedTop = { ...fullStack[1], baseRefName: 'master' };
+  const res = analyzeCompleteOpenStack({
+    selectedPrs: [{ ...fullStack[0], state: 'MERGED' }, retargetedTop],
+    allOpenPrs: [retargetedTop],
+  });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.fullStack.map((pr) => pr.number), [2175]);
+});
+
 test('queue targets include the whole open stack in order', () => {
   const targets = queueTargets(fullStack);
   assert.deepEqual(targets.map((pr) => pr.number), [2174, 2175]);
 });
 
-function runCli(prNumbers) {
+function runCli(prNumbers, prOverrides = {}) {
   const tmp = mkdtempSync(join(tmpdir(), 'land-stack-test-'));
   const bin = join(tmp, 'bin');
   const log = join(tmp, 'gh.log');
   mkdirSync(bin);
   writeFileSync(log, '');
+  const fakePrs = {
+    '2174': { number: 2174, headRefOid: SHA_2174, headRefName: STACK_BR_BOTTOM, baseRefName: 'master', state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
+    '2175': { number: 2175, headRefOid: SHA_2175, headRefName: STACK_BR_TOP, baseRefName: STACK_BR_BOTTOM, state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
+  };
+  for (const [number, override] of Object.entries(prOverrides)) {
+    fakePrs[number] = { ...fakePrs[number], ...override };
+  }
   createExecutable(join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const log = ${JSON.stringify(log)};
-const prs = {
-  '2174': { number: 2174, headRefOid: ${JSON.stringify(SHA_2174)}, headRefName: ${JSON.stringify(STACK_BR_BOTTOM)}, baseRefName: 'master', state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
-  '2175': { number: 2175, headRefOid: ${JSON.stringify(SHA_2175)}, headRefName: ${JSON.stringify(STACK_BR_TOP)}, baseRefName: ${JSON.stringify(STACK_BR_BOTTOM)}, state: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED' },
-};
+const prs = ${JSON.stringify(fakePrs)};
 if (process.argv[2] === 'pr' && process.argv[3] === 'view') {
   process.stdout.write(JSON.stringify(prs[process.argv[4]]));
   process.exit(0);
@@ -161,6 +216,10 @@ process.exit(1);
 `);
   createExecutable(join(bin, 'git'), `#!/usr/bin/env sh
 if [ "$1" = "cat-file" ]; then exit 0; fi
+if [ "$1" = "merge-base" ] && [ "$2" = "--is-ancestor" ]; then
+  if [ "$3" = "${MERGE_2174}" ] && [ "$4" = "${SHA_2175}" ]; then exit 0; fi
+  exit 1
+fi
 echo "unexpected git args: $@" >&2
 exit 1
 `);
@@ -186,6 +245,16 @@ test('execute labels every verified PR bottom-to-top', () => {
     'api --method POST repos/{owner}/{repo}/issues/2174/labels -f labels[]=admin-bypass',
     'api --method POST repos/{owner}/{repo}/issues/2175/labels -f labels[]=admin-bypass',
   ]);
+});
+
+test('execute no-ops successfully when the verified stack is already merged', () => {
+  const { res, edits } = runCli(['2174', '2175'], {
+    '2174': { state: 'MERGED', mergeCommit: { oid: MERGE_2174 } },
+    '2175': { state: 'MERGED', baseRefName: 'master', mergeCommit: { oid: MERGE_2175 } },
+  });
+  assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
+  assert.match(res.stdout, /No open PRs remain to queue/);
+  assert.deepEqual(edits, []);
 });
 
 console.log(`\n${passed} tests passed`);

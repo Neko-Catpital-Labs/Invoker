@@ -9,13 +9,15 @@
  *   - its head commit SHA exists in the local clone (so it is the code you reviewed),
  *   - its head branch is a real `stack/` branch (refuses raw workflow branches),
  *   - the PRs form a proper stack (each PR's base is the previous PR's head branch;
- *     the bottom PR's base is the trunk),
+ *     the bottom PR's base is the trunk; already-merged lower PRs may have caused
+ *     GitHub to retarget upper PRs to trunk, so those links are verified by local
+ *     merge-commit ancestry instead),
  *   - the provided PRs are the complete open stack, not a prefix/suffix slice,
- *   - every PR is OPEN.
+ *   - every PR is OPEN or already MERGED.
  *
  * Only after ALL checks pass does `--execute` add the `admin-bypass` label to
- * every PR in the verified stack, bottom-to-top. That lets Mergify land the
- * whole stack as one unit of work instead of one PR per manual re-run.
+ * every open PR in the verified stack, bottom-to-top. That lets Mergify land
+ * the whole stack as one unit of work instead of one PR per manual re-run.
  *
  * Background: a raw workflow branch PR (#505) once shared a branch name with the
  * intended stack (#2174/#2175). Landing "the PR on this branch" queued the wrong
@@ -39,7 +41,13 @@ import { fileURLToPath } from 'node:url';
 export const TRUNK_DEFAULT = 'master';
 export const STACK_PREFIX_DEFAULT = 'stack/';
 
-export function analyzeStack({ prs, hasLocalCommit, trunk = TRUNK_DEFAULT, stackPrefix = STACK_PREFIX_DEFAULT }) {
+export function analyzeStack({
+  prs,
+  hasLocalCommit,
+  isLocalAncestor = () => false,
+  trunk = TRUNK_DEFAULT,
+  stackPrefix = STACK_PREFIX_DEFAULT,
+}) {
   const checks = [];
   const add = (pr, name, ok, detail) => checks.push({ pr, name, ok, detail });
 
@@ -50,7 +58,8 @@ export function analyzeStack({ prs, hasLocalCommit, trunk = TRUNK_DEFAULT, stack
 
   prs.forEach((pr, i) => {
     const n = pr.number;
-    add(n, 'open', pr.state === 'OPEN', `state=${pr.state}`);
+    const stateOk = pr.state === 'OPEN' || pr.state === 'MERGED';
+    add(n, 'open', stateOk, pr.state === 'MERGED' ? 'state=MERGED (already landed)' : `state=${pr.state}`);
 
     const shaOk = Boolean(pr.headRefOid) && hasLocalCommit(pr.headRefOid);
     add(n, 'sha-local', shaOk,
@@ -61,16 +70,28 @@ export function analyzeStack({ prs, hasLocalCommit, trunk = TRUNK_DEFAULT, stack
       `head branch '${pr.headRefName}' ${branchOk ? 'is' : `is NOT`} a '${stackPrefix}' branch`);
 
     const expectedBase = i === 0 ? trunk : prs[i - 1].headRefName;
-    const baseOk = pr.baseRefName === expectedBase;
+    const previousPr = i === 0 ? null : prs[i - 1];
+    const previousMergeOid = previousPr ? mergeCommitOid(previousPr) : null;
+    const retargetedAfterMerge = Boolean(
+      previousPr?.state === 'MERGED'
+      && previousMergeOid
+      && pr.headRefOid
+      && pr.baseRefName === trunk
+      && isLocalAncestor(previousMergeOid, pr.headRefOid),
+    );
+    const baseOk = pr.baseRefName === expectedBase || retargetedAfterMerge;
     add(n, 'base-linkage', baseOk,
-      `base '${pr.baseRefName}' ${baseOk ? '==' : '!='} expected '${expectedBase}'`);
+      retargetedAfterMerge
+        ? `base '${pr.baseRefName}' retargeted to '${trunk}' after PR #${previousPr.number} merged; head descends from merge ${short(previousMergeOid)}`
+        : `base '${pr.baseRefName}' ${baseOk ? '==' : '!='} expected '${expectedBase}'`);
   });
 
   return { ok: checks.every((c) => c.ok), checks };
 }
 
 export function analyzeCompleteOpenStack({ selectedPrs, allOpenPrs, trunk = TRUNK_DEFAULT, stackPrefix = STACK_PREFIX_DEFAULT }) {
-  const selectedNumbers = selectedPrs.map((pr) => pr.number);
+  const selectedOpenPrs = selectedPrs.filter((pr) => pr?.state === 'OPEN');
+  const selectedNumbers = selectedOpenPrs.map((pr) => pr.number);
   const fail = (detail, fullStack = []) => ({
     ok: false,
     fullStack,
@@ -78,9 +99,21 @@ export function analyzeCompleteOpenStack({ selectedPrs, allOpenPrs, trunk = TRUN
   });
 
   if (selectedPrs.length === 0) return fail('no PR numbers provided');
+  if (selectedOpenPrs.length === 0) {
+    return {
+      ok: true,
+      fullStack: [],
+      checks: [{
+        pr: 0,
+        name: 'complete-stack',
+        ok: true,
+        detail: 'provided stack has no open PRs left to queue',
+      }],
+    };
+  }
 
   const byNumber = new Map();
-  for (const pr of allOpenPrs.concat(selectedPrs)) {
+  for (const pr of allOpenPrs.concat(selectedOpenPrs)) {
     if (pr?.state === 'OPEN' && typeof pr.headRefName === 'string' && pr.headRefName.startsWith(stackPrefix)) {
       byNumber.set(pr.number, pr);
     }
@@ -94,13 +127,13 @@ export function analyzeCompleteOpenStack({ selectedPrs, allOpenPrs, trunk = TRUN
     childrenByBase.set(pr.baseRefName, children);
   }
 
-  const fullStack = [selectedPrs[0]];
-  const seen = new Set([selectedPrs[0].number]);
-  let bottom = selectedPrs[0];
+  const fullStack = [selectedOpenPrs[0]];
+  const seen = new Set([selectedOpenPrs[0].number]);
+  let bottom = selectedOpenPrs[0];
   while (bottom.baseRefName !== trunk) {
     const parent = byHead.get(bottom.baseRefName);
     if (!parent) return fail(`missing lower open stack PR whose head branch is '${bottom.baseRefName}'`, fullStack);
-    if (seen.has(parent.number)) return fail(`cycle detected while walking lower stack from PR #${selectedPrs[0].number}`, fullStack);
+    if (seen.has(parent.number)) return fail(`cycle detected while walking lower stack from PR #${selectedOpenPrs[0].number}`, fullStack);
     fullStack.unshift(parent);
     seen.add(parent.number);
     bottom = parent;
@@ -153,7 +186,7 @@ function addLabel(prNumber, label) {
 
 function fetchPr(num) {
   const out = gh(['pr', 'view', String(num), '--json',
-    'number,headRefOid,headRefName,baseRefName,state,mergeStateStatus,reviewDecision']);
+    'number,headRefOid,headRefName,baseRefName,state,mergeCommit,mergeStateStatus,reviewDecision']);
   return JSON.parse(out);
 }
 
@@ -172,6 +205,24 @@ function localCommitChecker() {
       return false;
     }
   };
+}
+
+function localAncestorChecker() {
+  return (ancestor, descendant) => {
+    try {
+      execFileSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+}
+
+function mergeCommitOid(pr) {
+  if (typeof pr?.mergeCommit === 'string') return pr.mergeCommit;
+  if (typeof pr?.mergeCommit?.oid === 'string') return pr.mergeCommit.oid;
+  if (typeof pr?.mergeCommitOid === 'string') return pr.mergeCommitOid;
+  return null;
 }
 
 function parseArgs(argv) {
@@ -202,7 +253,7 @@ const HELP = `land-stack — verify and land a Mergify PR stack by confirmed PR 
 Pass confirmed PR numbers bottom-of-stack first. If numbers are missing, broadly
 list open PRs, filter to stack heads, order by base/head links, ask the user to
 confirm the suggested numbers, then run this guard. Verification must pass before
-anything is queued. --execute adds the admin-bypass label to every verified PR.`;
+anything is queued. --execute adds the admin-bypass label to every open verified PR.`;
 
 function printReport(result) {
   const byPr = new Map();
@@ -250,6 +301,7 @@ function main() {
   const structureResult = analyzeStack({
     prs: prData,
     hasLocalCommit: localCommitChecker(),
+    isLocalAncestor: localAncestorChecker(),
     trunk: args.trunk,
     stackPrefix: args.stackPrefix,
   });
@@ -277,15 +329,19 @@ function main() {
   }
   console.log('\nRESULT: verification passed.');
 
+  const targets = queueTargets(prData);
   if (!args.execute) {
-    console.log('Re-run with --execute to queue the whole verified stack via admin-bypass.');
+    if (targets.length === 0) {
+      console.log('No open PRs remain to queue.');
+    } else {
+      console.log('Re-run with --execute to queue the open verified PRs via admin-bypass.');
+    }
     return;
   }
 
-  const targets = queueTargets(prData);
   if (targets.length === 0) {
-    console.error('\nerror: no open PRs to queue.');
-    process.exit(1);
+    console.log('\nNo open PRs remain to queue.');
+    return;
   }
 
   console.log(`\nExecuting: adding 'admin-bypass' to ${targets.length} verified PR(s), bottom-to-top.`);
