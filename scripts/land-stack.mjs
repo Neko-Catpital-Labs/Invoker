@@ -11,9 +11,11 @@
  *   - the PRs form a proper stack (each PR's base is the previous PR's head branch;
  *     the bottom PR's base is the trunk),
  *   - the provided PRs are the complete open stack, not a prefix/suffix slice,
- *   - in execute mode, every PR is OPEN.
+ *   - in execute mode, every PR is OPEN unless the whole selected stack is
+ *     already MERGED.
  *
- * The default dry run also accepts MERGED PRs as already-landed stack members.
+ * The default dry run and idempotent execute path also accept MERGED PRs as
+ * already-landed stack members.
  *
  * Only after ALL checks pass does `--execute` add the `admin-bypass` label to
  * every PR in the verified stack, bottom-to-top. That lets Mergify land the
@@ -206,7 +208,7 @@ function parseArgs(argv) {
 const HELP = `land-stack — verify and land a Mergify PR stack by confirmed PR number
 
   node scripts/land-stack.mjs <pr> [<pr> ...]              verify confirmed numbers (safe default; OPEN or MERGED)
-  node scripts/land-stack.mjs <pr> [<pr> ...] --execute    re-verify, then queue the whole stack
+  node scripts/land-stack.mjs <pr> [<pr> ...] --execute    re-verify, then queue the whole stack if still open
   node scripts/land-stack.mjs <pr> ... --base <branch>     trunk branch (default: master)
   node scripts/land-stack.mjs <pr> ... --stack-prefix <p>  required head-branch prefix (default: stack/)
 
@@ -258,12 +260,13 @@ function main() {
     process.exit(2);
   }
 
+  const allSelectedPrsMerged = prData.every((pr) => pr.state === 'MERGED');
   const structureResult = analyzeStack({
     prs: prData,
     hasLocalCommit: localCommitChecker(),
     trunk: args.trunk,
     stackPrefix: args.stackPrefix,
-    requireOpen: args.execute,
+    requireOpen: args.execute && !allSelectedPrsMerged,
   });
   const completenessResult = analyzeCompleteOpenStack({
     selectedPrs: prData,
@@ -303,6 +306,10 @@ function main() {
   }
 
   if (targets.length === 0) {
+    if (allSelectedPrsMerged) {
+      console.log('\nNo open PRs to queue; selected stack is already merged.');
+      return;
+    }
     console.error('\nerror: no open PRs to queue.');
     process.exit(1);
   }

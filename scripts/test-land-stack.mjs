@@ -198,14 +198,27 @@ test('dry-run CLI accepts an already merged stack PR without queue guidance', ()
   assert.deepEqual(edits, []);
 });
 
-test('execute still refuses to label an already merged PR', () => {
+test('execute accepts an already merged stack PR as an idempotent no-op', () => {
   const { res, edits } = runCli(['2174'], {
     prs: {
       2174: { ...fullStack[0], state: 'MERGED', mergeStateStatus: 'UNKNOWN', reviewDecision: 'REVIEW_REQUIRED' },
     },
   });
+  assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
+  assert.match(res.stdout, /PASS\s+state\s+state=MERGED \(already merged\)/);
+  assert.match(res.stdout, /No open PRs to queue; selected stack is already merged\./);
+  assert.deepEqual(edits, []);
+});
+
+test('execute refuses an already merged PR when an open stack child remains', () => {
+  const { res, edits } = runCli(['2174'], {
+    prs: {
+      2174: { ...fullStack[0], state: 'MERGED', mergeStateStatus: 'UNKNOWN', reviewDecision: 'REVIEW_REQUIRED' },
+      2175: fullStack[1],
+    },
+  });
   assert.equal(res.status, 1, `${res.stdout}\n${res.stderr}`);
-  assert.match(res.stdout, /FAIL\s+open\s+state=MERGED/);
+  assert.match(res.stdout, /full open stack is \[2174, 2175\]/);
   assert.deepEqual(edits, []);
 });
 
