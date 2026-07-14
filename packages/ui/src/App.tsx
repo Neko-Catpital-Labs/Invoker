@@ -2152,8 +2152,7 @@ export function App() {
   const handleRefresh = useCallback(async () => {
     await refreshTaskGraph();
     void invoker?.checkPrStatuses?.();
-    issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'manual-refresh' });
-  }, [invoker, issueCameraCommand, refreshTaskGraph]);
+  }, [invoker, refreshTaskGraph]);
   const updatePlanningSessionById = useCallback((sessionId: string, updater: (session: PlanningSessionView) => PlanningSessionView) => {
     setPlanningSessions((prev) => prev.map((session) => (
       session.id === sessionId ? updater(session) : session
