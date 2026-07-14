@@ -321,6 +321,14 @@ describe('QueueView', () => {
           startable: false,
           stoppable: true,
         }),
+        makeWorker({
+          kind: 'pr-ci-failure-scan',
+          note: 'Scans mapped PRs for failing CI.',
+          lifecycle: 'running',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
       ]),
     );
 
@@ -331,13 +339,15 @@ describe('QueueView', () => {
       'worker-row-ci-failure',
       'worker-row-coderabbit-address',
       'worker-row-pr-conflict-rebase',
+      'worker-row-pr-ci-failure-scan',
     ]);
-    expect(screen.queryByText('Worker processes (5)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Worker processes (6)')).not.toBeInTheDocument();
     expect(screen.getByText('Autofix')).toBeInTheDocument();
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('CI failure repair')).toBeInTheDocument();
     expect(screen.getByText('Coderabbit Address')).toBeInTheDocument();
     expect(screen.getByText('Pr Conflict Rebase')).toBeInTheDocument();
+    expect(screen.getByText('PR CI scan')).toBeInTheDocument();
   });
 
   it('shows disabled Autofix and CI rows when policy is disabled', () => {
