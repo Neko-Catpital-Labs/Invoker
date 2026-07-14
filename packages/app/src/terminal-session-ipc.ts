@@ -15,6 +15,7 @@ import {
 export const TERMINAL_SESSION_UPSERT_COALESCE_MS = 250;
 
 type TerminalSessionRow = ReturnType<SQLiteAdapter['listTerminalSessions']>[number];
+type PlanningSessionStoreGetter = () => InAppPlanningSessionStore | undefined;
 
 interface PlanningTerminalLogger {
   info(message: string, context?: Record<string, unknown>): void;
@@ -278,21 +279,146 @@ function planningTerminalOnly(
   if (session.kind !== 'planning') {
     return { ok: false, reason: `Session "${sessionId}" is not a planning terminal session.` };
   }
+  const planningSessionId = session.planningSessionId ?? '';
+  if (!planningSessionId || !planningChatSessions.has(planningSessionId)) {
+    return { ok: false, reason: `Session "${sessionId}" is not owned by a planning conversation.` };
+  }
+  return { ok: true, planningSessionId };
+}
+
+function planningTerminalWritable(
+  embeddedTerminalManager: EmbeddedTerminalManager,
+  planningChatSessions: InAppPlanningChatSessions,
+  getPlanningSessionStore: PlanningSessionStoreGetter,
+  sessionId: string,
+): { ok: true } | { ok: false; reason: string } {
+  const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
+  if (!allowed.ok) return allowed;
+  if (!getPlanningSessionStore()) {
+    return { ok: false, reason: 'Planning terminal is read-only in this window.' };
+  }
+  const planningSession = planningChatSessions.get(allowed.planningSessionId);
+  if (planningSession?.status === 'submitted') {
+    return { ok: false, reason: 'This planning session was already submitted.' };
+  }
   return { ok: true };
+}
+
+function planningTerminalTargetKey(planningSessionId: string, repoRoot: string): string {
+  return JSON.stringify({
+    kind: 'planning',
+    planningSessionId,
+    taskId: `planning:${planningSessionId}`,
+    cwd: repoRoot,
+    command: null,
+    args: [],
+    linuxTerminalTail: null,
+    attach: null,
+  });
+}
+
+export function bindPlanningTerminalSessionState(deps: {
+  embeddedTerminalManager: EmbeddedTerminalManager;
+  logger: PlanningTerminalLogger;
+  planningChatSessions: InAppPlanningChatSessions;
+  getPlanningSessionStore: PlanningSessionStoreGetter;
+  repoRoot: string;
+}): { restorePersistedPlanningTerminals: () => void } {
+  const {
+    embeddedTerminalManager,
+    logger,
+    planningChatSessions,
+    getPlanningSessionStore,
+    repoRoot,
+  } = deps;
+
+  embeddedTerminalManager.on('session-updated', (record: TerminalSessionPersistenceRecord) => {
+    if (record.kind !== 'planning' || !record.planningSessionId) return;
+    updatePlanningChatTerminalState(record.planningSessionId, {
+      terminalMode: 'tmux',
+      terminalSessionId: record.sessionId,
+      terminalStatus: record.status,
+      terminalExitCode: record.exitCode,
+      terminalOutputSnapshot: record.outputSnapshot,
+      terminalUpdatedAt: record.updatedAt,
+      touchSessionUpdatedAt: record.status !== 'running' || record.outputSnapshot.length === 0,
+    }, {
+      sessions: planningChatSessions,
+      planningSessionStore: getPlanningSessionStore(),
+    });
+  });
+
+  const restorePersistedPlanningTerminals = (): void => {
+    for (const session of planningChatSessions.values()) {
+      if (
+        session.terminalMode !== 'tmux'
+        || !session.terminalSessionId
+        || session.terminalStatus === 'exited'
+      ) {
+        continue;
+      }
+      try {
+        embeddedTerminalManager.restoreSpawnSession({
+          sessionId: session.terminalSessionId,
+          taskId: `planning:${session.id}`,
+          kind: 'planning',
+          planningSessionId: session.id,
+          targetKey: planningTerminalTargetKey(session.id, repoRoot),
+          spec: { cwd: repoRoot },
+          cwd: repoRoot,
+          createdAt: session.terminalUpdatedAt ?? session.updatedAt,
+          outputSnapshot: session.terminalOutputSnapshot ?? '',
+        });
+      } catch (err) {
+        logger.warn(
+          `planning terminal restore failed for session="${session.id}": ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'planning-terminal' },
+        );
+        updatePlanningChatTerminalState(session.id, {
+          terminalMode: 'tmux',
+          terminalSessionId: session.terminalSessionId,
+          terminalStatus: 'exited',
+          terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
+          touchSessionUpdatedAt: true,
+        }, {
+          sessions: planningChatSessions,
+          planningSessionStore: getPlanningSessionStore(),
+        });
+      }
+    }
+  };
+
+  return { restorePersistedPlanningTerminals };
 }
 
 export function registerPlanningTerminalSessionIpcHandlers(deps: {
   ipcMain: IpcMain;
   embeddedTerminalManager: EmbeddedTerminalManager;
   logger: PlanningTerminalLogger;
+  planningChatSessions: InAppPlanningChatSessions;
+  getPlanningSessionStore: PlanningSessionStoreGetter;
   repoRoot: string;
 }): void {
-  const { ipcMain, embeddedTerminalManager, logger, repoRoot } = deps;
+  const {
+    ipcMain,
+    embeddedTerminalManager,
+    logger,
+    planningChatSessions,
+    getPlanningSessionStore,
+    repoRoot,
+  } = deps;
 
   ipcMain.handle('invoker:planning-terminal-open', async (_event, planningSessionIdArg: string) => {
     const planningSessionId = String(planningSessionIdArg ?? '').trim();
     if (!planningSessionId) {
       return { opened: false, reason: 'Planning session id is required.' };
+    }
+    const planningSession = planningChatSessions.get(planningSessionId);
+    if (!planningSession) {
+      return { opened: false, reason: 'Planning conversation was not found.' };
+    }
+    if (planningSession.status === 'submitted') {
+      return { opened: false, reason: 'This planning session was already submitted.' };
     }
     logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
     try {
@@ -302,6 +428,17 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
         planningSessionId,
         spec: { cwd: repoRoot },
         cwd: repoRoot,
+      });
+      updatePlanningChatTerminalState(planningSessionId, {
+        terminalMode: 'tmux',
+        terminalSessionId: session.sessionId,
+        terminalStatus: session.status,
+        terminalExitCode: session.exitCode,
+        terminalOutputSnapshot: session.outputSnapshot ?? '',
+        touchSessionUpdatedAt: true,
+      }, {
+        sessions: planningChatSessions,
+        planningSessionStore: getPlanningSessionStore(),
       });
       return { opened: true, session };
     } catch (err) {
@@ -316,7 +453,12 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
   });
 
   ipcMain.handle('invoker:planning-terminal-write', async (_event, sessionId: string, data: string) => {
-    const allowed = planningTerminalOnly(embeddedTerminalManager, sessionId);
+    const allowed = planningTerminalWritable(
+      embeddedTerminalManager,
+      planningChatSessions,
+      getPlanningSessionStore,
+      sessionId,
+    );
     if (!allowed.ok) return allowed;
     return embeddedTerminalManager.write(sessionId, data);
   });

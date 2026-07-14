@@ -2058,20 +2058,12 @@ function createEmbeddedTerminalBackendFromConfig(
       mainWindow.webContents.send('invoker:terminal-exit', payload);
     }
   });
-  embeddedTerminalManager.on('session-updated', (record) => {
-    if (record.kind !== 'planning' || !record.planningSessionId) return;
-    updatePlanningChatTerminalState(record.planningSessionId, {
-      terminalMode: 'tmux',
-      terminalSessionId: record.sessionId,
-      terminalStatus: record.status,
-      terminalExitCode: record.exitCode,
-      terminalOutputSnapshot: record.outputSnapshot,
-      terminalUpdatedAt: record.updatedAt,
-      touchSessionUpdatedAt: record.status !== 'running' || record.outputSnapshot.length === 0,
-    }, {
-      sessions: planningChatSessions,
-      planningSessionStore: ownerMode ? persistence : undefined,
-    });
+  const { restorePersistedPlanningTerminals } = bindPlanningTerminalSessionState({
+    embeddedTerminalManager,
+    logger,
+    planningChatSessions,
+    getPlanningSessionStore: () => (ownerMode ? persistence : undefined),
+    repoRoot,
   });
 
   const planningTerminalTargetKey = (planningSessionId: string): string => JSON.stringify({
@@ -5480,11 +5472,12 @@ function createEmbeddedTerminalBackendFromConfig(
         return { opened: false, reason: `Failed to start terminal session: ${reason}` };
       }
     });
-
     registerPlanningTerminalSessionIpcHandlers({
       ipcMain,
       embeddedTerminalManager,
       logger,
+      planningChatSessions,
+      getPlanningSessionStore: () => (ownerMode ? persistence : undefined),
       repoRoot,
     });
 
