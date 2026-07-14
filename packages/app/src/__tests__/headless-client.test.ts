@@ -537,6 +537,12 @@ describe('headless-client', () => {
     bus.onRequest('headless.query', async () => ({
       maxRendererEventLoopLagMs: 123,
       maxRendererLongTaskMs: 456,
+      planningTypingLagReports: 3,
+      maxPlanningTypingLagMs: 41,
+      planningChatInputChangeReports: 2,
+      maxPlanningChatInputHandlerMs: 17,
+      planningChatInputCommitReports: 1,
+      maxPlanningChatInputCommitMs: 29,
     }));
 
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
@@ -550,9 +556,27 @@ describe('headless-client', () => {
 
     expect(exitCode).toBe(0);
     expect(runElectronHeadless).not.toHaveBeenCalled();
-    expect(stdout).toHaveBeenCalledWith('{"maxRendererEventLoopLagMs":123,"maxRendererLongTaskMs":456}\n');
+    expect(stdout).toHaveBeenCalledWith(
+      '{"maxRendererEventLoopLagMs":123,"maxRendererLongTaskMs":456,"planningTypingLagReports":3,"maxPlanningTypingLagMs":41,"planningChatInputChangeReports":2,"maxPlanningChatInputHandlerMs":17,"planningChatInputCommitReports":1,"maxPlanningChatInputCommitMs":29}\n',
+    );
     stdout.mockRestore();
   });
+
+  it('rejects query ui-perf --reset before delegating to the owner', async () => {
+    const bus = new LocalBus();
+    const queryHandler = vi.fn(async () => ({ maxRendererEventLoopLagMs: 1 }));
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.query', queryHandler);
+
+    await expect(
+      runHeadlessClientCommand(['query', 'ui-perf', '--reset'], {
+        messageBus: bus,
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        runElectronHeadless: vi.fn(async () => 0),
+      }),
+    ).rejects.toThrow(/not a read-only query/);
+    expect(queryHandler).not.toHaveBeenCalled();
+  }, 30_000);
 
   it('does not silently fall back for query ui-perf when no owner endpoint is reachable', async () => {
     await expect(
