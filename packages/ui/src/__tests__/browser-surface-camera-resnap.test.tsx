@@ -150,16 +150,14 @@ describe('Browser-surface camera (component)', () => {
     mock.fireDelta({
       type: 'updated',
       taskId: 'wf-a/two',
-      changes: { description: 'Task Two (live update)' },
+      changes: { description: 'Task Two live' },
       taskStateVersion: 2,
       previousTaskStateVersion: 1,
     });
 
     // Wait until the update propagated and re-rendered (the node label updates),
     // then drain the frames any (buggy) re-issued camera command would use.
-    await waitFor(() =>
-      expect(screen.getAllByText('Task Two (live update)').length).toBeGreaterThan(0),
-    );
+    await waitFor(() => expect(screen.getAllByText('Task Two live').length).toBeGreaterThan(0));
     await flushFrames(6);
 
     // The camera must not move on a live update that changed no selection.
