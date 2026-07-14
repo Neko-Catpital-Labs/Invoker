@@ -18,7 +18,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { ActionGraphResponse, InAppPlanningSessionSummary, RuntimeStatus, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphResponse, InAppPlanningSessionSummary, RuntimeStatus, StartReadyResult, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult, WorkflowMutationFailedEvent } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -342,6 +342,22 @@ export function createMockInvoker(
       runtimeStatusCallbacks.add(cb);
       return () => { runtimeStatusCallbacks.delete(cb); };
     }),
+    startReady: vi.fn(async () => ({
+      preview: {
+        readyTaskIds: [],
+        recoverableTaskIds: [],
+        failedWorkflowIds: [],
+        skipped: {
+          awaitingApproval: 0,
+          reviewReady: 0,
+          blocked: 0,
+          failedTasks: 0,
+        },
+      },
+      started: [],
+      recreatedWorkflowIds: [],
+      dryRun: false,
+    } satisfies StartReadyResult)),
     resumeWorkflow: vi.fn(async () => null),
     listWorkflows: vi.fn(async () => workflowSnapshot),
     loadWorkflow: vi.fn(async () => ({ workflow: {}, tasks: [] })),

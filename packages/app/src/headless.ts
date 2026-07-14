@@ -76,6 +76,7 @@ import { headlessQuery, headlessQuerySelect, renderWorkerStatus } from './headle
 export { resolveAgentSession } from './headless-query-list.js';
 import {
   headlessRun,
+  headlessStartReady,
   headlessResume,
   headlessWatch,
   headlessRetryWorkflow,
@@ -267,6 +268,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     // ── Execute (unchanged) ──
     case 'run':
       await headlessRun(args[1], deps, deps.waitForApproval, deps.noTrack);
+      break;
+    case 'start-ready':
+      await headlessStartReady(args.slice(1), deps);
       break;
     case 'resume':
       await headlessResume(args[1], deps, deps.waitForApproval, deps.noTrack);
@@ -530,6 +534,8 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
 ${BOLD}Execute:${RESET}
   watch [<workflowId>]                                Watch workflow status until settled or Ctrl-C
   run <plan.yaml>                                     Load and execute plan
+  start-ready [--dry-run] [--recreate-failed] [--no-track]
+                                                      Start pending work that is ready to execute
   resume <id>                                         Resume incomplete workflow
   retry <workflowId>                                  Retry workflow: rerun failed, keep completed
   retry-task <taskId>                                 Retry a single failed/stuck task
@@ -929,4 +935,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-
