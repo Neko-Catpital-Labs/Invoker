@@ -22,6 +22,8 @@ const PLANNING_PRESSURE_TURNS = 30;
 const PLANNING_INPUT_HANDLER_BUDGET_MS = 50;
 const PLANNING_INPUT_COMMIT_BUDGET_MS = 250;
 const PLANNING_INPUT_FILL_WALL_BUDGET_MS = 1500;
+const MAX_PLANNING_RENDERER_EVENT_LOOP_LAG_MS = 1000;
+const MAX_PLANNING_RENDERER_LONG_TASK_MS = 1500;
 const STARTUP_GRAPH_VISIBLE_AFTER_WINDOW_BUDGET_MS = 5000;
 const MAX_STARTUP_RENDERER_EVENT_LOOP_LAG_MS = 1000;
 const MAX_STARTUP_RENDERER_LONG_TASK_MS = 1500;
@@ -39,6 +41,8 @@ const PLANNING_PRESSURE_BUDGETS = {
   maxInputHandlerMs: PLANNING_INPUT_HANDLER_BUDGET_MS,
   maxInputCommitMs: PLANNING_INPUT_COMMIT_BUDGET_MS,
   maxInputFillWallMs: PLANNING_INPUT_FILL_WALL_BUDGET_MS,
+  maxRendererEventLoopLagMs: MAX_PLANNING_RENDERER_EVENT_LOOP_LAG_MS,
+  maxRendererLongTaskMs: MAX_PLANNING_RENDERER_LONG_TASK_MS,
   maxRendererLongTaskCount: MAX_PLANNING_RENDERER_LONG_TASK_COUNT,
 };
 
@@ -369,6 +373,8 @@ test('planning chat typing stays responsive with a large restored transcript', a
       expect(Number(perf.maxPlanningChatInputHandlerMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_HANDLER_BUDGET_MS);
       expect(Number(perf.maxPlanningChatInputCommitMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_COMMIT_BUDGET_MS);
       expect(Number(perf.maxPlanningChatTranscriptLines), planningEvidenceMessage).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
+      expect(numberOrZero(perf.maxRendererEventLoopLagMs), planningEvidenceMessage).toBeLessThanOrEqual(MAX_PLANNING_RENDERER_EVENT_LOOP_LAG_MS);
+      expect(numberOrZero(perf.maxRendererLongTaskMs), planningEvidenceMessage).toBeLessThanOrEqual(MAX_PLANNING_RENDERER_LONG_TASK_MS);
     } finally {
       await app.close();
     }
