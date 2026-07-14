@@ -192,6 +192,7 @@ export function createMockInvoker(
       workflowId: 'wf-1',
     })),
     planningChatReset: vi.fn(async () => ({ ok: true })),
+    planningChatSetTerminalMode: vi.fn(async () => ({ ok: true })),
     planningTerminalOpen: vi.fn(async (planningSessionId: string) => ({
       opened: true,
       session: {

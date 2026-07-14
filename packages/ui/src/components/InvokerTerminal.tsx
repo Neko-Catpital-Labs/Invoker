@@ -116,9 +116,10 @@ interface PlanningTmuxPaneProps {
   session: TerminalSessionDescriptor | null;
   busy: boolean;
   error?: string | null;
+  readOnly?: boolean;
 }
 
-function PlanningTmuxPane({ session, busy, error }: PlanningTmuxPaneProps): JSX.Element {
+function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTmuxPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -151,6 +152,7 @@ function PlanningTmuxPane({ session, busy, error }: PlanningTmuxPaneProps): JSX.
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
 
     const inputDisposable = term.onData((data) => {
+      if (readOnly) return;
       void window.invoker?.planningTerminalWrite?.(session.sessionId, data);
     });
 
@@ -204,7 +206,7 @@ function PlanningTmuxPane({ session, busy, error }: PlanningTmuxPaneProps): JSX.
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [session?.sessionId]);
+  }, [readOnly, session?.sessionId]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -514,7 +516,7 @@ export function InvokerTerminal({
       </div>
 
       {mode === 'tmux' ? (
-        <PlanningTmuxPane session={terminalSession} busy={terminalBusy} error={terminalError} />
+        <PlanningTmuxPane session={terminalSession} busy={terminalBusy} error={terminalError} readOnly={readOnly} />
       ) : (
         <>
           <div
