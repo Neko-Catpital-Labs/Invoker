@@ -21,6 +21,12 @@ export interface MergeGateCloseReviewOptions {
   cwd: string;
 }
 
+export interface MergeGateUpdateReviewBodyOptions {
+  identifier: string;
+  cwd: string;
+  body: string;
+}
+
 export interface MergeGateCheckSummary {
   state: 'pending' | 'success' | 'failure';
   failed: MergeGateFailedCheck[];
@@ -71,4 +77,7 @@ export interface MergeGateProvider {
 
   /** Read the live PR body as published on the provider (e.g. GitHub). */
   getReviewBody?(opts: { identifier: string; cwd: string }): Promise<string>;
+
+  /** Replace the live PR body as published on the provider (e.g. GitHub). */
+  updateReviewBody?(opts: MergeGateUpdateReviewBodyOptions): Promise<void>;
 }
