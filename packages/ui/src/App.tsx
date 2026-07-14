@@ -170,6 +170,21 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
   };
 }
 
+function planningSessionSummaryToView(session: InAppPlanningSessionSummary): PlanningSessionView {
+  return {
+    ...session,
+    messages: session.messages.map((line) => ({
+      id: line.id,
+      text: line.text,
+      role: line.role,
+      ...(line.tone ? { tone: line.tone } : {}),
+    })),
+    input: '',
+    busy: false,
+    conversationKey: session.id,
+  };
+}
+
 function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
   return status === 'waiting_for_answer' || status === 'draft_ready';
 }
@@ -597,6 +612,7 @@ export function App() {
   const [planName, setPlanName] = useState<string | null>(null);
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
   const [activePlanningSessionId, setActivePlanningSessionId] = useState('local-planning-session-1');
+  const planningSessionsRef = useRef(planningSessions);
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(1);
   const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
@@ -619,6 +635,10 @@ export function App() {
   const activePlanningTerminalSession = activePlanningSession.terminalSession ?? null;
   const activePlanningTerminalBusy = Boolean(activePlanningSession.terminalBusy);
   const activePlanningTerminalError = activePlanningSession.terminalError ?? null;
+
+  useEffect(() => {
+    planningSessionsRef.current = planningSessions;
+  }, [planningSessions]);
   const [graphMaximized, setGraphMaximized] = useState(false);
   const { theme, toggleTheme } = useTheme();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -740,9 +760,36 @@ export function App() {
       .catch(() => {
         setPlanningPresetOptions([{ key: 'codex', label: 'Codex', isDefault: true }]);
         setSelectedPlanningPresetKey('codex');
-      });
+    });
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.invoker?.planningChatList?.()
+      .then((response) => {
+        if (cancelled || !response.ok || response.sessions.length === 0) return;
+        const currentSessions = planningSessionsRef.current;
+        const first = currentSessions[0];
+        const onlyInitialPlaceholder = currentSessions.length === 1
+          && first?.id === 'local-planning-session-1'
+          && first.input === ''
+          && first.messages.every((line) => line.role === 'system');
+        if (!onlyInitialPlaceholder) return;
+        const restored = response.sessions.map(planningSessionSummaryToView);
+        const maxLineId = restored.reduce((max, session) => (
+          Math.max(max, ...session.messages.map((line) => line.id))
+        ), 1);
+        nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
+        setPlanningSessions(restored);
+        setActivePlanningSessionId(restored[0]?.id ?? 'local-planning-session-1');
+        setSelectedPlanningPresetKey((current) => current || restored[0]?.presetKey || current);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     window.invoker?.terminalList?.().then((list) => {
