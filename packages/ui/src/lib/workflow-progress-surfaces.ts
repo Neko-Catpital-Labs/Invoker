@@ -143,21 +143,25 @@ export function getRunningTaskEntries(
   workflows: Map<string, WorkflowMeta>,
   queueStatus: QueueStatus | null,
 ): WorkflowTaskEntry[] {
+  const orderedTasks: TaskState[] = [];
+  const includedTaskIds = new Set<string>();
   if (queueStatus?.running.length) {
-    return queueStatus.running
-      .map(({ taskId }) => tasks.get(taskId))
-      .filter((task): task is TaskState => Boolean(task))
-      .map((task) => ({
-        task,
-        workflow: task.config.workflowId ? workflows.get(task.config.workflowId) ?? null : null,
-      }));
+    for (const { taskId } of queueStatus.running) {
+      const task = tasks.get(taskId);
+      if (!task || includedTaskIds.has(task.id)) continue;
+      orderedTasks.push(task);
+      includedTaskIds.add(task.id);
+    }
+  }
+  for (const task of [...tasks.values()]
+    .filter(isRunningTask)
+    .sort((a, b) => (a.description || a.id).localeCompare(b.description || b.id))) {
+    if (includedTaskIds.has(task.id)) continue;
+    orderedTasks.push(task);
   }
 
-  return [...tasks.values()]
-    .filter(isRunningTask)
-    .sort((a, b) => (a.description || a.id).localeCompare(b.description || b.id))
-    .map((task) => ({
-      task,
-      workflow: task.config.workflowId ? workflows.get(task.config.workflowId) ?? null : null,
-    }));
+  return orderedTasks.map((task) => ({
+    task,
+    workflow: task.config.workflowId ? workflows.get(task.config.workflowId) ?? null : null,
+  }));
 }
