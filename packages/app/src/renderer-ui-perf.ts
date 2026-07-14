@@ -12,6 +12,8 @@ export type RendererUiPerfCounters = {
   maxRendererCumulativeLagMs: number;
   maxRendererTickDeltaMs: number;
   maxRendererLongTaskMs: number;
+  planningTypingLagReports: number;
+  maxPlanningTypingLagMs: number;
   planningChatInputChangeReports: number;
   maxPlanningChatInputHandlerMs: number;
   planningChatInputCommitReports: number;
@@ -46,6 +48,8 @@ export function createRendererUiPerfCounters(): RendererUiPerfCounters {
     maxRendererCumulativeLagMs: 0,
     maxRendererTickDeltaMs: 0,
     maxRendererLongTaskMs: 0,
+    planningTypingLagReports: 0,
+    maxPlanningTypingLagMs: 0,
     planningChatInputChangeReports: 0,
     maxPlanningChatInputHandlerMs: 0,
     planningChatInputCommitReports: 0,
@@ -118,6 +122,12 @@ export function recordRendererUiPerfMetric(
 
   if (metric === 'renderer_long_task') {
     updateMax(counters, 'maxRendererLongTaskMs', numberField(data, 'durationMs'));
+    return;
+  }
+
+  if (metric === 'planning_typing_lag_baseline') {
+    counters.planningTypingLagReports += 1;
+    updateMax(counters, 'maxPlanningTypingLagMs', numberField(data, 'lagMs'));
     return;
   }
 
