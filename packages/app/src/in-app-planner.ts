@@ -13,6 +13,7 @@ import type {
   InAppPlanningResetResponse,
   InAppPlanningSessionStatus,
   InAppPlanningSessionSummary,
+  InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
   PlanningPresetOption,
@@ -47,6 +48,7 @@ export interface InAppPlannerDeps {
   planningCommandBuilder?: PlanningCommandBuilder;
   conversationRepo?: ConversationRepository;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
+  onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
 }
 
 export interface InAppPlanningChatSession {
@@ -277,7 +279,7 @@ function formatConversationalPlanningMessage(message: string): string {
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo'>,
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo' | 'onRawPlannerOutput'>,
   threadTs: string,
 ): PlanConversationConfig {
   return {
@@ -294,6 +296,9 @@ function planConversationConfig(
     planningCommandBuilder: deps.planningCommandBuilder,
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
+    onRawPlannerOutput: deps.onRawPlannerOutput
+      ? (chunk) => deps.onRawPlannerOutput?.({ sessionId: threadTs, chunk })
+      : undefined,
   };
 }
 
