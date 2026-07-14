@@ -30,6 +30,7 @@ interface LeftStatusColumnProps {
   onSelectSurface: (surface: SidebarSurface) => void;
   onToggleCollapsed: () => void;
   planningSessionCount: number;
+  planningAttentionCount: number;
   onOpenSettings: () => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
@@ -77,6 +78,7 @@ export function LeftStatusColumn({
   onSelectSurface,
   onToggleCollapsed,
   planningSessionCount,
+  planningAttentionCount,
   onOpenSettings,
   theme,
   onToggleTheme,
@@ -149,9 +151,9 @@ export function LeftStatusColumn({
         {collapsed ? (
           <div className="relative inline-flex h-9 w-9 items-center justify-center">
             <span><PlanningTerminalIcon className={ICON_CLASS} /></span>
-            {planningSessionCount > 0 && (
+            {planningAttentionCount > 0 && (
               <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none bg-background ${countClass('neutral')}`}>
-                {planningSessionCount}
+                {planningAttentionCount}
               </span>
             )}
           </div>
@@ -164,7 +166,7 @@ export function LeftStatusColumn({
               <span className="truncate">Planning Terminal</span>
             </span>
             <span className={`rounded-full px-2 py-0.5 text-[11px] ${countClass('neutral')}`}>
-              {planningSessionCount}
+              {planningAttentionCount}
             </span>
           </>
         )}
