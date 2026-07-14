@@ -357,6 +357,8 @@ export class EmbeddedTerminalManager extends EventEmitter {
   restoreSpawnSession(seed: {
     sessionId: string;
     taskId: string;
+    kind?: EmbeddedTerminalSessionKind;
+    planningSessionId?: string;
     targetKey: string;
     spec: TerminalSpec;
     cwd: string;
@@ -381,7 +383,8 @@ export class EmbeddedTerminalManager extends EventEmitter {
     return this.registerSpawnSession({
       sessionId: seed.sessionId,
       taskId: seed.taskId,
-      kind: 'task',
+      kind: seed.kind ?? 'task',
+      planningSessionId: seed.planningSessionId,
       targetKey: seed.targetKey,
       spec: seed.spec,
       cwd: seed.cwd,
