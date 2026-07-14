@@ -9,11 +9,29 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import { Terminal as XTermTerminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
+import type { Terminal as XTermTerminal } from 'xterm';
+import type { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+
+type TerminalModules = {
+  Terminal: typeof import('xterm').Terminal;
+  FitAddon: typeof import('xterm-addon-fit').FitAddon;
+};
+
+let terminalModulesPromise: Promise<TerminalModules> | null = null;
+
+function loadTerminalModules(): Promise<TerminalModules> {
+  terminalModulesPromise ??= Promise.all([
+    import('xterm'),
+    import('xterm-addon-fit'),
+  ]).then(([terminalModule, fitModule]) => ({
+    Terminal: terminalModule.Terminal,
+    FitAddon: fitModule.FitAddon,
+  }));
+  return terminalModulesPromise;
+}
 
 /**
  * The drawer has one explicit state model:
@@ -196,104 +214,131 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     const host = containerRef.current;
     if (!host) return;
 
-    let term: XTermTerminal;
-    let fit: FitAddon;
-    try {
-      const attachStartedAt = nowMs();
-      term = new XTermTerminal({
-        fontSize: 12,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-        cursorBlink: true,
-        convertEol: false,
-        scrollback: 5000,
-        theme: { background: '#0b0f1a', foreground: '#e5e7eb' },
-      });
-      fit = new FitAddon();
-      term.loadAddon(fit);
-      term.open(host);
-      reportTerminalPerf('embedded_terminal_attach', {
-        durationMs: roundMs(nowMs() - attachStartedAt),
-        sessionId: session.sessionId,
-        taskId: session.taskId,
-        mode: session.mode,
-        status: session.status,
-        active: isActive,
-        hasHeader,
-        hasSnapshot: Boolean(session.outputSnapshot),
-        snapshotBytes: session.outputSnapshot ? byteLength(session.outputSnapshot) : 0,
-      });
-    } catch {
-      return;
-    }
-    termRef.current = term;
-    fitRef.current = fit;
+    let cancelled = false;
+    let cleanupTerminal: (() => void) | null = null;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'attach');
-
-    const inputDisposable = term.onData((data) => {
-      const startedAt = nowMs();
-      void window.invoker?.terminalWrite?.(session.sessionId, data);
-      reportTerminalPerf('embedded_terminal_input', {
-        durationMs: roundMs(nowMs() - startedAt),
-        bytes: byteLength(data),
-        chars: data.length,
-        sessionId: session.sessionId,
-        taskId: session.taskId,
-        active: isActiveRef.current,
-      });
-    });
-
-    const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
-    const unsubscribeOutput = subscribeToOutput?.((event) => {
-      if (event.sessionId !== session.sessionId) return;
+    void (async () => {
+      let modules: TerminalModules;
       try {
-        const currentSession = sessionRef.current;
-        const startedAt = nowMs();
-        term.write(event.data);
-        reportTerminalPerf('embedded_terminal_output_write', {
-          durationMs: roundMs(nowMs() - startedAt),
-          bytes: byteLength(event.data),
-          chars: event.data.length,
-          sessionId: event.sessionId,
-          taskId: event.taskId,
-          active: isActiveRef.current,
-          status: currentSession.status,
+        modules = await loadTerminalModules();
+      } catch {
+        return;
+      }
+      if (cancelled) return;
+
+      const { Terminal: TerminalCtor, FitAddon: FitAddonCtor } = modules;
+      let term: XTermTerminal;
+      let fit: FitAddon;
+      try {
+        const attachStartedAt = nowMs();
+        term = new TerminalCtor({
+          fontSize: 12,
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          cursorBlink: true,
+          convertEol: false,
+          scrollback: 5000,
+          theme: { background: '#0b0f1a', foreground: '#e5e7eb' },
+        });
+        fit = new FitAddonCtor();
+        term.loadAddon(fit);
+        term.open(host);
+        reportTerminalPerf('embedded_terminal_attach', {
+          durationMs: roundMs(nowMs() - attachStartedAt),
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          mode: session.mode,
+          status: session.status,
+          active: isActive,
+          hasHeader,
+          hasSnapshot: Boolean(session.outputSnapshot),
+          snapshotBytes: session.outputSnapshot ? byteLength(session.outputSnapshot) : 0,
         });
       } catch {
-        /* terminal disposed */
+        return;
       }
-    });
+      if (cancelled) {
+        try {
+          term.dispose();
+        } catch {
+          /* already disposed */
+        }
+        return;
+      }
+      termRef.current = term;
+      fitRef.current = fit;
 
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== 'undefined') {
-      try {
-        resizeObserver = new ResizeObserver(() => scheduleFit('resize_observer'));
-        resizeObserver.observe(host);
-      } catch {
-        resizeObserver = null;
+      seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'attach');
+
+      const inputDisposable = term.onData((data) => {
+        const startedAt = nowMs();
+        void window.invoker?.terminalWrite?.(session.sessionId, data);
+        reportTerminalPerf('embedded_terminal_input', {
+          durationMs: roundMs(nowMs() - startedAt),
+          bytes: byteLength(data),
+          chars: data.length,
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          active: isActiveRef.current,
+        });
+      });
+
+      const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
+      const unsubscribeOutput = subscribeToOutput?.((event) => {
+        if (event.sessionId !== session.sessionId) return;
+        try {
+          const currentSession = sessionRef.current;
+          const startedAt = nowMs();
+          term.write(event.data);
+          reportTerminalPerf('embedded_terminal_output_write', {
+            durationMs: roundMs(nowMs() - startedAt),
+            bytes: byteLength(event.data),
+            chars: event.data.length,
+            sessionId: event.sessionId,
+            taskId: event.taskId,
+            active: isActiveRef.current,
+            status: currentSession.status,
+          });
+        } catch {
+          /* terminal disposed */
+        }
+      });
+
+      let resizeObserver: ResizeObserver | null = null;
+      if (typeof ResizeObserver !== 'undefined') {
+        try {
+          resizeObserver = new ResizeObserver(() => scheduleFit('resize_observer'));
+          resizeObserver.observe(host);
+        } catch {
+          resizeObserver = null;
+        }
       }
-    }
-    if (isActiveRef.current) {
-      scheduleFit('active_session');
-      try {
-        term.focus();
-      } catch {
-        /* focus unsupported */
+      if (isActiveRef.current) {
+        scheduleFit('active_session');
+        try {
+          term.focus();
+        } catch {
+          /* focus unsupported */
+        }
       }
-    }
+
+      cleanupTerminal = () => {
+        clearScheduledFit();
+        resizeObserver?.disconnect();
+        inputDisposable.dispose();
+        unsubscribeOutput?.();
+        try {
+          term.dispose();
+        } catch {
+          /* already disposed */
+        }
+        termRef.current = null;
+        fitRef.current = null;
+      };
+    })();
 
     return () => {
-      clearScheduledFit();
-      resizeObserver?.disconnect();
-      inputDisposable.dispose();
-      unsubscribeOutput?.();
-      try {
-        term.dispose();
-      } catch {
-        /* already disposed */
-      }
-      termRef.current = null;
-      fitRef.current = null;
+      cancelled = true;
+      cleanupTerminal?.();
     };
   }, [clearScheduledFit, fitVisibleTerminal, scheduleFit, session.sessionId]);
 

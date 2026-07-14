@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
-import { Terminal as XTermTerminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
+import type { Terminal as XTermTerminal } from 'xterm';
+import type { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 import { Button } from './primitives/index.js';
 
@@ -25,6 +25,24 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+
+type TerminalModules = {
+  Terminal: typeof import('xterm').Terminal;
+  FitAddon: typeof import('xterm-addon-fit').FitAddon;
+};
+
+let terminalModulesPromise: Promise<TerminalModules> | null = null;
+
+function loadTerminalModules(): Promise<TerminalModules> {
+  terminalModulesPromise ??= Promise.all([
+    import('xterm'),
+    import('xterm-addon-fit'),
+  ]).then(([terminalModule, fitModule]) => ({
+    Terminal: terminalModule.Terminal,
+    FitAddon: fitModule.FitAddon,
+  }));
+  return terminalModulesPromise;
+}
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
@@ -135,82 +153,109 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
     const host = containerRef.current;
     if (!host || !session) return;
 
-    let term: XTermTerminal;
-    let fit: FitAddon;
-    try {
-      term = new XTermTerminal({
-        fontSize: 12,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-        cursorBlink: true,
-        convertEol: false,
-        scrollback: 5000,
-        theme: { background: '#0b0f1a', foreground: '#e5e7eb' },
-      });
-      fit = new FitAddon();
-      term.loadAddon(fit);
-      term.open(host);
-    } catch {
-      return;
-    }
-    termRef.current = term;
-    fitRef.current = fit;
+    let cancelled = false;
+    let cleanupTerminal: (() => void) | null = null;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
-
-    const inputDisposable = term.onData((data) => {
-      if (readOnly) return;
-      void window.invoker?.planningTerminalWrite?.(session.sessionId, data);
-    });
-
-    const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
-    const unsubscribeOutput = subscribeToOutput?.((event) => {
-      if (event.sessionId !== session.sessionId) return;
+    void (async () => {
+      let modules: TerminalModules;
       try {
-        term.write(event.data);
+        modules = await loadTerminalModules();
       } catch {
-        /* terminal disposed */
+        return;
       }
-    });
+      if (cancelled) return;
 
-    const tryFit = () => {
+      const { Terminal: TerminalCtor, FitAddon: FitAddonCtor } = modules;
+      let term: XTermTerminal;
+      let fit: FitAddon;
       try {
-        fit.fit();
-        void window.invoker?.planningTerminalResize?.(session.sessionId, term.cols, term.rows);
-      } catch {
-        /* host has zero size or fit unsupported */
-      }
-    };
-
-    const raf = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame(tryFit)
-      : null;
-
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== 'undefined') {
-      try {
-        resizeObserver = new ResizeObserver(() => {
-          tryFit();
+        term = new TerminalCtor({
+          fontSize: 12,
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          cursorBlink: true,
+          convertEol: false,
+          scrollback: 5000,
+          theme: { background: '#0b0f1a', foreground: '#e5e7eb' },
         });
-        resizeObserver.observe(host);
+        fit = new FitAddonCtor();
+        term.loadAddon(fit);
+        term.open(host);
       } catch {
-        resizeObserver = null;
+        return;
       }
-    }
+      if (cancelled) {
+        try {
+          term.dispose();
+        } catch {
+          /* already disposed */
+        }
+        return;
+      }
+      termRef.current = term;
+      fitRef.current = fit;
+
+      seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+
+      const inputDisposable = term.onData((data) => {
+        if (readOnly) return;
+        void window.invoker?.planningTerminalWrite?.(session.sessionId, data);
+      });
+
+      const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
+      const unsubscribeOutput = subscribeToOutput?.((event) => {
+        if (event.sessionId !== session.sessionId) return;
+        try {
+          term.write(event.data);
+        } catch {
+          /* terminal disposed */
+        }
+      });
+
+      const tryFit = () => {
+        try {
+          fit.fit();
+          void window.invoker?.planningTerminalResize?.(session.sessionId, term.cols, term.rows);
+        } catch {
+          /* host has zero size or fit unsupported */
+        }
+      };
+
+      const raf = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame(tryFit)
+        : null;
+
+      let resizeObserver: ResizeObserver | null = null;
+      if (typeof ResizeObserver !== 'undefined') {
+        try {
+          resizeObserver = new ResizeObserver(() => {
+            tryFit();
+          });
+          resizeObserver.observe(host);
+        } catch {
+          resizeObserver = null;
+        }
+      }
+
+      cleanupTerminal = () => {
+        if (raf !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(raf);
+        }
+        resizeObserver?.disconnect();
+        inputDisposable.dispose();
+        unsubscribeOutput?.();
+        try {
+          term.dispose();
+        } catch {
+          /* already disposed */
+        }
+        termRef.current = null;
+        fitRef.current = null;
+      };
+    })();
 
     return () => {
-      if (raf !== null && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(raf);
-      }
-      resizeObserver?.disconnect();
-      inputDisposable.dispose();
-      unsubscribeOutput?.();
-      try {
-        term.dispose();
-      } catch {
-        /* already disposed */
-      }
-      termRef.current = null;
-      fitRef.current = null;
+      cancelled = true;
+      cleanupTerminal?.();
     };
   }, [readOnly, session?.sessionId]);
 
