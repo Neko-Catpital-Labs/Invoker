@@ -352,6 +352,62 @@ describe('WorkflowGraph', () => {
     expect(setCenterMock).not.toHaveBeenCalled();
   });
 
+  it('does not refit when graph data briefly empties after a manual viewport move', async () => {
+    const onManualViewport = vi.fn();
+
+    const { rerender } = await renderAndSettleInitialFit({
+      workflows: new Map([
+        ['wf-a', wf('wf-a', 'running')],
+        ['wf-b', wf('wf-b', 'pending')],
+      ]),
+      selectedWorkflowId: null,
+      statusFilters: new Set(),
+      onSelectWorkflow: () => {},
+      onWorkflowContextMenu: () => {},
+      onManualViewport,
+    });
+
+    fireEvent.pointerDown(screen.getByTestId('rf__pane'));
+    expect(onManualViewport).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <WorkflowGraph
+        workflows={new Map()}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+        onManualViewport={onManualViewport}
+      />,
+    );
+    expect(screen.getByText('Your plan will appear here.')).toBeInTheDocument();
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+
+    rerender(
+      <WorkflowGraph
+        workflows={new Map([
+          ['wf-a', wf('wf-a', 'running')],
+          ['wf-c', wf('wf-c', 'pending')],
+        ])}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+        onManualViewport={onManualViewport}
+      />,
+    );
+
+    expect(await screen.findByTestId('workflow-node-wf-c')).toBeInTheDocument();
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+    // No App-issued camera command is supplied, no selection fallback target is
+    // selected, mock nodes are visible, and the watchdog timer is not advanced.
+    // A failure here isolates the source to WorkflowGraph's React Flow remount.
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
   it('does not move the camera on a status-only update', async () => {
 
     const { rerender } = await renderAndSettleInitialFit({

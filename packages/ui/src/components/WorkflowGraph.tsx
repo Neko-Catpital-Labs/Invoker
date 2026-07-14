@@ -121,6 +121,7 @@ function WorkflowGraphInner({
   const reportedVisibleRef = useRef(false);
   const lastHandledCameraSeqRef = useRef(0);
   const initFitFrameRef = useRef(0);
+  const initialFitCompletedRef = useRef(false);
   const watchdogMissCountRef = useRef(0);
   const watchdogRecoveryAttemptedRef = useRef(false);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
@@ -187,12 +188,16 @@ function WorkflowGraphInner({
     };
   }), [graph.edges]);
 
-  // First non-empty render fits the whole graph once. React Flow only mounts
-  // when there is at least one node (the empty state short-circuits below), so
-  // onInit fires exactly on the first non-empty render — no graphSignature key
-  // and no per-update remount are needed.
+  // First non-empty render fits the whole graph once. React Flow can remount
+  // after transient empty graph data; that remount is not a new camera intent.
   const onInitHandler = useCallback(() => {
-    initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
+    if (initialFitCompletedRef.current) return;
+    cancelAnimationFrame(initFitFrameRef.current);
+    initFitFrameRef.current = requestAnimationFrame(() => {
+      if (initialFitCompletedRef.current) return;
+      initialFitCompletedRef.current = true;
+      fitView({ padding: 0.2 });
+    });
   }, [fitView]);
 
   // Cancel a pending first-fit frame on unmount so it never fires against a
