@@ -336,7 +336,7 @@ describe('QueueView', () => {
 
     expect(within(screen.getByTestId('worker-row-autofix')).getByText('Disabled · autoFixRetries=0')).toBeInTheDocument();
     expect(within(screen.getByTestId('worker-row-ci-failure')).getByText('Disabled · autoFixRetries=0')).toBeInTheDocument();
-    expect(within(screen.getByTestId('worker-row-ci-failure')).getByText('Auto-starts')).toBeInTheDocument();
+    expect(within(screen.getByTestId('worker-row-ci-failure')).getByText('Starts on launch')).toBeInTheDocument();
   });
 
   it('calls start worker for a stopped row', () => {
@@ -352,7 +352,7 @@ describe('QueueView', () => {
       ]),
     );
 
-    fireEvent.click(within(screen.getByTestId('worker-row-autofix')).getByRole('button', { name: 'Start process' }));
+    fireEvent.click(within(screen.getByTestId('worker-row-autofix')).getByRole('button', { name: 'Enable worker' }));
     expect(onStartWorker).toHaveBeenCalledWith('autofix');
   });
 
@@ -369,7 +369,7 @@ describe('QueueView', () => {
       ]),
     );
 
-    fireEvent.click(within(screen.getByTestId('worker-row-ci-failure')).getByRole('button', { name: 'Stop process' }));
+    fireEvent.click(within(screen.getByTestId('worker-row-ci-failure')).getByRole('button', { name: 'Disable worker' }));
     expect(onStopWorker).toHaveBeenCalledWith('ci-failure');
   });
 
@@ -388,7 +388,7 @@ describe('QueueView', () => {
       true,
     );
 
-    const start = within(screen.getByTestId('worker-row-autofix')).getByRole('button', { name: 'Start process' });
+    const start = within(screen.getByTestId('worker-row-autofix')).getByRole('button', { name: 'Enable worker' });
     expect(start).toBeDisabled();
     expect(start).toHaveAttribute('title', 'Read-only window');
   });

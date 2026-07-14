@@ -262,6 +262,7 @@ export interface WorkerStatusEntry {
   policy: WorkerPolicyStatus;
   policyReason?: string;
   autoStarts: boolean;
+  desiredEnabled?: boolean;
   startable: boolean;
   stoppable: boolean;
   controlDisabledReason?: string;
@@ -556,6 +557,30 @@ export interface WorkflowMutationAcceptedResult {
   channel: string;
 }
 
+export interface StartReadyRequest {
+  recreateFailed?: boolean;
+  dryRun?: boolean;
+}
+
+export interface StartReadyPreview {
+  readyTaskIds: string[];
+  recoverableTaskIds: string[];
+  failedWorkflowIds: string[];
+  skipped: {
+    awaitingApproval: number;
+    reviewReady: number;
+    blocked: number;
+    failedTasks: number;
+  };
+}
+
+export interface StartReadyResult {
+  preview: StartReadyPreview;
+  started: TaskState[];
+  recreatedWorkflowIds: string[];
+  dryRun: boolean;
+}
+
 export interface WorkflowMutationFailedEvent {
   intentId: number;
   workflowId: string;
@@ -834,6 +859,10 @@ export const IpcChannels = {
   'invoker:start': {} as {
     request: [];
     response: TaskState[];
+  },
+  'invoker:start-ready': {} as {
+    request: [request?: StartReadyRequest];
+    response: StartReadyResult;
   },
   'invoker:resume-workflow': {} as {
     request: [];
