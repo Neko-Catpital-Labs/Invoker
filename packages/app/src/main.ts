@@ -1832,6 +1832,14 @@ function startHeadlessMode(): void {
             setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
           });
         }
+
+        void recoverWorkflowMutationsOnStartup({
+          ownerMode: true,
+          persistence,
+          workflowMutationCoordinator: workflowMutationCoordinator ?? undefined,
+          logger,
+          maybeDelayResume: maybeDelayWorkflowResumeForTest,
+        });
       }
 
       await runHeadless(cliArgs, headlessDeps);
