@@ -206,11 +206,52 @@ export function formatEventLog(events: TaskEvent[]): string {
 
   const lines = events.map((event) => {
     const timestamp = event.createdAt;
-    const payload = event.payload ? ` ${event.payload}` : '';
-    return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${event.eventType}${payload}`;
+    const rendered = renderTaskEvent(event);
+    const payload = rendered.payload ? ` ${rendered.payload}` : '';
+    return `${DIM}[${timestamp}]${RESET} ${BOLD}${event.taskId}${RESET}: ${rendered.eventType}${payload}`;
   });
 
   return lines.join('\n');
+}
+
+function parseTaskEventPayload(payload: string | undefined): Record<string, unknown> | undefined {
+  if (!payload) return undefined;
+  try {
+    const parsed = JSON.parse(payload);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringPayloadValue(payload: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = payload?.[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function renderTaskEvent(event: TaskEvent): { eventType: string; payload?: string } {
+  if (event.eventType !== 'task.worker_action') {
+    return { eventType: event.eventType, ...(event.payload ? { payload: event.payload } : {}) };
+  }
+
+  const payload = parseTaskEventPayload(event.payload);
+  const workerKind = stringPayloadValue(payload, 'workerKind') ?? 'worker';
+  const actionType = stringPayloadValue(payload, 'actionType') ?? 'action';
+  const status = stringPayloadValue(payload, 'status') ?? 'recorded';
+  const summary = stringPayloadValue(payload, 'summary');
+  const reason = stringPayloadValue(payload, 'reason');
+  const renderedPayload = [
+    `${workerKind}/${actionType}`,
+    `[${status}]`,
+    ...(summary ? [summary] : []),
+    ...(reason ? [`reason=${reason}`] : []),
+  ].join(' ');
+  return {
+    eventType: 'task.worker_action',
+    payload: escapeTerminalText(renderedPayload),
+  };
 }
 
 export function formatWorkerActions(actions: WorkerActionRecord[]): string {
