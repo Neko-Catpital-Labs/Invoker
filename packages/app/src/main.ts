@@ -42,8 +42,10 @@ import {
   configureEarlyElectronApp,
   createDaemonOwnerLossController,
   formatGuiOwnerBootstrapFallbackMessage,
+  guiAutoOwnerBootstrapTimeoutMs,
   guiOwnerBootstrapTimeoutMs,
   isMutationOwnerUnavailableError,
+  shouldBootstrapDaemonOwner,
   shouldTreatAsDaemonOwnerLoss,
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
@@ -660,11 +662,10 @@ async function discoverStandaloneOwnerForGui(waitMs: number): Promise<boolean> {
   }
 }
 
-async function ensureStandaloneOwnerForGui(): Promise<void> {
+async function ensureStandaloneOwnerForGui(timeoutMs: number = guiOwnerBootstrapTimeoutMs()): Promise<void> {
   if (await discoverStandaloneOwnerForGui(2_000)) return;
 
   const invokerHomeRoot = resolveInvokerHomeRoot();
-  const timeoutMs = guiOwnerBootstrapTimeoutMs();
   const bootstrapLock = tryAcquireOwnerBootstrapLock(invokerHomeRoot);
   try {
     if (bootstrapLock) {
@@ -3511,16 +3512,17 @@ function createEmbeddedTerminalBackendFromConfig(
         process.stderr.write(`${YELLOW}Warning:${RESET} ${fallbackMessage}\n`);
         daemonGuiOwner = false;
       }
-    } else if (guiOwnerPreference === 'auto') {
-      recordStartupMark('daemonOwner.discover.start');
+    } else if (shouldBootstrapDaemonOwner(guiOwnerPreference)) {
+      recordStartupMark('daemonOwner.bootstrap.start');
       try {
-        daemonGuiOwner = await discoverStandaloneOwnerForGui(1_000);
+        await ensureStandaloneOwnerForGui(guiAutoOwnerBootstrapTimeoutMs());
+        daemonGuiOwner = true;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        logger.warn(`daemon owner auto-discovery failed; starting GUI owner locally: ${message}`, { module: 'init' });
+        logger.warn(`daemon owner auto-bootstrap failed; starting GUI owner locally: ${message}`, { module: 'init' });
         daemonGuiOwner = false;
       }
-      recordStartupMark('daemonOwner.discover.end', { daemonOwner: daemonGuiOwner });
+      recordStartupMark('daemonOwner.bootstrap.end', { daemonOwner: daemonGuiOwner });
     }
 
     if (daemonGuiOwner) {
