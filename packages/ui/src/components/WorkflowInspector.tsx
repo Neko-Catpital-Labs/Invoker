@@ -119,14 +119,14 @@ function workspaceRecreateNoticeFromEvent(event: TaskAuditEvent): WorkspaceRecre
 function logLevelClass(level: TaskLogLevel): string {
   switch (level) {
     case 'error':
-      return 'bg-red-900/40 text-red-300 border-red-800';
+      return 'text-red-300';
     case 'warn':
-      return 'bg-amber-900/40 text-amber-300 border-amber-800';
+      return 'text-amber-300';
     case 'debug':
-      return 'bg-slate-800 text-slate-300 border-slate-700';
+      return 'text-slate-300';
     case 'info':
     default:
-      return 'bg-secondary/70 text-foreground border-border-strong';
+      return 'text-muted-foreground';
   }
 }
 
@@ -850,11 +850,15 @@ export function WorkflowInspector({
                     {visibleLogEntries.length === 0 ? (
                       <p className="text-xs text-muted-foreground">No timeline entries at this level.</p>
                     ) : (
-                      <div className="space-y-2">
-                        {visibleLogEntries.slice(0, 20).map((entry) => (
-                          <div key={entry.id} className="rounded border border-border bg-card/60 p-2" data-testid="task-log-entry">
+                      <div className="space-y-0">
+                        {visibleLogEntries.slice(0, 20).map((entry, index) => (
+                          <div
+                            key={entry.id}
+                            className={`${index === 0 ? '' : 'border-t border-border/40'} py-2`}
+                            data-testid="task-log-entry"
+                          >
                             <div className="flex items-start gap-2">
-                              <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${logLevelClass(entry.level)}`}>
+                              <span className={`shrink-0 pt-0.5 text-[10px] font-medium uppercase ${logLevelClass(entry.level)}`}>
                                 {entry.level}
                               </span>
                               <div className="min-w-0 flex-1">
