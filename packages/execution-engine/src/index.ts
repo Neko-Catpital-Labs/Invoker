@@ -33,6 +33,8 @@ export type {
 export type {
   ReviewGateCiFailureTrigger,
   ReviewGateCiFailureLifecyclePublisher,
+  ReviewGateMergeConflictTrigger,
+  ReviewGateMergeConflictLifecyclePublisher,
 } from './task-runner-review-gate.js';
 export * from './merge-runner.js';
 export * from './conflict-resolver.js';
