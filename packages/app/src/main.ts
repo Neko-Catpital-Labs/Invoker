@@ -70,21 +70,15 @@ import {
   resolveRepoRoot,
 } from '@invoker/contracts';
 import type {
-  ActionGraphResponse,
   BundledSkillsInstallMode,
   InAppPlanRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
   InAppPlanningResetRequest,
-  InAppPlanningStreamEvent,
   InAppPlanningSetTerminalModeRequest,
   InAppPlanningSubmitRequest,
   Logger,
-  StartReadyRequest,
-  StartReadyResult,
-  WorkflowMeta,
   WorkflowMutationAcceptedResult,
-  WorkResponse,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -114,8 +108,7 @@ import { resolveTaskTerminalSpec } from './open-terminal-for-task.js';
 import { createBashTerminalBackend, createPtyTerminalBackend, EmbeddedTerminalManager, type EmbeddedTerminalBackend } from './embedded-terminal-manager.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
-import { maybeAutoInstallCli, resolveCliInstallerStatus, updateInvokerCli, type CliInstallerContext } from './cli-installer.js';
-import { runInvokerCliSetup } from './invoker-cli-setup.js';
+import { maybeAutoInstallCli, updateInvokerCli, type CliInstallerContext } from './cli-installer.js';
 import { resolveBundledCliPath } from './cli-helper.js';
 import { buildAppMenuTemplate } from './app-menu.js';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
@@ -132,12 +125,10 @@ import { dispatchStartedTasksWithGlobalTopup } from './global-topup.js';
 import { buildFixWithAgentMutationArgs, buildHeadlessFixArgs, listOpenFixIntentsForTask, parseFixWithAgentMutationArgs } from './auto-fix-intents.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
-import { createGuiMutationTaskActions } from './ipc/gui-mutation-handlers.js';
+import { createGuiMutationTaskActions, registerGuiMutationIpcHandlers } from './ipc/gui-mutation-handlers.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import { AUTO_STARTED_OWNER_WORKER_KINDS, createWorkerRuntimeController, type WorkerRuntimeController } from './worker-control.js';
-import { runStartReady } from './start-ready.js';
-import { registerReadOnlyIpcHandlers } from './ipc-read-handlers.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
@@ -179,7 +170,6 @@ import {
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
-  listInAppPlanningPresets,
   listPlanningChatSessions,
   planFromGoal as planFromGoalInApp,
   resetPlanningChat,
@@ -2220,8 +2210,6 @@ function createEmbeddedTerminalBackendFromConfig(
     translateGuiMutationToHeadless,
     submitWorkflowMutation,
     runWorkflowMutation,
-    workflowIdForTaskArg,
-    workflowIdForTargetArg,
   } = guiMutationTaskActions;
   const guiMutationRegistrationContext = {
     ipcMain,
@@ -2243,14 +2231,6 @@ function createEmbeddedTerminalBackendFromConfig(
     guiMutationRegistrationContext,
     workflowScopedGuiMutationRegistrationContext,
   );
-  const { registerGuiMutationHandler } = guiMutationRegistrars;
-
-  const emitPlanningChatStream = (event: InAppPlanningStreamEvent): void => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('invoker:planning-chat-stream', event);
-    }
-    webBridge?.broadcast('invoker:planning-chat-stream', event);
-  };
 
   function createWindow(): void {
     createMainWindow({
@@ -2352,49 +2332,6 @@ function createEmbeddedTerminalBackendFromConfig(
       taskCount: orchestrator.getAllTasks().length,
       workflowCount: workflows.length,
     });
-  }
-
-  function publishOrchestratorSnapshotToRenderer(): void {
-    const workflows = persistence.listWorkflows();
-    const tasks = orchestrator.getAllTasks();
-    const previousTaskIds = new Set(rendererTaskFeed.listKnownTaskIds());
-    rendererTaskFeed.clearTaskSnapshots();
-    rendererTaskFeed.replaceWorkflowRollups(tasks);
-    for (const task of tasks) {
-      previousTaskIds.delete(task.id);
-      rendererTaskFeed.rememberTaskState(task);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        rendererTaskFeed.publishTaskDeltaToRenderer({ type: 'created', task });
-      }
-    }
-    rendererTaskFeed.setLastKnownWorkflowCount(workflows.length);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      for (const removedTaskId of previousTaskIds) {
-        rendererTaskFeed.publishTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
-      }
-      requestWorkflowMetadataPublish('orchestrator-snapshot');
-    }
-  }
-  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
-    const result = runStartReady(orchestrator, request);
-    if (!result.dryRun) {
-      publishOrchestratorSnapshotToRenderer();
-    }
-    logger.info(
-      `start-ready: ready=${result.preview.readyTaskIds.length} recoverable=${result.preview.recoverableTaskIds.length} failedWorkflows=${result.preview.failedWorkflowIds.length} recreated=${result.recreatedWorkflowIds.length} started=${result.started.length} dryRun=${result.dryRun ? 'true' : 'false'}`,
-      { module: 'ipc' },
-    );
-    if (!result.dryRun && result.started.length > 0 && launchDispatcher) {
-      try {
-        launchDispatcher.poll();
-      } catch (err) {
-        logger.warn(
-          `start-ready: launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
-          { module: 'ipc' },
-        );
-      }
-    }
-    return result;
   }
 
   function startDeferredStartupWork(): void {
@@ -2853,349 +2790,39 @@ function createEmbeddedTerminalBackendFromConfig(
       getTaskDeltaStreamSequence,
       recordStartupDuration,
     });
-    async function loadGeneratedPlanPreview(
-      planText: string,
-      options?: { preserveTaskHandles?: boolean; logLabel?: string },
-    ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> {
-      const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
-      const submission = parsePlanSubmissionBundle(planText);
-      const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-      const loadedWorkflowIds: string[] = [];
-      let upstream: { workflowId: string; featureBranch: string } | undefined;
-      logger.info(
-        `${options?.logLabel ?? 'plan-from-goal'}: loading "${submission.name}" (${submission.plans.length} workflow${submission.plans.length === 1 ? '' : 's'})`,
-        { module: 'ipc' },
-      );
-      if (!options?.preserveTaskHandles) {
-        taskHandles.clear();
-      }
-
-      for (const parsedPlan of submission.plans) {
-        let plan = applyConfiguredPlanDefaults(parsedPlan);
-        if (upstream) {
-          plan = {
-            ...plan,
-            baseBranch: upstream.featureBranch,
-            externalDependencies: [
-              ...(plan.externalDependencies ?? []),
-              {
-                workflowId: upstream.workflowId,
-                taskId: '__merge__',
-                requiredStatus: 'completed',
-                gatePolicy: 'review_ready',
-              } as const,
-            ],
-          };
-        }
-        backupPlan(plan, undefined, logger);
-        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-        const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-        if (!workflow) {
-          throw new Error('Loaded plan did not create a workflow.');
-        }
-        existingWorkflowIds.add(workflow.id);
-        loadedWorkflowIds.push(workflow.id);
-        upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
-      }
-
-      const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
-      if (!workflowId) {
-        throw new Error('Loaded plan did not create a workflow.');
-      }
-      return {
-        planName: submission.name,
-        workflowId,
-        workflowIds: loadedWorkflowIds,
-        workflowCount: loadedWorkflowIds.length,
-      };
-    }
-
-    const planningConversationRepo = new ConversationRepository(persistence, {
-      info: (message) => logger.info(message, { module: 'planning-chat' }),
-      warn: (message) => logger.warn(message, { module: 'planning-chat' }),
-      error: (message) => logger.error(message, { module: 'planning-chat' }),
-    });
-    await restorePlanningChatSessions(persistence.listInAppPlanningSessions(), {
-      config: invokerConfig,
-      workingDir: repoRoot,
-      sessions: planningChatSessions,
-      planningCommandBuilder,
-      loadGeneratedPlan: loadGeneratedPlanPreview,
-      conversationRepo: planningConversationRepo,
-      planningSessionStore: ownerMode ? persistence : undefined,
-      onRawPlannerOutput: emitPlanningChatStream,
-    });
-    if (ownerMode) {
-      restorePersistedPlanningTerminals();
-    }
-    let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
-    // Two variants: (1) a successful override that returns a canned reply +
-    // plan YAML, or (2) an error injection that makes the wrapper throw the
-    // given message. The error variant lets visual-proof specs render the
-    // exhausted-retry error path without spawning a real planner subprocess.
-    let testPlanningChatResponse:
-      | { planYaml: string; planName: string; reply?: string }
-      | { throwError: string }
-      | null = null;
-
-
-    registerGuiMutationHandler('invoker:plan-from-goal', async (...args: unknown[]) => {
-      if (process.env.NODE_ENV === 'test' && testPlanFromGoalResponse) {
-        const loaded = await loadGeneratedPlanPreview(testPlanFromGoalResponse.planYaml);
-        return { ok: true, planName: testPlanFromGoalResponse.planName, workflowId: loaded.workflowId, workflowIds: loaded.workflowIds, workflowCount: loaded.workflowCount };
-      }
-      return planFromGoalInApp(args[0] as InAppPlanRequest, {
-        config: invokerConfig,
-        workingDir: repoRoot,
-        loadGeneratedPlan: loadGeneratedPlanPreview,
-        planningCommandBuilder,
-        conversationRepo: planningConversationRepo,
-      });
-    });
-    registerGuiMutationHandler('invoker:planning-chat-create', async (request: unknown) => {
-      return createPlanningChatSession(request as InAppPlanningCreateSessionRequest | undefined, {
-        config: invokerConfig,
-        workingDir: repoRoot,
-        sessions: planningChatSessions,
-        planningCommandBuilder,
-        loadGeneratedPlan: loadGeneratedPlanPreview,
-        conversationRepo: planningConversationRepo,
-        planningSessionStore: ownerMode ? persistence : undefined,
-        onRawPlannerOutput: emitPlanningChatStream,
-      });
-    });
-    registerGuiMutationHandler('invoker:planning-chat-list', async () => {
-      return listPlanningChatSessions({ sessions: planningChatSessions });
-    });
-    registerGuiMutationHandler('invoker:planning-chat-send', async (request: unknown) => {
-      const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;
-      const plannerReplyOverride = planningChatResponseOverride
-        ? async (): Promise<string> => {
-          if ('throwError' in planningChatResponseOverride) {
-            throw new Error(planningChatResponseOverride.throwError);
-          }
-          return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
-        }
-        : undefined;
-      return sendPlanningChatMessage(request as InAppPlanningChatRequest, {
-        config: invokerConfig,
-        workingDir: repoRoot,
-        sessions: planningChatSessions,
-        planningCommandBuilder,
-        loadGeneratedPlan: loadGeneratedPlanPreview,
-        conversationRepo: planningConversationRepo,
-        planningSessionStore: ownerMode ? persistence : undefined,
-        plannerReplyOverride,
-        onRawPlannerOutput: emitPlanningChatStream,
-      });
-    });
-    registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
-      return submitPlanningChatDraft(request as InAppPlanningSubmitRequest, {
-        sessions: planningChatSessions,
-        loadGeneratedPlan: (planText) => loadGeneratedPlanPreview(planText, {
-          preserveTaskHandles: true,
-          logLabel: 'planning-chat-submit',
-        }),
-        planningSessionStore: ownerMode ? persistence : undefined,
-      });
-    });
-    registerGuiMutationHandler('invoker:planning-chat-reset', async (request: unknown) => {
-      return resetPlanningChat(request as InAppPlanningResetRequest, {
-        sessions: planningChatSessions,
-        planningSessionStore: ownerMode ? persistence : undefined,
-      });
-    });
-    registerGuiMutationHandler('invoker:planning-chat-set-terminal-mode', async (request: unknown) => {
-      return setPlanningChatTerminalMode(request as InAppPlanningSetTerminalModeRequest, {
-        sessions: planningChatSessions,
-        planningSessionStore: ownerMode ? persistence : undefined,
-      });
-    });
-    registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
-      const planText = String(planTextArg);
-      await loadGeneratedPlanPreview(planText, { logLabel: 'load-plan' });
-    });
-
-    if (process.env.NODE_ENV === 'test') {
-      const injectTaskStates = async (updates: Array<{ taskId: string; changes: TaskStateChanges }>): Promise<void> => {
-        for (const { taskId, changes } of updates) {
-          const before = orchestrator.getTask(taskId);
-          const previousSnapshot = rendererTaskFeed.getTaskSnapshot(taskId);
-          const previousTaskStateVersion = previousSnapshot
-            ? (
-                (JSON.parse(previousSnapshot) as { taskStateVersion?: number }).taskStateVersion
-                ?? before?.taskStateVersion
-                ?? 1
-              )
-            : (before?.taskStateVersion ?? 0);
-          persistence.updateTask(taskId, changes);
-          messageBus.publish(Channels.TASK_DELTA, {
-            type: 'updated',
-            taskId,
-            changes,
-            previousTaskStateVersion,
-            taskStateVersion: previousTaskStateVersion + 1,
-          } satisfies TaskDelta);
-        }
-        orchestrator.syncAllFromDb();
-      };
-      registerGuiMutationHandler(
-        'invoker:inject-task-states',
-        async (updatesArg: unknown) => {
-          const updates = updatesArg as Array<{ taskId: string; changes: TaskStateChanges }>;
-          await injectTaskStates(updates);
-        },
-      );
-      ipcMain.handle(
-        'invoker:set-test-plan-from-goal-response',
-        async (_event, response: { planYaml: string; planName: string } | null) => {
-          testPlanFromGoalResponse = response;
-        },
-      );
-      ipcMain.handle(
-        'invoker:set-test-planning-chat-response',
-        async (
-          _event,
-          response:
-            | { planYaml: string; planName: string; reply?: string }
-            | { throwError: string }
-            | null,
-        ) => {
-          testPlanningChatResponse = response;
-        },
-      );
-      registerGuiMutationHandler('invoker:seed-main-process-hitch-fixture', async () => {
-        const seeded = seedMainProcessHitchFixture(persistence);
-        orchestrator.syncAllFromDb();
-        return seeded;
-      });
-      registerGuiMutationHandler('invoker:seed-stress-fixture', async (optionsArg: unknown) => {
-        const options = optionsArg as StressFixtureOptions | undefined;
-        const seeded = seedStressFixture(persistence, options);
-        orchestrator.syncAllFromDb();
-        return seeded;
-      });
-    }
-
-    registerGuiMutationHandler('invoker:start', async () => {
-      logger.info('start', { module: 'ipc' });
-      const started = orchestrator.startExecution();
-      logger.info(`startExecution returned ${started.length} tasks: [${started.map(t => t.id).join(', ')}]`, { module: 'ipc' });
-      return started;
-    });
-
-    registerGuiMutationHandler('invoker:start-ready', async (requestArg: unknown) => {
-      return executeStartReady(requestArg as StartReadyRequest | undefined);
-    });
-
-    registerGuiMutationHandler('invoker:resume-workflow', async () => {
-      const workflows = persistence.listWorkflows();
-      if (workflows.length === 0) {
-        logger.info('resume-workflow: no workflows found', { module: 'ipc' });
-        return null;
-      }
-      const result = executeStartReady({});
-      const tasks = orchestrator.getAllTasks();
-      logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${result.started.length} started`, { module: 'ipc' });
-      return { workflow: workflows[0], taskCount: tasks.length, startedCount: result.started.length };
-    });
-
-    registerGuiMutationHandler('invoker:stop', async () => {
-      logger.info('stop — destroying all executors', { module: 'ipc' });
-      const failInFlightTasks = (): void => {
-        const allTasks = orchestrator.getAllTasks();
-        for (const task of allTasks) {
-          if (isTaskInFlightForForcedStop(task)) {
-            logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc' });
-            persistShutdownDiagnostic(task, persistence, {
-              flushPendingOutput: rendererTaskFeed.flushTaskOutput,
-              forcedStopReason: 'Stopped by user',
-            });
-            orchestrator.handleWorkerResponse({
-              requestId: `stop-${task.id}`,
-              actionId: task.id,
-              attemptId: task.execution.selectedAttemptId,
-              executionGeneration: task.execution.generation ?? 0,
-              status: 'failed',
-              outputs: { exitCode: 1, error: 'Stopped by user' },
-            });
-          }
-        }
-      };
-      failInFlightTasks();
-      await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
-      failInFlightTasks();
-    });
-
-    registerGuiMutationHandler('invoker:clear', async () => {
-      logger.info('clear — stopping all tasks and resetting DAG', { module: 'ipc' });
-      await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
-      await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
-
-      orchestrator = new Orchestrator({
-        persistence,
-        messageBus,
-        taskRepository: new SqliteTaskRepository(persistence),
-        maxConcurrency: effectiveMaxConcurrency,
-        defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
-        executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
-        defaultPoolId: invokerConfig.defaultPoolId,
-        availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
-        deferRunningUntilLaunch: true,
-      });
-      commandService = new CommandService(
-        orchestrator,
-        buildCommandServiceInvalidationDeps(),
-      );
-      rebuildTaskRunner();
-      taskHandles.clear();
-      rendererTaskFeed.resetSnapshotState();
-      requestWorkflowMetadataPublish('clear');
-    });
-
-
-    ipcMain.handle('invoker:refresh-task-graph', async () => {
-      const startedAtMs = Date.now();
-      const snapshot = await resolveRefreshTaskGraphSnapshot({
-        ownerMode,
-        messageBus,
-        resolveInvokerHomeRoot,
-        orchestrator,
-        persistence,
-        logger,
-      });
-
-      taskGraphEventPublisher.publishSnapshot(
-        ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
-        snapshot.tasks,
-        snapshot.workflows,
-        true,
-      );
-      recordStartupDuration('refresh-task-graph.return', startedAtMs, {
-        taskCount: snapshot.tasks.length,
-        workflowCount: snapshot.workflows.length,
-        streamSequence: getTaskDeltaStreamSequence(),
-      });
-    });
-    registerReadOnlyIpcHandlers({
-      ipcMain,
-      logger,
-      persistence,
+    await registerGuiMutationIpcHandlers({
+      ipcMain, app, logger, persistence, messageBus, executorRegistry, agentRegistry,
+      repoRoot, invokerConfig, effectiveMaxConcurrency, taskHandles,
       getOrchestrator: () => orchestrator,
-      agentRegistry,
-      loadTaskByIdFromPersistence,
-      resolveAgentSession,
-      getOwnerMode: () => ownerMode,
-      getMessageBus: () => messageBus,
-      onMutationOwnerUnavailable: markDaemonOwnerUnavailable,
-      recordStartupDuration,
-      getTaskDeltaStreamSequence,
+      setOrchestrator: (value) => { orchestrator = value; },
+      getCommandService: () => commandService,
+      setCommandService: (value) => { commandService = value; },
+      getWorkflowMutationCoordinator: () => workflowMutationCoordinator,
+      workflowMutationDispatcher,
+      getActiveMutationContext: () => activeMutationContext,
+      getRendererTaskFeed: () => rendererTaskFeed,
+      getStartupWorkflowId: () => startupWorkflowId,
+      getLaunchDispatcher: () => launchDispatcher,
+      requireTaskExecutor, getTaskExecutor: () => taskExecutor, rebuildTaskRunner, initServices,
+      requestWorkflowMetadataPublish, cancelDeferredWorkflowLaunch, killRunningTask,
+      buildCommandServiceInvalidationDeps,
+      getMainWindow: () => mainWindow, getOwnerMode: () => ownerMode,
+      getWorkerRuntimeController: () => workerRuntimeController,
+      registrars: guiMutationRegistrars, actions: guiMutationTaskActions,
+      planningChatSessions, planningCommandBuilder,
+      emitPlanningChatStream: (event) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('invoker:planning-chat-stream', event);
+        webBridge?.broadcast('invoker:planning-chat-stream', event);
+      },
+      taskGraphEventPublisher, loadTaskByIdFromPersistence, markDaemonOwnerUnavailable,
+      recordStartupDuration, getTaskDeltaStreamSequence, computeRuntimeStatus, getUiPerfStats,
+      uiPerfStats, createRegisteredWorkerRegistry, buildCliInstallerContext,
+      resolveSetupCliPath, getBundledSkillsStatus, installPackagedSkills,
     });
-    // ── DB Polling — detect external workflow changes ───
-    ipcMain.handle('invoker:get-activity-logs', (_event, sinceId?: number, limit?: number) => {
-      return persistence.getActivityLogs(sinceId ?? 0, limit ?? 2000);
-    });
+    if (ownerMode) restorePersistedPlanningTerminals();
 
+    ipcMain.handle('invoker:get-activity-logs', (_event, sinceId?: number, limit?: number) =>
+      persistence.getActivityLogs(sinceId ?? 0, limit ?? 2000));
     // ── Embedded terminal session manager (GUI) ─────────────────
     // GUI `invoker:open-terminal` keeps users inside Invoker by opening
     // (or selecting) an embedded session managed in the main process.

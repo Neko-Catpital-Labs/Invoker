@@ -8,8 +8,12 @@ import type {
   InAppPlanningChatRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningResetRequest,
+  InAppPlanningSetTerminalModeRequest,
+  InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   Logger,
+  StartReadyRequest,
+  StartReadyResult,
   WorkflowMutationAcceptedResult,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
@@ -77,6 +81,7 @@ import {
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
+  setPlanningChatTerminalMode,
   submitPlanningChatDraft,
 } from '../in-app-planner.js';
 import { seedMainProcessHitchFixture } from '../main-process-hitch-fixture.js';
@@ -86,6 +91,7 @@ import {
   AUTO_STARTED_OWNER_WORKER_KINDS,
   createLocalWorkerStatusSnapshot,
 } from '../worker-control.js';
+import { runStartReady } from '../start-ready.js';
 import type { WorkerRuntimeController } from '../worker-control.js';
 import { buildTaskGraphSnapshot } from '../web/task-graph-snapshot.js';
 import { collectSystemDiagnostics } from '../system-diagnostics.js';
@@ -210,6 +216,7 @@ export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskAc
   actions: GuiMutationTaskActions;
   planningChatSessions: ReturnType<typeof createInAppPlanningChatSessions>;
   planningCommandBuilder: ReturnType<typeof createPlanningCommandBuilderFromRegistry>;
+  emitPlanningChatStream: (event: InAppPlanningStreamEvent) => void;
   taskGraphEventPublisher: TaskGraphEventPublisher;
   loadTaskByIdFromPersistence: (taskId: string) => TaskState | undefined;
   markDaemonOwnerUnavailable: (reason: string) => void;
@@ -243,26 +250,6 @@ function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
     || (task.status === 'pending' && task.execution.phase === 'launching');
-}
-
-function isTaskRecoverableOnExplicitResume(task: TaskState): boolean {
-  if (task.status === 'running') return true;
-  if (task.status !== 'pending' || !task.execution.selectedAttemptId) return false;
-  if (task.execution.phase === 'launching') return true;
-
-  return Boolean(
-    task.execution.startedAt
-    || task.execution.launchStartedAt
-    || task.execution.launchCompletedAt
-    || task.execution.lastHeartbeatAt
-    || task.execution.workspacePath
-    || task.execution.agentSessionId
-    || task.execution.containerId
-    || task.execution.error
-    || task.execution.exitCode !== undefined
-    || task.execution.inputPrompt
-    || task.execution.pendingFixError,
-  );
 }
 
 export function createGuiMutationTaskActions(context: GuiMutationTaskActionsContext): GuiMutationTaskActions {
@@ -973,6 +960,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     actions,
     planningChatSessions,
     planningCommandBuilder,
+    emitPlanningChatStream,
     taskGraphEventPublisher,
     loadTaskByIdFromPersistence,
     markDaemonOwnerUnavailable,
@@ -1003,7 +991,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   };
   const ownerMode = getOwnerMode();
   const workerRuntimeController = getWorkerRuntimeController();
-  const launchDispatcher = context.getLaunchDispatcher();
   const workflowIdForTaskArg = actions.workflowIdForTaskArg;
   const workflowIdForTargetArg = actions.workflowIdForTargetArg;
   const performDeleteTask = actions.performDeleteTask;
@@ -1015,6 +1002,52 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   const performDetachWorkflow = actions.performDetachWorkflow;
   const performSharedApproveTask = actions.performSharedApproveTask;
   const executeFixWithAgentMutation = actions.executeFixWithAgentMutation;
+
+  function publishOrchestratorSnapshotToRenderer(): void {
+    const workflows = persistence.listWorkflows();
+    const tasks = orchestrator.getAllTasks();
+    const previousTaskIds = new Set(rendererTaskFeed.listKnownTaskIds());
+    rendererTaskFeed.clearTaskSnapshots();
+    rendererTaskFeed.replaceWorkflowRollups(tasks);
+    for (const task of tasks) {
+      previousTaskIds.delete(task.id);
+      rendererTaskFeed.rememberTaskState(task);
+      if (mainWindowAvailable()) {
+        rendererTaskFeed.publishTaskDeltaToRenderer({ type: 'created', task });
+      }
+    }
+    rendererTaskFeed.setLastKnownWorkflowCount(workflows.length);
+    if (mainWindowAvailable()) {
+      for (const removedTaskId of previousTaskIds) {
+        rendererTaskFeed.publishTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
+      }
+      requestWorkflowMetadataPublish('orchestrator-snapshot');
+    }
+  }
+
+  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
+    const result = runStartReady(orchestrator, request);
+    if (!result.dryRun) {
+      publishOrchestratorSnapshotToRenderer();
+    }
+    logger.info(
+      `start-ready: ready=${result.preview.readyTaskIds.length} recoverable=${result.preview.recoverableTaskIds.length} failedWorkflows=${result.preview.failedWorkflowIds.length} recreated=${result.recreatedWorkflowIds.length} started=${result.started.length} dryRun=${result.dryRun ? 'true' : 'false'}`,
+      { module: 'ipc' },
+    );
+    const launchDispatcher = context.getLaunchDispatcher();
+    if (!result.dryRun && result.started.length > 0 && launchDispatcher) {
+      try {
+        launchDispatcher.poll();
+      } catch (err) {
+        logger.warn(
+          `start-ready: launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'ipc' },
+        );
+      }
+    }
+    return result;
+  }
+
   function registerTaskScopedGuiMutationHandler<TResult = unknown>(
   channel: keyof typeof IpcChannels & string,
   resolveWorkflowId: (...args: unknown[]) => string | undefined,
@@ -1097,6 +1130,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     loadGeneratedPlan: loadGeneratedPlanPreview,
     conversationRepo: planningConversationRepo,
     planningSessionStore: ownerMode ? persistence : undefined,
+    onRawPlannerOutput: emitPlanningChatStream,
   });
   let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
   // Two variants: (1) a successful override that returns a canned reply +
@@ -1131,6 +1165,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      onRawPlannerOutput: emitPlanningChatStream,
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -1155,6 +1190,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
       plannerReplyOverride,
+      onRawPlannerOutput: emitPlanningChatStream,
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
@@ -1169,6 +1205,12 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
   registerGuiMutationHandler('invoker:planning-chat-reset', async (request: unknown) => {
     return resetPlanningChat(request as InAppPlanningResetRequest, {
+      sessions: planningChatSessions,
+      planningSessionStore: ownerMode ? persistence : undefined,
+    });
+  });
+  registerGuiMutationHandler('invoker:planning-chat-set-terminal-mode', async (request: unknown) => {
+    return setPlanningChatTerminalMode(request as InAppPlanningSetTerminalModeRequest, {
       sessions: planningChatSessions,
       planningSessionStore: ownerMode ? persistence : undefined,
     });
@@ -1246,40 +1288,20 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return started;
   });
 
+  registerGuiMutationHandler('invoker:start-ready', async (requestArg: unknown) => {
+    return executeStartReady(requestArg as StartReadyRequest | undefined);
+  });
+
   registerGuiMutationHandler('invoker:resume-workflow', async () => {
     const workflows = persistence.listWorkflows();
     if (workflows.length === 0) {
       logger.info('resume-workflow: no workflows found', { module: 'ipc' });
       return null;
     }
-    orchestrator.syncAllFromDb();
-
-    const tasksToRecover = orchestrator.getAllTasks().filter(isTaskRecoverableOnExplicitResume);
-    for (const task of tasksToRecover) {
-      orchestrator.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
-    }
-
-    const allStarted = orchestrator.startExecution();
+    const result = executeStartReady({});
     const tasks = orchestrator.getAllTasks();
-    rendererTaskFeed.replaceWorkflowRollups(tasks);
-    for (const task of tasks) {
-      rendererTaskFeed.rememberTaskState(task);
-      if (mainWindowAvailable()) {
-        rendererTaskFeed.publishTaskDeltaToRenderer({ type: 'created', task });
-      }
-    }
-    logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
-    if (allStarted.length > 0 && launchDispatcher) {
-      try {
-        launchDispatcher.poll();
-      } catch (err) {
-        logger.warn(
-          `resume-workflow: launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
-          { module: 'ipc' },
-        );
-      }
-    }
-    return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
+    logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${result.started.length} started`, { module: 'ipc' });
+    return { workflow: workflows[0], taskCount: tasks.length, startedCount: result.started.length };
   });
 
   registerGuiMutationHandler('invoker:stop', async () => {
