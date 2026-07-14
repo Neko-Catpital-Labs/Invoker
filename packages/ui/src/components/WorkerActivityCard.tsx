@@ -96,12 +96,7 @@ export function WorkerActivityCard({
   }, [snapshot, optimisticByKind]);
 
   return (
-    <div data-testid="worker-activity-card" className="flex min-h-0 min-w-0 flex-col">
-      <div className="mb-4 shrink-0">
-        <h3 className="text-lg font-semibold text-foreground">Worker processes ({snapshot?.workers.length ?? 0})</h3>
-        <div className="mt-1 text-sm text-muted-foreground">Enabled workers are restored on launch. A running process can be idle.</div>
-      </div>
-
+    <div data-testid="worker-activity-card">
       {!snapshot ? (
         <div className="rounded border border-border bg-card/60 px-3 py-2 text-sm text-muted-foreground">Worker status unavailable</div>
       ) : (
