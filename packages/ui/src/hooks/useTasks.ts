@@ -55,16 +55,40 @@ function replaceWorkflowMapPreservingTaskBackedEntries(
   return next;
 }
 
-function workflowHasBackingTask(
-  tasks: Map<string, TaskState>,
+function countTasksByWorkflow(tasks: Map<string, TaskState>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const task of tasks.values()) {
+    const workflowId = task.config.workflowId;
+    if (!workflowId) continue;
+    counts.set(workflowId, (counts.get(workflowId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function workflowHasBackingTaskCount(
+  taskCountsByWorkflow: Map<string, number>,
   workflowId: string,
 ): boolean {
-  for (const task of tasks.values()) {
-    if (task.config.workflowId === workflowId) {
-      return true;
+  return (taskCountsByWorkflow.get(workflowId) ?? 0) > 0;
+}
+
+function moveWorkflowTaskCount(
+  taskCountsByWorkflow: Map<string, number>,
+  beforeWorkflowId: string | undefined,
+  afterWorkflowId: string | undefined,
+): void {
+  if (beforeWorkflowId === afterWorkflowId) return;
+  if (beforeWorkflowId) {
+    const nextCount = (taskCountsByWorkflow.get(beforeWorkflowId) ?? 0) - 1;
+    if (nextCount > 0) {
+      taskCountsByWorkflow.set(beforeWorkflowId, nextCount);
+    } else {
+      taskCountsByWorkflow.delete(beforeWorkflowId);
     }
   }
-  return false;
+  if (afterWorkflowId) {
+    taskCountsByWorkflow.set(afterWorkflowId, (taskCountsByWorkflow.get(afterWorkflowId) ?? 0) + 1);
+  }
 }
 
 function countTasksByWorkflow(tasks: Map<string, TaskState>): Map<string, number> {
