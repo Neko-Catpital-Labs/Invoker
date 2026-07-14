@@ -5396,6 +5396,77 @@ console.log(JSON.stringify(out));
         );
       });
 
+      it('publishes review-gate merge conflict wakeups for open PR conflicts', async () => {
+        const task = makeTask({
+          id: 'merge-conflict',
+          status: 'review_ready',
+          config: { workflowId: 'wf-merge-conflict', isMergeNode: true },
+          execution: {
+            generation: 4,
+            selectedAttemptId: 'attempt-merge',
+            reviewId: 'owner/repo#303',
+            branch: 'feature/conflict',
+            reviewGate: {
+              activeGeneration: 4,
+              completion: { required: 'all', status: 'approved' as const },
+              artifacts: [{
+                id: 'pr-303',
+                providerId: 'owner/repo#303',
+                required: true,
+                status: 'open' as const,
+                generation: 4,
+                headSha: 'abc123',
+              }],
+            },
+          },
+          taskStateVersion: 13,
+        });
+        const reviewGateMergeConflictPublisher = { publish: vi.fn().mockResolvedValue(undefined) };
+        const orchestrator = {
+          getTask: (id: string) => (id === task.id ? task : undefined),
+          getAllTasks: () => [task],
+          approve: vi.fn(),
+          recordTaskHeartbeat: vi.fn(),
+        };
+        const persistence = { updateTask: vi.fn() };
+        const mergeGateProvider = {
+          checkApproval: vi.fn().mockResolvedValue({
+            lifecycle: 'open',
+            rejected: false,
+            statusText: 'Awaiting review',
+            url: 'https://github.com/owner/repo/pull/303',
+            headSha: 'abc123',
+            headRef: 'feature/conflict',
+            mergeState: 'dirty',
+            hasMergeConflict: true,
+          }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: persistence as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/runner-base-cwd',
+          mergeGateProvider: mergeGateProvider as any,
+          reviewGateMergeConflictPublisher: reviewGateMergeConflictPublisher as any,
+        });
+
+        await executor.checkMergeGateStatuses();
+
+        expect(reviewGateMergeConflictPublisher.publish).toHaveBeenCalledWith({
+          taskId: 'merge-conflict',
+          workflowId: 'wf-merge-conflict',
+          reviewId: 'owner/repo#303',
+          reviewUrl: 'https://github.com/owner/repo/pull/303',
+          headSha: 'abc123',
+          headRef: 'feature/conflict',
+          branch: 'feature/conflict',
+          selectedAttemptId: 'attempt-merge',
+          generation: 4,
+          statusText: 'Awaiting review',
+        });
+      });
+
       it('polls all current reviewGate artifacts and approves only after every required artifact is approved', async () => {
         const downstream = makeTask({ id: 'downstream-after-stack', status: 'running' });
         const reviewGate = {
