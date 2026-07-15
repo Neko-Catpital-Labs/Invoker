@@ -684,8 +684,8 @@ function WorkflowGraphInner({
         const shouldRecover =
           watchdogMissCountRef.current >= WATCHDOG_RECOVERY_MISS_COUNT &&
           !watchdogRecoveryAttemptedRef.current;
-        fitView({ padding: 0.2 });
         if (shouldRecover) {
+          fitView({ padding: 0.2 });
           watchdogRecoveryAttemptedRef.current = true;
           setFlowInstanceKey((key) => key + 1);
         }
