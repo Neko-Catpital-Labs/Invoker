@@ -10,17 +10,22 @@ vi.mock('@xyflow/react', async () => {
 });
 
 type TaskDAGProps = Parameters<typeof TaskDAG>[0];
+type TaskOverrides = Parameters<typeof makeUITask>[0];
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
 });
 
-function renderOneTaskDag(props: Partial<Omit<TaskDAGProps, 'tasks'>> = {}) {
+function renderOneTaskDag(
+  props: Partial<Omit<TaskDAGProps, 'tasks'>> = {},
+  overrides: TaskOverrides = {},
+) {
   const task = makeUITask({
     id: 'task-1',
     description: 'Test task',
     status: 'running',
+    ...overrides,
   });
   const tasks = new Map([[task.id, task]]);
 
@@ -63,6 +68,22 @@ describe('TaskDAG interactions', () => {
     });
 
     expect(onTaskClick).toHaveBeenCalledTimes(1);
+    expect(onTaskDoubleClick).toHaveBeenCalledTimes(1);
+    expect(onTaskDoubleClick).toHaveBeenCalledWith(task);
+  });
+
+  it('dispatches one double-click callback for a merge-gate event sequence', async () => {
+    const onTaskDoubleClick = vi.fn();
+    const { task } = renderOneTaskDag(
+      { onTaskDoubleClick },
+      { id: '__merge__wf-1', workflowId: 'wf-1', isMergeNode: true },
+    );
+    const taskCard = await findRenderedTaskCard(task.id);
+
+    fireEvent.click(taskCard, { detail: 1 });
+    fireEvent.click(taskCard, { detail: 2 });
+    fireEvent.doubleClick(taskCard, { detail: 2 });
+
     expect(onTaskDoubleClick).toHaveBeenCalledTimes(1);
     expect(onTaskDoubleClick).toHaveBeenCalledWith(task);
   });
