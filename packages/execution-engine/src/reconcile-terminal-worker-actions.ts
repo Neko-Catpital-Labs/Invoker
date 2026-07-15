@@ -38,6 +38,8 @@ export function reconcileTerminalWorkerActionsOnStartup(
   if (!store.upsertWorkerAction || !store.listWorkflowMutationIntents) {
     return 0;
   }
+  const upsertWorkerAction = store.upsertWorkerAction.bind(store);
+  const listTerminalIntents = store.listWorkflowMutationIntents.bind(store);
 
   const seen = new Set<string>();
   const open: WorkerActionRecord[] = [];
@@ -51,10 +53,23 @@ export function reconcileTerminalWorkerActionsOnStartup(
 
   let reconciled = 0;
   const nowIso = now.toISOString();
+  const terminalIntentsByWorkflow = new Map<string, Map<string, WorkflowMutationIntent>>();
+  const resolveTerminalIntent = (
+    workflowId: string,
+    intentId: string,
+  ): WorkflowMutationIntent | undefined => {
+    let intentsById = terminalIntentsByWorkflow.get(workflowId);
+    if (!intentsById) {
+      const terminalIntents = listTerminalIntents(workflowId, ['completed', 'failed']);
+      intentsById = new Map(terminalIntents.map((candidate) => [String(candidate.id), candidate]));
+      terminalIntentsByWorkflow.set(workflowId, intentsById);
+    }
+    return intentsById.get(intentId);
+  };
+
   for (const action of open) {
-    if (!action.intentId) continue;
-    const terminalIntents = store.listWorkflowMutationIntents(action.workflowId, ['completed', 'failed']);
-    const intent = terminalIntents.find((candidate) => String(candidate.id) === action.intentId);
+    if (!action.intentId || !action.workflowId) continue;
+    const intent = resolveTerminalIntent(action.workflowId, action.intentId);
     if (!intent) continue;
 
     const status: WorkerActionStatus = intent.status === 'completed' ? 'completed' : 'failed';
@@ -65,7 +80,7 @@ export function reconcileTerminalWorkerActionsOnStartup(
       ? { ...(action.payload as Record<string, unknown>) }
       : {};
 
-    store.upsertWorkerAction({
+    upsertWorkerAction({
       ...action,
       status,
       summary,
