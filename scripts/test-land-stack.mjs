@@ -152,7 +152,8 @@ if (process.argv[2] === 'pr' && process.argv[3] === 'list') {
   process.stdout.write(JSON.stringify(Object.values(prs)));
   process.exit(0);
 }
-if (process.argv[2] === 'api') {
+const ghArgs = process.argv.slice(2);
+if (ghArgs[0] === 'api' && ghArgs.includes('POST') && ghArgs.some((arg) => arg.startsWith('repos/{owner}/{repo}/issues/'))) {
   fs.appendFileSync(log, process.argv.slice(2).join(' ') + '\\n');
   process.exit(0);
 }
@@ -183,8 +184,8 @@ test('execute labels every verified PR bottom-to-top', () => {
   const { res, edits } = runCli(['2174', '2175']);
   assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
   assert.deepEqual(edits, [
-    'api --method POST repos/{owner}/{repo}/issues/2174/labels -f labels[]=admin-bypass',
-    'api --method POST repos/{owner}/{repo}/issues/2175/labels -f labels[]=admin-bypass',
+    'api --silent --method POST repos/{owner}/{repo}/issues/2174/labels -f labels[]=admin-bypass',
+    'api --silent --method POST repos/{owner}/{repo}/issues/2175/labels -f labels[]=admin-bypass',
   ]);
 });
 
