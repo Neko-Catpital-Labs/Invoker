@@ -50,6 +50,7 @@ export function registerCiFailureWorker(
   registry.register({
     kind: CI_FAILURE_WORKER_KIND,
     note: 'Submits head-SHA guarded CI repair intents for failed review-gate checks.',
+    source: 'built-in',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createCiFailureWorker({
         logger: deps.logger,

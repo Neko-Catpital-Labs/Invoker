@@ -40,6 +40,7 @@ export interface OwnerReadQueryHandlers {
   listWorkerActionHistory: (request: WorkerActionHistoryRequest) => WorkerActionHistoryResponse;
   listWorkerDecisions: (request: WorkerDecisionsRequest) => WorkerDecisionsResponse;
   getWorkerStatus: () => WorkerStatusSnapshot;
+  getWorkers: () => WorkerStatusSnapshot;
   getWorkflowStatus: (workflowId?: string) => Record<string, unknown>;
   getTasksSnapshot: (opts: { refresh: boolean }) => Record<string, unknown>;
   getActionGraphSnapshot: () => Record<string, unknown>;
@@ -113,6 +114,8 @@ export function answerOwnerReadQuery(
       return handlers.getQueueStatus();
     case 'worker-status':
       return { workerStatus: handlers.getWorkerStatus() };
+    case 'workers':
+      return handlers.getWorkers() as unknown as Record<string, unknown>;
     case 'worker-action-history':
       return { workerActionHistory: handlers.listWorkerActionHistory(workerActionHistoryRequest()) };
     case 'worker-decisions':
@@ -211,6 +214,7 @@ export interface OwnerReadQueryDeps {
   resetUiPerfStats: () => void;
   getStreamSequence: () => number;
   getWorkerStatus: () => WorkerStatusSnapshot;
+  getWorkers: () => WorkerStatusSnapshot;
   resolveInvokerHomeRoot: () => string;
   orchestrator: ReadOrchestrator;
   persistence: ReadPersistence;
@@ -228,6 +232,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     resetUiPerfStats: deps.resetUiPerfStats,
     getQueueStatus: () => orchestrator.getQueueStatus() as unknown as Record<string, unknown>,
     getWorkerStatus: deps.getWorkerStatus,
+    getWorkers: deps.getWorkers,
     listWorkerActionHistory: (request: WorkerActionHistoryRequest) => listWorkerActionHistory(persistence, request),
     listWorkerDecisions: (request: WorkerDecisionsRequest) => listWorkerDecisions(persistence, request),
     getWorkflowStatus: (workflowId?: string) => orchestrator.getWorkflowStatus(workflowId) as unknown as Record<string, unknown>,
