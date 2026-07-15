@@ -3789,6 +3789,8 @@ export function App() {
           activeFilters={statusFilters}
           keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
           onStatusClick={handleStatusClick}
+          queueStatus={queueStatus}
+          onOpenRunningSurface={() => handleSelectSidebarSurface('running')}
         />
       )}
       <TerminalDrawer
