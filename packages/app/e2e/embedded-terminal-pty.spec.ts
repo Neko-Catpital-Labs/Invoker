@@ -17,7 +17,11 @@ import {
 const TERMINAL_INPUT_BUDGET_MS = 100;
 const TERMINAL_OUTPUT_WRITE_BUDGET_MS = 250;
 const TERMINAL_RESIZE_BUDGET_MS = 250;
+const TERMINAL_ATTACH_BUDGET_MS = 500;
+const TERMINAL_OPEN_WALL_BUDGET_MS = 5000;
+const TERMINAL_LIVE_OUTPUT_WALL_BUDGET_MS = 10000;
 const TERMINAL_TAB_SWITCH_WALL_BUDGET_MS = 1000;
+const TERMINAL_SCROLLBACK_WALL_BUDGET_MS = 5000;
 const TERMINAL_SESSION_UPSERT_BUDGET_MS = 250;
 const TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS = 1000;
 const TERMINAL_RENDERER_LONG_TASK_BUDGET_MS = 1500;
@@ -26,7 +30,11 @@ const TERMINAL_PRESSURE_BUDGETS = {
   maxInputMs: TERMINAL_INPUT_BUDGET_MS,
   maxOutputWriteMs: TERMINAL_OUTPUT_WRITE_BUDGET_MS,
   maxResizeMs: TERMINAL_RESIZE_BUDGET_MS,
+  maxAttachMs: TERMINAL_ATTACH_BUDGET_MS,
+  maxOpenWallMs: TERMINAL_OPEN_WALL_BUDGET_MS,
+  maxLiveOutputWallMs: TERMINAL_LIVE_OUTPUT_WALL_BUDGET_MS,
   maxTabSwitchWallMs: TERMINAL_TAB_SWITCH_WALL_BUDGET_MS,
+  maxScrollbackWallMs: TERMINAL_SCROLLBACK_WALL_BUDGET_MS,
   maxTerminalSessionUpsertMs: TERMINAL_SESSION_UPSERT_BUDGET_MS,
   maxRendererEventLoopLagMs: TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS,
   maxRendererLongTaskMs: TERMINAL_RENDERER_LONG_TASK_BUDGET_MS,
@@ -362,22 +370,30 @@ test.describe('Embedded terminal PTY', () => {
     const fullBetaTaskId = await resolveTaskId(page, 'terminal-pressure-beta');
     const watermark = await activityLogWatermark(page);
 
+    const alphaOpenStartedAt = Date.now();
     await openTaskTerminalFromMiniDag(page, 'terminal-pressure-alpha');
     await expect(page.getByTestId('terminal-drawer-body')).toBeVisible({ timeout: 10000 });
     const alphaPane = page.getByTestId(`terminal-pane-${fullAlphaTaskId}`);
     await expect(alphaPane).toBeVisible();
+    const alphaOpenWallMs = Date.now() - alphaOpenStartedAt;
     await alphaPane.click();
 
+    const liveOutputStartedAt = Date.now();
     await page.keyboard.type('for i in $(seq 1 140); do printf "term-live-%03d\\n" "$i"; done');
     await page.keyboard.press('Enter');
     await expect(alphaPane.getByText('term-live-140')).toBeVisible({ timeout: 10000 });
+    const liveOutputWallMs = Date.now() - liveOutputStartedAt;
 
+    const betaOpenStartedAt = Date.now();
     await openTaskTerminalFromMiniDag(page, 'terminal-pressure-beta');
     await expect(page.getByTestId(`terminal-tab-${fullBetaTaskId}`)).toHaveAttribute('data-active', 'true', { timeout: 10000 });
+    await expect(page.getByTestId(`terminal-pane-${fullBetaTaskId}`)).toBeVisible();
+    const betaOpenWallMs = Date.now() - betaOpenStartedAt;
 
     const switchStartedAt = Date.now();
     await page.getByRole('tab', { name: /Terminal pressure alpha/i }).click();
     await expect(page.getByTestId(`terminal-tab-${fullAlphaTaskId}`)).toHaveAttribute('data-active', 'true');
+    await expect(alphaPane).toBeVisible();
     const switchWallMs = Date.now() - switchStartedAt;
 
     await page.getByRole('button', { name: 'Maximize terminal drawer' }).click();
@@ -385,11 +401,13 @@ test.describe('Embedded terminal PTY', () => {
     const firstLine = alphaPane.getByText('term-live-001');
     await expect(firstLine).not.toBeVisible();
     await alphaPane.hover();
+    const scrollbackStartedAt = Date.now();
     for (let index = 0; index < 12; index += 1) {
       await page.mouse.wheel(0, -800);
       if (await firstLine.isVisible()) break;
     }
     await expect(firstLine).toBeVisible({ timeout: 10000 });
+    const scrollbackWallMs = Date.now() - scrollbackStartedAt;
 
     await expect
       .poll(async () => {
@@ -407,7 +425,11 @@ test.describe('Embedded terminal PTY', () => {
     const terminalEvidence = {
       fullAlphaTaskId,
       fullBetaTaskId,
+      alphaOpenWallMs,
+      betaOpenWallMs,
+      liveOutputWallMs,
       switchWallMs,
+      scrollbackWallMs,
       attachPayloads,
       inputPayloads,
       outputPayloads,
@@ -425,7 +447,11 @@ test.describe('Embedded terminal PTY', () => {
       resizePayloads.some((payload) => payload.source === 'active_session' && payload.taskId === fullAlphaTaskId),
       terminalEvidenceMessage,
     ).toBe(true);
+    expect(Math.max(...attachPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_ATTACH_BUDGET_MS);
+    expect(Math.max(alphaOpenWallMs, betaOpenWallMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_WALL_BUDGET_MS);
+    expect(liveOutputWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_LIVE_OUTPUT_WALL_BUDGET_MS);
     expect(switchWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_TAB_SWITCH_WALL_BUDGET_MS);
+    expect(scrollbackWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLLBACK_WALL_BUDGET_MS);
     expect(Math.max(...inputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
     expect(Math.max(...outputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
     expect(Math.max(...resizePayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
@@ -433,6 +459,7 @@ test.describe('Embedded terminal PTY', () => {
     expect(Number(perf.embeddedTerminalAttachReports), terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
     expect(Number(perf.embeddedTerminalInputReports), terminalEvidenceMessage).toBeGreaterThan(0);
     expect(Number(perf.embeddedTerminalOutputWriteReports), terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(Number(perf.maxEmbeddedTerminalAttachMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_ATTACH_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalInputMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalOutputWriteMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalResizeMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
