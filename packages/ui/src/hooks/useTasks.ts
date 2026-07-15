@@ -187,6 +187,20 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       }
       const taskList = result.tasks ?? [];
       const wfList = result.workflows ?? [];
+      const resultStreamSequence = typeof result.streamSequence === 'number' ? result.streamSequence : undefined;
+      if (resultStreamSequence !== undefined && resultStreamSequence < uiTaskGraphStreamWatermarkRef.current) {
+        return;
+      }
+      if (taskList.length === 0 && (tasksRef.current.size > 0 || wfList.length > 0)) {
+        void window.invoker.reportUiPerf?.('useTasks_startup_snapshot_ignored', {
+          reason: tasksRef.current.size > 0 ? 'empty-after-live-tasks' : 'empty-tasks-with-workflows',
+          currentTaskCount: tasksRef.current.size,
+          workflowCount: wfList.length,
+          requestDurationMs,
+          streamSequence: resultStreamSequence,
+        });
+        return;
+      }
       const replaceStartedAt = performance.now();
       // Always replace from server snapshot — empty lists mean "no tasks/workflows" (e.g. after delete).
       const nextTasks = new Map<string, TaskState>();
@@ -294,23 +308,6 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       });
     }
 
-    // Preload bootstrap already hydrated tasks/workflows synchronously, so
-    // the immediate startup snapshot would be a redundant full payload.
-    // Skip it when bootstrap is populated; deltas keep state live.
-    if (bootstrapHasState) {
-      reportedStartupSnapshotRef.current = true;
-      void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_complete', {
-        bootstrapTaskCount,
-        bootstrapWorkflowCount,
-        elapsedMs: Math.round(performance.now()),
-        processElapsedMs: bootstrapState?.appStartedAtEpochMs
-          ? Date.now() - bootstrapState.appStartedAtEpochMs
-          : undefined,
-      });
-    } else {
-      void loadStartupSnapshot();
-    }
-
     graphEventPipelineRef.current = createTaskGraphEventPipeline({
       flushMs: 100,
       maxBatchSize: 200,
@@ -361,6 +358,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         const removedWorkflowIds: string[] = [];
         let hasAppliedTaskDelta = false;
         let taskCountsByWorkflow: Map<string, number> | null = null;
+        let shouldRefreshTaskGraph = false;
         const ensureTaskCountsByWorkflow = () => {
           taskCountsByWorkflow ??= countTasksByWorkflow(nextTasks);
           return taskCountsByWorkflow;
@@ -371,6 +369,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
           const beforeTask = delta.type === 'created' ? undefined : nextTasks.get(delta.taskId);
           const beforeWorkflowId = beforeTask?.config.workflowId;
           if (delta.type === 'updated' && !nextTasks.has(delta.taskId)) {
+            shouldRefreshTaskGraph = true;
             if (traceTaskDeltas) {
               console.warn(
                 `[useTasks:task-delta] updated for taskId=${delta.taskId} not in local map before merge (stale snapshot?)`,
@@ -434,6 +433,9 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         }
         if (shouldRefreshWorkflows) {
           void refreshWorkflowMetadata();
+        }
+        if (shouldRefreshTaskGraph) {
+          void refreshTaskGraph();
         }
       },
     });
@@ -517,6 +519,23 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
         });
       }
     });
+
+    // Subscribe to live task/workflow events before requesting the startup
+    // snapshot. Otherwise an immediate plan load can render from deltas, then a
+    // late empty startup snapshot can wipe the already-live task map.
+    if (bootstrapHasState) {
+      reportedStartupSnapshotRef.current = true;
+      void window.invoker.reportUiPerf?.('startup_snapshot_skipped_bootstrap_complete', {
+        bootstrapTaskCount,
+        bootstrapWorkflowCount,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: bootstrapState?.appStartedAtEpochMs
+          ? Date.now() - bootstrapState.appStartedAtEpochMs
+          : undefined,
+      });
+    } else {
+      void loadStartupSnapshot();
+    }
 
     return () => {
       graphEventPipelineRef.current?.dispose();
