@@ -6,6 +6,9 @@ const maxWorkers = process.env.INVOKER_VITEST_MAX_WORKERS
 
 export default defineConfig({
   test: {
+    env: {
+      INVOKER_TEST_WORKFLOW_IDS: '1',
+    },
     exclude: ['**/node_modules/**', '**/dist/**'],
     globals: true,
     // App plan-parser tests call git ls-remote (execSync timeout 10s); Vitest default 5s flakes.
