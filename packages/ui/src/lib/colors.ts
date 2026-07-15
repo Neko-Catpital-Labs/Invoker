@@ -51,10 +51,13 @@ export function getEffectiveVisualStatus(
 ): string {
   if (status === 'fixing_with_ai') return 'fixing_with_ai';
   if (status === 'running' && execution?.isFixingWithAI) return 'fixing_with_ai';
-  if (opts?.runningLike === true && execution?.phase === 'launching') return 'assigning';
-  if (opts?.runningLike === true && execution?.phase === 'executing') return 'running_executing';
-  if (opts?.runningLike === true) return 'running';
   if (status === 'awaiting_approval' && execution?.pendingFixError) return 'fix_approval';
+  if (status === 'awaiting_approval') return 'awaiting_approval';
+  if (opts?.runningLike === true && (status === 'running' || status === 'pending')) {
+    if (execution?.phase === 'launching') return 'assigning';
+    if (execution?.phase === 'executing') return 'running_executing';
+    return 'running';
+  }
   if (status === 'running' && execution?.phase === 'launching') return 'assigning';
   if (status === 'running' && execution?.phase === 'executing') return 'running_executing';
   return status;

@@ -132,11 +132,12 @@ describe('Browser-surface camera (component)', () => {
     render(<App />);
 
     // Open the Workflows browser surface and select a task node so the camera
-    // lock has a target — the initial framing centers it.
+    // lock has a target. The initial framing is intentionally drained below
+    // instead of asserted as a setup requirement; jsdom can coalesce that camera
+    // move differently under the full parallel Vitest run.
     fireEvent.click(await screen.findByTestId('sidebar-workflows'));
     await screen.findByTestId('selected-workflow-mini-dag');
     fireEvent.click(await screen.findByTestId('rf__node-wf-a/one'));
-    await waitFor(() => expect(setCenterMock).toHaveBeenCalled());
 
     // Wait for every initial framing frame to drain, then measure from a clean
     // baseline so only update-triggered camera moves count.

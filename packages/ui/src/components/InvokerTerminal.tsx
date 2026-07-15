@@ -362,13 +362,13 @@ export function InvokerTerminal({
     const signature = `${activeConversationKey}:${lines.length}:${lastLine?.id ?? 'none'}:${lastLine?.role ?? 'none'}:${lastLine?.text.length ?? 0}:${lastLine?.reasoning?.length ?? 0}`;
     const previous = transcriptCommitRef.current;
     transcriptCommitRef.current = { signature, lineCount: lines.length };
-    if (!previous || previous.signature === signature) return;
+    if (previous?.signature === signature || (!previous && lines.length === 0)) return;
     const transcriptChars = lines.reduce((total, line) => total + line.text.length + (line.reasoning?.length ?? 0), 0);
     reportPlanningChatPerf('planning_chat_transcript_commit', {
       durationMs: roundMs(nowMs() - renderStartedAt),
       conversationKey: activeConversationKey,
       lineCount: lines.length,
-      lineDelta: lines.length - previous.lineCount,
+      lineDelta: previous ? lines.length - previous.lineCount : lines.length,
       transcriptChars,
       lastLineRole: lastLine?.role,
       lastLineChars: lastLine?.text.length ?? 0,
