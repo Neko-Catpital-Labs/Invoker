@@ -588,7 +588,7 @@ describe('Invoker terminal (component)', () => {
       expect(screen.getByText('Plan graph')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByTestId('sidebar-planning'));
-    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review it, then Run.');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.');
     expect(mock.api.start).not.toHaveBeenCalled();
   });
 
@@ -631,7 +631,7 @@ describe('Invoker terminal (component)', () => {
     });
     fireEvent.click(screen.getByTestId('sidebar-planning'));
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
-      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then Run.',
+      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then use Start ready work.',
     );
   });
 
@@ -672,7 +672,7 @@ describe('Invoker terminal (component)', () => {
       expect(screen.getByText('Plan graph')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByTestId('sidebar-planning'));
-    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. Review it, then Run.');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. Review it, then use Start ready work.');
     expect(screen.queryByTestId('invoker-terminal-submit-error')).not.toBeInTheDocument();
   });
 
@@ -705,7 +705,8 @@ describe('Invoker terminal (component)', () => {
 
     submitPlanningText('run');
 
-    expect(await screen.findByText('Create or submit a plan before running.')).toBeInTheDocument();
+    expect(await screen.findByText('Create or submit a plan before starting ready work.')).toBeInTheDocument();
+    expect(mock.api.startReady).not.toHaveBeenCalled();
     expect(mock.api.start).not.toHaveBeenCalled();
   });
 
