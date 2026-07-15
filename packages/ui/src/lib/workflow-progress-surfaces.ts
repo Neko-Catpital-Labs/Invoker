@@ -1,7 +1,7 @@
 import type { QueueStatus } from '@invoker/contracts';
 import type { TaskState, TaskStatus, WorkflowMeta, WorkflowStatus } from '../types.js';
 
-export type SidebarSurface = 'home' | 'planning' | 'workflows' | 'attention' | 'running' | 'workers';
+export type SidebarSurface = 'home' | 'planning' | 'workflows' | 'attention' | 'workers';
 
 export interface WorkflowListEntry {
   workflow: WorkflowMeta;

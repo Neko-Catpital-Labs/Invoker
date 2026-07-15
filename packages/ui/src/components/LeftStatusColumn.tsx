@@ -2,7 +2,7 @@ import type { QueueStatus } from '@invoker/contracts';
 import type { JSX } from 'react';
 import type { TaskState, WorkflowMeta, WorkerStatusSnapshot } from '../types.js';
 import type { SidebarSurface } from '../lib/workflow-progress-surfaces.js';
-import { getAttentionTaskEntries, getRunningTaskEntries, getSortedWorkflows } from '../lib/workflow-progress-surfaces.js';
+import { getAttentionTaskEntries, getSortedWorkflows } from '../lib/workflow-progress-surfaces.js';
 import { countActiveWorkerActions } from '../lib/worker-display.js';
 import {
   AttentionIcon,
@@ -84,7 +84,6 @@ export function LeftStatusColumn({
 }: LeftStatusColumnProps): JSX.Element {
   const workflowEntries = getSortedWorkflows(workflows, tasks);
   const attentionEntries = getAttentionTaskEntries(tasks, workflows, attentionTaskIdsWithFailures);
-  const runningEntries = getRunningTaskEntries(tasks, workflows, queueStatus);
   const runningWorkers = workerStatus?.workers.filter((worker) => worker.lifecycle === 'running').length ?? 0;
   const registeredWorkers = workerStatus?.workers.length ?? 0;
   const activeWorkerActions = workerStatus ? countActiveWorkerActions(workerStatus.workers) : 0;
@@ -223,11 +222,6 @@ export function LeftStatusColumn({
             attentionEntries.length === 0
               ? 'Nothing needs a decision right now.'
               : `${attentionEntries.length} item${attentionEntries.length === 1 ? ' needs' : 's need'} attention.`
-          )}
-          {selectedSurface === 'running' && (
-            runningEntries.length === 0
-              ? 'No tasks are running right now.'
-              : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`
           )}
           {selectedSurface === 'workers' && (
             workerStatus === null

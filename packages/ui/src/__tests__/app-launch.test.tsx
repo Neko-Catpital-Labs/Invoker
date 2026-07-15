@@ -184,6 +184,14 @@ describe('App launch (component)', () => {
     expect(sidebar.className).toContain('w-60');
   });
 
+  it('does not show the running browser rail on workers', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-workers'));
+    expect(screen.queryByTestId('browser-rail')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('running-rail-list')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-graph-surface')).toBeInTheDocument();
+  });
+
 
   it('shows workflow status chips and terminal drawer controls in home view', () => {
     render(<App />);
