@@ -17,8 +17,21 @@ import type {
   TaskStatus,
   TaskConfig,
   TaskExecution,
+  WorkerDecisionsRequest,
+  WorkerDecisionsResponse,
 } from '../../types.js';
-import type { ActionGraphResponse, InAppPlanningSessionSummary, InAppPlanningStreamEvent, RuntimeStatus, StartReadyResult, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type {
+  ActionGraphResponse,
+  InAppPlanningSessionSummary,
+  InAppPlanningStreamEvent,
+  RuntimeStatus,
+  StartReadyResult,
+  TerminalOutputEvent,
+  WorkerStatusEntry,
+  WorkerStatusSnapshot,
+  WorkflowMutationAcceptedResult,
+  WorkflowMutationFailedEvent,
+} from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -49,6 +62,10 @@ export interface MockInvoker {
   setRuntimeStatus: (status: RuntimeStatus) => void;
   /** Replace the worker status snapshot returned by getWorkerStatus. */
   setWorkerStatus: (status: WorkerStatusSnapshot) => void;
+  /** Replace the worker decision responses returned by getWorkerDecisions. */
+  setWorkerDecisions: (
+    resolver: WorkerDecisionsResponse | ((request: WorkerDecisionsRequest) => WorkerDecisionsResponse | Promise<WorkerDecisionsResponse>),
+  ) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -114,6 +131,14 @@ export function createMockInvoker(
     generatedAt: '2026-01-01T00:00:00.000Z',
     workers: [],
   };
+  let workerDecisionsResolver:
+    | WorkerDecisionsResponse
+    | ((request: WorkerDecisionsRequest) => WorkerDecisionsResponse | Promise<WorkerDecisionsResponse>) = {
+      actions: [],
+      limit: 25,
+      offset: 0,
+      hasMore: false,
+    };
 
   const accepted = (channel: string, workflowId = 'wf-1'): WorkflowMutationAcceptedResult => ({
     ok: true,
@@ -397,7 +422,12 @@ export function createMockInvoker(
       queued: [],
     })),
     getWorkerStatus: vi.fn(async () => workerStatus),
-    getWorkerDecisions: vi.fn(async () => ({ actions: [], limit: 25, offset: 0, hasMore: false })),
+    getWorkerDecisions: vi.fn(async (request: WorkerDecisionsRequest) => {
+      if (typeof workerDecisionsResolver === 'function') {
+        return await workerDecisionsResolver(request);
+      }
+      return workerDecisionsResolver;
+    }),
     getWorkers: vi.fn(async () => workerStatus),
     startWorker: vi.fn(async (kind: string) => {
       const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
@@ -446,6 +476,11 @@ export function createMockInvoker(
   }
   function setWorkerStatus(status: WorkerStatusSnapshot) {
     workerStatus = status;
+  }
+  function setWorkerDecisions(
+    resolver: WorkerDecisionsResponse | ((request: WorkerDecisionsRequest) => WorkerDecisionsResponse | Promise<WorkerDecisionsResponse>),
+  ) {
+    workerDecisionsResolver = resolver;
   }
 
 
@@ -515,6 +550,7 @@ export function createMockInvoker(
     setActionGraph,
     setRuntimeStatus,
     setWorkerStatus,
+    setWorkerDecisions,
     fireDelta,
     fireGraphEvent,
     fireWorkflowsChanged,
