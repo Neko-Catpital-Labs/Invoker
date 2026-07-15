@@ -796,10 +796,10 @@ describe('Invoker terminal (component)', () => {
     const expectedTitle = `${longPrompt.slice(0, 53).trimEnd()}…`;
     const title = within(rail).getByText(expectedTitle);
     const preview = within(rail).getByText(longReply);
-    expect(title).toHaveClass('line-clamp-2', 'break-words');
+    expect(title).toHaveClass('line-clamp-2', 'min-w-0', 'flex-1', 'break-words', 'leading-5');
     expect(title).not.toHaveClass('truncate');
     expect(title).toHaveAttribute('title', expectedTitle);
-    expect(preview).toHaveClass('line-clamp-3', 'break-words');
+    expect(preview).toHaveClass('mt-1', 'line-clamp-3', 'break-words');
     expect(preview).not.toHaveClass('truncate');
     expect(preview).toHaveAttribute('title', longReply);
     expect(screen.getByTestId('planning-session-rail')).toHaveClass('w-64', 'shrink-0');
