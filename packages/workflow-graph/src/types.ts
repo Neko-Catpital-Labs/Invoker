@@ -141,6 +141,13 @@ export type ReviewGateArtifactStatus =
   | 'discarded'
   | 'unknown';
 
+export interface MergeGateFailedCheck {
+  readonly name: string;
+  readonly conclusion?: string;
+  readonly detailsUrl?: string;
+  readonly summary?: string;
+}
+
 export interface ReviewGateArtifact {
   readonly id: string;
   readonly title?: string;
@@ -154,6 +161,9 @@ export interface ReviewGateArtifact {
   readonly required: boolean;
   readonly status: ReviewGateArtifactStatus;
   readonly rawStatus?: string;
+  readonly checksState?: 'pending' | 'success' | 'failure';
+  readonly failedChecks?: readonly MergeGateFailedCheck[];
+  readonly mergeState?: 'clean' | 'dirty' | 'unknown';
   readonly dependsOn?: readonly string[];
   readonly generation: number;
   readonly createdAt?: string;
