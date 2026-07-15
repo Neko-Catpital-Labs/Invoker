@@ -59,22 +59,60 @@ export function createReactFlowMock() {
 
     // Background pane: panning or wheel-zooming here simulates a user-driven
     // viewport move, forwarding a non-null event to onMoveStart (mirroring real
-    // React Flow, which passes null for programmatic moves). It is a sibling of
-    // the node elements, so node clicks do not trigger manual-viewport events.
+    // React Flow, which passes null for programmatic moves). Node targets are
+    // excluded so workflow/task clicks do not trigger manual-viewport events.
     const emitManualMove = (event: unknown) =>
       onMoveStart?.(event, { x: 0, y: 0, zoom: getZoom() });
     const emitManualMoveEnd = (event: unknown) =>
       onMoveEnd?.(event, { x: 0, y: 0, zoom: getZoom() });
+    const isNodeTarget = (target: EventTarget | null) =>
+      target instanceof Element && target.closest('.react-flow__node') !== null;
+
+    const nodeElements = nodes.map((node) => {
+      const NodeComponent = nodeTypes[node.type ?? ''];
+      return (
+        <div
+          key={node.id}
+          data-testid={`rf__node-${node.id}`}
+          data-x={(node as { position?: { x?: number } }).position?.x}
+          data-y={(node as { position?: { y?: number } }).position?.y}
+          className="react-flow__node"
+          onClick={(e) => onNodeClick?.(e, node)}
+          onContextMenu={(e) => onNodeContextMenu?.(e, node)}
+          onDoubleClick={(e) => onNodeDoubleClick?.(e, node)}
+        >
+          {NodeComponent ? (
+            <NodeComponent data={node.data ?? {}} />
+          ) : (
+            <>
+              <span>{node.data?.label ?? node.data?.task?.description ?? node.id}</span>
+              <span>{node.id}</span>
+            </>
+          )}
+        </div>
+      );
+    });
 
     return (
       <div data-testid="mock-react-flow" className="react-flow">
         <div
           data-testid="rf__pane"
           className="react-flow__pane"
-          onPointerDown={(e) => emitManualMove(e.nativeEvent)}
-          onPointerUp={(e) => emitManualMoveEnd(e.nativeEvent)}
-          onWheel={(e) => emitManualMove(e.nativeEvent)}
-        />
+          onPointerDown={(e) => {
+            if (isNodeTarget(e.target)) return;
+            emitManualMove(e.nativeEvent);
+          }}
+          onPointerUp={(e) => {
+            if (isNodeTarget(e.target)) return;
+            emitManualMoveEnd(e.nativeEvent);
+          }}
+          onWheel={(e) => {
+            if (isNodeTarget(e.target)) return;
+            emitManualMove(e.nativeEvent);
+          }}
+        >
+          {nodeElements}
+        </div>
         {props.edges?.map((edge: any) => (
           <div
             key={edge.id}
@@ -86,30 +124,6 @@ export function createReactFlowMock() {
             aria-label={edge.ariaLabel}
           />
         ))}
-        {nodes.map((node) => {
-          const NodeComponent = nodeTypes[node.type ?? ''];
-          return (
-            <div
-              key={node.id}
-              data-testid={`rf__node-${node.id}`}
-              data-x={(node as { position?: { x?: number } }).position?.x}
-              data-y={(node as { position?: { y?: number } }).position?.y}
-              className="react-flow__node"
-              onClick={(e) => onNodeClick?.(e, node)}
-              onContextMenu={(e) => onNodeContextMenu?.(e, node)}
-              onDoubleClick={(e) => onNodeDoubleClick?.(e, node)}
-            >
-              {NodeComponent ? (
-                <NodeComponent data={node.data ?? {}} />
-              ) : (
-                <>
-                  <span>{node.data?.label ?? node.data?.task?.description ?? node.id}</span>
-                  <span>{node.id}</span>
-                </>
-              )}
-            </div>
-          );
-        })}
         {children}
       </div>
     );
