@@ -118,6 +118,7 @@ describe('registerReadOnlyIpcHandlers', () => {
         { from: 'runtime', to: 'ui' },
       ],
       ready: false,
+      substate: 'review_open',
     });
   });
 
