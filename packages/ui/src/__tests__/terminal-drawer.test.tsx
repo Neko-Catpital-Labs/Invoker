@@ -562,6 +562,18 @@ describe('Terminal drawer (component)', () => {
         }),
       );
     });
+
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+    fireEvent.wheel(screen.getByTestId(`terminal-pane-${session.taskId}`), { deltaY: -800 });
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'embedded_terminal_scroll',
+      expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        deltaY: -800,
+        active: true,
+      }),
+    );
   });
 
   it('keeps live output, input, and tab switching responsive under terminal pressure', async () => {

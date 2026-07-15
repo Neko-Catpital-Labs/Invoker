@@ -17,7 +17,10 @@ import {
 const TERMINAL_INPUT_BUDGET_MS = 100;
 const TERMINAL_OUTPUT_WRITE_BUDGET_MS = 250;
 const TERMINAL_RESIZE_BUDGET_MS = 250;
+const TERMINAL_SCROLL_BUDGET_MS = 50;
+const TERMINAL_OPEN_WALL_BUDGET_MS = 2000;
 const TERMINAL_TAB_SWITCH_WALL_BUDGET_MS = 1000;
+const TERMINAL_SCROLL_WALL_BUDGET_MS = 2000;
 const TERMINAL_SESSION_UPSERT_BUDGET_MS = 250;
 const TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS = 1000;
 const TERMINAL_RENDERER_LONG_TASK_BUDGET_MS = 1500;
@@ -26,7 +29,10 @@ const TERMINAL_PRESSURE_BUDGETS = {
   maxInputMs: TERMINAL_INPUT_BUDGET_MS,
   maxOutputWriteMs: TERMINAL_OUTPUT_WRITE_BUDGET_MS,
   maxResizeMs: TERMINAL_RESIZE_BUDGET_MS,
+  maxScrollMs: TERMINAL_SCROLL_BUDGET_MS,
+  maxOpenWallMs: TERMINAL_OPEN_WALL_BUDGET_MS,
   maxTabSwitchWallMs: TERMINAL_TAB_SWITCH_WALL_BUDGET_MS,
+  maxScrollWallMs: TERMINAL_SCROLL_WALL_BUDGET_MS,
   maxTerminalSessionUpsertMs: TERMINAL_SESSION_UPSERT_BUDGET_MS,
   maxRendererEventLoopLagMs: TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS,
   maxRendererLongTaskMs: TERMINAL_RENDERER_LONG_TASK_BUDGET_MS,
@@ -362,18 +368,22 @@ test.describe('Embedded terminal PTY', () => {
     const fullBetaTaskId = await resolveTaskId(page, 'terminal-pressure-beta');
     const watermark = await activityLogWatermark(page);
 
+    const alphaOpenStartedAt = Date.now();
     await openTaskTerminalFromMiniDag(page, 'terminal-pressure-alpha');
     await expect(page.getByTestId('terminal-drawer-body')).toBeVisible({ timeout: 10000 });
     const alphaPane = page.getByTestId(`terminal-pane-${fullAlphaTaskId}`);
     await expect(alphaPane).toBeVisible();
+    const alphaOpenWallMs = Date.now() - alphaOpenStartedAt;
     await alphaPane.click();
 
     await page.keyboard.type('for i in $(seq 1 140); do printf "term-live-%03d\\n" "$i"; done');
     await page.keyboard.press('Enter');
     await expect(alphaPane.getByText('term-live-140')).toBeVisible({ timeout: 10000 });
 
+    const betaOpenStartedAt = Date.now();
     await openTaskTerminalFromMiniDag(page, 'terminal-pressure-beta');
     await expect(page.getByTestId(`terminal-tab-${fullBetaTaskId}`)).toHaveAttribute('data-active', 'true', { timeout: 10000 });
+    const betaOpenWallMs = Date.now() - betaOpenStartedAt;
 
     const switchStartedAt = Date.now();
     await page.getByRole('tab', { name: /Terminal pressure alpha/i }).click();
@@ -384,34 +394,42 @@ test.describe('Embedded terminal PTY', () => {
     await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'maximized');
     const firstLine = alphaPane.getByText('term-live-001');
     await expect(firstLine).not.toBeVisible();
+    const scrollStartedAt = Date.now();
     await alphaPane.hover();
     for (let index = 0; index < 12; index += 1) {
       await page.mouse.wheel(0, -800);
       if (await firstLine.isVisible()) break;
     }
     await expect(firstLine).toBeVisible({ timeout: 10000 });
+    const scrollWallMs = Date.now() - scrollStartedAt;
 
     await expect
       .poll(async () => {
         const payloads = await uiPerfPayloadsSince(page, watermark);
-        return payloads.filter((payload) => payload.metric === 'embedded_terminal_output_write').length;
+        return payloads.some((payload) => payload.metric === 'embedded_terminal_output_write')
+          && payloads.some((payload) => payload.metric === 'embedded_terminal_scroll');
       }, { timeout: 5000 })
-      .toBeGreaterThan(0);
+      .toBe(true);
 
     const payloads = await uiPerfPayloadsSince(page, watermark);
     const attachPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_attach');
     const inputPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_input');
     const outputPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_output_write');
     const resizePayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_resize');
+    const scrollPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_scroll');
     const perf = await page.evaluate(async () => window.invoker.getUiPerfStats());
     const terminalEvidence = {
       fullAlphaTaskId,
       fullBetaTaskId,
+      alphaOpenWallMs,
+      betaOpenWallMs,
       switchWallMs,
+      scrollWallMs,
       attachPayloads,
       inputPayloads,
       outputPayloads,
       resizePayloads,
+      scrollPayloads,
       perf,
       budgets: TERMINAL_PRESSURE_BUDGETS,
     };
@@ -421,21 +439,36 @@ test.describe('Embedded terminal PTY', () => {
     expect(attachPayloads.length, terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
     expect(inputPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
     expect(outputPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(scrollPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(
+      scrollPayloads.some((payload) =>
+        payload.taskId === fullAlphaTaskId
+        && payload.active === true
+        && payload.drawerState === 'maximized',
+      ),
+      terminalEvidenceMessage,
+    ).toBe(true);
     expect(
       resizePayloads.some((payload) => payload.source === 'active_session' && payload.taskId === fullAlphaTaskId),
       terminalEvidenceMessage,
     ).toBe(true);
+    expect(alphaOpenWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_WALL_BUDGET_MS);
+    expect(betaOpenWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_WALL_BUDGET_MS);
     expect(switchWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_TAB_SWITCH_WALL_BUDGET_MS);
+    expect(scrollWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLL_WALL_BUDGET_MS);
     expect(Math.max(...inputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
     expect(Math.max(...outputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
     expect(Math.max(...resizePayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
+    expect(Math.max(...scrollPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLL_BUDGET_MS);
 
     expect(Number(perf.embeddedTerminalAttachReports), terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
     expect(Number(perf.embeddedTerminalInputReports), terminalEvidenceMessage).toBeGreaterThan(0);
     expect(Number(perf.embeddedTerminalOutputWriteReports), terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(Number(perf.embeddedTerminalScrollReports), terminalEvidenceMessage).toBeGreaterThan(0);
     expect(Number(perf.maxEmbeddedTerminalInputMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalOutputWriteMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalResizeMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
+    expect(Number(perf.maxEmbeddedTerminalScrollMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLL_BUDGET_MS);
     expect(numberOrZero(perf.maxTerminalSessionUpsertMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SESSION_UPSERT_BUDGET_MS);
     expect(numberOrZero(perf.maxRendererEventLoopLagMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS);
     expect(numberOrZero(perf.maxRendererLongTaskMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_LONG_TASK_BUDGET_MS);
