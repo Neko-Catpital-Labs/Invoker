@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
+import { SshExecutor } from '../ssh-executor.js';
 import { ResourceLimitError } from '../repo-pool.js';
 import { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
@@ -298,6 +299,142 @@ describe('SSH pool member capacity', () => {
       { err: killErr },
     );
   });
+  it('does not resolve crabbox for a static pool member (resolver untouched)', () => {
+    const resolve = vi.fn();
+    // A registry with no pre-registered ssh executor so the lazy SSH path runs.
+    const staticRunner = new TaskRunner({
+      orchestrator: { getTask: () => null, getAllTasks: () => [], deferTask: vi.fn() } as any,
+      persistence: { logEvent: vi.fn() } as any,
+      executorRegistry: {
+        getDefault: () => ({ type: 'worktree' }),
+        get: () => null,
+        getAll: () => [],
+        register: vi.fn(),
+      } as any,
+      cwd: '/tmp',
+      remoteTargetsProvider: () => ({
+        'remote-a': { host: 'remote-a.example.com', user: 'invoker', sshKeyPath: '/tmp/fake-a' },
+      }),
+      executionPoolsProvider: () => ({
+        'ssh-pool': { selectionStrategy: 'leastLoaded', maxConcurrentTasksPerMember: 1, members: [{ id: 'remote-a', type: 'ssh' as const, maxConcurrentTasks: 1 }] },
+      }),
+      crabboxResolver: { resolve },
+    });
+
+    const executor = staticRunner.selectExecutor(makeTask('wf-1/task-a'));
+    expect(executor.type).toBe('ssh');
+    expect((executor as any).host).toBe('remote-a.example.com');
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('keys the execution resource lease on the resolved crabbox endpoint while keeping the pool member id', async () => {
+    vi.spyOn(SshExecutor.prototype, 'start').mockImplementation(async function (this: any, request: any) {
+      return {
+        executionId: `exec-${request.actionId}`,
+        taskId: request.actionId,
+        workspacePath: `/remote/${request.actionId}`,
+        branch: `branch-${request.actionId}`,
+      };
+    });
+    const completeByTask = new Map<string, (response: any) => void>();
+    vi.spyOn(SshExecutor.prototype, 'onComplete').mockImplementation((handle: any, cb: any) => {
+      completeByTask.set(handle.taskId, cb);
+    });
+    vi.spyOn(SshExecutor.prototype, 'onOutput').mockImplementation(() => {});
+    vi.spyOn(SshExecutor.prototype, 'onHeartbeat').mockImplementation(() => {});
+    vi.spyOn(SshExecutor.prototype, 'kill').mockImplementation(async () => {});
+
+    try {
+      const resolve = vi.fn(async (config: any) => ({
+        sshTarget: { host: 'leased.crab', user: 'crab', sshKeyPath: '/leased/key', port: 2200 },
+        remoteLeaseMetadata: {
+          provider: 'crabbox' as const,
+          leaseId: 'L1',
+          slug: 'lease-slug',
+          targetId: config.id,
+          sshHost: 'leased.crab',
+          sshUser: 'crab',
+          sshPort: 2200,
+          sshKeyPath: '/leased/key',
+          expiresAt: '',
+          stopAfter: config.stopAfter,
+          keepOnFailure: config.keepOnFailure,
+        },
+      }));
+      const claimCalls: any[] = [];
+      const task = makeTask('wf/crab');
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: (id: string) => (id === task.id ? task : null),
+          getAllTasks: () => [task],
+          markTaskRunningAfterLaunch: () => true,
+          handleWorkerResponse: () => [],
+          deferTask: vi.fn(),
+        } as any,
+        persistence: {
+          updateTask: vi.fn(),
+          updateAttempt: vi.fn(),
+          appendTaskOutput: vi.fn(),
+          logEvent: vi.fn(),
+          loadAttempts: () => [],
+          claimExecutionResourceLease: (args: any) => { claimCalls.push(args); return true; },
+          renewExecutionResourceLease: vi.fn(),
+          releaseExecutionResourceLease: vi.fn(),
+        } as any,
+        executorRegistry: {
+          getDefault: () => ({ type: 'worktree' }),
+          get: () => null,
+          getAll: () => [],
+          register: vi.fn(),
+        } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'crab-a': {
+            type: 'crabbox' as const,
+            crabboxCommand: 'crabbox',
+            provider: 'do',
+            class: 'medium',
+            ttl: '30m',
+            idleTimeout: '10m',
+            network: 'default',
+            target: 'ubuntu-22',
+            stopAfter: 'completed',
+            keepOnFailure: false,
+          },
+        }),
+        executionPoolsProvider: () => ({
+          'ssh-pool': {
+            selectionStrategy: 'leastLoaded',
+            maxConcurrentTasksPerMember: 1,
+            members: [{ id: 'crab-a', type: 'ssh' as const, maxConcurrentTasks: 1 }],
+          },
+        }),
+        crabboxResolver: { resolve },
+      });
+
+      const run = runner.executeTask(task);
+      await vi.waitFor(() => expect(SshExecutor.prototype.start).toHaveBeenCalledTimes(1));
+
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(claimCalls).toHaveLength(1);
+      // Resource key uses the RESOLVED endpoint; the pool member id is preserved.
+      expect(claimCalls[0].resourceKey).toBe('ssh:crab@leased.crab:2200');
+      expect(claimCalls[0].poolMemberId).toBe('crab-a');
+
+      completeByTask.get(task.id)?.({
+        requestId: 'r',
+        actionId: task.id,
+        attemptId: task.execution.selectedAttemptId,
+        executionGeneration: task.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      });
+      await run;
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('uses execution resource leases to defer across TaskRunner instances', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     try {

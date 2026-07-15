@@ -2155,6 +2155,182 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('crabbox target resolution', () => {
+    function makeFakeResolver() {
+      const resolve = vi.fn(async (config: any) => ({
+        sshTarget: {
+          host: 'lease-host.crabbox.dev',
+          user: 'crab',
+          sshKeyPath: '/leased/key',
+          port: 2222,
+        },
+        remoteLeaseMetadata: {
+          provider: 'crabbox' as const,
+          leaseId: 'lease-123',
+          slug: 'happy-lease',
+          targetId: config.id,
+          sshHost: 'lease-host.crabbox.dev',
+          sshUser: 'crab',
+          sshPort: 2222,
+          sshKeyPath: '/leased/key',
+          expiresAt: '2099-01-01T00:00:00Z',
+          stopAfter: config.stopAfter,
+          keepOnFailure: config.keepOnFailure,
+        },
+      }));
+      return { resolve };
+    }
+
+    const crabboxTarget = {
+      type: 'crabbox' as const,
+      crabboxCommand: 'crabbox',
+      provider: 'do',
+      class: 'medium',
+      ttl: '30m',
+      idleTimeout: '10m',
+      network: 'default',
+      target: 'ubuntu-22',
+      stopAfter: 'completed',
+      keepOnFailure: false,
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('does not call the resolver for a static SSH target', () => {
+      const resolver = makeFakeResolver();
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'static-a': { host: 'static.example.com', user: 'deployer', sshKeyPath: '/keys/static' },
+        }),
+        crabboxResolver: resolver,
+      });
+
+      const task = makeTask({
+        id: 'static-task',
+        config: { runnerKind: 'ssh', poolMemberId: 'static-a' },
+      });
+
+      const executor = runner.selectExecutor(task);
+      expect(executor.type).toBe('ssh');
+      expect((executor as any).host).toBe('static.example.com');
+      expect(resolver.resolve).not.toHaveBeenCalled();
+    });
+
+    it('resolves a crabbox target through the injected resolver and uses the leased endpoint', async () => {
+      const completeByTask = new Map<string, (response: WorkResponse) => void>();
+      const starts: Array<{ host: string; user: string; sshKeyPath: string; port: number }> = [];
+      vi.spyOn(SshExecutor.prototype, 'start').mockImplementation(async function (this: any, request: any) {
+        starts.push({ host: this.host, user: this.user, sshKeyPath: this.sshKeyPath, port: this.port });
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: `/remote/${request.actionId}`,
+          branch: `branch-${request.actionId}`,
+        };
+      });
+      vi.spyOn(SshExecutor.prototype, 'onComplete').mockImplementation((handle: any, cb: any) => {
+        completeByTask.set(handle.taskId, cb);
+      });
+      vi.spyOn(SshExecutor.prototype, 'onOutput').mockImplementation(() => {});
+      vi.spyOn(SshExecutor.prototype, 'onHeartbeat').mockImplementation(() => {});
+      vi.spyOn(SshExecutor.prototype, 'kill').mockImplementation(async () => {});
+
+      const resolver = makeFakeResolver();
+      const task = makeTask({
+        id: 'wf/crab-task',
+        config: { runnerKind: 'ssh', poolMemberId: 'crab-target' },
+        execution: { selectedAttemptId: 'crab-task-attempt', generation: 0 },
+      });
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const logEvent = vi.fn();
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: (id: string) => (id === task.id ? task : null),
+          getAllTasks: () => [task],
+          markTaskRunningAfterLaunch: () => true,
+          handleWorkerResponse: () => [],
+          deferTask: vi.fn(),
+        } as any,
+        persistence: {
+          updateTask,
+          updateAttempt,
+          appendTaskOutput: vi.fn(),
+          logEvent,
+          loadAttempts: () => [],
+        } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({ 'crab-target': crabboxTarget }),
+        crabboxResolver: resolver,
+      });
+
+      const run = runner.executeTask(task);
+      await vi.waitFor(() => expect(starts.length).toBe(1));
+
+      // Resolver called exactly once, with the configured crabbox lease inputs.
+      expect(resolver.resolve).toHaveBeenCalledTimes(1);
+      expect(resolver.resolve.mock.calls[0][0]).toMatchObject({
+        id: 'crab-target',
+        crabboxCommand: 'crabbox',
+        provider: 'do',
+        class: 'medium',
+        ttl: '30m',
+        idleTimeout: '10m',
+        network: 'default',
+        target: 'ubuntu-22',
+        stopAfter: 'completed',
+        keepOnFailure: false,
+      });
+
+      // SshExecutor was built from the resolved (leased) endpoint.
+      expect(starts[0]).toMatchObject({
+        host: 'lease-host.crabbox.dev',
+        user: 'crab',
+        sshKeyPath: '/leased/key',
+        port: 2222,
+      });
+
+      // Lease metadata persisted with the start-metadata update.
+      const persisted = updateTask.mock.calls.find(
+        ([, changes]: [string, any]) => changes.execution?.remoteLeaseMetadata,
+      );
+      expect(persisted?.[1].execution.remoteLeaseMetadata).toMatchObject({
+        provider: 'crabbox',
+        leaseId: 'lease-123',
+        targetId: 'crab-target',
+        sshHost: 'lease-host.crabbox.dev',
+      });
+
+      // selected payload reports the resolved endpoint + lease metadata.
+      completeByTask.get(task.id)?.({
+        requestId: 'r',
+        actionId: task.id,
+        attemptId: 'crab-task-attempt',
+        executionGeneration: task.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      } as WorkResponse);
+      await run;
+
+      const selected = logEvent.mock.calls.find(
+        ([, event]: [string, string]) => event === 'task.executor.selected',
+      );
+      expect(selected?.[2]).toMatchObject({
+        remoteHost: 'lease-host.crabbox.dev',
+        remoteUser: 'crab',
+        port: 2222,
+        remoteLeaseMetadata: { leaseId: 'lease-123' },
+      });
+    });
+  });
+
   describe('publishAfterFix', () => {
     function setupPublishAfterFix(opts: {
       mergeMode?: string;
