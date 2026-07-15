@@ -1067,15 +1067,22 @@ export async function approveMergeImpl(
         branchRepoUrl,
       );
       await execGitInMergeSafe(host, ['merge', '--squash', featureBranch], worktreeDir);
-      mergeTrace('GIT_COMMIT', { mergeMessage });
-      const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
-      await execGitInMergeSafe(host, ['commit', '-m', commitBody], worktreeDir);
-      // Push squash commit directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', 'origin', `HEAD:refs/heads/${baseBranch}`], worktreeDir);
-      // Advance the baseBranch ref in the clone so subsequent operations see the updated base
-      const newHead = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], worktreeDir)).trim();
-      await execGitInMergeSafe(host, ['update-ref', `refs/heads/${baseBranch}`, newHead], worktreeDir);
-      mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
+      const hasChanges = await execGitInMergeSafe(host, ['diff', '--cached', '--quiet'], worktreeDir)
+        .then(() => false)
+        .catch(() => true);
+      if (hasChanges) {
+        mergeTrace('GIT_COMMIT', { mergeMessage });
+        const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
+        await execGitInMergeSafe(host, ['commit', '-m', commitBody], worktreeDir);
+        // Push squash commit directly to origin (GitHub) from the clone
+        await execGitInMergeSafe(host, ['push', '--force', 'origin', `HEAD:refs/heads/${baseBranch}`], worktreeDir);
+        // Advance the baseBranch ref in the clone so subsequent operations see the updated base
+        const newHead = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], worktreeDir)).trim();
+        await execGitInMergeSafe(host, ['update-ref', `refs/heads/${baseBranch}`, newHead], worktreeDir);
+        mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
+      } else {
+        mergeTrace('SQUASH_MERGE_NOOP', { featureBranch, baseBranch });
+      }
       console.log(`[merge] Approved: squash-merged ${featureBranch} into ${baseBranch}`);
     } catch (err) {
       mergeTrace('APPROVE_MERGE_ERROR', { workflowId, error: String(err) });
@@ -1557,6 +1564,7 @@ export async function consolidateAndMergeImpl(
     'consolidate-' + (workflowId ?? 'default'),
     repoUrlForMerge,
   );
+  const baseHead = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], worktreeDir)).trim();
   console.log(`[merge] consolidateAndMerge: featureBranch=${featureBranch}, baseBranch=${baseBranch}, worktree=${worktreeDir}`);
 
   try {
@@ -1647,7 +1655,7 @@ export async function consolidateAndMergeImpl(
 
     if (onFinish === 'merge') {
       // Squash merge in the clone and push result directly to origin (GitHub)
-      await execGitInMergeSafe(host, ['checkout', '--detach', baseBranch], worktreeDir);
+      await execGitInMergeSafe(host, ['checkout', '--detach', baseHead], worktreeDir);
       await execGitInMergeSafe(host, ['merge', '--squash', featureBranch], worktreeDir);
       const hasChanges = await execGitInMergeSafe(host, ['diff', '--cached', '--quiet'], worktreeDir)
         .then(() => false)
