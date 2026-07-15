@@ -44,6 +44,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   selected: boolean;
   dimmed: boolean;
   coreActivity?: WorkflowCoreActivity;
+  onSelect?: () => void;
 }
 
 interface GraphViewport {
@@ -97,6 +98,7 @@ function shouldStartPanePan(
   if (targetElement) {
     if (!root.contains(targetElement)) return false;
     if (targetElement.closest(PANE_PAN_BLOCK_SELECTOR)) return false;
+    if (targetElement.closest('.react-flow__node, [data-testid^="workflow-node-"]')) return false;
     if (targetElement.closest('.react-flow__pane')) return true;
   }
 
@@ -238,7 +240,7 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
         selected={data.selected}
         dimmed={data.dimmed}
         coreActivity={data.coreActivity}
-        onClick={() => {}}
+        onClick={() => data.onSelect?.()}
         onContextMenu={() => {}}
       />
       <Handle
@@ -307,12 +309,13 @@ function WorkflowGraphInner({
           selected: selectedWorkflowId === node.id,
           dimmed,
           coreActivity: coreActivityByWorkflow?.get(node.id),
+          onSelect: () => onSelectWorkflow(node.id),
         },
       };
     });
     graphMetricsRef.current.objectsMs = performance.now() - startedAt;
     return nextNodes;
-  }, [coreActivityByWorkflow, graph.nodes, positions, selectedWorkflowId, statusFilters]);
+  }, [coreActivityByWorkflow, graph.nodes, onSelectWorkflow, positions, selectedWorkflowId, statusFilters]);
   const [rfNodes, setRfNodes] = useState<Node<WorkflowNodeData>[]>([]);
 
   useEffect(() => {
