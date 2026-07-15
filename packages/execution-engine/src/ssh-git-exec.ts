@@ -294,13 +294,10 @@ export interface GitWorktreeSandboxResetOpts {
  *                                   files (e.g. node_modules/, build caches).
  *
  * Why -fd and not -fdx:
- *   The managed-workspace execution path always runs provisionCommand
- *   (pnpm install --frozen-lockfile) inside buildRuntimeBootstrapScript, so
- *   there is no warm-reuse savings to protect by keeping node_modules/ out of the
- *   clean.  However, -x would unconditionally evict the package cache on every
- *   reuse_exact hit, forcing a full network re-install.  Keeping gitignored caches
- *   alive with -fd lets the package manager do its own lockfile-gated cache check,
- *   which is faster and no less correct.
+ *   Invoker no longer hydrates repos on checkout, so the task payload owns any
+ *   repo bootstrap such as `pnpm install` or `flutter pub get`. Keeping
+ *   gitignored caches alive with -fd makes repeated task-level hydration faster
+ *   without changing tracked files.
  */
 export function buildWorktreeSandboxResetScript(opts: GitWorktreeSandboxResetOpts): string {
   const wtB64 = base64Encode(opts.worktreePath);
