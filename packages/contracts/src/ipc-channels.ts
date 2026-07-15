@@ -214,6 +214,28 @@ export type WorkerActionStatus =
   | 'skipped'
   | 'abandoned'
   | 'cancelled';
+export type WorkerSource = 'built-in' | 'external';
+export type WorkerAvailability = 'available' | 'unknown';
+export type WorkerLogSource = 'worker_actions' | 'task_events';
+
+export interface WorkerLogEntry {
+  id: string;
+  workerKind: string;
+  source: WorkerLogSource;
+  actionType?: string;
+  eventType?: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType?: string;
+  subjectId?: string;
+  externalKey?: string;
+  status?: WorkerActionStatus;
+  summary?: string;
+  payload?: unknown;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 
 export interface WorkerActionSummary {
   id: string;
@@ -253,6 +275,7 @@ export interface WorkerRecoverySummary {
   skips: number;
 }
 
+
 export interface WorkerStatusEntry {
   kind: string;
   note: string;
@@ -270,7 +293,11 @@ export interface WorkerStatusEntry {
   stoppedAt?: string;
   lastError?: string;
   recentActions: WorkerActionSummary[];
+  recentLogs?: WorkerLogEntry[];
   recovery?: WorkerRecoverySummary;
+  source?: WorkerSource;
+  availability?: WorkerAvailability;
+  running?: boolean;
 }
 
 export interface WorkerStatusSnapshot {
@@ -1097,6 +1124,10 @@ export const IpcChannels = {
     response: QueueStatus;
   },
   'invoker:get-worker-status': {} as {
+    request: [];
+    response: WorkerStatusSnapshot;
+  },
+  'invoker:get-workers': {} as {
     request: [];
     response: WorkerStatusSnapshot;
   },
