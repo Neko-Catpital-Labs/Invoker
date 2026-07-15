@@ -478,6 +478,67 @@ ov_set_overload_config() {
 EOF
 }
 
+ov_kill_owners_for_db_dir() {
+  local signal="${1:-TERM}"
+  local db_dir="${INVOKER_DB_DIR:-}"
+  local sock="${INVOKER_IPC_SOCKET:-}"
+  local pattern pid cmd
+  [ -n "$db_dir" ] || return 0
+  pattern="packages/app/dist/main.js --headless owner-serve"
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    cmd="$(ps -p "$pid" -ww -o command= 2>/dev/null || true)"
+    if [ -n "$sock" ] && printf '%s' "$cmd" | grep -Fq "$sock"; then
+      kill "-$signal" "$pid" >/dev/null 2>&1 || true
+      continue
+    fi
+    if printf '%s' "$cmd" | grep -Fq "$db_dir"; then
+      kill "-$signal" "$pid" >/dev/null 2>&1 || true
+      continue
+    fi
+    if ps eww -p "$pid" 2>/dev/null | grep -Fq "INVOKER_DB_DIR=$db_dir"; then
+      kill "-$signal" "$pid" >/dev/null 2>&1 || true
+    fi
+  done < <(pgrep -f "$pattern" 2>/dev/null || true)
+}
+
+ov_wait_for_owner_teardown() {
+  local wait_secs="${1:-30}"
+  local waited=0
+  local sock="${INVOKER_IPC_SOCKET:-}"
+  local pid matched
+  while [ "$waited" -lt "$wait_secs" ]; do
+    local alive=0
+    if [ -n "${OVERLOAD_OWNER_PID:-}" ] && kill -0 "${OVERLOAD_OWNER_PID}" >/dev/null 2>&1; then
+      alive=1
+    elif [ -n "$sock" ] && [ -e "$sock" ]; then
+      alive=1
+    else
+      matched=0
+      while IFS= read -r pid; do
+        [ -n "$pid" ] || continue
+        if ps eww -p "$pid" 2>/dev/null | grep -Fq "INVOKER_DB_DIR=${INVOKER_DB_DIR}"; then
+          matched=1
+          break
+        fi
+        if ps -p "$pid" -ww -o command= 2>/dev/null | grep -Fq "${INVOKER_DB_DIR}"; then
+          matched=1
+          break
+        fi
+      done < <(pgrep -f "packages/app/dist/main.js --headless owner-serve" 2>/dev/null || true)
+      if [ "$matched" -eq 1 ]; then
+        alive=1
+      fi
+    fi
+    if [ "$alive" -eq 0 ]; then
+      return 0
+    fi
+    waited=$((waited + 1))
+    sleep 1
+  done
+  return 1
+}
+
 ov_start_owner() {
   local electron_bin="$INVOKER_E2E_REPO_ROOT/scripts/electron.cjs"
   local main_js="$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js"
@@ -496,6 +557,15 @@ ov_start_owner() {
         INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
         INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
         LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
+        "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
+        >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
+    elif command -v python3 >/dev/null 2>&1; then
+      # macOS lacks setsid(1); open a new session so group kill works.
+      INVOKER_HEADLESS_STANDALONE=1 \
+      INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS=600000 \
+      INVOKER_GIT_NETWORK_TIMEOUT_MS="${INVOKER_GIT_NETWORK_TIMEOUT_MS:-120000}" \
+      LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}" \
+      python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
         "$electron_bin" $sandbox_flag "$main_js" --headless owner-serve \
         >"${OVERLOAD_TMP_DIR}/owner-serve.log" 2>&1 &
     else
@@ -567,34 +637,25 @@ ov_start_owner() {
 
 ov_stop_owner() {
   local wait_secs=30
-  local waited=0
   if [ -n "${OVERLOAD_OWNER_PID:-}" ]; then
     kill -- "-${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || kill "${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || true
     pkill -TERM -P "${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || true
-    while [ "$waited" -lt "$wait_secs" ]; do
-      if ! kill -0 "${OVERLOAD_OWNER_PID}" >/dev/null 2>&1; then
-        break
-      fi
-      waited=$((waited + 1))
-      sleep 1
-    done
-    if kill -0 "${OVERLOAD_OWNER_PID}" >/dev/null 2>&1; then
+  fi
+  ov_kill_owners_for_db_dir TERM
+  if ! ov_wait_for_owner_teardown "$wait_secs"; then
+    if [ -n "${OVERLOAD_OWNER_PID:-}" ]; then
       kill -KILL -- "-${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || kill -KILL "${OVERLOAD_OWNER_PID}" >/dev/null 2>&1 || true
     fi
-    wait "${OVERLOAD_OWNER_PID}" 2>/dev/null || true
-    unset OVERLOAD_OWNER_PID waited
+    ov_kill_owners_for_db_dir KILL
+    ov_wait_for_owner_teardown 5 || true
   fi
-  pkill -TERM -f 'packages/app/dist/main.js --headless owner-serve' >/dev/null 2>&1 || true
-  waited=0
-  while [ "$waited" -lt "$wait_secs" ]; do
-    if ! pgrep -f 'packages/app/dist/main.js --headless owner-serve' >/dev/null 2>&1; then
-      return 0
-    fi
-    waited=$((waited + 1))
-    sleep 1
-  done
-  pkill -KILL -f 'packages/app/dist/main.js --headless owner-serve' >/dev/null 2>&1 || true
-  sleep 1
+  if [ -n "${OVERLOAD_OWNER_PID:-}" ]; then
+    wait "${OVERLOAD_OWNER_PID}" 2>/dev/null || true
+    unset OVERLOAD_OWNER_PID
+  fi
+  if [ -n "${INVOKER_IPC_SOCKET:-}" ] && [ -e "${INVOKER_IPC_SOCKET}" ]; then
+    rm -f "${INVOKER_IPC_SOCKET}" >/dev/null 2>&1 || true
+  fi
 }
 
 ov_cancel_all_workflows() {
