@@ -225,6 +225,17 @@ function getMergeNodeReviewUrl(
 function artifactLabel(artifact: ReviewGateArtifact): string {
   return artifact.title || artifact.url || (artifact.providerId ? `#${artifact.providerId}` : artifact.id);
 }
+function artifactDetail(artifact: ReviewGateArtifact): string | null {
+  if (artifact.mergeState === 'dirty') return 'Merge conflict';
+  if (artifact.checksState === 'failure') {
+    const failedChecks = artifact.failedChecks?.map((check) => check.name).filter(Boolean) ?? [];
+    return failedChecks.length > 0 ? failedChecks.join(', ') : null;
+  }
+  if (artifact.checksState === 'pending') return 'Checks pending';
+  if (artifact.checksState === 'success' && artifact.status === 'open') return 'Checks passing';
+  return null;
+}
+
 
 function ReviewGateStackSection({ reviewGate }: { reviewGate: ReviewGateQueryResponse }): JSX.Element {
   const artifacts = reviewGate.artifacts;
@@ -262,6 +273,11 @@ function ReviewGateStackSection({ reviewGate }: { reviewGate: ReviewGateQueryRes
                   <div className="text-foreground">{artifactLabel(artifact)}</div>
                 )}
                 <div className="mt-1 text-[11px] text-muted-foreground">{formatStatus(artifact.status)}</div>
+                {artifactDetail(artifact) && (
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    {artifactDetail(artifact)}
+                  </div>
+                )}
               </div>
             </li>
           ))}
