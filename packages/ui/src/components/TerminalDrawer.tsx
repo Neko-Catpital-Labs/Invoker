@@ -14,6 +14,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS = 100;
 
 /**
  * The drawer has one explicit state model:
@@ -129,11 +130,14 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
   const isActiveRef = useRef(isActive);
+  const drawerStateRef = useRef(drawerState);
   const sessionRef = useRef(session);
+  const lastScrollPerfAtRef = useRef(Number.NEGATIVE_INFINITY);
   const fitFrameRef = useRef<number | null>(null);
   const secondFitFrameRef = useRef<number | null>(null);
 
   isActiveRef.current = isActive;
+  drawerStateRef.current = drawerState;
   sessionRef.current = session;
 
   const clearScheduledFit = useCallback(() => {
@@ -263,6 +267,26 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
         /* terminal disposed */
       }
     });
+    const handleWheel = (event: WheelEvent): void => {
+      const startedAt = nowMs();
+      if (startedAt - lastScrollPerfAtRef.current < TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS) return;
+      lastScrollPerfAtRef.current = startedAt;
+      const rawEventAgeMs = startedAt - event.timeStamp;
+      reportTerminalPerf('embedded_terminal_scroll', {
+        durationMs: roundMs(nowMs() - startedAt),
+        eventAgeMs: Number.isFinite(rawEventAgeMs) && Math.abs(rawEventAgeMs) < 60_000
+          ? roundMs(rawEventAgeMs)
+          : undefined,
+        deltaX: Math.round(event.deltaX),
+        deltaY: Math.round(event.deltaY),
+        deltaMode: event.deltaMode,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        active: isActiveRef.current,
+        drawerState: drawerStateRef.current,
+      });
+    };
+    host.addEventListener('wheel', handleWheel, { passive: true, capture: true });
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
@@ -285,6 +309,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     return () => {
       clearScheduledFit();
       resizeObserver?.disconnect();
+      host.removeEventListener('wheel', handleWheel, true);
       inputDisposable.dispose();
       unsubscribeOutput?.();
       try {
