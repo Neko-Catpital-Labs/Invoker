@@ -37,7 +37,6 @@ export interface CommandPaletteProps {
   runningEntries: WorkflowTaskEntry[];
   workflowCount: number;
   attentionCount: number;
-  runningCount: number;
   onSelectSurface: (surface: SidebarSurface) => void;
   onSelectWorkflow: (workflowId: string) => void;
   onSelectTask: (taskId: string) => void;
@@ -53,7 +52,6 @@ interface CommandPaletteBodyProps {
   runningEntries: WorkflowTaskEntry[];
   workflowCount: number;
   attentionCount: number;
-  runningCount: number;
   onSelectSurface: (surface: SidebarSurface) => void;
   onSelectWorkflow: (workflowId: string) => void;
   onSelectTask: (taskId: string) => void;
@@ -69,7 +67,6 @@ const CommandPaletteBody = memo(function CommandPaletteBody({
   runningEntries,
   workflowCount,
   attentionCount,
-  runningCount,
   onSelectSurface,
   onSelectWorkflow,
   onSelectTask,
@@ -108,11 +105,6 @@ const CommandPaletteBody = memo(function CommandPaletteBody({
               <AlertTriangle strokeWidth={1.75} />
               <span>Needs Attention</span>
               {attentionCount > 0 && <CommandShortcut>{attentionCount}</CommandShortcut>}
-            </CommandItem>
-            <CommandItem value="running tasks" onSelect={closeAnd(() => onSelectSurface('running'))}>
-              <Clock strokeWidth={1.75} />
-              <span>Running</span>
-              {runningCount > 0 && <CommandShortcut>{runningCount}</CommandShortcut>}
             </CommandItem>
             <CommandItem value="workflows browser" onSelect={closeAnd(() => onSelectSurface('workflows'))}>
               <Layers strokeWidth={1.75} />
@@ -192,7 +184,6 @@ export function CommandPalette({
   runningEntries,
   workflowCount,
   attentionCount,
-  runningCount,
   onSelectSurface,
   onSelectWorkflow,
   onSelectTask,
@@ -254,7 +245,6 @@ export function CommandPalette({
         runningEntries={runningEntries}
         workflowCount={workflowCount}
         attentionCount={attentionCount}
-        runningCount={runningCount}
         onSelectSurface={onSelectSurface}
         onSelectWorkflow={onSelectWorkflow}
         onSelectTask={onSelectTask}

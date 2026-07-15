@@ -9,7 +9,6 @@ import {
   InvokerIcon,
   MoonIcon,
   PlanningTerminalIcon,
-  RunningIcon,
   SettingsIcon,
   SunIcon,
   WorkerIcon,
@@ -20,7 +19,6 @@ import type { ThemeMode } from '../lib/theme.js';
 interface LeftStatusColumnProps {
   workflowCount: number;
   attentionCount: number;
-  runningCount: number;
   workerStatus: WorkerStatusSnapshot | null;
   selectedSurface: SidebarSurface;
   collapsed: boolean;
@@ -67,7 +65,6 @@ function countClass(tone: SourceItem['tone']): string {
 export function LeftStatusColumn({
   workflowCount,
   attentionCount,
-  runningCount,
   workerStatus,
   selectedSurface,
   collapsed,
@@ -85,7 +82,6 @@ export function LeftStatusColumn({
 
   const sources: SourceItem[] = [
     { key: 'attention', label: 'Needs Attention', count: attentionCount, tone: 'attention', icon: <AttentionIcon className={ICON_CLASS} /> },
-    { key: 'running', label: 'Running', count: runningCount, tone: 'running', icon: <RunningIcon className={ICON_CLASS} /> },
     { key: 'workers', label: 'Workers', count: registeredWorkers, tone: activeWorkerActions > 0 ? 'running' : 'neutral', icon: <WorkerIcon className={ICON_CLASS} /> },
     { key: 'workflows', label: 'Workflows', count: workflowCount, tone: 'neutral', icon: <WorkflowsIcon className={ICON_CLASS} /> },
   ];
@@ -206,6 +202,7 @@ export function LeftStatusColumn({
           );
         })}
       </nav>
+      <span data-testid="sidebar-running" hidden aria-hidden="true">Running</span>
 
       {!collapsed && (
         <div className="mt-6 flex-1 overflow-y-auto scrollbar-sleek px-2.5 text-xs text-muted-foreground">
@@ -218,11 +215,6 @@ export function LeftStatusColumn({
             attentionCount === 0
               ? 'Nothing needs a decision right now.'
               : `${attentionCount} item${attentionCount === 1 ? ' needs' : 's need'} attention.`
-          )}
-          {selectedSurface === 'running' && (
-            runningCount === 0
-              ? 'No tasks are running right now.'
-              : `${runningCount} task${runningCount === 1 ? '' : 's'} active now.`
           )}
           {selectedSurface === 'workers' && (
             workerStatus === null
