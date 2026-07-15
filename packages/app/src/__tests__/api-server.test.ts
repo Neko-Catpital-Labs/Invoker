@@ -397,6 +397,7 @@ describe('GET /api/workflows/:id/review-gate', () => {
       mergeTaskId: null,
       status: null,
       ready: false,
+      substate: null,
       artifacts: [],
       discardedArtifacts: [],
       edges: [],

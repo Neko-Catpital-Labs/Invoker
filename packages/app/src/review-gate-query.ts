@@ -20,6 +20,25 @@ function scalarArtifact(task: TaskState): ReviewGateArtifact | null {
   };
 }
 
+function deriveReviewGateSubstate(
+  mergeTask: TaskState,
+  requiredArtifacts: readonly ReviewGateArtifact[],
+): ReviewGateQueryResponse['substate'] {
+  if (mergeTask.execution.pendingFixError !== undefined) return 'fix_pending';
+  if (requiredArtifacts.some((artifact) => artifact.mergeState === 'dirty')) return 'merge_conflict';
+  if (requiredArtifacts.some((artifact) => artifact.checksState === 'failure')) return 'ci_failing';
+  if (requiredArtifacts.some((artifact) => artifact.checksState === 'pending')) return 'ci_pending';
+  if (
+    requiredArtifacts.length > 0
+    && requiredArtifacts.every((artifact) => artifact.status === 'open')
+    && requiredArtifacts.every((artifact) => artifact.checksState === 'success')
+  ) {
+    return 'ready_to_land';
+  }
+  if (requiredArtifacts.length > 0) return 'review_open';
+  return null;
+}
+
 export function buildReviewGateQueryResponse(args: {
   workflowId: string;
   workflow: unknown | undefined;
@@ -34,6 +53,7 @@ export function buildReviewGateQueryResponse(args: {
       activeGeneration: null,
       completion,
       ready: false,
+      substate: null,
       artifacts: [],
       discardedArtifacts: [],
       edges: [],
@@ -62,6 +82,7 @@ export function buildReviewGateQueryResponse(args: {
 
   const requiredArtifacts = artifacts.filter((artifact) => artifact.required);
   const ready = requiredArtifacts.length > 0 && requiredArtifacts.every((artifact) => artifact.status === 'approved');
+  const substate = deriveReviewGateSubstate(mergeTask, requiredArtifacts);
   const edges = artifacts.length < 2
     ? []
     : artifacts.slice(0, -1).map((artifact, index) => ({
@@ -76,6 +97,7 @@ export function buildReviewGateQueryResponse(args: {
     activeGeneration,
     completion,
     ready,
+    substate,
     artifacts,
     discardedArtifacts,
     edges,
