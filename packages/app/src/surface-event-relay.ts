@@ -42,6 +42,25 @@ function workflowIdFromTaskId(taskId: string): string | undefined {
  * Start relaying workflow-progress surface events on the IPC bus.
  * Returns a stop function that unsubscribes and clears pending timers.
  */
+function reviewStateLabel(substate: ReturnType<typeof buildReviewGateQueryResponse>['substate']): string | undefined {
+  switch (substate) {
+    case 'review_open':
+      return 'review open';
+    case 'ci_pending':
+      return 'CI pending';
+    case 'ci_failing':
+      return 'CI failing';
+    case 'merge_conflict':
+      return 'merge conflict';
+    case 'fix_pending':
+      return 'fix pending approval';
+    case 'ready_to_land':
+      return 'ready to land';
+    default:
+      return undefined;
+  }
+}
+
 export function startSurfaceEventRelay(deps: SurfaceEventRelayDeps): () => void {
   const { messageBus, persistence, orchestrator } = deps;
   const progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -53,9 +72,7 @@ export function startSurfaceEventRelay(deps: SurfaceEventRelayDeps): () => void 
     const percentComplete = counts.total > 0 ? Math.round((counts.completed / counts.total) * 100) : 0;
     const gate = buildReviewGateQueryResponse({ workflowId, workflow, tasks });
     const prUrl = gate.artifacts.find((artifact) => artifact.url)?.url;
-    const reviewState = gate.mergeTaskId
-      ? (gate.ready ? 'review ready' : (gate.status ?? undefined))
-      : undefined;
+    const reviewState = gate.mergeTaskId ? reviewStateLabel(gate.substate) : undefined;
     const event = {
       type: 'workflow_progress' as const,
       progress: {

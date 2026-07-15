@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
-import {
-  publishReviewGateCiFailedLifecycleEvent,
-  publishReviewGateMergeConflictLifecycleEvent,
-} from '../lifecycle-event-bridge.js';
+import { publishReviewGateCiFailedLifecycleEvent } from '../lifecycle-event-bridge.js';
 import { loadConfig, resolveSecretsFilePath } from '../config.js';
 import {
   killRunningTaskExecution,
@@ -48,7 +45,6 @@ vi.mock('@invoker/execution-engine', () => {
 
 vi.mock('../lifecycle-event-bridge.js', () => ({
   publishReviewGateCiFailedLifecycleEvent: vi.fn(),
-  publishReviewGateMergeConflictLifecycleEvent: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -195,8 +191,9 @@ describe('task-runner-wiring', () => {
     };
     const persistence = {
       updateTask: vi.fn(),
-      loadWorkflow: vi.fn(() => ({ mergeMode: 'local' })),
+      loadWorkflow: vi.fn(() => ({ onFinish: 'merge', mergeMode: 'manual' })),
     };
+
 
     rebuildTaskRunner({
       orchestrator: orchestrator as any,
@@ -222,12 +219,6 @@ describe('task-runner-wiring', () => {
       expect.objectContaining({ messageBus: expect.any(Object), getTask: expect.any(Function) }),
     );
 
-    await config.reviewGateMergeConflictPublisher.publish({ taskId: 'merge-task' });
-    expect(publishReviewGateMergeConflictLifecycleEvent).toHaveBeenCalledWith(
-      { taskId: 'merge-task' },
-      expect.objectContaining({ messageBus: expect.any(Object), getTask: expect.any(Function) }),
-    );
-
     const approveHook = orchestrator.setBeforeApproveHook.mock.calls[0]?.[0];
     const mergeTask = {
       config: { isMergeNode: true, workflowId: 'wf-1' },
@@ -236,7 +227,11 @@ describe('task-runner-wiring', () => {
     await approveHook(mergeTask);
     expect(currentRunner.approveMerge).toHaveBeenCalledWith('wf-1');
 
-    persistence.loadWorkflow.mockReturnValueOnce({ mergeMode: 'external_review' });
+    persistence.loadWorkflow.mockReturnValueOnce({ onFinish: 'pull_request', mergeMode: 'manual' });
+    await approveHook(mergeTask);
+    expect(currentRunner.approveMerge).toHaveBeenCalledTimes(1);
+
+    persistence.loadWorkflow.mockReturnValueOnce({ onFinish: 'merge', mergeMode: 'external_review' });
     await approveHook(mergeTask);
     expect(currentRunner.approveMerge).toHaveBeenCalledTimes(1);
   });
