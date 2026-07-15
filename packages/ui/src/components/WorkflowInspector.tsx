@@ -183,6 +183,8 @@ interface WorkflowInspectorProps {
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onApprove?: (task: TaskState) => void;
   onReject?: (task: TaskState) => void;
+  onRestartTask?: (taskId: string) => void;
+  onRecreateTask?: (taskId: string) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   onSetMergeMode?: (workflowId: string, mergeMode: MergeMode) => Promise<void>;
   onToggleCollapsed: () => void;
@@ -306,6 +308,8 @@ export function WorkflowInspector({
   onEditCommand,
   onApprove,
   onReject,
+  onRestartTask,
+  onRecreateTask,
   onSetMergeBranch,
   onSetMergeMode,
   onToggleCollapsed,
@@ -425,6 +429,8 @@ export function WorkflowInspector({
     return [...ids].filter(Boolean);
   }, [executionPools, task?.config.poolId]);
   const isTaskBusy = task?.status === 'running' || task?.status === 'fixing_with_ai';
+  const isCrashPreserved = Boolean(task?.execution.crashPreservedAt);
+  const crashPreservedSummary = task?.execution.crashPreservedDiagnosticSummary;
   const hasPrompt = task?.config.prompt !== undefined;
   const hasCommand = task?.config.command !== undefined;
   const hasExecutableContent = Boolean(hasPrompt || hasCommand);
@@ -549,6 +555,48 @@ export function WorkflowInspector({
               <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-amber-100">
                 {task.execution.pendingFixError}
               </pre>
+            </div>
+          )}
+          {isCrashPreserved && task && (
+            <div
+              data-testid="inspector-crash-preserved"
+              className="mt-3 rounded border border-amber-500/40 bg-amber-950/40 p-3"
+            >
+              <h3 className="text-[11px] uppercase tracking-wide text-amber-200">Preserved after crash</h3>
+              <p className="mt-1 text-xs text-amber-100 break-words">
+                Invoker kept this task unchanged after the previous owner died so the state stays inspectable.
+              </p>
+              {task.execution.crashPreservedOwnerPid !== undefined && (
+                <p className="mt-2 text-[11px] text-amber-300">
+                  Previous owner PID: {task.execution.crashPreservedOwnerPid}
+                </p>
+              )}
+              {task.execution.crashPreservedReportPath && (
+                <p className="mt-1 text-[11px] text-amber-300 break-all">
+                  Crash report: {task.execution.crashPreservedReportPath}
+                </p>
+              )}
+              {crashPreservedSummary && (
+                <p className="mt-2 text-[11px] text-amber-200 break-words">
+                  {crashPreservedSummary}
+                </p>
+              )}
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => onRestartTask?.(task.id)}
+                  className="flex-1 rounded bg-amber-500 px-3 py-2 text-xs font-medium text-black transition-colors hover:bg-amber-400"
+                >
+                  Restart Task
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRecreateTask?.(task.id)}
+                  className="flex-1 rounded border border-amber-400 px-3 py-2 text-xs font-medium text-amber-100 transition-colors hover:bg-amber-900/40"
+                >
+                  Recreate from Task
+                </button>
+              </div>
             </div>
           )}
           {showApprovalActions && task && (
