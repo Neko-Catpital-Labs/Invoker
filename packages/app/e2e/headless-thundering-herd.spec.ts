@@ -83,15 +83,20 @@ function parseJsonStdout(stdout: string): Record<string, unknown> {
 }
 
 async function measureInspectorToggleResponsive(page: Page, timeoutMs: number, label: string): Promise<number> {
-  const minimizeButton = page.getByLabel('Minimize inspector');
-  const maximizeButton = page.getByLabel('Maximize inspector');
+  const sidebarToggle = page.getByTestId('sidebar-collapse-toggle');
   const startedAt = Date.now();
   try {
     await expect(async () => {
-      await minimizeButton.click();
-      await expect(maximizeButton).toBeVisible({ timeout: 1000 });
-      await maximizeButton.click();
-      await expect(minimizeButton).toBeVisible({ timeout: 1000 });
+      await expect(sidebarToggle).toBeVisible({ timeout: 1000 });
+      const initialLabel = await sidebarToggle.getAttribute('aria-label');
+      await sidebarToggle.click();
+      if (initialLabel) {
+        await expect(sidebarToggle).not.toHaveAttribute('aria-label', initialLabel, { timeout: 1000 });
+      }
+      await sidebarToggle.click();
+      if (initialLabel) {
+        await expect(sidebarToggle).toHaveAttribute('aria-label', initialLabel, { timeout: 1000 });
+      }
     }).toPass({ timeout: timeoutMs });
   } catch (err) {
     console.log(`HEADLESS_THUNDERING_HERD_INTERACTION_FAILURE=${JSON.stringify({

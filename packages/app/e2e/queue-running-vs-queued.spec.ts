@@ -53,11 +53,11 @@ test.describe('queue running vs queued', () => {
 
     // Stay on home — this is the live bottom bar surface.
     await expect(page.getByTestId('sidebar-home')).toBeVisible();
-    await expect(page.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/1)');
-    await expect(page.getByTestId('queue-chip-queued')).toHaveTextContent('Queued (1)');
+    await expect(page.getByTestId('queue-chip-running')).toHaveText('Executing (1/1)');
+    await expect(page.getByTestId('queue-chip-queued')).toHaveText('Queued (1)');
     await captureScreenshot(page, 'home-queue-capacity-chips');
 
-    await page.getByTestId('sidebar-running').click();
+    await page.getByTestId('queue-chip-running').click();
     await expect(page.getByTestId('running-queue-section-running')).toContainText('Running (1)');
     await expect(page.getByTestId('running-queue-section-queued')).toContainText('Queued (1)');
     await captureScreenshot(page, 'running-queued-split');

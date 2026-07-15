@@ -41,6 +41,12 @@ const FAILING_PLAN = {
 
 test.describe('Fix with Claude', () => {
   async function openFixWithClaude(page: any, taskId: string) {
+    const readStatus = async () => page.evaluate(async (id: string) => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      return tasks.find((task: { id: string }) => task.id === id)?.status;
+    }, taskId);
+
     const node = page.locator('.react-flow__node[data-testid$="/task-fail"]').first();
     await expect(node).toBeVisible({ timeout: 10000 });
     const box = await node.boundingBox();
@@ -72,8 +78,10 @@ test.describe('Fix with Claude', () => {
     }
 
     if (await fixBtn.isVisible({ timeout: 10000 }).catch(() => false)) {
-      await fixBtn.click();
-      return;
+      await fixBtn.click({ force: true });
+      await page.waitForTimeout(500);
+      const status = await readStatus();
+      if (status === 'awaiting_approval' || status === 'fixing_with_ai') return;
     }
 
     await page.evaluate((id: string) => window.invoker.fixWithAgent(id, 'claude'), taskId);

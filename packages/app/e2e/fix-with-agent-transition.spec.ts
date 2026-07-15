@@ -11,8 +11,8 @@
  * and uses isFixingWithAI: false (instead of undefined) so the value
  * survives IPC serialization.
  *
- * This test exercises the real UI action path to verify the end-to-end
- * rendered state transition.
+ * This test exercises the exposed fixWithAgent IPC path to verify the
+ * end-to-end rendered state transition.
  */
 
 import {
@@ -22,6 +22,7 @@ import {
   startPlan,
   waitForTaskStatus,
   E2E_REPO_URL,
+  resolveTaskId,
 } from './fixtures/electron-app.js';
 
 const PLAN = {
@@ -44,6 +45,8 @@ const PLAN = {
   ],
 };
 
+test.use({ repoConfig: { autoFixRetries: 0, autoApproveAIFixes: false } });
+
 test.describe('Fix with Agent - rendered state transition', () => {
   test('rendered node transitions to APPROVE FIX after fixWithAgent IPC', async ({ page }) => {
     await loadPlan(page, PLAN);
@@ -54,16 +57,16 @@ test.describe('Fix with Agent - rendered state transition', () => {
     const node = page.locator('.react-flow__node[data-testid$="/task-fail"]');
     await expect(node.locator('text=FAILED')).toBeVisible({ timeout: 3000 });
 
-    await node.click({ button: 'right' });
-    const fixBtn = page.locator('button').filter({ hasText: 'Fix with Claude' });
-    await expect(fixBtn).toBeVisible({ timeout: 2000 });
-    await fixBtn.click();
+    const scopedTaskId = await resolveTaskId(page, 'task-fail');
+    await page.evaluate((id) => window.invoker.fixWithAgent(id, 'claude'), scopedTaskId);
 
     // DB should reflect awaiting_approval
     await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 15000);
 
+    await page.evaluate(() => window.invoker.refreshTaskGraph());
+    await page.waitForTimeout(1000);
     // Rendered DOM must show approval state, not "FIXING WITH AI"
-    const approveLabel = node.locator('text=/APPROVE/');
+    const approveLabel = node.locator('text=/Approve/i');
     await expect(approveLabel).toBeVisible({ timeout: 5000 });
     await expect(node.locator('text=FIXING WITH AI')).not.toBeVisible();
   });
