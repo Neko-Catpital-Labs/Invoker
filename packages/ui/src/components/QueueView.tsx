@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { TaskState, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMeta } from '../types.js';
+import type { QueueStatus, TaskState, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMeta } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';
 import {
   displayWorkerTaskId,
@@ -13,6 +13,7 @@ import { WorkerActivityCard } from './WorkerActivityCard.js';
 interface QueueViewProps {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
+  queueStatus?: QueueStatus | null;
   workerStatus: WorkerStatusSnapshot | null;
   readOnly: boolean;
   onStartWorker: (kind: string) => Promise<void> | void;
@@ -39,6 +40,7 @@ function relatedTaskLabel(taskId: string, tasks: Map<string, TaskState>): string
 export function QueueView({
   tasks,
   workflows,
+  queueStatus = null,
   workerStatus,
   readOnly,
   onStartWorker,
@@ -73,6 +75,14 @@ export function QueueView({
     ),
     [workerStatus],
   );
+  const queueRunning = queueStatus?.running ?? [];
+  const queueQueued = queueStatus?.queued ?? [];
+
+  const queueTaskLabel = useCallback(
+    (entry: { taskId: string; description?: string }) =>
+      entry.description || tasks.get(entry.taskId)?.description || displayWorkerTaskId(entry.taskId),
+    [tasks],
+  );
 
   const toggleExpanded = useCallback((rowKey: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -104,6 +114,39 @@ export function QueueView({
           </h3>
           <div className="mt-1 text-sm text-muted-foreground">
             Only work started by a worker process appears here.
+          </div>
+        </div>
+
+        <div className="shrink-0 border-b border-border px-4 py-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <section data-testid="running-queue-section-running" className="rounded-md border border-border bg-card/60 p-3">
+              <div className="text-sm font-medium text-foreground">Running ({queueRunning.length})</div>
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {queueRunning.length > 0 ? (
+                  queueRunning.map((entry) => (
+                    <div key={entry.taskId} className="truncate" title={queueTaskLabel(entry)}>
+                      {queueTaskLabel(entry)}
+                    </div>
+                  ))
+                ) : (
+                  <div>No running tasks.</div>
+                )}
+              </div>
+            </section>
+            <section data-testid="running-queue-section-queued" className="rounded-md border border-border bg-card/60 p-3">
+              <div className="text-sm font-medium text-foreground">Queued ({queueQueued.length})</div>
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {queueQueued.length > 0 ? (
+                  queueQueued.map((entry) => (
+                    <div key={entry.taskId} className="truncate" title={queueTaskLabel(entry)}>
+                      {queueTaskLabel(entry)}
+                    </div>
+                  ))
+                ) : (
+                  <div>No queued tasks.</div>
+                )}
+              </div>
+            </section>
           </div>
         </div>
 
