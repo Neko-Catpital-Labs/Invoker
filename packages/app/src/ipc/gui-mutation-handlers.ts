@@ -1212,6 +1212,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
     const planText = String(planTextArg);
     await loadGeneratedPlanPreview(planText, { logLabel: 'load-plan' });
+    publishOrchestratorSnapshotToRenderer();
   });
 
   if (process.env.NODE_ENV === 'test') {
