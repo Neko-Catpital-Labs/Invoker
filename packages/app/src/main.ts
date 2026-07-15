@@ -235,9 +235,11 @@ import {
   resetRendererUiPerfCounters,
 } from './renderer-ui-perf.js';
 import {
+  bindPlanningTerminalSessionState,
   registerPlanningTerminalSessionIpcHandlers,
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
+  type TerminalSessionPersistenceHandle,
 } from './terminal-session-ipc.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
 import { seedMainProcessHitchFixture } from './main-process-hitch-fixture.js';
@@ -1223,6 +1225,11 @@ function startHeadlessMode(): void {
             await loadGeneratedPlan(planText);
             return undefined;
           }
+          case 'invoker:start': {
+            const started = orchestrator.startExecution();
+            logger.info(`standalone startExecution returned ${started.length} tasks: [${started.map(t => t.id).join(', ')}]`, { module: 'ipc-delegate' });
+            return started;
+          }
           case 'invoker:stop': {
             logger.info('stop — destroying all daemon executors', { module: 'ipc-delegate' });
             const failInFlightTasks = (): void => {
@@ -1845,11 +1852,19 @@ function createEmbeddedTerminalBackendFromConfig(
       mainWindow.webContents.send('invoker:terminal-exit', payload);
     }
   });
+  const planningTerminalState = bindPlanningTerminalSessionState({
+    embeddedTerminalManager,
+    logger,
+    planningChatSessions,
+    getPlanningSessionStore: () => (ownerMode ? persistence : undefined),
+    repoRoot,
+  });
   const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   let dbPollInterval: { stop(): void } | null = null;
   let uiPerfLogInterval: { stop(): void } | null = null;
   let rendererTaskFeed: ReturnType<typeof createRendererTaskFeed> | null = null;
   let guiMutationTaskActions: GuiMutationTaskActions | null = null;
+  let terminalSessionPersistenceHandle: TerminalSessionPersistenceHandle | null = null;
   const deferredWorkflowLaunches = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
     taskIds: string[];
@@ -2483,7 +2498,7 @@ function createEmbeddedTerminalBackendFromConfig(
     );
 
     if (ownerMode) {
-      registerTerminalSessionPersistence({
+      terminalSessionPersistenceHandle = registerTerminalSessionPersistence({
         embeddedTerminalManager,
         persistence,
         uiPerfStats,
@@ -2847,6 +2862,9 @@ function createEmbeddedTerminalBackendFromConfig(
       getBundledSkillsStatus,
       installPackagedSkills,
     });
+    if (ownerMode) {
+      planningTerminalState.restorePersistedPlanningTerminals();
+    }
 
     ipcMain.handle('invoker:get-workers', async () => {
       if (!ownerMode) {
@@ -2996,7 +3014,9 @@ function createEmbeddedTerminalBackendFromConfig(
 
       try {
         if (apiServer) await apiServer.close().catch(() => {});
+        terminalSessionPersistenceHandle?.flushPending();
         embeddedTerminalManager.closeAll({ preserveForRestart: true });
+        terminalSessionPersistenceHandle?.flushPending();
         await workerRuntimeController?.stopAll();
         dbPollInterval?.stop();
         uiPerfLogInterval?.stop();
@@ -3006,6 +3026,8 @@ function createEmbeddedTerminalBackendFromConfig(
         }
 
         embeddedTerminalManager.closeAll();
+        terminalSessionPersistenceHandle?.dispose();
+        terminalSessionPersistenceHandle = null;
         if (executorRegistry) {
           await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
         }
