@@ -4422,23 +4422,43 @@ console.log(JSON.stringify(out));
       consolidateSpy.mockRestore();
     });
 
-    it('approveMerge with onFinish=pull_request persists PR URL', async () => {
+    it('executeMergeNode with onFinish=pull_request parks in review_ready with a typed review gate', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
+      };
       const persistence = {
         loadWorkflow: () => ({
           id: 'wf-1',
           onFinish: 'pull_request',
+          mergeMode: 'manual',
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           name: 'Test Workflow',
         }),
         updateTask: vi.fn(),
-        getWorkspacePath: () => null,
+      };
+      const mergeGateProvider = {
+        name: 'github',
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/55',
+          identifier: 'owner/repo#55',
+        }),
       };
       const executor = new TaskRunner({
-        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        orchestrator: orchestrator as any,
         persistence: persistence as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+        callbacks: { onComplete: vi.fn() },
       });
 
       (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
@@ -4456,39 +4476,55 @@ console.log(JSON.stringify(out));
         sessionId: 'sess-pr-1',
         agentName: 'codex',
       });
-      (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/55');
+      (executor as any).execPr = vi.fn();
 
-      const logSpy = vi.spyOn(console, 'log');
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
 
-      await executor.approveMerge('wf-1');
+      await (executor as any).executeMergeNode(mergeTask);
 
-      // Should push + create PR (with clone dir as cwd)
       expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
         title: 'Test Workflow',
         baseBranch: 'master',
         featureBranch: 'plan/feature',
         cwd: '/tmp/mock-wt',
       }));
-      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary\n\nAuthored body', '/tmp/mock-wt');
-
-      // Should persist the PR URL on the merge task
-      expect(persistence.updateTask).toHaveBeenCalledWith(
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(expect.objectContaining({
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        title: 'Test Workflow',
+        cwd: '/tmp/mock-wt',
+        body: '## Summary\n\nAuthored body',
+      }));
+      expect((executor as any).execPr).not.toHaveBeenCalled();
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({
-          config: expect.objectContaining({ summary: expect.any(String) }),
-          execution: { reviewUrl: 'https://github.com/owner/repo/pull/55' },
+          execution: expect.objectContaining({
+            reviewUrl: 'https://github.com/owner/repo/pull/55',
+            reviewId: 'owner/repo#55',
+            reviewStatus: 'Awaiting review',
+            reviewGate: expect.objectContaining({
+              activeGeneration: 0,
+              artifacts: [expect.objectContaining({
+                providerId: 'owner/repo#55',
+                status: 'open',
+                generation: 0,
+              })],
+            }),
+          }),
         }),
+        expect.objectContaining({ generation: 0 }),
       );
-
-      // Should log the PR URL
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('https://github.com/owner/repo/pull/55'),
-      );
-
-      logSpy.mockRestore();
+      expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
-    it('automatic merge with onFinish=pull_request persists PR URL', async () => {
+
+    it('automatic merge with onFinish=pull_request reuses typed review publication instead of execPr', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -4496,6 +4532,9 @@ console.log(JSON.stringify(out));
         getTask: (id: string) => allTasks.find(t => t.id === id),
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -4508,12 +4547,20 @@ console.log(JSON.stringify(out));
         }),
         updateTask: vi.fn(),
       };
+      const mergeGateProvider = {
+        name: 'github',
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/77',
+          identifier: 'owner/repo#77',
+        }),
+      };
       const onComplete = vi.fn();
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: persistence as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
         callbacks: { onComplete },
       });
 
@@ -4532,7 +4579,7 @@ console.log(JSON.stringify(out));
         sessionId: 'sess-pr-2',
         agentName: 'codex',
       });
-      (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/77');
+      (executor as any).execPr = vi.fn();
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -4543,21 +4590,28 @@ console.log(JSON.stringify(out));
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      // Should persist the PR URL via the final updateTask call
-      expect(persistence.updateTask).toHaveBeenCalledWith(
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
+        expect.objectContaining({ body: '## Summary\n\nAuto authored body' }),
+      );
+      expect((executor as any).execPr).not.toHaveBeenCalled();
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({
           execution: expect.objectContaining({
             reviewUrl: 'https://github.com/owner/repo/pull/77',
+            reviewGate: expect.objectContaining({
+              artifacts: [expect.objectContaining({ providerId: 'owner/repo#77' })],
+            }),
           }),
         }),
+        expect.objectContaining({ generation: 0 }),
       );
 
-      // Should complete successfully
-      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
+      expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalledWith(
         expect.objectContaining({ status: 'completed' }),
       );
     });
+
 
     it('executeMergeNode passes authored body to createReview in external_review mode', async () => {
       const allTasks = [
@@ -4704,7 +4758,7 @@ console.log(JSON.stringify(out));
       );
     });
 
-    it('approveMerge passes summary body to execPr for pull_request onFinish', async () => {
+    it('approveMerge with onFinish=pull_request does not publish a second review', async () => {
       const persistence = {
         loadWorkflow: () => ({
           id: 'wf-1',
@@ -4723,39 +4777,16 @@ console.log(JSON.stringify(out));
         cwd: '/tmp',
       });
 
-      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
-        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
-        return '';
-      };
-      (executor as any).execGitIn = async (args: string[], _dir: string) => {
-        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
-        return '';
-      };
-      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
-      (executor as any).removeMergeWorktree = async () => {};
-      (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nApprove summary');
-      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
-        body: '## Summary\n\nApprove authored body',
-        sessionId: 'sess-pr-3',
-        agentName: 'codex',
-      });
-      (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/88');
+      (executor as any).createMergeWorktree = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn();
+      (executor as any).execPr = vi.fn();
 
       await executor.approveMerge('wf-1');
 
-      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
-        title: 'Test Workflow',
-        workflowSummary: '## Summary\nApprove summary',
-      }));
-      expect((executor as any).execPr).toHaveBeenCalledWith(
-        'master', 'plan/feature', 'Test Workflow', '## Summary\n\nApprove authored body', '/tmp/mock-wt',
-      );
-      expect(persistence.updateTask).toHaveBeenCalledWith(
-        '__merge__wf-1',
-        expect.objectContaining({
-          config: expect.objectContaining({ summary: '## Summary\nApprove summary' }),
-        }),
-      );
+      expect((executor as any).createMergeWorktree).not.toHaveBeenCalled();
+      expect((executor as any).authorPrBodyWithSkill).not.toHaveBeenCalled();
+      expect((executor as any).execPr).not.toHaveBeenCalled();
+      expect(persistence.updateTask).not.toHaveBeenCalled();
     });
   });
 
@@ -5394,77 +5425,6 @@ console.log(JSON.stringify(out));
           'manual-heartbeat',
           expect.objectContaining({ source: 'executor' }),
         );
-      });
-
-      it('publishes review-gate merge conflict wakeups for open PR conflicts', async () => {
-        const task = makeTask({
-          id: 'merge-conflict',
-          status: 'review_ready',
-          config: { workflowId: 'wf-merge-conflict', isMergeNode: true },
-          execution: {
-            generation: 4,
-            selectedAttemptId: 'attempt-merge',
-            reviewId: 'owner/repo#303',
-            branch: 'feature/conflict',
-            reviewGate: {
-              activeGeneration: 4,
-              completion: { required: 'all', status: 'approved' as const },
-              artifacts: [{
-                id: 'pr-303',
-                providerId: 'owner/repo#303',
-                required: true,
-                status: 'open' as const,
-                generation: 4,
-                headSha: 'abc123',
-              }],
-            },
-          },
-          taskStateVersion: 13,
-        });
-        const reviewGateMergeConflictPublisher = { publish: vi.fn().mockResolvedValue(undefined) };
-        const orchestrator = {
-          getTask: (id: string) => (id === task.id ? task : undefined),
-          getAllTasks: () => [task],
-          approve: vi.fn(),
-          recordTaskHeartbeat: vi.fn(),
-        };
-        const persistence = { updateTask: vi.fn() };
-        const mergeGateProvider = {
-          checkApproval: vi.fn().mockResolvedValue({
-            lifecycle: 'open',
-            rejected: false,
-            statusText: 'Awaiting review',
-            url: 'https://github.com/owner/repo/pull/303',
-            headSha: 'abc123',
-            headRef: 'feature/conflict',
-            mergeState: 'dirty',
-            hasMergeConflict: true,
-          }),
-        };
-
-        const executor = new TaskRunner({
-          orchestrator: orchestrator as any,
-          persistence: persistence as any,
-          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
-          cwd: '/runner-base-cwd',
-          mergeGateProvider: mergeGateProvider as any,
-          reviewGateMergeConflictPublisher: reviewGateMergeConflictPublisher as any,
-        });
-
-        await executor.checkMergeGateStatuses();
-
-        expect(reviewGateMergeConflictPublisher.publish).toHaveBeenCalledWith({
-          taskId: 'merge-conflict',
-          workflowId: 'wf-merge-conflict',
-          reviewId: 'owner/repo#303',
-          reviewUrl: 'https://github.com/owner/repo/pull/303',
-          headSha: 'abc123',
-          headRef: 'feature/conflict',
-          branch: 'feature/conflict',
-          selectedAttemptId: 'attempt-merge',
-          generation: 4,
-          statusText: 'Awaiting review',
-        });
       });
 
       it('polls all current reviewGate artifacts and approves only after every required artifact is approved', async () => {
@@ -6932,7 +6892,7 @@ console.log(JSON.stringify(out));
       expect(mergeAbort).toBeDefined();
     });
 
-    it('appends visual proof markdown when runVisualProofCapture returns content', async () => {
+    it('leaves pull_request visual proof capture to the caller instead of consolidateAndMerge', async () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('t1', makeTask({
         id: 't1', status: 'completed',
@@ -6973,19 +6933,18 @@ console.log(JSON.stringify(out));
         sessionId: 'sess-pr-5',
         agentName: 'codex',
       });
-      (executor as any).execPr = vi.fn().mockResolvedValue('https://example.com/pr');
 
       await executor.consolidateAndMerge(
         'pull_request', 'master', 'plan/test', 'wf-1', 'Test', ['t1'],
         'original body', true,
       );
 
-      expect((executor as any).runVisualProofCapture).toHaveBeenCalledWith(
-        'master', 'plan/test', expect.any(String), undefined,
-      );
+      expect((executor as any).runVisualProofCapture).not.toHaveBeenCalled();
+      expect((executor as any).authorPrBodyWithSkill).not.toHaveBeenCalled();
     });
 
-    it('proceeds normally when runVisualProofCapture returns undefined', async () => {
+
+    it('still succeeds when pull_request visual proof is delegated to the caller', async () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('t1', makeTask({
         id: 't1', status: 'completed',
@@ -7021,20 +6980,15 @@ console.log(JSON.stringify(out));
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).runVisualProofCapture = vi.fn().mockResolvedValue(undefined);
-      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
-        body: '## Summary\n\nAuthored consolidate body',
-        sessionId: 'sess-pr-6',
-        agentName: 'codex',
-      });
-      (executor as any).execPr = vi.fn().mockResolvedValue('https://example.com/pr');
+      (executor as any).authorPrBodyWithSkill = vi.fn();
 
-      // Should not throw
       await executor.consolidateAndMerge(
         'pull_request', 'master', 'plan/test', 'wf-1', 'Test', ['t1'],
         'original body', true,
       );
 
-      expect((executor as any).runVisualProofCapture).toHaveBeenCalled();
+      expect((executor as any).runVisualProofCapture).not.toHaveBeenCalled();
+      expect((executor as any).authorPrBodyWithSkill).not.toHaveBeenCalled();
     });
 
     it('skips visual proof when visualProof is false', async () => {

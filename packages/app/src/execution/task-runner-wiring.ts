@@ -12,10 +12,7 @@ import {
 } from '@invoker/execution-engine';
 import type { Logger } from '@invoker/contracts';
 import { loadConfig, resolveDefaultTaskExecutionSettings, resolveSecretsFilePath, type InvokerConfig } from '../config.js';
-import {
-  publishReviewGateCiFailedLifecycleEvent,
-  publishReviewGateMergeConflictLifecycleEvent,
-} from '../lifecycle-event-bridge.js';
+import { publishReviewGateCiFailedLifecycleEvent } from '../lifecycle-event-bridge.js';
 
 export type TaskHandleMap = Map<string, { handle: ExecutorHandle; executor: Executor }>;
 
@@ -71,11 +68,15 @@ export function wireTaskRunnerApproveHook(deps: Pick<
   'orchestrator' | 'persistence' | 'getTaskRunner'
 >): void {
   deps.orchestrator.setBeforeApproveHook(async (task: TaskState) => {
-    if (task.config.isMergeNode && task.config.workflowId && task.execution.pendingFixError === undefined) {
-      const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
-      if (workflow?.mergeMode === 'external_review') return;
-      await requireWiredTaskRunner(deps.getTaskRunner).approveMerge(task.config.workflowId);
-    }
+    if (!task.config.isMergeNode || !task.config.workflowId) return;
+    if (task.execution.pendingFixError !== undefined) return;
+
+    const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
+    if (!workflow) return;
+    if (workflow.onFinish !== 'merge') return;
+    if (workflow.mergeMode === 'external_review') return;
+
+    await requireWiredTaskRunner(deps.getTaskRunner).approveMerge(task.config.workflowId);
   });
 }
 
@@ -97,14 +98,6 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
     reviewGateCiFailurePublisher: {
       publish: (trigger) => {
         publishReviewGateCiFailedLifecycleEvent(trigger, {
-          messageBus: deps.messageBus,
-          getTask: (taskId) => deps.orchestrator.getTask(taskId),
-        });
-      },
-    },
-    reviewGateMergeConflictPublisher: {
-      publish: (trigger) => {
-        publishReviewGateMergeConflictLifecycleEvent(trigger, {
           messageBus: deps.messageBus,
           getTask: (taskId) => deps.orchestrator.getTask(taskId),
         });
