@@ -726,6 +726,10 @@ export function App() {
   const { tasks, workflows, clearTasks, refreshTaskGraph } = useTasks({
     onTaskGraphSnapshotApplied: handleTaskGraphSnapshotApplied,
   });
+  useEffect(() => {
+    if (workflows.size === 0 || tasks.size > 0) return;
+    void refreshTaskGraph();
+  }, [refreshTaskGraph, tasks.size, workflows.size]);
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
@@ -3297,7 +3301,7 @@ export function App() {
         Full graph ⤢
       </Button>
       {showMoreMenu && (
-        <div ref={graphActionsMenuRef} className="relative">
+        <div ref={graphActionsMenuRef} className="relative z-[1200]">
           <button
             type="button"
             data-testid="graph-more-button"
@@ -3309,7 +3313,7 @@ export function App() {
           {graphActionsMenuOpen && (
             <div
               data-testid="graph-more-menu"
-              className="absolute right-0 top-10 z-20 w-48 rounded-lg border border-border bg-card p-1 shadow-xl"
+              className="absolute right-0 top-10 z-[1200] w-48 rounded-lg border border-border bg-card p-1 shadow-xl"
             >
               <button
                 type="button"
@@ -3462,6 +3466,7 @@ export function App() {
         <QueueView
           tasks={tasks}
           workflows={workflows}
+          queueStatus={queueStatus}
           workerStatus={workerStatus}
           readOnly={runtimeStatus?.readOnly === true}
           onStartWorker={handleStartWorker}
@@ -3749,14 +3754,16 @@ export function App() {
             Close
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <WorkerActivityCard
-            snapshot={workerStatus}
-            selectedWorkerKind={selectedWorkerKind}
-            onSelectWorker={setSelectedWorkerKind}
-            showControls={false}
-          />
-        </div>
+        <section data-testid="worker-processes-section" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div data-testid="worker-process-scroll" className="min-h-0 flex-1 overflow-y-auto p-4">
+            <WorkerActivityCard
+              snapshot={workerStatus}
+              selectedWorkerKind={selectedWorkerKind}
+              onSelectWorker={setSelectedWorkerKind}
+              showControls={false}
+            />
+          </div>
+        </section>
       </div>
       <div className="min-w-0 flex-1 overflow-hidden">
         {renderWorkersDetail()}
@@ -3902,6 +3909,7 @@ export function App() {
           keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
           onStatusClick={handleStatusClick}
           queueStatus={queueStatus}
+          onOpenRunningSurface={() => selectViewMode('queue')}
         />
       )}
       <TerminalDrawer
