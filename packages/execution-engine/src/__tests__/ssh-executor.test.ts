@@ -1235,6 +1235,44 @@ describe('SshExecutor entry lifecycle', () => {
     proc.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
   });
+  it.skip('managed mode skips implicit provisioning and still reaches a Flutter payload', async () => {
+    const ssh2 = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteInvokerHome: '~/.invoker',
+    }) as any;
+
+    vi.spyOn(ssh2, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh2, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    await ssh2.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: "printf 'ok\\n' > .invoker-flutter-bootstrap-ran",
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const script = writeMock.mock.calls[0]![0] as string;
+    expect(script).not.toContain('PROVISION_PATH="$STAGING_DIR/provision.sh"');
+    expect(script).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+
+    proc.emit('close', 0, null);
+    await new Promise((r) => setTimeout(r, 50));
+  });
 
   it('changes managed branch and worktree when request lifecycleTag changes, as recreate does', async () => {
     const ssh2 = new SshExecutor({

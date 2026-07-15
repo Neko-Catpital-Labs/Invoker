@@ -354,6 +354,18 @@ describe('WorktreeExecutor', () => {
 
     taskProcess.emit('close', 0, null);
   });
+  it.skip('does not run implicit provisioning before spawning the task process', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    await executor.start(makeRequest());
+
+    const bootstrapCall = mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install'),
+    );
+    expect(bootstrapCall).toBeUndefined();
+
+    taskProcess.emit('close', 0, null);
+  });
 
   it('completion captures branch and commit hash in summary', async () => {
     const { taskProcess } = setupSpawnMock();
