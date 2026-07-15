@@ -2694,21 +2694,36 @@ function createEmbeddedTerminalBackendFromConfig(
     if (!ownerMode) {
       logger.info('follower mode startup: auto-run disabled', { module: 'init' });
     } else {
-      const orphaned = reconcileOrphanedInFlightTasksOnBoot({
-        orchestrator,
-        persistence,
-      });
-      if (orphaned.length > 0) {
-        logger.info(
-          `failed ${orphaned.length} orphaned in-flight task(s) left by a previous owner crash`,
-          { module: 'init', taskIds: orphaned.map((task) => task.id) },
-        );
-      }
-      if (invokerConfig.disableAutoRunOnStartup) {
-        logger.info('auto-run on startup disabled by config', { module: 'init' });
-      } else {
-        orchestrator.startExecution();
-      }
+      setTimeout(() => {
+        if (!ownerMode) return;
+        try {
+          const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
+          if (reconciledWorkerActions > 0) {
+            logger.info(
+              `reconciled ${reconciledWorkerActions} terminal worker action(s) on startup`,
+              { module: 'init' },
+            );
+          }
+          const orphaned = reconcileOrphanedInFlightTasksOnBoot({
+            orchestrator,
+            persistence,
+          });
+          if (orphaned.length > 0) {
+            logger.info(
+              `failed ${orphaned.length} orphaned in-flight task(s) left by a previous owner crash`,
+              { module: 'init', taskIds: orphaned.map((task) => task.id) },
+            );
+          }
+          if (invokerConfig.disableAutoRunOnStartup) {
+            logger.info('auto-run on startup disabled by config', { module: 'init' });
+          } else {
+            orchestrator.startExecution();
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logger.error(`deferred owner startup maintenance failed: ${message}`, { module: 'init' });
+        }
+      }, 0);
     }
 
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
