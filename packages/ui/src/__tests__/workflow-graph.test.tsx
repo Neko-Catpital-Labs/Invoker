@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { WorkflowGraph } from '../components/WorkflowGraph.js';
@@ -74,6 +74,10 @@ describe('WorkflowGraph', () => {
     getZoomMock.mockReturnValue(1);
     getViewportMock.mockReset();
     getViewportMock.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('calls selection and context menu handlers', () => {
@@ -442,6 +446,75 @@ describe('WorkflowGraph', () => {
     // Give any stray rAF a chance to flush before asserting nothing happened.
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('does not fit on a transient watchdog miss after manual viewport pan and graph data change', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const onManualViewport = vi.fn();
+
+    const { rerender } = render(
+      <WorkflowGraph
+        workflows={new Map([
+          ['wf-a', wf('wf-a', 'running')],
+          ['wf-b', wf('wf-b', 'pending')],
+        ])}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+        onManualViewport={onManualViewport}
+      />,
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(16);
+    });
+    await waitFor(() => expect(fitViewMock).toHaveBeenCalledTimes(1));
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    const pane = screen.getByTestId('rf__pane');
+    fireEvent.pointerDown(pane);
+    fireEvent.pointerUp(pane);
+    expect(onManualViewport).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <WorkflowGraph
+        workflows={new Map([
+          ['wf-a', wf('wf-a', 'running')],
+          ['wf-b', wf('wf-b', 'pending')],
+          ['wf-c', wf('wf-c', 'review_ready')],
+        ])}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+        onManualViewport={onManualViewport}
+      />,
+    );
+    expect(await screen.findByTestId('workflow-node-wf-c')).toBeInTheDocument();
+
+    const graphRoot = screen.getByTestId('workflow-graph-react-flow');
+    graphRoot.querySelectorAll<HTMLElement>('.react-flow__node').forEach((node) => {
+      node.style.visibility = 'hidden';
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    // No App is mounted, no cameraCommand is supplied, no selection fallback can
+    // run, and the watchdog has only one miss. A failure here isolates the source
+    // to WorkflowGraph's pre-recovery watchdog fit.
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(fitViewMock).toHaveBeenCalledTimes(1);
     expect(setCenterMock).not.toHaveBeenCalled();
   });
 
