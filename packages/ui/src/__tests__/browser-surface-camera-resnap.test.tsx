@@ -1,5 +1,5 @@
 /**
- * Regression: a browser surface (Needs Attention / Running / Workflows) must not
+ * Regression: a browser surface (Needs Attention / Workflows) must not
  * re-center or re-fit the task graph on every live update.
  *
  * The browser-surface camera effect in App used to depend on

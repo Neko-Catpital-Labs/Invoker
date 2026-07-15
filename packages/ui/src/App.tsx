@@ -1997,23 +1997,8 @@ export function App() {
       return;
     }
 
-    if (sidebarSurface === 'running') {
-      if (!runningEntries.length) {
-        if (selectedTaskId !== null || selectedWorkflowId !== null) {
-          setSelectedTaskId(null);
-          setSelectedWorkflowId(null);
-          setWorkflowSelectionDismissed(false);
-        }
-        return;
-      }
-      if (runningEntries.some((entry) => entry.task.id === selectedTaskId)) {
-        return;
-      }
-      selectTaskById(runningEntries[0].task.id);
-    }
   }, [
     attentionEntries,
-    runningEntries,
     selectTaskById,
     selectWorkflowById,
     selectedTaskId,
@@ -3519,20 +3504,8 @@ export function App() {
   const attentionSubtitle = attentionEntries.length === 0
     ? 'Nothing needs a decision right now.'
     : `${attentionEntries.length} item${attentionEntries.length === 1 ? '' : 's'} need attention.`;
-  const runningSubtitle = runningEntries.length === 0
-    ? 'No active tasks right now.'
-    : `${runningEntries.length} task${runningEntries.length === 1 ? '' : 's'} active now.`;
-
-  const browserSurfaceTitle = sidebarSurface === 'workflows'
-    ? 'Workflows'
-    : sidebarSurface === 'attention'
-      ? 'Needs Attention'
-      : 'Running';
-  const browserSurfaceSubtitle = sidebarSurface === 'workflows'
-    ? workflowsSubtitle
-    : sidebarSurface === 'attention'
-      ? attentionSubtitle
-      : runningSubtitle;
+  const browserSurfaceTitle = sidebarSurface === 'workflows' ? 'Workflows' : 'Needs Attention';
+  const browserSurfaceSubtitle = sidebarSurface === 'workflows' ? workflowsSubtitle : attentionSubtitle;
 
   const browserSelectedTitle = sidebarSurface === 'workflows'
     ? selectedWorkflow?.name ?? 'Select a workflow'
@@ -3549,11 +3522,9 @@ export function App() {
     : selectedTask
       ? formatTaskStatus(selectedTask.status)
       : 'No item selected';
-  const browserStatusToneClass = sidebarSurface === 'running'
-    ? 'bg-secondary text-secondary-foreground'
-    : sidebarSurface === 'attention'
-      ? 'bg-amber-950/70 text-amber-100'
-      : 'bg-secondary text-foreground';
+  const browserStatusToneClass = sidebarSurface === 'attention'
+    ? 'bg-amber-950/70 text-amber-100'
+    : 'bg-secondary text-foreground';
 
   const relatedBrowserTasks = Array.from(miniDagTasks.values()).filter((task) =>
     sidebarSurface === 'workflows' || task.id !== selectedTask?.id,
@@ -3579,9 +3550,9 @@ export function App() {
     )
   );
 
-  const renderTaskList = (entries: typeof attentionEntries, emptyTitle: string, emptyCopy: string, tone: 'attention' | 'running'): JSX.Element => (
+  const renderTaskList = (entries: typeof attentionEntries, emptyTitle: string, emptyCopy: string): JSX.Element => (
     entries.length === 0 ? renderBrowserEmptyState(emptyTitle, emptyCopy) : (
-      <div data-testid={`${tone}-rail-list`} className={`${RAIL_SCROLL_BODY_CLASS} p-3`}>
+      <div data-testid="attention-rail-list" className={`${RAIL_SCROLL_BODY_CLASS} p-3`}>
         <div className="space-y-1">
           {entries.map((entry) => (
             <BrowserTaskRow
@@ -3590,7 +3561,7 @@ export function App() {
               title={entry.task.description || entry.task.id}
               workflowName={entry.workflow?.name}
               statusLabel={formatTaskStatus(entry.task.status)}
-              tone={tone}
+              tone="attention"
               selected={selectedTaskId === entry.task.id}
               onSelect={selectTaskById}
             />
@@ -3719,9 +3690,7 @@ export function App() {
       <div className={RAIL_LIST_FRAME_CLASS}>
         {sidebarSurface === 'workflows'
           ? renderWorkflowsList()
-          : sidebarSurface === 'attention'
-            ? renderTaskList(attentionEntries, 'All clear', 'Nothing needs a decision right now.', 'attention')
-            : renderTaskList(runningEntries, 'No tasks running', 'Start a run to watch live work here.', 'running')}
+          : renderTaskList(attentionEntries, 'All clear', 'Nothing needs a decision right now.')}
       </div>
     </div>
   );
@@ -3740,7 +3709,6 @@ export function App() {
           keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
           onStatusClick={handleStatusClick}
           queueStatus={queueStatus}
-          onOpenRunningSurface={() => handleSelectSidebarSurface('running')}
         />
       )}
       <TerminalDrawer
@@ -3833,7 +3801,6 @@ export function App() {
         runningEntries={commandPaletteRunningEntries}
         workflowCount={workflowEntries.length}
         attentionCount={attentionEntries.length}
-        runningCount={runningEntries.length}
         onSelectSurface={handleSelectSidebarSurface}
         onSelectWorkflow={selectWorkflowById}
         onSelectTask={selectTaskById}
@@ -3900,7 +3867,6 @@ export function App() {
         <LeftStatusColumn
           workflowCount={workflowEntries.length}
           attentionCount={attentionEntries.length}
-          runningCount={runningEntries.length}
           workerStatus={workerStatus}
           planningSessionCount={planningSessions.length}
           planningAttentionCount={planningAttentionCount}
@@ -3922,6 +3888,10 @@ export function App() {
               renderGraphWorkspace('Plan graph', homeSubtitle, true)
             ) : sidebarSurface === 'planning' ? (
               renderPlanningTerminalSurface()
+            ) : sidebarSurface === 'workers' ? (
+              <div className="flex min-h-0 flex-1 overflow-hidden">
+                {renderBrowserDetailWorkspace()}
+              </div>
             ) : (
               <div className="flex min-h-0 flex-1 overflow-hidden">
                 {renderBrowserRail()}

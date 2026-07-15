@@ -38,7 +38,6 @@ function entriesFrom(workflows: Map<string, WorkflowMeta>, tasks: Map<string, Ta
     runningEntries: runningEntries.slice(0, COMMAND_PALETTE_MAX_ROWS),
     workflowCount: workflowEntries.length,
     attentionCount: attentionEntries.length,
-    runningCount: runningEntries.length,
   };
 }
 
@@ -109,7 +108,6 @@ function Harness({
       <LeftStatusColumn
         workflowCount={workflowEntries.length}
         attentionCount={attentionEntries.length}
-        runningCount={runningEntries.length}
         workerStatus={null}
         selectedSurface="home"
         collapsed={false}
@@ -128,7 +126,6 @@ function Harness({
         runningEntries={runningEntries.slice(0, COMMAND_PALETTE_MAX_ROWS)}
         workflowCount={workflowEntries.length}
         attentionCount={attentionEntries.length}
-        runningCount={runningEntries.length}
         onSelectSurface={() => {}}
         onSelectWorkflow={() => {}}
         onSelectTask={() => {}}
