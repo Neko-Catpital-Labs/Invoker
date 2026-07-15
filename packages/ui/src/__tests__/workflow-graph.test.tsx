@@ -533,7 +533,23 @@ describe('WorkflowGraph', () => {
     expect(setViewportMock).toHaveBeenCalledWith({ x: 40, y: 8, zoom: 0.75 }, { duration: 0 });
   });
 
-  it('starts pane drags from workflow node surfaces inside the pane bounds', async () => {
+  it('selects a workflow when clicking its node inside the pane', async () => {
+    const onSelectWorkflow = vi.fn();
+
+    await renderAndSettleInitialFit({
+      workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
+      selectedWorkflowId: null,
+      statusFilters: new Set(),
+      onSelectWorkflow,
+      onWorkflowContextMenu: () => {},
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+
+    expect(onSelectWorkflow).toHaveBeenCalledWith('wf-a');
+  });
+
+  it('does not start pane drags when pressing on a workflow node surface', async () => {
     getViewportMock.mockReturnValue({ x: 10, y: 20, zoom: 0.75 });
 
     await renderAndSettleInitialFit({
@@ -544,24 +560,11 @@ describe('WorkflowGraph', () => {
       onWorkflowContextMenu: () => {},
     });
 
-    const pane = screen.getByTestId('rf__pane');
-    vi.spyOn(pane, 'getBoundingClientRect').mockReturnValue({
-      x: 0,
-      y: 0,
-      left: 0,
-      top: 0,
-      right: 200,
-      bottom: 200,
-      width: 200,
-      height: 200,
-      toJSON: () => ({}),
-    } as DOMRect);
-
     fireEvent.mouseDown(screen.getByTestId('workflow-node-wf-a'), { clientX: 100, clientY: 100, button: 0 });
     fireEvent.mouseMove(window, { clientX: 130, clientY: 88, buttons: 1 });
     fireEvent.mouseUp(window, { clientX: 130, clientY: 88, button: 0 });
 
-    expect(setViewportMock).toHaveBeenCalledWith({ x: 40, y: 8, zoom: 0.75 }, { duration: 0 });
+    expect(setViewportMock).not.toHaveBeenCalled();
   });
 
   it('centers the selected workflow on a centerSelection command, preserving the current zoom', async () => {
