@@ -279,9 +279,11 @@ describe('WorkflowInspector', () => {
           activeGeneration: 0,
           completion: { required: 'all', status: 'approved' },
           ready: false,
+          substate: null,
           artifacts: [],
           discardedArtifacts: [],
           edges: [],
+
         }}
         collapsed={false}
         advancedExpanded={false}
@@ -306,12 +308,14 @@ describe('WorkflowInspector', () => {
           activeGeneration: 0,
           completion: { required: 'all', status: 'approved' },
           ready: false,
+          substate: null,
           artifacts: [
             { id: 'contracts', title: 'Define contracts', url: 'https://example.test/contracts', required: true, status: 'open', generation: 0 },
             { id: 'runtime', title: 'Wire runtime', url: 'https://example.test/runtime', required: true, status: 'open', generation: 0 },
           ],
           discardedArtifacts: [],
           edges: [],
+
         }}
         collapsed={false}
         advancedExpanded={false}
@@ -325,6 +329,50 @@ describe('WorkflowInspector', () => {
       'Wire runtime',
     ]);
   });
+  it('renders artifact detail lines from typed review metadata', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready' }}
+        task={null}
+        reviewGate={{
+          workflowId: 'wf-1',
+          mergeTaskId: '__merge__wf-1',
+          status: 'review_ready',
+          activeGeneration: 0,
+          completion: { required: 'all', status: 'approved' },
+          ready: false,
+          substate: 'ci_failing',
+          artifacts: [
+            { id: 'conflict', title: 'Conflict', url: 'https://example.test/conflict', required: true, status: 'open', generation: 0, mergeState: 'dirty' },
+            {
+              id: 'checks',
+              title: 'Checks',
+              url: 'https://example.test/checks',
+              required: true,
+              status: 'open',
+              generation: 0,
+              checksState: 'failure',
+              failedChecks: [{ name: 'lint' }, { name: 'unit' }],
+            },
+            { id: 'pending', title: 'Pending', url: 'https://example.test/pending', required: true, status: 'open', generation: 0, checksState: 'pending' },
+            { id: 'passing', title: 'Passing', url: 'https://example.test/passing', required: true, status: 'open', generation: 0, checksState: 'success' },
+          ],
+          discardedArtifacts: [],
+          edges: [],
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Merge conflict')).toBeInTheDocument();
+    expect(screen.getByText('lint, unit')).toBeInTheDocument();
+    expect(screen.getByText('Checks pending')).toBeInTheDocument();
+    expect(screen.getByText('Checks passing')).toBeInTheDocument();
+  });
+
 
   it('renders a linear pull request stack with connectors', () => {
     render(
@@ -338,6 +386,7 @@ describe('WorkflowInspector', () => {
           activeGeneration: 0,
           completion: { required: 'all', status: 'approved' },
           ready: false,
+          substate: null,
           artifacts: [
             { id: 'contracts', title: 'Contracts', url: 'https://example.test/contracts', required: true, status: 'approved', generation: 0 },
             { id: 'runtime', title: 'Runtime', url: 'https://example.test/runtime', required: true, status: 'open', generation: 0, dependsOn: ['contracts'] },
@@ -345,6 +394,7 @@ describe('WorkflowInspector', () => {
           ],
           discardedArtifacts: [],
           edges: [{ from: 'contracts', to: 'runtime' }, { from: 'runtime', to: 'ui' }],
+
         }}
         collapsed={false}
         advancedExpanded={false}
@@ -374,6 +424,7 @@ describe('WorkflowInspector', () => {
           activeGeneration: 1,
           completion: { required: 'all', status: 'approved' },
           ready: false,
+          substate: null,
           artifacts: [
             { id: 'runtime', title: 'Runtime', url: 'https://example.test/runtime', required: true, status: 'open', generation: 1 },
           ],

@@ -16,6 +16,8 @@ import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
 import { AUTO_FIX_WORKER_KIND, type AgentRegistry } from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
+import { buildReviewGateQueryResponse } from './review-gate-query.js';
+
 import {
   type HeadlessDeps,
   type QueryFlags,
@@ -177,11 +179,20 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         case 'label': writeOut(`${record?.workflowId ?? ''}\n`); break;
         case 'json':  writeOut(formatAsJson(record ?? {}) + '\n'); break;
         case 'jsonl': writeOut(formatAsJsonl(record ? [record] : []) + '\n'); break;
-        default:      writeOut(
-          record
-            ? `${record.workflowId}\t${record.reviewId ?? prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\t${record.branch ?? ''}\n`
-            : `No Invoker workflow found for PR ${prNumber}.\n`,
-        ); break;
+        default:      if (!record) {
+          writeOut(`No Invoker workflow found for PR ${prNumber}.\n`);
+          break;
+        }
+        {
+          const workflow = deps.persistence.loadWorkflow(record.workflowId);
+          const tasks = deps.persistence.loadTasks(record.workflowId);
+          const gate = buildReviewGateQueryResponse({ workflowId: record.workflowId, workflow, tasks });
+          const substate = gate.substate ?? 'null';
+          writeOut(
+            `${record.workflowId}\t${record.reviewId ?? prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\tsubstate=${substate}\t${record.branch ?? ''}\n`,
+          );
+        }
+        break;
       }
       break;
     }
