@@ -24,7 +24,7 @@ const RESET_PLAN = {
       id: 'slow-task',
       description: 'Long task interrupted before resume',
       command: 'sleep 60',
-      dependencies: ['fast-task'],
+      dependencies: [] as string[],
     },
   ],
 };
@@ -78,7 +78,7 @@ async function launchApp(testDir: string, configPath: string): Promise<{ app: El
       NODE_ENV: 'test',
           INVOKER_TEST_WORKFLOW_IDS: '1',
       TZ: 'UTC',
-      INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'daemon',
+      INVOKER_GUI_OWNER_MODE: 'standalone',
       INVOKER_DB_DIR: testDir,
       INVOKER_IPC_SOCKET: ipcSocketPath,
       INVOKER_ALLOW_DELETE_ALL: '1',

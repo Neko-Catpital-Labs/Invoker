@@ -218,7 +218,7 @@ base.describe('Planning Terminal restart persistence', () => {
       ({ app, page } = await launchApp({ dbDir: testDir, userDataDir, ipcSocketPath, configPath }));
       await page.getByTestId('sidebar-planning').click();
 
-      await expect(page.getByText('Planning tmux')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: 'tmux' })).toHaveAttribute('aria-selected', 'true', { timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toBeVisible({ timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', firstTerminalSessionId ?? '');
       await expect.poll(async () => page!.evaluate(async (sessionId) => {
