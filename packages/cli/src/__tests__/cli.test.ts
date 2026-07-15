@@ -294,6 +294,12 @@ tasks:
     expect(prompt).toContain('multiple review slices');
     expect(prompt).toContain('skill://review-compression/SKILL.md');
     expect(prompt).toContain('before writing workflow YAML');
+    expect(prompt).toContain('distinguish the workflow plan file, the tasks inside it, optional reviewGate.artifacts metadata');
+    expect(prompt).toContain('actual published GitHub PRs');
+    expect(prompt).toContain('Do not derive PR count or PR order from onFinish: pull_request');
+    expect(prompt).toContain('from task count, or from a lone plan file');
+    expect(prompt).toContain('use reviewGate.artifacts when present');
+    expect(prompt).toContain('inspect actual published PR evidence before making the claim');
   });
 
   it('describes PR skill triggers in the MCP prompt metadata', () => {
