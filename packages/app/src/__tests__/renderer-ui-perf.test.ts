@@ -36,9 +36,10 @@ describe('renderer ui perf counters', () => {
     recordRendererUiPerfMetric(counters, 'embedded_terminal_input', { durationMs: 3, bytes: 5 });
     recordRendererUiPerfMetric(counters, 'embedded_terminal_output_write', { durationMs: 80, bytes: 4096 });
     recordRendererUiPerfMetric(counters, 'embedded_terminal_resize', { durationMs: 18 });
+    recordRendererUiPerfMetric(counters, 'embedded_terminal_scroll', { durationMs: 6 });
     recordRendererUiPerfMetric(counters, 'embedded_terminal_snapshot_write', { durationMs: 90, bytes: 8192 });
 
-    expect(counters.rendererReports).toBe(14);
+    expect(counters.rendererReports).toBe(15);
     expect(counters.maxRendererEventLoopLagMs).toBe(300);
     expect(counters.maxRendererHiddenEventLoopLagMs).toBe(900);
     expect(counters.maxRendererCumulativeLagMs).toBe(450);
@@ -67,6 +68,8 @@ describe('renderer ui perf counters', () => {
     expect(counters.maxEmbeddedTerminalOutputWriteBytes).toBe(4096);
     expect(counters.embeddedTerminalResizeReports).toBe(1);
     expect(counters.maxEmbeddedTerminalResizeMs).toBe(18);
+    expect(counters.embeddedTerminalScrollReports).toBe(1);
+    expect(counters.maxEmbeddedTerminalScrollMs).toBe(6);
     expect(counters.embeddedTerminalSnapshotWriteReports).toBe(1);
     expect(counters.maxEmbeddedTerminalSnapshotWriteMs).toBe(90);
     expect(counters.maxEmbeddedTerminalSnapshotBytes).toBe(8192);
@@ -76,6 +79,7 @@ describe('renderer ui perf counters', () => {
     expect(counters.rendererReports).toBe(0);
     expect(counters.maxPlanningTypingLagMs).toBe(0);
     expect(counters.maxPlanningChatInputCommitMs).toBe(0);
+    expect(counters.maxEmbeddedTerminalScrollMs).toBe(0);
     expect(counters.maxEmbeddedTerminalOutputWriteBytes).toBe(0);
   });
 });
