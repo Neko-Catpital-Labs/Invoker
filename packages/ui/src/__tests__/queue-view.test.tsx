@@ -42,12 +42,16 @@ describe('QueueView', () => {
     return {
       kind: 'autofix',
       note: 'Auto-fixes failed tasks.',
+      source: 'built-in',
+      availability: 'available',
+      running: true,
       lifecycle: 'running',
       policy: 'enabled',
       autoStarts: true,
       startable: false,
       stoppable: true,
       recentActions: [],
+      recentLogs: [],
       ...overrides,
     };
   }

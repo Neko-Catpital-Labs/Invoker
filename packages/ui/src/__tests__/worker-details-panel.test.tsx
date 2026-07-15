@@ -34,12 +34,16 @@ function makeWorker(overrides: Partial<WorkerStatusEntry> = {}): WorkerStatusEnt
   return {
     kind: 'ci-failure',
     note: 'Repairs failed CI.',
+    source: 'built-in',
+    availability: 'available',
+    running: true,
     lifecycle: 'running',
     policy: 'enabled',
     autoStarts: true,
     startable: false,
     stoppable: true,
     recentActions: [makeAction()],
+    recentLogs: [],
     ...overrides,
   };
 }

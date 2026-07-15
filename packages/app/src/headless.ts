@@ -18,9 +18,7 @@ import {
   acquireWorkerLock,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
-  registerAutoFixWorker,
-  registerPrMaintenanceWorkers,
-  registerPrSummaryRefreshWorker,
+  registerBuiltinWorkers,
   resolveInvokerHomeRoot,
   GitHubMergeGateProvider,
   WorkerLockHeldError,
@@ -432,11 +430,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerPrSummaryRefreshWorker(
-      registerPrMaintenanceWorkers(
-        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
-      ),
-    ),
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
   );
 
   if (subCommand === 'list') {
