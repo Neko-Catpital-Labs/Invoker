@@ -48,7 +48,7 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
-    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
   });
 
@@ -104,7 +104,7 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
-    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
   });
@@ -160,7 +160,7 @@ describe('App launch (component)', () => {
 
     fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-16');
-    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-running')).toBeInTheDocument();
 
     for (const surface of ['workflows', 'attention', 'workers', 'planning', 'home']) {
       fireEvent.click(screen.getByTestId(`sidebar-${surface}`));

@@ -55,4 +55,21 @@ describe('Dialog primitive', () => {
     const title = await findByRole('heading', { name: 'Confirm' });
     expect(title).toBeVisible();
   });
+
+  it('applies overlayClassName to the dialog overlay', async () => {
+    const { getByRole, findByRole, container } = render(
+      <Dialog>
+        <DialogTrigger asChild>
+          <button type="button">Open</button>
+        </DialogTrigger>
+        <DialogContent overlayClassName="backdrop-blur-none">
+          <DialogTitle>Confirm</DialogTitle>
+        </DialogContent>
+      </Dialog>,
+    );
+    getByRole('button', { name: 'Open' }).click();
+    await findByRole('heading', { name: 'Confirm' });
+    const overlay = container.ownerDocument.querySelector('.backdrop-blur-none');
+    expect(overlay).not.toBeNull();
+  });
 });
