@@ -2755,7 +2755,7 @@ describe('TaskRunner', () => {
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
-    it('pull_request mode: calls execPr and persists reviewUrl', async () => {
+    it('pull_request mode: republishes through createReview and returns to review_ready', async () => {
       const completedTask = makeTask({
         id: 't1',
         status: 'completed',
@@ -2763,7 +2763,7 @@ describe('TaskRunner', () => {
         execution: { branch: 'invoker/t1' },
       });
 
-      const { executor, mergeTask, orchestrator, persistence } = setupPublishAfterFix({
+      const { executor, mergeTask, orchestrator, persistence, mergeGateProvider } = setupPublishAfterFix({
         mergeMode: 'manual',
         onFinish: 'pull_request',
         featureBranch: 'plan/feature',
@@ -2778,11 +2778,33 @@ describe('TaskRunner', () => {
         workflowSummary: '## Summary',
         cwd: '/tmp/gate-clone',
       }));
-      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary\n\nPublished body', '/tmp/gate-clone');
-      expect(persistence.updateTask).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
-        execution: expect.objectContaining({ reviewUrl: 'https://github.com/owner/repo/pull/100' }),
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(expect.objectContaining({
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        title: 'Test Workflow',
+        cwd: '/tmp/gate-clone',
+        body: '## Summary\n\nPublished body',
       }));
-      expect(orchestrator.setTaskReviewReady).toHaveBeenCalled();
+      expect((executor as any).execPr).not.toHaveBeenCalled();
+      expect(persistence.updateTask).not.toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
+        execution: expect.objectContaining({ reviewUrl: expect.any(String) }),
+      }));
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
+        execution: expect.objectContaining({
+          branch: 'plan/feature',
+          reviewUrl: 'https://github.com/owner/repo/pull/99',
+          reviewId: 'owner/repo#99',
+          reviewStatus: 'Awaiting review',
+          reviewGate: expect.objectContaining({
+            activeGeneration: 0,
+            artifacts: [expect.objectContaining({
+              providerId: 'owner/repo#99',
+              status: 'open',
+              generation: 0,
+            })],
+          }),
+        }),
+      }), expect.objectContaining({ generation: 0 }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
