@@ -1,5 +1,5 @@
 import { createElement } from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskDAG } from '../components/TaskDAG.js';
 import { makeUITask } from './helpers/mock-invoker.js';
@@ -13,6 +13,7 @@ type TaskDAGProps = Parameters<typeof TaskDAG>[0];
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 function renderOneTaskDag(props: Partial<Omit<TaskDAGProps, 'tasks'>> = {}) {
@@ -33,44 +34,44 @@ async function findRenderedTaskCard(taskId: string): Promise<HTMLElement> {
   return node.firstElementChild instanceof HTMLElement ? node.firstElementChild : node;
 }
 
-function dispatchUserDoubleClick(target: HTMLElement) {
-  fireEvent.click(target);
-  fireEvent.click(target);
-  fireEvent.doubleClick(target);
-}
-
 describe('TaskDAG interactions', () => {
-  it('dispatches exactly one double-click callback per user double-click', async () => {
+  it('selects a task on single click', async () => {
     const onTaskClick = vi.fn();
     const onTaskDoubleClick = vi.fn();
     const { task } = renderOneTaskDag({ onTaskClick, onTaskDoubleClick });
     const taskCard = await findRenderedTaskCard(task.id);
 
-    dispatchUserDoubleClick(taskCard);
-
-    expect(onTaskDoubleClick).toHaveBeenCalledTimes(1);
-    expect(onTaskDoubleClick).toHaveBeenCalledWith(task);
-    expect(onTaskClick).toHaveBeenCalledTimes(2);
-    expect(onTaskClick).toHaveBeenNthCalledWith(1, task);
-    expect(onTaskClick).toHaveBeenNthCalledWith(2, task);
-  });
-
-  it('preserves single-click selection without double-click dispatch', async () => {
-    const onTaskClick = vi.fn();
-    const onTaskDoubleClick = vi.fn();
-    const { task } = renderOneTaskDag({ onTaskClick, onTaskDoubleClick });
-    const taskCard = await findRenderedTaskCard(task.id);
-
-    fireEvent.click(taskCard);
+    fireEvent.click(taskCard, { detail: 1 });
 
     expect(onTaskClick).toHaveBeenCalledTimes(1);
     expect(onTaskClick).toHaveBeenCalledWith(task);
     expect(onTaskDoubleClick).not.toHaveBeenCalled();
   });
 
+  it('dispatches one double-click callback for a user double-click event sequence', async () => {
+    const onTaskClick = vi.fn();
+    const onTaskDoubleClick = vi.fn();
+    const { task } = renderOneTaskDag({ onTaskClick, onTaskDoubleClick });
+    const taskCard = await findRenderedTaskCard(task.id);
+
+    vi.useFakeTimers();
+    fireEvent.click(taskCard, { detail: 1 });
+    fireEvent.click(taskCard, { detail: 2 });
+    fireEvent.doubleClick(taskCard, { detail: 2 });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(onTaskClick).toHaveBeenCalledTimes(1);
+    expect(onTaskDoubleClick).toHaveBeenCalledTimes(1);
+    expect(onTaskDoubleClick).toHaveBeenCalledWith(task);
+  });
+
   it('preserves task context menu dispatch and default prevention', async () => {
     const onTaskContextMenu = vi.fn();
-    const { task } = renderOneTaskDag({ onTaskContextMenu });
+    const onTaskClick = vi.fn();
+    const onTaskDoubleClick = vi.fn();
+    const { task } = renderOneTaskDag({ onTaskContextMenu, onTaskClick, onTaskDoubleClick });
     const taskCard = await findRenderedTaskCard(task.id);
     const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
 
@@ -80,5 +81,7 @@ describe('TaskDAG interactions', () => {
     expect(event.defaultPrevented).toBe(true);
     expect(onTaskContextMenu).toHaveBeenCalledTimes(1);
     expect(onTaskContextMenu.mock.calls[0][0]).toBe(task);
+    expect(onTaskClick).not.toHaveBeenCalled();
+    expect(onTaskDoubleClick).not.toHaveBeenCalled();
   });
 });
