@@ -7205,6 +7205,45 @@ describe('Orchestrator', () => {
       expect(queueStatus.queued).toHaveLength(1);
       expect(queueStatus.queued[0]?.taskId).toBe(sid(orchestrator, 0, 't1'));
     });
+    it.fails('getQueueStatus reports queued tasks in the same dependency order used for launch selection', () => {
+      const workflowId = 'wf-queue-order';
+      persistence.saveWorkflow({
+        id: workflowId,
+        name: 'queue-order',
+      });
+      persistence.saveTask(workflowId, {
+        id: 'beta-ready',
+        description: 'Beta ready',
+        status: 'pending',
+        dependencies: ['alpha-root'],
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        config: { workflowId },
+        execution: {},
+      });
+      persistence.saveTask(workflowId, {
+        id: 'aardvark-root',
+        description: 'Aardvark root',
+        status: 'pending',
+        dependencies: [],
+        createdAt: new Date('2026-01-01T00:00:01.000Z'),
+        config: { workflowId },
+        execution: {},
+      });
+      persistence.saveTask(workflowId, {
+        id: 'alpha-root',
+        description: 'Alpha root',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date('2026-01-01T00:00:02.000Z'),
+        config: { workflowId },
+        execution: { completedAt: new Date('2026-01-01T00:00:02.000Z') },
+      });
+      const queueStatus = orchestrator.getQueueStatus();
+      expect(queueStatus.queued.map((task) => task.taskId)).toEqual([
+        'aardvark-root',
+        'beta-ready',
+      ]);
+    });
 
     it('getQueueStatus counts claimed selected attempts as active before launch completes', () => {
       orchestrator.loadPlan({
