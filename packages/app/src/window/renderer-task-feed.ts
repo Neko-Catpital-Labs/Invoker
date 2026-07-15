@@ -65,7 +65,7 @@ export interface RendererTaskFeedDeps {
   logger: Logger;
   persistence: RendererTaskFeedPersistence;
   messageBus: Pick<MessageBus, 'publish' | 'request'>;
-  orchestrator: RendererTaskFeedOrchestrator;
+  getOrchestrator: () => RendererTaskFeedOrchestrator;
   taskHandles: { has(taskId: string): boolean };
   taskGraphEventPublisher: Pick<TaskGraphEventPublisher, 'publishDelta'>;
   getMainWindow: () => BrowserWindow | null;
@@ -166,7 +166,7 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
       deps.logger.info(`[gap-detect] quarantined task="${taskId}" — triggering authoritative reload`, { module: 'delta-merge' });
       const { rendererDelta } = recoverQuarantinedTask(lastKnownTaskStates, taskId, {
         loadTask: (recoveryTaskId) => deps.persistence.loadTask(recoveryTaskId),
-        getMergeNode: (workflowId) => deps.orchestrator.getMergeNode(workflowId),
+        getMergeNode: (workflowId) => deps.getOrchestrator().getMergeNode(workflowId),
       });
       if (rendererDelta) {
         rendererDeltas.push(rendererDelta);
@@ -177,7 +177,7 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
 
   const seedUiSnapshotCache = (): void => {
     lastKnownWorkflowCount = deps.persistence.listWorkflows().length;
-    seedTaskCachesFromSnapshot(deps.orchestrator.getAllTasks(), { lastKnownTaskStates, workflowRollupProjection });
+    seedTaskCachesFromSnapshot(deps.getOrchestrator().getAllTasks(), { lastKnownTaskStates, workflowRollupProjection });
   };
 
   // Detached viewer: the local DB is empty, so seed the delta caches and
@@ -236,7 +236,7 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
     const deltaTaskId = delta.type === 'updated' || delta.type === 'removed' ? delta.taskId : undefined;
     if (delta.type === 'updated' && delta.changes.status === 'failed') {
       const cancellationError = shouldSkipAutoFixForError(delta.changes.execution?.error);
-      const shouldAutoFixFromOrchestrator = deps.orchestrator.shouldAutoFix(delta.taskId);
+      const shouldAutoFixFromOrchestrator = deps.getOrchestrator().shouldAutoFix(delta.taskId);
       deps.logAutoFixDebug(delta.taskId, 'delta-failed', {
         shouldSkipForCancellation: cancellationError,
         shouldAutoFixFromOrchestrator,
@@ -279,7 +279,7 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
           lastKnownWorkflowCount = workflows.length;
           deps.requestWorkflowMetadataPublish('db-poll-count');
 
-          deps.orchestrator.syncAllFromDb();
+          deps.getOrchestrator().syncAllFromDb();
           deps.logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
         }
 
@@ -350,7 +350,7 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
                     ? 'Startup Failure Diagnostic'
                     : 'Shutdown Diagnostic',
                 });
-                deps.orchestrator.handleWorkerResponse(failedResponse);
+                deps.getOrchestrator().handleWorkerResponse(failedResponse);
                 continue;
               }
             }
@@ -379,7 +379,7 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
                   `Fix session stalled: task remained in fixing_with_ai for ${Math.floor(fixAgeMs / 1000)}s ` +
                   `without a live fix handle (${staleReason}).`;
                 deps.logger.error(`[fix-session-stall] reclaiming "${task.id}": ${reason}`, { module: 'db-poll' });
-                const outcome = deps.orchestrator.reclaimStalledFixSession(task.id, {
+                const outcome = deps.getOrchestrator().reclaimStalledFixSession(task.id, {
                   reason,
                   expectedLineage: {
                     taskId: task.id,
