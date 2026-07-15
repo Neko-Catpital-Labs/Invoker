@@ -609,7 +609,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   }, [nodes.length, fitView]);
 
   const onNodeClick = useCallback(
-    (_event: React.MouseEvent, node: Node) => {
+    (event: React.MouseEvent, node: Node) => {
+      if (event.detail > 1) return;
       const task = tasks.get(node.id);
       if (task && onTaskClick) {
         onTaskClick(task);
