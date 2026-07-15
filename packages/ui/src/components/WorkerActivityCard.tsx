@@ -5,10 +5,11 @@ import { formatWorkerValue, getActiveWorkerAction, getWorkerDisplayCopy } from '
 interface WorkerActivityCardProps {
   snapshot: WorkerStatusSnapshot | null;
   selectedWorkerKind: string | null;
-  readOnly: boolean;
-  onStartWorker: (kind: string) => Promise<void> | void;
-  onStopWorker: (kind: string) => Promise<void> | void;
+  readOnly?: boolean;
+  onStartWorker?: (kind: string) => Promise<void> | void;
+  onStopWorker?: (kind: string) => Promise<void> | void;
   onSelectWorker: (kind: string) => void;
+  showControls?: boolean;
 }
 
 type OptimisticLifecycle = 'running' | 'stopped';
@@ -49,10 +50,11 @@ function activityExplanation(worker: WorkerStatusEntry, lifecycle: string): stri
 export function WorkerActivityCard({
   snapshot,
   selectedWorkerKind,
-  readOnly,
+  readOnly = false,
   onStartWorker,
   onStopWorker,
   onSelectWorker,
+  showControls = true,
 }: WorkerActivityCardProps) {
   const [optimisticByKind, setOptimisticByKind] = useState<Record<string, OptimisticLifecycle>>({});
   const [pendingByKind, setPendingByKind] = useState<Record<string, boolean>>({});
@@ -107,14 +109,23 @@ export function WorkerActivityCard({
             const lifecycle = optimisticByKind[worker.kind] ?? worker.lifecycle;
             const showStart = lifecycle !== 'running';
             const pending = Boolean(pendingByKind[worker.kind]);
-            const isControlDisabled = Boolean(disabledTitle) || pending;
+            const controlUnavailable = showStart ? !onStartWorker : !onStopWorker;
+            const isControlDisabled = Boolean(disabledTitle) || pending || controlUnavailable;
+            const controlTitle = disabledTitle ?? (controlUnavailable ? 'Worker control unavailable' : undefined);
             const selected = selectedWorkerKind === worker.kind;
             const launchesOnStart = worker.desiredEnabled ?? worker.autoStarts;
-            const footer = worker.kind === 'pr-status'
-              ? 'No queue task is expected for this worker.'
-              : selected
-                ? 'Details are in the right panel.'
-                : null;
+            const recentLogs = worker.recentLogs ?? [];
+            const latestLog = recentLogs[0];
+            const latestAction = worker.recentActions[0];
+            const footer = latestLog
+              ? `Latest log: ${latestLog.summary ?? formatWorkerValue(latestLog.eventType ?? latestLog.actionType ?? latestLog.source)}`
+              : latestAction
+                ? `Latest response: ${latestAction.summary ?? `${formatWorkerValue(latestAction.actionType)} · ${formatWorkerValue(latestAction.status)}`}`
+                : worker.kind === 'pr-status'
+                  ? 'No queue task is expected for this worker.'
+                  : selected
+                    ? 'Details are in the right panel.'
+                    : 'No worker responses have been logged yet.';
             return (
               <div
                 key={worker.kind}
@@ -138,6 +149,8 @@ export function WorkerActivityCard({
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold text-foreground">{copy.name}</div>
                     <div className="mt-0.5 text-xs text-muted-foreground">Kind: {worker.kind}</div>
+                    {worker.note ? <div className="mt-1 text-xs text-muted-foreground">{worker.note}</div> : null}
+                    <div className="mt-1 text-xs text-muted-foreground">Source: {formatWorkerValue(worker.source)}</div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <span
                         className={`rounded-full border px-2 py-0.5 text-[11px] ${processClass(lifecycle)}`}
@@ -163,34 +176,36 @@ export function WorkerActivityCard({
                     <div className="mt-2 text-sm text-muted-foreground">{activityExplanation(worker, lifecycle)}</div>
                     {footer ? <div className="mt-1 text-xs text-muted-foreground">{footer}</div> : null}
                   </div>
-                  <button
-                    type="button"
-                    className="shrink-0 rounded border border-border-strong px-2 py-1 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-50 hover:bg-muted"
-                    title={disabledTitle}
-                    disabled={isControlDisabled}
-                    data-testid={`worker-start-stop-${worker.kind}`}
-                    data-action={showStart ? 'start' : 'stop'}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
-                    }}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (pending || isControlDisabled) return;
-                      const nextLifecycle: OptimisticLifecycle = showStart ? 'running' : 'stopped';
-                      setOptimisticByKind((prev) => ({ ...prev, [worker.kind]: nextLifecycle }));
-                      setPendingByKind((prev) => ({ ...prev, [worker.kind]: true }));
-                      const action = showStart ? onStartWorker(worker.kind) : onStopWorker(worker.kind);
-                      void Promise.resolve(action).finally(() => {
-                        setPendingByKind((prev) => {
-                          const next = { ...prev };
-                          delete next[worker.kind];
-                          return next;
+                  {showControls ? (
+                    <button
+                      type="button"
+                      className="shrink-0 rounded border border-border-strong px-2 py-1 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-50 hover:bg-muted"
+                      title={controlTitle}
+                      disabled={isControlDisabled}
+                      data-testid={`worker-start-stop-${worker.kind}`}
+                      data-action={showStart ? 'start' : 'stop'}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (pending || isControlDisabled) return;
+                        const nextLifecycle: OptimisticLifecycle = showStart ? 'running' : 'stopped';
+                        setOptimisticByKind((prev) => ({ ...prev, [worker.kind]: nextLifecycle }));
+                        setPendingByKind((prev) => ({ ...prev, [worker.kind]: true }));
+                        const action = showStart ? onStartWorker?.(worker.kind) : onStopWorker?.(worker.kind);
+                        void Promise.resolve(action).finally(() => {
+                          setPendingByKind((prev) => {
+                            const next = { ...prev };
+                            delete next[worker.kind];
+                            return next;
+                          });
                         });
-                      });
-                    }}
-                  >
-                    {pending ? (showStart ? 'Enabling…' : 'Disabling…') : showStart ? 'Enable worker' : 'Disable worker'}
-                  </button>
+                      }}
+                    >
+                      {pending ? (showStart ? 'Enabling…' : 'Disabling…') : showStart ? 'Enable worker' : 'Disable worker'}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             );

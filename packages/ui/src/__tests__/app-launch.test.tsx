@@ -65,7 +65,7 @@ describe('App launch (component)', () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
 
-  it('opens worker status from the left panel', async () => {
+  it('opens read-only worker status from the left panel', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
     act(() => window.dispatchEvent(new Event('resize')));
     mock.setWorkerStatus({
@@ -74,13 +74,56 @@ describe('App launch (component)', () => {
         {
           kind: 'pr-status',
           note: 'PR status',
+          source: 'built-in',
+          availability: 'available',
+          running: true,
           lifecycle: 'running',
           policy: 'enabled',
           autoStarts: true,
           startable: false,
           stoppable: true,
           runtimeKind: 'pr-status',
+          recentActions: [
+            {
+              id: 'action-1',
+              workerKind: 'pr-status',
+              actionType: 'check-pr',
+              subjectType: 'workflow',
+              subjectId: 'wf-1',
+              externalKey: 'wf-1',
+              status: 'completed',
+              attemptCount: 1,
+              summary: 'Checked PR status',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:01:00.000Z',
+            },
+          ],
+          recentLogs: [
+            {
+              id: 'log-1',
+              workerKind: 'pr-status',
+              source: 'worker_actions',
+              actionType: 'check-pr',
+              subjectType: 'workflow',
+              subjectId: 'wf-1',
+              status: 'completed',
+              summary: 'PR check finished',
+              createdAt: '2026-01-01T00:01:00.000Z',
+            },
+          ],
+        },
+        {
+          kind: 'autofix',
+          note: 'Autofix worker',
+          source: 'built-in',
+          availability: 'available',
+          lifecycle: 'stopped',
+          policy: 'enabled',
+          autoStarts: false,
+          startable: true,
+          stoppable: false,
           recentActions: [],
+          recentLogs: [],
         },
       ],
     });
@@ -92,7 +135,13 @@ describe('App launch (component)', () => {
     fireEvent.click(workersButton);
 
     expect(await screen.findByTestId('worker-activity-card')).toBeInTheDocument();
-    expect(screen.getByText('PR status')).toBeInTheDocument();
+    expect(screen.getAllByText('PR status').length).toBeGreaterThan(0);
+    expect(screen.getByText('Autofix worker')).toBeInTheDocument();
+    expect(screen.getAllByText('Source: Built In').length).toBeGreaterThan(0);
+    expect(screen.getByText('Checked PR status')).toBeInTheDocument();
+    expect(screen.getByText('PR check finished')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start process' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop process' })).not.toBeInTheDocument();
   });
   it('renders the Apple-like source list without manual plan loading', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
@@ -189,7 +238,7 @@ describe('App launch (component)', () => {
     fireEvent.click(await screen.findByTestId('sidebar-workers'));
     expect(screen.queryByTestId('browser-rail')).not.toBeInTheDocument();
     expect(screen.queryByTestId('running-rail-list')).not.toBeInTheDocument();
-    expect(screen.getByTestId('workflow-graph-surface')).toBeInTheDocument();
+    expect(screen.getByTestId('workers-rail')).toBeInTheDocument();
   });
 
 
