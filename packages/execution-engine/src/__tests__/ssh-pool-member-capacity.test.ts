@@ -425,6 +425,7 @@ describe('SSH pool member capacity', () => {
         requestId: 'r',
         actionId: task.id,
         attemptId: task.execution.selectedAttemptId,
+        executionGeneration: task.execution.generation ?? 0,
         status: 'completed',
         outputs: { exitCode: 0 },
       });

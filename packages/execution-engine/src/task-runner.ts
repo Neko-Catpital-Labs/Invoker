@@ -126,6 +126,11 @@ type PoolSelection = {
    */
   resolvedCrabbox?: ResolvedCrabboxTarget;
 };
+type CachedResolvedCrabboxTarget = {
+  resolverConfig: CrabboxResolverTargetConfig;
+  resolved: ResolvedCrabboxTarget;
+};
+
 
 function isRetryableSshStartupTransportError(err: unknown): boolean {
   const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
@@ -200,6 +205,39 @@ class CrabboxResolutionRequiredError extends Error {
     this.name = 'CrabboxResolutionRequiredError';
   }
 }
+function sameOptionalStringArray(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  if (!a && !b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
+}
+
+function crabboxResolverConfigMatches(
+  cached: CrabboxResolverTargetConfig,
+  next: CrabboxResolverTargetConfig,
+): boolean {
+  return cached.id === next.id
+    && cached.crabboxCommand === next.crabboxCommand
+    && cached.provider === next.provider
+    && cached.class === next.class
+    && cached.ttl === next.ttl
+    && cached.idleTimeout === next.idleTimeout
+    && cached.network === next.network
+    && cached.target === next.target
+    && cached.stopAfter === next.stopAfter
+    && cached.keepOnFailure === next.keepOnFailure
+    && cached.port === next.port
+    && sameOptionalStringArray(cached.warmupArgs, next.warmupArgs)
+    && sameOptionalStringArray(cached.statusArgs, next.statusArgs);
+}
+
+function isResolvedCrabboxExpired(
+  resolved: ResolvedCrabboxTarget,
+  nowMs: number = Date.now(),
+): boolean {
+  const expiresAtMs = Date.parse(resolved.remoteLeaseMetadata.expiresAt);
+  return Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs;
+}
+
 
 export interface ReviewGateCiFailureTrigger {
   taskId: string;
@@ -417,8 +455,9 @@ export class TaskRunner {
   private sshExecutorCache = new Map<string, SshExecutor>();
   /** Resolves crabbox targets into SSH endpoints. */
   private crabboxResolver: CrabboxResolver;
-  /** Resolved crabbox leases, keyed by remote target id. One lease per target until cleared. */
-  private resolvedCrabboxTargets = new Map<string, ResolvedCrabboxTarget>();
+  /** Resolved crabbox leases, keyed by target id and invalidated on config drift or expiry. */
+  private resolvedCrabboxTargets = new Map<string, CachedResolvedCrabboxTarget>();
+
   private poolRoundRobinCursor = new Map<string, number>();
   private pendingPoolSelections = new Map<string, PoolSelection>();
   private freshBaseCommits = new Map<string, FreshBaseCommit>();
@@ -996,7 +1035,11 @@ export class TaskRunner {
         try {
           bench('crabbox.resolve.start', { targetId: err.targetId });
           const resolved = await this.crabboxResolver.resolve(err.resolverConfig);
-          this.resolvedCrabboxTargets.set(err.targetId, resolved);
+          this.resolvedCrabboxTargets.set(err.targetId, {
+            resolverConfig: err.resolverConfig,
+            resolved,
+          });
+
           bench('crabbox.resolve.end', {
             targetId: err.targetId,
             host: resolved.sshTarget.host,
@@ -1252,10 +1295,14 @@ export class TaskRunner {
       // launch-scoped lease bound to this selection over the shared map, which a
       // concurrent same-target resolution may have overwritten with another
       // launch's lease.
+      const selectedTarget = selectedSshTargetId
+        ? this.getRemoteTargets()[selectedSshTargetId]
+        : undefined;
       const remoteLeaseMetadata = poolSelection?.resolvedCrabbox?.remoteLeaseMetadata
-        ?? (selectedSshTargetId
-          ? this.resolvedCrabboxTargets.get(selectedSshTargetId)?.remoteLeaseMetadata
+        ?? (selectedSshTargetId && selectedTarget
+          ? this.getCachedResolvedCrabboxTarget(selectedSshTargetId, selectedTarget)?.remoteLeaseMetadata
           : undefined);
+
       const changes = {
         config: {
           runnerKind: executor.type as RunnerKind,
@@ -1564,6 +1611,41 @@ export class TaskRunner {
   private leaseHolderId(taskId: string, attemptId: string): string {
     return `${this.runnerInstanceId}:${process.pid}:${taskId}:${attemptId}`;
   }
+  private getCachedResolvedCrabboxTarget(
+    targetId: string,
+    target: RemoteTargetDisplay,
+  ): ResolvedCrabboxTarget | undefined {
+    if (target.type !== 'crabbox') return undefined;
+    const cached = this.resolvedCrabboxTargets.get(targetId);
+    if (!cached) return undefined;
+    const resolverConfig = this.buildCrabboxResolverConfig(targetId, target);
+    if (
+      !crabboxResolverConfigMatches(cached.resolverConfig, resolverConfig)
+      || isResolvedCrabboxExpired(cached.resolved)
+    ) {
+      this.resolvedCrabboxTargets.delete(targetId);
+      return undefined;
+    }
+    return cached.resolved;
+  }
+
+  private rehydrateResolvedCrabboxTarget(
+    targetId: string,
+    execution: TaskState['execution'] | undefined,
+  ): ResolvedCrabboxTarget | undefined {
+    const metadata = execution?.remoteLeaseMetadata;
+    if (!metadata || metadata.provider !== 'crabbox' || metadata.targetId !== targetId) return undefined;
+    return {
+      sshTarget: {
+        host: metadata.sshHost,
+        user: metadata.sshUser,
+        sshKeyPath: metadata.sshKeyPath,
+        port: metadata.sshPort,
+      },
+      remoteLeaseMetadata: metadata,
+    };
+  }
+
 
   private acquirePoolSelectionLease(task: TaskState, attemptId: string, selection: PoolSelection | undefined): boolean {
     if (!selection || selection.member.type !== 'ssh') return true;
@@ -1575,7 +1657,8 @@ export class TaskRunner {
     // used as the holder/poolMemberId below. Prefer the launch-scoped lease so
     // the key matches the box this executor actually uses even if a concurrent
     // same-target launch has since rewritten the shared map.
-    const resolved = selection.resolvedCrabbox ?? this.resolvedCrabboxTargets.get(selection.member.id);
+    const resolved = selection.resolvedCrabbox ?? this.getCachedResolvedCrabboxTarget(selection.member.id, target);
+
     const resourceKey = this.sshResourceKey(
       resolved
         ? {
@@ -1645,8 +1728,9 @@ export class TaskRunner {
       // Prefer the launch-scoped lease bound to this selection so the logged
       // endpoint matches the executor's lease even under concurrent same-target
       // resolution; fall back to the shared map for pre-selection callers.
+      const target = targetId ? this.getRemoteTargets()[targetId] : undefined;
       const resolved = poolSelection?.resolvedCrabbox
-        ?? (targetId ? this.resolvedCrabboxTargets.get(targetId) : undefined);
+        ?? (targetId && target ? this.getCachedResolvedCrabboxTarget(targetId, target) : undefined);
       if (resolved) {
         // Crabbox: report the resolved (leased) endpoint plus durable lease metadata.
         payload.remoteHost = resolved.sshTarget.host;
@@ -1654,7 +1738,6 @@ export class TaskRunner {
         payload.port = resolved.sshTarget.port;
         payload.remoteLeaseMetadata = resolved.remoteLeaseMetadata;
       } else {
-        const target = targetId ? this.getRemoteTargets()[targetId] : undefined;
         if (target) {
           payload.remoteHost = target.host;
           payload.remoteUser = target.user;
@@ -1832,7 +1915,8 @@ export class TaskRunner {
         // targets skip all of this and behave exactly as before.
         let resolvedCrabbox: ResolvedCrabboxTarget | undefined;
         if (target.type === 'crabbox') {
-          resolvedCrabbox = this.resolvedCrabboxTargets.get(targetId);
+          resolvedCrabbox = this.getCachedResolvedCrabboxTarget(targetId, target);
+
           if (!resolvedCrabbox) {
             throw new CrabboxResolutionRequiredError(
               targetId,
@@ -2032,7 +2116,7 @@ export class TaskRunner {
     let publishWorkspacePath = workspacePath;
     if (task.config.runnerKind === 'ssh') {
       const poolMemberId = resolveSelectedRemoteTargetId(this, task.id, task);
-      const target = poolMemberId ? this.getRemoteTargetConfig(poolMemberId) : undefined;
+      const target = poolMemberId ? this.getRemoteTargetConfig(poolMemberId, task.execution) : undefined;
       if (target) {
         const repairedWorkspacePath = await resolveRemoteBranchOwnerPath(branch, workspacePath, target);
         if (repairedWorkspacePath && repairedWorkspacePath !== workspacePath) {
@@ -3144,7 +3228,7 @@ export class TaskRunner {
     return this.executionAgentRegistry;
   }
 
-  getRemoteTargetConfig(targetId: string): {
+  getRemoteTargetConfig(targetId: string, execution?: TaskState['execution']): {
     host: string;
     user: string;
     sshKeyPath: string;
@@ -3160,8 +3244,11 @@ export class TaskRunner {
     if (!target) return undefined;
     // Overlay the resolved crabbox endpoint so post-execution flows (publish,
     // conflict resolution, terminal restore) reach the leased machine, not the
-    // empty config host. Static targets pass through unchanged.
-    const resolved = this.resolvedCrabboxTargets.get(targetId);
+    // empty config host. Static targets pass through unchanged. When a runner is
+    // restarted and the in-memory cache is gone, fall back to the persisted
+    // lease metadata on the task so cleanup/publish still reach the right box.
+    const resolved = this.getCachedResolvedCrabboxTarget(targetId, target)
+      ?? this.rehydrateResolvedCrabboxTarget(targetId, execution);
     const host = resolved?.sshTarget.host ?? target.host;
     const user = resolved?.sshTarget.user ?? target.user;
     const sshKeyPath = resolved?.sshTarget.sshKeyPath ?? target.sshKeyPath;

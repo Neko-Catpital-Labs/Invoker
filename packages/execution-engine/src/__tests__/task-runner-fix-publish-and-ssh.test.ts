@@ -2309,6 +2309,16 @@ describe('TaskRunner', () => {
       });
 
       // selected payload reports the resolved endpoint + lease metadata.
+      completeByTask.get(task.id)?.({
+        requestId: 'r',
+        actionId: task.id,
+        attemptId: 'crab-task-attempt',
+        executionGeneration: task.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      } as WorkResponse);
+      await run;
+
       const selected = logEvent.mock.calls.find(
         ([, event]: [string, string]) => event === 'task.executor.selected',
       );
@@ -2318,15 +2328,6 @@ describe('TaskRunner', () => {
         port: 2222,
         remoteLeaseMetadata: { leaseId: 'lease-123' },
       });
-
-      completeByTask.get(task.id)?.({
-        requestId: 'r',
-        actionId: task.id,
-        attemptId: 'crab-task-attempt',
-        status: 'completed',
-        outputs: { exitCode: 0 },
-      } as WorkResponse);
-      await run;
     });
   });
 
