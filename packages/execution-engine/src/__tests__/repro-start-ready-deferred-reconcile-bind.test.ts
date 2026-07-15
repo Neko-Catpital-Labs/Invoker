@@ -47,7 +47,7 @@ describe('repro: deferred startup reconcile method binding', () => {
     );
   });
 
-  it.fails('queries terminal intents once per workflow during startup reconcile', () => {
+  it('queries terminal intents once per workflow during startup reconcile', () => {
     const actions = [
       toRecord(buildQueuedAction('a', '9')),
       toRecord(buildQueuedAction('b', '9')),
