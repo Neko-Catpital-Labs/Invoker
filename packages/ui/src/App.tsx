@@ -3479,7 +3479,13 @@ export function App() {
       ) : viewMode === 'history' ? (
         <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
       ) : viewMode === 'timeline' ? (
-        <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+        <TimelineView
+          tasks={tasks}
+          workflows={workflows}
+          selectedWorkflowId={selectedWorkflow?.id ?? null}
+          onTaskClick={handleTaskClick}
+          selectedTaskId={selectedTaskId}
+        />
       ) : viewMode === 'actionGraph' ? (
         <ActionGraphView
           graph={actionGraph}
