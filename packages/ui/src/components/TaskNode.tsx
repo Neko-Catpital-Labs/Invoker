@@ -11,7 +11,6 @@
  */
 
 import { Handle, Position } from '@xyflow/react';
-import type { MouseEvent } from 'react';
 import type { TaskState } from '../types.js';
 import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
 
@@ -21,7 +20,6 @@ interface TaskNodeData {
   dimmed?: boolean;
   selected?: boolean;
   runningLike?: boolean;
-  onDoubleClick?: (task: TaskState) => void;
   [key: string]: unknown;
 }
 
@@ -65,18 +63,12 @@ export function TaskNode({ data }: TaskNodeProps) {
 
   const isStale = task.status === 'stale';
   const dotClass = `${colors.dot} ${isAnimated ? 'pulse-strong' : ''}`;
-  const handleDoubleClick = (event: MouseEvent<HTMLDivElement>) => {
-    if (!data.onDoubleClick) return;
-    event.stopPropagation();
-    data.onDoubleClick(task);
-  };
 
   return (
     <div
       className={`relative w-[167px] overflow-hidden rounded-xl border px-2 py-2 transition-[opacity,box-shadow,border-color] duration-150 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
       title={task.id}
       data-selected={selected ? 'true' : 'false'}
-      onDoubleClick={handleDoubleClick}
     >
       <Handle
         type="target"
