@@ -21,7 +21,7 @@ import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
-import { createTaskState, createAttempt, hasFailedDependencyPath, isLivenessFailureClass } from '@invoker/workflow-graph';
+import { createTaskState, createAttempt, hasFailedDependencyPath, isCrashPreservedExecution, isLivenessFailureClass } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
@@ -998,6 +998,7 @@ export class Orchestrator {
     attempt: Attempt | undefined,
     now: number = Date.now(),
   ): boolean {
+    if (isCrashPreservedExecution(task.execution)) return false;
     if (attempt && this.isAttemptLeaseActive(attempt, now)) {
       return task.status === 'pending' || task.status === 'running' || task.status === 'fixing_with_ai';
     }
@@ -1006,6 +1007,7 @@ export class Orchestrator {
   }
 
   private isExecutableResponseTask(task: TaskState): boolean {
+    if (isCrashPreservedExecution(task.execution)) return false;
     return task.status === 'running'
       || task.status === 'fixing_with_ai'
       || (

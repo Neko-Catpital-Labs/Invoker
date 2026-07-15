@@ -1,4 +1,4 @@
-import type { TaskState } from '@invoker/workflow-core';
+import { isCrashPreservedExecution, type TaskState } from '@invoker/workflow-core';
 
 import {
   persistShutdownDiagnostic,
@@ -6,6 +6,7 @@ import {
 } from './shutdown-diagnostic.js';
 
 export function isTaskInFlightForForcedStop(task: TaskState): boolean {
+  if (isCrashPreservedExecution(task.execution)) return false;
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
     || (task.status === 'pending' && task.execution.phase === 'launching');

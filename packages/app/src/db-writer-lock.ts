@@ -29,11 +29,18 @@ export interface PreviousOwnerCrashDiagnostic {
   ktriageInfo?: string;
 }
 
+export interface ReclaimedDeadOwnerInfo {
+  pid: number;
+  diagnostic: PreviousOwnerCrashDiagnostic | null;
+}
+
 export interface DbWriterLockResult {
   /** True when the lock was acquired (or bypassed). */
   acquired: true;
   /** True when the lock was bypassed via env var. */
   bypassed: boolean;
+  /** Previous dead owner details when this acquisition reclaimed a stale lock. */
+  reclaimedDeadOwner: ReclaimedDeadOwnerInfo | null;
   /** Release the lock. No-op if bypassed. */
   release: () => void;
 }
@@ -156,14 +163,17 @@ export function formatPreviousOwnerCrashDiagnostic(diagnostic: PreviousOwnerCras
  * @returns lock handle with a `release()` method.
  * @throws if another process already holds the lock.
  */
-export function acquireDbWriterLock(dbPath: string, callerContext?: string): DbWriterLockResult {
+export function acquireDbWriterLock(
+  dbPath: string,
+  callerContext?: string,
+  reclaimedDeadOwner: ReclaimedDeadOwnerInfo | null = null,
+): DbWriterLockResult {
   const bypassed = process.env[ENV_BYPASS] === '1';
   const lockDir = `${dbPath}.lock`;
   const callerTag = callerContext ? ` caller=${callerContext}` : '';
 
   if (bypassed) {
-    console.log(`[db-writer-lock] BYPASSED (${ENV_BYPASS}=1) — no exclusive lock acquired${callerTag}`);
-    return { acquired: true, bypassed: true, release: () => {} };
+    return { acquired: true, bypassed: true, reclaimedDeadOwner: null, release: () => {} };
   }
 
   try {
@@ -188,7 +198,7 @@ export function acquireDbWriterLock(dbPath: string, callerContext?: string): DbW
                 : '; no matching owner crash report found';
               console.warn(`[db-writer-lock] Stale lock from dead PID ${holderPid}, reclaiming${callerTag}${diagnosticSuffix}`);
               rmSync(lockDir, { recursive: true, force: true });
-              return acquireDbWriterLock(dbPath, callerContext);
+              return acquireDbWriterLock(dbPath, callerContext, { pid: holderPid, diagnostic });
             }
           }
         } catch { /* best effort */ }
@@ -219,5 +229,5 @@ export function acquireDbWriterLock(dbPath: string, callerContext?: string): DbW
     } catch { /* best effort on shutdown */ }
   };
 
-  return { acquired: true, bypassed: false, release };
+  return { acquired: true, bypassed: false, reclaimedDeadOwner, release };
 }

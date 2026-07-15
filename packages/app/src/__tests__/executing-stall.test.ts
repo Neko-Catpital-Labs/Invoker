@@ -85,8 +85,8 @@ describe('evaluateExecutingStall', () => {
 });
 
 describe('taskNeedsExecutingStallCheck', () => {
-  function task(status: string, phase?: string): Pick<TaskState, 'status' | 'execution'> {
-    return { status, execution: { phase } } as unknown as Pick<TaskState, 'status' | 'execution'>;
+  function task(status: string, phase?: string, crashPreservedAt?: Date): Pick<TaskState, 'status' | 'execution'> {
+    return { status, execution: { phase, crashPreservedAt } } as unknown as Pick<TaskState, 'status' | 'execution'>;
   }
 
   it('selects running, launching, and fixing tasks (the only stall-eligible states)', () => {
@@ -102,6 +102,10 @@ describe('taskNeedsExecutingStallCheck', () => {
     expect(taskNeedsExecutingStallCheck(task('failed'))).toBe(false);
     expect(taskNeedsExecutingStallCheck(task('closed'))).toBe(false);
     expect(taskNeedsExecutingStallCheck(task('review_ready'))).toBe(false);
+  });
+  it('skips crash-preserved tasks so restart inspection does not mutate them later', () => {
+    expect(taskNeedsExecutingStallCheck(task('running', 'executing', new Date('2026-05-13T08:00:00.000Z')))).toBe(false);
+    expect(taskNeedsExecutingStallCheck(task('pending', 'launching', new Date('2026-05-13T08:00:00.000Z')))).toBe(false);
   });
 
   it('collapses the per-tick attempt-load count to the stall-eligible tasks under a storm', () => {

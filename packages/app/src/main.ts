@@ -68,7 +68,14 @@ if (process.env.INVOKER_USER_DATA_DIR) {
   app.setPath('userData', process.env.INVOKER_USER_DATA_DIR);
 }
 
-import { Orchestrator, CommandService, OrchestratorError, OrchestratorErrorCode, buildWorkflowInvalidationDeps } from '@invoker/workflow-core';
+import {
+  Orchestrator,
+  CommandService,
+  OrchestratorError,
+  OrchestratorErrorCode,
+  buildWorkflowInvalidationDeps,
+  isCrashPreservedExecution,
+} from '@invoker/workflow-core';
 import type {
   PlanDefinition,
   TaskDelta,
@@ -246,6 +253,7 @@ import {
 } from './global-topup.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { evaluateExecutingStall } from './executing-stall.js';
+import { preserveCrashedInFlightTasks } from './crash-preserved-tasks.js';
 
 
 import {
@@ -404,11 +412,6 @@ function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependenc
   const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
   return registerExternalWorkersFromConfig(invokerConfig.externalWorkers, registry);
 }
-
-
-
-
-
 
 declare const __BUILD_SHA__: string | undefined;
 declare const __BUILD_VERSION__: string | undefined;
@@ -2880,6 +2883,21 @@ function createEmbeddedTerminalBackendFromConfig(
         workflowCount: workflows.length,
         taskCount: orchestrator.getAllTasks().length,
       }));
+      if (writerLock?.reclaimedDeadOwner && ownerMode) {
+        const preservedTaskIds = preserveCrashedInFlightTasks(
+          persistence,
+          orchestrator.getAllTasks(),
+          writerLock.reclaimedDeadOwner,
+          new Date(),
+        );
+        if (preservedTaskIds.length > 0) {
+          orchestrator.syncAllFromDb();
+          logger.warn(
+            `[init] preserved ${preservedTaskIds.length} in-flight task(s) after reclaiming dead owner pid=${writerLock.reclaimedDeadOwner.pid}: ${preservedTaskIds.join(', ')}`,
+            { module: 'init' },
+          );
+        }
+      }
       const snapshotStats = (persistence as unknown as {
         getLastWorkflowTaskSnapshotStats?: () => Record<string, unknown> | null;
       }).getLastWorkflowTaskSnapshotStats?.();
@@ -3098,6 +3116,7 @@ function createEmbeddedTerminalBackendFromConfig(
                 const leaseExpiresAt = parseExecutionDate(selectedAttempt?.leaseExpiresAt);
                 const remoteHeartbeat = parseExecutionDate(task.execution.remoteHeartbeatAt);
 
+                if (isCrashPreservedExecution(task.execution)) continue;
                 if (task.status === 'running' || (task.status === 'pending' && task.execution.phase === 'launching')) {
                   // CC.1: launch-stall watchdog removed. The
                   // LaunchDispatcher's reapExpiredLeases /

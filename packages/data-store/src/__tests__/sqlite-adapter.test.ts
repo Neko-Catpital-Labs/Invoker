@@ -221,6 +221,48 @@ describe('SQLiteAdapter', () => {
       expect(adapter.loadTasks('wf-1')[0].execution.failureClass).toBe('liveness_stall');
     });
   });
+  describe('task crash preservation metadata', () => {
+    it('round-trips crash preservation through the side table and clears it on reset', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', { status: 'running' }));
+
+      adapter.updateTask('t1', {
+        execution: {
+          crashPreservedAt: new Date('2026-07-13T01:02:03.000Z'),
+          crashPreservedOwnerPid: 46301,
+          crashPreservedReportPath: '/tmp/Electron-46301.ips',
+          crashPreservedDiagnosticSummary: 'previous owner pid=46301; no matching crash report found',
+        },
+      });
+
+      expect(adapter.loadTasks('wf-1')[0]?.execution).toMatchObject({
+        crashPreservedOwnerPid: 46301,
+        crashPreservedReportPath: '/tmp/Electron-46301.ips',
+        crashPreservedDiagnosticSummary: 'previous owner pid=46301; no matching crash report found',
+      });
+      expect(adapter.loadTasks('wf-1')[0]?.execution.crashPreservedAt?.toISOString()).toBe('2026-07-13T01:02:03.000Z');
+      expect(tableColumns(adapter, 'tasks')).not.toContain('crash_preserved_at');
+      expect(tableColumns(adapter, 'task_crash_preservation')).toEqual([
+        'task_id',
+        'preserved_at',
+        'owner_pid',
+        'diagnostic_report_path',
+        'diagnostic_summary',
+      ]);
+
+      adapter.updateTask('t1', {
+        execution: {
+          crashPreservedAt: undefined,
+          crashPreservedOwnerPid: undefined,
+          crashPreservedReportPath: undefined,
+          crashPreservedDiagnosticSummary: undefined,
+        },
+      });
+
+      expect(adapter.loadTasks('wf-1')[0]?.execution.crashPreservedAt).toBeUndefined();
+      expect(sqliteScalar(adapter, 'SELECT COUNT(*) FROM task_crash_preservation')).toBe(0);
+    });
+  });
 
   describe('terminal_sessions', () => {
     it('creates the terminal_sessions schema with strict checks', () => {

@@ -239,6 +239,10 @@ export interface TaskExecution {
     readonly conflictFiles: readonly string[];
   };
   readonly selectedAttemptId?: string;
+  readonly crashPreservedAt?: Date;
+  readonly crashPreservedOwnerPid?: number;
+  readonly crashPreservedReportPath?: string;
+  readonly crashPreservedDiagnosticSummary?: string;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -314,6 +318,10 @@ export function createTaskState(
     execution: { generation: 0 },
     taskStateVersion: 1,
   };
+}
+
+export function isCrashPreservedExecution(execution: TaskExecution | undefined | null): boolean {
+  return Boolean(execution?.crashPreservedAt);
 }
 
 // ── Attempt Status ──────────────────────────────────────────

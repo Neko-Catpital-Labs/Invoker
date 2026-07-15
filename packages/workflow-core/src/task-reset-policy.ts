@@ -92,6 +92,10 @@ export const TASK_EXECUTION_RESET_RULES = {
   launchStartedAt: clearFor(launchReset),
   launchCompletedAt: clearFor(launchReset),
   mergeConflict: preserve,
+  crashPreservedAt: clearFor(retryRecreateDetachNewAttempt),
+  crashPreservedOwnerPid: clearFor(retryRecreateDetachNewAttempt),
+  crashPreservedReportPath: clearFor(retryRecreateDetachNewAttempt),
+  crashPreservedDiagnosticSummary: clearFor(retryRecreateDetachNewAttempt),
   selectedAttemptId: preserve,
 } satisfies TaskExecutionResetRulebook;
 

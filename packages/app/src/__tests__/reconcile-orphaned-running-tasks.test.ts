@@ -30,6 +30,9 @@ describe('reconcileOrphanedInFlightTasksOnBoot', () => {
     expect(isTaskInFlightForForcedStop(makeTask('c', 'pending', { phase: 'launching' }))).toBe(true);
     expect(isTaskInFlightForForcedStop(makeTask('d', 'pending'))).toBe(false);
     expect(isTaskInFlightForForcedStop(makeTask('e', 'completed'))).toBe(false);
+    expect(isTaskInFlightForForcedStop(makeTask('f', 'running', {
+      crashPreservedAt: new Date('2026-07-13T01:02:03.000Z'),
+    }))).toBe(false);
   });
 
   it('fails orphaned in-flight tasks with Application quit and writes a diagnostic', () => {
