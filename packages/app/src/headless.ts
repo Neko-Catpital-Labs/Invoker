@@ -523,6 +523,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
     [--no-merge] [--output F]
   query task <taskId> [--output F]                    Print single task status
   query queue [--output F]                            Show queue status
+  query workers [--output F]                          Show worker fleet snapshot
   query review-gate <prNumber|prUrl> [--output F]    Resolve a PR back to its Invoker workflow
   query action-graph [--output F]                     Print action graph source-of-truth snapshot
   query audit <taskId> [--output F]                   Print event history
