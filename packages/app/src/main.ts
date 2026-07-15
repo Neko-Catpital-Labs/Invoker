@@ -1102,6 +1102,11 @@ function startHeadlessMode(): void {
           ...createRendererUiPerfCounters(),
         }),
         resetUiPerfStats: () => {},
+        getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+          registry: createRegisteredWorkerRegistry(),
+          persistence,
+          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        }),
         waitForApproval,
         noTrack,
         executionAgentRegistry: agentRegistry,
@@ -1689,6 +1694,7 @@ function startHeadlessMode(): void {
             executionAgentRegistry: headlessDeps.executionAgentRegistry,
             getUiPerfStats: headlessDeps.getUiPerfStats,
             resetUiPerfStats: headlessDeps.resetUiPerfStats,
+            getWorkerStatus: headlessDeps.getWorkerStatus,
           }));
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           noteStandaloneOwnerActivity();
@@ -3420,6 +3426,7 @@ function createEmbeddedTerminalBackendFromConfig(
           executionAgentRegistry: agentRegistry,
           getUiPerfStats,
           resetUiPerfStats,
+          getWorkerStatus: () => workerRuntimeController?.snapshot() ?? { generatedAt: new Date().toISOString(), workers: [] },
         }));
       messageBus.onRequest('headless.run', async (req: unknown) => {
         const { planPath, traceId } = req as { planPath: string; traceId?: string };

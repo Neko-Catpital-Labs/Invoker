@@ -10,7 +10,7 @@
  * other way around.
  */
 
-import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger } from '@invoker/contracts';
+import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger, WorkerStatusSnapshot } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
 import { OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { Orchestrator, CommandService, TaskState } from '@invoker/workflow-core';
@@ -50,6 +50,7 @@ export interface HeadlessDeps {
   executionAgentRegistry?: AgentRegistry;
   getUiPerfStats?: () => Record<string, unknown>;
   resetUiPerfStats?: () => void;
+  getWorkerStatus?: () => WorkerStatusSnapshot;
   deferRunnableTasks?: (tasks: TaskState[], workflowId?: string) => void;
   preemptTaskSubgraph?: (taskId: string) => Promise<void>;
   preemptWorkflowExecution?: (workflowId: string) => Promise<WorkflowCancelResult>;
