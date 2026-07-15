@@ -35,6 +35,8 @@ export type RendererUiPerfCounters = {
   maxEmbeddedTerminalOutputWriteBytes: number;
   embeddedTerminalResizeReports: number;
   maxEmbeddedTerminalResizeMs: number;
+  embeddedTerminalScrollReports: number;
+  maxEmbeddedTerminalScrollMs: number;
   embeddedTerminalSnapshotWriteReports: number;
   maxEmbeddedTerminalSnapshotWriteMs: number;
   maxEmbeddedTerminalSnapshotBytes: number;
@@ -71,6 +73,8 @@ export function createRendererUiPerfCounters(): RendererUiPerfCounters {
     maxEmbeddedTerminalOutputWriteBytes: 0,
     embeddedTerminalResizeReports: 0,
     maxEmbeddedTerminalResizeMs: 0,
+    embeddedTerminalScrollReports: 0,
+    maxEmbeddedTerminalScrollMs: 0,
     embeddedTerminalSnapshotWriteReports: 0,
     maxEmbeddedTerminalSnapshotWriteMs: 0,
     maxEmbeddedTerminalSnapshotBytes: 0,
@@ -185,6 +189,12 @@ export function recordRendererUiPerfMetric(
   if (metric === 'embedded_terminal_resize') {
     counters.embeddedTerminalResizeReports += 1;
     updateMax(counters, 'maxEmbeddedTerminalResizeMs', numberField(data, 'durationMs'));
+    return;
+  }
+
+  if (metric === 'embedded_terminal_scroll') {
+    counters.embeddedTerminalScrollReports += 1;
+    updateMax(counters, 'maxEmbeddedTerminalScrollMs', numberField(data, 'durationMs'));
     return;
   }
 
