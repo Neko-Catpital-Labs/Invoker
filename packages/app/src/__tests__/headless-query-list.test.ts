@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkerActionRecord } from '@invoker/data-store';
+import type { WorkerStatusSnapshot } from '@invoker/contracts';
 import {
   runReadOnlyHeadlessQueryToString,
   type HeadlessQueryDeps,
@@ -45,6 +46,39 @@ function makeQueryDeps(): HeadlessQueryDeps {
     resetUiPerfStats: () => {},
   };
 }
+
+const workerStatusSnapshot: WorkerStatusSnapshot = {
+  generatedAt: '2026-01-01T00:00:00.000Z',
+  workers: [{
+    kind: 'autofix',
+    note: 'Recovers failed tasks',
+    lifecycle: 'running',
+    policy: 'enabled',
+    autoStarts: true,
+    desiredEnabled: true,
+    startable: false,
+    stoppable: true,
+    recentActions: [],
+  }],
+};
+
+function makeWorkerStatusDeps(): HeadlessQueryDeps {
+  return {
+    ...makeQueryDeps(),
+    getWorkerStatus: () => workerStatusSnapshot,
+  };
+}
+
+describe('headless query workers', () => {
+  it('returns the worker fleet snapshot as JSON', async () => {
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'workers', '--output', 'json'],
+      makeWorkerStatusDeps(),
+    );
+
+    expect(JSON.parse(output)).toEqual(workerStatusSnapshot);
+  });
+});
 
 describe('headless query worker-actions', () => {
   it('renders worker actions as JSON', async () => {

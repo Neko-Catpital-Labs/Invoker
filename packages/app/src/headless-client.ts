@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import { resolveRepoRoot } from '@invoker/contracts';
 import { IpcBus } from '@invoker/transport';
+import { SQLiteAdapter } from '@invoker/data-store';
+import { createWorkerRegistry, registerBuiltinWorkers, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import type { MessageBus } from '@invoker/transport';
 
 import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
@@ -21,6 +24,8 @@ import {
   spawnDetachedStandaloneOwner,
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
+import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
+import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot } from './worker-control.js';
 import { loadConfig } from './config.js';
 import {
   discoverOwner,
@@ -374,6 +379,51 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
   }
 }
 
+function workerQueryOutputFormat(args: string[]): string {
+  const index = args.indexOf('--output');
+  return index >= 0 ? args[index + 1] ?? 'text' : 'text';
+}
+
+async function tryRunLocalWorkersQuery(args: string[]): Promise<boolean> {
+  if (args[0] !== 'query' || args[1] !== 'workers') return false;
+
+  const config = loadConfig();
+  const dbPath = join(resolveInvokerHomeRoot(), 'invoker.db');
+  const persistence = existsSync(dbPath)
+    ? await SQLiteAdapter.create(dbPath, { readOnly: true })
+    : await SQLiteAdapter.createEphemeral();
+  try {
+    const registry = registerExternalWorkersFromConfig(
+      config.externalWorkers,
+      registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    );
+    const snapshot = createLocalWorkerStatusSnapshot({
+      registry,
+      persistence,
+      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+    });
+    switch (workerQueryOutputFormat(args)) {
+      case 'label':
+        process.stdout.write(`${snapshot.workers.map((worker) => worker.kind).join('\n')}\n`);
+        break;
+      case 'json':
+        process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+        break;
+      case 'jsonl':
+        for (const worker of snapshot.workers) {
+          process.stdout.write(`${JSON.stringify({ generatedAt: snapshot.generatedAt, ...worker })}\n`);
+        }
+        break;
+      default:
+        process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+        break;
+    }
+  } finally {
+    persistence.close();
+  }
+  return true;
+}
+
 function parseArgs(argv: string[]): { args: string[]; waitForApproval?: boolean; noTrack?: boolean } {
   const args: string[] = [];
   let waitForApproval = false;
@@ -491,6 +541,10 @@ export async function runHeadlessClientCommand(
   }
 
   if (!internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
+    const exitCode = process.exitCode;
+    return typeof exitCode === 'number' ? exitCode : 0;
+  }
+  if (await tryRunLocalWorkersQuery(args)) {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
   }

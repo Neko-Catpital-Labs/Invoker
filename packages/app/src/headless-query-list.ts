@@ -1,6 +1,6 @@
 /**
  * Headless "query" command family: the read-only `query <sub>` router
- * (workflows · tasks · task · queue · review-gate · action-graph · audit ·
+ * (workflows · tasks · task · queue · workers · review-gate · action-graph · audit ·
  * session · worker-actions · cost · cost-events · costs · ui-perf · stats), the cost-event
  * collection/rollup
  * helpers, agent session resolution, and `query-select`.
@@ -12,7 +12,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
-import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
+import type { AgentSessionData, NormalizedCostEvent, WorkerStatusSnapshot } from '@invoker/contracts';
 import { AUTO_FIX_WORKER_KIND, type AgentRegistry } from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
@@ -59,13 +59,13 @@ function writeOut(chunk: string): void {
  */
 export type HeadlessQueryDeps = Pick<
   HeadlessDeps,
-  'orchestrator' | 'persistence' | 'executionAgentRegistry' | 'invokerConfig' | 'getUiPerfStats' | 'resetUiPerfStats'
+  'orchestrator' | 'persistence' | 'executionAgentRegistry' | 'invokerConfig' | 'getUiPerfStats' | 'resetUiPerfStats' | 'getWorkerStatus'
 >;
 
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|workers|review-gate|action-graph|audit|session|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -216,6 +216,30 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
           break;
         }
         default: writeOut(formatQueueStatus(status) + '\n'); break;
+      }
+      break;
+    }
+    case 'workers': {
+      const snapshot = deps.getWorkerStatus?.();
+      if (!snapshot) {
+        throw new Error('Worker status snapshot is unavailable in this runtime.');
+      }
+      switch (flags.output) {
+        case 'label':
+          writeOut(snapshot.workers.map((worker) => worker.kind).join('\n') + '\n');
+          break;
+        case 'json':
+          writeOut(formatAsJson(snapshot) + '\n');
+          break;
+        case 'jsonl':
+          writeOut(formatAsJsonl(snapshot.workers.map((worker) => ({
+            generatedAt: snapshot.generatedAt,
+            ...worker,
+          }))) + '\n');
+          break;
+        default:
+          writeOut(formatWorkerStatusSnapshot(snapshot) + '\n');
+          break;
       }
       break;
     }
@@ -390,8 +414,36 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, queue, review-gate, action-graph, audit, session, worker-actions, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, queue, workers, review-gate, action-graph, audit, session, worker-actions, cost, cost-events, costs, ui-perf, stats`);
   }
+}
+
+function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
+  const lines = [
+    `${BOLD}Workers${RESET} (${snapshot.workers.length})`,
+    `  generatedAt: ${snapshot.generatedAt}`,
+  ];
+  if (snapshot.workers.length === 0) {
+    lines.push('  No workers registered.');
+    return lines.join('\n');
+  }
+  for (const worker of snapshot.workers) {
+    const controls = [
+      worker.startable ? 'startable' : undefined,
+      worker.stoppable ? 'stoppable' : undefined,
+      worker.controlDisabledReason ? `control=${worker.controlDisabledReason}` : undefined,
+    ].filter(Boolean).join(' ');
+    lines.push(
+      `  ${worker.kind}: ${worker.lifecycle} policy=${worker.policy} autoStarts=${worker.autoStarts} desired=${worker.desiredEnabled ?? worker.autoStarts}${controls ? ` ${controls}` : ''}`,
+    );
+    if (worker.note) lines.push(`    ${worker.note}`);
+    if (worker.recovery) {
+      lines.push(
+        `    recovery wakeups=${worker.recovery.wakeups} scans=${worker.recovery.scans} submissions=${worker.recovery.submissions} skips=${worker.recovery.skips}`,
+      );
+    }
+  }
+  return lines.join('\n');
 }
 
 /**
