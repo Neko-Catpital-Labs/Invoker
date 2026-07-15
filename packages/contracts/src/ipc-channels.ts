@@ -1272,6 +1272,10 @@ export const IpcTestOnlyChannels = {
       workerActionCount: number;
     };
   },
+  'invoker:ingest-worker-actions': {} as {
+    request: [actions: Array<Record<string, unknown>>];
+    response: void;
+  },
   'invoker:seed-stress-fixture': {} as {
     request: [options?: {
       workflowCount?: number;

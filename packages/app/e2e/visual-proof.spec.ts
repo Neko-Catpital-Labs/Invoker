@@ -24,8 +24,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 import type { Locator, Page } from '@playwright/test';
-import { SQLiteAdapter } from '@invoker/data-store';
-
+import { SQLiteAdapter, type WorkerActionWrite } from '@invoker/data-store';
 /** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
 const QUEUE_SEMANTICS_PLAN = {
   name: 'Queue Semantics Visual Proof',
@@ -542,6 +541,68 @@ async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId
       leaseExpiresAt: new Date(now.getTime() + 60_000),
       createdAt: now,
     });
+  } finally {
+    adapter.close();
+  }
+}
+async function seedWorkerTimelineActions(
+  dbPath: string,
+  workflowId: string,
+  taskIds: { alpha: string; beta: string },
+): Promise<WorkerActionWrite[]> {
+  const adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+  const actions: WorkerActionWrite[] = [
+    {
+      id: 'alpha-repair',
+      workerKind: 'autofix',
+      actionType: 'repair',
+      workflowId,
+      taskId: taskIds.alpha,
+      subjectType: 'task',
+      subjectId: taskIds.alpha,
+      externalKey: `timeline:${workflowId}:alpha-repair`,
+      status: 'completed',
+      summary: 'Repair finished cleanly.',
+      payload: { reason: 'Autofix picked the failing task.' },
+      createdAt: '2024-01-01T00:00:10Z',
+      updatedAt: '2024-01-01T00:00:20Z',
+      completedAt: '2024-01-01T00:00:20Z',
+    },
+    {
+      id: 'alpha-review',
+      workerKind: 'pr-summary-refresh',
+      actionType: 'refresh-review',
+      workflowId,
+      taskId: taskIds.beta,
+      subjectType: 'task',
+      subjectId: taskIds.beta,
+      externalKey: `timeline:${workflowId}:alpha-review`,
+      status: 'completed',
+      summary: 'Updated review metadata.',
+      createdAt: '2024-01-01T00:00:30Z',
+      updatedAt: '2024-01-01T00:00:40Z',
+      completedAt: '2024-01-01T00:00:40Z',
+    },
+    {
+      id: 'alpha-inspect',
+      workerKind: 'autofix',
+      actionType: 'inspect',
+      workflowId,
+      taskId: taskIds.alpha,
+      subjectType: 'task',
+      subjectId: taskIds.alpha,
+      externalKey: `timeline:${workflowId}:alpha-inspect`,
+      status: 'running',
+      payload: { reason: 'Selected task still has open execution output.' },
+      createdAt: '2024-01-01T00:00:50Z',
+      updatedAt: '2024-01-01T00:00:55Z',
+    },
+  ];
+  try {
+    for (const action of actions) {
+      adapter.upsertWorkerAction(action);
+    }
+    return actions;
   } finally {
     adapter.close();
   }
@@ -1255,6 +1316,86 @@ test.describe('Visual proof capture', () => {
     expect(beta?.status).toBe('completed');
     await captureScreenshot(page, 'task-complete');
     await assertPageScreenshot(page, 'task-complete');
+  });
+  test.describe('timeline worker proof', () => {
+    test.use({ guiOwnerMode: 'local' });
+
+    test('timeline workers mode', async ({ page, testDir }) => {
+      const workflowId = await loadPlanAndSelectWorkflow(page, TEST_PLAN);
+      const tasks = await getTasks(page);
+      const alphaTask = tasks.find((task: { id: string; config?: { workflowId?: string } }) => task.id.endsWith('task-alpha'));
+      const betaTask = tasks.find((task: { id: string; config?: { workflowId?: string } }) => task.id.endsWith('task-beta'));
+      expect(alphaTask?.id).toBeTruthy();
+      expect(betaTask?.id).toBeTruthy();
+      const timelineWorkflowId = alphaTask?.config?.workflowId ?? workflowId;
+      expect(timelineWorkflowId).toBeTruthy();
+
+      const seededActions = await seedWorkerTimelineActions(path.join(testDir, 'invoker.db'), timelineWorkflowId, {
+        alpha: alphaTask!.id,
+        beta: betaTask!.id,
+      });
+      const seededAdapter = await SQLiteAdapter.create(path.join(testDir, 'invoker.db'), { ownerCapability: true });
+      try {
+        expect(seededAdapter.listWorkerActions({ workflowId: timelineWorkflowId }).map((action) => action.id)).toEqual([
+          'alpha-inspect',
+          'alpha-review',
+          'alpha-repair',
+        ]);
+      } finally {
+        seededAdapter.close();
+      }
+      await page.evaluate((actions) => window.invoker.ingestWorkerActions(actions), seededActions);
+
+      await expect.poll(async () => {
+        const response = await page.evaluate((id) => window.invoker.getWorkerDecisions({ workflowId: id, limit: 100, offset: 0 }), timelineWorkflowId);
+        return response.actions.map((action) => action.id);
+      }).toEqual(['alpha-inspect', 'alpha-review', 'alpha-repair']);
+
+      await selectWorkflowNode(page, timelineWorkflowId);
+      await selectGraphMenuItem(page, 'rail-timeline');
+
+      const workerTimelineView = page.getByTestId('worker-timeline-view');
+      const workerActionOrder = async () => workerTimelineView
+        .locator('[data-testid^="worker-timeline-action-"]')
+        .evaluateAll((elements) => elements
+          .map((element) => element.getAttribute('data-testid'))
+          .filter((value): value is string => Boolean(value)));
+
+      await expect(page.getByTestId('timeline-mode-workers')).toHaveAttribute('aria-pressed', 'true');
+      await expect(workerTimelineView).toBeVisible();
+      await expect.poll(workerActionOrder).toEqual([
+        'worker-timeline-action-alpha-repair-launched',
+        'worker-timeline-action-alpha-repair-finished',
+        'worker-timeline-action-alpha-review-launched',
+        'worker-timeline-action-alpha-review-finished',
+        'worker-timeline-action-alpha-inspect-launched',
+      ]);
+      await captureScreenshot(page, 'timeline-worker-events');
+      await assertPageScreenshot(page, 'timeline-worker-events');
+
+      await page.getByTestId('worker-timeline-action-alpha-review-finished').click();
+      await expect(page.getByTestId('workflow-inspector-title')).toContainText('Second test task depending on alpha');
+      await captureScreenshot(page, 'timeline-worker-events-selected');
+      await assertPageScreenshot(page, 'timeline-worker-events-selected');
+
+      await page.getByTestId('worker-timeline-task-search').fill('first');
+      await expect.poll(workerActionOrder).toEqual([
+        'worker-timeline-action-alpha-repair-launched',
+        'worker-timeline-action-alpha-repair-finished',
+        'worker-timeline-action-alpha-inspect-launched',
+      ]);
+      await expect(page.getByTestId('worker-timeline-row-alpha-repair-launched')).toContainText('Autofix');
+      await expect(page.getByTestId('worker-timeline-row-alpha-inspect-launched')).toContainText('Autofix');
+      await expect(page.getByTestId('worker-timeline-action-alpha-review-launched')).toHaveCount(0);
+      await captureScreenshot(page, 'timeline-worker-events-search');
+      await assertPageScreenshot(page, 'timeline-worker-events-search');
+
+      await page.getByTestId('timeline-mode-tasks').click();
+      await expect(page.getByTestId(`timeline-bar-${alphaTask!.id}`)).toBeVisible();
+      await expect(page.getByTestId(`timeline-bar-${betaTask!.id}`)).toBeVisible();
+      await captureScreenshot(page, 'timeline-worker-tasks-mode');
+      await assertPageScreenshot(page, 'timeline-worker-tasks-mode');
+    });
   });
 
   test('task panel', async ({ page }) => {
