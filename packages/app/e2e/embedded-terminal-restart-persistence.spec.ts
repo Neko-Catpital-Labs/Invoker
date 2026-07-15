@@ -48,6 +48,7 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
     env: {
       ...process.env,
       NODE_ENV: 'test',
+          INVOKER_TEST_WORKFLOW_IDS: '1',
       INVOKER_USER_DATA_DIR: paths.userDataDir,
       INVOKER_DISABLE_SLACK: '1',
       TZ: 'UTC',

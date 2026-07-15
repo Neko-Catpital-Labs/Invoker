@@ -9,7 +9,17 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
   return {
     ownerModeLabel: 'gui',
     onActivity: vi.fn(),
-    getUiPerfStats: vi.fn(() => ({ mainDeltaToUi: 7 })),
+    getUiPerfStats: vi.fn(() => ({
+      mainDeltaToUi: 7,
+      maxRendererEventLoopLagMs: 12,
+      maxRendererLongTaskMs: 34,
+      planningTypingLagReports: 3,
+      maxPlanningTypingLagMs: 41,
+      planningChatInputChangeReports: 2,
+      maxPlanningChatInputHandlerMs: 17,
+      planningChatInputCommitReports: 1,
+      maxPlanningChatInputCommitMs: 29,
+    })),
     resetUiPerfStats: vi.fn(),
     getQueueStatus: vi.fn(() => ({ runningCount: 2 })),
     listWorkerActionHistory: vi.fn((request) => ({ workerKind: request.workerKind, actions: [], limit: request.limit ?? 20, offset: request.offset ?? 0, hasMore: false })),
@@ -36,7 +46,18 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
 describe('answerOwnerReadQuery', () => {
   it('ui-perf merges the owner label with the stats; reset only when asked', () => {
     const h = makeHandlers({ ownerModeLabel: 'standalone' });
-    expect(answerOwnerReadQuery({ kind: 'ui-perf' }, h)).toEqual({ ownerMode: 'standalone', mainDeltaToUi: 7 });
+    expect(answerOwnerReadQuery({ kind: 'ui-perf' }, h)).toEqual({
+      ownerMode: 'standalone',
+      mainDeltaToUi: 7,
+      maxRendererEventLoopLagMs: 12,
+      maxRendererLongTaskMs: 34,
+      planningTypingLagReports: 3,
+      maxPlanningTypingLagMs: 41,
+      planningChatInputChangeReports: 2,
+      maxPlanningChatInputHandlerMs: 17,
+      planningChatInputCommitReports: 1,
+      maxPlanningChatInputCommitMs: 29,
+    });
     expect(h.resetUiPerfStats).not.toHaveBeenCalled();
     answerOwnerReadQuery({ kind: 'ui-perf', reset: true }, h);
     expect(h.resetUiPerfStats).toHaveBeenCalledTimes(1);

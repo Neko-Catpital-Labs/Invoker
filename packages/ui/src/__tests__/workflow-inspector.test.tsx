@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowInspector } from '../components/WorkflowInspector.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { WorkflowMutationFailedEvent } from '@invoker/contracts';
 
 function makeTask(partial?: Partial<TaskState>): TaskState {
   return {
@@ -278,9 +279,11 @@ describe('WorkflowInspector', () => {
           activeGeneration: 0,
           completion: { required: 'all', status: 'approved' },
           ready: false,
+          substate: null,
           artifacts: [],
           discardedArtifacts: [],
           edges: [],
+
         }}
         collapsed={false}
         advancedExpanded={false}
@@ -305,12 +308,14 @@ describe('WorkflowInspector', () => {
           activeGeneration: 0,
           completion: { required: 'all', status: 'approved' },
           ready: false,
+          substate: null,
           artifacts: [
             { id: 'contracts', title: 'Define contracts', url: 'https://example.test/contracts', required: true, status: 'open', generation: 0 },
             { id: 'runtime', title: 'Wire runtime', url: 'https://example.test/runtime', required: true, status: 'open', generation: 0 },
           ],
           discardedArtifacts: [],
           edges: [],
+
         }}
         collapsed={false}
         advancedExpanded={false}
@@ -324,6 +329,50 @@ describe('WorkflowInspector', () => {
       'Wire runtime',
     ]);
   });
+  it('renders artifact detail lines from typed review metadata', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready' }}
+        task={null}
+        reviewGate={{
+          workflowId: 'wf-1',
+          mergeTaskId: '__merge__wf-1',
+          status: 'review_ready',
+          activeGeneration: 0,
+          completion: { required: 'all', status: 'approved' },
+          ready: false,
+          substate: 'ci_failing',
+          artifacts: [
+            { id: 'conflict', title: 'Conflict', url: 'https://example.test/conflict', required: true, status: 'open', generation: 0, mergeState: 'dirty' },
+            {
+              id: 'checks',
+              title: 'Checks',
+              url: 'https://example.test/checks',
+              required: true,
+              status: 'open',
+              generation: 0,
+              checksState: 'failure',
+              failedChecks: [{ name: 'lint' }, { name: 'unit' }],
+            },
+            { id: 'pending', title: 'Pending', url: 'https://example.test/pending', required: true, status: 'open', generation: 0, checksState: 'pending' },
+            { id: 'passing', title: 'Passing', url: 'https://example.test/passing', required: true, status: 'open', generation: 0, checksState: 'success' },
+          ],
+          discardedArtifacts: [],
+          edges: [],
+        }}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Merge conflict')).toBeInTheDocument();
+    expect(screen.getByText('lint, unit')).toBeInTheDocument();
+    expect(screen.getByText('Checks pending')).toBeInTheDocument();
+    expect(screen.getByText('Checks passing')).toBeInTheDocument();
+  });
+
 
   it('renders a linear pull request stack with connectors', () => {
     render(
@@ -337,6 +386,7 @@ describe('WorkflowInspector', () => {
           activeGeneration: 0,
           completion: { required: 'all', status: 'approved' },
           ready: false,
+          substate: null,
           artifacts: [
             { id: 'contracts', title: 'Contracts', url: 'https://example.test/contracts', required: true, status: 'approved', generation: 0 },
             { id: 'runtime', title: 'Runtime', url: 'https://example.test/runtime', required: true, status: 'open', generation: 0, dependsOn: ['contracts'] },
@@ -344,6 +394,7 @@ describe('WorkflowInspector', () => {
           ],
           discardedArtifacts: [],
           edges: [{ from: 'contracts', to: 'runtime' }, { from: 'runtime', to: 'ui' }],
+
         }}
         collapsed={false}
         advancedExpanded={false}
@@ -373,6 +424,7 @@ describe('WorkflowInspector', () => {
           activeGeneration: 1,
           completion: { required: 'all', status: 'approved' },
           ready: false,
+          substate: null,
           artifacts: [
             { id: 'runtime', title: 'Runtime', url: 'https://example.test/runtime', required: true, status: 'open', generation: 1 },
           ],
@@ -730,9 +782,17 @@ describe('WorkflowInspector', () => {
     expect(screen.getByTestId('workflow-inspector-action-node')).toHaveTextContent('12000');
   });
 
-  it('shows task logs and filters by minimum level', async () => {
+  it('shows task timeline events and matching worker decisions', async () => {
     (window as unknown as {
-      invoker: { getEvents: (taskId: string, options: { limit: number }) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>> };
+      invoker: {
+        getEvents: (taskId: string, options: { limit: number }) => Promise<Array<{ id: number; eventType: string; payload?: string; createdAt?: string }>>;
+        getWorkerDecisions: () => Promise<{
+          actions: Array<Record<string, unknown>>;
+          limit: number;
+          offset: number;
+          hasMore: boolean;
+        }>;
+      };
     }).invoker = {
       getEvents: vi.fn(async () => [
         {
@@ -754,6 +814,46 @@ describe('WorkflowInspector', () => {
           createdAt: '2025-01-01T00:00:01.000Z',
         },
       ]),
+      getWorkerDecisions: vi.fn(async () => ({
+        actions: [
+          {
+            id: 'wd-1',
+            workerKind: 'autofix',
+            actionType: 'fix-task',
+            workflowId: 'wf-1',
+            taskId: 'task-1',
+            subjectType: 'task',
+            subjectId: 'task-1',
+            externalKey: 'wf-1/task-1:g0:a1',
+            status: 'queued',
+            attemptCount: 1,
+            summary: 'Queued auto-fix with agent',
+            decision: 'act',
+            createdAt: '2025-01-01T00:00:04.000Z',
+            updatedAt: '2025-01-01T00:00:04.000Z',
+          },
+          {
+            id: 'wd-2',
+            workerKind: 'autofix',
+            actionType: 'fix-task',
+            workflowId: 'wf-1',
+            taskId: 'task-2',
+            subjectType: 'task',
+            subjectId: 'task-2',
+            externalKey: 'wf-1/task-2:g0:a1',
+            status: 'skipped',
+            attemptCount: 1,
+            summary: 'Skipped auto-fix',
+            reason: 'retry-budget-disabled',
+            decision: 'skip',
+            createdAt: '2025-01-01T00:00:05.000Z',
+            updatedAt: '2025-01-01T00:00:05.000Z',
+          },
+        ],
+        limit: 25,
+        offset: 0,
+        hasMore: false,
+      })),
     };
 
     try {
@@ -770,6 +870,8 @@ describe('WorkflowInspector', () => {
 
       await waitFor(() => expect(screen.getByText('Preparing review workspace')).toBeInTheDocument());
       expect(screen.getByText('Merge gate failed')).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText('Queued auto-fix with agent')).toBeInTheDocument());
+      expect(screen.queryByText('Skipped auto-fix')).not.toBeInTheDocument();
       expect(screen.queryByText('debug detail')).not.toBeInTheDocument();
 
       fireEvent.change(screen.getByTestId('task-log-level-select'), { target: { value: 'debug' } });
@@ -847,5 +949,77 @@ describe('WorkflowInspector', () => {
     } finally {
       delete (window as unknown as { invoker?: unknown }).invoker;
     }
+  });
+
+  it('renders a persistent mutation failure detail panel for the selected task', () => {
+    const mutationFailure: WorkflowMutationFailedEvent = {
+      intentId: 42,
+      workflowId: 'wf-1',
+      channel: 'invoker:approve',
+      taskId: 'task-1',
+      message: 'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"',
+      failedAt: '2026-07-08T10:00:00.000Z',
+    };
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        mutationFailure={mutationFailure}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const detail = screen.getByTestId('task-mutation-failure-detail');
+    expect(detail).toBeInTheDocument();
+    expect(detail).toHaveTextContent('Approve failed');
+    expect(detail).toHaveTextContent('missing execution harness "codex"');
+    expect(detail).toHaveTextContent('Channel: invoker:approve');
+  });
+
+  it('renders headless command metadata in the mutation failure detail panel', () => {
+    const mutationFailure: WorkflowMutationFailedEvent = {
+      intentId: 46,
+      workflowId: 'wf-1',
+      channel: 'headless.exec',
+      headlessCommand: 'fix',
+      taskId: 'task-1',
+      message: 'SSH remote script failed (exit=1, phase=remote_agent_fix)',
+      failedAt: '2026-07-08T10:00:00.000Z',
+    };
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        mutationFailure={mutationFailure}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const detail = screen.getByTestId('task-mutation-failure-detail');
+    expect(detail).toHaveTextContent('Fix failed');
+    expect(detail).toHaveTextContent('Command: fix');
+  });
+
+  it('does not render the mutation failure detail panel when no failure is provided', () => {
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={makeTask({ status: 'awaiting_approval' })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('task-mutation-failure-detail')).not.toBeInTheDocument();
   });
 });

@@ -93,6 +93,42 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('prompt-command-display')).toHaveTextContent('exit 1');
     });
   });
+
+  it('renders task.worker_action events in the task timeline', async () => {
+    const task = makeUITask({
+      id: 'task-worker-action',
+      description: 'Worker action target',
+      status: 'completed',
+      workflowId: 'wf-a',
+      command: 'pnpm test',
+    });
+    mock.setEvents(task.id, [{
+      id: 1,
+      taskId: task.id,
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        summary: 'Updated PR body with Invoker pipeline summary',
+        reviewId: '123',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    render(<App />);
+    act(() => mock.setTasks([task], workflows));
+
+    fireEvent.click(await screen.findByTestId('rf__node-task-worker-action'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent(
+        'pr-summary-refresh/refresh-pr-summary completed: Updated PR body with Invoker pipeline summary',
+      );
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('"workerKind":"pr-summary-refresh"');
+    });
+  });
+
   it('lets prompt tasks change harness and model from the inspector', async () => {
     const promptTask = makeUITask({
       id: 'task-ai',

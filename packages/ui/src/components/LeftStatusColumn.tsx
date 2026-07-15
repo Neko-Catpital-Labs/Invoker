@@ -11,7 +11,6 @@ import {
   InvokerIcon,
   MoonIcon,
   PlanningTerminalIcon,
-  RunningIcon,
   SettingsIcon,
   SunIcon,
   WorkerIcon,
@@ -26,9 +25,11 @@ interface LeftStatusColumnProps {
   workerStatus: WorkerStatusSnapshot | null;
   selectedSurface: SidebarSurface;
   collapsed: boolean;
+  attentionTaskIdsWithFailures?: Set<string>;
   onSelectSurface: (surface: SidebarSurface) => void;
   onToggleCollapsed: () => void;
   planningSessionCount: number;
+  planningAttentionCount: number;
   onOpenSettings: () => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
@@ -72,15 +73,17 @@ export function LeftStatusColumn({
   workerStatus,
   selectedSurface,
   collapsed,
+  attentionTaskIdsWithFailures,
   onSelectSurface,
   onToggleCollapsed,
   planningSessionCount,
+  planningAttentionCount,
   onOpenSettings,
   theme,
   onToggleTheme,
 }: LeftStatusColumnProps): JSX.Element {
   const workflowEntries = getSortedWorkflows(workflows, tasks);
-  const attentionEntries = getAttentionTaskEntries(tasks, workflows);
+  const attentionEntries = getAttentionTaskEntries(tasks, workflows, attentionTaskIdsWithFailures);
   const runningEntries = getRunningTaskEntries(tasks, workflows, queueStatus);
   const runningWorkers = workerStatus?.workers.filter((worker) => worker.lifecycle === 'running').length ?? 0;
   const registeredWorkers = workerStatus?.workers.length ?? 0;
@@ -88,7 +91,6 @@ export function LeftStatusColumn({
 
   const sources: SourceItem[] = [
     { key: 'attention', label: 'Needs Attention', count: attentionEntries.length, tone: 'attention', icon: <AttentionIcon className={ICON_CLASS} /> },
-    { key: 'running', label: 'Running', count: runningEntries.length, tone: 'running', icon: <RunningIcon className={ICON_CLASS} /> },
     { key: 'workers', label: 'Workers', count: registeredWorkers, tone: activeWorkerActions > 0 ? 'running' : 'neutral', icon: <WorkerIcon className={ICON_CLASS} /> },
     { key: 'workflows', label: 'Workflows', count: workflowEntries.length, tone: 'neutral', icon: <WorkflowsIcon className={ICON_CLASS} /> },
   ];
@@ -147,9 +149,9 @@ export function LeftStatusColumn({
         {collapsed ? (
           <div className="relative inline-flex h-9 w-9 items-center justify-center">
             <span><PlanningTerminalIcon className={ICON_CLASS} /></span>
-            {planningSessionCount > 0 && (
+            {planningAttentionCount > 0 && (
               <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none bg-background ${countClass('neutral')}`}>
-                {planningSessionCount}
+                {planningAttentionCount}
               </span>
             )}
           </div>
@@ -162,7 +164,7 @@ export function LeftStatusColumn({
               <span className="truncate">Planning Terminal</span>
             </span>
             <span className={`rounded-full px-2 py-0.5 text-[11px] ${countClass('neutral')}`}>
-              {planningSessionCount}
+              {planningAttentionCount}
             </span>
           </>
         )}

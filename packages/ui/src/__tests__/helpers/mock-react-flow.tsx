@@ -19,6 +19,7 @@ import { vi } from 'vitest';
 export function createReactFlowMock() {
   const fitView = vi.fn();
   const setCenter = vi.fn();
+  const setViewport = vi.fn();
   const getZoom = vi.fn(() => 1);
   const getViewport = vi.fn(() => ({ x: 0, y: 0, zoom: 1 }));
   const MockReactFlow = React.forwardRef(function MockReactFlow(
@@ -35,12 +36,22 @@ export function createReactFlowMock() {
       onNodeContextMenu?: (event: React.MouseEvent, node: any) => void;
       onNodeDoubleClick?: (event: React.MouseEvent, node: any) => void;
       onMoveStart?: (event: unknown, viewport: { x: number; y: number; zoom: number }) => void;
+      onMoveEnd?: (event: unknown, viewport: { x: number; y: number; zoom: number }) => void;
       onInit?: () => void;
       children?: React.ReactNode;
     },
     _ref: React.Ref<unknown>,
   ) {
-    const { nodes = [], nodeTypes = {}, onNodeClick, onNodeContextMenu, onNodeDoubleClick, onMoveStart, children } = props;
+    const {
+      nodes = [],
+      nodeTypes = {},
+      onNodeClick,
+      onNodeContextMenu,
+      onNodeDoubleClick,
+      onMoveStart,
+      onMoveEnd,
+      children,
+    } = props;
 
     React.useEffect(() => {
       props.onInit?.();
@@ -52,15 +63,46 @@ export function createReactFlowMock() {
     // the node elements, so node clicks do not trigger manual-viewport events.
     const emitManualMove = (event: unknown) =>
       onMoveStart?.(event, { x: 0, y: 0, zoom: getZoom() });
+    const emitManualMoveEnd = (event: unknown) =>
+      onMoveEnd?.(event, { x: 0, y: 0, zoom: getZoom() });
+
+    const nodeElements = nodes.map((node) => {
+      const NodeComponent = nodeTypes[node.type ?? ''];
+      return (
+        <div
+          key={node.id}
+          data-testid={`rf__node-${node.id}`}
+          data-x={(node as { position?: { x?: number } }).position?.x}
+          data-y={(node as { position?: { y?: number } }).position?.y}
+          className="react-flow__node"
+          onClick={(e) => onNodeClick?.(e, node)}
+          onContextMenu={(e) => onNodeContextMenu?.(e, node)}
+          onDoubleClick={(e) => onNodeDoubleClick?.(e, node)}
+        >
+          {NodeComponent ? (
+            <NodeComponent data={node.data ?? {}} />
+          ) : (
+            <>
+              <span>{node.data?.label ?? node.data?.task?.description ?? node.id}</span>
+              <span>{node.id}</span>
+            </>
+          )}
+        </div>
+      );
+    });
 
     return (
       <div data-testid="mock-react-flow" className="react-flow">
+        <div className="react-flow__viewport" />
         <div
           data-testid="rf__pane"
           className="react-flow__pane"
           onPointerDown={(e) => emitManualMove(e.nativeEvent)}
+          onPointerUp={(e) => emitManualMoveEnd(e.nativeEvent)}
           onWheel={(e) => emitManualMove(e.nativeEvent)}
-        />
+        >
+          {nodeElements}
+        </div>
         {props.edges?.map((edge: any) => (
           <div
             key={edge.id}
@@ -72,30 +114,6 @@ export function createReactFlowMock() {
             aria-label={edge.ariaLabel}
           />
         ))}
-        {nodes.map((node) => {
-          const NodeComponent = nodeTypes[node.type ?? ''];
-          return (
-            <div
-              key={node.id}
-              data-testid={`rf__node-${node.id}`}
-              data-x={(node as { position?: { x?: number } }).position?.x}
-              data-y={(node as { position?: { y?: number } }).position?.y}
-              className="react-flow__node"
-              onClick={(e) => onNodeClick?.(e, node)}
-              onContextMenu={(e) => onNodeContextMenu?.(e, node)}
-              onDoubleClick={(e) => onNodeDoubleClick?.(e, node)}
-            >
-              {NodeComponent ? (
-                <NodeComponent data={node.data ?? {}} />
-              ) : (
-                <>
-                  <span>{node.data?.label ?? node.data?.task?.description ?? node.id}</span>
-                  <span>{node.id}</span>
-                </>
-              )}
-            </div>
-          );
-        })}
         {children}
       </div>
     );
@@ -108,8 +126,9 @@ export function createReactFlowMock() {
   return {
     ReactFlow: MockReactFlow,
     ReactFlowProvider: MockReactFlowProvider,
-    useReactFlow: () => ({ fitView, setCenter, getZoom, getViewport }),
+    useReactFlow: () => ({ fitView, setCenter, setViewport, getZoom, getViewport }),
     __setCenterMock: setCenter,
+    __setViewportMock: setViewport,
     __fitViewMock: fitView,
     __getZoomMock: getZoom,
     __getViewportMock: getViewport,
@@ -132,9 +151,10 @@ export function createReactFlowMock() {
       return next;
     }),
     Background: () => null,
-    Controls: () => null,
-    Panel: ({ children }: { children?: React.ReactNode }) => (
-      <div className="react-flow__panel">{children}</div>
+    Controls: ({ onFitView }: { onFitView?: () => void }) => (
+      <button type="button" data-testid="rf__fit-view" onClick={() => onFitView?.()}>
+        Fit
+      </button>
     ),
     MarkerType: { ArrowClosed: 'arrowclosed' },
     Handle: () => null,

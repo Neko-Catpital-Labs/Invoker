@@ -901,8 +901,10 @@ export async function fixWithAgentAction(
   const effectiveAgentName = options.agentName ?? resolveTaskRunnerDefaultExecutionAgent(taskExecutor);
   const savedError = task.execution.error ?? '';
   const recoveryRoute = await selectFailureRecoveryRouteForAction(task, savedError, taskExecutor, options.recoveryRoute);
-  if (recoveryRoute.kind === 'invalidMergeWorkspace') {
-    const msg = invalidMergeWorkspaceMessage(recoveryRoute);
+  if (recoveryRoute.kind === 'invalidMergeWorkspace' || recoveryRoute.kind === 'invalidTaskWorkspace') {
+    const msg = recoveryRoute.kind === 'invalidMergeWorkspace'
+      ? invalidMergeWorkspaceMessage(recoveryRoute)
+      : invalidTaskWorkspaceMessage();
     const errorLabel = options.failureOutputLabel ?? `Fix with ${effectiveAgentName}`;
     persistence.appendTaskOutput(taskId, `\n[${errorLabel}] ${msg}`);
     // No session has begun; on a task with no fix-session evidence this is a
@@ -1006,7 +1008,8 @@ export type FailureRecoveryRoute =
   | { kind: 'fixWithAgent' }
   | { kind: 'resolveConflict' }
   | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string }
-  | { kind: 'invalidMergeWorkspace'; workspacePath?: string };
+  | { kind: 'invalidMergeWorkspace'; workspacePath?: string }
+  | { kind: 'invalidTaskWorkspace' };
 
 export function selectFailureRecoveryRoute(
   task: TaskState,
@@ -1036,13 +1039,18 @@ async function selectFailureRecoveryRouteForAction(
   initialRoute?: FailureRecoveryRoute,
 ): Promise<FailureRecoveryRoute> {
   const route = initialRoute ?? selectFailureRecoveryRoute(task, savedError);
-  if (route.kind !== 'fixWithAgent' || !task.config.isMergeNode) {
+  if (route.kind !== 'fixWithAgent') {
     return route;
   }
 
   const workspacePath = task.execution.workspacePath?.trim();
   if (!workspacePath) {
-    return { kind: 'invalidMergeWorkspace' };
+    return task.config.isMergeNode
+      ? { kind: 'invalidMergeWorkspace' }
+      : { kind: 'invalidTaskWorkspace' };
+  }
+  if (!task.config.isMergeNode) {
+    return route;
   }
 
   try {
@@ -1060,6 +1068,10 @@ function freshBaseRecoveryMessage(_route: Extract<FailureRecoveryRoute, { kind: 
 function invalidMergeWorkspaceMessage(route: Extract<FailureRecoveryRoute, { kind: 'invalidMergeWorkspace' }>): string {
   const suffix = route.workspacePath ? `: ${route.workspacePath}` : '';
   return `Cannot apply a fix because this merge gate's saved workspace is missing or is not a git repository${suffix}. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.`;
+}
+
+function invalidTaskWorkspaceMessage(): string {
+  return 'Cannot apply a fix because this task has no saved workspace. This task state is stale or corrupted. Recreate the task or recreate the workflow, then rerun it.';
 }
 
 function isInvalidGitWorkspaceError(err: unknown): boolean {

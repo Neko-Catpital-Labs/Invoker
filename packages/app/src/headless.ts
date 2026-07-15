@@ -20,7 +20,9 @@ import {
   createWorkerRegistry,
   registerAutoFixWorker,
   registerPrMaintenanceWorkers,
+  registerPrSummaryRefreshWorker,
   resolveInvokerHomeRoot,
+  GitHubMergeGateProvider,
   WorkerLockHeldError,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
@@ -76,6 +78,7 @@ import { headlessQuery, headlessQuerySelect, renderWorkerStatus } from './headle
 export { resolveAgentSession } from './headless-query-list.js';
 import {
   headlessRun,
+  headlessStartReady,
   headlessResume,
   headlessWatch,
   headlessRetryWorkflow,
@@ -86,6 +89,7 @@ import {
   headlessForkWorkflow,
   headlessRebaseRetry,
   headlessRebaseRecreate,
+  headlessRepairReviewGateCi,
   headlessFix,
   headlessResolveConflict,
 } from './headless-run-resume.js';
@@ -268,6 +272,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'run':
       await headlessRun(args[1], deps, deps.waitForApproval, deps.noTrack);
       break;
+    case 'start-ready':
+      await headlessStartReady(args.slice(1), deps);
+      break;
     case 'resume':
       await headlessResume(args[1], deps, deps.waitForApproval, deps.noTrack);
       break;
@@ -302,6 +309,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'rebase-recreate':
       await headlessRebaseRecreate(args[1], deps);
+      break;
+    case 'repair-review-gate-ci':
+      await headlessRepairReviewGateCi(args[1], deps);
       break;
     case 'fix':
       await headlessFix(args, deps);
@@ -422,8 +432,10 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
     deps.invokerConfig?.externalWorkers,
-    registerPrMaintenanceWorkers(
-      registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    registerPrSummaryRefreshWorker(
+      registerPrMaintenanceWorkers(
+        registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>()),
+      ),
     ),
   );
 
@@ -472,6 +484,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
+      mergeGateProvider: new GitHubMergeGateProvider(),
     });
     await worker.tick('manual');
     await worker.stop();
@@ -530,6 +543,8 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
 ${BOLD}Execute:${RESET}
   watch [<workflowId>]                                Watch workflow status until settled or Ctrl-C
   run <plan.yaml>                                     Load and execute plan
+  start-ready [--dry-run] [--recreate-failed] [--no-track]
+                                                      Start pending work that is ready to execute
   resume <id>                                         Resume incomplete workflow
   retry <workflowId>                                  Retry workflow: rerun failed, keep completed
   retry-task <taskId>                                 Retry a single failed/stuck task
@@ -540,8 +555,8 @@ ${BOLD}Execute:${RESET}
   detach-workflow <workflowId> <upstreamWorkflowId>  Detach one upstream workflow and void downstream to pending
   rebase-retry <workflowId|mergeTaskId|taskId>        Refresh pool base, then retry incomplete work
   rebase-recreate <workflowId|mergeTaskId|taskId>     Refresh pool base, then recreate workflow
+  repair-review-gate-ci <prNumber|prUrl>              Queue CI repair for one mapped review-gate PR
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
-  resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
 
 ${BOLD}Respond:${RESET}
   approve <taskId>                                    Approve a task
@@ -929,4 +944,3 @@ async function headlessSetTaskMetadata(
   );
   process.stdout.write(`Updated task "${result.id}" ${result.fieldPath} → ${JSON.stringify(result.value)}\n`);
 }
-

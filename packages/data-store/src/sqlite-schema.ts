@@ -189,6 +189,12 @@ export const SCHEMA_DDL = `
         draft_plan_summary_json TEXT CHECK (draft_plan_summary_json IS NULL OR json_valid(draft_plan_summary_json)),
         submitted_workflow_id TEXT,
         submitted_plan_name TEXT,
+        terminal_mode TEXT NOT NULL DEFAULT 'chat' CHECK (terminal_mode IN ('chat', 'tmux')),
+        terminal_session_id TEXT,
+        terminal_status TEXT CHECK (terminal_status IS NULL OR terminal_status IN ('running', 'exited')),
+        terminal_exit_code INTEGER,
+        terminal_output_snapshot TEXT NOT NULL DEFAULT '',
+        terminal_updated_at TEXT,
         pending_response INTEGER NOT NULL DEFAULT 0 CHECK (pending_response IN (0, 1)),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -385,6 +391,12 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_worker_actions_kind_updated
         ON worker_actions(worker_kind, updated_at DESC, id);
 
+      CREATE TABLE IF NOT EXISTS worker_desired_states (
+        worker_kind TEXT PRIMARY KEY,
+        desired_enabled INTEGER NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
       CREATE TABLE IF NOT EXISTS execution_resource_leases (
         resource_key TEXT NOT NULL,
         resource_type TEXT NOT NULL,
@@ -508,11 +520,16 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
   'ALTER TABLE tasks ADD COLUMN fix_prompt TEXT',
   'ALTER TABLE tasks ADD COLUMN fix_context TEXT',
-  'ALTER TABLE tasks ADD COLUMN execution_model TEXT',
   'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
   'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
   'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
+  "ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_mode TEXT NOT NULL DEFAULT 'chat' CHECK (terminal_mode IN ('chat', 'tmux'))",
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_session_id TEXT',
+  "ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_status TEXT CHECK (terminal_status IS NULL OR terminal_status IN ('running', 'exited'))",
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_exit_code INTEGER',
+  "ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_output_snapshot TEXT NOT NULL DEFAULT ''",
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_updated_at TEXT',
 ];
 
 /**
@@ -529,6 +546,11 @@ export const POST_MIGRATION_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_worker_actions_task_updated ON worker_actions(task_id, updated_at)',
   'CREATE INDEX IF NOT EXISTS idx_worker_actions_workflow_status ON worker_actions(workflow_id, worker_kind, status)',
   'CREATE INDEX IF NOT EXISTS idx_worker_actions_kind_updated ON worker_actions(worker_kind, updated_at DESC, id)',
+  `CREATE TABLE IF NOT EXISTS worker_desired_states (
+    worker_kind TEXT PRIMARY KEY,
+    desired_enabled INTEGER NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+  )`,
   'DROP INDEX IF EXISTS idx_task_launch_dispatch_active_attempt',
   `
       CREATE UNIQUE INDEX IF NOT EXISTS idx_task_launch_dispatch_active_attempt

@@ -191,8 +191,9 @@ describe('task-runner-wiring', () => {
     };
     const persistence = {
       updateTask: vi.fn(),
-      loadWorkflow: vi.fn(() => ({ mergeMode: 'local' })),
+      loadWorkflow: vi.fn(() => ({ onFinish: 'merge', mergeMode: 'manual' })),
     };
+
 
     rebuildTaskRunner({
       orchestrator: orchestrator as any,
@@ -226,7 +227,11 @@ describe('task-runner-wiring', () => {
     await approveHook(mergeTask);
     expect(currentRunner.approveMerge).toHaveBeenCalledWith('wf-1');
 
-    persistence.loadWorkflow.mockReturnValueOnce({ mergeMode: 'external_review' });
+    persistence.loadWorkflow.mockReturnValueOnce({ onFinish: 'pull_request', mergeMode: 'manual' });
+    await approveHook(mergeTask);
+    expect(currentRunner.approveMerge).toHaveBeenCalledTimes(1);
+
+    persistence.loadWorkflow.mockReturnValueOnce({ onFinish: 'merge', mergeMode: 'external_review' });
     await approveHook(mergeTask);
     expect(currentRunner.approveMerge).toHaveBeenCalledTimes(1);
   });

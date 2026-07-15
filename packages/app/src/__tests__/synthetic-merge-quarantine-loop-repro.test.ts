@@ -6,8 +6,10 @@
  * lines in ~/.invoker/invoker.log with no intervening recovery, after which
  * the selected workflow's mini-DAG renders blank until the user reloads.
  *
- * Owner-side root cause (current production code at
- * packages/app/src/main.ts:2896–2904):
+ * Owner-side recovery now lives in
+ * packages/app/src/window/renderer-task-feed.ts:158–176. Before
+ * `recoverQuarantinedTask` extracted the contract, the equivalent inline loop
+ * looked like:
  *
  *   const { quarantined } = applyDelta(d, lastKnownTaskStates);
  *   for (const taskId of quarantined) {
@@ -72,9 +74,10 @@ function makeMergeNode(workflowId: string, taskStateVersion: number): TaskState 
 
 /**
  * Faithful mirror of the production main-process recovery loop
- * (packages/app/src/main.ts:2896–2906): apply the delta, then for each
- * quarantined id, run the shared `recoverQuarantinedTask` helper and
- * collect every renderer delta it returns.
+ * (packages/app/src/window/renderer-task-feed.ts:158–176 and :231–256):
+ * apply the delta, then for each quarantined id, run the shared
+ * `recoverQuarantinedTask` helper and collect every renderer delta it
+ * returns.
  *
  * Pre-fix, this file used a `simulateLegacyRecoveryLoop` that inlined the
  * old buggy code (no orchestrator fallback, silent delete on persistence

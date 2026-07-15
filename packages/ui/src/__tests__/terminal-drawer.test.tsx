@@ -6,12 +6,13 @@
  *   - the drawer has three explicit states: minimized, partial, maximized
  *   - opening a terminal puts the drawer in the partial state
  *   - the single cycling button advances minimized → partial → maximized → minimized
- *   - the same task id reuses a single tab
+ *   - the same task id reuses and focuses a single tab without another IPC call
  *   - failures from openTerminal surface as an alert
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
+import { useState } from 'react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
@@ -86,6 +87,8 @@ vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
 
 const { App } = await import('../App.js');
 const { TerminalDrawer } = await import('../components/TerminalDrawer.js');
+
+const COMPONENT_TERMINAL_INTERACTION_BUDGET_MS = 50;
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'completed' }];
 const taskAlpha = makeUITask({
@@ -323,9 +326,9 @@ describe('Terminal drawer (component)', () => {
     expect(screen.getByTestId('terminal-pane-task-alpha')).toHaveClass('overflow-hidden');
   });
 
-  it('reuses an existing tab when opening the same task twice', async () => {
+  it('focuses an existing running tab when double-clicking the same task again', async () => {
     render(<App />);
-    act(() => mock.setTasks([taskAlpha], workflows));
+    act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
     await selectWorkflow();
 
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
@@ -333,8 +336,14 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
     });
 
-    // Minimize (cycle partial → maximized → minimized), then re-open —
-    // should not duplicate the tab.
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-beta'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'true');
+    });
+    expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
+
+    // Minimize (cycle partial → maximized → minimized), then re-open alpha.
+    // The existing alpha tab should be selected without another open-terminal IPC call.
     fireEvent.click(screen.getByRole('button', { name: 'Maximize terminal drawer' }));
     fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
@@ -343,9 +352,16 @@ describe('Terminal drawer (component)', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
     });
     const tabs = screen.getAllByTestId('terminal-tab-task-alpha');
     expect(tabs).toHaveLength(1);
+    expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'false');
+    expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
+    expect((mock.api.openTerminal as ReturnType<typeof vi.fn>).mock.calls.map(([taskId]) => taskId)).toEqual([
+      'task-alpha',
+      'task-beta',
+    ]);
   });
 
   it('renders distinct tabs for different tasks side by side', async () => {
@@ -420,6 +436,29 @@ describe('Terminal drawer (component)', () => {
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
   });
 
+  it('keeps the context-menu Open Terminal action routed through open-terminal IPC', async () => {
+    render(<App />);
+    act(() => mock.setTasks([taskAlpha], workflows));
+    await selectWorkflow();
+
+    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument();
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const openTerminalItem = await screen.findByRole('menuitem', { name: /Open Terminal/i });
+    fireEvent.click(openTerminalItem);
+
+    await waitFor(() => {
+      expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
+    });
+    expect((mock.api.openTerminal as ReturnType<typeof vi.fn>).mock.calls.map(([taskId]) => taskId)).toEqual([
+      'task-alpha',
+      'task-alpha',
+    ]);
+  });
+
   it('seeds the replay snapshot before live terminal output', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'early line\n',
@@ -452,30 +491,227 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
-  it('does not duplicate the replay snapshot when the same session re-renders', async () => {
+  it('reports embedded terminal attach, snapshot, input, and output perf markers', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: 'early line\n',
+      command: 'sh',
+      args: ['-lc', 'printf ready'],
+    });
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_attach',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          active: true,
+          hasSnapshot: true,
+        }),
+      );
+    });
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'embedded_terminal_snapshot_write',
+      expect.objectContaining({
+        source: 'attach',
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        bytes: 'early line\n'.length,
+      }),
+    );
+
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+    act(() => {
+      xtermMock.instances[0]?.emitData('pwd\n');
+    });
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'embedded_terminal_input',
+      expect.objectContaining({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        bytes: 'pwd\n'.length,
+        active: true,
+      }),
+    );
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'live line\n',
+      });
+    });
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_output_write',
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          taskId: session.taskId,
+          bytes: 'live line\n'.length,
+          active: true,
+        }),
+      );
+    });
+  });
+
+  it('keeps live output, input, and tab switching responsive under terminal pressure', async () => {
+    const alpha = makeTerminalSession('task-alpha', {
+      command: 'sh',
+      args: ['-lc', 'alpha'],
+    });
+    const beta = makeTerminalSession('task-beta', {
+      command: 'sh',
+      args: ['-lc', 'beta'],
+    });
+
+    function Harness(): JSX.Element {
+      const [activeSessionId, setActiveSessionId] = useState(alpha.sessionId);
+      return (
+        <TerminalDrawer
+          state="partial"
+          onCycle={vi.fn()}
+          sessions={[alpha, beta]}
+          activeSessionId={activeSessionId}
+          onSelectSession={setActiveSessionId}
+          onCloseSession={vi.fn()}
+          taskLabels={new Map([
+            [alpha.taskId, 'Alpha description'],
+            [beta.taskId, 'Beta description'],
+          ])}
+        />
+      );
+    }
+
+    render(<Harness />);
+    await waitFor(() => expect(xtermMock.instances).toHaveLength(2));
+    const initialWriteCount = xtermMock.writeLog.length;
+    vi.mocked(mock.api.reportUiPerf).mockClear();
+
+    act(() => {
+      for (let index = 0; index < 80; index += 1) {
+        mock.fireTerminalOutput({
+          sessionId: alpha.sessionId,
+          taskId: alpha.taskId,
+          data: `alpha pressure output ${index}\n`,
+        });
+      }
+    });
+
+    await waitFor(() => expect(xtermMock.writeLog).toHaveLength(initialWriteCount + 80));
+    expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
+
+    fireEvent.click(screen.getByRole('tab', { name: /Beta description/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'true');
+    });
+
+    act(() => {
+      xtermMock.instances[1]?.emitData('printf beta\n');
+    });
+    expect(mock.api.terminalWrite).toHaveBeenCalledWith(beta.sessionId, 'printf beta\n');
+
+    const outputPayloads = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([metric]) => metric === 'embedded_terminal_output_write')
+      .map(([, data]) => data as Record<string, any>);
+    expect(outputPayloads).toHaveLength(80);
+    expect(Math.max(...outputPayloads.map((payload) => payload.durationMs))).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
+    expect(outputPayloads.every((payload) => payload.active === true)).toBe(true);
+
+    const inputPayload = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([metric]) => metric === 'embedded_terminal_input')
+      .map(([, data]) => data as Record<string, any>)
+      .at(-1);
+    expect(inputPayload).toEqual(expect.objectContaining({
+      sessionId: beta.sessionId,
+      taskId: beta.taskId,
+      active: true,
+    }));
+    expect(inputPayload?.durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
+
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_resize',
+        expect.objectContaining({
+          source: 'active_session',
+          sessionId: beta.sessionId,
+          taskId: beta.taskId,
+          active: true,
+        }),
+      );
+    });
+  });
+
+  it('does not duplicate the replay snapshot when a live mounted session receives an updated descriptor', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'replayed once\n',
     });
-    (mock.api.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValue({
-      opened: true,
-      session,
-    });
 
-    render(<App />);
-    act(() => mock.setTasks([taskAlpha], workflows));
-    await selectWorkflow();
-
-    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    const { rerender } = render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
     await waitFor(() => {
       expect(xtermMock.writeLog).toEqual(['replayed once\n']);
     });
 
-    fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        data: 'live line\n',
+      });
+    });
     await waitFor(() => {
-      expect(mock.api.openTerminal).toHaveBeenCalledTimes(2);
+      expect(xtermMock.writeLog).toEqual(['replayed once\n', 'live line\n']);
     });
 
-    expect(xtermMock.writeLog).toEqual(['replayed once\n']);
+    rerender(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[{ ...session, outputSnapshot: 'replayed once\nlive line\n' }]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    expect(xtermMock.writeLog).toEqual(['replayed once\n', 'live line\n']);
+
+    const newSession = makeTerminalSession('task-alpha', {
+      sessionId: 'mock-session-task-alpha-restarted',
+      outputSnapshot: 'new session replay\n',
+    });
+    rerender(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[newSession]}
+        activeSessionId={newSession.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['replayed once\n', 'live line\n', 'new session replay\n']);
+    });
   });
 
   it('keeps live output, input, resize, close, and tab selection intact without a preview row', async () => {

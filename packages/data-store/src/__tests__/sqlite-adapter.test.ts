@@ -101,6 +101,8 @@ describe('SQLiteAdapter', () => {
       },
       submittedWorkflowId: 'wf-planning',
       submittedPlanName: 'README plan',
+      terminalMode: 'chat',
+      terminalOutputSnapshot: '',
       pendingResponse: true,
       createdAt: '2026-07-07T00:00:00.000Z',
       updatedAt: '2026-07-07T00:00:03.000Z',
@@ -461,6 +463,12 @@ describe('SQLiteAdapter', () => {
         'draft_plan_summary_json',
         'submitted_workflow_id',
         'submitted_plan_name',
+        'terminal_mode',
+        'terminal_session_id',
+        'terminal_status',
+        'terminal_exit_code',
+        'terminal_output_snapshot',
+        'terminal_updated_at',
         'pending_response',
         'created_at',
         'updated_at',
@@ -494,10 +502,44 @@ describe('SQLiteAdapter', () => {
       }
     });
 
+    it('round-trips planning tmux ownership across adapter reopen', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-tmux-sessions-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.upsertInAppPlanningSession(makePlanningSession('planning-tmux', {
+          terminalMode: 'tmux',
+          terminalSessionId: 'term-planning-tmux',
+          terminalStatus: 'running',
+          terminalExitCode: undefined,
+          terminalOutputSnapshot: 'tmux transcript\n',
+          terminalUpdatedAt: '2026-07-07T00:00:04.000Z',
+        }));
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(reopened.loadInAppPlanningSession('planning-tmux')).toMatchObject({
+          terminalMode: 'tmux',
+          terminalSessionId: 'term-planning-tmux',
+          terminalStatus: 'running',
+          terminalOutputSnapshot: 'tmux transcript\n',
+          terminalUpdatedAt: '2026-07-07T00:00:04.000Z',
+        });
+        reopened.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('updates planning sessions and replaces visible messages', () => {
       adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
       adapter.updateInAppPlanningSession('planning-1', {
         status: 'still_discussing',
+        terminalMode: 'tmux',
+        terminalSessionId: 'planning-terminal-1',
+        terminalStatus: 'running',
+        terminalOutputSnapshot: 'tmux output\n',
+        terminalUpdatedAt: '2026-07-07T00:00:04.500Z',
         messages: [{
           id: 7,
           role: 'system',
@@ -513,6 +555,11 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadInAppPlanningSession('planning-1');
       expect(loaded).toMatchObject({
         status: 'still_discussing',
+        terminalMode: 'tmux',
+        terminalSessionId: 'planning-terminal-1',
+        terminalStatus: 'running',
+        terminalOutputSnapshot: 'tmux output\n',
+        terminalUpdatedAt: '2026-07-07T00:00:04.500Z',
         messages: [{
           id: 7,
           role: 'system',
@@ -600,19 +647,17 @@ describe('SQLiteAdapter', () => {
       expect(adapter.loadTerminalSession('term-t2')).toBeDefined();
     });
 
-    it('persists executionModel through saveTask, updateTask, and loadTask', () => {
+    it('persists optional executionModel through saveTask and loadTask', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('model-task', {
-        config: { executionAgent: 'omp', executionModel: 'openai/gpt-5.2' },
+        config: { executionAgent: 'omp', executionModel: 'claude' },
+      }));
+      adapter.saveTask('wf-1', makeTask('no-model-task', {
+        config: { executionAgent: 'omp' },
       }));
 
-      expect(adapter.loadTask('model-task')?.config.executionModel).toBe('openai/gpt-5.2');
-
-      adapter.updateTask('model-task', {
-        config: { executionModel: 'anthropic/claude-sonnet-4.5' },
-      });
-
-      expect(adapter.loadTasks('wf-1')[0]?.config.executionModel).toBe('anthropic/claude-sonnet-4.5');
+      expect(adapter.loadTask('model-task')?.config.executionModel).toBe('claude');
+      expect(adapter.loadTask('no-model-task')?.config.executionModel).toBeUndefined();
     });
 
     it('loads all workflows and tasks in one startup snapshot', () => {
@@ -691,6 +736,11 @@ describe('SQLiteAdapter', () => {
       expect(tableForeignKeys(adapter, 'worker_actions')).toEqual(expect.arrayContaining([
         'workflows.id:CASCADE',
         'tasks.id:CASCADE',
+      ]));
+      expect(tableColumns(adapter, 'worker_desired_states')).toEqual(expect.arrayContaining([
+        'worker_kind',
+        'desired_enabled',
+        'updated_at',
       ]));
     });
 
@@ -854,6 +904,26 @@ describe('SQLiteAdapter', () => {
 
       expect(adapter.listWorkerActions({ decision: 'skip' }).map((action) => action.id)).toEqual(['wa-skip']);
       expect(adapter.listWorkerActions({ decision: 'act' }).map((action) => action.id)).toEqual(['wa-done', 'wa-act']);
+    });
+
+    it('persists worker desired states', () => {
+      expect(adapter.getWorkerDesiredState('workflow-resume')).toBeUndefined();
+
+      expect(adapter.setWorkerDesiredState('workflow-resume', true)).toMatchObject({
+        workerKind: 'workflow-resume',
+        desiredEnabled: true,
+      });
+      expect(adapter.getWorkerDesiredState('workflow-resume')).toMatchObject({
+        workerKind: 'workflow-resume',
+        desiredEnabled: true,
+      });
+
+      adapter.setWorkerDesiredState('workflow-resume', false);
+      adapter.setWorkerDesiredState('pr-status', true);
+      expect(adapter.listWorkerDesiredStates()).toEqual([
+        expect.objectContaining({ workerKind: 'pr-status', desiredEnabled: true }),
+        expect.objectContaining({ workerKind: 'workflow-resume', desiredEnabled: false }),
+      ]);
     });
   });
 

@@ -95,8 +95,8 @@ export function FloatingGraphPanel({
     <div
       ref={panelRef}
       data-testid={testId}
-      className={`absolute h-[280px] w-[420px] rounded border border-border bg-background/95 overflow-hidden shadow-lg ${className}`}
-      style={position ? { left: position.left, top: position.top } : { top: PANEL_MARGIN, right: PANEL_MARGIN }}
+      className={`absolute top-3 right-3 h-[210px] w-[315px] rounded border border-border bg-background/95 overflow-hidden shadow-lg ${className}`}
+      style={position ? { left: position.left, top: position.top, right: 'auto' } : undefined}
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
     >

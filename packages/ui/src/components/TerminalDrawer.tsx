@@ -52,39 +52,74 @@ interface TerminalSessionPaneProps {
 
 type SeededOutputSnapshot = {
   sessionId: string;
-  snapshot: string;
   term: XTermTerminal;
 };
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
+}
+
+function byteLength(value: string): number {
+  try {
+    return new TextEncoder().encode(value).byteLength;
+  } catch {
+    return value.length;
+  }
+}
+
+function reportTerminalPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
 
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
+  source: 'attach' | 'session_update',
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
   if (
-    outputSnapshot &&
-    (
-      !seededSnapshot ||
-      seededSnapshot.sessionId !== session.sessionId ||
-      seededSnapshot.snapshot !== outputSnapshot ||
-      seededSnapshot.term !== term
-    )
+    seededSnapshot &&
+    seededSnapshot.sessionId === session.sessionId &&
+    seededSnapshot.term === term
   ) {
-    try {
-      term.write(outputSnapshot);
-      seededSnapshotRef.current = {
-        sessionId: session.sessionId,
-        snapshot: outputSnapshot,
-        term,
-      };
-    } catch (err) {
-      console.warn(
-        `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
-        err,
-      );
-    }
+    return;
+  }
+
+  if (!outputSnapshot) {
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      term,
+    };
+    return;
+  }
+
+  try {
+    const startedAt = nowMs();
+    term.write(outputSnapshot);
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      term,
+    };
+    reportTerminalPerf('embedded_terminal_snapshot_write', {
+      source,
+      durationMs: roundMs(nowMs() - startedAt),
+      bytes: byteLength(outputSnapshot),
+      chars: outputSnapshot.length,
+      sessionId: session.sessionId,
+      taskId: session.taskId,
+      status: session.status,
+    });
+  } catch (err) {
+    console.warn(
+      `Failed to seed output snapshot for terminal session ${session.sessionId}:`,
+      err,
+    );
   }
 }
 
@@ -94,10 +129,12 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
   const isActiveRef = useRef(isActive);
+  const sessionRef = useRef(session);
   const fitFrameRef = useRef<number | null>(null);
   const secondFitFrameRef = useRef<number | null>(null);
 
   isActiveRef.current = isActive;
+  sessionRef.current = session;
 
   const clearScheduledFit = useCallback(() => {
     if (fitFrameRef.current !== null) {
@@ -114,33 +151,43 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     }
   }, []);
 
-  const fitVisibleTerminal = useCallback(() => {
+  const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
     if (!isActiveRef.current) return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
     try {
+      const startedAt = nowMs();
       fit.fit();
       if (term.rows > 0) {
         term.refresh?.(0, term.rows - 1);
       }
       void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      reportTerminalPerf('embedded_terminal_resize', {
+        source,
+        durationMs: roundMs(nowMs() - startedAt),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        cols: term.cols,
+        rows: term.rows,
+        active: isActiveRef.current,
+      });
     } catch {
       /* host has zero size, terminal disposed, or fit unsupported */
     }
-  }, [session.sessionId]);
+  }, [session.sessionId, session.taskId]);
 
-  const scheduleFit = useCallback(() => {
+  const scheduleFit = useCallback((source: 'active_session' | 'resize_observer') => {
     clearScheduledFit();
-    fitVisibleTerminal();
+    fitVisibleTerminal(source);
     if (typeof requestAnimationFrame !== 'function') return;
 
     fitFrameRef.current = requestAnimationFrame(() => {
       fitFrameRef.current = null;
-      fitVisibleTerminal();
+      fitVisibleTerminal('followup_frame');
       secondFitFrameRef.current = requestAnimationFrame(() => {
         secondFitFrameRef.current = null;
-        fitVisibleTerminal();
+        fitVisibleTerminal('followup_frame');
       });
     });
   }, [clearScheduledFit, fitVisibleTerminal]);
@@ -152,6 +199,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     let term: XTermTerminal;
     let fit: FitAddon;
     try {
+      const attachStartedAt = nowMs();
       term = new XTermTerminal({
         fontSize: 12,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -163,23 +211,54 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host);
+      reportTerminalPerf('embedded_terminal_attach', {
+        durationMs: roundMs(nowMs() - attachStartedAt),
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        mode: session.mode,
+        status: session.status,
+        active: isActive,
+        hasHeader,
+        hasSnapshot: Boolean(session.outputSnapshot),
+        snapshotBytes: session.outputSnapshot ? byteLength(session.outputSnapshot) : 0,
+      });
     } catch {
       return;
     }
     termRef.current = term;
     fitRef.current = fit;
 
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'attach');
 
     const inputDisposable = term.onData((data) => {
+      const startedAt = nowMs();
       void window.invoker?.terminalWrite?.(session.sessionId, data);
+      reportTerminalPerf('embedded_terminal_input', {
+        durationMs: roundMs(nowMs() - startedAt),
+        bytes: byteLength(data),
+        chars: data.length,
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        active: isActiveRef.current,
+      });
     });
 
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
       try {
+        const currentSession = sessionRef.current;
+        const startedAt = nowMs();
         term.write(event.data);
+        reportTerminalPerf('embedded_terminal_output_write', {
+          durationMs: roundMs(nowMs() - startedAt),
+          bytes: byteLength(event.data),
+          chars: event.data.length,
+          sessionId: event.sessionId,
+          taskId: event.taskId,
+          active: isActiveRef.current,
+          status: currentSession.status,
+        });
       } catch {
         /* terminal disposed */
       }
@@ -188,14 +267,14 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       try {
-        resizeObserver = new ResizeObserver(fitVisibleTerminal);
+        resizeObserver = new ResizeObserver(() => scheduleFit('resize_observer'));
         resizeObserver.observe(host);
       } catch {
         resizeObserver = null;
       }
     }
     if (isActiveRef.current) {
-      scheduleFit();
+      scheduleFit('active_session');
       try {
         term.focus();
       } catch {
@@ -221,7 +300,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
+    seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'session_update');
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
@@ -232,7 +311,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     const term = termRef.current;
     if (!term) return;
     try {
-      scheduleFit();
+      scheduleFit('active_session');
       term.focus();
     } catch {
       /* fit failed (e.g., hidden) */
@@ -274,10 +353,10 @@ export function TerminalDrawer({
       className={
         isMaximized
           ? 'fixed inset-0 z-40 flex min-h-0 flex-col overflow-hidden border-t border-border bg-card'
-          : 'border-t border-border bg-card'
+          : 'shrink-0 border-t border-border bg-card'
       }
     >
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
         <div
           role="tablist"
           data-testid="terminal-tab-strip"
@@ -340,7 +419,7 @@ export function TerminalDrawer({
       {showBody && (
         <div
           data-testid="terminal-drawer-body"
-          className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-black' : 'relative overflow-hidden bg-black'}
+          className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-black' : 'relative shrink-0 overflow-hidden bg-black'}
           style={isMaximized ? undefined : { height: DRAWER_BODY_HEIGHT_PX }}
         >
           {sessions.length === 0 && (

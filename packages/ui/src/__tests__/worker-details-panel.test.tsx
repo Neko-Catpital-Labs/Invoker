@@ -125,6 +125,18 @@ describe('WorkerDetailsPanel', () => {
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('No persisted PR status actions. This worker updates review gates directly.')).toBeInTheDocument();
   });
+  it('shows PR CI scan copy when no actions are persisted', () => {
+    renderPanel(makeWorker({
+      kind: 'pr-ci-failure-scan',
+      note: 'Scans mapped PRs for failing CI.',
+      recentActions: [],
+    }));
+
+    expect(screen.getByTestId('worker-details-title')).toHaveTextContent('PR CI scan');
+    expect(screen.getByText('Idle. Scans mapped PRs for failing CI and queues repairs.')).toBeInTheDocument();
+    expect(screen.getByText('No PR CI scan runs recorded yet.')).toBeInTheDocument();
+  });
+
   it('shows coderabbit-address as a built-in worker when no actions are persisted', () => {
     renderPanel(makeWorker({
       kind: 'coderabbit-address',

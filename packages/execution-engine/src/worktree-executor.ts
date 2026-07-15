@@ -45,17 +45,6 @@ export interface WorktreeExecutorConfig {
   maxDurationMs?: number;
 }
 
-const DEFAULT_WORKTREE_PROVISION_TIMEOUT_MS = 15 * 60 * 1000;
-
-function resolveWorktreeProvisionTimeoutMs(): number {
-  const raw = process.env.INVOKER_WORKTREE_PROVISION_TIMEOUT_MS?.trim();
-  if (!raw) return DEFAULT_WORKTREE_PROVISION_TIMEOUT_MS;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_WORKTREE_PROVISION_TIMEOUT_MS;
-  }
-  return parsed;
-}
 
 interface WorktreeEntry extends BaseEntry {
   process: ChildProcess | null;
@@ -406,14 +395,12 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       branch: handle.branch,
     });
 
-    bench('WorktreeExecutor.provisionWorktree.before');
     const provisioning = this.provisionWorktree(acquired.worktreePath, executionId);
     entry.process = provisioning.child;
     try {
       await provisioning.completion;
       entry.process = null;
       entry.phase = 'running';
-      bench('WorktreeExecutor.provisionWorktree.after');
     } catch (err) {
       // Keep the failed workspace on disk for post-failure debugging/fix flows.
       // Only free the in-memory pool slot so retries are not blocked.
@@ -706,60 +693,8 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
   }
 
-  private provisionWorktree(dir: string, executionId?: string): { child: ChildProcess; completion: Promise<void> } {
-    traceExecution(`[WorktreeExecutor] provisionWorktree begin dir=${dir}`);
-    const t0 = Date.now();
-    const cmd = `set -euo pipefail; ${DEFAULT_WORKTREE_PROVISION_COMMAND}`;
-    const child = spawn('/bin/bash', ['-c', cmd], {
-      cwd: dir,
-      env: cleanElectronEnv(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    traceExecution(`[WorktreeExecutor] provisionWorktree spawned pid=${child.pid}`);
-    const completion = new Promise<void>((resolve, reject) => {
-      const timeoutMs = resolveWorktreeProvisionTimeoutMs();
-      let timedOut = false;
-      let stdout = '';
-      let stderr = '';
-      const timeout = setTimeout(() => {
-        timedOut = true;
-        if (typeof child.pid === 'number') {
-          killProcessGroup(child, 'SIGTERM');
-        }
-        reject(new Error(`Worktree provisioning timed out after ${timeoutMs}ms in ${dir}`));
-      }, timeoutMs);
-      timeout.unref?.();
-      child.stdout?.on('data', (d: Buffer) => {
-        const text = d.toString();
-        stdout += text;
-        traceExecution(`[WorktreeExecutor] provision stdout: ${text.trimEnd()}`);
-        if (executionId) this.emitOutput(executionId, text);
-      });
-      child.stderr?.on('data', (d: Buffer) => {
-        const text = d.toString();
-        stderr += text;
-        traceExecution(`[WorktreeExecutor] provision stderr: ${text.trimEnd()}`);
-        if (executionId) this.emitOutput(executionId, text);
-      });
-      child.on('error', (err) => {
-        clearTimeout(timeout);
-        if (timedOut) return;
-        traceExecution(`[WorktreeExecutor] provisionWorktree error: ${err.message}`);
-        reject(new Error(`Failed to spawn provisioning process: ${err.message}`));
-      });
-      child.on('close', (code, signal) => {
-        clearTimeout(timeout);
-        if (timedOut) return;
-        traceExecution(`[WorktreeExecutor] provisionWorktree finished dir=${dir} code=${code} signal=${signal ?? 'none'} elapsed=${Date.now() - t0}ms`);
-        if (code === 0) resolve();
-        else {
-          const exitCode = code ?? (signal ? 1 : 0);
-          const combined = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
-          reject(new Error(`Worktree provisioning failed in ${dir} (exit ${exitCode}): ${combined}`));
-        }
-      });
-    });
-    return { child, completion };
+  private provisionWorktree(dir: string, _executionId?: string): { child: ChildProcess | null; completion: Promise<void> } {
+    traceExecution(`[WorktreeExecutor] provisionWorktree skipped dir=${dir}`);
+    return { child: null, completion: Promise.resolve() };
   }
-
 }

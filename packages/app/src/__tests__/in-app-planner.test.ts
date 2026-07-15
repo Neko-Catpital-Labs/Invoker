@@ -2,13 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PlanConversation } from '../../../surfaces/src/index.ts';
 import {
   createInAppPlanningChatSessions,
+  createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
   listInAppPlanningPresets,
+  listPlanningChatSessions,
   planFromGoal,
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
+  setPlanningChatTerminalMode,
   submitPlanningChatDraft,
+  updatePlanningChatTerminalState,
   type LoadedGeneratedPlan,
 } from '../in-app-planner.js';
 import { ConversationRepository, SQLiteAdapter, type InAppPlanningSessionRecord } from '@invoker/data-store';
@@ -526,7 +530,7 @@ tasks:
       workflowCount: 2,
     });
     expect(sessions.get(sent.sessionId)?.messages.at(-1)?.text).toBe(
-      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then Run.',
+      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then use Start ready work.',
     );
   });
 
@@ -666,6 +670,97 @@ tasks:
     }
   });
 
+  it('restores persisted tmux mode and planning-owned terminal state', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-tmux-restored',
+        title: 'Restored tmux plan',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        messages: [
+          { id: 1, role: 'system', text: 'Ask Invoker what you want to build.', tone: 'muted', createdAt: '2026-07-07T00:00:00.000Z' },
+        ],
+        terminalMode: 'tmux',
+        terminalSessionId: 'term-planning-owned',
+        terminalStatus: 'running',
+        terminalOutputSnapshot: 'planner tmux output\n',
+        terminalUpdatedAt: '2026-07-07T00:00:03.000Z',
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:02.000Z',
+      };
+
+      const sessions = createInAppPlanningChatSessions();
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo,
+        planningSessionStore: adapter,
+      });
+
+      expect(sessions.get('planning-tmux-restored')).toMatchObject({
+        terminalMode: 'tmux',
+        terminalSessionId: 'term-planning-owned',
+        terminalStatus: 'running',
+        terminalOutputSnapshot: 'planner tmux output\n',
+      });
+      expect(listPlanningChatSessions({ sessions }).sessions[0]).toMatchObject({
+        terminalMode: 'tmux',
+        terminalSessionId: 'term-planning-owned',
+        terminalStatus: 'running',
+      });
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('persists planning terminal mode and snapshot updates without rewriting messages', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const sessions = createInAppPlanningChatSessions();
+      const created = await createPlanningChatSession({ title: 'Terminal state' }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        planningSessionStore: adapter,
+      });
+      if (!created.ok) throw new Error(created.error);
+
+      expect(setPlanningChatTerminalMode({
+        sessionId: created.session.id,
+        mode: 'tmux',
+      }, {
+        sessions,
+        planningSessionStore: adapter,
+      })).toEqual({ ok: true });
+      expect(updatePlanningChatTerminalState(created.session.id, {
+        terminalSessionId: 'term-planning-state',
+        terminalStatus: 'running',
+        terminalOutputSnapshot: 'hello from tmux\n',
+      }, {
+        sessions,
+        planningSessionStore: adapter,
+      })).toBe(true);
+
+      expect(adapter.loadInAppPlanningSession(created.session.id)).toMatchObject({
+        terminalMode: 'tmux',
+        terminalSessionId: 'term-planning-state',
+        terminalStatus: 'running',
+        terminalOutputSnapshot: 'hello from tmux\n',
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: 'system', text: 'Ask Invoker what you want to build.' }),
+        ]),
+      });
+    } finally {
+      adapter.close();
+    }
+  });
+
   it('rebuilds missing draft summaries from hidden planner state on restore', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     try {
@@ -740,6 +835,27 @@ tasks:
 
       expect(sessions.get('planning-submitted')?.messages).toHaveLength(1);
       expect(adapter.loadInAppPlanningSession('planning-submitted')?.pendingResponse).toBe(false);
+      expect(setPlanningChatTerminalMode({
+        sessionId: 'planning-submitted',
+        mode: 'tmux',
+      }, {
+        sessions,
+        planningSessionStore: adapter,
+      })).toEqual({ ok: true });
+      await expect(sendPlanningChatMessage({
+        sessionId: 'planning-submitted',
+        message: 'change it',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo: new ConversationRepository(adapter),
+        planningSessionStore: adapter,
+      })).resolves.toMatchObject({
+        ok: false,
+        error: 'This planning session was already submitted. Start a new planning chat for changes.',
+      });
     } finally {
       adapter.close();
     }

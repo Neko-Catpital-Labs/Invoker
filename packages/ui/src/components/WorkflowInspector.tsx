@@ -3,7 +3,9 @@ import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMe
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import { subscribeVisibilityAwarePoll } from '../hooks/visibilityAwarePoll.js';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption } from '@invoker/contracts';
+import { mutationFailureTitle } from '../lib/mutation-failure-display.js';
+import { WorkerDecisionsSection } from './WorkerDecisionsSection.js';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, WorkflowMutationFailedEvent } from '@invoker/contracts';
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
 type TaskLogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -24,10 +26,12 @@ interface TaskLogEntry {
 }
 
 const SAFE_LOG_DETAIL_KEYS = new Set([
+  'actionType',
   'agentCount',
   'agentName',
   'artifactCount',
   'attempt',
+  'attemptCount',
   'baseBranch',
   'branch',
   'featureBranch',
@@ -36,6 +40,7 @@ const SAFE_LOG_DETAIL_KEYS = new Set([
   'status',
   'reason',
   'route',
+  'workerKind',
   'workflowId',
 ]);
 
@@ -82,15 +87,39 @@ function formatLogDetail(payload: Record<string, unknown> | undefined): string |
   return Object.keys(detail).length > 0 ? JSON.stringify(detail) : undefined;
 }
 
+function formatWorkerActionMessage(payload: Record<string, unknown> | undefined): string | undefined {
+  if (!payload) return undefined;
+  const workerKind = typeof payload.workerKind === 'string' && payload.workerKind.trim()
+    ? payload.workerKind
+    : 'worker';
+  const actionType = typeof payload.actionType === 'string' && payload.actionType.trim()
+    ? payload.actionType
+    : 'action';
+  const status = typeof payload.status === 'string' && payload.status.trim()
+    ? payload.status
+    : 'recorded';
+  const summary = typeof payload.summary === 'string' && payload.summary.trim()
+    ? payload.summary
+    : undefined;
+  return summary
+    ? `${workerKind}/${actionType} ${status}: ${summary}`
+    : `${workerKind}/${actionType} ${status}`;
+}
+
 function taskEventToLogEntry(event: TaskAuditEvent, index: number): TaskLogEntry {
   const payload = parseEventPayload(event.payload);
   const payloadMessage = payload?.message;
+  const workerActionMessage = event.eventType === 'task.worker_action'
+    ? formatWorkerActionMessage(payload)
+    : undefined;
+  const message = workerActionMessage
+    ?? (typeof payloadMessage === 'string' && payloadMessage.trim()
+      ? payloadMessage
+      : event.eventType);
   return {
     id: String(event.id ?? `${event.eventType}-${event.createdAt ?? index}`),
     level: inferLogLevel(event, payload),
-    message: typeof payloadMessage === 'string' && payloadMessage.trim()
-      ? payloadMessage
-      : event.eventType,
+    message,
     detail: formatLogDetail(payload),
     createdAt: event.createdAt,
   };
@@ -117,14 +146,14 @@ function workspaceRecreateNoticeFromEvent(event: TaskAuditEvent): WorkspaceRecre
 function logLevelClass(level: TaskLogLevel): string {
   switch (level) {
     case 'error':
-      return 'bg-red-900/40 text-red-300 border-red-800';
+      return 'text-red-300';
     case 'warn':
-      return 'bg-amber-900/40 text-amber-300 border-amber-800';
+      return 'text-amber-300';
     case 'debug':
-      return 'bg-slate-800 text-slate-300 border-slate-700';
+      return 'text-slate-300';
     case 'info':
     default:
-      return 'bg-secondary/70 text-foreground border-border-strong';
+      return 'text-muted-foreground';
   }
 }
 
@@ -143,6 +172,7 @@ interface WorkflowInspectorProps {
   executionHarnesses?: ExecutionHarnessOption[];
   executionDefaults?: ExecutionDefaults | null;
   actionNode?: ActionGraphNode | null;
+  mutationFailure?: WorkflowMutationFailedEvent | null;
   collapsed: boolean;
   advancedExpanded: boolean;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
@@ -195,6 +225,17 @@ function getMergeNodeReviewUrl(
 function artifactLabel(artifact: ReviewGateArtifact): string {
   return artifact.title || artifact.url || (artifact.providerId ? `#${artifact.providerId}` : artifact.id);
 }
+function artifactDetail(artifact: ReviewGateArtifact): string | null {
+  if (artifact.mergeState === 'dirty') return 'Merge conflict';
+  if (artifact.checksState === 'failure') {
+    const failedChecks = artifact.failedChecks?.map((check) => check.name).filter(Boolean) ?? [];
+    return failedChecks.length > 0 ? failedChecks.join(', ') : null;
+  }
+  if (artifact.checksState === 'pending') return 'Checks pending';
+  if (artifact.checksState === 'success' && artifact.status === 'open') return 'Checks passing';
+  return null;
+}
+
 
 function ReviewGateStackSection({ reviewGate }: { reviewGate: ReviewGateQueryResponse }): JSX.Element {
   const artifacts = reviewGate.artifacts;
@@ -232,6 +273,11 @@ function ReviewGateStackSection({ reviewGate }: { reviewGate: ReviewGateQueryRes
                   <div className="text-foreground">{artifactLabel(artifact)}</div>
                 )}
                 <div className="mt-1 text-[11px] text-muted-foreground">{formatStatus(artifact.status)}</div>
+                {artifactDetail(artifact) && (
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    {artifactDetail(artifact)}
+                  </div>
+                )}
               </div>
             </li>
           ))}
@@ -250,6 +296,7 @@ export function WorkflowInspector({
   executionHarnesses,
   executionDefaults,
   actionNode,
+  mutationFailure,
   collapsed,
   advancedExpanded,
   onEditPool,
@@ -400,7 +447,11 @@ export function WorkflowInspector({
   const logEntries = taskLogEvents.map(taskEventToLogEntry);
   const visibleLogEntries = logEntries
     .filter((entry) => LOG_LEVEL_RANK[entry.level] >= LOG_LEVEL_RANK[logLevelFilter]);
-
+  const selectedWorkflowId = workflow?.id ?? task?.config.workflowId;
+  const timelineDecisionTitle = task ? 'Worker decisions' : 'Workflow decisions';
+  const timelineDecisionEmptyText = task
+    ? 'No worker decisions for this task yet.'
+    : 'No workflow-level worker decisions recorded yet.';
   const savePrompt = () => {
     if (task && onEditPrompt && editPromptValue !== (task.config.prompt ?? '')) {
       onEditPrompt(task.id, editPromptValue);
@@ -525,6 +576,19 @@ export function WorkflowInspector({
             </div>
           )}
         </section>
+
+        {mutationFailure && (
+          <section data-testid="task-mutation-failure-detail" className="rounded border border-amber-700 bg-amber-950/40 p-3">
+            <h3 className="text-[11px] uppercase tracking-wide text-amber-200">
+              {mutationFailureTitle(mutationFailure)}
+            </h3>
+            <p className="mt-1 text-xs text-amber-100 break-words">{mutationFailure.message}</p>
+            <p className="mt-2 text-[11px] text-amber-300">Channel: {mutationFailure.channel}</p>
+            {mutationFailure.headlessCommand && (
+              <p className="mt-1 text-[11px] text-amber-300">Command: {mutationFailure.headlessCommand}</p>
+            )}
+          </section>
+        )}
 
         {workspaceRecreateNotice && (
           <section data-testid="workspace-recreate-notice" className="rounded border border-amber-700 bg-amber-950/40 p-3">
@@ -783,68 +847,89 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {task && (
+        {(task || selectedWorkflowId) && (
           <section className="rounded border border-border bg-secondary/70" data-testid="task-logs-section">
             <div className="flex items-center justify-between gap-3 px-3 py-2">
               <button
                 onClick={() => setShowLogs(!showLogs)}
                 className="text-left text-[11px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
                 data-testid="task-logs-toggle"
-                data-sidebar-nav-item
-                data-sidebar-nav-order="80"
-                data-sidebar-expandable="true"
                 aria-expanded={showLogs}
               >
-                Logs {showLogs ? '▲' : '▼'}
+                Timeline {showLogs ? '▲' : '▼'}
               </button>
-              <label className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
-                Level
-                <select
-                  value={logLevelFilter}
-                  onChange={(event) => setLogLevelFilter(event.target.value as TaskLogLevel)}
-                  className="rounded border border-border-strong bg-muted px-2 py-1 text-xs normal-case text-foreground focus:border-border-strong focus:outline-none"
-                  data-testid="task-log-level-select"
-                >
-                  <option value="debug">Debug+</option>
-                  <option value="info">Info+</option>
-                  <option value="warn">Warn+</option>
-                  <option value="error">Error</option>
-                </select>
-              </label>
+              {task ? (
+                <label className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+                  Level
+                  <select
+                    value={logLevelFilter}
+                    onChange={(event) => setLogLevelFilter(event.target.value as TaskLogLevel)}
+                    className="rounded border border-border-strong bg-muted px-2 py-1 text-xs normal-case text-foreground focus:border-border-strong focus:outline-none"
+                    data-testid="task-log-level-select"
+                  >
+                    <option value="debug">Debug+</option>
+                    <option value="info">Info+</option>
+                    <option value="warn">Warn+</option>
+                    <option value="error">Error</option>
+                  </select>
+                </label>
+              ) : null}
             </div>
             {showLogs && (
-              <div className="border-t border-border px-3 py-2">
-                {taskLogError && (
-                  <p className="mb-2 rounded border border-amber-800 bg-amber-950/30 px-2 py-1 text-xs text-amber-300" data-testid="task-log-error">
-                    {taskLogError}
-                  </p>
-                )}
-                {visibleLogEntries.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No logs at this level.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {visibleLogEntries.slice(0, 20).map((entry) => (
-                      <div key={entry.id} className="rounded border border-border bg-card/60 p-2" data-testid="task-log-entry">
-                        <div className="flex items-start gap-2">
-                          <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${logLevelClass(entry.level)}`}>
-                            {entry.level}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <p className="break-words text-xs text-foreground">{entry.message}</p>
-                              {entry.createdAt && (
-                                <span className="shrink-0 text-[10px] text-muted-foreground">{formatEventTime(entry.createdAt)}</span>
-                              )}
+              <div className="space-y-3 border-t border-border px-3 py-2">
+                <p className="text-xs text-muted-foreground">
+                  {task
+                    ? 'Task events first. Worker decisions below. This is the fastest way to see retries, skips, and AI fix attempts.'
+                    : 'Workflow-level worker decisions. Select a task for the event-by-event task timeline.'}
+                </p>
+                {task ? (
+                  <div>
+                    <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-foreground">Task events</div>
+                    {taskLogError && (
+                      <p className="mb-2 rounded border border-amber-800 bg-amber-950/30 px-2 py-1 text-xs text-amber-300" data-testid="task-log-error">
+                        {taskLogError}
+                      </p>
+                    )}
+                    {visibleLogEntries.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No timeline entries at this level.</p>
+                    ) : (
+                      <div className="space-y-0">
+                        {visibleLogEntries.slice(0, 20).map((entry, index) => (
+                          <div
+                            key={entry.id}
+                            className={`${index === 0 ? '' : 'border-t border-border/40'} py-2`}
+                            data-testid="task-log-entry"
+                          >
+                            <div className="flex items-start gap-2">
+                              <span className={`shrink-0 pt-0.5 text-[10px] font-medium uppercase ${logLevelClass(entry.level)}`}>
+                                {entry.level}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-baseline justify-between gap-2">
+                                  <p className="break-words text-xs text-foreground">{entry.message}</p>
+                                  {entry.createdAt && (
+                                    <span className="shrink-0 text-[10px] text-muted-foreground">{formatEventTime(entry.createdAt)}</span>
+                                  )}
+                                </div>
+                                {entry.detail && (
+                                  <code className="mt-1 block break-all text-[10px] text-muted-foreground">{entry.detail}</code>
+                                )}
+                              </div>
                             </div>
-                            {entry.detail && (
-                              <code className="mt-1 block break-all text-[10px] text-muted-foreground">{entry.detail}</code>
-                            )}
                           </div>
-                        </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
                   </div>
-                )}
+                ) : null}
+                {selectedWorkflowId ? (
+                  <WorkerDecisionsSection
+                    workflowId={selectedWorkflowId}
+                    taskId={task?.id}
+                    title={timelineDecisionTitle}
+                    emptyText={timelineDecisionEmptyText}
+                  />
+                ) : null}
               </div>
             )}
           </section>

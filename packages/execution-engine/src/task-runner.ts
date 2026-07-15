@@ -66,7 +66,10 @@ import { buildWorkRequest } from './task-runner-prepare.js';
 import { dispatchExecutor } from './task-runner-dispatch.js';
 import { wireCompletion } from './task-runner-finalize.js';
 import * as reviewGate from './task-runner-review-gate.js';
-import type { ReviewGateCiFailureLifecyclePublisher } from './task-runner-review-gate.js';
+import type {
+  ReviewGateCiFailureLifecyclePublisher,
+  ReviewGateMergeConflictLifecyclePublisher,
+} from './task-runner-review-gate.js';
 import {
   poolMemberKey,
   selectPoolMember,
@@ -163,6 +166,7 @@ export interface TaskRunnerConfig {
   mergeGateProvider?: MergeGateProvider;
   reviewProviderRegistry?: ReviewProviderRegistry;
   reviewGateCiFailurePublisher?: ReviewGateCiFailureLifecyclePublisher;
+  reviewGateMergeConflictPublisher?: ReviewGateMergeConflictLifecyclePublisher;
   /**
    * Provider that returns remote SSH targets keyed by target ID.
    * Called at task-execution time so config file changes take effect on retry.
@@ -174,7 +178,6 @@ export interface TaskRunnerConfig {
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
-    provisionCommand?: string;
     use_api_key?: boolean;
     secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
@@ -217,6 +220,9 @@ export class TaskRunner {
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   /** @internal */ reviewGateCiFailurePublisher?: ReviewGateCiFailureLifecyclePublisher;
   /** @internal */ reviewGateCiFailureInFlight = new Set<string>();
+  /** @internal */ reviewGateMergeConflictPublisher?: ReviewGateMergeConflictLifecyclePublisher;
+  /** @internal */ reviewGateMergeConflictInFlight = new Set<string>();
+
   /** @internal */ getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   /** @internal */ getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private getExecutionDefaults: () => { executionAgent?: string; executionModel?: string };
@@ -332,6 +338,7 @@ export class TaskRunner {
     this.mergeGateProvider = config.mergeGateProvider;
     this.reviewProviderRegistry = config.reviewProviderRegistry;
     this.reviewGateCiFailurePublisher = config.reviewGateCiFailurePublisher;
+    this.reviewGateMergeConflictPublisher = config.reviewGateMergeConflictPublisher;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.getExecutionDefaults = config.executionDefaultsProvider ?? (() => ({}));
@@ -1673,7 +1680,6 @@ export class TaskRunner {
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
-    provisionCommand?: string;
     use_api_key?: boolean;
     secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;

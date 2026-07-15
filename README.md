@@ -96,6 +96,14 @@ Spread work across SSH targets and remote machines you already manage — same a
 </tr>
 </table>
 
+## Workers
+
+Invoker recovery is driven by a worker registry, not a single hard-coded auto-fix loop. Built-in worker definitions are registered by stable kind; `autofix` remains the built-in default worker for failed-task recovery and submits normal `fix-with-agent` intents after reconciling persisted state.
+
+Manual headless worker runs use the registered kind (`./run.sh --headless worker autofix`) and take a single-instance lock named for that kind, so a second `autofix` scan is refused without blocking other worker kinds. The same registry powers desktop worker status and start/stop controls.
+
+External worker support is configured with `externalWorkers`, where each entry declares a registry `kind` and a `launch` command (`executable`, optional `args`, optional `cwd`). The loader registers each external worker kind and supervises its process boundary: start/wake launches the process, stop terminates it, and producers still only publish lifecycle wakeups rather than launching scripts directly.
+
 ## Install
 
 ```bash
@@ -106,6 +114,19 @@ npm install -g @neko-catpital-labs/invoker-slack
 
 Or grab desktop builds and standalone binaries from [GitHub Releases](https://github.com/Neko-Catpital-Labs/Invoker/releases/latest). Full install, config, and source checkout steps: [Getting started](docs/getting-started.md).
 
+Packaged installs bundle the first-party Invoker AI helpers inside the app. Install helpers from System Setup or:
+
+```bash
+invoker-ui --install-skills
+```
+
+Then, in Codex, Claude, Cursor, or OMP, run:
+
+```text
+/invoker-plan-to-invoker "help me plan <change>"
+```
+
+The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 ## Docs
 
 - [Getting started](docs/getting-started.md) — prerequisites, install, config, quick start, troubleshooting
@@ -118,6 +139,7 @@ Or grab desktop builds and standalone binaries from [GitHub Releases](https://gi
 
 More: [local macOS release build](docs/local-macos-release-build.md), [remote SSH targets](docs/remote-ssh-targets.md), [Docker executor](docs/docker-executor.md), [web surface](docs/web-surface.md), [product story](docs/invoker-medium-article.md).
 
+If you need to turn a product or implementation plan into an Invoker workflow, install helpers from System Setup or `invoker-ui --install-skills`, then run `/invoker-plan-to-invoker "help me plan <change>"` in Codex, Claude, Cursor, or OMP. The command plans first, writes `plans/invoker-handoff.md`, converts it to `plans/invoker-handoff.yaml`, validates, and submits with `invoker-cli run --live` or the Invoker MCP tool.
 ## License
 
 [Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (SPDX: **FSL-1.1-ALv2**). Permitted use, competing use, and the future Apache License 2.0 grant are defined in the license file.

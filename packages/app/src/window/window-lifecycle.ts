@@ -53,15 +53,17 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
   deps.recordStartupMark('createWindow.begin');
   const iconPath = path.join(deps.appRootDir, 'assets', 'icons', 'png', '256x256.png');
   const icon = nativeImage.createFromPath(iconPath);
+  const keepE2eWindowHidden = deps.hideE2eWindow && !deps.enableTestCompositor;
   const mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    ...(deps.hideE2eWindow ? { x: -32000, y: -32000, skipTaskbar: true } : {}),
+    ...(deps.hideE2eWindow
+      ? { ...(keepE2eWindowHidden ? { x: -32000, y: -32000 } : {}), skipTaskbar: true }
+      : {}),
     // Show explicitly after load/timeout rather than relying on Electron's
     // implicit initial map behavior, which has regressed on some Linux/X11
-    // sessions and leaves the BrowserWindow unmapped. E2E windows stay hidden:
-    // Playwright can still drive the renderer, and the test run cannot steal
-    // focus or intercept mouse clicks from a live Invoker session.
+    // sessions and leaves the BrowserWindow unmapped. Compositor-enabled E2E
+    // tests must map the window so Chromium does not throttle requestAnimationFrame.
     show: false,
     webPreferences: {
       preload: path.join(deps.appRootDir, 'preload.js'),
@@ -130,9 +132,9 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
     const showWindow = (): void => {
       if (mainWindow.isDestroyed() || showTriggered) return;
       showTriggered = true;
-      deps.logger.info(deps.hideE2eWindow ? 'main window ready while hidden' : 'main window show()', { module: 'window' });
-      deps.recordStartupMark(deps.hideE2eWindow ? 'window.hidden-ready' : 'window.show');
-      if (!deps.hideE2eWindow) {
+      deps.logger.info(keepE2eWindowHidden ? 'main window ready while hidden' : 'main window show()', { module: 'window' });
+      deps.recordStartupMark(keepE2eWindowHidden ? 'window.hidden-ready' : 'window.show');
+      if (!keepE2eWindowHidden) {
         mainWindow.show();
         mainWindow.focus();
       }

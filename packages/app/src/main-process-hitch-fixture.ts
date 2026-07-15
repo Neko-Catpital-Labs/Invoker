@@ -54,59 +54,61 @@ function makeTask(id: string): TaskState {
 }
 
 export function seedMainProcessHitchFixture(
-  persistence: Pick<SQLiteAdapter, 'saveWorkflow' | 'saveTask' | 'logEvent' | 'upsertWorkerAction'>,
+  persistence: Pick<SQLiteAdapter, 'saveWorkflow' | 'saveTask' | 'logEvent' | 'upsertWorkerAction' | 'runInTransaction'>,
   options: MainProcessHitchFixtureOptions = {},
 ): MainProcessHitchFixtureResult {
   const taskCount = options.taskCount ?? DEFAULT_TASK_COUNT;
   const eventsPerTask = options.eventsPerTask ?? DEFAULT_EVENTS_PER_TASK;
   const actionsPerKind = options.actionsPerKind ?? DEFAULT_ACTIONS_PER_KIND;
   const workflowId = MAIN_PROCESS_HITCH_FIXTURE_WORKFLOW_ID;
-
-  persistence.saveWorkflow(makeWorkflow(workflowId, 'Main-process hitch fixture'));
-
-  for (let t = 0; t < taskCount; t += 1) {
-    const taskId = `${workflowId}/t${t}`;
-    persistence.saveTask(workflowId, makeTask(taskId));
-    for (let e = 0; e < eventsPerTask; e += 1) {
-      const action = e % 4 === 0 ? 'wakeup'
-        : e % 4 === 1 ? 'scan'
-          : e % 4 === 2 ? 'submit'
-            : 'skip';
-      persistence.logEvent(
-        taskId,
-        recoveryWorkerEventType(action),
-        buildRecoveryWorkerAuditPayload(action, `${action}-phase`, {
-          workflowId,
-          reason: action === 'skip' ? 'budget' : undefined,
-        }),
-      );
-    }
-  }
-
   let workerActionCount = 0;
-  for (const workerKind of ACTION_WORKER_KINDS) {
-    for (let i = 0; i < actionsPerKind; i += 1) {
-      const taskId = `${workflowId}/t${i % Math.max(taskCount, 1)}`;
-      const write: WorkerActionWrite = {
-        id: `wa-hitch-${workerKind}-${i}`,
-        workerKind,
-        actionType: 'hitch-fixture',
-        workflowId,
-        taskId,
-        subjectType: 'task',
-        subjectId: taskId,
-        externalKey: `hitch:${workerKind}:${i}`,
-        status: i % 5 === 0 ? 'skipped' : 'completed',
-        attemptCount: 1,
-        summary: `Hitch fixture ${workerKind} ${i}`,
-        payload: { reason: i % 5 === 0 ? 'budget' : 'ok' },
-        createdAt: `2026-07-01T00:00:${String(i % 60).padStart(2, '0')}.000Z`,
-        updatedAt: `2026-07-01T00:01:${String(i % 60).padStart(2, '0')}.000Z`,
-      };
-      persistence.upsertWorkerAction(write);
-      workerActionCount += 1;
+
+  persistence.runInTransaction(() => {
+    persistence.saveWorkflow(makeWorkflow(workflowId, 'Main-process hitch fixture'));
+
+    for (let t = 0; t < taskCount; t += 1) {
+      const taskId = `${workflowId}/t${t}`;
+      persistence.saveTask(workflowId, makeTask(taskId));
+      for (let e = 0; e < eventsPerTask; e += 1) {
+        const action = e % 4 === 0 ? 'wakeup'
+          : e % 4 === 1 ? 'scan'
+            : e % 4 === 2 ? 'submit'
+              : 'skip';
+        persistence.logEvent(
+          taskId,
+          recoveryWorkerEventType(action),
+          buildRecoveryWorkerAuditPayload(action, `${action}-phase`, {
+            workflowId,
+            reason: action === 'skip' ? 'budget' : undefined,
+          }),
+        );
+      }
     }
-  }
+
+    for (const workerKind of ACTION_WORKER_KINDS) {
+      for (let i = 0; i < actionsPerKind; i += 1) {
+        const taskId = `${workflowId}/t${i % Math.max(taskCount, 1)}`;
+        const write: WorkerActionWrite = {
+          id: `wa-hitch-${workerKind}-${i}`,
+          workerKind,
+          actionType: 'hitch-fixture',
+          workflowId,
+          taskId,
+          subjectType: 'task',
+          subjectId: taskId,
+          externalKey: `hitch:${workerKind}:${i}`,
+          status: i % 5 === 0 ? 'skipped' : 'completed',
+          attemptCount: 1,
+          summary: `Hitch fixture ${workerKind} ${i}`,
+          payload: { reason: i % 5 === 0 ? 'budget' : 'ok' },
+          createdAt: `2026-07-01T00:00:${String(i % 60).padStart(2, '0')}.000Z`,
+          updatedAt: `2026-07-01T00:01:${String(i % 60).padStart(2, '0')}.000Z`,
+        };
+        persistence.upsertWorkerAction(write);
+        workerActionCount += 1;
+      }
+    }
+  });
 
   return {
     workflowId,

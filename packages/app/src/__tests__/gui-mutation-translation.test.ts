@@ -3,13 +3,17 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const mainSource = readFileSync(path.resolve(__dirname, '..', 'main.ts'), 'utf8');
+const guiMutationHandlersSource = readFileSync(
+  path.resolve(__dirname, '..', 'ipc', 'gui-mutation-handlers.ts'),
+  'utf8',
+);
 
 function getTranslatorSource(): string {
-  const start = mainSource.indexOf('function translateGuiMutationToHeadless');
-  const end = mainSource.indexOf('  async function performSharedApproveTask', start);
+  const start = guiMutationHandlersSource.indexOf('function translateGuiMutationToHeadless');
+  const end = guiMutationHandlersSource.indexOf('  async function performSharedApproveTask', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return mainSource.slice(start, end);
+  return guiMutationHandlersSource.slice(start, end);
 }
 
 function getStandaloneClassifierSource(): string {
@@ -21,33 +25,34 @@ function getStandaloneClassifierSource(): string {
 }
 
 function getPerformDeleteWorkflowSource(): string {
-  const start = mainSource.indexOf('async function performDeleteWorkflow');
-  const end = mainSource.indexOf('  async function performDetachWorkflow', start);
+  const start = guiMutationHandlersSource.indexOf('async function performDeleteWorkflow');
+  const end = guiMutationHandlersSource.indexOf('  async function performDetachWorkflow', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return mainSource.slice(start, end);
+  return guiMutationHandlersSource.slice(start, end);
 }
 
 function getPerformDetachWorkflowSource(): string {
-  const start = mainSource.indexOf('async function performDetachWorkflow');
-  const end = mainSource.indexOf('  /** Orchestrator error codes', start);
+  const start = guiMutationHandlersSource.indexOf('async function performDetachWorkflow');
+  const end = guiMutationHandlersSource.indexOf('  /** Orchestrator error codes', start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return mainSource.slice(start, end);
+  return guiMutationHandlersSource.slice(start, end);
 }
 
 function getSetMergeBranchSource(): string {
-  const start = mainSource.lastIndexOf("'invoker:set-merge-branch'");
-  const end = mainSource.indexOf("'invoker:set-merge-mode'", start);
+  const start = guiMutationHandlersSource.lastIndexOf("'invoker:set-merge-branch'");
+  const end = guiMutationHandlersSource.indexOf("'invoker:set-merge-mode'", start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-  return mainSource.slice(start, end);
+  return guiMutationHandlersSource.slice(start, end);
 }
 
 describe('GUI mutation translation', () => {
   it.each([
     'invoker:check-pr-statuses',
     'invoker:check-pr-status',
+    'invoker:start-ready',
   ])('routes %s to the owner GUI mutation handler', (channel) => {
     const translatorSource = getTranslatorSource();
     expect(translatorSource).toMatch(

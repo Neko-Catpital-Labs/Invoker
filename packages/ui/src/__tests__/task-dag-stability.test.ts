@@ -82,12 +82,12 @@ describe('TaskDAG stability', () => {
       expect(hasFitViewProp).toBe(false);
     });
 
-    it('does not pass fitViewOptions as a prop to ReactFlow', () => {
+    it('passes fitViewOptions with padding to ReactFlow', () => {
       const reactFlowBlock = source.slice(
         source.indexOf('<ReactFlow'),
         source.indexOf('</ReactFlow>'),
       );
-      expect(reactFlowBlock).not.toContain('fitViewOptions');
+      expect(reactFlowBlock).toContain("fitViewOptions={{ padding: { top: '10%', right: '10%', bottom: '64px', left: '64px' } }}");
     });
 
     it('passes onInit handler to ReactFlow', () => {

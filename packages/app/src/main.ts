@@ -99,6 +99,8 @@ import type {
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
   Logger,
+  StartReadyRequest,
+  StartReadyResult,
   WorkflowMeta,
   WorkflowMutationAcceptedResult,
   WorkResponse,
@@ -116,12 +118,14 @@ import { composeRuntimeServices, composeHeadlessStartup } from '@invoker/runtime
 import type { RuntimeServices } from '@invoker/runtime-service';
 import type { MessageBus } from '@invoker/transport';
 import {
-  ExecutorRegistry, TaskRunner,
+  ExecutorRegistry,
+  TaskRunner,
   WorktreeExecutor,
   CI_FAILURE_WORKER_KIND,
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
+  GitHubMergeGateProvider,
   PR_STATUS_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   RESTART_TO_BRANCH_TRACE,
@@ -131,6 +135,7 @@ import {
   registerBuiltinWorkers,
   parseRequeueMutationArgs,
   parseRequeueEscalateMutationArgs,
+  reconcileTerminalWorkerActionsOnStartup,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -186,6 +191,7 @@ import {
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
+import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
   startStandaloneLaunchDispatcher,
@@ -229,12 +235,15 @@ import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from './delta-m
 import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
 import { WorkflowRollupProjection } from './workflow-rollup-projection.js';
 import { seedTaskCachesFromSnapshot } from './viewer-cache-hydration.js';
-import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import { submitWorkflowMutationOrAcknowledgeDeleted } from './workflow-mutation-submit.js';
 import type { WorkflowMutationContext } from './persisted-workflow-mutation-coordinator.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
+import {
+  isTaskInFlightForForcedStop,
+  reconcileOrphanedInFlightTasksOnBoot,
+} from './reconcile-orphaned-running-tasks.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
 import {
   dispatchStartedTasksWithGlobalTopup,
@@ -248,9 +257,7 @@ import { preserveCrashedInFlightTasks } from './crash-preserved-tasks.js';
 
 
 import {
-  buildFixWithAgentMutationArgs,
   buildHeadlessFixArgs,
-  listOpenFixIntentsForTask,
   parseFixWithAgentMutationArgs,
   type ReviewGateCiContext,
 } from './auto-fix-intents.js';
@@ -266,6 +273,7 @@ import {
   createWorkerRuntimeController,
   type WorkerRuntimeController,
 } from './worker-control.js';
+import { runStartReady } from './start-ready.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
@@ -286,16 +294,16 @@ import {
   resetTerminalUiPerfCounters,
 } from './terminal-ui-perf.js';
 import {
+  createRendererUiPerfCounters,
+  recordRendererUiPerfMetric,
+  resetRendererUiPerfCounters,
+} from './renderer-ui-perf.js';
+import {
   registerPlanningTerminalSessionIpcHandlers,
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
 } from './terminal-session-ipc.js';
 import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
-import {
-  buildRecoveryWorkerAuditPayload,
-  classifyAutoFixRecoveryPhase,
-  recoveryWorkerEventType,
-} from './recovery-worker-observability.js';
 import { seedMainProcessHitchFixture } from './main-process-hitch-fixture.js';
 import { seedStressFixture, type StressFixtureOptions } from './stress-fixture.js';
 import {
@@ -378,6 +386,7 @@ function buildRegisteredOwnerWorkerDeps(
     reviewGate: {
       checkMergeGateStatuses,
     },
+    mergeGateProvider: new GitHubMergeGateProvider(),
     autoFix: {
       defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
       attemptLedger: autoFixAttemptLedger,
@@ -402,35 +411,6 @@ function buildRegisteredOwnerWorkerDeps(
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
   const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
   return registerExternalWorkersFromConfig(invokerConfig.externalWorkers, registry);
-}
-
-
-
-function isTaskInFlightForForcedStop(task: TaskState): boolean {
-  if (isCrashPreservedExecution(task.execution)) return false;
-  return task.status === 'running'
-    || task.status === 'fixing_with_ai'
-    || (task.status === 'pending' && task.execution.phase === 'launching');
-}
-
-function isTaskRecoverableOnExplicitResume(task: TaskState): boolean {
-  if (task.status === 'running') return true;
-  if (task.status !== 'pending' || !task.execution.selectedAttemptId) return false;
-  if (task.execution.phase === 'launching') return true;
-
-  return Boolean(
-    task.execution.startedAt
-    || task.execution.launchStartedAt
-    || task.execution.launchCompletedAt
-    || task.execution.lastHeartbeatAt
-    || task.execution.workspacePath
-    || task.execution.agentSessionId
-    || task.execution.containerId
-    || task.execution.error
-    || task.execution.exitCode !== undefined
-    || task.execution.inputPrompt
-    || task.execution.pendingFixError,
-  );
 }
 
 declare const __BUILD_SHA__: string | undefined;
@@ -1098,7 +1078,20 @@ function startHeadlessMode(): void {
         executionAgentRegistry: agentRegistry,
       });
 
-      const headlessDeps: HeadlessDeps = {
+      if (!readOnlyMode && orchestrator && persistence) {
+        const orphaned = reconcileOrphanedInFlightTasksOnBoot({
+          orchestrator,
+          persistence,
+        });
+        if (orphaned.length > 0) {
+          logger.info(
+            `failed ${orphaned.length} orphaned in-flight task(s) left by a previous owner crash`,
+            { module: 'init', taskIds: orphaned.map((task) => task.id) },
+          );
+        }
+      }
+
+      const headlessDeps = {
         logger,
         orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices,
@@ -1109,12 +1102,7 @@ function startHeadlessMode(): void {
           dbPollCreated: 0,
           dbPollUpdatedAsCreated: 0,
           dbPollUpdatedAsUpdated: 0,
-          rendererReports: 0,
-          maxRendererEventLoopLagMs: 0,
-          maxRendererHiddenEventLoopLagMs: 0,
-          maxRendererCumulativeLagMs: 0,
-          maxRendererTickDeltaMs: 0,
-          maxRendererLongTaskMs: 0,
+          ...createRendererUiPerfCounters(),
         }),
         resetUiPerfStats: () => {},
         waitForApproval,
@@ -1122,9 +1110,22 @@ function startHeadlessMode(): void {
         executionAgentRegistry: agentRegistry,
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
+        repairReviewGateCi: (prArg: string) => repairReviewGateCiByPr(prArg, {
+          persistence,
+          repoRoot,
+          policy: {
+            store: persistence,
+            submitter: { submit: submitRegisteredOwnerWorkerMutation },
+            logger,
+            defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+            getAutoFixAgent: () => invokerConfig.autoFixAgent,
+            getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+            attemptLedger: autoFixAttemptLedger,
+          },
+        }),
         runtimeServices,
         appRootDir: __dirname,
-      };
+      } as HeadlessDeps;
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
         const executor = createHeadlessExecutor(headlessDeps);
@@ -1516,6 +1517,8 @@ function startHeadlessMode(): void {
             case 'fix':
             case 'resolve-conflict':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'normal' };
+            case 'repair-review-gate-ci':
+              return { workflowId: standaloneWorkflowIdForReviewGatePrArg(arg0), priority: 'normal' };
             default:
               return { priority: 'normal' };
           }
@@ -1523,6 +1526,13 @@ function startHeadlessMode(): void {
 
         const standaloneWorkflowIdForTaskArg = (taskIdArg: unknown): string => {
           return resolveHeadlessTargetWorkflowId(taskIdArg, persistence);
+        };
+        const standaloneWorkflowIdForReviewGatePrArg = (prArg: unknown): string | undefined => {
+          const raw = prArg === undefined ? undefined : String(prArg);
+          if (!raw) return undefined;
+          const prNumber = parseReviewGatePrNumber(raw);
+          if (!prNumber) return undefined;
+          return persistence.findReviewGateByPr(prNumber)?.workflowId;
         };
 
         const runStandaloneWorkflowMutation = async <T>(
@@ -1551,6 +1561,11 @@ function startHeadlessMode(): void {
             });
             return { ok: true };
           });
+        }
+        if (!workflowMutationDispatcher.has('invoker:start-ready')) {
+          workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
+            runStartReady(orchestrator, requestArg as StartReadyRequest | undefined),
+          );
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
           workflowMutationDispatcher.set('invoker:fix-with-agent', async (...fixArgs: unknown[]) => {
@@ -1608,187 +1623,6 @@ function startHeadlessMode(): void {
           );
         }
 
-        const buildStandaloneAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
-          const workflowId = standaloneWorkflowIdForTaskArg(taskId);
-          if (!workflowId) {
-            return {
-              workflowId: null,
-              openIntentCountForWorkflow: 0,
-              openFixIntentCountForWorkflow: 0,
-              openFixIntentCountForTask: 0,
-              openFixIntentForTask: false,
-              openFixIntentHead: null,
-              openFixIntentPreview: [],
-            };
-          }
-          const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-          const openFixIntents = openIntents.filter((intent) => (
-            intent.channel === 'invoker:fix-with-agent' || intent.channel === 'headless.exec'
-          ));
-          const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-          return {
-            workflowId,
-            openIntentCountForWorkflow: openIntents.length,
-            openFixIntentCountForWorkflow: openFixIntents.length,
-            openFixIntentCountForTask: openTaskFixIntents.length,
-            openFixIntentForTask: openTaskFixIntents.length > 0,
-            openFixIntentHead: openTaskFixIntents[0]
-              ? {
-                id: openTaskFixIntents[0].id,
-                status: openTaskFixIntents[0].status,
-                channel: openTaskFixIntents[0].channel,
-              }
-              : null,
-            openFixIntentPreview: openTaskFixIntents.slice(0, 5).map((intent) => ({
-              id: intent.id,
-              status: intent.status,
-              channel: intent.channel,
-            })),
-          };
-        };
-
-        const logStandaloneAutoFixDebug = (
-          taskId: string,
-          phase: string,
-          details: Record<string, unknown> = {},
-        ): void => {
-          const task = orchestrator.getTask(taskId);
-          const payload = {
-            phase,
-            status: task?.status ?? 'missing',
-            ...buildStandaloneAutoFixQueueSnapshot(taskId),
-            ...details,
-          };
-          persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
-          const recoveryAction = classifyAutoFixRecoveryPhase(phase, payload);
-          if (recoveryAction) {
-            persistence.logEvent?.(
-              taskId,
-              recoveryWorkerEventType(recoveryAction),
-              buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
-            );
-          }
-          logger.info(
-            `[auto-fix-debug][standalone] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
-            { module: 'auto-fix' },
-          );
-        };
-
-        const scheduleStandaloneAutoFix = (taskId: string): void => {
-          logStandaloneAutoFixDebug(taskId, 'schedule-enter');
-          if (!workflowMutationCoordinator) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-workflow-mutation-coordinator' });
-            return;
-          }
-          if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', { reason: 'fix-handler-not-ready' });
-            return;
-          }
-          const workflowId = standaloneWorkflowIdForTaskArg(taskId);
-          if (!workflowId) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
-            return;
-          }
-          const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-          if (!shouldAutoFixNow) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', {
-              reason: 'shouldAutoFix-false',
-              shouldAutoFix: shouldAutoFixNow,
-            });
-            return;
-          }
-          const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-          const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-          if (openTaskFixIntents.length > 0) {
-            logStandaloneAutoFixDebug(taskId, 'schedule-skip', {
-              reason: 'already-queued-intent',
-              existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-            });
-            return;
-          }
-          const configuredAgent = loadConfig().autoFixAgent?.trim();
-          const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
-          logStandaloneAutoFixDebug(taskId, 'schedule-enqueue');
-          logStandaloneAutoFixDebug(taskId, 'schedule-enqueued');
-          void workflowMutationCoordinator.enqueue(
-            workflowId,
-            'normal',
-            'invoker:fix-with-agent',
-            buildFixWithAgentMutationArgs(taskId, selectedAgent, { autoFix: true }),
-          )
-            .then(() => {
-              logStandaloneAutoFixDebug(taskId, 'schedule-dispatch-finished');
-            })
-            .catch((err) => {
-              if (err instanceof StaleLineageError) {
-                logger.info(`auto-fix discarded stale result for "${taskId}": ${err.message}`, { module: 'auto-fix' });
-                return;
-              }
-              logStandaloneAutoFixDebug(taskId, 'schedule-dispatch-error', {
-                error: err instanceof Error ? err.stack ?? err.message : String(err),
-              });
-            });
-        };
-
-        const maybeScheduleStandaloneAutoFix = (
-          task: TaskState,
-          trigger: 'delta' | 'poll',
-        ): boolean => {
-          if (task.status !== 'failed') return false;
-          const cancellationError = shouldSkipAutoFixForError(task.execution.error);
-          const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(task.id);
-          logStandaloneAutoFixDebug(task.id, `${trigger}-failed`, {
-            shouldSkipForCancellation: cancellationError,
-            shouldAutoFixFromOrchestrator,
-          });
-          if (!cancellationError && shouldAutoFixFromOrchestrator) {
-            logStandaloneAutoFixDebug(task.id, `${trigger}-trigger-schedule`);
-            scheduleStandaloneAutoFix(task.id);
-            return true;
-          }
-          logStandaloneAutoFixDebug(task.id, `${trigger}-skip`, {
-            reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
-            shouldSkipForCancellation: cancellationError,
-            shouldAutoFixFromOrchestrator,
-          });
-          return false;
-        };
-
-        const startStandaloneAutoFixRecoveryPoll = (workflowId: string): void => {
-          const startedAtMs = Date.now();
-          const maxPollMs = 90_000;
-          const poll = setInterval(() => {
-            if (Date.now() - startedAtMs > maxPollMs) {
-              clearInterval(poll);
-              return;
-            }
-            try {
-              orchestrator.syncFromDb(workflowId);
-              const scheduled = orchestrator
-                .getAllTasks()
-                .filter((task) => task.config.workflowId === workflowId)
-                .some((task) => maybeScheduleStandaloneAutoFix(task, 'poll'));
-              if (scheduled) {
-                clearInterval(poll);
-              }
-            } catch (err) {
-              logger.warn(
-                `standalone auto-fix recovery poll failed for "${workflowId}": ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-                { module: 'auto-fix' },
-              );
-            }
-          }, 1_000);
-          poll.unref?.();
-        };
-
-        messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
-          const d = delta as TaskDelta;
-          if (d.type !== 'updated' || d.changes.status !== 'failed') return;
-          const task = orchestrator.getTask(d.taskId);
-          if (task) maybeScheduleStandaloneAutoFix(task, 'delta');
-        });
 
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
@@ -1800,7 +1634,6 @@ function startHeadlessMode(): void {
           orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
           const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
           const started = orchestrator.startExecution();
-          startStandaloneAutoFixRecoveryPoll(workflowId);
           logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
           return { workflowId, tasks };
@@ -1936,6 +1769,13 @@ function startHeadlessMode(): void {
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
         });
+        const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
+        if (reconciledWorkerActions > 0) {
+          logger.info(
+            `reconciled ${reconciledWorkerActions} terminal worker action(s) on startup`,
+            { module: 'init' },
+          );
+        }
         workerRuntimeController.startAutoStartedWorkers();
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
@@ -1947,6 +1787,14 @@ function startHeadlessMode(): void {
             setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
           });
         }
+
+        void recoverWorkflowMutationsOnStartup({
+          ownerMode: true,
+          persistence,
+          workflowMutationCoordinator: workflowMutationCoordinator ?? undefined,
+          logger,
+          maybeDelayResume: maybeDelayWorkflowResumeForTest,
+        });
       }
 
       await runHeadless(cliArgs, headlessDeps);
@@ -2118,12 +1966,7 @@ function createEmbeddedTerminalBackendFromConfig(
     dbPollCreated: 0,
     dbPollUpdatedAsCreated: 0,
     dbPollUpdatedAsUpdated: 0,
-    rendererReports: 0,
-    maxRendererEventLoopLagMs: 0,
-    maxRendererHiddenEventLoopLagMs: 0,
-    maxRendererCumulativeLagMs: 0,
-    maxRendererTickDeltaMs: 0,
-    maxRendererLongTaskMs: 0,
+    ...createRendererUiPerfCounters(),
     workflowMetadataPublishRequests: 0,
     workflowMetadataPublishes: 0,
     workflowMetadataCoalescedRequests: 0,
@@ -2188,12 +2031,7 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.dbPollCreated = 0;
     uiPerfStats.dbPollUpdatedAsCreated = 0;
     uiPerfStats.dbPollUpdatedAsUpdated = 0;
-    uiPerfStats.rendererReports = 0;
-    uiPerfStats.maxRendererEventLoopLagMs = 0;
-    uiPerfStats.maxRendererHiddenEventLoopLagMs = 0;
-    uiPerfStats.maxRendererCumulativeLagMs = 0;
-    uiPerfStats.maxRendererTickDeltaMs = 0;
-    uiPerfStats.maxRendererLongTaskMs = 0;
+    resetRendererUiPerfCounters(uiPerfStats);
     uiPerfStats.workflowMetadataPublishRequests = 0;
     uiPerfStats.workflowMetadataPublishes = 0;
     uiPerfStats.workflowMetadataCoalescedRequests = 0;
@@ -2296,73 +2134,6 @@ function createEmbeddedTerminalBackendFromConfig(
     uiPerfStats.workflowMetadataPublishRequests += 1;
     workflowMetadataPublisher?.requestPublish(reason);
   };
-
-  const buildAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
-    const workflowId = workflowIdForTaskArg(taskId);
-    if (!workflowId) {
-      return {
-        workflowId: null,
-        openIntentCountForWorkflow: 0,
-        openFixIntentCountForWorkflow: 0,
-        openFixIntentCountForTask: 0,
-        openFixIntentForTask: false,
-        openFixIntentHead: null,
-        openFixIntentPreview: [],
-      };
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openFixIntents = openIntents.filter((intent) => (
-      intent.channel === 'invoker:fix-with-agent' || intent.channel === 'headless.exec'
-    ));
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    return {
-      workflowId,
-      openIntentCountForWorkflow: openIntents.length,
-      openFixIntentCountForWorkflow: openFixIntents.length,
-      openFixIntentCountForTask: openTaskFixIntents.length,
-      openFixIntentForTask: openTaskFixIntents.length > 0,
-      openFixIntentHead: openTaskFixIntents[0]
-        ? {
-          id: openTaskFixIntents[0].id,
-          status: openTaskFixIntents[0].status,
-          channel: openTaskFixIntents[0].channel,
-        }
-        : null,
-      openFixIntentPreview: openTaskFixIntents.slice(0, 5).map((intent) => ({
-        id: intent.id,
-        status: intent.status,
-        channel: intent.channel,
-      })),
-    };
-  };
-
-  const logAutoFixDebug = (
-    taskId: string,
-    phase: string,
-    details: Record<string, unknown> = {},
-  ): void => {
-    const task = orchestrator.getTask(taskId);
-    const payload = {
-      phase,
-      status: task?.status ?? 'missing',
-      ...buildAutoFixQueueSnapshot(taskId),
-      ...details,
-    };
-    persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
-    const recoveryAction = classifyAutoFixRecoveryPhase(phase, payload);
-    if (recoveryAction) {
-      persistence.logEvent?.(
-        taskId,
-        recoveryWorkerEventType(recoveryAction),
-        buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
-      );
-    }
-    logger.info(
-      `[auto-fix-debug] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
-      { module: 'auto-fix' },
-    );
-  };
-
   const executeFixWithAgentMutation = async (
     taskId: string,
     agentName?: string,
@@ -2403,62 +2174,6 @@ function createEmbeddedTerminalBackendFromConfig(
     return result.started;
   };
 
-  const scheduleAutoFix = (taskId: string): void => {
-    logAutoFixDebug(taskId, 'schedule-enter');
-    if (!workflowMutationCoordinator) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-workflow-mutation-coordinator' });
-      return;
-    }
-    if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'fix-handler-not-ready' });
-      return;
-    }
-    const workflowId = workflowIdForTaskArg(taskId);
-    if (!workflowId) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
-      return;
-    }
-    const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-    if (!shouldAutoFixNow) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'shouldAutoFix-false',
-        shouldAutoFix: shouldAutoFixNow,
-      });
-      return;
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    if (openTaskFixIntents.length > 0) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'already-queued-intent',
-        existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-      });
-      return;
-    }
-    const configuredAgent = loadConfig().autoFixAgent?.trim();
-    const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
-    logAutoFixDebug(taskId, 'schedule-enqueue');
-    logAutoFixDebug(taskId, 'schedule-enqueued');
-    void runWorkflowMutation(
-      workflowId,
-      'normal',
-      'invoker:fix-with-agent',
-      [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
-    )
-      .then(() => {
-        logAutoFixDebug(taskId, 'schedule-dispatch-finished');
-      })
-      .catch((err) => {
-        if (err instanceof StaleLineageError) {
-          logger.info(`auto-fix discarded stale result for "${taskId}": ${err.message}`, { module: 'auto-fix' });
-          return;
-        }
-        logAutoFixDebug(taskId, 'schedule-dispatch-error', {
-          error: err instanceof Error ? err.stack ?? err.message : String(err),
-        });
-      });
-  };
 
   const parseExecutionDate = (value: unknown): Date | undefined => {
     if (!value) return undefined;
@@ -2715,8 +2430,21 @@ function createEmbeddedTerminalBackendFromConfig(
         );
         return;
       },
+      repairReviewGateCi: (prArg: string) => repairReviewGateCiByPr(prArg, {
+        persistence,
+        repoRoot,
+        policy: {
+          store: persistence,
+          submitter: { submit: submitRegisteredOwnerWorkerMutation },
+          logger,
+          defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+          getAutoFixAgent: () => invokerConfig.autoFixAgent,
+          getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+          attemptLedger: autoFixAttemptLedger,
+        },
+      }),
       executionAgentRegistry: registerBuiltinAgents(),
-    });
+    } as HeadlessDeps);
     const { workflowId } = classifyHeadlessExecMutation(payload);
     logger.info(`executeHeadlessExec end args="${payload.args.join(' ')}" workflow="${workflowId ?? 'unknown'}"`, {
       module: 'ipc-delegate',
@@ -2728,6 +2456,14 @@ function createEmbeddedTerminalBackendFromConfig(
     const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
     return { workflowId, tasks };
   }
+  function workflowIdForReviewGatePrArg(prArg: unknown): string | undefined {
+    const raw = prArg === undefined ? undefined : String(prArg);
+    if (!raw) return undefined;
+    const prNumber = parseReviewGatePrNumber(raw);
+    if (!prNumber) return undefined;
+    return persistence.findReviewGateByPr(prNumber)?.workflowId;
+  }
+
 
   function workflowIdForTargetArg(targetArg: unknown): string | undefined {
     if (targetArg === undefined) return undefined;
@@ -2788,6 +2524,8 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'fix':
       case 'resolve-conflict':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'normal' };
+      case 'repair-review-gate-ci':
+        return { workflowId: workflowIdForReviewGatePrArg(arg0), priority: 'normal' };
       default:
         return { priority: 'normal' };
     }
@@ -2858,6 +2596,8 @@ function createEmbeddedTerminalBackendFromConfig(
       case 'invoker:load-plan':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:start':
+        return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:start-ready':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:stop':
         return { channel: 'headless.gui-mutation', request: payload };
@@ -3080,31 +2820,12 @@ function createEmbeddedTerminalBackendFromConfig(
   }
 
   // Apply one owner task delta to the local cache and forward results to the
-  // renderer (and drive owner-side auto-fix). Extracted so the detached viewer
-  // can replay deltas that were buffered during hydration.
+  // renderer. Extracted so the detached viewer can replay deltas that were
+  // buffered during hydration.
   function processIncomingTaskDelta(d: TaskDelta): void {
     uiPerfStats.mainDeltaToUi += 1;
     if (traceUiDeltaFlow) {
       logger.debug(`delta→ui: ${JSON.stringify(d)}`, { module: 'ui' });
-    }
-    const deltaTaskId = d.type === 'updated' || d.type === 'removed' ? d.taskId : undefined;
-    if (d.type === 'updated' && d.changes.status === 'failed') {
-      const cancellationError = shouldSkipAutoFixForError(d.changes.execution?.error);
-      const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(d.taskId);
-      logAutoFixDebug(d.taskId, 'delta-failed', {
-        shouldSkipForCancellation: cancellationError,
-        shouldAutoFixFromOrchestrator,
-      });
-      if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
-        logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
-        scheduleAutoFix(deltaTaskId);
-      } else if (deltaTaskId) {
-        logAutoFixDebug(deltaTaskId, 'delta-skip', {
-          reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
-          shouldSkipForCancellation: cancellationError,
-          shouldAutoFixFromOrchestrator,
-        });
-      }
     }
     for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(d)) {
       publishTaskDeltaToRenderer(rendererDelta);
@@ -3162,7 +2883,7 @@ function createEmbeddedTerminalBackendFromConfig(
         workflowCount: workflows.length,
         taskCount: orchestrator.getAllTasks().length,
       }));
-      if (writerLock?.reclaimedDeadOwner && !readOnly) {
+      if (writerLock?.reclaimedDeadOwner && ownerMode) {
         const preservedTaskIds = preserveCrashedInFlightTasks(
           persistence,
           orchestrator.getAllTasks(),
@@ -3239,6 +2960,28 @@ function createEmbeddedTerminalBackendFromConfig(
       }
       requestWorkflowMetadataPublish('orchestrator-snapshot');
     }
+  }
+
+  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
+    const result = runStartReady(orchestrator, request);
+    if (!result.dryRun) {
+      publishOrchestratorSnapshotToRenderer();
+    }
+    logger.info(
+      `start-ready: ready=${result.preview.readyTaskIds.length} recoverable=${result.preview.recoverableTaskIds.length} failedWorkflows=${result.preview.failedWorkflowIds.length} recreated=${result.recreatedWorkflowIds.length} started=${result.started.length} dryRun=${result.dryRun ? 'true' : 'false'}`,
+      { module: 'ipc' },
+    );
+    if (!result.dryRun && result.started.length > 0 && launchDispatcher) {
+      try {
+        launchDispatcher.poll();
+      } catch (err) {
+        logger.warn(
+          `start-ready: launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'ipc' },
+        );
+      }
+    }
+    return result;
   }
 
   function startDeferredStartupWork(): void {
@@ -3656,6 +3399,9 @@ function createEmbeddedTerminalBackendFromConfig(
       workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
         return executeHeadlessExec(payloadArg as HeadlessExecMutationPayload);
       });
+      workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
+        executeStartReady(requestArg as StartReadyRequest | undefined),
+      );
       workflowMutationDispatcher.set('api:approve-task', async (taskIdArg: unknown) => {
         await performSharedApproveTask(String(taskIdArg), 'api');
       });
@@ -3809,13 +3555,40 @@ function createEmbeddedTerminalBackendFromConfig(
       });
     }
 
-    // Relaunch orphaned running tasks and start any pending-but-ready tasks.
+    // Fail orphaned in-flight tasks left by a previous crash, then start ready work.
     if (!ownerMode) {
       logger.info('follower mode startup: auto-run disabled', { module: 'init' });
-    } else if (invokerConfig.disableAutoRunOnStartup) {
-      logger.info('auto-run on startup disabled by config', { module: 'init' });
     } else {
-      orchestrator.startExecution();
+      setTimeout(() => {
+        if (!ownerMode) return;
+        try {
+          const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
+          if (reconciledWorkerActions > 0) {
+            logger.info(
+              `reconciled ${reconciledWorkerActions} terminal worker action(s) on startup`,
+              { module: 'init' },
+            );
+          }
+          const orphaned = reconcileOrphanedInFlightTasksOnBoot({
+            orchestrator,
+            persistence,
+          });
+          if (orphaned.length > 0) {
+            logger.info(
+              `failed ${orphaned.length} orphaned in-flight task(s) left by a previous owner crash`,
+              { module: 'init', taskIds: orphaned.map((task) => task.id) },
+            );
+          }
+          if (invokerConfig.disableAutoRunOnStartup) {
+            logger.info('auto-run on startup disabled by config', { module: 'init' });
+          } else {
+            orchestrator.startExecution();
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logger.error(`deferred owner startup maintenance failed: ${message}`, { module: 'init' });
+        }
+      }, 0);
     }
 
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
@@ -4102,40 +3875,20 @@ function createEmbeddedTerminalBackendFromConfig(
       return started;
     });
 
+    registerGuiMutationHandler('invoker:start-ready', async (requestArg: unknown) => {
+      return executeStartReady(requestArg as StartReadyRequest | undefined);
+    });
+
     registerGuiMutationHandler('invoker:resume-workflow', async () => {
       const workflows = persistence.listWorkflows();
       if (workflows.length === 0) {
         logger.info('resume-workflow: no workflows found', { module: 'ipc' });
         return null;
       }
-      orchestrator.syncAllFromDb();
-
-      const tasksToRecover = orchestrator.getAllTasks().filter(isTaskRecoverableOnExplicitResume);
-      for (const task of tasksToRecover) {
-        orchestrator.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
-      }
-
-      const allStarted = orchestrator.startExecution();
+      const result = executeStartReady({});
       const tasks = orchestrator.getAllTasks();
-      workflowRollupProjection.replaceAll(tasks);
-      for (const task of tasks) {
-        lastKnownTaskStates.set(task.id, JSON.stringify(task));
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          publishTaskDeltaToRenderer({ type: 'created', task });
-        }
-      }
-      logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
-      if (allStarted.length > 0 && launchDispatcher) {
-        try {
-          launchDispatcher.poll();
-        } catch (err) {
-          logger.warn(
-            `resume-workflow: launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
-            { module: 'ipc' },
-          );
-        }
-      }
-      return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
+      logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${result.started.length} started`, { module: 'ipc' });
+      return { workflow: workflows[0], taskCount: tasks.length, startedCount: result.started.length };
     });
 
     registerGuiMutationHandler('invoker:stop', async () => {
@@ -4556,24 +4309,7 @@ function createEmbeddedTerminalBackendFromConfig(
       ) {
         logger.info(`ui metric ${metric} ${JSON.stringify(data ?? {})}`, { module: 'ui-state' });
       }
-      if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
-        const hiddenOrUnfocused = data.visibilityState === 'hidden' || data.hasFocus === false;
-        if (hiddenOrUnfocused) {
-          uiPerfStats.maxRendererHiddenEventLoopLagMs = Math.max(uiPerfStats.maxRendererHiddenEventLoopLagMs, data.lagMs);
-        } else {
-          uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
-        }
-        if (typeof data.cumulativeLagMs === 'number') {
-          uiPerfStats.maxRendererCumulativeLagMs = Math.max(uiPerfStats.maxRendererCumulativeLagMs, data.cumulativeLagMs);
-        }
-        if (typeof data.tickDeltaMs === 'number') {
-          uiPerfStats.maxRendererTickDeltaMs = Math.max(uiPerfStats.maxRendererTickDeltaMs, data.tickDeltaMs);
-        }
-      }
-      if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
-        uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
-      }
-      uiPerfStats.rendererReports += 1;
+      recordRendererUiPerfMetric(uiPerfStats, metric, data);
       try {
         persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
       } catch {
@@ -5318,6 +5054,59 @@ function createEmbeddedTerminalBackendFromConfig(
     // (or selecting) an embedded session managed in the main process.
     // Headless `open-terminal` still routes to `openExternalTerminalForTask`
     // in `headless.ts` so existing CLI behaviour is preserved.
+    const planningTerminalOnly = (sessionId: string): { ok: true } | { ok: false; reason: string } => {
+      const session = embeddedTerminalManager.get(sessionId);
+      if (!session) return { ok: false, reason: `Unknown session "${sessionId}".` };
+      if (session.kind !== 'planning') {
+        return { ok: false, reason: `Session "${sessionId}" is not a planning terminal session.` };
+      }
+      return { ok: true };
+    };
+
+    ipcMain.handle('invoker:planning-terminal-open', async (_event, planningSessionIdArg: string) => {
+      const planningSessionId = String(planningSessionIdArg ?? '').trim();
+      if (!planningSessionId) {
+        return { opened: false, reason: 'Planning session id is required.' };
+      }
+      logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
+      try {
+        const session = embeddedTerminalManager.openOrReuse({
+          kind: 'planning',
+          taskId: `planning:${planningSessionId}`,
+          planningSessionId,
+          spec: { cwd: repoRoot },
+          cwd: repoRoot,
+        });
+        return { opened: true, session };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn(`planning terminal spawn failed for session="${planningSessionId}": ${reason}`, { module: 'planning-terminal' });
+        return { opened: false, reason: `Failed to start planning terminal session: ${reason}` };
+      }
+    });
+
+    ipcMain.handle('invoker:planning-terminal-list', async () => {
+      return embeddedTerminalManager.list().filter((session) => session.kind === 'planning');
+    });
+
+    ipcMain.handle('invoker:planning-terminal-write', async (_event, sessionId: string, data: string) => {
+      const allowed = planningTerminalOnly(sessionId);
+      if (!allowed.ok) return allowed;
+      return embeddedTerminalManager.write(sessionId, data);
+    });
+
+    ipcMain.handle('invoker:planning-terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
+      const allowed = planningTerminalOnly(sessionId);
+      if (!allowed.ok) return allowed;
+      return embeddedTerminalManager.resize(sessionId, cols, rows);
+    });
+
+    ipcMain.handle('invoker:planning-terminal-close', async (_event, sessionId: string) => {
+      const allowed = planningTerminalOnly(sessionId);
+      if (!allowed.ok) return allowed;
+      return embeddedTerminalManager.close(sessionId);
+    });
+
     ipcMain.handle('invoker:open-terminal', async (_event, taskId: string) => {
       logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
       const liveHandle = taskHandles.get(taskId);
@@ -5359,6 +5148,8 @@ function createEmbeddedTerminalBackendFromConfig(
       ipcMain,
       embeddedTerminalManager,
       logger,
+      planningChatSessions,
+      getPlanningSessionStore: () => (ownerMode ? persistence : undefined),
       repoRoot,
     });
 

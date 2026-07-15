@@ -125,6 +125,14 @@ export interface WorkResponseOutputs {
   /** Typed review-gate artifact state produced by merge-gate style actions. */
   reviewGate?: ReviewGateState;
 }
+export type ReviewGateSubstate =
+  | 'review_open'
+  | 'ci_pending'
+  | 'ci_failing'
+  | 'merge_conflict'
+  | 'fix_pending'
+  | 'ready_to_land';
+
 
 export interface ReviewGateQueryResponse {
   workflowId: string;
@@ -133,6 +141,7 @@ export interface ReviewGateQueryResponse {
   activeGeneration: number | null;
   completion: { required: 'all'; status: 'approved' };
   ready: boolean;
+  substate?: ReviewGateSubstate | null;
   artifacts: ReviewGateArtifact[];
   discardedArtifacts: ReviewGateArtifact[];
   edges: Array<{ from: string; to: string }>;

@@ -13,9 +13,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import { AUTO_FIX_WORKER_KIND, type AgentRegistry } from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
+import { buildReviewGateQueryResponse } from './review-gate-query.js';
+
 import {
   type HeadlessDeps,
   type QueryFlags,
@@ -26,7 +28,8 @@ import {
 } from './headless-shared.js';
 import { resolveDefaultExecutionAgent } from './config.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
-import { listWorkerDecisions } from './worker-control.js';
+import { listWorkerDecisions, toWorkerActionSummary } from './worker-control.js';
+import { createRendererUiPerfCounters } from './renderer-ui-perf.js';
 import {
   collectRecoveryWorkerStatus,
   type RecoveryWorkerStatus,
@@ -176,11 +179,20 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         case 'label': writeOut(`${record?.workflowId ?? ''}\n`); break;
         case 'json':  writeOut(formatAsJson(record ?? {}) + '\n'); break;
         case 'jsonl': writeOut(formatAsJsonl(record ? [record] : []) + '\n'); break;
-        default:      writeOut(
-          record
-            ? `${record.workflowId}\t${record.reviewId ?? prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\t${record.branch ?? ''}\n`
-            : `No Invoker workflow found for PR ${prNumber}.\n`,
-        ); break;
+        default:      if (!record) {
+          writeOut(`No Invoker workflow found for PR ${prNumber}.\n`);
+          break;
+        }
+        {
+          const workflow = deps.persistence.loadWorkflow(record.workflowId);
+          const tasks = deps.persistence.loadTasks(record.workflowId);
+          const gate = buildReviewGateQueryResponse({ workflowId: record.workflowId, workflow, tasks });
+          const substate = gate.substate ?? 'null';
+          writeOut(
+            `${record.workflowId}\t${record.reviewId ?? prNumber}\t${record.workflowStatus}\tgen=${record.workflowGeneration}\tsubstate=${substate}\t${record.branch ?? ''}\n`,
+          );
+        }
+        break;
       }
       break;
     }
@@ -294,9 +306,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         dbPollCreated: 0,
         dbPollUpdatedAsCreated: 0,
         dbPollUpdatedAsUpdated: 0,
-        rendererReports: 0,
-        maxRendererEventLoopLagMs: 0,
-        maxRendererLongTaskMs: 0,
+        ...createRendererUiPerfCounters(),
       };
       switch (flags.output) {
         case 'label':
@@ -763,7 +773,11 @@ export async function headlessSession(taskId: string | undefined, deps: Pick<Hea
   }
 }
 
-function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
+type RecoveryWorkerStatusWithActions = RecoveryWorkerStatus & {
+  recentActions?: ReturnType<typeof toWorkerActionSummary>[];
+};
+
+function formatRecoveryWorkerStatus(status: RecoveryWorkerStatusWithActions): string {
   const lines = [
     `${BOLD}Recovery worker${RESET}`,
     `  kind: ${status.kind}`,
@@ -784,6 +798,18 @@ function formatRecoveryWorkerStatus(status: RecoveryWorkerStatus): string {
       lines.push(`  ${event.at} ${event.taskId} ${event.action}${phase}${reason}`);
     }
   }
+  if (status.recentActions && status.recentActions.length > 0) {
+    lines.push('');
+    lines.push(`${BOLD}Recent worker actions${RESET}`);
+    for (const action of status.recentActions) {
+      const task = action.taskId ? ` task=${action.taskId}` : '';
+      const reason = action.reason ? ` reason=${action.reason}` : '';
+      const summary = action.summary ? ` — ${action.summary}` : '';
+      lines.push(
+        `  ${action.updatedAt} ${action.workerKind}/${action.actionType} [${action.status}]${task}${reason}${summary}`,
+      );
+    }
+  }
   return lines.join('\n');
 }
 
@@ -793,19 +819,25 @@ export async function renderWorkerStatus(
 ): Promise<void> {
   const flags = parseQueryFlags(flagArgs);
   const status = collectRecoveryWorkerStatus(deps.persistence);
+  const recentActions = deps.persistence.listWorkerActions?.({ workerKind: AUTO_FIX_WORKER_KIND, limit: 5 })
+    .map(toWorkerActionSummary) ?? [];
+  const statusWithActions: RecoveryWorkerStatusWithActions = {
+    ...status,
+    recentActions,
+  };
   const { formatAsJson, formatAsJsonl } = await import('./formatter.js');
   switch (flags.output) {
     case 'label':
       writeOut(`${status.workerId}\n`);
       break;
     case 'json':
-      writeOut(formatAsJson(status) + '\n');
+      writeOut(formatAsJson(statusWithActions) + '\n');
       break;
     case 'jsonl':
-      writeOut(formatAsJsonl([status]) + '\n');
+      writeOut(formatAsJsonl([statusWithActions]) + '\n');
       break;
     default:
-      writeOut(formatRecoveryWorkerStatus(status) + '\n');
+      writeOut(formatRecoveryWorkerStatus(statusWithActions) + '\n');
       break;
   }
 }

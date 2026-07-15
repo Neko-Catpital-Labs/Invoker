@@ -4,6 +4,7 @@ import type { TaskDelta, TaskState } from '@invoker/workflow-core';
 import {
   buildLifecycleEventFromTaskDelta,
   buildReviewGateCiFailedLifecycleEvent,
+  buildReviewGateMergeConflictLifecycleEvent,
   buildTaskUpdatedLifecycleEvent,
   buildWorkflowWakeupLifecycleEvent,
   isTaskLifecycleEvent,
@@ -232,6 +233,42 @@ describe('lifecycle event helpers', () => {
     expect(event.failedChecks).toEqual([
       { name: 'test-all', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/runs/1' },
     ]);
+    expect(isWorkflowLifecycleEvent(event)).toBe(true);
+    expectRecoveryWakeup(event, { reason: 'review_gate_failure' });
+  });
+
+  it('builds review_gate.merge_conflict lifecycle wakeups', () => {
+    const event = buildReviewGateMergeConflictLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/merge',
+      status: 'review_ready',
+      taskStateVersion: 12,
+      reviewId: '123',
+      reviewUrl: 'https://github.com/owner/repo/pull/123',
+      headSha: 'abc123',
+      headRef: 'feature/merge-conflict',
+      branch: 'feature/merge-conflict',
+      statusText: 'Awaiting review',
+      generation: 7,
+      attemptId: 'attempt-merge',
+      createdAt: CREATED_AT_DATE,
+    });
+
+    expect(event).toMatchObject({
+      eventKey: 'review_gate.merge_conflict|workflow:wf-1|task:wf-1/merge|generation:7|attempt:attempt-merge|task-state:12|review:123:abc123',
+      kind: 'review_gate.merge_conflict',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/merge',
+      status: 'review_ready',
+      taskStateVersion: 12,
+      reviewId: '123',
+      reviewUrl: 'https://github.com/owner/repo/pull/123',
+      headSha: 'abc123',
+      generation: 7,
+      attemptId: 'attempt-merge',
+      createdAt: CREATED_AT,
+      statusText: 'Awaiting review',
+    });
     expect(isWorkflowLifecycleEvent(event)).toBe(true);
     expectRecoveryWakeup(event, { reason: 'review_gate_failure' });
   });

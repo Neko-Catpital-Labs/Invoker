@@ -45,6 +45,25 @@ export interface ReviewGateCiFailureTrigger {
 export interface ReviewGateCiFailureLifecyclePublisher {
   publish(trigger: ReviewGateCiFailureTrigger): void | Promise<void>;
 }
+export interface ReviewGateMergeConflictTrigger {
+  taskId: string;
+  workflowId: string;
+  status?: TaskState['status'];
+  taskStateVersion?: number;
+  reviewId: string;
+  reviewUrl: string;
+  headSha?: string;
+  headRef?: string;
+  branch?: string;
+  selectedAttemptId?: string;
+  generation: number;
+  statusText: string;
+}
+
+export interface ReviewGateMergeConflictLifecyclePublisher {
+  publish(trigger: ReviewGateMergeConflictTrigger): void | Promise<void>;
+}
+
 
 /**
  * Subset of {@link TaskRunner} the review-gate polling family reads. Picked from
@@ -175,17 +194,25 @@ export function updateReviewGateArtifact(
       ) {
         return artifact;
       }
-      const next: ReviewGateArtifact = {
+      return {
         ...artifact,
         status: mappedStatus,
+        checksState: status.checks?.state,
+        ...(status.checks
+          ? { failedChecks: status.checks.failed }
+          : mappedStatus !== 'open'
+            ? { failedChecks: undefined }
+            : {}),
+        ...(status.mergeState !== undefined
+          ? { mergeState: status.mergeState }
+          : mappedStatus !== 'open'
+            ? { mergeState: undefined }
+            : {}),
+        ...(mappedStatus === 'open' ? { rawStatus: status.statusText } : {}),
         ...(status.headSha ? { headSha: status.headSha } : {}),
         ...(status.headRef ? { headRef: status.headRef } : {}),
         updatedAt: new Date().toISOString(),
       };
-      if (mappedStatus === 'open') {
-        return { ...next, rawStatus: status.statusText };
-      }
-      return next;
     }),
   };
 }

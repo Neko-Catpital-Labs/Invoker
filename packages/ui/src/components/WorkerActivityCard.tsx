@@ -42,8 +42,8 @@ function activityExplanation(worker: WorkerStatusEntry, lifecycle: string): stri
   const action = getActiveWorkerAction(worker);
   if (action) return `Active work: ${formatWorkerValue(action.actionType)} · ${formatWorkerValue(action.status)}`;
   if (lifecycle === 'running') return getWorkerDisplayCopy(worker.kind).idleText;
-  if (lifecycle === 'exited') return 'Process exited. Start it to create a fresh runtime.';
-  return 'Process stopped. Start it to listen for work.';
+  if (lifecycle === 'exited') return 'Process exited. Enable it to create a fresh runtime.';
+  return 'Worker disabled. Enable it to listen for work.';
 }
 
 export function WorkerActivityCard({
@@ -96,16 +96,11 @@ export function WorkerActivityCard({
   }, [snapshot, optimisticByKind]);
 
   return (
-    <div data-testid="worker-activity-card">
-      <div className="mb-4">
-        <h3 className="text-lg font-semibold text-foreground">Worker processes ({snapshot?.workers.length ?? 0})</h3>
-        <div className="mt-1 text-sm text-muted-foreground">Process status is separate from queue work. A running process can be idle.</div>
-      </div>
-
+    <div data-testid="worker-activity-card" className="flex min-h-0 flex-col">
       {!snapshot ? (
         <div className="rounded border border-border bg-card/60 px-3 py-2 text-sm text-muted-foreground">Worker status unavailable</div>
       ) : (
-        <div className="space-y-3">
+        <div data-testid="worker-process-list" className="min-h-0 space-y-3">
           {snapshot.workers.map((worker) => {
             const copy = getWorkerDisplayCopy(worker.kind);
             const disabledTitle = readOnly ? 'Read-only window' : worker.controlDisabledReason;
@@ -114,6 +109,7 @@ export function WorkerActivityCard({
             const pending = Boolean(pendingByKind[worker.kind]);
             const isControlDisabled = Boolean(disabledTitle) || pending;
             const selected = selectedWorkerKind === worker.kind;
+            const launchesOnStart = worker.desiredEnabled ?? worker.autoStarts;
             const footer = worker.kind === 'pr-status'
               ? 'No queue task is expected for this worker.'
               : selected
@@ -158,9 +154,9 @@ export function WorkerActivityCard({
                           {formatWorkerValue(worker.policy)}{worker.policyReason ? ` · ${worker.policyReason}` : ''}
                         </span>
                       )}
-                      {worker.autoStarts && (
+                      {launchesOnStart && (
                         <span className="rounded-full border border-border-strong bg-accent/30 px-2 py-0.5 text-[11px] text-muted-foreground">
-                          Auto-starts
+                          Starts on launch
                         </span>
                       )}
                     </div>
@@ -193,7 +189,7 @@ export function WorkerActivityCard({
                       });
                     }}
                   >
-                    {pending ? (showStart ? 'Starting…' : 'Stopping…') : showStart ? 'Start process' : 'Stop process'}
+                    {pending ? (showStart ? 'Enabling…' : 'Disabling…') : showStart ? 'Enable worker' : 'Disable worker'}
                   </button>
                 </div>
               </div>

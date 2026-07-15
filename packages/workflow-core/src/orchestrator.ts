@@ -85,6 +85,7 @@ import {
   enqueueIfNotScheduledImpl,
   autoStartExternallyUnblockedReadyTasksImpl,
   autoStartUnblockedTasksImpl,
+  getPendingLaunchQueueSnapshotImpl,
   getTaskLaunchReadinessImpl,
   areLocalDependenciesSatisfiedImpl,
   getLocalDependencyBlockerImpl,
@@ -181,7 +182,7 @@ function isReplaceableAttemptStatus(status: Attempt['status']): boolean {
 
 function nextWorkflowId(): string {
   workflowCounter += 1;
-  if (process.env.NODE_ENV === 'test') return `wf-test-${workflowCounter}`;
+  if (process.env.INVOKER_TEST_WORKFLOW_IDS === '1') return `wf-test-${workflowCounter}`;
   return `wf-${Date.now()}-${workflowCounter}`;
 }
 
@@ -1381,29 +1382,28 @@ export class Orchestrator {
     this.pruneLaunchDeferrals();
 
     const activeAttempts = this.countActivePersistedAttempts();
-    const readyTasks = this.stateMachine
-      .getReadyTasks()
-      .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
+    const readyTasks = this.getExecutableReadyTasks();
     this.logger.info('[orchestrator] startExecution', {
       ready: readyTasks.length,
       active: activeAttempts,
       maxConcurrency: this.maxConcurrency,
       readyIds: readyTasks.map((task) => task.id),
     });
-    const started: TaskState[] = [];
 
     const launchPollNow = Date.now();
-    for (const task of readyTasks) {
-      // A task deferred for execution-pool capacity waits in line with a
-      // heartbeat instead of being re-dispatched (and re-deferred) every poll.
-      if (this.isLaunchParked(task.id, launchPollNow)) {
-        this.emitLaunchWaitingHeartbeat(task.id, launchPollNow);
-        continue;
-      }
-      this.enqueueIfNotScheduled(task.id);
-    }
+    const readyTaskIds = readyTasks
+      .filter((task) => {
+        // A task deferred for execution-pool capacity waits in line with a
+        // heartbeat instead of being re-dispatched (and re-deferred) every poll.
+        if (this.isLaunchParked(task.id, launchPollNow)) {
+          this.emitLaunchWaitingHeartbeat(task.id, launchPollNow);
+          return false;
+        }
+        return true;
+      })
+      .map((task) => task.id);
 
-    return this.drainScheduler();
+    return this.autoStartReadyTasks(readyTaskIds);
   }
 
   /**
@@ -2961,6 +2961,23 @@ export class Orchestrator {
     return this.stateMachine.getReadyTasks();
   }
 
+  getExecutableReadyTasks(): TaskState[] {
+    const readyTasks = this.stateMachine
+      .getReadyTasks()
+      .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
+    const readyTasksById = new Map(readyTasks.map((task) => [task.id, task]));
+    return getPendingLaunchQueueSnapshotImpl(
+      this as unknown as SchedulerDomainHost,
+      readyTasks.map((task) => ({
+        taskId: task.id,
+        attemptId: task.execution.selectedAttemptId,
+        priority: this.loadAttemptById(task.execution.selectedAttemptId)?.queuePriority ?? 0,
+      })),
+    )
+      .map((job) => readyTasksById.get(job.taskId))
+      .filter((task): task is TaskState => task !== undefined);
+  }
+
   /**
    * Find the terminal merge node for a given workflow.
    */
@@ -3123,24 +3140,31 @@ export class Orchestrator {
       }
       return workflowBlockerCache.get(workflowId) !== undefined;
     };
-    const queuedTasks = this.stateMachine
-      .getReadyTasks()
-      .filter((task) => task.status === 'pending')
-      .filter((task) => !activeTaskIds.has(task.id))
-      .filter((task) => !isExternallyBlocked(task))
-      .map((task) => {
-        const attempt = task.execution.selectedAttemptId
-          ? this.loadAttemptById(task.execution.selectedAttemptId)
-          : undefined;
+    const queuedJobs = getPendingLaunchQueueSnapshotImpl(
+      this as unknown as SchedulerDomainHost,
+      this.stateMachine
+        .getReadyTasks()
+        .filter((task) => task.status === 'pending')
+        .filter((task) => !activeTaskIds.has(task.id))
+        .filter((task) => !isExternallyBlocked(task))
+        .map((task) => ({
+          taskId: task.id,
+          attemptId: task.execution.selectedAttemptId,
+          priority: this.loadAttemptById(task.execution.selectedAttemptId)?.queuePriority ?? 0,
+        })),
+    );
+    const queuedTasks = queuedJobs
+      .map((job) => {
+        const task = this.stateGetTask(job.taskId);
+        if (!task || task.status !== 'pending') return undefined;
+        if (activeTaskIds.has(task.id) || isExternallyBlocked(task)) return undefined;
         return {
           taskId: task.id,
-          priority: attempt?.queuePriority ?? 0,
+          priority: job.priority,
           description: task.description,
-          createdAt: attempt?.createdAt?.getTime() ?? task.createdAt.getTime(),
         };
       })
-      .sort((a, b) => (b.priority - a.priority) || (a.createdAt - b.createdAt));
-
+      .filter((task): task is { taskId: string; priority: number; description: string } => task !== undefined);
     const activeExecutionCount = activeAttempts.filter(({ task }) =>
       task.status === 'running' || task.status === 'fixing_with_ai',
     ).length;

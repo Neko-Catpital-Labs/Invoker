@@ -115,14 +115,6 @@ function setupSpawnMock(): {
       return gitProc as any;
     }
 
-    // Auto-succeed pnpm install (worktree provisioning)
-    const argsArr = args as string[] | undefined;
-    if (cmd === '/bin/bash' && argsArr?.[1]?.includes('pnpm install')) {
-      const installProc = createMockProcess();
-      Promise.resolve().then(() => installProc.emit('close', 0, null));
-      return installProc as any;
-    }
-
     // For non-git commands (task execution), return the task process
     if (!taskProcessReturned) {
       taskProcessReturned = true;

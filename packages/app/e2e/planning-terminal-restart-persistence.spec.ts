@@ -46,6 +46,7 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
     env: {
       ...process.env,
       NODE_ENV: 'test',
+          INVOKER_TEST_WORKFLOW_IDS: '1',
       INVOKER_USER_DATA_DIR: paths.userDataDir,
       INVOKER_DISABLE_SLACK: '1',
       TZ: 'UTC',
@@ -54,6 +55,7 @@ async function launchApp(paths: { dbDir: string; userDataDir: string; ipcSocketP
       INVOKER_IPC_SOCKET: paths.ipcSocketPath,
       INVOKER_ALLOW_DELETE_ALL: '1',
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
+      INVOKER_EMBEDDED_TERMINAL_BACKEND: 'bash',
       INVOKER_REPO_CONFIG_PATH: paths.configPath,
       INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:
         process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '10000',
@@ -152,6 +154,85 @@ base.describe('Planning Terminal restart persistence', () => {
       await page.screenshot({
         path: path.join(process.cwd(), 'visual-proof-planning-terminal-restart.png'),
         fullPage: true,
+      });
+    } finally {
+      if (app) await closeApp(app).catch(() => undefined);
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  base('restores a tmux-mode planning terminal after relaunch', async () => {
+    const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-planning-tmux-restart-'));
+    const configPath = path.join(testDir, 'e2e-config.json');
+    const userDataDir = path.join(testDir, 'electron-user-data');
+    const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
+    const planYaml = yamlStringify(PLANNING_RESTART_PLAN);
+    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0, disableAutoRunOnStartup: true }), 'utf8');
+
+    let app: ElectronApplication | undefined;
+    let page: Page | undefined;
+    try {
+      ({ app, page } = await launchApp({ dbDir: testDir, userDataDir, ipcSocketPath, configPath }));
+      await page.evaluate(async () => {
+        await window.invoker.clear();
+        await window.invoker.deleteAllWorkflows();
+      });
+      await page.evaluate(async ({ yaml }) => {
+        await window.invoker.setTestPlanningChatResponse({
+          planYaml: yaml,
+          planName: 'Planning Terminal Restart',
+          reply: 'I drafted the restart plan.',
+        });
+      }, { yaml: planYaml });
+
+      await openPlanningTerminal(page);
+      await submitPlanningText(page, 'Add README');
+      await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('draft ready', { timeout: 10000 });
+      const savedSessionId = await page.evaluate(async () => {
+        const list = await window.invoker.planningChatList();
+        return list.sessions[0]?.id;
+      });
+      expect(savedSessionId).toBeTruthy();
+
+      await page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: 'tmux' }).click();
+      await expect(page.getByTestId('invoker-terminal-tmux-pane')).toBeVisible({ timeout: 10000 });
+      const firstTerminalSessionId = await page.getByTestId('invoker-terminal-tmux-pane').getAttribute('data-session-id');
+      expect(firstTerminalSessionId).toBeTruthy();
+      await expect.poll(async () => page!.evaluate(async (sessionId) => {
+        const list = await window.invoker.planningChatList();
+        const session = list.sessions.find((candidate) => candidate.id === sessionId);
+        return {
+          mode: session?.terminalMode,
+          terminalSessionId: session?.terminalSessionId,
+        };
+      }, savedSessionId)).toEqual({
+        mode: 'tmux',
+        terminalSessionId: firstTerminalSessionId,
+      });
+
+      await closeApp(app);
+      app = undefined;
+      page = undefined;
+      await delay(1500);
+
+      ({ app, page } = await launchApp({ dbDir: testDir, userDataDir, ipcSocketPath, configPath }));
+      await page.getByTestId('sidebar-planning').click();
+
+      await expect(page.getByText('Planning tmux')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('invoker-terminal-tmux-pane')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', firstTerminalSessionId ?? '');
+      await expect.poll(async () => page!.evaluate(async (sessionId) => {
+        const list = await window.invoker.planningChatList();
+        const session = list.sessions.find((candidate) => candidate.id === sessionId);
+        return {
+          mode: session?.terminalMode,
+          terminalSessionId: session?.terminalSessionId,
+          terminalStatus: session?.terminalStatus,
+        };
+      }, savedSessionId)).toEqual({
+        mode: 'tmux',
+        terminalSessionId: firstTerminalSessionId,
+        terminalStatus: 'running',
       });
     } finally {
       if (app) await closeApp(app).catch(() => undefined);

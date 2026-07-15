@@ -34,6 +34,36 @@ describe('GitHubMergeGateProvider', () => {
     process.env = originalEnv;
   });
 
+  describe('updateReviewBody', () => {
+    it('updates the PR body through a temporary body file', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await provider.updateReviewBody({
+        identifier: '42',
+        cwd: '/tmp/repo',
+        body: '## Summary\n\nUpdated body',
+      });
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr', 'edit', '42',
+          '--repo', 'owner/repo',
+          '--body-file', expect.stringContaining('body.md'),
+        ],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
+  });
+
   describe('createReview', () => {
     it('targets origin repository when creating merge-gate PRs', async () => {
       const { spawn } = await import('node:child_process');
@@ -573,6 +603,7 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.headSha).toBe('abc123');
       expect(result.headRef).toBe('feature/red-ci');
       expect(result.mergeState).toBe('clean');
+      expect(result.hasMergeConflict).toBe(false);
       expect(result.checks).toEqual({
         state: 'failure',
         failed: [
@@ -590,6 +621,58 @@ describe('GitHubMergeGateProvider', () => {
           },
         ],
       });
+    });
+
+    it('marks only DIRTY merge state as a merge conflict signal', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/5',
+            headRefOid: 'dirty123',
+            headRefName: 'feature/conflict',
+            mergeStateStatus: 'DIRTY',
+            statusCheckRollup: [],
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '5', cwd: '/tmp/repo' });
+
+      expect(result.mergeState).toBe('dirty');
+      expect(result.hasMergeConflict).toBe(true);
+    });
+
+    it('does not treat BEHIND merge state as a merge conflict signal', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/6',
+            headRefOid: 'behind123',
+            headRefName: 'feature/behind',
+            mergeStateStatus: 'BEHIND',
+            statusCheckRollup: [],
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '6', cwd: '/tmp/repo' });
+
+      expect(result.mergeState).toBe('dirty');
+      expect(result.hasMergeConflict).toBe(false);
     });
   });
 });

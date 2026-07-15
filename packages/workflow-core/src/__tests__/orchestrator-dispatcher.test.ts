@@ -598,6 +598,45 @@ describe('Orchestrator launch claims', () => {
     expect(orchestrator.getTask(downstreamId)?.status).toBe('pending');
     expect(persistence.launchDispatchRows.some((row) => row.taskId === downstreamId)).toBe(false);
   });
+  it('rebuilds the pending queue so runnable tasks stay ahead of dependency-blocked stale jobs', () => {
+    const { orchestrator, persistence } = makeOrchestrator({
+      deferRunningUntilLaunch: true,
+      enqueueLaunchDispatchEnabled: true,
+      maxConcurrency: 1,
+    });
+    orchestrator.loadPlan({
+      name: 'pending-queue-rebuild',
+      onFinish: 'none',
+      tasks: [
+        { id: 'ready-root', description: 'ready root', command: 'echo ready' },
+        { id: 'stale-upstream', description: 'stale upstream', command: 'echo stale' },
+        { id: 'stale-blocked', description: 'stale blocked', command: 'echo blocked', dependencies: ['stale-upstream'] },
+      ],
+    });
+    const readyRootId = taskIdBySuffix(orchestrator, 'ready-root');
+    const staleUpstreamId = taskIdBySuffix(orchestrator, 'stale-upstream');
+    const staleBlockedId = taskIdBySuffix(orchestrator, 'stale-blocked');
+    persistence.updateTask(staleUpstreamId, {
+      status: 'failed',
+      execution: {
+        exitCode: 1,
+        error: 'boom',
+        completedAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    });
+    orchestrator.syncAllFromDb();
+    (orchestrator as any).scheduler.enqueue({ taskId: staleBlockedId, priority: 0 });
+    (orchestrator as any).enqueueIfNotScheduled(readyRootId);
+    expect((orchestrator as any).scheduler.getQueuedJobs().map((job: { taskId: string }) => job.taskId)).toEqual([
+      readyRootId,
+      staleBlockedId,
+    ]);
+    const started = (orchestrator as any).drainScheduler() as TaskState[];
+    expect(started).toHaveLength(1);
+    expect(started[0]?.id).toBe(readyRootId);
+    expect(orchestrator.getTask(staleBlockedId)?.status).toBe('pending');
+    expect(persistence.launchDispatchRows.map((row) => row.taskId)).toEqual([readyRootId]);
+  });
 
   it('ignores responses for a selected attempt row that has been superseded', () => {
     const { orchestrator, persistence } = makeOrchestrator();

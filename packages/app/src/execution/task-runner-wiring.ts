@@ -68,11 +68,15 @@ export function wireTaskRunnerApproveHook(deps: Pick<
   'orchestrator' | 'persistence' | 'getTaskRunner'
 >): void {
   deps.orchestrator.setBeforeApproveHook(async (task: TaskState) => {
-    if (task.config.isMergeNode && task.config.workflowId && task.execution.pendingFixError === undefined) {
-      const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
-      if (workflow?.mergeMode === 'external_review') return;
-      await requireWiredTaskRunner(deps.getTaskRunner).approveMerge(task.config.workflowId);
-    }
+    if (!task.config.isMergeNode || !task.config.workflowId) return;
+    if (task.execution.pendingFixError !== undefined) return;
+
+    const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
+    if (!workflow) return;
+    if (workflow.onFinish !== 'merge') return;
+    if (workflow.mergeMode === 'external_review') return;
+
+    await requireWiredTaskRunner(deps.getTaskRunner).approveMerge(task.config.workflowId);
   });
 }
 

@@ -5,7 +5,9 @@ import {
   CODERABBIT_ADDRESS_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
+  PR_CI_FAILURE_SCAN_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
+  PR_SUMMARY_REFRESH_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRuntime,
@@ -50,12 +52,29 @@ function runtime(kind: string): TestWorkerRuntime {
   };
 }
 
-function persistence() {
+function persistence(initialDesired: Record<string, boolean> = {}) {
+  const desired = new Map(Object.entries(initialDesired));
   return {
     listWorkerActions: vi.fn(() => []),
     listWorkflows: vi.fn(() => []),
     loadTasks: vi.fn(() => []),
     getEvents: vi.fn(() => []),
+    getEventsByTypes: vi.fn(() => []),
+    countEventsByTypes: vi.fn(() => []),
+    getWorkerDesiredState: vi.fn((workerKind: string) => (
+      desired.has(workerKind)
+        ? { workerKind, desiredEnabled: desired.get(workerKind) === true, updatedAt: '2026-01-01T00:00:00.000Z' }
+        : undefined
+    )),
+    setWorkerDesiredState: vi.fn((workerKind: string, desiredEnabled: boolean) => {
+      desired.set(workerKind, desiredEnabled);
+      return { workerKind, desiredEnabled, updatedAt: '2026-01-01T00:00:00.000Z' };
+    }),
+    listWorkerDesiredStates: vi.fn(() => Array.from(desired.entries()).map(([workerKind, desiredEnabled]) => ({
+      workerKind,
+      desiredEnabled,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }))),
   };
 }
 
@@ -72,9 +91,13 @@ function deps(): WorkerRuntimeDependencies {
   } as WorkerRuntimeDependencies;
 }
 
-function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKER_KINDS) {
+function controller(
+  autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKER_KINDS,
+  desiredState: Record<string, boolean> = {},
+) {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
   const runtimes = new Map<string, TestWorkerRuntime[]>();
+  const store = persistence(desiredState);
   const register = (kind: string, note: string, runtimeKind = kind) => {
     registry.register({
       kind,
@@ -90,40 +113,82 @@ function controller(autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKE
   };
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
+  register(PR_SUMMARY_REFRESH_WORKER_KIND, 'Refreshes pull request summaries.');
   register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
   register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
   register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
+  register(PR_CI_FAILURE_SCAN_WORKER_KIND, 'Scans mapped PRs for failing CI.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
   register('external-preview', 'External preview worker.');
 
   return {
     runtimes,
+    persistence: store,
     controller: createWorkerRuntimeController({
       registry,
       deps: deps(),
       autoStartKinds,
-      persistence: persistence() as never,
+      persistence: store as never,
       canControl: () => true,
     }),
   };
 }
 
 describe('createWorkerRuntimeController', () => {
-  it('auto-start starts every built-in owner worker except autofix and workflow-resume', () => {
+  it('auto-start starts every built-in owner worker except workflow-resume', () => {
     const setup = controller();
 
     setup.controller.startAutoStartedWorkers();
     const snapshot = setup.controller.snapshot();
 
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_SUMMARY_REFRESH_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_CI_FAILURE_SCAN_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.startable).toBe(true);
     expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
+  });
+
+  it('restores saved desired worker states over built-in launch defaults', () => {
+    const setup = controller(AUTO_STARTED_OWNER_WORKER_KINDS, {
+      [PR_STATUS_WORKER_KIND]: false,
+      [WORKFLOW_RESUME_WORKER_KIND]: true,
+    });
+
+    setup.controller.startAutoStartedWorkers();
+    const snapshot = setup.controller.snapshot();
+
+    expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)).toMatchObject({
+      lifecycle: 'stopped',
+      desiredEnabled: false,
+      autoStarts: false,
+    });
+    expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)).toMatchObject({
+      lifecycle: 'running',
+      desiredEnabled: true,
+      autoStarts: true,
+    });
+    expect(setup.persistence.setWorkerDesiredState).not.toHaveBeenCalled();
+  });
+
+  it('persists manual worker enable and disable state', async () => {
+    const setup = controller();
+
+    setup.controller.start(WORKFLOW_RESUME_WORKER_KIND);
+    await setup.controller.stop(WORKFLOW_RESUME_WORKER_KIND);
+
+    expect(setup.persistence.setWorkerDesiredState).toHaveBeenNthCalledWith(1, WORKFLOW_RESUME_WORKER_KIND, true);
+    expect(setup.persistence.setWorkerDesiredState).toHaveBeenNthCalledWith(2, WORKFLOW_RESUME_WORKER_KIND, false);
+    expect(setup.controller.snapshot().workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)).toMatchObject({
+      lifecycle: 'stopped',
+      desiredEnabled: false,
+      autoStarts: false,
+    });
   });
 
   it('auto-starts e2e-autofix only when its kind is in autoStartKinds', () => {
@@ -183,6 +248,7 @@ describe('createWorkerRuntimeController', () => {
       CI_FAILURE_WORKER_KIND,
       CODERABBIT_ADDRESS_WORKER_KIND,
       PR_CONFLICT_REBASE_WORKER_KIND,
+      PR_CI_FAILURE_SCAN_WORKER_KIND,
     ] as const) {
       expect(setup.controller.start(kind)).toMatchObject({
         kind,

@@ -59,28 +59,30 @@ describe('main-process read hot-path cost guards', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'invoker-hotpath-'));
     adapter = await SQLiteAdapter.create(join(tmpDir, 'invoker.db'), { ownerCapability: true });
 
-    adapter.saveWorkflow(makeWorkflow('wf-fat', 'Fat events'));
-
     const taskCount = 40;
     const eventsPerTask = 250; // 10k events total
-    for (let t = 0; t < taskCount; t += 1) {
-      const taskId = `wf-fat/t${t}`;
-      adapter.saveTask('wf-fat', makeTask(taskId));
-      for (let e = 0; e < eventsPerTask; e += 1) {
-        const action = e % 4 === 0 ? 'wakeup'
-          : e % 4 === 1 ? 'scan'
-            : e % 4 === 2 ? 'submit'
-              : 'skip';
-        adapter.logEvent(
-          taskId,
-          recoveryWorkerEventType(action),
-          buildRecoveryWorkerAuditPayload(action, `${action}-phase`, {
-            workflowId: 'wf-fat',
-            reason: action === 'skip' ? 'budget' : undefined,
-          }),
-        );
+    adapter.runInTransaction(() => {
+      adapter.saveWorkflow(makeWorkflow('wf-fat', 'Fat events'));
+
+      for (let t = 0; t < taskCount; t += 1) {
+        const taskId = `wf-fat/t${t}`;
+        adapter.saveTask('wf-fat', makeTask(taskId));
+        for (let e = 0; e < eventsPerTask; e += 1) {
+          const action = e % 4 === 0 ? 'wakeup'
+            : e % 4 === 1 ? 'scan'
+              : e % 4 === 2 ? 'submit'
+                : 'skip';
+          adapter.logEvent(
+            taskId,
+            recoveryWorkerEventType(action),
+            buildRecoveryWorkerAuditPayload(action, `${action}-phase`, {
+              workflowId: 'wf-fat',
+              reason: action === 'skip' ? 'budget' : undefined,
+            }),
+          );
+        }
       }
-    }
+    });
 
     const getEvents = vi.spyOn(adapter, 'getEvents');
     const started = Date.now();

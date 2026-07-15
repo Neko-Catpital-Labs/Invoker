@@ -30,7 +30,7 @@ import type {
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
 import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
@@ -47,6 +47,7 @@ import type {
   WorkerActionListFilters,
   WorkerActionRecord,
   WorkerActionWrite,
+  WorkerDesiredStateRecord,
   TerminalSessionPatch,
   TerminalSessionRecord,
   InAppPlanningSessionPatch,
@@ -420,6 +421,12 @@ type InAppPlanningSessionRow = {
   draft_plan_summary_json?: unknown;
   submitted_workflow_id?: unknown;
   submitted_plan_name?: unknown;
+  terminal_mode?: unknown;
+  terminal_session_id?: unknown;
+  terminal_status?: unknown;
+  terminal_exit_code?: unknown;
+  terminal_output_snapshot?: unknown;
+  terminal_updated_at?: unknown;
   pending_response?: unknown;
   created_at?: unknown;
   updated_at?: unknown;
@@ -449,6 +456,14 @@ function isInAppPlanningSessionStatus(value: unknown): value is InAppPlanningSes
     || value === 'waiting_for_answer'
     || value === 'draft_ready'
     || value === 'submitted';
+}
+
+function isPlanningTerminalMode(value: unknown): value is PlanningTerminalMode {
+  return value === 'chat' || value === 'tmux';
+}
+
+function isPlanningTerminalStatus(value: unknown): value is 'running' | 'exited' | undefined {
+  return value === undefined || value === null || value === 'running' || value === 'exited';
 }
 
 function isInAppPlanningMessageRole(value: unknown): value is InAppPlanningChatLine['role'] {
@@ -1075,10 +1090,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
           draft_plan_summary_json,
           submitted_workflow_id,
           submitted_plan_name,
+          terminal_mode,
+          terminal_session_id,
+          terminal_status,
+          terminal_exit_code,
+          terminal_output_snapshot,
+          terminal_updated_at,
           pending_response,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           title = excluded.title,
           preset_key = excluded.preset_key,
@@ -1086,6 +1107,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
           draft_plan_summary_json = excluded.draft_plan_summary_json,
           submitted_workflow_id = excluded.submitted_workflow_id,
           submitted_plan_name = excluded.submitted_plan_name,
+          terminal_mode = excluded.terminal_mode,
+          terminal_session_id = excluded.terminal_session_id,
+          terminal_status = excluded.terminal_status,
+          terminal_exit_code = excluded.terminal_exit_code,
+          terminal_output_snapshot = excluded.terminal_output_snapshot,
+          terminal_updated_at = excluded.terminal_updated_at,
           pending_response = excluded.pending_response,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at`,
@@ -1097,6 +1124,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
           record.submittedWorkflowId ?? null,
           record.submittedPlanName ?? null,
+          record.terminalMode ?? 'chat',
+          record.terminalSessionId ?? null,
+          record.terminalStatus ?? null,
+          record.terminalExitCode ?? null,
+          record.terminalOutputSnapshot ?? '',
+          record.terminalUpdatedAt ?? null,
           record.pendingResponse ? 1 : 0,
           record.createdAt,
           record.updatedAt,
@@ -1147,6 +1180,30 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (Object.hasOwn(patch, 'submittedPlanName')) {
         setClauses.push('submitted_plan_name = ?');
         values.push(patch.submittedPlanName ?? null);
+      }
+      if (Object.hasOwn(patch, 'terminalMode')) {
+        setClauses.push('terminal_mode = ?');
+        values.push(patch.terminalMode ?? 'chat');
+      }
+      if (Object.hasOwn(patch, 'terminalSessionId')) {
+        setClauses.push('terminal_session_id = ?');
+        values.push(patch.terminalSessionId ?? null);
+      }
+      if (Object.hasOwn(patch, 'terminalStatus')) {
+        setClauses.push('terminal_status = ?');
+        values.push(patch.terminalStatus ?? null);
+      }
+      if (Object.hasOwn(patch, 'terminalExitCode')) {
+        setClauses.push('terminal_exit_code = ?');
+        values.push(patch.terminalExitCode ?? null);
+      }
+      if (Object.hasOwn(patch, 'terminalOutputSnapshot')) {
+        setClauses.push('terminal_output_snapshot = ?');
+        values.push(patch.terminalOutputSnapshot ?? '');
+      }
+      if (Object.hasOwn(patch, 'terminalUpdatedAt')) {
+        setClauses.push('terminal_updated_at = ?');
+        values.push(patch.terminalUpdatedAt ?? null);
       }
       if (Object.hasOwn(patch, 'pendingResponse')) {
         setClauses.push('pending_response = ?');
@@ -1662,6 +1719,38 @@ export class SQLiteAdapter implements PersistenceAdapter {
       params,
     );
     return rows.map((row) => this.rowToWorkerAction(row));
+  }
+
+  getWorkerDesiredState(workerKind: string): WorkerDesiredStateRecord | undefined {
+    const row = this.queryOne(
+      'SELECT worker_kind, desired_enabled, updated_at FROM worker_desired_states WHERE worker_kind = ?',
+      [workerKind],
+    );
+    return row ? this.rowToWorkerDesiredState(row) : undefined;
+  }
+
+  setWorkerDesiredState(workerKind: string, desiredEnabled: boolean): WorkerDesiredStateRecord {
+    const updatedAt = new Date().toISOString();
+    this.execRun(
+      `INSERT INTO worker_desired_states (worker_kind, desired_enabled, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(worker_kind) DO UPDATE SET
+         desired_enabled = excluded.desired_enabled,
+         updated_at = excluded.updated_at`,
+      [workerKind, desiredEnabled ? 1 : 0, updatedAt],
+    );
+    const saved = this.getWorkerDesiredState(workerKind);
+    if (!saved) {
+      throw new Error(`Failed to persist worker desired state for ${workerKind}`);
+    }
+    return saved;
+  }
+
+  listWorkerDesiredStates(): WorkerDesiredStateRecord[] {
+    const rows = this.queryAll(
+      'SELECT worker_kind, desired_enabled, updated_at FROM worker_desired_states ORDER BY worker_kind ASC',
+    );
+    return rows.map((row) => this.rowToWorkerDesiredState(row));
   }
 
   // ── Queries ─────────────────────────────────────────
@@ -2247,6 +2336,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (!id || !title || !presetKey || !createdAt || !updatedAt || !isInAppPlanningSessionStatus(row.status)) {
         return undefined;
       }
+      const terminalMode = row.terminal_mode === undefined || row.terminal_mode === null
+        ? 'chat'
+        : isPlanningTerminalMode(row.terminal_mode)
+          ? row.terminal_mode
+          : undefined;
+      if (!terminalMode) {
+        return undefined;
+      }
+      if (!isPlanningTerminalStatus(row.terminal_status)) {
+        return undefined;
+      }
       if (
         row.status === 'submitted'
         && (
@@ -2291,6 +2391,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ...(draftPlanSummary ? { draftPlanSummary } : {}),
         ...(typeof row.submitted_workflow_id === 'string' ? { submittedWorkflowId: row.submitted_workflow_id } : {}),
         ...(typeof row.submitted_plan_name === 'string' ? { submittedPlanName: row.submitted_plan_name } : {}),
+        terminalMode,
+        ...(typeof row.terminal_session_id === 'string' ? { terminalSessionId: row.terminal_session_id } : {}),
+        ...(row.terminal_status ? { terminalStatus: row.terminal_status } : {}),
+        ...(typeof row.terminal_exit_code === 'number' ? { terminalExitCode: row.terminal_exit_code } : {}),
+        terminalOutputSnapshot: typeof row.terminal_output_snapshot === 'string' ? row.terminal_output_snapshot : '',
+        ...(typeof row.terminal_updated_at === 'string' ? { terminalUpdatedAt: row.terminal_updated_at } : {}),
         pendingResponse: row.pending_response === 1,
         createdAt,
         updatedAt,
@@ -3119,6 +3225,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private rowToWorkerAction(row: Record<string, unknown>): WorkerActionRecord {
     return mapRowToWorkerAction(row);
+  }
+
+  private rowToWorkerDesiredState(row: Record<string, unknown>): WorkerDesiredStateRecord {
+    return {
+      workerKind: String(row.worker_kind),
+      desiredEnabled: Number(row.desired_enabled) !== 0,
+      updatedAt: String(row.updated_at),
+    };
   }
 
   private requeueWorkflowMutationLease(workflowId: string): void {

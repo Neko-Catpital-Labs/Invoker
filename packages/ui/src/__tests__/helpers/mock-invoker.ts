@@ -18,7 +18,7 @@ import type {
   TaskConfig,
   TaskExecution,
 } from '../../types.js';
-import type { ActionGraphResponse, InAppPlanningSessionSummary, RuntimeStatus, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphResponse, InAppPlanningSessionSummary, InAppPlanningStreamEvent, RuntimeStatus, StartReadyResult, TerminalOutputEvent, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMutationAcceptedResult, WorkflowMutationFailedEvent } from '@invoker/contracts';
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
@@ -37,6 +37,8 @@ export interface MockInvoker {
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
   /** Fire an embedded terminal output event to subscribers. */
   fireTerminalOutput: (event: TerminalOutputEvent) => void;
+  /** Fire a planning chat raw stream event to subscribers. */
+  firePlanningChatStream: (event: InAppPlanningStreamEvent) => void;
   /** Fire a workflow-mutation-failed event to subscribers. */
   fireWorkflowMutationFailed: (event: WorkflowMutationFailedEvent) => void;
   /** Fire a runtime-status event to subscribers. */
@@ -93,6 +95,7 @@ export function createMockInvoker(
   const eventsByTask = new Map<string, TaskEvent[]>();
   let graphEventCallback: ((event: TaskGraphEvent) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
+  const planningChatStreamCallbacks = new Set<(event: InAppPlanningStreamEvent) => void>();
   const terminalOutputCallbacks = new Set<(event: TerminalOutputEvent) => void>();
   const workflowMutationFailedCallbacks = new Set<(event: WorkflowMutationFailedEvent) => void>();
   const runtimeStatusCallbacks = new Set<(status: RuntimeStatus) => void>();
@@ -192,6 +195,11 @@ export function createMockInvoker(
       workflowId: 'wf-1',
     })),
     planningChatReset: vi.fn(async () => ({ ok: true })),
+    onPlanningChatStream: vi.fn((cb: (event: InAppPlanningStreamEvent) => void) => {
+      planningChatStreamCallbacks.add(cb);
+      return () => { planningChatStreamCallbacks.delete(cb); };
+    }),
+    planningChatSetTerminalMode: vi.fn(async () => ({ ok: true })),
     planningTerminalOpen: vi.fn(async (planningSessionId: string) => ({
       opened: true,
       session: {
@@ -299,6 +307,8 @@ export function createMockInvoker(
     runInvokerCliSetup: vi.fn(async () => ({ ok: true, steps: [{ id: 'tools', name: 'Run setup', ok: true, output: 'setup ok' }] })),
     replaceTask: vi.fn(async () => accepted('invoker:replace-task')),
     getActivityLogs: vi.fn(async () => []),
+    reportUiPerf: vi.fn(async () => {}),
+    getUiPerfStats: vi.fn(async () => ({})),
     getEvents: vi.fn(async (taskId: string, options?: { limit: number; sortBy?: 'asc' | 'desc'; beforeId?: number }) => {
       const events = [...(eventsByTask.get(taskId) ?? [])];
       const sorted = options?.sortBy === 'desc'
@@ -340,6 +350,22 @@ export function createMockInvoker(
       runtimeStatusCallbacks.add(cb);
       return () => { runtimeStatusCallbacks.delete(cb); };
     }),
+    startReady: vi.fn(async () => ({
+      preview: {
+        readyTaskIds: [],
+        recoverableTaskIds: [],
+        failedWorkflowIds: [],
+        skipped: {
+          awaitingApproval: 0,
+          reviewReady: 0,
+          blocked: 0,
+          failedTasks: 0,
+        },
+      },
+      started: [],
+      recreatedWorkflowIds: [],
+      dryRun: false,
+    } satisfies StartReadyResult)),
     resumeWorkflow: vi.fn(async () => null),
     listWorkflows: vi.fn(async () => workflowSnapshot),
     loadWorkflow: vi.fn(async () => ({ workflow: {}, tasks: [] })),
@@ -441,6 +467,12 @@ export function createMockInvoker(
     }
   }
 
+  function firePlanningChatStream(event: InAppPlanningStreamEvent) {
+    for (const callback of planningChatStreamCallbacks) {
+      callback(event);
+    }
+  }
+
   function fireWorkflowMutationFailed(event: WorkflowMutationFailedEvent) {
     for (const callback of workflowMutationFailedCallbacks) {
       callback(event);
@@ -466,6 +498,7 @@ export function createMockInvoker(
   function cleanup() {
     delete (window as unknown as { invoker?: InvokerAPI }).invoker;
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
+    planningChatStreamCallbacks.clear();
     terminalOutputCallbacks.clear();
     workflowMutationFailedCallbacks.clear();
     runtimeStatusCallbacks.clear();
@@ -485,6 +518,7 @@ export function createMockInvoker(
     fireGraphEvent,
     fireWorkflowsChanged,
     fireTerminalOutput,
+    firePlanningChatStream,
     fireWorkflowMutationFailed,
     fireRuntimeStatus,
     install,

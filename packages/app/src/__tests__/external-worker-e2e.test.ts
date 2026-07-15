@@ -5,12 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 import {
   createWorkerRegistry,
-  type ExternalWorkerRuntime,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { registerExternalWorkersFromConfig } from '../external-worker-loader.js';
+import { createWorkerRuntimeController } from '../worker-control.js';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/sample-external-worker.mjs', import.meta.url));
 
@@ -34,6 +34,15 @@ const deps: WorkerRuntimeDependencies = {
   },
 };
 
+const persistence = {
+  listWorkerActions: () => [],
+  listWorkflows: () => [],
+  loadTasks: () => [],
+  getEvents: () => [],
+  getEventsByTypes: () => [],
+  countEventsByTypes: () => [],
+};
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -47,13 +56,12 @@ async function waitFor(condition: () => boolean, message: string): Promise<void>
   throw new Error(message);
 }
 
-function isExternalWorkerRuntime(worker: unknown): worker is ExternalWorkerRuntime {
-  return Boolean(
-    worker
-      && typeof worker === 'object'
-      && 'finished' in worker
-      && (worker as { finished?: unknown }).finished instanceof Promise,
-  );
+function readMarker(markerPath: string): { pid?: number; started?: boolean; stopped?: boolean } {
+  return JSON.parse(readFileSync(markerPath, 'utf8')) as {
+    pid?: number;
+    started?: boolean;
+    stopped?: boolean;
+  };
 }
 
 describe('external worker e2e', () => {
@@ -79,31 +87,43 @@ describe('external worker e2e', () => {
           cwd: scratchDir,
         },
       }],
-      createWorkerRegistry(),
+      createWorkerRegistry<WorkerRuntimeDependencies>(),
     );
 
     const definition = registry.get('sample-external');
     expect(definition).toBeDefined();
     expect(registry.list().map((worker) => worker.kind)).toEqual(['sample-external']);
 
-    const worker = definition!.factory(deps);
-    expect(isExternalWorkerRuntime(worker)).toBe(true);
-    expect(worker.identity.kind).toBe('sample-external');
-    expect(worker.isRunning()).toBe(false);
+    const controller = createWorkerRuntimeController({
+      registry,
+      deps,
+      autoStartKinds: [],
+      persistence,
+      canControl: () => true,
+    });
+
+    expect(controller.snapshot().workers.find((worker) => worker.kind === 'sample-external')?.lifecycle)
+      .toBe('stopped');
 
     try {
-      worker.start();
-      await waitFor(() => existsSync(markerPath), 'sample external worker did not launch');
+      const started = controller.start('sample-external');
+      expect(started.lifecycle).toBe('running');
 
-      expect(worker.isRunning()).toBe(true);
-      expect(JSON.parse(readFileSync(markerPath, 'utf8'))).toEqual(
-        expect.objectContaining({ started: true }),
-      );
+      await waitFor(() => existsSync(markerPath), 'sample external worker did not launch');
+      const launchMarker = readMarker(markerPath);
+      expect(launchMarker).toEqual(expect.objectContaining({ started: true, stopped: false }));
+      expect(typeof launchMarker.pid).toBe('number');
+
+      expect(controller.snapshot().workers.find((worker) => worker.kind === 'sample-external')?.lifecycle)
+        .toBe('running');
     } finally {
-      await worker.stop();
-      await worker.finished;
+      const stopped = await controller.stop('sample-external');
+      expect(stopped.lifecycle).toBe('stopped');
     }
 
-    expect(worker.isRunning()).toBe(false);
+    await waitFor(
+      () => existsSync(markerPath) && readMarker(markerPath).stopped === true,
+      'sample external worker did not stop cleanly',
+    );
   });
 });

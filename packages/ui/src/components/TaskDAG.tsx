@@ -17,7 +17,6 @@ import {
   type NodeChange,
   Background,
   Controls,
-  Panel,
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -170,14 +169,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const onInitHandler = useCallback(() => {
     initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
-  }, [fitView]);
-
-  // Manual "snap to graph" recovery. The auto-fit watchdog only runs in the
-  // browser surface, so on desktop a graph that has been panned/zoomed off
-  // screen (a blank/black canvas) has no way back. This button re-fits every
-  // node into view on demand, independent of the camera-lock preference.
-  const handleSnapToGraph = useCallback(() => {
-    fitView({ padding: 0.2, duration: 300 });
   }, [fitView]);
 
   // Cancel a pending first-fit frame on unmount so it never fires against a
@@ -618,7 +609,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   }, [nodes.length, fitView]);
 
   const onNodeClick = useCallback(
-    (_event: React.MouseEvent, node: Node) => {
+    (event: React.MouseEvent, node: Node) => {
+      if (event.detail > 1) return;
       const task = tasks.get(node.id);
       if (task && onTaskClick) {
         onTaskClick(task);
@@ -663,8 +655,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   return (
     <div
       ref={graphRootRef}
-      className="flex w-full flex-1"
-      style={{ minHeight: '300px', height: browserHeight }}
+      className="flex min-h-0 w-full flex-1 overflow-hidden"
+      style={{ height: browserHeight }}
     >
       <ReactFlow
         key={flowInstanceKey}
@@ -680,6 +672,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
         onNodeContextMenu={onNodeContextMenu}
         onMoveStart={onMoveStart}
         onInit={onInitHandler}
+        fitViewOptions={{ padding: { top: '10%', right: '10%', bottom: '64px', left: '64px' } }}
         zoomOnDoubleClick={false}
         minZoom={0.3}
         maxZoom={2}
@@ -696,31 +689,6 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
             border: '1px solid var(--graph-controls-border)',
           }}
         />
-        <Panel position="top-right">
-          <button
-            type="button"
-            data-testid="snap-to-graph"
-            onClick={handleSnapToGraph}
-            title="Snap view to fit the whole graph"
-            aria-label="Snap view to fit the whole graph"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 10px',
-              background: 'var(--graph-controls)',
-              color: 'var(--graph-controls-button-color, #000)',
-              border: '1px solid var(--graph-controls-border)',
-              borderRadius: '8px',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            <span aria-hidden="true">⤢</span>
-            Snap to graph
-          </button>
-        </Panel>
       </ReactFlow>
     </div>
   );

@@ -699,7 +699,7 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-planning').click();
     await expect(transcript).toContainText('Add README');
     await expect(transcript).toContainText('sleep 2 && echo hello-gamma');
-    await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker. Review it, then Run.');
+    await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker. Review it, then use Start ready work.');
     await captureScreenshot(page, 'terminal-planned-conversation-after-submit');
 
     await page.evaluate(async () => {
@@ -742,6 +742,69 @@ test.describe('Visual proof capture', () => {
     await expect(transcript).toContainText('cursor: session expired');
 
     await captureScreenshot(page, 'planner-retry-exhausted-error');
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanningChatResponse(null);
+    });
+  });
+
+  test('planning chat long transcript — scrollable surface with follow pinned to bottom', async ({ page }) => {
+    // Render a long planning transcript by sending several user messages and
+    // returning a long assistant reply for each turn. This exercises the same
+    // setTestPlanningChatResponse helper used by the other planning proofs and
+    // produces a scrollable transcript surface suitable for a visual snapshot.
+    const longReplyLines = Array.from(
+      { length: 30 },
+      (_, index) => `Assistant line ${index + 1}: ${'lorem ipsum dolor sit amet '.repeat(4)}`,
+    );
+    const planYaml = yamlStringify({
+      name: 'Long Transcript Visual Proof',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'none' as const,
+      tasks: [
+        {
+          id: 'lt-proof',
+          description: 'Long transcript proof task',
+          command: 'echo ok',
+          dependencies: [] as string[],
+        },
+      ],
+    });
+
+    await page.getByTestId('sidebar-planning').click();
+    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+
+    const transcript = page.getByTestId('invoker-terminal-transcript');
+    await expect(transcript).toBeVisible();
+
+    const sendCount = 5;
+    for (let i = 0; i < sendCount; i += 1) {
+      const marker = `long-reply-marker-${i + 1}`;
+      const reply = [`${marker}`, ...longReplyLines].join('\n');
+      await page.evaluate(async ({ planYaml: py, replyText }) => {
+        await window.invoker.setTestPlanningChatResponse({ planYaml: py, reply: replyText });
+      }, { planYaml: planYaml, replyText: reply });
+
+      await page.getByTestId('invoker-terminal-input').fill(`Prompt ${i + 1}`);
+      await page.getByRole('button', { name: 'Send' }).click();
+      await expect(transcript).toContainText(marker);
+    }
+
+    await expect(transcript).toContainText('Prompt 1');
+    await expect(transcript).toContainText(`Prompt ${sendCount}`);
+    await expect(transcript).toContainText('Assistant line 30');
+
+    const { scrollHeight, clientHeight, scrollTop } = await transcript.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      scrollTop: el.scrollTop,
+    }));
+    expect(scrollHeight).toBeGreaterThan(clientHeight);
+    // Follow mode should have kept the transcript pinned to the bottom after
+    // the last assistant reply arrived.
+    expect(scrollHeight - scrollTop - clientHeight).toBeLessThanOrEqual(1);
+
+    await captureScreenshot(page, 'planning-chat-long-transcript');
 
     await page.evaluate(async () => {
       await window.invoker.setTestPlanningChatResponse(null);

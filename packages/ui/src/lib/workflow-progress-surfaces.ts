@@ -106,8 +106,9 @@ export function getSortedWorkflows(
 export function getAttentionTaskEntries(
   tasks: Map<string, TaskState>,
   workflows: Map<string, WorkflowMeta>,
+  extraTaskIds?: Set<string>,
 ): WorkflowTaskEntry[] {
-  return [...tasks.values()]
+  const baseEntries = [...tasks.values()]
     .filter(isAttentionTask)
     .sort((a, b) => {
       const priority = (ATTENTION_STATUS_PRIORITY[a.status] ?? 99) - (ATTENTION_STATUS_PRIORITY[b.status] ?? 99);
@@ -121,6 +122,20 @@ export function getAttentionTaskEntries(
       task,
       workflow: task.config.workflowId ? workflows.get(task.config.workflowId) ?? null : null,
     }));
+
+  if (!extraTaskIds || extraTaskIds.size === 0) return baseEntries;
+
+  const existingIds = new Set(baseEntries.map((entry) => entry.task.id));
+  const extraEntries = [...extraTaskIds]
+    .filter((id) => !existingIds.has(id))
+    .map((id) => tasks.get(id))
+    .filter((task): task is TaskState => Boolean(task))
+    .map((task) => ({
+      task,
+      workflow: task.config.workflowId ? workflows.get(task.config.workflowId) ?? null : null,
+    }));
+
+  return [...baseEntries, ...extraEntries];
 }
 
 export function getRunningTaskEntries(
@@ -128,21 +143,25 @@ export function getRunningTaskEntries(
   workflows: Map<string, WorkflowMeta>,
   queueStatus: QueueStatus | null,
 ): WorkflowTaskEntry[] {
+  const orderedTasks: TaskState[] = [];
+  const includedTaskIds = new Set<string>();
   if (queueStatus?.running.length) {
-    return queueStatus.running
-      .map(({ taskId }) => tasks.get(taskId))
-      .filter((task): task is TaskState => Boolean(task))
-      .map((task) => ({
-        task,
-        workflow: task.config.workflowId ? workflows.get(task.config.workflowId) ?? null : null,
-      }));
+    for (const { taskId } of queueStatus.running) {
+      const task = tasks.get(taskId);
+      if (!task || includedTaskIds.has(task.id)) continue;
+      orderedTasks.push(task);
+      includedTaskIds.add(task.id);
+    }
+  }
+  for (const task of [...tasks.values()]
+    .filter(isRunningTask)
+    .sort((a, b) => (a.description || a.id).localeCompare(b.description || b.id))) {
+    if (includedTaskIds.has(task.id)) continue;
+    orderedTasks.push(task);
   }
 
-  return [...tasks.values()]
-    .filter(isRunningTask)
-    .sort((a, b) => (a.description || a.id).localeCompare(b.description || b.id))
-    .map((task) => ({
-      task,
-      workflow: task.config.workflowId ? workflows.get(task.config.workflowId) ?? null : null,
-    }));
+  return orderedTasks.map((task) => ({
+    task,
+    workflow: task.config.workflowId ? workflows.get(task.config.workflowId) ?? null : null,
+  }));
 }

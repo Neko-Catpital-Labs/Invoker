@@ -2202,6 +2202,53 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(downstreamTaskId)!.config.externalDependencies ?? []).toEqual(taskDepsBefore);
       expect(persistence.events.map((event) => event.eventType)).not.toContain('workflow.external_dependency_policy_updated');
     });
+    it('treats pull-request publication as review_ready, not completed, for downstream gate policies', () => {
+      orchestrator.loadPlan({
+        name: 'publish-pr-workflow',
+        tasks: [{ id: 'publish-pr', description: 'Publish pull request' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'publish-pr');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-waits-for-published-pr',
+        tasks: [
+          {
+            id: 'review-leaf',
+            description: 'needs upstream published PR only',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const reviewLeafId = sid(orchestrator, 1, 'review-leaf');
+
+      orchestrator.loadPlan({
+        name: 'workflow-waits-for-upstream-completion',
+        tasks: [
+          {
+            id: 'strict-leaf',
+            description: 'needs upstream workflow completion',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const strictLeafId = sid(orchestrator, 2, 'strict-leaf');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      orchestrator.setTaskReviewReady(prereqMergeId, {
+        execution: {
+          reviewId: 'owner/repo#229',
+          reviewUrl: 'https://github.com/owner/repo/pull/229',
+          reviewStatus: 'Awaiting review',
+        },
+      });
+
+      expect(orchestrator.getTask(reviewLeafId)!.status).toBe('running');
+      expect(orchestrator.getTask(strictLeafId)!.status).toBe('pending');
+    });
+
 
     it('approved merge-gate dependency keeps downstream pending when upstream is awaiting_approval', () => {
       orchestrator.loadPlan({
@@ -7157,6 +7204,46 @@ describe('Orchestrator', () => {
       expect(queueStatus.running).toEqual([]);
       expect(queueStatus.queued).toHaveLength(1);
       expect(queueStatus.queued[0]?.taskId).toBe(sid(orchestrator, 0, 't1'));
+    });
+    it('getQueueStatus reports queued tasks in the same dependency order used for launch selection', () => {
+      const workflowId = 'wf-queue-order';
+      persistence.saveWorkflow({
+        id: workflowId,
+        name: 'queue-order',
+      });
+      persistence.saveTask(workflowId, {
+        id: 'beta-ready',
+        description: 'Beta ready',
+        status: 'pending',
+        dependencies: ['alpha-root'],
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        config: { workflowId },
+        execution: {},
+      });
+      persistence.saveTask(workflowId, {
+        id: 'aardvark-root',
+        description: 'Aardvark root',
+        status: 'pending',
+        dependencies: [],
+        createdAt: new Date('2026-01-01T00:00:01.000Z'),
+        config: { workflowId },
+        execution: {},
+      });
+      persistence.saveTask(workflowId, {
+        id: 'alpha-root',
+        description: 'Alpha root',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date('2026-01-01T00:00:02.000Z'),
+        config: { workflowId },
+        execution: { completedAt: new Date('2026-01-01T00:00:02.000Z') },
+      });
+      orchestrator.syncAllFromDb();
+      const queueStatus = orchestrator.getQueueStatus();
+      expect(queueStatus.queued.map((task) => task.taskId)).toEqual([
+        'aardvark-root',
+        'beta-ready',
+      ]);
     });
 
     it('getQueueStatus counts claimed selected attempts as active before launch completes', () => {

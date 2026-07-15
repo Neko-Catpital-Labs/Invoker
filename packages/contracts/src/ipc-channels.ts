@@ -262,6 +262,7 @@ export interface WorkerStatusEntry {
   policy: WorkerPolicyStatus;
   policyReason?: string;
   autoStarts: boolean;
+  desiredEnabled?: boolean;
   startable: boolean;
   stoppable: boolean;
   controlDisabledReason?: string;
@@ -428,6 +429,8 @@ export type InAppPlanningSessionStatus =
   | 'draft_ready'
   | 'submitted';
 
+export type PlanningTerminalMode = 'chat' | 'tmux';
+
 export interface InAppPlanningChatLine {
   id: number;
   role: 'user' | 'assistant' | 'system';
@@ -446,6 +449,12 @@ export interface InAppPlanningSessionSummary {
   draftPlanSummary?: InAppPlanningPlanSummary;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
+  terminalMode?: PlanningTerminalMode;
+  terminalSessionId?: string;
+  terminalStatus?: 'running' | 'exited';
+  terminalExitCode?: number;
+  terminalOutputSnapshot?: string;
+  terminalUpdatedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -470,6 +479,10 @@ export type InAppPlanningListSessionsResponse = {
   sessions: InAppPlanningSessionSummary[];
 };
 
+export interface InAppPlanningStreamEvent {
+  sessionId: string;
+  chunk: string;
+}
 
 export interface InAppPlanningChatRequest {
   sessionId?: string;
@@ -514,6 +527,15 @@ export interface InAppPlanningResetRequest {
 
 export type InAppPlanningResetResponse = { ok: true };
 
+export interface InAppPlanningSetTerminalModeRequest {
+  sessionId: string;
+  mode: PlanningTerminalMode;
+}
+
+export type InAppPlanningSetTerminalModeResponse =
+  | { ok: true }
+  | { ok: false; error: string };
+
 
 
 export interface WorkflowListEntry {
@@ -537,6 +559,30 @@ export interface WorkflowMutationAcceptedResult {
   intentId: number;
   workflowId: string;
   channel: string;
+}
+
+export interface StartReadyRequest {
+  recreateFailed?: boolean;
+  dryRun?: boolean;
+}
+
+export interface StartReadyPreview {
+  readyTaskIds: string[];
+  recoverableTaskIds: string[];
+  failedWorkflowIds: string[];
+  skipped: {
+    awaitingApproval: number;
+    reviewReady: number;
+    blocked: number;
+    failedTasks: number;
+  };
+}
+
+export interface StartReadyResult {
+  preview: StartReadyPreview;
+  started: TaskState[];
+  recreatedWorkflowIds: string[];
+  dryRun: boolean;
 }
 
 export interface WorkflowMutationFailedEvent {
@@ -782,6 +828,10 @@ export const IpcChannels = {
     request: [request: InAppPlanningResetRequest];
     response: InAppPlanningResetResponse;
   },
+  'invoker:planning-chat-set-terminal-mode': {} as {
+    request: [request: InAppPlanningSetTerminalModeRequest];
+    response: InAppPlanningSetTerminalModeResponse;
+  },
   'invoker:planning-terminal-open': {} as {
     request: [planningSessionId: string];
     response: OpenTerminalResponse;
@@ -813,6 +863,10 @@ export const IpcChannels = {
   'invoker:start': {} as {
     request: [];
     response: TaskState[];
+  },
+  'invoker:start-ready': {} as {
+    request: [request?: StartReadyRequest];
+    response: StartReadyResult;
   },
   'invoker:resume-workflow': {} as {
     request: [];
@@ -1235,6 +1289,9 @@ export const IpcEventChannels = {
   },
   'invoker:runtime-status': {} as {
     payload: RuntimeStatus;
+  },
+  'invoker:planning-chat-stream': {} as {
+    payload: InAppPlanningStreamEvent;
   },
 } as const;
 

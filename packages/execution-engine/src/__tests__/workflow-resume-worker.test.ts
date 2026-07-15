@@ -107,12 +107,12 @@ function harness(options: HarnessOptions = {}) {
 }
 
 describe('workflow resume worker tick', () => {
-  it('submits a retry for a workflow that has any non-terminal task', async () => {
+  it('submits start-ready for a workflow that has ready pending work', async () => {
     const h = harness({
       workflows: [
         {
           id: 'wf-1',
-          tasks: [makeTask({ status: 'running' as TaskState['status'] })],
+          tasks: [makeTask({ status: 'pending' as TaskState['status'] })],
         },
       ],
     });
@@ -122,7 +122,47 @@ describe('workflow resume worker tick', () => {
     expect(workflowId).toBe('wf-1');
     expect(priority).toBe('normal');
     expect(channel).toBe(WORKFLOW_RESUME_COMMAND_CHANNEL);
-    expect(args).toEqual(['wf-1']);
+    expect(args).toEqual([{}]);
+  });
+
+  it('skips pending work whose local dependencies are not completed', async () => {
+    const h = harness({
+      workflows: [
+        {
+          id: 'wf-1',
+          tasks: [
+            makeTask({ id: 'wf-1/a', status: 'running' as TaskState['status'] }),
+            makeTask({
+              id: 'wf-1/b',
+              status: 'pending' as TaskState['status'],
+              dependencies: ['wf-1/a'],
+            }),
+          ],
+        },
+      ],
+    });
+    await h.tick(POLL_CTX);
+    expect(h.submit).not.toHaveBeenCalled();
+  });
+
+  it('submits pending work when local dependencies are completed', async () => {
+    const h = harness({
+      workflows: [
+        {
+          id: 'wf-1',
+          tasks: [
+            makeTask({ id: 'wf-1/a', status: 'completed' as TaskState['status'] }),
+            makeTask({
+              id: 'wf-1/b',
+              status: 'pending' as TaskState['status'],
+              dependencies: ['wf-1/a'],
+            }),
+          ],
+        },
+      ],
+    });
+    await h.tick(POLL_CTX);
+    expect(h.submit).toHaveBeenCalledTimes(1);
   });
 
   it('skips workflows whose tasks are all terminal', async () => {
@@ -182,7 +222,7 @@ describe('workflow resume worker tick', () => {
     expect(h.submit).not.toHaveBeenCalled();
   });
 
-  it('still resumes a workflow with actionable pending work alongside a failed task', async () => {
+  it('still submits start-ready for pending work alongside a failed task', async () => {
     const h = harness({
       workflows: [
         {
@@ -270,7 +310,7 @@ describe('workflow resume worker tick', () => {
       'recovery.worker.submit',
       expect.objectContaining({
         worker: 'workflow-resume',
-        phase: 'retry-workflow',
+        phase: 'start-ready',
         workflowId: 'wf-1',
         channel: WORKFLOW_RESUME_COMMAND_CHANNEL,
         intentId: expect.any(Number),

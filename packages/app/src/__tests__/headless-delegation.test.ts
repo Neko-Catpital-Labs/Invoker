@@ -102,13 +102,37 @@ describe('headless delegation enforcement', () => {
     });
 
     it('allows query ui-perf in read-only mode', async () => {
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
       mockDeps.getUiPerfStats = vi.fn(() => ({
         maxRendererEventLoopLagMs: 12,
         maxRendererLongTaskMs: 34,
+        planningTypingLagReports: 1,
+        maxPlanningTypingLagMs: 11,
+        planningChatInputChangeReports: 1,
+        maxPlanningChatInputHandlerMs: 9,
+        planningChatInputCommitReports: 1,
+        maxPlanningChatInputCommitMs: 15,
       }));
-      await expect(
-        runHeadless(['query', 'ui-perf', '--output', 'json'], mockDeps)
-      ).resolves.toBeUndefined();
+      mockDeps.resetUiPerfStats = vi.fn();
+      try {
+        await expect(
+          runHeadless(['query', 'ui-perf', '--output', 'json'], mockDeps),
+        ).resolves.toBeUndefined();
+
+        expect(mockDeps.resetUiPerfStats).not.toHaveBeenCalled();
+        expect(JSON.parse(stdout.mock.calls[0][0] as string)).toMatchObject({
+          maxRendererEventLoopLagMs: 12,
+          maxRendererLongTaskMs: 34,
+          planningTypingLagReports: 1,
+          maxPlanningTypingLagMs: 11,
+          planningChatInputChangeReports: 1,
+          maxPlanningChatInputHandlerMs: 9,
+          planningChatInputCommitReports: 1,
+          maxPlanningChatInputCommitMs: 15,
+        });
+      } finally {
+        stdout.mockRestore();
+      }
     });
 
     it('prints direct action graph query JSON in read-only mode', async () => {

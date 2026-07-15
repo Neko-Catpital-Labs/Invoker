@@ -7,6 +7,7 @@ import {
 } from '../lifecycle-events.js';
 import {
   publishReviewGateCiFailedLifecycleEvent,
+  publishReviewGateMergeConflictLifecycleEvent,
   startLifecycleEventBridge,
 } from '../lifecycle-event-bridge.js';
 
@@ -305,6 +306,60 @@ describe('lifecycle event bridge', () => {
       attemptId: 'attempt-persisted',
     });
     expectRecoveryWakeup(events[0], { reason: 'review_gate_failure' });
+  });
+
+  it('publishes review-gate merge conflict wakeups with persisted task context', () => {
+    const bus = new LocalBus();
+    const events = collectLifecycleEvents(bus);
+    const task = makeTask({
+      id: 'wf-1/merge',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {
+        generation: 7,
+        selectedAttemptId: 'attempt-merge',
+        reviewId: '123',
+        branch: 'feature/merge-conflict',
+      },
+      taskStateVersion: 12,
+    });
+
+    const event = publishReviewGateMergeConflictLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/merge',
+      reviewId: '123',
+      reviewUrl: 'https://github.com/owner/repo/pull/123',
+      headSha: 'abc123',
+      headRef: 'feature/merge-conflict',
+      branch: 'feature/merge-conflict',
+      selectedAttemptId: 'attempt-merge',
+      generation: 7,
+      statusText: 'Awaiting review',
+    }, {
+      messageBus: bus,
+      getTask: () => task,
+      now: () => CREATED_AT_DATE,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toBe(event);
+    expect(events[0]).toMatchObject({
+      eventKey: 'review_gate.merge_conflict|workflow:wf-1|task:wf-1/merge|generation:7|attempt:attempt-merge|task-state:12|review:123:abc123',
+      kind: 'review_gate.merge_conflict',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/merge',
+      status: 'review_ready',
+      taskStateVersion: 12,
+      generation: 7,
+      attemptId: 'attempt-merge',
+      createdAt: CREATED_AT,
+      reviewId: '123',
+      reviewUrl: 'https://github.com/owner/repo/pull/123',
+      headSha: 'abc123',
+      statusText: 'Awaiting review',
+    });
+    expectRecoveryWakeup(events[0], { reason: 'review_gate_failure' });
+    expect(isWorkflowLifecycleEvent(events[0])).toBe(true);
   });
 
   it('unsubscribes cleanly', () => {

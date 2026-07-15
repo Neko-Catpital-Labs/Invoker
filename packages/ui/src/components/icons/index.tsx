@@ -1,6 +1,7 @@
 import type { JSX } from 'react';
 import {
   AlertTriangle,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -10,6 +11,7 @@ import {
   GitPullRequest,
   Layers,
   Moon,
+  Play,
   Settings,
   Sun,
   TerminalSquare,
@@ -40,6 +42,8 @@ export const SettingsIcon = withDefaults(Settings);
 export const InvokerIcon = withDefaults(Compass);
 export const ChevronLeftIcon = withDefaults(ChevronLeft);
 export const ChevronRightIcon = withDefaults(ChevronRight);
+export const ChevronDownIcon = withDefaults(ChevronDown);
+export const PlayIcon = withDefaults(Play);
 export const GitPullRequestIcon = withDefaults(GitPullRequest);
 export const GitMergeIcon = withDefaults(GitMerge);
 export const SunIcon = withDefaults(Sun);

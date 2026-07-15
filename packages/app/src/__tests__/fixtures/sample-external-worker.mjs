@@ -6,12 +6,17 @@ if (!markerPath) {
   process.exit(64);
 }
 
-writeFileSync(markerPath, JSON.stringify({ pid: process.pid, started: true }), 'utf8');
+const writeMarker = (state) => {
+  writeFileSync(markerPath, JSON.stringify({ pid: process.pid, ...state }), 'utf8');
+};
+
+writeMarker({ started: true, stopped: false });
 
 const keepAlive = setInterval(() => {}, 1_000);
 
 const shutdown = () => {
   clearInterval(keepAlive);
+  writeMarker({ started: true, stopped: true });
   process.exit(0);
 };
 
