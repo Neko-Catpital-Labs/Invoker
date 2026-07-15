@@ -3427,6 +3427,7 @@ describe('TaskRunner', () => {
       (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'base-sha';
         // diff --cached --quiet exits non-zero when there are staged changes
         if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) {
           throw new Error('exit code 1');
@@ -3436,6 +3437,7 @@ describe('TaskRunner', () => {
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'base-sha';
         // diff --cached --quiet exits non-zero when there are staged changes
         if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) {
           throw new Error('exit code 1');
@@ -3457,7 +3459,7 @@ describe('TaskRunner', () => {
       // Should squash merge featureBranch into baseBranch using detached HEAD pattern (no rebase)
       const rebaseCall = gitCalls.find(c => c[0] === 'rebase');
       expect(rebaseCall).toBeUndefined();
-      const detachCall = gitCalls.find(c => c[0] === 'checkout' && c[1] === '--detach' && c[2] === 'master');
+      const detachCall = gitCalls.find(c => c[0] === 'checkout' && c[1] === '--detach' && c[2] === 'base-sha');
       expect(detachCall).toBeDefined();
       const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/feature'));
       expect(squashCall).toBeDefined();
@@ -4231,6 +4233,7 @@ console.log(JSON.stringify(out));
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'diff' && args[1] === '--cached' && args[2] === '--quiet') throw new Error('changes staged');
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
@@ -4248,6 +4251,47 @@ console.log(JSON.stringify(out));
       // Squash commit pushed directly to origin from the clone
       const pushCall = gitCalls.find(c => c[0] === 'push' && c.includes('--force') && c.includes('origin') && c.some(a => a.startsWith('HEAD:refs/heads/')));
       expect(pushCall).toBeDefined();
+    });
+
+    it('approveMerge skips commit when squash merge is a no-op', async () => {
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+        getWorkspacePath: () => null,
+      };
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+
+      await executor.approveMerge('wf-1');
+
+      expect(gitCalls.find((c) => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/feature'))).toBeDefined();
+      expect(gitCalls.find((c) => c[0] === 'diff' && c[1] === '--cached' && c[2] === '--quiet')).toBeDefined();
+      expect(gitCalls.find((c) => c[0] === 'commit')).toBeUndefined();
+      expect(gitCalls.find((c) => c[0] === 'push')).toBeUndefined();
     });
 
     it('approveMerge throws when workflow has no merge configured', async () => {
