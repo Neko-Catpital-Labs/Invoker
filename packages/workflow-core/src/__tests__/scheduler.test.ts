@@ -97,6 +97,24 @@ describe('TaskScheduler', () => {
       expect(scheduler.getQueuedJobs()).toHaveLength(2);
     });
   });
+  describe('replaceQueue', () => {
+    it('replaces the queue with the provided ordering verbatim', () => {
+      const scheduler = new TaskScheduler();
+      scheduler.enqueue({ taskId: 'old', priority: 10 });
+
+      scheduler.replaceQueue([
+        { taskId: 'first', attemptId: 'first-a1', priority: 0 },
+        { taskId: 'second', attemptId: 'second-a1', priority: 100, bypassLocalDependencyReadiness: true },
+      ]);
+
+      expect(scheduler.getQueuedJobs()).toEqual([
+        { taskId: 'first', attemptId: 'first-a1', priority: 0 },
+        { taskId: 'second', attemptId: 'second-a1', priority: 100, bypassLocalDependencyReadiness: true },
+      ]);
+      expect(scheduler.takeNext()?.taskId).toBe('first');
+      expect(scheduler.takeNext()?.taskId).toBe('second');
+    });
+  });
 
   describe('removeJob', () => {
     it('removes a queued job and returns true', () => {
