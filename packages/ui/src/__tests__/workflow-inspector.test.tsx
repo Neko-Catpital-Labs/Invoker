@@ -754,6 +754,39 @@ describe('WorkflowInspector', () => {
       'Approval blocked: capability mismatch',
     );
   });
+  it('surfaces crash-preserved inspection actions for orphaned running tasks', () => {
+    const onRestartTask = vi.fn();
+    const onRecreateTask = vi.fn();
+    const task = makeTask({
+      status: 'running',
+      execution: {
+        crashPreservedAt: new Date('2026-07-13T01:02:03.000Z'),
+        crashPreservedOwnerPid: 46301,
+        crashPreservedReportPath: '/tmp/Electron-46301.ips',
+        crashPreservedDiagnosticSummary: 'previous owner pid=46301; no matching crash report found',
+      },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={task}
+        collapsed={false}
+        advancedExpanded={false}
+        onRestartTask={onRestartTask}
+        onRecreateTask={onRecreateTask}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('inspector-crash-preserved')).toHaveTextContent('Preserved after crash');
+    expect(screen.getByTestId('inspector-crash-preserved')).toHaveTextContent('Previous owner PID: 46301');
+    fireEvent.click(screen.getByRole('button', { name: 'Restart Task' }));
+    expect(onRestartTask).toHaveBeenCalledWith('task-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Recreate from Task' }));
+    expect(onRecreateTask).toHaveBeenCalledWith('task-1');
+  });
 
   it('shows selected action graph node details', () => {
     render(
