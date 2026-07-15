@@ -752,9 +752,7 @@ tasks:
         terminalSessionId: 'term-planning-state',
         terminalStatus: 'running',
         terminalOutputSnapshot: 'hello from tmux\n',
-        messages: expect.arrayContaining([
-          expect.objectContaining({ role: 'system', text: 'Ask Invoker what you want to build.' }),
-        ]),
+        messages: [],
       });
     } finally {
       adapter.close();
