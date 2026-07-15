@@ -165,23 +165,22 @@ export function getPendingLaunchQueueSnapshotImpl(
 }
 
 function rebuildPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): void {
-  const orderedJobs = planPendingLaunchQueue(host, candidateJobs)
-    .map((job) => {
-      const task = host.stateGetTask(job.taskId);
-      if (!task) return undefined;
-      const attemptId = host.ensureCurrentPendingAttempt(task);
-      const currentAttempt = host.loadAttemptById(attemptId);
-      if ((currentAttempt?.queuePriority ?? 0) !== job.priority) {
-        host.taskRepository.updateAttempt(attemptId, { queuePriority: job.priority });
-      }
-      return {
-        taskId: task.id,
-        attemptId,
-        priority: job.priority,
-        ...(job.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
-      };
-    })
-    .filter((job): job is TaskJob => job !== undefined);
+  const orderedJobs: TaskJob[] = [];
+  for (const job of planPendingLaunchQueue(host, candidateJobs)) {
+    const task = host.stateGetTask(job.taskId);
+    if (!task) continue;
+    const attemptId = host.ensureCurrentPendingAttempt(task);
+    const currentAttempt = host.loadAttemptById(attemptId);
+    if ((currentAttempt?.queuePriority ?? 0) !== job.priority) {
+      host.taskRepository.updateAttempt(attemptId, { queuePriority: job.priority });
+    }
+    orderedJobs.push({
+      taskId: task.id,
+      attemptId,
+      priority: job.priority,
+      ...(job.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
+    });
+  }
   host.scheduler.replaceQueue(orderedJobs);
 }
 
