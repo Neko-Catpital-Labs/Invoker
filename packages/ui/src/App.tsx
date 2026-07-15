@@ -253,7 +253,6 @@ interface PlanningTypingTelemetryState {
   selectedTaskId: string | null;
   selectedWorkflowId: string | null;
   hasLoadedPlan: boolean;
-  hasStarted: boolean;
 }
 
 function utf8Size(value: string): number {
@@ -304,7 +303,6 @@ function createPlanningTypingTelemetryContext({
   selectedTaskId,
   selectedWorkflowId,
   hasLoadedPlan,
-  hasStarted,
 }: PlanningTypingTelemetryState): Record<string, unknown> {
   const sessions = new Set<string>();
   const taskStatusCounts: Record<string, number> = {};
@@ -340,7 +338,6 @@ function createPlanningTypingTelemetryContext({
     selectedTaskId,
     selectedWorkflowId,
     hasLoadedPlan,
-    hasStarted,
   };
 }
 
@@ -653,8 +650,8 @@ function EmptyGraphTutorial(): JSX.Element {
             <div className="mt-1 text-xs text-muted-foreground">Check the graph before starting work.</div>
           </li>
           <li>
-            <div className="font-medium text-foreground">3. Run it</div>
-            <div className="mt-1 text-xs text-muted-foreground">Start the workflow when the plan looks right.</div>
+            <div className="font-medium text-foreground">3. Start ready work</div>
+            <div className="mt-1 text-xs text-muted-foreground">Use Start ready work when the plan looks right.</div>
           </li>
         </ol>
       </div>
@@ -751,7 +748,6 @@ export function App() {
   const [selectedWorkflowVanished, setSelectedWorkflowVanished] = useState(false);
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
-  const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [planningSessions, setPlanningSessions] = useState<PlanningSessionView[]>(() => [makeInitialPlanningSession()]);
   const planningSessionsRef = useRef<PlanningSessionView[]>(planningSessions);
@@ -1173,7 +1169,6 @@ export function App() {
       selectedTaskId,
       selectedWorkflowId,
       hasLoadedPlan,
-      hasStarted,
     };
   }, [
     tasks,
@@ -1183,7 +1178,6 @@ export function App() {
     selectedTaskId,
     selectedWorkflowId,
     hasLoadedPlan,
-    hasStarted,
   ]);
 
   useEffect(() => {
@@ -2432,18 +2426,6 @@ export function App() {
     }));
   }, [updateActivePlanningSession]);
 
-  const handleStart = useCallback(async (): Promise<boolean> => {
-    if (!invoker) return false;
-    try {
-      await invoker.start();
-      setHasStarted(true);
-      return true;
-    } catch (err) {
-      notifyMutationError('Failed to start:', err);
-      return false;
-    }
-  }, [invoker]);
-
   const handleStartReadyAction = useCallback(async (
     request: StartReadyRequest = {},
   ): Promise<StartReadyResult | null> => {
@@ -2455,7 +2437,6 @@ export function App() {
       if (!result.dryRun) {
         await refreshTaskGraph();
         void refreshActionGraph();
-        if (result.started.length > 0) setHasStarted(true);
         if (result.started.length > 0 || result.recreatedWorkflowIds.length > 0) {
           const descriptionParts = [
             result.recreatedWorkflowIds.length > 0
@@ -2521,7 +2502,6 @@ export function App() {
       if (result.ok) {
         setPlanningSubmitError(null);
         setHasLoadedPlan(true);
-        setHasStarted(false);
         setSidebarSurface('home');
         setWorkflowSelectionDismissed(false);
         setViewMode('dag');
@@ -2541,8 +2521,8 @@ export function App() {
         await refreshTaskGraph();
         appendTerminalLine(
           result.workflowCount && result.workflowCount > 1
-            ? `Plan "${result.planName}" submitted as ${result.workflowCount} stacked workflows. Review them, then Run.`
-            : `Plan "${result.planName}" submitted to Invoker. Review it, then Run.`,
+            ? `Plan "${result.planName}" submitted as ${result.workflowCount} stacked workflows. Review them, then use Start ready work.`
+            : `Plan "${result.planName}" submitted to Invoker. Review it, then use Start ready work.`,
           'system',
           'success',
         );
@@ -2567,9 +2547,9 @@ export function App() {
     setPlanningSubmitError(null);
 
     if (input.toLowerCase() === 'run') {
-      if (!hasLoadedPlan || hasStarted) {
+      if (!hasLoadedPlan && tasks.size === 0 && workflows.size === 0) {
         appendTerminalLine(
-          hasStarted ? 'Run already started.' : 'Create or submit a plan before running.',
+          'Create or submit a plan before starting ready work.',
           'system',
           'error',
         );
@@ -2577,8 +2557,17 @@ export function App() {
       }
       updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, busy: true }));
       try {
-        const started = await handleStart();
-        appendTerminalLine(started ? 'Run started.' : 'Run failed to start.', 'system', started ? 'success' : 'error');
+        const result = await handleStartReadyAction();
+        if (result && !result.dryRun) {
+          const startedCount = result.started.length;
+          appendTerminalLine(
+            startedCount > 0
+              ? `Started ${startedCount} ready task${startedCount === 1 ? '' : 's'}.`
+              : 'No ready work to start.',
+            'system',
+            startedCount > 0 ? 'success' : undefined,
+          );
+        }
       } finally {
         updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, busy: false }));
       }
@@ -2662,16 +2651,17 @@ export function App() {
     clearPlanningStreamForSessionIds,
     forgetPlanningStreamAliasesForSessionIds,
     handlePlanningSubmitDraft,
-    handleStart,
+    handleStartReadyAction,
     hasLoadedPlan,
-    hasStarted,
     keepPlanningStreamFailureForSessionIds,
     invoker,
     planningInput,
     planningSessionId,
     selectedPlanningPresetKey,
     setPlanningInput,
+    tasks.size,
     updatePlanningSessionById,
+    workflows.size,
   ]);
 
   const handleCreatePlanningSession = useCallback(() => {
@@ -2830,22 +2820,12 @@ export function App() {
   ]);
 
 
-  const handleStop = useCallback(async () => {
-    if (!invoker) return;
-    try {
-      await invoker.stop();
-    } catch (err) {
-      notifyMutationError('Failed to stop:', err);
-    }
-  }, [invoker]);
-
   const handleClear = useCallback(async () => {
     if (!invoker) return;
     try {
       await invoker.clear();
       clearTasks();
       setHasLoadedPlan(false);
-      setHasStarted(false);
       setPlanName(null);
       setSidebarSurface('home');
       setSidebarCollapsed(null);
@@ -2870,7 +2850,6 @@ export function App() {
       await invoker.deleteAllWorkflowsBulk();
       clearTasks();
       setHasLoadedPlan(false);
-      setHasStarted(false);
       setPlanName(null);
       setSidebarSurface('home');
       setSidebarCollapsed(null);
@@ -2884,18 +2863,6 @@ export function App() {
       notifyMutationError('Failed to delete workflows:', err);
     }
   }, [clearTasks, invoker]);
-  const allSettled = useMemo(() => {
-    if (tasks.size === 0) return false;
-    for (const task of tasks.values()) {
-      if (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'closed' && task.status !== 'blocked') {
-        return false;
-      }
-    }
-    return true;
-  }, [tasks]);
-
-  const showStart = hasLoadedPlan && !hasStarted;
-  const showStop = hasStarted && !allSettled;
   const showStartReadyControl = hasLoadedPlan || tasks.size > 0 || workflows.size > 0;
   const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
   const autoCollapseSidebar = viewportWidth < 1440;
@@ -3258,26 +3225,6 @@ export function App() {
 
   const renderGraphActions = (showMoreMenu: boolean): JSX.Element => (
     <div className="flex items-center gap-2">
-      {showStart && (
-        <button
-          type="button"
-          data-testid="rail-start"
-          onClick={handleStart}
-          className="rounded bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600"
-        >
-          Run
-        </button>
-      )}
-      {showStop && (
-        <button
-          type="button"
-          data-testid="rail-stop"
-          onClick={handleStop}
-          className="rounded bg-red-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-600"
-        >
-          Stop
-        </button>
-      )}
       {showStartReadyControl && (
         <div ref={startReadyMenuRef} className="relative inline-flex">
           <button
