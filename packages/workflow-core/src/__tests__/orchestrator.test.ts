@@ -7205,7 +7205,7 @@ describe('Orchestrator', () => {
       expect(queueStatus.queued).toHaveLength(1);
       expect(queueStatus.queued[0]?.taskId).toBe(sid(orchestrator, 0, 't1'));
     });
-    it.fails('getQueueStatus reports queued tasks in the same dependency order used for launch selection', () => {
+    it('getQueueStatus reports queued tasks in the same dependency order used for launch selection', () => {
       const workflowId = 'wf-queue-order';
       persistence.saveWorkflow({
         id: workflowId,
@@ -7238,6 +7238,7 @@ describe('Orchestrator', () => {
         config: { workflowId },
         execution: { completedAt: new Date('2026-01-01T00:00:02.000Z') },
       });
+      orchestrator.syncAllFromDb();
       const queueStatus = orchestrator.getQueueStatus();
       expect(queueStatus.queued.map((task) => task.taskId)).toEqual([
         'aardvark-root',
