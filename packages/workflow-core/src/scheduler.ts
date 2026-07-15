@@ -82,6 +82,10 @@ export class TaskScheduler {
     };
   }
 
+  replaceQueue(jobs: TaskJob[]): void {
+    this.queue = [...jobs];
+  }
+
   /** Return a shallow copy of the internal queue (not-yet-running jobs). */
   getQueuedJobs(): TaskJob[] {
     return [...this.queue];
