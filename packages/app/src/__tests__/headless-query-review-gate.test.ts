@@ -23,6 +23,32 @@ const record: ReviewGateLookup = {
   mergeTaskStatus: 'running',
   selectedAttemptId: 'wf-42/__merge__wf-42-attempt-1',
 };
+const reviewGateTasks = [{
+  id: '__merge__wf-42',
+  description: 'Review gate for wf-42',
+  status: 'review_ready',
+  dependencies: [],
+  createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  config: { workflowId: 'wf-42', isMergeNode: true },
+  execution: {
+    generation: 2,
+    reviewId: '999',
+    reviewUrl: 'https://github.com/owner/repo/pull/999',
+    reviewGate: {
+      activeGeneration: 2,
+      completion: { required: 'all', status: 'approved' as const },
+      artifacts: [{
+        id: '999',
+        providerId: '999',
+        required: true,
+        status: 'open' as const,
+        generation: 2,
+        checksState: 'pending' as const,
+      }],
+    },
+  },
+}] as any[];
+
 
 describe('headless query review-gate', () => {
   let mockDeps: HeadlessDeps;
@@ -37,7 +63,10 @@ describe('headless query review-gate', () => {
       persistence: {
         readOnly: true,
         findReviewGateByPr,
+        loadWorkflow: vi.fn(() => ({ id: 'wf-42', name: 'Workflow 42' })),
+        loadTasks: vi.fn(() => reviewGateTasks),
       } as unknown as SQLiteAdapter,
+
       commandService: {} as unknown as CommandService,
       executorRegistry: {} as unknown as HeadlessDeps['executorRegistry'],
       messageBus: new LocalBus() as MessageBus,
@@ -92,11 +121,12 @@ describe('headless query review-gate', () => {
     await runHeadless(['query', 'review-gate', '123456', '--output', 'jsonl'], mockDeps);
     expect((stdoutSpy.mock.calls[0][0] as string).trim()).toBe('');
   });
-  it('prints a human text line by default and a clear miss message', async () => {
+  it('prints a human text line by default with the derived review substate and a clear miss message', async () => {
     await runHeadless(['query', 'review-gate', '999'], mockDeps);
     const line = stdoutSpy.mock.calls[0][0] as string;
     expect(line).toContain('wf-42');
     expect(line).toContain('running');
+    expect(line).toContain('substate=ci_pending');
     expect(line).not.toContain('{');
 
     stdoutSpy.mockClear();
