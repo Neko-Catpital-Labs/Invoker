@@ -19,7 +19,6 @@ import type { ParsedResponse } from '../response-handler.js';
 import { scopePlanTaskId } from '../task-id-scope.js';
 import { parseMergeConflictError } from '../merge-conflict-error.js';
 import type { TaskStateMachine } from '../state-machine.js';
-import type { TaskScheduler } from '../scheduler.js';
 import type { TaskRepository } from '../task-repository.js';
 import {
   OrchestratorError,
@@ -44,7 +43,6 @@ const TASK_DELTA_CHANNEL = 'task.delta';
  */
 export interface TransitionHost {
   readonly stateMachine: TaskStateMachine;
-  readonly scheduler: TaskScheduler;
   readonly persistence: OrchestratorPersistence;
   readonly messageBus: OrchestratorMessageBus;
   readonly logger: Logger;
@@ -173,15 +171,10 @@ export function handleCompletedImpl(
 
   // Re-enqueue deferred tasks now that a slot freed up
   if (host.deferredTaskIds.size > 0) {
-    for (const id of host.deferredTaskIds) {
-      const t = host.stateGetTask(id);
-      if (t && t.status === 'pending') {
-        const attemptId = host.ensureCurrentPendingAttempt(t);
-        host.scheduler.enqueue({ taskId: id, attemptId, priority: 0 });
-      }
-    }
+    const deferredTaskIds = [...host.deferredTaskIds]
+      .filter((id) => host.stateGetTask(id)?.status === 'pending');
     host.deferredTaskIds.clear();
-    started.push(...host.drainScheduler());
+    started.push(...host.autoStartReadyTasks(deferredTaskIds));
   }
 
   checkWorkflowCompletionImpl(host);
@@ -256,15 +249,10 @@ export function finalizeFailedTaskImpl(
 
   // Re-enqueue deferred tasks now that a slot freed up
   if (host.deferredTaskIds.size > 0) {
-    for (const id of host.deferredTaskIds) {
-      const t = host.stateGetTask(id);
-      if (t && t.status === 'pending') {
-        const attemptId = host.ensureCurrentPendingAttempt(t);
-        host.scheduler.enqueue({ taskId: id, attemptId, priority: 0 });
-      }
-    }
+    const deferredTaskIds = [...host.deferredTaskIds]
+      .filter((id) => host.stateGetTask(id)?.status === 'pending');
     host.deferredTaskIds.clear();
-    started.push(...host.drainScheduler());
+    started.push(...host.autoStartReadyTasks(deferredTaskIds));
   }
 
   checkWorkflowCompletionImpl(host);
