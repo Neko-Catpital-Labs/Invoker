@@ -128,6 +128,7 @@ import {
   registerBuiltinWorkers,
   parseRequeueMutationArgs,
   parseRequeueEscalateMutationArgs,
+  reconcileTerminalWorkerActionsOnStartup,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -1765,6 +1766,13 @@ function startHeadlessMode(): void {
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
         });
+        const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
+        if (reconciledWorkerActions > 0) {
+          logger.info(
+            `reconciled ${reconciledWorkerActions} terminal worker action(s) on startup`,
+            { module: 'init' },
+          );
+        }
         workerRuntimeController.startAutoStartedWorkers();
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
@@ -3518,6 +3526,13 @@ function createEmbeddedTerminalBackendFromConfig(
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
       });
+      const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
+      if (reconciledWorkerActions > 0) {
+        logger.info(
+          `reconciled ${reconciledWorkerActions} terminal worker action(s) on startup`,
+          { module: 'init' },
+        );
+      }
     }
 
     // Fail orphaned in-flight tasks left by a previous crash, then start ready work.
