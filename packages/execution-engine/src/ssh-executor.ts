@@ -9,7 +9,6 @@ import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './proces
 import { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 import { planManagedWorktree } from './managed-worktree-controller.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
-import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
@@ -43,7 +42,7 @@ export interface SshExecutorConfig {
   agentRegistry?: AgentRegistry;
   /**
    * When true, use managed workspace mode: clone/fetch repo, create/reset worktrees,
-   * and provision per-task workspaces. When false (default), BYO mode: user provides
+   * then run the task in that checkout. When false (default), BYO mode: user provides
    * pre-cloned repo path and handles all git/setup operations.
    */
   managedWorkspaces?: boolean;
@@ -52,11 +51,6 @@ export interface SshExecutorConfig {
    * Default: ~/.invoker
    */
   remoteInvokerHome?: string;
-  /**
-   * Optional provision command to run in the worktree after creation (e.g., pnpm install).
-   * Only used in managed mode. Default: pnpm install --frozen-lockfile
-   */
-  provisionCommand?: string;
   /** Opt-in: export agent API keys from secretsFile into remote task shells. */
   useApiKey?: boolean;
   /** Optional local secrets file used when useApiKey is true. */
@@ -77,9 +71,9 @@ interface SshEntry extends BaseEntry {
  * Executor that executes tasks on a remote machine via SSH key-based auth.
  *
  * Requires `repoUrl` on the work request. Clones / worktrees on the remote
- * under ~/.invoker (mirroring local RepoPool layout), provisions with the same
- * command as WorktreeExecutor, then runs the task (command or Claude) in that
- * directory. Always produces a branch and commits on completion.
+ * under ~/.invoker (mirroring local RepoPool layout), then runs the task
+ * (command or Claude) in that directory. Always produces a branch and commits
+ * on completion.
  */
 export class SshExecutor extends BaseExecutor<SshEntry> {
   readonly type = 'ssh';
@@ -93,7 +87,6 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly agentRegistry?: AgentRegistry;
   private readonly managedWorkspaces: boolean;
   private readonly remoteInvokerHome: string;
-  private readonly provisionCommand: string;
   private readonly useApiKey: boolean;
   private readonly secretsFile: string | undefined;
   private readonly remoteHeartbeatIntervalSeconds: number;
@@ -108,7 +101,6 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.agentRegistry = config.agentRegistry;
     this.managedWorkspaces = config.managedWorkspaces ?? false;
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
-    this.provisionCommand = config.provisionCommand ?? DEFAULT_WORKTREE_PROVISION_COMMAND;
     this.useApiKey = config.useApiKey === true;
     this.secretsFile = config.secretsFile;
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
@@ -177,17 +169,11 @@ exit "$PAYLOAD_EXIT"
 `;
   }
 
+
   private buildPayloadScript(payload: string): string {
     return `#!/usr/bin/env bash
 set -e
 ${payload}
-`;
-  }
-
-  private buildProvisionScript(): string {
-    return `#!/usr/bin/env bash
-set -e
-${this.provisionCommand}
 `;
   }
 
@@ -243,24 +229,10 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
   }): string {
     const runner = this.buildRunnerScript();
     const payload = this.buildPayloadScript(options.payload);
-    const provision = options.managed ? this.buildProvisionScript() : undefined;
     const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
-    const provisionSection = provision
-      ? `${this.renderHeredocFile('"$PROVISION_PATH"', provision, 'provision')}
-chmod 700 "$PROVISION_PATH"
-`
-      : '';
-    const provisionLogLine = this.shellQuote(
-      `[SshExecutor] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}...`,
-    );
-    const runProvisionSection = provision
-      ? `echo ${provisionLogLine}
-. "$PROVISION_PATH"
-echo "[SshExecutor] Running task payload..."
-`
-      : `echo "[SshExecutor BYO] Running task in user-provided workspace: $WT"
+    const runPayloadSection = `echo "[SshExecutor] Running task payload..."
 `;
 
     return `set -euo pipefail
@@ -269,7 +241,6 @@ INVOKER_HOME=$(normalize_remote_path ${this.shellQuote(this.remoteInvokerHome)})
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
-PROVISION_PATH="$STAGING_DIR/provision.sh"
 cleanup_runtime() {
   local status="$1"
   trap - EXIT HUP INT TERM
@@ -304,12 +275,12 @@ trap 'cleanup_runtime 143' TERM
 rm -rf "$STAGING_DIR" 2>/dev/null || true
 mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
-${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}${provisionSection}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
+${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
 WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
 cd "$WT"
 ${options.envExports}
 start_bootstrap_heartbeat
-${runProvisionSection}stop_bootstrap_heartbeat
+${runPayloadSection}stop_bootstrap_heartbeat
 "$RUNNER_PATH" "$PAYLOAD_PATH"
 `;
   }
