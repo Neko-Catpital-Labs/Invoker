@@ -17,6 +17,7 @@ import type {
   BundledSkillsStatus,
   Logger,
   SystemDiagnostics,
+  WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
@@ -47,6 +48,7 @@ export interface WebInvokerDispatchDeps {
   getSystemDiagnostics?: () => SystemDiagnostics;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   checkPrStatuses?: () => void | Promise<void>;
+  getWorkers?: () => WorkerStatusSnapshot;
   logger?: Logger;
 }
 
@@ -107,6 +109,9 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return orchestrator.getWorkflowStatus();
       case 'invoker:get-queue-status':
         return orchestrator.getQueueStatus();
+      case 'invoker:get-worker-status':
+      case 'invoker:get-workers':
+        return deps.getWorkers?.() ?? { generatedAt: new Date().toISOString(), workers: [] };
       case 'invoker:get-action-graph':
         return buildCurrentActionGraphSnapshot({
           orchestrator,
