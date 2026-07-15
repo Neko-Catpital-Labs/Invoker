@@ -82,4 +82,45 @@ describe('reconcileTerminalWorkerActionsOnStartup', () => {
       summary: 'Worker action reconciled from failed intent on startup: boom',
     });
   });
+
+  it('preserves store method binding when listing terminal intents', () => {
+    const actions = new Map<string, WorkerActionRecord>([
+      ['a', toRecord({
+        id: 'a',
+        workerKind: 'ci-failure',
+        actionType: 'fix-ci-failure',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/t',
+        subjectType: 'review',
+        subjectId: '1',
+        externalKey: 'a',
+        status: 'queued',
+        intentId: '9',
+      })],
+    ]);
+    const store = {
+      listWorkerActions: () => Array.from(actions.values()),
+      listWorkflowMutationIntents(workflowId?: string) {
+        expect(this).toBe(store);
+        expect(workflowId).toBe('wf-1');
+        return [{
+          id: 9,
+          workflowId: 'wf-1',
+          channel: 'invoker:fix-with-agent',
+          args: [],
+          priority: 'normal' as const,
+          status: 'completed' as const,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        }];
+      },
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => {
+        const saved = toRecord(write);
+        actions.set(write.id, saved);
+        return saved;
+      }),
+    };
+
+    expect(reconcileTerminalWorkerActionsOnStartup(store)).toBe(1);
+    expect(actions.get('a')?.status).toBe('completed');
+  });
 });
