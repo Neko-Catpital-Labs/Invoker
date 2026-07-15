@@ -178,7 +178,6 @@ export interface TaskRunnerConfig {
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
-    provisionCommand?: string;
     use_api_key?: boolean;
     secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
@@ -1681,7 +1680,6 @@ export class TaskRunner {
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
-    provisionCommand?: string;
     use_api_key?: boolean;
     secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
