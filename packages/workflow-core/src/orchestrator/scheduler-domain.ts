@@ -13,12 +13,13 @@
  */
 
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '@invoker/workflow-graph';
+import { topologicalSort } from '@invoker/workflow-graph';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import type { Logger } from '@invoker/contracts';
 import { isDiscardedAttempt } from '../attempt-policy.js';
 import { assertResetComplete, buildTaskResetChanges } from '../task-reset-policy.js';
 import type { TaskStateMachine } from '../state-machine.js';
-import type { TaskScheduler } from '../scheduler.js';
+import type { TaskJob, TaskScheduler } from '../scheduler.js';
 import type { TaskRepository } from '../task-repository.js';
 import type {
   OrchestratorPersistence,
@@ -69,6 +70,120 @@ export interface SchedulerDomainHost {
   getExecutionGeneration(task: TaskState | undefined): number;
   getExternalDependencyBlocker(task: TaskState): string | undefined;
 }
+function byCreatedAtThenId(left: TaskState, right: TaskState): number {
+  return (left.createdAt.getTime() - right.createdAt.getTime()) || left.id.localeCompare(right.id);
+}
+
+function getCandidatePriority(host: SchedulerDomainHost, task: TaskState, fallback: number): number {
+  const attempt = task.execution.selectedAttemptId
+    ? host.loadAttemptById(task.execution.selectedAttemptId)
+    : undefined;
+  return Math.max(fallback, attempt?.queuePriority ?? fallback);
+}
+
+function hasActiveLaunchAttempt(
+  host: SchedulerDomainHost,
+  task: TaskState,
+  attemptId: string | undefined,
+): boolean {
+  if (!attemptId) return false;
+  if (task.execution.selectedAttemptId !== attemptId) return false;
+  const attempt = host.loadAttemptById(attemptId);
+  if (!host.isAttemptLeaseActive(attempt)) return false;
+  return task.status === 'running'
+    || task.status === 'fixing_with_ai'
+    || attempt?.status === 'claimed'
+    || attempt?.status === 'running';
+}
+
+function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): TaskJob[] {
+  const mergedJobs = new Map<string, TaskJob>();
+  for (const sourceJob of [...host.scheduler.getQueuedJobs(), ...candidateJobs]) {
+    const task = host.stateGetTask(sourceJob.taskId);
+    if (!task || task.status !== 'pending') continue;
+    if (host.getExternalDependencyBlocker(task) !== undefined) continue;
+    const knownAttemptId = sourceJob.attemptId ?? task.execution.selectedAttemptId;
+    if (hasActiveLaunchAttempt(host, task, knownAttemptId)) continue;
+    const existing = mergedJobs.get(task.id);
+    mergedJobs.set(task.id, {
+      taskId: task.id,
+      attemptId: existing?.attemptId ?? knownAttemptId,
+      priority: Math.max(existing?.priority ?? sourceJob.priority, sourceJob.priority),
+      ...(existing?.bypassLocalDependencyReadiness || sourceJob.bypassLocalDependencyReadiness
+        ? { bypassLocalDependencyReadiness: true }
+        : {}),
+    });
+  }
+
+  let topologyIndex: Map<string, number> | undefined;
+  try {
+    topologyIndex = new Map(
+      topologicalSort([...host.stateMachine.getAllTasks()].sort(byCreatedAtThenId))
+        .map((task, index) => [task.id, index]),
+    );
+  } catch (error) {
+    host.logger.warn('[orchestrator] rebuildPendingLaunchQueue: topological sort failed; falling back to deterministic order', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const orderedJobs = [...mergedJobs.values()]
+    .map((job) => {
+      const task = host.stateGetTask(job.taskId);
+      if (!task) return undefined;
+      return {
+        job,
+        task,
+        ready: getTaskLaunchReadinessImpl(host, job.taskId, {
+          bypassLocalDependencyReadiness: job.bypassLocalDependencyReadiness,
+        }).ready,
+      };
+    })
+    .filter((entry): entry is { job: TaskJob; task: TaskState; ready: boolean } => entry !== undefined);
+
+  orderedJobs.sort((left, right) => {
+    const priorityDiff = right.job.priority - left.job.priority;
+    if (priorityDiff !== 0) return priorityDiff;
+    const readinessDiff = Number(right.ready) - Number(left.ready);
+    if (readinessDiff !== 0) return readinessDiff;
+    if (topologyIndex) {
+      const topologyDiff = (topologyIndex.get(left.task.id) ?? Number.MAX_SAFE_INTEGER)
+        - (topologyIndex.get(right.task.id) ?? Number.MAX_SAFE_INTEGER);
+      if (topologyDiff !== 0) return topologyDiff;
+    }
+    return byCreatedAtThenId(left.task, right.task);
+  });
+
+  return orderedJobs.map(({ job }) => job);
+}
+
+export function getPendingLaunchQueueSnapshotImpl(
+  host: SchedulerDomainHost,
+  candidateJobs: TaskJob[],
+): TaskJob[] {
+  return planPendingLaunchQueue(host, candidateJobs);
+}
+
+function rebuildPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): void {
+  const orderedJobs: TaskJob[] = [];
+  for (const job of planPendingLaunchQueue(host, candidateJobs)) {
+    const task = host.stateGetTask(job.taskId);
+    if (!task) continue;
+    const attemptId = host.ensureCurrentPendingAttempt(task);
+    const currentAttempt = host.loadAttemptById(attemptId);
+    if ((currentAttempt?.queuePriority ?? 0) !== job.priority) {
+      host.taskRepository.updateAttempt(attemptId, { queuePriority: job.priority });
+    }
+    orderedJobs.push({
+      taskId: task.id,
+      attemptId,
+      priority: job.priority,
+      ...(job.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
+    });
+  }
+  host.scheduler.replaceQueue(orderedJobs);
+}
+
 
 // ── Extracted Functions ─────────────────────────────────────
 
@@ -78,6 +193,7 @@ export function autoStartReadyTasksImpl(
   priority: number = 0,
   opts?: LaunchReadinessOptions,
 ): TaskState[] {
+  const candidateJobs: TaskJob[] = [];
   for (const taskId of taskIds) {
     let task = host.stateGetTask(taskId);
     if (!task) continue;
@@ -98,9 +214,15 @@ export function autoStartReadyTasksImpl(
       if (!task) continue;
     }
 
-    enqueueIfNotScheduledImpl(host, taskId, priority, opts);
+    candidateJobs.push({
+      taskId,
+      attemptId: task.execution.selectedAttemptId,
+      priority: getCandidatePriority(host, task, priority),
+      ...(opts?.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
+    });
   }
 
+  rebuildPendingLaunchQueue(host, candidateJobs);
   return drainSchedulerImpl(host);
 }
 
@@ -113,46 +235,16 @@ export function enqueueIfNotScheduledImpl(
   const task = host.stateGetTask(taskId);
   if (!task) return;
   if (host.getExternalDependencyBlocker(task) !== undefined) return;
+  if (hasActiveLaunchAttempt(host, task, task.execution.selectedAttemptId)) {
+    return;
+  }
 
-  const attemptId = host.ensureCurrentPendingAttempt(task);
-  const currentAttempt = host.loadAttemptById(attemptId);
-  if ((currentAttempt?.queuePriority ?? 0) !== priority) {
-    host.taskRepository.updateAttempt(attemptId, { queuePriority: priority });
-  }
-  // A task can be force-set back to blocked/pending by recovery logic while
-  // still carrying a stale selectedAttemptId from an older run. Only skip
-  // re-enqueue when the task is actually active.
-  if (
-    (task.status === 'running' || task.status === 'fixing_with_ai') &&
-    task.execution.selectedAttemptId === attemptId &&
-    host.isAttemptLeaseActive(currentAttempt)
-  ) {
-    return;
-  }
-  const queuedJob = host.scheduler
-    .getQueuedJobs()
-    .find((job) => job.attemptId === attemptId || job.taskId === taskId);
-  if (queuedJob) {
-    const shouldReplaceQueuedJob =
-      priority > queuedJob.priority ||
-      (opts?.bypassLocalDependencyReadiness === true && !queuedJob.bypassLocalDependencyReadiness);
-    if (shouldReplaceQueuedJob) {
-      host.scheduler.removeJob(queuedJob.attemptId ?? queuedJob.taskId);
-      host.scheduler.enqueue({
-        taskId,
-        attemptId,
-        priority: Math.max(priority, queuedJob.priority),
-        ...(opts?.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
-      });
-    }
-    return;
-  }
-  host.scheduler.enqueue({
+  rebuildPendingLaunchQueue(host, [{
     taskId,
-    attemptId,
-    priority,
+    attemptId: task.execution.selectedAttemptId,
+    priority: getCandidatePriority(host, task, priority),
     ...(opts?.bypassLocalDependencyReadiness ? { bypassLocalDependencyReadiness: true } : {}),
-  });
+  }]);
 }
 
 export function autoStartExternallyUnblockedReadyTasksImpl(host: SchedulerDomainHost): TaskState[] {
@@ -161,14 +253,17 @@ export function autoStartExternallyUnblockedReadyTasksImpl(host: SchedulerDomain
     .getReadyTasks()
     .filter((task) => host.getExternalDependencyBlocker(task) === undefined);
 
-  for (const task of readyTasks) {
-    enqueueIfNotScheduledImpl(host, task.id);
-  }
+  rebuildPendingLaunchQueue(host, readyTasks.map((task) => ({
+    taskId: task.id,
+    attemptId: task.execution.selectedAttemptId,
+    priority: getCandidatePriority(host, task, 0),
+  })));
   started.push(...drainSchedulerImpl(host));
   return started;
 }
 
 export function autoStartUnblockedTasksImpl(host: SchedulerDomainHost): TaskState[] {
+  const candidateJobs: TaskJob[] = [];
   for (const task of host.stateMachine.getAllTasks()) {
     if (task.status !== 'blocked') continue;
     if (!areLocalDependenciesSatisfiedImpl(host, task)) continue;
@@ -180,8 +275,15 @@ export function autoStartUnblockedTasksImpl(host: SchedulerDomainHost): TaskStat
     const changes = buildTaskResetChanges('externalUnblock');
     const updated = host.writeAndSync(task.id, changes);
     assertResetComplete(resetBefore, updated, 'externalUnblock', { execution: changes.execution });
-    enqueueIfNotScheduledImpl(host, task.id);
+    const pendingTask = host.stateGetTask(task.id);
+    if (!pendingTask) continue;
+    candidateJobs.push({
+      taskId: pendingTask.id,
+      attemptId: pendingTask.execution.selectedAttemptId,
+      priority: getCandidatePriority(host, pendingTask, 0),
+    });
   }
+  rebuildPendingLaunchQueue(host, candidateJobs);
   return drainSchedulerImpl(host);
 }
 
