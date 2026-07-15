@@ -158,20 +158,19 @@ Minimal example:
       "user": "invoker",
       "sshKeyPath": "/home/you/.ssh/invoker_staging_a",
       "managedWorkspaces": true,
-      "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile"
+      "remoteInvokerHome": "~/.invoker"
     },
     "staging-b": {
       "host": "203.0.113.11",
       "user": "invoker",
       "sshKeyPath": "/home/you/.ssh/invoker_staging_b",
       "managedWorkspaces": true,
-      "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile"
+      "remoteInvokerHome": "~/.invoker"
     }
   }
 }
 ```
+Invoker does not run repo bootstrap automatically on managed SSH checkouts. If a repo needs setup such as `pnpm install` or `flutter pub get`, make the task command run that repo-owned step explicitly.
 
 `autoFixRetries` is a finite per-task cap. `3` means the worker keeps consumed attempts in process memory and can submit at most three auto-fix attempts for the same failed task lineage; `0` disables auto-fix workers.
 
