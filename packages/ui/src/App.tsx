@@ -3614,7 +3614,7 @@ export function App() {
               <PlanningSessionStatusIcon busy={session.busy} status={session.status} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-2">
-                  <div className="line-clamp-2 break-words text-sm font-medium" title={session.title}>
+                  <div className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium leading-5" title={session.title}>
                     {session.title}
                   </div>
                   <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
@@ -3622,7 +3622,7 @@ export function App() {
                   </span>
                 </div>
                 <div
-                  className="mt-0.5 line-clamp-3 break-words font-mono text-[11px] leading-4 text-muted-foreground"
+                  className="mt-1 line-clamp-3 break-words font-mono text-[11px] leading-4 text-muted-foreground"
                   title={preview}
                 >
                   {preview}
