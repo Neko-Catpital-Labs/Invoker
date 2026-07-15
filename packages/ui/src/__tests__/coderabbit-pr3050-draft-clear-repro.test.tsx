@@ -58,7 +58,7 @@ describe('CodeRabbit PR #3050 — draft state cleared after submit', () => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(1);
     });
     await openPlanningTerminal();
-    await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then Run.');
+    await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.');
     // The submit succeeded; the ready bar must be gone so it cannot resubmit the same session.
     await waitFor(() => {
       expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();

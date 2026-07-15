@@ -622,8 +622,8 @@ export async function submitPlanningChatDraft(
         session,
         'system',
         loaded.workflowCount && loaded.workflowCount > 1
-          ? `Plan "${loaded.planName}" submitted as ${loaded.workflowCount} stacked workflows. Review them, then Run.`
-          : `Plan "${loaded.planName}" submitted to Invoker. Review it, then Run.`,
+          ? `Plan "${loaded.planName}" submitted as ${loaded.workflowCount} stacked workflows. Review them, then use Start ready work.`
+          : `Plan "${loaded.planName}" submitted to Invoker. Review it, then use Start ready work.`,
         'success',
       );
       persistPlanningSession(session, deps.planningSessionStore, false);
