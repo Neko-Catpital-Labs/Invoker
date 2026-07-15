@@ -530,7 +530,7 @@ tasks:
       workflowCount: 2,
     });
     expect(sessions.get(sent.sessionId)?.messages.at(-1)?.text).toBe(
-      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then Run.',
+      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then use Start ready work.',
     );
   });
 
