@@ -44,6 +44,7 @@ interface WorkflowNodeData extends Record<string, unknown> {
   selected: boolean;
   dimmed: boolean;
   coreActivity?: WorkflowCoreActivity;
+  onSelect?: () => void;
 }
 
 interface GraphViewport {
@@ -97,6 +98,7 @@ function shouldStartPanePan(
   if (targetElement) {
     if (!root.contains(targetElement)) return false;
     if (targetElement.closest(PANE_PAN_BLOCK_SELECTOR)) return false;
+    if (targetElement.closest('.react-flow__node, [data-testid^="workflow-node-"]')) return false;
     if (targetElement.closest('.react-flow__pane')) return true;
   }
 
@@ -137,6 +139,10 @@ function applyViewportTransform(viewportElement: HTMLElement | null, viewport: G
     'transform',
     `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
   );
+}
+
+function clearViewportInlineTransform(viewportElement: HTMLElement | null): void {
+  viewportElement?.style.removeProperty('transform');
 }
 
 function schedulePanePanAnimation(pan: PanePan): void {
@@ -238,7 +244,7 @@ function WorkflowFlowNode({ data }: NodeProps<Node<WorkflowNodeData>>): JSX.Elem
         selected={data.selected}
         dimmed={data.dimmed}
         coreActivity={data.coreActivity}
-        onClick={() => {}}
+        onClick={() => data.onSelect?.()}
         onContextMenu={() => {}}
       />
       <Handle
@@ -275,6 +281,30 @@ function WorkflowGraphInner({
   const pendingGestureEdgesRef = useRef<Edge[] | null>(null);
   const panePointerPanRef = useRef<PanePointerPan | null>(null);
   const paneMousePanRef = useRef<PanePan | null>(null);
+
+  const getViewportElement = useCallback(
+    () => graphRootRef.current?.querySelector<HTMLElement>('.react-flow__viewport') ?? null,
+    [],
+  );
+
+  const cancelActivePanePans = useCallback(() => {
+    for (const ref of [panePointerPanRef, paneMousePanRef] as const) {
+      const pan = ref.current;
+      if (!pan) continue;
+      pan.active = false;
+      if (pan.animationFrame !== 0) {
+        cancelAnimationFrame(pan.animationFrame);
+        pan.animationFrame = 0;
+      }
+      ref.current = null;
+    }
+  }, []);
+
+  const performFitView = useCallback(() => {
+    cancelActivePanePans();
+    clearViewportInlineTransform(getViewportElement());
+    fitView({ padding: 0.2 });
+  }, [cancelActivePanePans, fitView, getViewportElement]);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
@@ -307,12 +337,13 @@ function WorkflowGraphInner({
           selected: selectedWorkflowId === node.id,
           dimmed,
           coreActivity: coreActivityByWorkflow?.get(node.id),
+          onSelect: () => onSelectWorkflow(node.id),
         },
       };
     });
     graphMetricsRef.current.objectsMs = performance.now() - startedAt;
     return nextNodes;
-  }, [coreActivityByWorkflow, graph.nodes, positions, selectedWorkflowId, statusFilters]);
+  }, [coreActivityByWorkflow, graph.nodes, onSelectWorkflow, positions, selectedWorkflowId, statusFilters]);
   const [rfNodes, setRfNodes] = useState<Node<WorkflowNodeData>[]>([]);
 
   useEffect(() => {
@@ -398,9 +429,9 @@ function WorkflowGraphInner({
     initFitFrameRef.current = requestAnimationFrame(() => {
       if (initialFitCompletedRef.current) return;
       initialFitCompletedRef.current = true;
-      fitView({ padding: 0.2 });
+      performFitView();
     });
-  }, [fitView]);
+  }, [performFitView]);
 
   // Cancel a pending first-fit frame on unmount so it never fires against a
   // torn-down graph after the component has gone away.
@@ -489,8 +520,8 @@ function WorkflowGraphInner({
       pan.animationFrame = 0;
     }
     pan.visualViewport = { ...pan.targetViewport };
-    applyViewportTransform(pan.viewportElement, pan.targetViewport);
     void setViewport(pan.targetViewport, { duration: 0 });
+    clearViewportInlineTransform(pan.viewportElement);
   }, [setViewport]);
 
   const onPanePointerMoveCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
@@ -645,7 +676,7 @@ function WorkflowGraphInner({
     if (nodes.length === 0) return;
 
     if (command.kind === 'fitInitial') {
-      const frame = requestAnimationFrame(() => fitView({ padding: 0.2 }));
+      const frame = requestAnimationFrame(() => performFitView());
       return () => cancelAnimationFrame(frame);
     }
 
@@ -658,11 +689,11 @@ function WorkflowGraphInner({
         const zoom = typeof getZoom === 'function' ? getZoom() : 1;
         setCenter(node.position.x + 110, node.position.y + 45, { zoom, duration: 180 });
       } else {
-        fitView({ padding: 0.2 });
+        performFitView();
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [cameraCommand, fitView, getZoom, nodes, setCenter]);
+  }, [cameraCommand, getZoom, nodes, performFitView, setCenter]);
 
   useEffect(() => {
     if (nodes.length === 0) return;
@@ -681,7 +712,7 @@ function WorkflowGraphInner({
         const shouldRecover =
           watchdogMissCountRef.current >= WATCHDOG_RECOVERY_MISS_COUNT &&
           !watchdogRecoveryAttemptedRef.current;
-        fitView({ padding: 0.2 });
+        performFitView();
         if (shouldRecover) {
           watchdogRecoveryAttemptedRef.current = true;
           setFlowInstanceKey((key) => key + 1);
@@ -691,7 +722,7 @@ function WorkflowGraphInner({
       }
     }, 2000);
     return () => clearInterval(interval);
-  }, [fitView, nodes.length]);
+  }, [nodes.length, performFitView]);
 
   const flowNodes = rfNodes.length > 0 ? rfNodes : nodes;
   const flowEdges = rfEdges.length > 0 || edges.length === 0 ? rfEdges : edges;
@@ -742,6 +773,8 @@ function WorkflowGraphInner({
         >
           <Background color="var(--graph-grid)" gap={20} />
           <Controls
+            fitViewOptions={{ padding: 0.2 }}
+            onFitView={performFitView}
             style={{
               background: 'var(--graph-controls)',
               borderRadius: '8px',
