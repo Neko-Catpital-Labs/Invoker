@@ -36,6 +36,27 @@ function reviewGateTask(id: string, reviewId: string, status: TaskState['status'
     },
   } as TaskState;
 }
+function structuredReviewGateTask(id: string, reviewId: string, status: TaskState['status']): TaskState {
+  return {
+    ...reviewGateTask(id, reviewId, status),
+    execution: {
+      ...reviewGateTask(id, reviewId, status).execution,
+      reviewGate: {
+        activeGeneration: 1,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [{
+          id: reviewId,
+          providerId: reviewId,
+          provider: 'stub-github',
+          required: true,
+          status: 'open',
+          generation: 1,
+        }],
+      },
+    },
+  } as TaskState;
+}
+
 
 function stubMergeGateProvider(overrides: Partial<MergeGateApprovalStatus> = {}): MergeGateProvider {
   return {
@@ -99,6 +120,40 @@ describe('pollMergeGateTask → SQLite heartbeat persistence', () => {
     expect(heartbeatMs).toBeGreaterThanOrEqual(beforePoll);
     expect(heartbeatMs).toBeLessThanOrEqual(afterPoll);
     expect(heartbeatMs).toBeGreaterThan(before.getTime());
+  });
+  it('persists checksState failedChecks and mergeState onto an open review artifact', async () => {
+    const task = structuredReviewGateTask('merge-health', 'foo/bar#303', 'review_ready');
+    adapter.saveTask(WORKFLOW.id, task);
+    orchestrator.syncFromDb(WORKFLOW.id);
+
+    const runner = new TaskRunner({
+      orchestrator,
+      persistence: adapter,
+      executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+      cwd: '/runner-base-cwd',
+      mergeGateProvider: stubMergeGateProvider({
+        statusText: 'Checks failing',
+        mergeState: 'dirty',
+        checks: {
+          state: 'failure',
+          failed: [{ name: 'lint', conclusion: 'FAILURE', detailsUrl: 'https://ci.example/lint' }],
+        },
+      }),
+    });
+
+    await runner.checkMergeGateStatuses();
+
+    const persisted = adapter.loadTasks(WORKFLOW.id).find((candidate) => candidate.id === task.id)!;
+    expect(persisted.execution.reviewGate?.artifacts).toEqual([
+      expect.objectContaining({
+        id: 'foo/bar#303',
+        status: 'open',
+        rawStatus: 'Checks failing',
+        checksState: 'failure',
+        failedChecks: [{ name: 'lint', conclusion: 'FAILURE', detailsUrl: 'https://ci.example/lint' }],
+        mergeState: 'dirty',
+      }),
+    ]);
   });
 
   it('checkPrApprovalNow advances lastHeartbeatAt for a review_ready task in SQLite', async () => {
