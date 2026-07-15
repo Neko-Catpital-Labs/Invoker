@@ -38,7 +38,7 @@ describe('Visual proof snapshots', () => {
     expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
-    expect(screen.queryByTestId('sidebar-running')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
     expect(screen.getByText('Describe the change in the terminal to generate a plan.')).toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
@@ -66,8 +66,8 @@ describe('Visual proof snapshots', () => {
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
-      expect(screen.getByText('Alpha')).toBeInTheDocument();
-      expect(screen.getByText('Beta')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-alpha')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-beta')).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-alpha'));

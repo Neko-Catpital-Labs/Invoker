@@ -5054,59 +5054,6 @@ function createEmbeddedTerminalBackendFromConfig(
     // (or selecting) an embedded session managed in the main process.
     // Headless `open-terminal` still routes to `openExternalTerminalForTask`
     // in `headless.ts` so existing CLI behaviour is preserved.
-    const planningTerminalOnly = (sessionId: string): { ok: true } | { ok: false; reason: string } => {
-      const session = embeddedTerminalManager.get(sessionId);
-      if (!session) return { ok: false, reason: `Unknown session "${sessionId}".` };
-      if (session.kind !== 'planning') {
-        return { ok: false, reason: `Session "${sessionId}" is not a planning terminal session.` };
-      }
-      return { ok: true };
-    };
-
-    ipcMain.handle('invoker:planning-terminal-open', async (_event, planningSessionIdArg: string) => {
-      const planningSessionId = String(planningSessionIdArg ?? '').trim();
-      if (!planningSessionId) {
-        return { opened: false, reason: 'Planning session id is required.' };
-      }
-      logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
-      try {
-        const session = embeddedTerminalManager.openOrReuse({
-          kind: 'planning',
-          taskId: `planning:${planningSessionId}`,
-          planningSessionId,
-          spec: { cwd: repoRoot },
-          cwd: repoRoot,
-        });
-        return { opened: true, session };
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        logger.warn(`planning terminal spawn failed for session="${planningSessionId}": ${reason}`, { module: 'planning-terminal' });
-        return { opened: false, reason: `Failed to start planning terminal session: ${reason}` };
-      }
-    });
-
-    ipcMain.handle('invoker:planning-terminal-list', async () => {
-      return embeddedTerminalManager.list().filter((session) => session.kind === 'planning');
-    });
-
-    ipcMain.handle('invoker:planning-terminal-write', async (_event, sessionId: string, data: string) => {
-      const allowed = planningTerminalOnly(sessionId);
-      if (!allowed.ok) return allowed;
-      return embeddedTerminalManager.write(sessionId, data);
-    });
-
-    ipcMain.handle('invoker:planning-terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
-      const allowed = planningTerminalOnly(sessionId);
-      if (!allowed.ok) return allowed;
-      return embeddedTerminalManager.resize(sessionId, cols, rows);
-    });
-
-    ipcMain.handle('invoker:planning-terminal-close', async (_event, sessionId: string) => {
-      const allowed = planningTerminalOnly(sessionId);
-      if (!allowed.ok) return allowed;
-      return embeddedTerminalManager.close(sessionId);
-    });
-
     ipcMain.handle('invoker:open-terminal', async (_event, taskId: string) => {
       logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
       const liveHandle = taskHandles.get(taskId);
