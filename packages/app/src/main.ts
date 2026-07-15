@@ -2037,6 +2037,10 @@ function createEmbeddedTerminalBackendFromConfig(
     }, taskId);
   }
 
+  function requireTaskExecutor(): TaskRunner {
+    return requireWiredTaskRunner(() => taskExecutor);
+  }
+
   function createWindow(): void {
     createMainWindow({
       appRootDir: __dirname,
