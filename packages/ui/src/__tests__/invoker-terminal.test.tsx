@@ -954,5 +954,6 @@ describe('Invoker terminal (component)', () => {
     await expectSurfaceRailList('planning', 'planning-session-list');
     await expectSurfaceRailList('workflows', 'workflows-rail-list');
     await expectSurfaceRailList('attention', 'attention-rail-list');
+    expect(screen.queryByTestId('running-rail-list')).not.toBeInTheDocument();
   });
 });

@@ -86,11 +86,6 @@ export function CommandPalette({
                 <span>Needs Attention</span>
                 {attentionEntries.length > 0 && <CommandShortcut>{attentionEntries.length}</CommandShortcut>}
               </CommandItem>
-              <CommandItem value="running tasks" onSelect={closeAnd(() => onSelectSurface('running'))}>
-                <Clock strokeWidth={1.75} />
-                <span>Running</span>
-                {runningEntries.length > 0 && <CommandShortcut>{runningEntries.length}</CommandShortcut>}
-              </CommandItem>
               <CommandItem value="workflows browser" onSelect={closeAnd(() => onSelectSurface('workflows'))}>
                 <Layers strokeWidth={1.75} />
                 <span>Workflows</span>
