@@ -598,7 +598,7 @@ describe('Orchestrator launch claims', () => {
     expect(orchestrator.getTask(downstreamId)?.status).toBe('pending');
     expect(persistence.launchDispatchRows.some((row) => row.taskId === downstreamId)).toBe(false);
   });
-  it.fails('rebuilds the pending queue so runnable tasks stay ahead of dependency-blocked stale jobs', () => {
+  it('rebuilds the pending queue so runnable tasks stay ahead of dependency-blocked stale jobs', () => {
     const { orchestrator, persistence } = makeOrchestrator({
       deferRunningUntilLaunch: true,
       enqueueLaunchDispatchEnabled: true,
