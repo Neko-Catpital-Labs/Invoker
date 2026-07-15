@@ -699,7 +699,7 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-planning').click();
     await expect(transcript).toContainText('Add README');
     await expect(transcript).toContainText('sleep 2 && echo hello-gamma');
-    await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker. Review it, then Run.');
+    await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker. Review it, then use Start ready work.');
     await captureScreenshot(page, 'terminal-planned-conversation-after-submit');
 
     await page.evaluate(async () => {
