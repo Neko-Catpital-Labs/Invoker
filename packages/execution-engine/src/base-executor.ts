@@ -936,6 +936,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       const session = this.prepareClaudeSession(request);
       return { cmd: claudeCommand, args: session.cliArgs, agentSessionId: session.sessionId, fullPrompt: session.fullPrompt };
     }
+    if (request.actionType === 'merge_gate') {
+      throw new Error(
+        'WorkRequest actionType "merge_gate" must run on MergeGateExecutor, not a worktree/command executor',
+      );
+    }
     return { cmd: '/bin/bash', args: ['-c', 'echo "Unsupported action type"'] };
   }
 

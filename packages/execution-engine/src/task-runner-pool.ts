@@ -456,7 +456,9 @@ export function selectExecutor(
   task: TaskState,
   excludedPoolMemberKeys: Set<string> = new Set(),
 ): SelectedExecutor {
-  let effectiveType = task.config.runnerKind ?? (task.config.isMergeNode ? 'merge' : undefined);
+  let effectiveType = task.config.isMergeNode
+    ? 'merge'
+    : task.config.runnerKind;
   let selectedPoolMemberId: string | undefined;
   const explicitPoolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
   let resolvedExecution: ResolvedExecutionSelection = {

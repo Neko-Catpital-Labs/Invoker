@@ -3962,19 +3962,15 @@ describe('TaskRunner', () => {
       for (let i = 0; i < 10; i++) await Promise.resolve();
     }
 
-    it('does not run merge-node work from the completion handler', async () => {
-      const log: string[] = [];
-      const deferred1 = createDeferred();
-      const deferred2 = createDeferred();
+    it('does not run legacy executeMergeNode from the completion handler', async () => {
       let mergeCallCount = 0;
-
       const completeCallbacks = new Map<string, (response: WorkResponse) => void>();
-      const manualExecutor = {
-        type: 'worktree',
+      const mergeExecutor = {
+        type: 'merge',
         start: vi.fn(async (request: any) => ({
           executionId: `exec-${request.actionId}`,
           taskId: request.actionId,
-          workspacePath: '/tmp/mock-worktree',
+          workspacePath: '/tmp/mock-merge',
           branch: `invoker/${request.actionId}`,
         })),
         onComplete: vi.fn((handle: any, cb: any) => {
@@ -3993,30 +3989,28 @@ describe('TaskRunner', () => {
         } as any,
         persistence: { updateTask: vi.fn() } as any,
         executorRegistry: {
-          getDefault: () => manualExecutor,
-          get: () => manualExecutor,
-          getAll: () => [manualExecutor],
+          getDefault: () => mergeExecutor,
+          get: (type: string) => (type === 'merge' ? mergeExecutor : null),
+          getAll: () => [mergeExecutor],
+          register: vi.fn(),
         } as any,
         cwd: '/tmp',
       });
 
       vi.spyOn(runner as any, 'executeMergeNode').mockImplementation(async () => {
-        const n = ++mergeCallCount;
-        log.push(`enter-${n}`);
-        if (n === 1) await deferred1.promise;
-        else await deferred2.promise;
-        log.push(`exit-${n}`);
+        mergeCallCount += 1;
       });
 
+      // Persisted runnerKind=worktree must still route to the merge executor.
       const task1 = makeTask({ id: 'merge-1', status: 'running', config: { isMergeNode: true, runnerKind: 'worktree' } });
       const task2 = makeTask({ id: 'merge-2', status: 'running', config: { isMergeNode: true, runnerKind: 'worktree' } });
 
       const done1 = runner.executeTask(task1);
       const done2 = runner.executeTask(task2);
       await flush();
+      expect(mergeExecutor.start).toHaveBeenCalledTimes(2);
       expect(completeCallbacks.size).toBe(2);
 
-      // Fire both onComplete callbacks simultaneously
       completeCallbacks.get('merge-1')!({
         requestId: 'r1', actionId: 'merge-1', status: 'completed', outputs: { exitCode: 0 },
       });
@@ -4026,26 +4020,23 @@ describe('TaskRunner', () => {
 
       await flush();
       await Promise.all([done1, done2]);
-      expect(log).toEqual([]);
       expect(mergeCallCount).toBe(0);
     });
 
-    it('a completed no-command merge worktree does not enter merge execution from onComplete', async () => {
+    it('routes isMergeNode + runnerKind worktree through merge executor completion', async () => {
       vi.useFakeTimers();
       try {
-        const log: string[] = [];
-        const deferred1 = createDeferred();
         const completeCallbacks = new Map<string, (response: WorkResponse) => void>();
         const updateAttempt = vi.fn();
-        const receivedHeartbeats: string[] = [];
         const onCompleteCb = vi.fn();
+        let legacyMergeCallCount = 0;
 
-        const manualExecutor = {
-          type: 'worktree',
+        const mergeExecutor = {
+          type: 'merge',
           start: vi.fn(async (request: any) => ({
             executionId: `exec-${request.actionId}`,
             taskId: request.actionId,
-            workspacePath: '/tmp/mock-worktree',
+            workspacePath: '/tmp/mock-merge',
             branch: `invoker/${request.actionId}`,
           })),
           onComplete: vi.fn((handle: any, cb: any) => {
@@ -4082,23 +4073,19 @@ describe('TaskRunner', () => {
           } as any,
           persistence: { updateTask: vi.fn(), updateAttempt } as any,
           executorRegistry: {
-            getDefault: () => manualExecutor,
-            get: () => manualExecutor,
-            getAll: () => [manualExecutor],
+            getDefault: () => mergeExecutor,
+            get: (type: string) => (type === 'merge' ? mergeExecutor : null),
+            getAll: () => [mergeExecutor],
+            register: vi.fn(),
           } as any,
           cwd: '/tmp',
           callbacks: {
-            onHeartbeat: (taskId: string) => { receivedHeartbeats.push(taskId); },
             onComplete: onCompleteCb,
           },
         });
 
-        vi.spyOn(runner as any, 'executeMergeNode').mockImplementation(async (task: TaskState) => {
-          log.push(`enter-${task.id}`);
-          if (task.id === 'merge-1') {
-            await deferred1.promise;
-          }
-          log.push(`exit-${task.id}`);
+        vi.spyOn(runner as any, 'executeMergeNode').mockImplementation(async () => {
+          legacyMergeCallCount += 1;
         });
 
         const task1 = makeTask({
@@ -4117,6 +4104,7 @@ describe('TaskRunner', () => {
         const done1 = runner.executeTask(task1);
         const done2 = runner.executeTask(task2);
         await flush();
+        expect(mergeExecutor.start).toHaveBeenCalledTimes(2);
         expect(completeCallbacks.size).toBe(2);
 
         completeCallbacks.get('merge-1')!({
@@ -4133,18 +4121,12 @@ describe('TaskRunner', () => {
         });
 
         await flush();
-        await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
-
-        expect(log).toEqual([]);
-        expect(receivedHeartbeats).not.toContain('merge-2');
+        await Promise.all([done1, done2]);
+        expect(legacyMergeCallCount).toBe(0);
         expect(onCompleteCb).toHaveBeenCalledWith(
           'merge-2',
           expect.objectContaining({ status: 'completed' }),
         );
-
-        deferred1.resolve(undefined as any);
-        await Promise.all([done1, done2]);
-        expect(log).toEqual([]);
       } finally {
         vi.useRealTimers();
       }
