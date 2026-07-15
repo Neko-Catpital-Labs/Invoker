@@ -770,7 +770,7 @@ export function App() {
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
   const contextMenuTaskRef = useRef<TaskState | null>(null);
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkerKind, setSelectedWorkerKind] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
@@ -2848,7 +2848,7 @@ export function App() {
       setHasLoadedPlan(false);
       setPlanName(null);
       setSidebarSurface('home');
-      setSidebarCollapsed(null);
+      setSidebarCollapsed(false);
       setViewMode('dag');
       setGraphActionsMenuOpen(false);
       setSelectedTaskId(null);
@@ -2872,7 +2872,7 @@ export function App() {
       setHasLoadedPlan(false);
       setPlanName(null);
       setSidebarSurface('home');
-      setSidebarCollapsed(null);
+      setSidebarCollapsed(false);
       setViewMode('dag');
       setGraphActionsMenuOpen(false);
       setSelectedTaskId(null);
@@ -2885,8 +2885,6 @@ export function App() {
   }, [clearTasks, invoker]);
   const showStartReadyControl = hasLoadedPlan || tasks.size > 0 || workflows.size > 0;
   const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
-  const autoCollapseSidebar = viewportWidth < 1440;
-  const effectiveSidebarCollapsed = sidebarCollapsed ?? autoCollapseSidebar;
   const autoCollapseInspector = sidebarSurface !== 'home' && viewportWidth < 1440;
   const effectiveInspectorCollapsed = inspectorCollapsed || (autoCollapseInspector && !inspectorManualOpen);
   const showWorkerDetailsPanel = viewMode === 'queue' && sidebarSurface === 'workers';
@@ -4072,9 +4070,9 @@ export function App() {
           planningSessionCount={planningSessions.length}
           planningAttentionCount={planningAttentionCount}
           selectedSurface={sidebarSurface}
-          collapsed={effectiveSidebarCollapsed}
+          collapsed={sidebarCollapsed}
           onSelectSurface={handleSelectSidebarSurface}
-          onToggleCollapsed={() => setSidebarCollapsed(!effectiveSidebarCollapsed)}
+          onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
           onOpenSettings={() => {
             cancelPendingSystemSetupAutoOpen();
             setShowSystemSetup(true);
