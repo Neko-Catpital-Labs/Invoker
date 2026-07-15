@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getStatusColor, getStatusInlineColors, matchesStatusFilter, formatStatusLabel } from '../lib/colors.js';
+import { getStatusColor, getStatusInlineColors, matchesStatusFilter, formatStatusLabel, getEffectiveVisualStatus } from '../lib/colors.js';
 import { getStatusVisual, STATUS_VISUALS } from '../lib/status-colors.js';
 import type { TaskStatus } from '../types.js';
 
@@ -144,5 +144,15 @@ describe('matchesStatusFilter', () => {
   it('does not cross-match unrelated statuses', () => {
     expect(matchesStatusFilter('running', 'completed')).toBe(false);
     expect(matchesStatusFilter('failed', 'running_executing')).toBe(false);
+  });
+});
+
+describe('getEffectiveVisualStatus', () => {
+  it('does not let running-like terminal state mask fix approval', () => {
+    expect(getEffectiveVisualStatus(
+      'awaiting_approval',
+      { pendingFixError: 'tests failed', phase: 'executing' },
+      { runningLike: true },
+    )).toBe('fix_approval');
   });
 });
