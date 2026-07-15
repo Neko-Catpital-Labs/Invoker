@@ -215,6 +215,7 @@ import {
 } from './reconcile-orphaned-running-tasks.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
 import {
+  dispatchStartedTasksWithGlobalTopup,
   executeGlobalTopup,
 } from './global-topup.js';
 import {
@@ -2791,9 +2792,14 @@ function createEmbeddedTerminalBackendFromConfig(
       getOwnerMode: () => ownerMode,
       getWorkerRuntimeController: () => workerRuntimeController,
       registrars: guiMutationRegistrars,
+      getMainWindow: () => mainWindow,
       actions: requireGuiMutationActions(),
       planningChatSessions,
       planningCommandBuilder,
+      emitPlanningChatStream: (event) => {
+        if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) return;
+        mainWindow.webContents.send('invoker:planning-chat-stream', event);
+      },
       taskGraphEventPublisher,
       loadTaskByIdFromPersistence,
       markDaemonOwnerUnavailable,

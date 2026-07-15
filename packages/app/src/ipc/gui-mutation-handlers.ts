@@ -8,6 +8,8 @@ import type {
   InAppPlanningChatRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningResetRequest,
+  InAppPlanningSetTerminalModeRequest,
+  InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   Logger,
   StartReadyRequest,
@@ -79,6 +81,7 @@ import {
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
+  setPlanningChatTerminalMode,
   submitPlanningChatDraft,
 } from '../in-app-planner.js';
 import { seedMainProcessHitchFixture } from '../main-process-hitch-fixture.js';
@@ -102,11 +105,10 @@ import { isMutationOwnerUnavailableError } from '../bootstrap/app-bootstrap.js';
 import type { HeadlessExecMutationPayload } from '../headless-batch-exec.js';
 import type { TaskHandleMap } from '../execution/task-runner-wiring.js';
 import type { TaskRunner } from '@invoker/execution-engine';
-import type { RendererTaskFeed } from '../window/renderer-task-feed.js';
+import { createRendererTaskFeed } from '../window/renderer-task-feed.js';
 import { createTaskGraphEventPublisher } from '../task-graph-event-publisher.js';
 import type { GuiMutationPayload, GuiMutationRegistrars } from './ipc-registration.js';
 import { resolveInvokerHomeRoot } from '../delete-all-snapshot.js';
-import { recordRendererUiPerfMetric, type RendererUiPerfCounters } from '../renderer-ui-perf.js';
 import {
   buildRecoveryWorkerAuditPayload,
   classifyAutoFixRecoveryPhase,
@@ -123,6 +125,7 @@ interface HeadlessResumeMutationPayload {
   traceId?: string;
 }
 
+type RendererTaskFeed = ReturnType<typeof createRendererTaskFeed>;
 type TaskGraphEventPublisher = ReturnType<typeof createTaskGraphEventPublisher>;
 
 export interface GuiMutationTaskActions {
@@ -214,6 +217,7 @@ export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskAc
   actions: GuiMutationTaskActions;
   planningChatSessions: ReturnType<typeof createInAppPlanningChatSessions>;
   planningCommandBuilder: ReturnType<typeof createPlanningCommandBuilderFromRegistry>;
+  emitPlanningChatStream: (event: InAppPlanningStreamEvent) => void;
   taskGraphEventPublisher: TaskGraphEventPublisher;
   loadTaskByIdFromPersistence: (taskId: string) => TaskState | undefined;
   markDaemonOwnerUnavailable: (reason: string) => void;
@@ -221,7 +225,14 @@ export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskAc
   getTaskDeltaStreamSequence: () => number;
   computeRuntimeStatus: () => unknown;
   getUiPerfStats: () => Record<string, unknown>;
-  uiPerfStats: RendererUiPerfCounters;
+  uiPerfStats: {
+    rendererReports: number;
+    maxRendererHiddenEventLoopLagMs: number;
+    maxRendererEventLoopLagMs: number;
+    maxRendererCumulativeLagMs: number;
+    maxRendererTickDeltaMs: number;
+    maxRendererLongTaskMs: number;
+  };
   createRegisteredWorkerRegistry: () => WorkerRegistry<WorkerRuntimeDependencies>;
   buildCliInstallerContext: () => CliInstallerContext;
   resolveSetupCliPath: () => string;
@@ -950,6 +961,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     actions,
     planningChatSessions,
     planningCommandBuilder,
+    emitPlanningChatStream,
     taskGraphEventPublisher,
     loadTaskByIdFromPersistence,
     markDaemonOwnerUnavailable,
@@ -1119,6 +1131,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     loadGeneratedPlan: loadGeneratedPlanPreview,
     conversationRepo: planningConversationRepo,
     planningSessionStore: ownerMode ? persistence : undefined,
+    onRawPlannerOutput: emitPlanningChatStream,
   });
   let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
   // Two variants: (1) a successful override that returns a canned reply +
@@ -1153,6 +1166,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      onRawPlannerOutput: emitPlanningChatStream,
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -1177,6 +1191,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
       plannerReplyOverride,
+      onRawPlannerOutput: emitPlanningChatStream,
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
@@ -1191,6 +1206,12 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
   registerGuiMutationHandler('invoker:planning-chat-reset', async (request: unknown) => {
     return resetPlanningChat(request as InAppPlanningResetRequest, {
+      sessions: planningChatSessions,
+      planningSessionStore: ownerMode ? persistence : undefined,
+    });
+  });
+  registerGuiMutationHandler('invoker:planning-chat-set-terminal-mode', async (request: unknown) => {
+    return setPlanningChatTerminalMode(request as InAppPlanningSetTerminalModeRequest, {
       sessions: planningChatSessions,
       planningSessionStore: ownerMode ? persistence : undefined,
     });
@@ -1699,7 +1720,24 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     ) {
       logger.info(`ui metric ${metric} ${JSON.stringify(data ?? {})}`, { module: 'ui-state' });
     }
-    recordRendererUiPerfMetric(uiPerfStats, metric, data);
+    if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
+      const hiddenOrUnfocused = data.visibilityState === 'hidden' || data.hasFocus === false;
+      if (hiddenOrUnfocused) {
+        uiPerfStats.maxRendererHiddenEventLoopLagMs = Math.max(uiPerfStats.maxRendererHiddenEventLoopLagMs, data.lagMs);
+      } else {
+        uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
+      }
+      if (typeof data.cumulativeLagMs === 'number') {
+        uiPerfStats.maxRendererCumulativeLagMs = Math.max(uiPerfStats.maxRendererCumulativeLagMs, data.cumulativeLagMs);
+      }
+      if (typeof data.tickDeltaMs === 'number') {
+        uiPerfStats.maxRendererTickDeltaMs = Math.max(uiPerfStats.maxRendererTickDeltaMs, data.tickDeltaMs);
+      }
+    }
+    if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
+      uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
+    }
+    uiPerfStats.rendererReports += 1;
     try {
       persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
     } catch {
