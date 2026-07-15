@@ -93,6 +93,7 @@ export function createReactFlowMock() {
 
     return (
       <div data-testid="mock-react-flow" className="react-flow">
+        <div className="react-flow__viewport" />
         <div
           data-testid="rf__pane"
           className="react-flow__pane"
@@ -150,7 +151,11 @@ export function createReactFlowMock() {
       return next;
     }),
     Background: () => null,
-    Controls: () => null,
+    Controls: ({ onFitView }: { onFitView?: () => void }) => (
+      <button type="button" data-testid="rf__fit-view" onClick={() => onFitView?.()}>
+        Fit
+      </button>
+    ),
     MarkerType: { ArrowClosed: 'arrowclosed' },
     Handle: () => null,
     Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },

@@ -567,6 +567,34 @@ describe('WorkflowGraph', () => {
     expect(setViewportMock).not.toHaveBeenCalled();
   });
 
+  it('clears pane-pan inline transforms after drag and restores fit from controls', async () => {
+    getViewportMock.mockReturnValue({ x: 10, y: 20, zoom: 0.75 });
+
+    await renderAndSettleInitialFit({
+      workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
+      selectedWorkflowId: 'wf-a',
+      statusFilters: new Set(),
+      onSelectWorkflow: () => {},
+      onWorkflowContextMenu: () => {},
+    });
+
+    const viewport = screen.getByTestId('workflow-graph-react-flow').querySelector('.react-flow__viewport');
+    expect(viewport).not.toBeNull();
+
+    const pane = screen.getByTestId('rf__pane');
+    fireEvent.mouseDown(pane, { clientX: 100, clientY: 100, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 130, clientY: 88, buttons: 1 });
+    await waitFor(() => expect((viewport as HTMLElement).style.transform).not.toBe(''));
+    fireEvent.mouseUp(window, { clientX: 130, clientY: 88, button: 0 });
+    await waitFor(() => expect((viewport as HTMLElement).style.transform).toBe(''));
+
+    fitViewMock.mockClear();
+    fireEvent.click(screen.getByTestId('rf__fit-view'));
+    expect(fitViewMock).toHaveBeenCalledTimes(1);
+    expect(fitViewMock).toHaveBeenCalledWith({ padding: 0.2 });
+    expect((viewport as HTMLElement).style.transform).toBe('');
+  });
+
   it('centers the selected workflow on a centerSelection command, preserving the current zoom', async () => {
     const issuer = createGraphCameraCommandIssuer();
     getZoomMock.mockReturnValue(1.75);
