@@ -103,13 +103,10 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
   });
 
 
-  it('issue: headless retry for a missing workflow still throws FOREIGN KEY', () => {
-    const error = makeForeignKeyError();
-    const submit = vi.fn(() => {
-      throw error;
-    });
+  it('fixed: headless retry for a missing workflow is accepted without queueing', () => {
+    const submit = vi.fn(() => 42);
 
-    expect(() => submitWorkflowMutationOrAcknowledgeDeleted(
+    const result = submitWorkflowMutationOrAcknowledgeDeleted(
       'wf-missing',
       'high',
       'headless.exec',
@@ -118,28 +115,59 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
         coordinator: { submit },
         workflowExists: () => false,
       },
-    )).toThrow(error);
+    );
+
+    expect(result.intentId).toBe(0);
+    expect(result.accepted).toBe(true);
+    expect(submit).not.toHaveBeenCalled();
   });
 
-  it('issue: headless recreate for a missing workflow still throws FOREIGN KEY', () => {
-    const error = makeForeignKeyError();
+  it('fixed: headless recreate FK race is accepted when the workflow is gone', () => {
     const submit = vi.fn(() => {
-      throw error;
+      throw makeForeignKeyError();
     });
+    let exists = true;
 
-    expect(() => submitWorkflowMutationOrAcknowledgeDeleted(
+    const result = submitWorkflowMutationOrAcknowledgeDeleted(
       'wf-missing',
       'high',
       'headless.exec',
       [{ args: ['recreate', 'wf-missing'] }],
       {
         coordinator: { submit },
-        workflowExists: () => false,
+        workflowExists: () => {
+          const current = exists;
+          exists = false;
+          return current;
+        },
       },
-    )).toThrow(error);
+    );
+
+    expect(result.intentId).toBe(0);
+    expect(result.accepted).toBe(true);
+    expect(submit).toHaveBeenCalledTimes(1);
   });
 
-  it('still propagates foreign-key failures for non-delete mutations', () => {
+  it('fixed: invoker retry-workflow for a missing workflow is accepted without queueing', () => {
+    const submit = vi.fn(() => 42);
+
+    const result = submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-missing',
+      'high',
+      'invoker:retry-workflow',
+      ['wf-missing'],
+      {
+        coordinator: { submit },
+        workflowExists: () => false,
+      },
+    );
+
+    expect(result.intentId).toBe(0);
+    expect(result.accepted).toBe(true);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('still propagates foreign-key failures for non-idempotent mutations', () => {
     const error = makeForeignKeyError();
     const submit = vi.fn(() => {
       throw error;
@@ -148,8 +176,8 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
     expect(() => submitWorkflowMutationOrAcknowledgeDeleted(
       'wf-missing',
       'high',
-      'invoker:retry-workflow',
-      ['wf-missing'],
+      'invoker:fix-with-agent',
+      ['wf-missing/task', 'codex'],
       {
         coordinator: { submit },
         workflowExists: () => false,
