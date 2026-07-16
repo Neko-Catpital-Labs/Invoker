@@ -16,7 +16,7 @@ export default defineConfig({
   globalTeardown: './e2e/global-teardown.ts',
   testDir: './e2e',
   timeout: 120000,
-  retries: Number.isFinite(retries) && retries >= 0 ? retries : 0,
+  retries: Number.isInteger(retries) && retries >= 0 ? retries : 0,
   workers: Number.isFinite(workers) && workers > 0 ? workers : 1,
   snapshotPathTemplate: '{testDir}/__screenshots__/{testFileName}/{arg}{ext}',
   use: {
