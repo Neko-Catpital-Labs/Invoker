@@ -223,7 +223,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 }
 
-async function discoverLiveOwner(bus: MessageBus, timeoutMs = 1_000): Promise<LiveOwnerInfo | null> {
+async function discoverLiveOwner(bus: MessageBus, timeoutMs = 10_000): Promise<LiveOwnerInfo | null> {
   try {
     const raw = await withTimeout(
       bus.request('headless.owner-ping', {}),
@@ -272,7 +272,7 @@ async function submitPlanToLiveOwner(
   planPath: string,
   bus: MessageBus,
   owner: LiveOwnerInfo,
-  timeoutMs = 5_000,
+  timeoutMs = 15_000,
 ): Promise<LiveSubmissionResult> {
   const absolutePlanPath = resolve(planPath);
   const raw = await withTimeout(
