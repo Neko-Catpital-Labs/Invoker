@@ -196,11 +196,11 @@ The desktop Workers tab surfaces the same feed: selecting a worker shows a
 `Decisions` list (act vs skip, with reasons) backed by the
 `invoker:get-worker-decisions` IPC channel.
 
-Only the auto-fix and CI-failure workers own per-task decisions. The
-PR-maintenance crons record coarse run-level rows (running → completed/failed);
-the pr-status worker delegates its decisions to the review gate, and the
-disk-headroom and external-process workers have no task/workflow decision to
-record.
+Only the auto-fix, CI-failure, and review-gate-merge-conflict workers own
+per-task decisions. The coderabbit-address PR-maintenance shell worker records
+coarse run-level rows (running → completed/failed); the pr-status worker
+delegates its decisions to the review gate, and the disk-headroom and
+external-process workers have no task/workflow decision to record.
 
 ## External Workers
 

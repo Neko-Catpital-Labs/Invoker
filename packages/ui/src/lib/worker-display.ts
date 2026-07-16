@@ -99,11 +99,11 @@ export function getWorkerDisplayCopy(kind: string): WorkerDisplayCopy {
       noActionText: 'No CI repair actions recorded yet.',
     };
   }
-  if (kind === 'pr-ci-failure-scan') {
+  if (kind === 'review-gate-merge-conflict') {
     return {
-      name: 'PR CI scan',
-      idleText: 'Idle. Scans mapped PRs for failing CI and queues repairs.',
-      noActionText: 'No PR CI scan runs recorded yet.',
+      name: 'Merge conflict repair',
+      idleText: 'Idle. Waiting for review-gate merge-conflict events.',
+      noActionText: 'No merge-conflict repair actions recorded yet.',
     };
   }
   if (kind === 'e2e-autofix') {
