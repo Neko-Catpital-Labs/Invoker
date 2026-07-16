@@ -11,19 +11,32 @@
  *    for straighter edges.
  */
 
+import elkWorkerUrl from 'elkjs/lib/elk-worker.min.js?url';
 import type { TaskState } from '../types.js';
 
-// elkjs (~1.6 MB bundled) is loaded lazily so it does not ride in the cold
-// startup entry chunk. The first workflow graph paint uses WorkflowGraph, which
-// does not call layoutTaskGraph; ELK is only fetched when the task DAG renders.
-let elkModulePromise: Promise<{ default: new () => ElkLayoutEngine }> | null = null;
-function loadElk(): Promise<{ default: new () => ElkLayoutEngine }> {
-  if (!elkModulePromise) {
-    elkModulePromise = import('elkjs/lib/elk.bundled.js') as Promise<{
-      default: new () => ElkLayoutEngine;
-    }>;
+type ElkConstructor = new (args?: {
+  algorithms?: string[];
+  workerUrl?: string;
+}) => ElkLayoutEngine;
+
+// Keep the heavy ELK implementation out of Vite's JS chunks. The app imports
+// the small browser API and lets the browser load elk-worker.min.js as a worker
+// asset when the Task DAG first needs routed layout.
+let elkConstructorPromise: Promise<ElkConstructor> | null = null;
+function loadElkConstructor(): Promise<ElkConstructor> {
+  if (!elkConstructorPromise) {
+    if (typeof Worker === 'undefined') {
+      const bundledModule = 'elkjs/lib/elk.bundled.js';
+      elkConstructorPromise = import(/* @vite-ignore */ bundledModule).then(
+        (module) => module.default as ElkConstructor,
+      );
+    } else {
+      elkConstructorPromise = import('elkjs/lib/elk-api.js').then(
+        (module) => module.default as ElkConstructor,
+      );
+    }
   }
-  return elkModulePromise;
+  return elkConstructorPromise;
 }
 
 export interface NodePosition {
@@ -103,8 +116,11 @@ export async function layoutTaskGraph(
     if (options?.elk) {
       elk = options.elk;
     } else {
-      const { default: ELK } = await loadElk();
-      elk = new ELK();
+      const ELK = await loadElkConstructor();
+      elk = new ELK({
+        algorithms: ['layered'],
+        ...(typeof Worker === 'undefined' ? {} : { workerUrl: elkWorkerUrl }),
+      });
     }
     const graph = {
       id: 'task-dag',

@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Verify that the tsup/esbuild "unreachable `types` condition" warnings and
-# the `No projects matched the filters` launcher warning stay fixed.
+# Verify that launch/build warning cleanup stays fixed.
 #
 # Modes:
 #   export-order     Inspect every packages/*/package.json and fail if any
 #                    exports map orders `types` after `import` or `require`.
-#   targeted-builds  Run the three targeted builds called out by the task
-#                    (`@invoker/core`, `@invoker/persistence`, `@invoker/app`)
-#                    and fail if their combined output mentions an unreachable
-#                    `types` condition.
+#   targeted-builds  Run the targeted build set and fail if output mentions an
+#                    unreachable `types` condition, empty Vite manual chunks,
+#                    or oversized Vite chunks.
 #   run-sh           Assert that `run.sh` and `scripts/verify-executor-routing.sh`
 #                    no longer reference the removed `@invoker/executors` package
 #                    filter (which is what produced the
@@ -75,7 +73,7 @@ verify_targeted_builds() {
   log="$(mktemp "${TMPDIR:-/tmp}/invoker-build-warn.XXXXXX")"
   trap 'rm -f "$log"' RETURN
 
-  local filters=(@invoker/core @invoker/persistence @invoker/app)
+  local filters=(@invoker/core @invoker/persistence @invoker/app @invoker/ui)
   for filter in "${filters[@]}"; do
     echo "==> pnpm --filter $filter build"
     if ! pnpm --filter "$filter" build >>"$log" 2>&1; then
@@ -85,13 +83,27 @@ verify_targeted_builds() {
     fi
   done
 
+  local failed=0
   if grep -E -i '("types"[^\n]*(unreachable|will never be used|never be used))|(unreachable[^\n]*"types")' "$log" >/dev/null; then
     echo "FAIL: targeted-builds emitted unreachable 'types' condition warnings:" >&2
     grep -E -i -n '("types"[^\n]*(unreachable|will never be used|never be used))|(unreachable[^\n]*"types")' "$log" >&2 || true
+    failed=1
+  fi
+  if grep -F 'Generated an empty chunk' "$log" >/dev/null; then
+    echo "FAIL: targeted-builds emitted empty Vite chunk warnings:" >&2
+    grep -F -n 'Generated an empty chunk' "$log" >&2 || true
+    failed=1
+  fi
+  if grep -F 'Some chunks are larger than 500 kB' "$log" >/dev/null; then
+    echo "FAIL: targeted-builds emitted oversized Vite chunk warnings:" >&2
+    grep -F -n 'Some chunks are larger than 500 kB' "$log" >&2 || true
+    failed=1
+  fi
+  if (( failed > 0 )); then
     return 1
   fi
 
-  echo "PASS: targeted-builds (no unreachable 'types' condition warnings)"
+  echo "PASS: targeted-builds (no known build warning markers)"
 }
 
 verify_run_sh() {
