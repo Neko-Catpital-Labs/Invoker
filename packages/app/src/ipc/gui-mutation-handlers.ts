@@ -17,7 +17,7 @@ import type {
   WorkflowMutationAcceptedResult,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
-import type { SQLiteAdapter } from '@invoker/data-store';
+import type { SQLiteAdapter, WorkerActionWrite } from '@invoker/data-store';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import {
@@ -1267,6 +1267,12 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       const seeded = seedMainProcessHitchFixture(persistence);
       orchestrator.syncAllFromDb();
       return seeded;
+    });
+    registerGuiMutationHandler('invoker:ingest-worker-actions', async (actionsArg: unknown) => {
+      const actions = actionsArg as WorkerActionWrite[];
+      for (const action of actions) {
+        persistence.upsertWorkerAction(action);
+      }
     });
     registerGuiMutationHandler('invoker:seed-stress-fixture', async (optionsArg: unknown) => {
       const options = optionsArg as StressFixtureOptions | undefined;
