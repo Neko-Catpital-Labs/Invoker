@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -443,6 +443,64 @@ describe('WorkflowGraph', () => {
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     expect(fitViewMock).not.toHaveBeenCalled();
     expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('does not refit on a transient hidden-node watchdog miss after a user pan and workflow data change', async () => {
+    vi.useFakeTimers();
+    const onManualViewport = vi.fn();
+    const workflows = new Map([['wf-a', wf('wf-a', 'running')]]);
+    const utils = render(
+      <WorkflowGraph
+        workflows={workflows}
+        selectedWorkflowId="wf-a"
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+        onManualViewport={onManualViewport}
+      />,
+    );
+
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(16);
+      });
+      expect(fitViewMock).toHaveBeenCalledTimes(1);
+      fitViewMock.mockClear();
+      setCenterMock.mockClear();
+
+      const pane = screen.getByTestId('rf__pane');
+      fireEvent.pointerDown(pane, { clientX: 100, clientY: 100, button: 0, pointerId: 1, isPrimary: true });
+      fireEvent.pointerUp(pane, { clientX: 120, clientY: 112, button: 0, pointerId: 1, isPrimary: true });
+      expect(onManualViewport).toHaveBeenCalledTimes(1);
+
+      utils.rerender(
+        <WorkflowGraph
+          workflows={new Map([['wf-a', wf('wf-a', 'completed')]])}
+          selectedWorkflowId="wf-a"
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+          onManualViewport={onManualViewport}
+        />,
+      );
+
+      for (const node of screen.getByTestId('workflow-graph-react-flow').querySelectorAll<HTMLElement>('.react-flow__node')) {
+        node.style.visibility = 'hidden';
+      }
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      // No App command exists in this component-level repro, no cameraCommand is
+      // supplied for WorkflowGraph to consume, and the selected workflow remains
+      // stable. A failure here isolates the source to the watchdog miss path.
+      expect(fitViewMock).not.toHaveBeenCalled();
+      expect(setCenterMock).not.toHaveBeenCalled();
+    } finally {
+      utils.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('defers graph object updates while a manual viewport pan is active', async () => {
