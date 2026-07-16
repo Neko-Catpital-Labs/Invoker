@@ -50,6 +50,7 @@ import type {
   WorkerActionRecord,
   WorkerActionWrite,
   WorkerDesiredStateRecord,
+  WorkerGlobalStateRecord,
   TerminalSessionPatch,
   TerminalSessionRecord,
   InAppPlanningSessionPatch,
@@ -1852,6 +1853,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'SELECT worker_kind, desired_enabled, updated_at FROM worker_desired_states ORDER BY worker_kind ASC',
     );
     return rows.map((row) => this.rowToWorkerDesiredState(row));
+  }
+
+  getWorkersGloballyEnabled(): boolean {
+    const row = this.queryOne('SELECT enabled FROM worker_global_state WHERE id = 1');
+    return row ? Number(row.enabled) !== 0 : true;
+  }
+
+  setWorkersGloballyEnabled(enabled: boolean): WorkerGlobalStateRecord {
+    const updatedAt = new Date().toISOString();
+    this.execRun(
+      `INSERT INTO worker_global_state (id, enabled, updated_at)
+       VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         enabled = excluded.enabled,
+         updated_at = excluded.updated_at`,
+      [enabled ? 1 : 0, updatedAt],
+    );
+    return { enabled, updatedAt };
   }
 
   // ── Queries ─────────────────────────────────────────

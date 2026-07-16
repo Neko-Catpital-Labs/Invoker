@@ -925,6 +925,26 @@ describe('SQLiteAdapter', () => {
         expect.objectContaining({ workerKind: 'workflow-resume', desiredEnabled: false }),
       ]);
     });
+
+    it('reports workers globally enabled until the switch is used', () => {
+      expect(adapter.getWorkersGloballyEnabled()).toBe(true);
+    });
+
+    it('persists the global worker switch across both directions', () => {
+      expect(adapter.setWorkersGloballyEnabled(false)).toMatchObject({ enabled: false });
+      expect(adapter.getWorkersGloballyEnabled()).toBe(false);
+
+      adapter.setWorkersGloballyEnabled(true);
+      expect(adapter.getWorkersGloballyEnabled()).toBe(true);
+    });
+
+    it('keeps per-worker desired states untouched when the global switch flips', () => {
+      adapter.setWorkerDesiredState('pr-status', false);
+      adapter.setWorkersGloballyEnabled(false);
+      adapter.setWorkersGloballyEnabled(true);
+
+      expect(adapter.getWorkerDesiredState('pr-status')).toMatchObject({ desiredEnabled: false });
+    });
   });
 
   describe('execution resource leases', () => {

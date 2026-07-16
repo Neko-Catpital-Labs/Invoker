@@ -177,6 +177,11 @@ export interface WorkerDesiredStateRecord {
   updatedAt: string;
 }
 
+export interface WorkerGlobalStateRecord {
+  enabled: boolean;
+  updatedAt: string;
+}
+
 export interface WorkerActionWrite {
   /** Insert-only row id. Updates are keyed by workerKind/externalKey and reject a different id. */
   id: string;
@@ -318,6 +323,8 @@ export interface PersistenceAdapter {
   getWorkerDesiredState(workerKind: string): WorkerDesiredStateRecord | undefined;
   setWorkerDesiredState(workerKind: string, desiredEnabled: boolean): WorkerDesiredStateRecord;
   listWorkerDesiredStates(): WorkerDesiredStateRecord[];
+  getWorkersGloballyEnabled(): boolean;
+  setWorkersGloballyEnabled(enabled: boolean): WorkerGlobalStateRecord;
 
   // Conversations (Slack thread-based)
   saveConversation(conversation: Conversation): void;

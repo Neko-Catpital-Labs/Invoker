@@ -759,6 +759,10 @@ export function App() {
     await invoker.stopWorker(kind);
     void refreshWorkerStatus();
   }, [invoker, refreshWorkerStatus]);
+  const handleSetWorkersEnabled = useCallback(async (enabled: boolean) => {
+    await invoker.setWorkersEnabled(enabled);
+    void refreshWorkerStatus();
+  }, [invoker, refreshWorkerStatus]);
   const runningTaskIds = useMemo(
     () => new Set((queueStatus?.running ?? []).map((entry) => entry.taskId)),
     [queueStatus],
@@ -3469,6 +3473,7 @@ export function App() {
           readOnly={runtimeStatus?.readOnly === true}
           onStartWorker={handleStartWorker}
           onStopWorker={handleStopWorker}
+          onSetWorkersEnabled={handleSetWorkersEnabled}
           onTaskClick={handleTaskClick}
           selectedTaskId={selectedTaskId}
           selectedWorkerKind={selectedWorkerKind}

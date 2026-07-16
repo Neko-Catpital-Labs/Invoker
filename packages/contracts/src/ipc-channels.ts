@@ -303,6 +303,7 @@ export interface WorkerStatusEntry {
 export interface WorkerStatusSnapshot {
   generatedAt: string;
   workers: WorkerStatusEntry[];
+  globalEnabled?: boolean;
 }
 
 export interface WorkerActionHistoryRequest {
@@ -1146,6 +1147,10 @@ export const IpcChannels = {
   'invoker:stop-worker': {} as {
     request: [kind: string];
     response: WorkerStatusEntry;
+  },
+  'invoker:set-workers-enabled': {} as {
+    request: [enabled: boolean];
+    response: WorkerStatusSnapshot;
   },
   'invoker:get-action-graph': {} as {
     request: [];

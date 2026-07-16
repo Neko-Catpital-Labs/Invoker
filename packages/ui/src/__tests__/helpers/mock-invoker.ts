@@ -437,6 +437,10 @@ export function createMockInvoker(
       const row = workerStatus.workers.find((worker) => worker.kind === kind) ?? makeMockWorkerStatusEntry(kind);
       return row;
     }),
+    setWorkersEnabled: vi.fn(async (enabled: boolean) => {
+      workerStatus = { ...workerStatus, globalEnabled: enabled };
+      return workerStatus;
+    }),
     getActionGraph: vi.fn(async () => actionGraphSnapshot),
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),

@@ -48,6 +48,7 @@ export interface WorkerRuntimeController {
   start(kind: string, options?: { persistDesiredState?: boolean }): WorkerStatusEntry;
   stop(kind: string): Promise<WorkerStatusEntry>;
   stopAll(): Promise<void>;
+  setGlobalEnabled(enabled: boolean): Promise<WorkerStatusSnapshot>;
   snapshot(): WorkerStatusSnapshot;
 }
 
@@ -60,7 +61,14 @@ type WorkerStatusPersistence = Pick<
   | 'getEvents'
   | 'getEventsByTypes'
   | 'countEventsByTypes'
-> & Partial<Pick<SQLiteAdapter, 'getWorkerDesiredState' | 'setWorkerDesiredState' | 'listWorkerDesiredStates'>>;
+> & Partial<Pick<
+  SQLiteAdapter,
+  | 'getWorkerDesiredState'
+  | 'setWorkerDesiredState'
+  | 'listWorkerDesiredStates'
+  | 'getWorkersGloballyEnabled'
+  | 'setWorkersGloballyEnabled'
+>>;
 
 const DEFAULT_WORKER_ACTION_HISTORY_LIMIT = 20;
 const MAX_WORKER_ACTION_HISTORY_LIMIT = 100;
@@ -206,6 +214,8 @@ export function createWorkerRuntimeController(options: {
     return saved?.desiredEnabled ?? options.autoStartKinds.includes(kind);
   };
 
+  const globalEnabled = (): boolean => options.persistence.getWorkersGloballyEnabled?.() ?? true;
+
   const rowForKind = (kind: string): WorkerStatusEntry => {
     const definition = options.registry.get(kind);
     if (!definition) {
@@ -223,6 +233,7 @@ export function createWorkerRuntimeController(options: {
       policy: policyForKind(kind),
       persistence: options.persistence,
       canControl: options.canControl(),
+      globalEnabled: globalEnabled(),
       recovery: definition.kind === AUTO_FIX_WORKER_KIND
         ? toWorkerRecoverySummary(options.persistence)
         : undefined,
@@ -241,18 +252,30 @@ export function createWorkerRuntimeController(options: {
     handles.delete(kind);
   };
 
-  return {
+  const startDesiredWorkers = (): void => {
+    if (!globalEnabled()) return;
+    for (const definition of options.registry.list()) {
+      if (!desiredEnabledForKind(definition.kind)) continue;
+      controller.start(definition.kind, { persistDesiredState: false });
+    }
+  };
+
+  const stopRuntimesKeepingDesiredState = async (): Promise<void> => {
+    await controller.stopAll();
+  };
+
+  const controller: WorkerRuntimeController = {
     startAutoStartedWorkers(): void {
-      for (const definition of options.registry.list()) {
-        if (!desiredEnabledForKind(definition.kind)) continue;
-        this.start(definition.kind, { persistDesiredState: false });
-      }
+      startDesiredWorkers();
     },
 
     start(kind: string, optionsArg?: { persistDesiredState?: boolean }): WorkerStatusEntry {
       const definition = requireDefinition(kind);
       if (optionsArg?.persistDesiredState !== false) {
         options.persistence.setWorkerDesiredState?.(kind, true);
+      }
+      if (!globalEnabled()) {
+        return rowForKind(kind);
       }
 
       const existing = handles.get(kind);
@@ -291,13 +314,26 @@ export function createWorkerRuntimeController(options: {
       await Promise.all(stopping);
     },
 
+    async setGlobalEnabled(enabled: boolean): Promise<WorkerStatusSnapshot> {
+      options.persistence.setWorkersGloballyEnabled?.(enabled);
+      if (enabled) {
+        startDesiredWorkers();
+      } else {
+        await stopRuntimesKeepingDesiredState();
+      }
+      return this.snapshot();
+    },
+
     snapshot(): WorkerStatusSnapshot {
       return {
         generatedAt: new Date().toISOString(),
+        globalEnabled: globalEnabled(),
         workers: options.registry.list().map((definition) => rowForKind(definition.kind)),
       };
     },
   };
+
+  return controller;
 }
 export function createLocalWorkerStatusSnapshot(options: {
   registry: WorkerRegistry<WorkerRuntimeDependencies>;
@@ -307,8 +343,10 @@ export function createLocalWorkerStatusSnapshot(options: {
   const recovery = options.registry.list().some((definition) => definition.kind === AUTO_FIX_WORKER_KIND)
     ? toWorkerRecoverySummary(options.persistence)
     : undefined;
+  const globalEnabled = options.persistence.getWorkersGloballyEnabled?.() ?? true;
   return {
     generatedAt: new Date().toISOString(),
+    globalEnabled,
     workers: options.registry.list().map((definition) => {
       const desiredEnabled = options.persistence.getWorkerDesiredState?.(definition.kind)?.desiredEnabled
         ?? options.autoStartKinds.includes(definition.kind);
@@ -321,6 +359,7 @@ export function createLocalWorkerStatusSnapshot(options: {
         policy: 'unknown',
         persistence: options.persistence,
         canControl: false,
+        globalEnabled,
         recovery: definition.kind === AUTO_FIX_WORKER_KIND ? recovery : undefined,
         runningKnown: false,
       });
@@ -340,13 +379,14 @@ function buildWorkerStatusEntry(args: {
   policy: WorkerPolicyStatus;
   persistence: WorkerStatusPersistence;
   canControl: boolean;
+  globalEnabled: boolean;
   recovery?: WorkerRecoverySummary;
   runningKnown: boolean;
 }): WorkerStatusEntry {
   const lifecycle = args.handle
     ? args.handle.runtime.isRunning() ? 'running' : 'exited'
     : 'stopped';
-  const controlDisabledReason = getControlDisabledReason(args.canControl);
+  const controlDisabledReason = getControlDisabledReason(args.canControl, args.globalEnabled);
   const runtime = args.handle?.runtime;
   const rawActions = args.persistence.listWorkerActions({ workerKind: args.definitionKind, limit: 5 }).slice(0, 5);
   const recentActions = rawActions.map(toWorkerActionSummary);
@@ -361,7 +401,7 @@ function buildWorkerStatusEntry(args: {
     policy: args.policy,
     autoStarts: args.autoStarts,
     desiredEnabled: args.desiredEnabled,
-    startable: lifecycle !== 'running' && args.policy !== 'disabled' && args.canControl,
+    startable: lifecycle !== 'running' && args.policy !== 'disabled' && args.canControl && args.globalEnabled,
     stoppable: lifecycle === 'running' && args.canControl,
     ...(controlDisabledReason ? { controlDisabledReason } : {}),
     ...(args.handle?.startedAt ? { startedAt: args.handle.startedAt } : {}),
@@ -381,8 +421,9 @@ function policyForKind(kind: string): WorkerPolicyStatus {
   return 'unknown';
 }
 
-function getControlDisabledReason(canControl: boolean): string | undefined {
+function getControlDisabledReason(canControl: boolean, globalEnabled: boolean): string | undefined {
   if (!canControl) return 'Controls unavailable';
+  if (!globalEnabled) return 'Workers are turned off';
   return undefined;
 }
 

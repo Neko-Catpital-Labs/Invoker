@@ -53,9 +53,15 @@ function runtime(kind: string): TestWorkerRuntime {
   };
 }
 
-function persistence(initialDesired: Record<string, boolean> = {}) {
+function persistence(initialDesired: Record<string, boolean> = {}, initialGlobalEnabled = true) {
   const desired = new Map(Object.entries(initialDesired));
+  let globalEnabled = initialGlobalEnabled;
   return {
+    getWorkersGloballyEnabled: vi.fn(() => globalEnabled),
+    setWorkersGloballyEnabled: vi.fn((enabled: boolean) => {
+      globalEnabled = enabled;
+      return { enabled, updatedAt: '2026-01-01T00:00:00.000Z' };
+    }),
     listWorkerActions: vi.fn(() => []),
     listWorkflows: vi.fn(() => []),
     loadTasks: vi.fn(() => []),
@@ -95,10 +101,11 @@ function deps(): WorkerRuntimeDependencies {
 function controller(
   autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKER_KINDS,
   desiredState: Record<string, boolean> = {},
+  globalEnabled = true,
 ) {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
   const runtimes = new Map<string, TestWorkerRuntime[]>();
-  const store = persistence(desiredState);
+  const store = persistence(desiredState, globalEnabled);
   const register = (kind: string, note: string, runtimeKind = kind) => {
     registry.register({
       kind,
@@ -444,5 +451,65 @@ describe('listWorkerDecisions', () => {
     ]);
     const res = listWorkerDecisions({ listWorkerActions } as never, { reason: 'BUDGET' });
     expect(res.actions.map((action) => action.id)).toEqual(['a2']);
+  });
+});
+
+describe('global worker switch', () => {
+  it('defaults to on so existing installs keep auto-starting workers', () => {
+    const harness = controller();
+    harness.controller.startAutoStartedWorkers();
+    expect(harness.controller.snapshot().globalEnabled).toBe(true);
+    expect(harness.runtimes.get(PR_STATUS_WORKER_KIND)?.[0]?.starts).toBe(1);
+  });
+
+  it('starts no workers on boot while the switch is off', () => {
+    const harness = controller(AUTO_STARTED_OWNER_WORKER_KINDS, {}, false);
+    harness.controller.startAutoStartedWorkers();
+    expect(harness.runtimes.size).toBe(0);
+    expect(harness.controller.snapshot().globalEnabled).toBe(false);
+  });
+
+  it('stops every running worker when switched off', async () => {
+    const harness = controller();
+    harness.controller.startAutoStartedWorkers();
+    const prStatus = harness.runtimes.get(PR_STATUS_WORKER_KIND)?.[0];
+    expect(prStatus?.isRunning()).toBe(true);
+
+    const snapshot = await harness.controller.setGlobalEnabled(false);
+
+    expect(snapshot.globalEnabled).toBe(false);
+    expect(prStatus?.isRunning()).toBe(false);
+    expect(snapshot.workers.every((worker) => worker.lifecycle !== 'running')).toBe(true);
+  });
+
+  it('keeps each per-worker setting intact across an off/on cycle', async () => {
+    const harness = controller(AUTO_STARTED_OWNER_WORKER_KINDS, { [CI_FAILURE_WORKER_KIND]: false });
+    harness.controller.startAutoStartedWorkers();
+    expect(harness.runtimes.get(CI_FAILURE_WORKER_KIND)).toBeUndefined();
+
+    await harness.controller.setGlobalEnabled(false);
+    await harness.controller.setGlobalEnabled(true);
+
+    const snapshot = harness.controller.snapshot();
+    expect(snapshot.globalEnabled).toBe(true);
+    const ciFailure = snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND);
+    expect(ciFailure?.desiredEnabled).toBe(false);
+    expect(ciFailure?.lifecycle).not.toBe('running');
+    expect(harness.runtimes.get(PR_STATUS_WORKER_KIND)?.at(-1)?.isRunning()).toBe(true);
+  });
+
+  it('records intent but spawns nothing when a worker is enabled while the switch is off', () => {
+    const harness = controller(AUTO_STARTED_OWNER_WORKER_KINDS, {}, false);
+    const row = harness.controller.start(CI_FAILURE_WORKER_KIND);
+    expect(row.desiredEnabled).toBe(true);
+    expect(row.lifecycle).not.toBe('running');
+    expect(harness.runtimes.get(CI_FAILURE_WORKER_KIND)).toBeUndefined();
+  });
+
+  it('reports the switch as the reason per-worker controls are unavailable', () => {
+    const harness = controller(AUTO_STARTED_OWNER_WORKER_KINDS, {}, false);
+    const worker = harness.controller.snapshot().workers[0];
+    expect(worker?.startable).toBe(false);
+    expect(worker?.controlDisabledReason).toBe('Workers are turned off');
   });
 });

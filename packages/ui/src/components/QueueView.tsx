@@ -18,6 +18,7 @@ interface QueueViewProps {
   readOnly: boolean;
   onStartWorker: (kind: string) => Promise<void> | void;
   onStopWorker: (kind: string) => Promise<void> | void;
+  onSetWorkersEnabled?: (enabled: boolean) => Promise<void> | void;
   onTaskClick: (task: TaskState) => void;
   selectedTaskId: string | null;
   selectedWorkerKind: string | null;
@@ -45,6 +46,7 @@ export function QueueView({
   readOnly,
   onStartWorker,
   onStopWorker,
+  onSetWorkersEnabled,
   onTaskClick,
   selectedTaskId,
   selectedWorkerKind,
@@ -275,6 +277,7 @@ export function QueueView({
             readOnly={readOnly}
             onStartWorker={onStartWorker}
             onStopWorker={onStopWorker}
+            onSetWorkersEnabled={onSetWorkersEnabled}
             onSelectWorker={onSelectWorker}
           />
         </div>

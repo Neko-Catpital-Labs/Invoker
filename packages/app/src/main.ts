@@ -1266,6 +1266,12 @@ function startHeadlessMode(): void {
             }
             return workerRuntimeController.stop(String(payload.args[0]));
           }
+          case 'invoker:set-workers-enabled': {
+            if (!workerRuntimeController) {
+              throw new Error('Worker runtime controller is unavailable');
+            }
+            return workerRuntimeController.setGlobalEnabled(Boolean(payload.args[0]));
+          }
           case 'invoker:inject-task-states': {
             if (process.env.NODE_ENV !== 'test') {
               throw new Error('inject-task-states is only available in tests');

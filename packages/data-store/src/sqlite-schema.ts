@@ -400,6 +400,12 @@ export const SCHEMA_DDL = `
         updated_at TEXT DEFAULT (datetime('now'))
       );
 
+      CREATE TABLE IF NOT EXISTS worker_global_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        enabled INTEGER NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
       CREATE TABLE IF NOT EXISTS execution_resource_leases (
         resource_key TEXT NOT NULL,
         resource_type TEXT NOT NULL,
@@ -564,6 +570,11 @@ export const POST_MIGRATION_STATEMENTS = [
   `UPDATE worker_actions SET status = 'cancelled' WHERE status = 'canceled'`,
   'CREATE TABLE IF NOT EXISTS task_crash_preservation (task_id TEXT PRIMARY KEY, preserved_at TEXT NOT NULL, owner_pid INTEGER, diagnostic_report_path TEXT, diagnostic_summary TEXT, FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE)',
   'CREATE INDEX IF NOT EXISTS idx_task_crash_preservation_preserved_at ON task_crash_preservation(preserved_at)',
+  `CREATE TABLE IF NOT EXISTS worker_global_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+  )`,
 ];
 
 /** Rebuilt `workflows` table used to drop a legacy `status` column. */

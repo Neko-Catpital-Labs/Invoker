@@ -8,6 +8,7 @@ interface WorkerActivityCardProps {
   readOnly?: boolean;
   onStartWorker?: (kind: string) => Promise<void> | void;
   onStopWorker?: (kind: string) => Promise<void> | void;
+  onSetWorkersEnabled?: (enabled: boolean) => Promise<void> | void;
   onSelectWorker: (kind: string) => void;
   showControls?: boolean;
 }
@@ -53,11 +54,24 @@ export function WorkerActivityCard({
   readOnly = false,
   onStartWorker,
   onStopWorker,
+  onSetWorkersEnabled,
   onSelectWorker,
   showControls = true,
 }: WorkerActivityCardProps) {
   const [optimisticByKind, setOptimisticByKind] = useState<Record<string, OptimisticLifecycle>>({});
   const [pendingByKind, setPendingByKind] = useState<Record<string, boolean>>({});
+  const [optimisticGlobalEnabled, setOptimisticGlobalEnabled] = useState<boolean | null>(null);
+  const [globalPending, setGlobalPending] = useState(false);
+
+  const serverGlobalEnabled = snapshot?.globalEnabled ?? true;
+  const globalEnabled = optimisticGlobalEnabled ?? serverGlobalEnabled;
+
+  useEffect(() => {
+    if (optimisticGlobalEnabled === null) return;
+    if (serverGlobalEnabled === optimisticGlobalEnabled) {
+      setOptimisticGlobalEnabled(null);
+    }
+  }, [serverGlobalEnabled, optimisticGlobalEnabled]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -99,13 +113,54 @@ export function WorkerActivityCard({
 
   return (
     <div data-testid="worker-activity-card" className="flex min-h-0 flex-col">
+      {snapshot && showControls ? (
+        <div
+          data-testid="worker-global-switch-row"
+          className="mb-3 flex shrink-0 items-center justify-between gap-3 rounded border border-border bg-card/60 px-3 py-2"
+        >
+          <div className="min-w-0">
+            <div className="text-sm text-foreground">All workers</div>
+            <div className="text-xs text-muted-foreground">
+              {globalEnabled
+                ? 'Workers run as configured below.'
+                : 'Master switch is off. No worker runs, and each worker keeps its own setting for when you turn this back on.'}
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={globalEnabled}
+            aria-label="Turn all workers on or off"
+            className="shrink-0 rounded border border-border-strong px-2 py-1 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-50 hover:bg-muted"
+            title={readOnly ? 'Read-only window' : undefined}
+            disabled={readOnly || globalPending || !onSetWorkersEnabled}
+            data-testid="worker-global-switch"
+            data-action={globalEnabled ? 'disable-all' : 'enable-all'}
+            onClick={() => {
+              if (globalPending || readOnly || !onSetWorkersEnabled) return;
+              const next = !globalEnabled;
+              setOptimisticGlobalEnabled(next);
+              setGlobalPending(true);
+              void Promise.resolve(onSetWorkersEnabled(next)).finally(() => setGlobalPending(false));
+            }}
+          >
+            {globalPending
+              ? (globalEnabled ? 'Turning off…' : 'Turning on…')
+              : globalEnabled ? 'Turn workers off' : 'Turn workers on'}
+          </button>
+        </div>
+      ) : null}
       {!snapshot ? (
         <div className="rounded border border-border bg-card/60 px-3 py-2 text-sm text-muted-foreground">Worker status unavailable</div>
       ) : (
         <div data-testid="worker-process-list" className="min-h-0 space-y-3">
           {snapshot.workers.map((worker) => {
             const copy = getWorkerDisplayCopy(worker.kind);
-            const disabledTitle = readOnly ? 'Read-only window' : worker.controlDisabledReason;
+            const disabledTitle = readOnly
+              ? 'Read-only window'
+              : !globalEnabled
+                ? 'Workers are turned off'
+                : worker.controlDisabledReason;
             const lifecycle = optimisticByKind[worker.kind] ?? worker.lifecycle;
             const showStart = lifecycle !== 'running';
             const pending = Boolean(pendingByKind[worker.kind]);
