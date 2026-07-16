@@ -17,6 +17,7 @@ esac
 RESULT_ROOT="${INVOKER_CHAOS_RESULT_ROOT:-$GIT_DIR/invoker-chaos/$RUN_ID}"
 RESULTS_FILE="${INVOKER_CHAOS_RESULTS_FILE:-$RESULT_ROOT/results.jsonl}"
 UI_STALL_REQUIRED_SCENARIOS="
+cancel-downstream-standalone
 reset-race-coalesced
 timeout-deadlock-guard
 retry-vs-recreate-window
@@ -73,6 +74,7 @@ seed = int(sys.argv[2])
 lines = [line.strip() for line in os.environ["BASE_LINES"].splitlines() if line.strip()]
 
 high_risk = {
+    "cancel-downstream-standalone",
     "reset-race-coalesced",
     "timeout-deadlock-guard",
     "retry-vs-recreate-window",
@@ -254,6 +256,18 @@ if [ -z "$SCENARIO_FILTER" ]; then
   done
   if [ -n "$missing_ui_stall" ]; then
     echo "FAILED: chaos matrix omitted UI-stall-relevant scenario(s):$missing_ui_stall" >&2
+    exit 1
+  fi
+  required_ui_stall_list=" ${UI_STALL_REQUIRED_SCENARIOS//$'\n'/ } "
+  unrequired_ui_stall=""
+  for seen_scenario in $ui_stall_seen; do
+    case "$required_ui_stall_list" in
+      *" $seen_scenario "*) ;;
+      *) unrequired_ui_stall="$unrequired_ui_stall $seen_scenario" ;;
+    esac
+  done
+  if [ -n "$unrequired_ui_stall" ]; then
+    echo "FAILED: chaos matrix has UI-stall-tagged scenario(s) missing from required coverage:$unrequired_ui_stall" >&2
     exit 1
   fi
 fi
