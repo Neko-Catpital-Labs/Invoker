@@ -348,9 +348,13 @@ export function buildGitHubRawMediaUrl(nwo, branch, filePath) {
 
 // ── Git + GitHub helpers ────────────────────────────────────────────────────
 
+/** Full-context diffs scale with whole-file size, so they outgrow Node's 1MB default. */
+const GIT_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
+
 function runGit(args, options = {}) {
   return execFileSync('git', args, {
     encoding: 'utf-8',
+    maxBuffer: GIT_MAX_BUFFER_BYTES,
     ...options,
   });
 }

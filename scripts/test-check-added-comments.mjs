@@ -96,4 +96,34 @@ const scriptPath = fileURLToPath(new URL('./check-added-comments.mjs', import.me
   }
 }
 
+// Temp git case: a diff larger than Node's 1MB execFileSync default still runs.
+// `git diff` streams every changed file back before any path filtering, so a
+// large lockfile update used to kill the checker with ENOBUFS.
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'invoker-added-comments-big-'));
+  try {
+    execFileSync('git', ['init', '-q', '-b', 'master'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: root, stdio: 'ignore' });
+    writeFileSync(path.join(root, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '-A'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-q', '-m', 'seed'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['checkout', '-q', '-b', 'feature'], { cwd: root, stdio: 'ignore' });
+
+    let lockfile = '';
+    for (let index = 0; index < 60000; index += 1) {
+      lockfile += `  '/some-package-${index}@1.0.0': {}\n`;
+    }
+    writeFileSync(path.join(root, 'pnpm-lock.yaml'), lockfile);
+    writeFileSync(path.join(root, 'package.json'), '{\n  "name": "probe"\n}\n');
+    execFileSync('git', ['add', '-A'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-q', '-m', 'big dependency update'], { cwd: root, stdio: 'ignore' });
+
+    const output = execFileSync(process.execPath, [scriptPath, '--root', root, '--base', 'master'], { encoding: 'utf8' });
+    assert.match(output, /Checked added source lines; no disallowed comments found\./);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 console.log('ok added comment checker');
