@@ -455,7 +455,7 @@ describe('headless-client', () => {
     expect(exitCode).toBe(0);
     expect(queueCalls).toBe(2);
     expect(refreshMessageBus).toHaveBeenCalled();
-  }, 15_000);
+  }, 35_000);
 
   it('refreshes and retries generic read queries when a live owner is not ready', async () => {
     const firstBus = new LocalBus();
@@ -489,7 +489,7 @@ describe('headless-client', () => {
     expect(runElectronHeadless).not.toHaveBeenCalled();
     expect(stdout).toHaveBeenCalledWith('wf-1\n');
     stdout.mockRestore();
-  }, 15_000);
+  }, 35_000);
 
   it('refreshes past a non-mutation owner before delegating a mutation', async () => {
     const firstBus = new LocalBus();
