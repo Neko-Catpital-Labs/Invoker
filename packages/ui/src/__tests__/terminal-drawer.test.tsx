@@ -140,6 +140,18 @@ async function selectWorkflow(): Promise<void> {
   });
 }
 
+function perfPayloads(metric: string): Array<Record<string, any>> {
+  return vi.mocked(window.invoker.reportUiPerf).mock.calls
+    .filter(([name]) => name === metric)
+    .map(([, data]) => data as Record<string, any>);
+}
+
+function lastPerfPayload(metric: string): Record<string, any> {
+  const payload = perfPayloads(metric).at(-1);
+  if (!payload) throw new Error(`Missing ${metric} perf payload`);
+  return payload;
+}
+
 describe('Terminal drawer (component)', () => {
   let mock: MockInvoker;
 
@@ -277,6 +289,18 @@ describe('Terminal drawer (component)', () => {
     expect(drawer).not.toHaveClass('fixed');
     expect(screen.getByTestId('terminal-drawer-body')).toHaveStyle({ height: '280px' });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+    await waitFor(() => {
+      expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+        'embedded_terminal_open_request',
+        expect.objectContaining({
+          taskId: 'task-alpha',
+          result: 'opened',
+          sessionId: 'mock-session-task-alpha',
+          status: 'running',
+        }),
+      );
+    });
+    expect(lastPerfPayload('embedded_terminal_open_request').durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
   });
 
   it('cycles minimized → partial → maximized → minimized via the single button', async () => {
@@ -291,17 +315,31 @@ describe('Terminal drawer (component)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Partial terminal drawer' }));
     expect(drawer).toHaveAttribute('data-state', 'partial');
     expect(screen.getByTestId('terminal-drawer-body')).toHaveStyle({ height: '280px' });
+    expect(lastPerfPayload('embedded_terminal_drawer_cycle')).toEqual(expect.objectContaining({
+      previousState: 'minimized',
+      nextState: 'partial',
+    }));
 
     // partial → maximized: body covers app content via fixed inset positioning.
     fireEvent.click(screen.getByRole('button', { name: 'Maximize terminal drawer' }));
     expect(drawer).toHaveAttribute('data-state', 'maximized');
     expect(drawer).toHaveClass('fixed');
     expect(screen.getByTestId('terminal-drawer-body')).toBeInTheDocument();
+    expect(lastPerfPayload('embedded_terminal_drawer_cycle')).toEqual(expect.objectContaining({
+      previousState: 'partial',
+      nextState: 'maximized',
+    }));
 
     // maximized → minimized: body flattens away.
     fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
     expect(drawer).toHaveAttribute('data-state', 'minimized');
     expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
+    const cyclePayload = lastPerfPayload('embedded_terminal_drawer_cycle');
+    expect(cyclePayload).toEqual(expect.objectContaining({
+      previousState: 'maximized',
+      nextState: 'minimized',
+    }));
+    expect(cyclePayload.durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
   });
 
   it('bounds the maximized terminal body so xterm owns scrollback', () => {
@@ -362,6 +400,13 @@ describe('Terminal drawer (component)', () => {
       'task-alpha',
       'task-beta',
     ]);
+    expect(lastPerfPayload('embedded_terminal_existing_tab_reuse')).toEqual(expect.objectContaining({
+      taskId: 'task-alpha',
+      sessionId: 'mock-session-task-alpha',
+      previousActiveSessionId: 'mock-session-task-beta',
+      sessionCount: 2,
+    }));
+    expect(lastPerfPayload('embedded_terminal_existing_tab_reuse').durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
   });
 
   it('renders distinct tabs for different tasks side by side', async () => {
@@ -417,6 +462,13 @@ describe('Terminal drawer (component)', () => {
       expect(alertSpy).toHaveBeenCalledWith('Task is still running.');
     });
     expect(screen.queryByTestId('terminal-tab-task-alpha')).not.toBeInTheDocument();
+    const openPayload = lastPerfPayload('embedded_terminal_open_request');
+    expect(openPayload).toEqual(expect.objectContaining({
+      taskId: 'task-alpha',
+      result: 'rejected',
+      reason: 'Task is still running.',
+    }));
+    expect(openPayload.durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
   });
 
   it('opens the drawer when the context-menu Open Terminal action is used', async () => {
@@ -751,6 +803,14 @@ describe('Terminal drawer (component)', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: /Alpha description/i }));
     expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
+    expect(lastPerfPayload('embedded_terminal_tab_select')).toEqual(expect.objectContaining({
+      sessionId: 'mock-session-task-alpha',
+      taskId: 'task-alpha',
+      previousActiveSessionId: 'mock-session-task-beta',
+      sessionCount: 2,
+      drawerState: 'partial',
+    }));
+    expect(lastPerfPayload('embedded_terminal_tab_select').durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
 
     act(() => {
       xtermMock.instances[0]?.emitData('pwd\n');

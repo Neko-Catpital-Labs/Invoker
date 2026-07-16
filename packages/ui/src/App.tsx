@@ -248,6 +248,18 @@ function relativePlanningUpdatedAt(value: string): string {
 const PLANNING_TYPING_LAG_METRIC = 'planning_typing_lag_baseline';
 const PLANNING_TYPING_SCENARIO = 'many-chats-many-messages-typing';
 
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
+}
+
+function reportAppUiPerf(metric: string, data: Record<string, unknown>): void {
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
 interface PlanningTypingTelemetryState {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
@@ -1921,15 +1933,34 @@ export function App() {
   }, [selectTaskById]);
 
   const requestTerminalForTaskId = useCallback(async (taskId: string) => {
+    const startedAt = nowMs();
     const task = tasks.get(taskId);
     if (task && isExperimentSpawnPivotTask(task)) {
       window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
+      reportAppUiPerf('embedded_terminal_open_request', {
+        taskId,
+        result: 'blocked_experiment_spawn_pivot',
+        durationMs: roundMs(nowMs() - startedAt),
+      });
       return;
     }
     setTerminalDrawerState('partial');
     const result = await (window.__INVOKER_TEST_OPEN_TERMINAL__ ?? window.invoker?.openTerminal)?.(taskId);
-    if (!result) return;
+    if (!result) {
+      reportAppUiPerf('embedded_terminal_open_request', {
+        taskId,
+        result: 'missing_handler',
+        durationMs: roundMs(nowMs() - startedAt),
+      });
+      return;
+    }
     if (!result.opened) {
+      reportAppUiPerf('embedded_terminal_open_request', {
+        taskId,
+        result: 'rejected',
+        reason: result.reason,
+        durationMs: roundMs(nowMs() - startedAt),
+      });
       window.alert(result.reason ?? 'Cannot open terminal for this task.');
       return;
     }
@@ -1946,20 +1977,37 @@ export function App() {
       });
       setActiveTerminalSessionId(session.sessionId);
     }
+    reportAppUiPerf('embedded_terminal_open_request', {
+      taskId,
+      result: 'opened',
+      durationMs: roundMs(nowMs() - startedAt),
+      sessionId: session?.sessionId,
+      mode: session?.mode,
+      status: session?.status,
+      hasSnapshot: Boolean(session?.outputSnapshot),
+    });
   }, [tasks]);
 
   const openTerminalForTaskId = useCallback(async (taskId: string) => {
+    const startedAt = nowMs();
     const existingRunningSession = terminalSessions.find(
       (session) => session.taskId === taskId && session.status === 'running',
     );
     if (existingRunningSession) {
       setTerminalDrawerState('partial');
       setActiveTerminalSessionId(existingRunningSession.sessionId);
+      reportAppUiPerf('embedded_terminal_existing_tab_reuse', {
+        taskId,
+        sessionId: existingRunningSession.sessionId,
+        durationMs: roundMs(nowMs() - startedAt),
+        previousActiveSessionId: activeTerminalSessionId,
+        sessionCount: terminalSessions.length,
+      });
       return;
     }
 
     await requestTerminalForTaskId(taskId);
-  }, [requestTerminalForTaskId, terminalSessions]);
+  }, [activeTerminalSessionId, requestTerminalForTaskId, terminalSessions]);
 
   const handleTaskDoubleClick = useCallback(async (task: TaskState) => {
     setSelectedTaskId(task.id);
@@ -2140,6 +2188,38 @@ export function App() {
       /* best-effort */
     }
   }, [terminalSessions]);
+
+  const handleSelectTerminalSession = useCallback((sessionId: string) => {
+    const startedAt = nowMs();
+    const session = terminalSessions.find((candidate) => candidate.sessionId === sessionId);
+    setActiveTerminalSessionId(sessionId);
+    reportAppUiPerf('embedded_terminal_tab_select', {
+      durationMs: roundMs(nowMs() - startedAt),
+      sessionId,
+      taskId: session?.taskId,
+      previousActiveSessionId: activeTerminalSessionId,
+      sessionCount: terminalSessions.length,
+      drawerState: terminalDrawerState,
+    });
+  }, [activeTerminalSessionId, terminalDrawerState, terminalSessions]);
+
+  const handleCycleTerminalDrawer = useCallback(() => {
+    const startedAt = nowMs();
+    const previousState = terminalDrawerState;
+    const nextState = previousState === 'minimized'
+      ? 'partial'
+      : previousState === 'partial'
+        ? 'maximized'
+        : 'minimized';
+    setTerminalDrawerState(nextState);
+    reportAppUiPerf('embedded_terminal_drawer_cycle', {
+      durationMs: roundMs(nowMs() - startedAt),
+      previousState,
+      nextState,
+      activeSessionId: activeTerminalSessionId,
+      sessionCount: terminalSessions.length,
+    });
+  }, [activeTerminalSessionId, terminalDrawerState, terminalSessions.length]);
 
   const terminalTaskLabels = useMemo(() => {
     const labels = new Map<string, string>();
@@ -3927,14 +4007,10 @@ export function App() {
       )}
       <TerminalDrawer
         state={terminalDrawerState}
-        onCycle={() =>
-          setTerminalDrawerState((prev) =>
-            prev === 'minimized' ? 'partial' : prev === 'partial' ? 'maximized' : 'minimized',
-          )
-        }
+        onCycle={handleCycleTerminalDrawer}
         sessions={terminalSessions}
         activeSessionId={activeTerminalSessionId}
-        onSelectSession={setActiveTerminalSessionId}
+        onSelectSession={handleSelectTerminalSession}
         onCloseSession={(sessionId) => void handleCloseTerminalSession(sessionId)}
         taskLabels={terminalTaskLabels}
       />
