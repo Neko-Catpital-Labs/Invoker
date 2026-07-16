@@ -124,6 +124,24 @@ function buildSingleArtifactReviewGate(args: {
   };
 }
 
+function assertReviewGateGenerationsAligned(gate: ReviewGateState): void {
+  const mismatched = gate.artifacts.filter(
+    (artifact) =>
+      artifact.status !== 'discarded'
+      && !artifact.discardedAt
+      && artifact.generation !== gate.activeGeneration,
+  );
+  if (mismatched.length === 0) return;
+  const detail = mismatched
+    .map((artifact) => `${artifact.providerId ?? artifact.id ?? 'unknown'}@${artifact.generation}`)
+    .join(', ');
+  throw new Error(
+    `review gate generation mismatch: activeGeneration=${gate.activeGeneration} `
+      + `but live artifacts at [${detail}]; published artifacts must share the gate generation `
+      + 'or the poller treats them as discarded',
+  );
+}
+
 function buildMergeConflictJson(errorText: string, failedBranch: string): string | undefined {
   const hasConflictMarkers =
     errorText.includes('CONFLICT (') ||
@@ -269,6 +287,7 @@ export interface MergeRunnerHost {
     featureBranch: string;
     workflowSummary: string;
     cwd: string;
+    expectedGeneration: number;
     reviewGate?: ReviewGateState;
   }): Promise<{ artifacts: ReviewGateArtifact[]; sessionId: string; agentName: string }>;
   authorPrBodyWithSkill?(args: {
@@ -359,6 +378,7 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
       featureBranch: args.featureBranch,
       workflowSummary: args.workflowSummary,
       cwd: args.cwd,
+      expectedGeneration: args.expectedGeneration,
       reviewGate: args.reviewGate,
     });
     logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Review stack published', {
@@ -371,13 +391,14 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
       baseBranch: artifact.baseBranch ?? args.baseBranch,
       required: artifact.required ?? true,
       status: artifact.status ?? 'open' as const,
-      generation: artifact.generation ?? args.expectedGeneration,
+      generation: args.expectedGeneration,
     }));
     const reviewGate = {
       activeGeneration: args.expectedGeneration,
       completion: { required: 'all' as const, status: 'approved' as const },
       artifacts,
     };
+    assertReviewGateGenerationsAligned(reviewGate);
     const firstArtifact = artifacts[0];
     console.log(
       `[merge] Published Invoker review stack via ${published.agentName} skill`,
@@ -428,20 +449,22 @@ async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
   });
   console.log(`[merge] Created GitHub PR: ${result.url}`);
 
+  const reviewGate = buildSingleArtifactReviewGate({
+    expectedGeneration: args.expectedGeneration,
+    title: args.workflowName,
+    url: result.url,
+    providerId: result.identifier,
+    provider: host.mergeGateProvider.name,
+    branch: args.featureBranch,
+    baseBranch: args.baseBranch,
+    nowIso: new Date().toISOString(),
+  });
+  assertReviewGateGenerationsAligned(reviewGate);
   return {
     reviewUrl: result.url,
     reviewId: result.identifier,
     reviewStatus: 'Awaiting review',
-    reviewGate: buildSingleArtifactReviewGate({
-      expectedGeneration: args.expectedGeneration,
-      title: args.workflowName,
-      url: result.url,
-      providerId: result.identifier,
-      provider: host.mergeGateProvider.name,
-      branch: args.featureBranch,
-      baseBranch: args.baseBranch,
-      nowIso: new Date().toISOString(),
-    }),
+    reviewGate,
   };
 }
 
