@@ -54,6 +54,7 @@ interface TerminalSessionPaneProps {
 type SeededOutputSnapshot = {
   sessionId: string;
   term: XTermTerminal;
+  snapshot: string;
 };
 
 function nowMs(): number {
@@ -82,20 +83,27 @@ function seedTerminalOutputSnapshot(
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
   source: 'attach' | 'session_update',
 ): void {
-  const outputSnapshot = session.outputSnapshot;
+  const outputSnapshot = session.outputSnapshot ?? '';
   const seededSnapshot = seededSnapshotRef.current;
   if (
     seededSnapshot &&
     seededSnapshot.sessionId === session.sessionId &&
     seededSnapshot.term === term
   ) {
-    return;
+    if (
+      seededSnapshot.snapshot === outputSnapshot ||
+      seededSnapshot.snapshot.length > 0 ||
+      !outputSnapshot
+    ) {
+      return;
+    }
   }
 
   if (!outputSnapshot) {
     seededSnapshotRef.current = {
       sessionId: session.sessionId,
       term,
+      snapshot: '',
     };
     return;
   }
@@ -106,6 +114,7 @@ function seedTerminalOutputSnapshot(
     seededSnapshotRef.current = {
       sessionId: session.sessionId,
       term,
+      snapshot: outputSnapshot,
     };
     reportTerminalPerf('embedded_terminal_snapshot_write', {
       source,
