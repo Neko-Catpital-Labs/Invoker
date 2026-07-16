@@ -14,6 +14,19 @@ export function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+export function maxPayloadNumber(
+  payloads: readonly UiPerfPayload[],
+  metric: string,
+  field: string,
+): number {
+  let max = 0;
+  for (const payload of payloads) {
+    if (payload.metric !== metric) continue;
+    max = Math.max(max, numberOrZero(payload[field]));
+  }
+  return max;
+}
+
 export async function activityLogWatermark(page: Page): Promise<number> {
   const rows = await page.evaluate(async () => window.invoker.getActivityLogs(0, 100000));
   return rows.at(-1)?.id ?? 0;
