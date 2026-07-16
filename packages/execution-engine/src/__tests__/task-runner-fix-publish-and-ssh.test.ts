@@ -1321,11 +1321,13 @@ describe('TaskRunner', () => {
           workflowSummary: 'summary',
           cwd: '/tmp',
           mergeNodeTaskId: '__merge__wf-1',
+          expectedGeneration: 26,
         });
 
         expect(attempts).toEqual(['claude', 'codex']);
         expect(result.agentName).toBe('codex');
         expect(result.artifacts[1].dependsOn).toEqual(['contracts']);
+        expect(result.artifacts.map((a: any) => a.generation)).toEqual([26, 26]);
         expect(logEvent).toHaveBeenCalledWith(
           '__merge__wf-1',
           'task.log',
