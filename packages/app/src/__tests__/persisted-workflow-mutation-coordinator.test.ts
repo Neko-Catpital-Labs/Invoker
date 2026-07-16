@@ -1100,6 +1100,48 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
+  it('reports intents cancelled by a delete fence as task-scoped failures indistinguishable from real errors', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
+
+    const gate = deferred();
+    const failedEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel) => {
+        if (channel === 'invoker:fix-with-agent') {
+          await gate.promise;
+        }
+      },
+      { onIntentFailed: (event) => failedEvents.push(event) },
+    );
+
+    const running = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:fix-with-agent', ['wf-1/blocker-task', null]);
+    void running.catch(() => {});
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+    const queued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['wf-1/queued-task']);
+    void queued.catch(() => {});
+
+    await coordinator.enqueue<void>('wf-1', 'high', 'invoker:delete-workflow', ['wf-1']);
+    await expect(running).rejects.toThrow(/superseded by delete intent/i);
+    await expect(queued).rejects.toThrow(/evicted/i);
+
+    // Deleting a workflow deliberately cancels its in-flight work, yet every
+    // cancellation is announced as a task-scoped failure carrying no marker that
+    // separates it from a genuine error. Renderers therefore treat a routine
+    // delete as work the user must attend to.
+    expect(failedEvents).toHaveLength(2);
+    expect(failedEvents.map((event) => event.taskId)).toEqual(['wf-1/blocker-task', 'wf-1/queued-task']);
+    expect(failedEvents.map((event) => event.message)).toEqual([
+      expect.stringMatching(/superseded by delete intent/i),
+      expect.stringMatching(/evicted/i),
+    ]);
+  });
+
   it('invalidates an older running workflow intent when delegated headless delete is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
