@@ -52,6 +52,25 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  it('treats headless recreate-task for an explicitly scoped task in a deleted workflow as accepted without queueing', () => {
+    const submit = vi.fn(() => 42);
+
+    const result = submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-deleted',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate-task', 'wf-deleted/verify-ui-visual-snapshots'] }],
+      {
+        coordinator: { submit },
+        workflowExists: () => false,
+      },
+    );
+
+    expect(result.intentId).toBe(0);
+    expect(result.accepted).toBe(true);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   it('treats a delete-workflow foreign-key race as already accepted when the workflow is gone', () => {
     const submit = vi.fn(() => {
       throw makeForeignKeyError();
@@ -75,6 +94,70 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
 
     expect(result.intentId).toBe(0);
     expect(result.accepted).toBe(true);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats headless retry-task foreign-key races as accepted when the scoped workflow is gone', () => {
+    const submit = vi.fn(() => {
+      throw makeForeignKeyError();
+    });
+    let exists = true;
+
+    const result = submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-raced',
+      'high',
+      'headless.exec',
+      [{ args: ['retry-task', 'wf-raced/test-land-stack-guard'] }],
+      {
+        coordinator: { submit },
+        workflowExists: () => {
+          const current = exists;
+          exists = false;
+          return current;
+        },
+      },
+    );
+
+    expect(result.intentId).toBe(0);
+    expect(result.accepted).toBe(true);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat task targets scoped to another workflow as deleted workflow races', () => {
+    const error = makeForeignKeyError();
+    const submit = vi.fn(() => {
+      throw error;
+    });
+
+    expect(() => submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-raced',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate-task', 'wf-other/test-land-stack-guard'] }],
+      {
+        coordinator: { submit },
+        workflowExists: () => false,
+      },
+    )).toThrow(error);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat workflow-scoped headless commands with task-like targets as deleted workflow races', () => {
+    const error = makeForeignKeyError();
+    const submit = vi.fn(() => {
+      throw error;
+    });
+
+    expect(() => submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-raced',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate', 'wf-raced/test-land-stack-guard'] }],
+      {
+        coordinator: { submit },
+        workflowExists: () => false,
+      },
+    )).toThrow(error);
     expect(submit).toHaveBeenCalledTimes(1);
   });
 
