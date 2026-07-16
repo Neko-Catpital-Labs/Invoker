@@ -95,6 +95,18 @@ describe('disk-headroom cleanup guards', () => {
     expect(script).not.toContain('rm -rf "$TMP_CLEAN"/$pat');
     expect(script).not.toMatch(/-mmin \+\d+[\s\S]*?-exec rm -rf/);
   });
+
+  it('age-gates the targeted glob sweep and never touches the live invoker home', () => {
+    const script = buildInvokerHomeCleanupScript('~/.invoker');
+    // The glob loop must be age-gated via find + -mmin, not an un-aged sweep that
+    // could delete a running task's fresh scratch dir.
+    expect(script).toMatch(/find "\$TMP_CLEAN"[^\n]*-name "\$pat"[^\n]*-mmin \+/);
+    // Globbing is disabled around the pattern loop so patterns can't expand against the CWD.
+    expect(script).toContain('set -f');
+    expect(script).toContain('set +f');
+    // Both /tmp sweeps refuse to touch the live invoker home.
+    expect(script.match(/! -path "\$INVOKER_HOME"/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe('disk-headroom cleanup env', () => {
