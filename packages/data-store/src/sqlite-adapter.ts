@@ -1926,7 +1926,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   loadWorkerDesiredState<TDesiredState = unknown>(workerKind: string): WorkerDesiredState<TDesiredState> | undefined {
     const row = this.queryOne(
       `SELECT * FROM ${WORKER_DESIRED_STATE_TABLE} WHERE worker_kind = ?`,
-      [workerKind],
+      [workerKind.trim()],
     );
     return row ? this.rowToWorkerDesiredState<TDesiredState>(row) : undefined;
   }
@@ -1949,7 +1949,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   deleteWorkerDesiredState(workerKind: string): void {
     this.execRun(
       `DELETE FROM ${WORKER_DESIRED_STATE_TABLE} WHERE worker_kind = ?`,
-      [workerKind],
+      [workerKind.trim()],
     );
   }
 
