@@ -9,11 +9,14 @@ import { PlanConversation } from '../slack/plan-conversation.js';
 // itself did not fail. A model that stops early — it reached its own output
 // budget — is indistinguishable from one that finished: stdout is non-empty and
 // the exit code is 0. `spawnPlanner` only rejects on empty stdout, so a partial
-// reply is accepted as a complete turn and recorded in conversation history with
-// nothing anywhere saying the reply was cut off.
+// reply is accepted as a complete turn and recorded in conversation history.
 //
-// This suite pins the CURRENT (buggy) behavior so the proof lands green. The fix
-// slice flips these expectations to the corrected behavior.
+// A missing closing fence cannot be the signal: `extractYamlPlan` deliberately
+// accepts a plan whose closing fence never arrived. The signal only truncation
+// produces is an opened ```yaml block whose content no longer parses as YAML —
+// it ends on an unterminated string or key. A complete plan always parses,
+// closing fence or not, so this suite also pins that a valid unfenced plan is
+// left untouched.
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof child_process>();
@@ -49,8 +52,7 @@ function fakePlannerChild({ stdout = '', stderr = '', exitCode = 0 }: FakeChildO
 }
 
 // A reply that stops partway through the YAML plan: the ```yaml fence opens and
-// the text ends mid-token on an unterminated quoted string, exactly as it looks
-// when a model hits its output cap.
+// the text ends mid-token, exactly as it looks when a model hits its output cap.
 const TRUNCATED_REPLY = [
   'Here is the plan we discussed.',
   '',
@@ -63,7 +65,20 @@ const TRUNCATED_REPLY = [
   '    description: "Move planning composer text into local component state so keystrokes stop re-rendering App; lock the fix with the fat-graph e2e b',
 ].join('\n');
 
-describe('planner exit=0 with a cut-off reply — current behavior silently accepts truncation', () => {
+const COMPLETE_REPLY = [
+  'Here is the plan we discussed.',
+  '',
+  '```yaml',
+  'name: "Planning composer typing responsiveness"',
+  'onFinish: pull_request',
+  'mergeMode: external_review',
+  'tasks:',
+  '  - id: localize-composer-state',
+  '    description: "Move planning composer text into local component state"',
+  '```',
+].join('\n');
+
+describe('planner exit=0 with a cut-off reply — repro for silently accepted truncation', () => {
   let conversation: PlanConversation;
 
   beforeEach(() => {
@@ -71,24 +86,52 @@ describe('planner exit=0 with a cut-off reply — current behavior silently acce
     conversation = new PlanConversation({ plannerRetryLimit: 0 });
   });
 
-  it('accepts a cut-off reply as a complete turn with no truncation notice', async () => {
+  it('marks the reply as cut off when the planner stops mid-message', async () => {
     mockSpawn.mockReturnValueOnce(fakePlannerChild({ stdout: TRUNCATED_REPLY, exitCode: 0 }));
 
     const reply = await conversation.sendMessage('Draft the plan');
 
-    // BUG: the reply ends mid-word and nothing flags it as cut off.
-    expect(reply).not.toContain('cut off');
-    expect(reply.trimEnd().endsWith('fat-graph e2e b')).toBe(true);
+    // The partial text is still worth showing, but the reply must say it was cut off.
+    expect(reply).toContain('cut off');
   });
 
-  it('stores the partial reply in history verbatim, as if the planner had finished', async () => {
+  it('records the truncation in conversation history rather than storing a partial reply as complete', async () => {
     mockSpawn.mockReturnValueOnce(fakePlannerChild({ stdout: TRUNCATED_REPLY, exitCode: 0 }));
 
     await conversation.sendMessage('Draft the plan').catch(() => undefined);
 
     const assistant = conversation.history.filter((entry) => entry.role === 'assistant');
     expect(assistant.length).toBeGreaterThan(0);
-    // BUG: history keeps the cut-off text with no marker that it was truncated.
-    expect(assistant[assistant.length - 1].content).not.toContain('cut off');
+    expect(assistant[assistant.length - 1].content).toContain('cut off');
+  });
+
+  it('leaves a complete reply untouched', async () => {
+    mockSpawn.mockReturnValueOnce(fakePlannerChild({ stdout: COMPLETE_REPLY, exitCode: 0 }));
+
+    const reply = await conversation.sendMessage('Draft the plan');
+
+    expect(reply).not.toContain('cut off');
+    expect(reply).toContain('localize-composer-state');
+  });
+
+  it('does not flag a complete plan whose closing fence is missing', async () => {
+    // A finished plan that simply lacks its closing ``` still parses as YAML.
+    // The tolerant extractor accepts it, so truncation detection must not fire.
+    const noClosingFence = [
+      'Here is the plan.',
+      '',
+      '```yaml',
+      'name: Mock Plan',
+      'onFinish: none',
+      'tasks:',
+      '  - id: first',
+      '    description: First task',
+      '    command: echo first',
+    ].join('\n');
+    mockSpawn.mockReturnValueOnce(fakePlannerChild({ stdout: noClosingFence, exitCode: 0 }));
+
+    const reply = await conversation.sendMessage('Draft the plan');
+
+    expect(reply).not.toContain('cut off');
   });
 });

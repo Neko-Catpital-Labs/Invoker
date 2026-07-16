@@ -66,6 +66,36 @@ export function buildEmptyPlannerOutputError(
   return new Error(`${plannerLabel} exited 0 but produced no output${attemptSuffix}${tail}`);
 }
 
+const YAML_FENCE_OPEN = '```yaml\n';
+const YAML_FENCE_CLOSE = /^```\s*$/m;
+
+export const TRUNCATED_PLANNER_REPLY_NOTICE =
+  '\n\n_[invoker] This reply was cut off before it finished — the planner opened a YAML plan block that ends mid-way and does not parse. '
+  + 'The planner model most likely reached its own output limit. Ask it to continue, or ask for a smaller plan._';
+
+// A planner CLI that exits 0 with a partial reply is indistinguishable from one
+// that finished: stdout is non-empty and nothing reports a stop reason. A missing
+// closing fence cannot be the signal — extractYamlPlan deliberately accepts a plan
+// whose closing fence never arrived. The signal that only truncation produces is an
+// opened ```yaml block whose content no longer parses as YAML (it ends on an
+// unterminated string or key). A complete plan always parses, closing fence or not.
+export function plannerReplyWasCutOff(message: string): boolean {
+  const fenceStart = message.lastIndexOf(YAML_FENCE_OPEN);
+  if (fenceStart === -1) return false;
+  const rest = message.slice(fenceStart + YAML_FENCE_OPEN.length);
+  const closeMatch = rest.match(YAML_FENCE_CLOSE);
+  const yamlContent = closeMatch && closeMatch.index !== undefined
+    ? rest.slice(0, closeMatch.index)
+    : rest;
+  if (!yamlContent.trim()) return false;
+  try {
+    parseYaml(yamlContent);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 // Internal marker for the specific "success with empty stdout" case so the
 // retry wrapper can distinguish transient silent-success from user-actionable
 // failures (non-zero exit, spawn error, timeout) that must not be retried.
@@ -410,7 +440,15 @@ export class PlanConversation {
     const response = await this.spawnPlanner(prompt);
     const tCursor = Date.now();
     const formatted = formatCodexPlannerStdout(response);
-    const message = formatted.message;
+    const cutOff = plannerReplyWasCutOff(formatted.message);
+    if (cutOff) {
+      this.log('plan-conversation', 'error',
+        `[PLANNER_TRUNCATED] Turn ${turn}: planner exited 0 with a cut-off reply `
+        + `(planner=${this.tool ?? 'cursor'}, model=${this.model ?? 'default'}, stdoutLen=${response.length}, `
+        + `messageLen=${formatted.message.length}, promptLen=${prompt.length}, historyMsgs=${this.messages.length - 1}, `
+        + `messageTail="${formatted.message.slice(-200).replace(/\n/g, '\\n')}")`);
+    }
+    const message = cutOff ? `${formatted.message}${TRUNCATED_PLANNER_REPLY_NOTICE}` : formatted.message;
     this._lastTurnReasoning = formatted.reasoning;
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${formatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
