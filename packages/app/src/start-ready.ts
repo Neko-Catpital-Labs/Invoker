@@ -9,11 +9,19 @@ type StartReadyOrchestrator = Pick<
   Orchestrator,
   | 'syncAllFromDb'
   | 'getAllTasks'
+  | 'getPersistedActiveTaskIds'
   | 'getExecutableReadyTasks'
   | 'prepareTaskForNewAttempt'
   | 'recreateWorkflow'
   | 'startExecution'
 >;
+
+function collectRecoverableTasks(orchestrator: StartReadyOrchestrator): TaskState[] {
+  const activeTaskIds = orchestrator.getPersistedActiveTaskIds();
+  return orchestrator
+    .getAllTasks()
+    .filter((task) => !activeTaskIds.has(task.id) && isTaskRecoverableOnExplicitResume(task));
+}
 
 export function isTaskRecoverableOnExplicitResume(task: TaskState): boolean {
   if (task.status === 'running') return true;
@@ -59,7 +67,7 @@ function uniqueTasks(tasks: readonly TaskState[]): TaskState[] {
 export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): StartReadyPreview {
   const tasks = orchestrator.getAllTasks();
   const readyTasks = orchestrator.getExecutableReadyTasks();
-  const recoverableTasks = tasks.filter(isTaskRecoverableOnExplicitResume);
+  const recoverableTasks = collectRecoverableTasks(orchestrator);
   const failedTasks = tasks.filter((task) => task.status === 'failed');
 
   return {
@@ -99,7 +107,7 @@ export function runStartReady(
     }
   }
 
-  const recoverableTasks = orchestrator.getAllTasks().filter(isTaskRecoverableOnExplicitResume);
+  const recoverableTasks = collectRecoverableTasks(orchestrator);
   for (const task of recoverableTasks) {
     orchestrator.prepareTaskForNewAttempt(task.id, 'start_ready_recovery');
   }

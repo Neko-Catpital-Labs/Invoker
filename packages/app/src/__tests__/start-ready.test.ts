@@ -21,11 +21,12 @@ function makeTask(
   } as TaskState;
 }
 
-function harness(initialTasks: TaskState[], readyTasks: TaskState[]) {
+function harness(initialTasks: TaskState[], readyTasks: TaskState[], activeTaskIds: string[] = []) {
   let tasks = [...initialTasks];
   const orchestrator = {
     syncAllFromDb: vi.fn(() => undefined),
     getAllTasks: vi.fn(() => tasks),
+    getPersistedActiveTaskIds: vi.fn(() => new Set(activeTaskIds)),
     getExecutableReadyTasks: vi.fn(() => readyTasks),
     prepareTaskForNewAttempt: vi.fn((taskId: string) => {
       tasks = tasks.map((task) => task.id === taskId
@@ -93,6 +94,21 @@ describe('start-ready', () => {
     expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith('wf-1/recoverable', 'start_ready_recovery');
     expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
     expect(result.started.map((task) => task.id)).toEqual(['wf-1/ready']);
+  });
+
+  it('leaves actively executing tasks alone instead of superseding their attempts', () => {
+    const ready = makeTask('wf-1/ready', 'pending');
+    const live = makeTask('wf-1/live', 'running', {
+      execution: { selectedAttemptId: 'attempt-live' },
+    });
+    const orphaned = makeTask('wf-1/orphaned', 'running');
+    const orchestrator = harness([ready, live, orphaned], [ready], ['wf-1/live']);
+
+    const result = runStartReady(orchestrator);
+
+    expect(orchestrator.prepareTaskForNewAttempt).not.toHaveBeenCalledWith('wf-1/live', 'start_ready_recovery');
+    expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith('wf-1/orphaned', 'start_ready_recovery');
+    expect(result.preview.recoverableTaskIds).toEqual(['wf-1/orphaned']);
   });
 
   it('recreates failed workflows only when requested', () => {
