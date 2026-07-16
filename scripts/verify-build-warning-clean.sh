@@ -10,9 +10,9 @@
 #                    and fail if their combined output mentions an unreachable
 #                    `types` condition.
 #   run-sh           Assert that `run.sh` and `scripts/verify-executor-routing.sh`
-#                    no longer reference the removed `@invoker/executors` package
-#                    filter (which is what produced the
-#                    `No projects matched the filters` launcher warning).
+#                    no longer use the removed `@invoker/executors` package
+#                    filter, and that their active build filters do not produce
+#                    the `No projects matched the filters` launcher warning.
 #
 # Each mode exits 0 on pass and nonzero on fail.
 set -euo pipefail
@@ -34,7 +34,32 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 problems = []
-inspected = 0
+stats = {"inspected": 0}
+
+
+def export_path(segments):
+    return "exports" + "".join(f"[{segment!r}]" for segment in segments)
+
+
+def inspect_export_object(pkg_json, segments, entry):
+    if not isinstance(entry, dict):
+        return
+
+    keys = list(entry.keys())
+    if any(cond in keys for cond in ("types", "import", "require")):
+        stats["inspected"] += 1
+        if "types" in keys:
+            types_idx = keys.index("types")
+            for cond in ("import", "require"):
+                if cond in keys and keys.index(cond) < types_idx:
+                    problems.append(
+                        f"{pkg_json}: {export_path(segments)} orders 'types' after '{cond}'"
+                    )
+                    break
+
+    for key, value in entry.items():
+        if isinstance(value, dict):
+            inspect_export_object(pkg_json, segments + [key], value)
 
 for pkg_json in sorted(root.glob("packages/*/package.json")):
     try:
@@ -45,20 +70,7 @@ for pkg_json in sorted(root.glob("packages/*/package.json")):
     exports = data.get("exports")
     if not isinstance(exports, dict):
         continue
-    for subpath, entry in exports.items():
-        if not isinstance(entry, dict):
-            continue
-        inspected += 1
-        keys = list(entry.keys())
-        if "types" not in keys:
-            continue
-        types_idx = keys.index("types")
-        for cond in ("import", "require"):
-            if cond in keys and keys.index(cond) < types_idx:
-                problems.append(
-                    f"{pkg_json}: exports[{subpath!r}] orders 'types' after '{cond}'"
-                )
-                break
+    inspect_export_object(pkg_json, [], exports)
 
 if problems:
     print("FAIL: unreachable 'types' export conditions found:", file=sys.stderr)
@@ -66,7 +78,7 @@ if problems:
         print(f"  - {line}", file=sys.stderr)
     sys.exit(1)
 
-print(f"PASS: export-order ({inspected} export object(s) inspected)")
+print(f"PASS: export-order ({stats['inspected']} export object(s) inspected)")
 PY
 }
 
@@ -85,9 +97,10 @@ verify_targeted_builds() {
     fi
   done
 
-  if grep -E -i '("types"[^\n]*(unreachable|will never be used|never be used))|(unreachable[^\n]*"types")' "$log" >/dev/null; then
+  local warning_pattern='condition[[:space:]]+"types"[[:space:]]+here will never be used|"types".*(unreachable|will never be used|never be used)|unreachable.*"types"'
+  if grep -E -i "$warning_pattern" "$log" >/dev/null; then
     echo "FAIL: targeted-builds emitted unreachable 'types' condition warnings:" >&2
-    grep -E -i -n '("types"[^\n]*(unreachable|will never be used|never be used))|(unreachable[^\n]*"types")' "$log" >&2 || true
+    grep -E -i -n "$warning_pattern" "$log" >&2 || true
     return 1
   fi
 
@@ -95,22 +108,73 @@ verify_targeted_builds() {
 }
 
 verify_run_sh() {
-  local hits=0
-  for path in run.sh scripts/verify-executor-routing.sh; do
+  local paths=(run.sh scripts/verify-executor-routing.sh)
+  local path
+  for path in "${paths[@]}"; do
     if [[ ! -f "$path" ]]; then
       echo "FAIL: expected script missing: $path" >&2
       return 1
     fi
-    if grep -n -F '@invoker/executors' "$path" >/dev/null; then
-      echo "FAIL: $path still references the removed '@invoker/executors' filter:" >&2
-      grep -n -F '@invoker/executors' "$path" >&2 || true
-      hits=$((hits + 1))
-    fi
   done
-  if (( hits > 0 )); then
+
+  local stale_filters
+  stale_filters="$(
+    awk '
+      /^[[:space:]]*#/ { next }
+      {
+        for (i = 1; i <= NF - 2; i++) {
+          if ($i == "--filter" && $(i + 1) == "@invoker/executors" && $(i + 2) == "build") {
+            print FILENAME ":" FNR ":" $0
+          }
+        }
+      }
+    ' "${paths[@]}"
+  )"
+  if [[ -n "$stale_filters" ]]; then
+    echo "FAIL: active launcher build filters still reference removed '@invoker/executors':" >&2
+    printf '%s\n' "$stale_filters" >&2
     return 1
   fi
-  echo "PASS: run-sh (no stale '@invoker/executors' build filters)"
+
+  local filters
+  mapfile -t filters < <(
+    awk '
+      /^[[:space:]]*#/ { next }
+      {
+        for (i = 1; i <= NF - 2; i++) {
+          if ($i == "--filter" && $(i + 1) ~ /^@invoker\// && $(i + 2) == "build") {
+            print $(i + 1)
+          }
+        }
+      }
+    ' "${paths[@]}" | sort -u
+  )
+
+  if (( ${#filters[@]} == 0 )); then
+    echo "FAIL: no active package build filters found in launcher scripts" >&2
+    return 1
+  fi
+
+  local log
+  log="$(mktemp "${TMPDIR:-/tmp}/invoker-run-sh-filter.XXXXXX")"
+  trap 'rm -f "$log"' RETURN
+
+  local filter
+  for filter in "${filters[@]}"; do
+    if ! pnpm --filter "$filter" exec node -e "" >>"$log" 2>&1; then
+      echo "FAIL: unable to validate launcher build filter $filter" >&2
+      cat "$log" >&2
+      return 1
+    fi
+  done
+
+  if grep -F 'No projects matched the filters' "$log" >/dev/null; then
+    echo "FAIL: run-sh validation emitted 'No projects matched the filters':" >&2
+    grep -F -n 'No projects matched the filters' "$log" >&2 || true
+    return 1
+  fi
+
+  echo "PASS: run-sh (no stale filters and no 'No projects matched the filters' warnings)"
 }
 
 case "$MODE" in
