@@ -49,7 +49,12 @@ interface InvokerTerminalProps {
   selectedPresetKey: string;
   presetOptions: PlanningPresetOptionView[];
   draftPlanAvailable: boolean;
-  draftPlanSummary?: { name: string; taskCount: number; workflowCount?: number };
+  draftPlanSummary?: {
+    name: string;
+    taskCount: number;
+    workflowCount?: number;
+    taskGroups?: { workflow: string | null; tasks: string[] }[];
+  };
   planningStream?: InvokerTerminalPlanningStream | null;
   submitError?: SubmitErrorView | null;
   readOnly?: boolean;
@@ -633,10 +638,32 @@ export function InvokerTerminal({
               data-testid="invoker-terminal-ready-bar"
               className="sticky bottom-0 z-10 border-t border-border bg-background px-4 py-3 text-sm text-foreground"
             >
+              {draftPlanSummary?.taskGroups && draftPlanSummary.taskGroups.length > 0 && (
+                <div
+                  data-testid="invoker-terminal-plan-tasks"
+                  className="mb-3 max-h-52 overflow-y-auto pr-1"
+                >
+                  {draftPlanSummary.taskGroups.map((group, groupIndex) => (
+                    <div key={group.workflow ?? `group-${groupIndex}`} className="mb-2 last:mb-0">
+                      {group.workflow ? (
+                        <div className="text-xs font-semibold text-foreground">{group.workflow}</div>
+                      ) : null}
+                      <ul className={group.workflow ? 'mt-0.5 border-l border-border-strong pl-3' : ''}>
+                        {group.tasks.map((task, taskIndex) => (
+                          <li key={taskIndex} className="flex gap-2 text-xs text-muted-foreground">
+                            <span aria-hidden="true">–</span>
+                            <span>{task}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <span className="font-mono text-xs text-muted-foreground">
                   {draftPlanSummary
-                    ? `draft ready · "${draftPlanSummary.name}" · ${draftPlanSummary.workflowCount && draftPlanSummary.workflowCount > 1 ? `${draftPlanSummary.workflowCount} workflows` : `${draftPlanSummary.taskCount} step${draftPlanSummary.taskCount === 1 ? '' : 's'}`}`
+                    ? `draft ready · "${draftPlanSummary.name}" · ${draftPlanSummary.workflowCount && draftPlanSummary.workflowCount > 1 ? `${draftPlanSummary.workflowCount} workflows · ${draftPlanSummary.taskCount} task${draftPlanSummary.taskCount === 1 ? '' : 's'}` : `${draftPlanSummary.taskCount} task${draftPlanSummary.taskCount === 1 ? '' : 's'}`}`
                     : 'draft ready'}
                 </span>
                 <div className="flex items-center gap-2">
