@@ -551,11 +551,22 @@ function parseInAppPlanningPlanSummary(value: unknown): InAppPlanningPlanSummary
   ) {
     throw new Error('planning summary has invalid shape');
   }
+  const taskGroups = Array.isArray(candidate.taskGroups)
+    ? candidate.taskGroups.filter(
+      (group): group is InAppPlanningPlanSummary['taskGroups'][number] =>
+        !!group
+        && typeof group === 'object'
+        && (group.workflow === null || typeof group.workflow === 'string')
+        && Array.isArray(group.tasks)
+        && group.tasks.every((task) => typeof task === 'string'),
+    )
+    : [];
   return {
     name: candidate.name,
     taskCount: candidate.taskCount,
     ...(candidate.workflowCount === undefined ? {} : { workflowCount: candidate.workflowCount }),
     steps: candidate.steps,
+    taskGroups,
   };
 }
 
