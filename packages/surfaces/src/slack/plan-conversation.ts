@@ -11,6 +11,8 @@
  */
 
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
@@ -443,7 +445,30 @@ export class PlanConversation {
 
   /** Returns the last complete YAML plan drafted in this conversation, or null. */
   getDraftedPlan(): string | null {
-    return this.extractLastPlanFromMessages();
+    return this.readPlanDraftFile() ?? this.extractLastPlanFromMessages();
+  }
+
+  // The planner writes the full YAML plan here so its chat reply can stay a
+  // short summary instead of an inline block that truncates when the model hits
+  // its output limit. Gated on workingDir + threadTs; without both, planning
+  // falls back to inline extraction unchanged. `.invoker/` is gitignored.
+  planDraftFilePath(): string | null {
+    if (!this.workingDir || !this.threadTs) return null;
+    const safeId = this.threadTs.replace(/[^a-zA-Z0-9._-]/g, '_');
+    return join(this.workingDir, '.invoker', 'plan-drafts', `${safeId}.yaml`);
+  }
+
+  private readPlanDraftFile(): string | null {
+    const path = this.planDraftFilePath();
+    if (!path) return null;
+    try {
+      if (!existsSync(path)) return null;
+      const content = readFileSync(path, 'utf8').trim();
+      return content.length > 0 ? content : null;
+    } catch (err) {
+      this.log('plan-conversation', 'error', `Failed to read plan draft file ${path}: ${err}`);
+      return null;
+    }
   }
 
   /** Returns the conversation history. */
