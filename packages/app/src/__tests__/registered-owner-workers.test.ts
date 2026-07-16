@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
-  PR_CI_FAILURE_SCAN_WORKER_KIND,
-  PR_CONFLICT_REBASE_WORKER_KIND,
   createWorkerRegistry,
   registerBuiltinWorkers,
   type WorkerRuntimeDependencies,
@@ -97,21 +95,15 @@ describe('registered owner PR-maintenance worker dependencies', () => {
     expect(deps.prMaintenance).toEqual({ intervalMs: 90000, shell: '/bin/bash' });
   });
 
-  it('builds all PR-maintenance workers from the owner deps without starting them', () => {
+  it('builds the surviving PR-maintenance worker from the owner deps without starting it', () => {
     const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
     const deps = buildOwnerWorkerDeps({
       prMaintenance: { enabled: true, intervalMs: 90000 },
     });
 
     const coderabbit = registry.get(CODERABBIT_ADDRESS_WORKER_KIND)?.factory(deps);
-    const rebase = registry.get(PR_CONFLICT_REBASE_WORKER_KIND)?.factory(deps);
-    const ciScan = registry.get(PR_CI_FAILURE_SCAN_WORKER_KIND)?.factory(deps);
 
     expect(coderabbit?.identity.kind).toBe(CODERABBIT_ADDRESS_WORKER_KIND);
     expect(coderabbit?.isRunning()).toBe(false);
-    expect(rebase?.identity.kind).toBe(PR_CONFLICT_REBASE_WORKER_KIND);
-    expect(rebase?.isRunning()).toBe(false);
-    expect(ciScan?.identity.kind).toBe(PR_CI_FAILURE_SCAN_WORKER_KIND);
-    expect(ciScan?.isRunning()).toBe(false);
   });
 });

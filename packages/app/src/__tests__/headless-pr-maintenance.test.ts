@@ -4,8 +4,6 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
-  PR_CI_FAILURE_SCAN_WORKER_KIND,
-  PR_CONFLICT_REBASE_WORKER_KIND,
 } from '@invoker/execution-engine';
 import { runHeadless } from '../headless.js';
 
@@ -83,30 +81,13 @@ describe('headless worker PR-maintenance', () => {
     expect(stdout).toContain(`${CODERABBIT_ADDRESS_WORKER_KIND} worker scan completed.`);
   });
 
-  it('runs the pr-conflict-rebase worker one-shot with the threaded config', async () => {
-    writeCronScript(repoRoot, 'scripts/cron-pr-conflict-rebase.sh', 'rebase.marker');
 
-    await runHeadless(['worker', PR_CONFLICT_REBASE_WORKER_KIND], makeWorkerDeps(repoRoot, 'rebase-token') as never);
-
-    expect(readFileSync(join(repoRoot, 'rebase.marker'), 'utf8')).toBe('rebase-token');
-    expect(stdout).toContain(`${PR_CONFLICT_REBASE_WORKER_KIND} worker scan completed.`);
-  });
-  it('runs the pr-ci-failure-scan worker one-shot with the threaded config', async () => {
-    writeCronScript(repoRoot, 'packages/execution-engine/scripts/cron-pr-ci-failure.sh', 'pr-ci.marker');
-
-    await runHeadless(['worker', PR_CI_FAILURE_SCAN_WORKER_KIND], makeWorkerDeps(repoRoot, 'scan-token') as never);
-
-    expect(readFileSync(join(repoRoot, 'pr-ci.marker'), 'utf8')).toBe('scan-token');
-    expect(stdout).toContain(`${PR_CI_FAILURE_SCAN_WORKER_KIND} worker scan completed.`);
-  });
-
-
-  it('lists all PR-maintenance worker kinds from the manual entrypoint', async () => {
+  it('lists only the surviving PR-maintenance worker kind from the manual entrypoint', async () => {
     await runHeadless(['worker', 'list'], { invokerConfig: {} } as never);
 
     expect(stdout).toContain('Worker kinds');
     expect(stdout).toContain(CODERABBIT_ADDRESS_WORKER_KIND);
-    expect(stdout).toContain(PR_CONFLICT_REBASE_WORKER_KIND);
-    expect(stdout).toContain(PR_CI_FAILURE_SCAN_WORKER_KIND);
+    expect(stdout).not.toContain('pr-conflict-rebase');
+    expect(stdout).not.toContain('pr-ci-failure-scan');
   });
 });

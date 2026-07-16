@@ -310,24 +310,16 @@ describe('QueueView', () => {
           stoppable: true,
         }),
         makeWorker({
+          kind: 'review-gate-merge-conflict',
+          note: 'Queues workflow rebase-recreate when a review-gate PR reports merge conflicts.',
+          lifecycle: 'running',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
+        makeWorker({
           kind: 'coderabbit-address',
           note: 'Addresses CodeRabbit review comments.',
-          lifecycle: 'running',
-          autoStarts: true,
-          startable: false,
-          stoppable: true,
-        }),
-        makeWorker({
-          kind: 'pr-conflict-rebase',
-          note: 'Rebases conflicted pull requests.',
-          lifecycle: 'running',
-          autoStarts: true,
-          startable: false,
-          stoppable: true,
-        }),
-        makeWorker({
-          kind: 'pr-ci-failure-scan',
-          note: 'Scans mapped PRs for failing CI.',
           lifecycle: 'running',
           autoStarts: true,
           startable: false,
@@ -341,17 +333,15 @@ describe('QueueView', () => {
       'worker-row-autofix',
       'worker-row-pr-status',
       'worker-row-ci-failure',
+      'worker-row-review-gate-merge-conflict',
       'worker-row-coderabbit-address',
-      'worker-row-pr-conflict-rebase',
-      'worker-row-pr-ci-failure-scan',
     ]);
-    expect(screen.queryByText('Worker processes (6)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Worker processes (5)')).not.toBeInTheDocument();
     expect(screen.getByText('Autofix')).toBeInTheDocument();
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('CI failure repair')).toBeInTheDocument();
+    expect(screen.getByText('Merge conflict repair')).toBeInTheDocument();
     expect(screen.getByText('Coderabbit Address')).toBeInTheDocument();
-    expect(screen.getByText('Pr Conflict Rebase')).toBeInTheDocument();
-    expect(screen.getByText('PR CI scan')).toBeInTheDocument();
   });
 
   it('shows disabled Autofix and CI rows when policy is disabled', () => {

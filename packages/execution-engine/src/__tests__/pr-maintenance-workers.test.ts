@@ -14,10 +14,7 @@ import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store'
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
   DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
-  PR_CONFLICT_REBASE_WORKER_KIND,
   createCoderabbitAddressWorker,
-  createPrCiFailureScanWorker,
-  createPrConflictRebaseWorker,
   type PrMaintenanceLockProbeOptions,
 } from '../workers/pr-maintenance-workers.js';
 
@@ -148,52 +145,13 @@ describe('PR maintenance workers', () => {
     );
   });
 
-  it('spawns the PR conflict rebase shell entrypoint', async () => {
-    const repoRoot = makeRepoRoot();
-    const logger = makeLogger();
-    const spawnHarness = makeSpawnHarness();
-    const worker = createPrConflictRebaseWorker({
-      logger,
-      repoRoot,
-      spawnProcess: spawnHarness.spawnProcess,
-      lockProbe: () => ({ held: false }),
-      installSignalHandlers: false,
-    });
 
-    await worker.tick();
-
-    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
-      command: 'bash',
-      args: [resolve(repoRoot, 'scripts/cron-pr-conflict-rebase.sh')],
-      options: expect.objectContaining({ cwd: repoRoot }),
-    }));
-  });
-  it('spawns the PR CI scan shell entrypoint', async () => {
-    const repoRoot = makeRepoRoot();
-    const logger = makeLogger();
-    const spawnHarness = makeSpawnHarness();
-    const worker = createPrCiFailureScanWorker({
-      logger,
-      repoRoot,
-      spawnProcess: spawnHarness.spawnProcess,
-      lockProbe: () => ({ held: false }),
-      installSignalHandlers: false,
-    });
-
-    await worker.tick();
-
-    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
-      command: 'bash',
-      args: [resolve(repoRoot, 'packages/execution-engine/scripts/cron-pr-ci-failure.sh')],
-      options: expect.objectContaining({ cwd: repoRoot }),
-    }));
-  });
 
   it('skips cleanly when the shared PR-maintenance lock is already held', async () => {
     const repoRoot = makeRepoRoot();
     const logger = makeLogger();
     const spawnHarness = makeSpawnHarness();
-    const worker = createPrConflictRebaseWorker({
+    const worker = createCoderabbitAddressWorker({
       logger,
       repoRoot,
       spawnProcess: spawnHarness.spawnProcess,
@@ -205,9 +163,9 @@ describe('PR maintenance workers', () => {
 
     expect(spawnHarness.calls).toEqual([]);
     expect(logger.info).toHaveBeenCalledWith(
-      `[worker:${PR_CONFLICT_REBASE_WORKER_KIND}] shared PR maintenance lock held; skipping tick`,
+      `[worker:${CODERABBIT_ADDRESS_WORKER_KIND}] shared PR maintenance lock held; skipping tick`,
       expect.objectContaining({
-        worker: PR_CONFLICT_REBASE_WORKER_KIND,
+        worker: CODERABBIT_ADDRESS_WORKER_KIND,
         reason: 'test-lock-held',
       }),
     );
@@ -261,7 +219,7 @@ describe('PR maintenance workers', () => {
       getWorkerAction: vi.fn(() => undefined),
       upsertWorkerAction: vi.fn(),
     };
-    const worker = createPrConflictRebaseWorker({
+    const worker = createCoderabbitAddressWorker({
       logger: makeLogger(),
       repoRoot,
       spawnProcess: makeSpawnHarness().spawnProcess,

@@ -3,8 +3,8 @@ import { resolve } from 'node:path';
 
 /**
  * Options for acquiring the shared PR-maintenance lock. The lock guarantees
- * that only one PR-maintenance operation (across both the coderabbit-address
- * and pr-conflict-rebase jobs) runs at a time, mirroring the shell `cron_lock`.
+ * that only one PR-maintenance shell operation runs at a time, mirroring the
+ * shell `cron_lock`.
  */
 export interface PrMaintenanceLockOptions {
   /** Base lock path; the on-disk lock is `${lockPath}.d`. */
