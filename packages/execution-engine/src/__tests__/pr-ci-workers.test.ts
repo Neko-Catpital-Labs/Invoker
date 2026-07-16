@@ -14,7 +14,10 @@ import {
   ciFailureActionKey,
   createCiFailureTick,
 } from '../workers/ci-failure-worker.js';
-import { maybePublishReviewGateCiFailure } from '../task-runner-review-gate.js';
+import {
+  maybePublishReviewGateCiFailure,
+  pollMergeGateTask,
+} from '../task-runner-review-gate.js';
 import {
   DEFAULT_PR_STATUS_WORKER_INTERVAL_MS,
   createPrStatusWorker,
@@ -136,6 +139,43 @@ function makeHarness(task = makeTask()) {
   const attemptLedger = createAutoFixAttemptLedger();
   return { actions, store, submit, attemptLedger };
 }
+function makeMergeConflictPublisherHarness(
+  status: {
+    lifecycle: 'open' | 'closed' | 'merged';
+    rejected: boolean;
+    statusText: string;
+    url: string;
+    headSha?: string;
+    headRef?: string;
+    mergeState?: 'clean' | 'dirty' | 'unknown';
+    hasMergeConflict?: boolean;
+    checks?: { state: 'pending' | 'success' | 'failure'; failed: Array<{ name: string; conclusion: string; detailsUrl?: string }> };
+  },
+  task = makeTask(),
+) {
+  const publishCi = vi.fn();
+  const publishMergeConflict = vi.fn();
+  const host = {
+    cwd: '/repo',
+    logger,
+    executeTasks: vi.fn(),
+    persistence: {
+      updateTask: vi.fn(),
+    },
+    orchestrator: {
+      getTask: vi.fn(() => task),
+      recordTaskHeartbeat: vi.fn(),
+    },
+    mergeGateProvider: {
+      checkApproval: vi.fn(async () => status),
+    },
+    reviewGateCiFailurePublisher: { publish: publishCi },
+    reviewGateCiFailureInFlight: new Set<string>(),
+    reviewGateMergeConflictPublisher: { publish: publishMergeConflict },
+    reviewGateMergeConflictInFlight: new Set<string>(),
+  } as any;
+  return { host, publishCi, publishMergeConflict };
+}
 
 describe('PR status and CI failure workers', () => {
   afterEach(() => {
@@ -209,6 +249,81 @@ describe('PR status and CI failure workers', () => {
       intentId: '42',
       externalKey: ciFailureActionKey(event),
     });
+  });
+
+  it('publishes only the CI repair event for open reviews with failing checks', async () => {
+    const task = makeTask();
+    const { host, publishCi, publishMergeConflict } = makeMergeConflictPublisherHarness({
+      lifecycle: 'open',
+      rejected: false,
+      statusText: 'CI failed',
+      url: 'https://github.com/owner/repo/pull/123',
+      headSha: 'sha-1',
+      headRef: 'feature/ci',
+      checks: {
+        state: 'failure',
+        failed: [{ name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/1' }],
+      },
+      hasMergeConflict: false,
+      mergeState: 'clean',
+    }, task);
+
+    await pollMergeGateTask(host, task, 'refresh');
+
+    expect(publishCi).toHaveBeenCalledTimes(1);
+    expect(publishCi).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'wf-1/merge',
+      workflowId: 'wf-1',
+      reviewId: '123',
+      failedChecks: [{ name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/1' }],
+    }));
+    expect(publishMergeConflict).not.toHaveBeenCalled();
+  });
+
+  it.fails('publishes only the merge-conflict repair event for actionable review conflicts', async () => {
+    const task = makeTask();
+    const { host, publishCi, publishMergeConflict } = makeMergeConflictPublisherHarness({
+      lifecycle: 'open',
+      rejected: false,
+      statusText: 'Merge conflict',
+      url: 'https://github.com/owner/repo/pull/123',
+      headSha: 'sha-1',
+      headRef: 'feature/ci',
+      mergeState: 'dirty',
+      hasMergeConflict: true,
+    }, task);
+
+    await pollMergeGateTask(host, task, 'refresh');
+
+    expect(publishCi).not.toHaveBeenCalled();
+    expect(publishMergeConflict).toHaveBeenCalledTimes(1);
+    expect(publishMergeConflict).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'wf-1/merge',
+      workflowId: 'wf-1',
+      reviewId: '123',
+      status: 'review_ready',
+      taskStateVersion: 10,
+      statusText: 'Merge conflict',
+    }));
+  });
+
+  it('does not publish a merge-conflict repair for BEHIND review status', async () => {
+    const task = makeTask();
+    const { host, publishCi, publishMergeConflict } = makeMergeConflictPublisherHarness({
+      lifecycle: 'open',
+      rejected: false,
+      statusText: 'Branch is behind base',
+      url: 'https://github.com/owner/repo/pull/123',
+      headSha: 'sha-1',
+      headRef: 'feature/ci',
+      mergeState: 'dirty',
+      hasMergeConflict: false,
+    }, task);
+
+    await pollMergeGateTask(host, task, 'refresh');
+
+    expect(publishCi).not.toHaveBeenCalled();
+    expect(publishMergeConflict).not.toHaveBeenCalled();
   });
 
   it('queues CI repair while the in-memory retry budget allows it', async () => {
