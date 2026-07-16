@@ -10,11 +10,17 @@ import { parse as parseYaml } from 'yaml';
 
 // ── Types ───────────────────────────────────────────────────
 
+export interface PlanSummaryTaskGroup {
+  workflow: string | null;
+  tasks: string[];
+}
+
 export interface PlanSummary {
   name: string;
   steps: string[];
   taskCount: number;
   workflowCount?: number;
+  taskGroups: PlanSummaryTaskGroup[];
 }
 
 interface PlanTask {
@@ -42,6 +48,7 @@ export function summarizePlanText(planText: string): PlanSummary | null {
   if (Array.isArray(rawWorkflows)) {
     if (rawWorkflows.length === 0) return null;
     const workflowNames: string[] = [];
+    const taskGroups: PlanSummaryTaskGroup[] = [];
     let taskCount = 0;
     for (const rawWorkflow of rawWorkflows) {
       if (!isRecord(rawWorkflow)) return null;
@@ -49,10 +56,15 @@ export function summarizePlanText(planText: string): PlanSummary | null {
       if (typeof workflowName !== 'string' || workflowName.trim().length === 0) return null;
       const workflowTasks = parseTasks(rawWorkflow.tasks);
       if (!workflowTasks) return null;
-      workflowNames.push(summarizeDescription(workflowName));
+      const label = summarizeDescription(workflowName);
+      workflowNames.push(label);
+      taskGroups.push({
+        workflow: label,
+        tasks: topoSort(workflowTasks).map((t) => summarizeDescription(t.description)),
+      });
       taskCount += workflowTasks.length;
     }
-    return { name, steps: workflowNames, taskCount, workflowCount: rawWorkflows.length };
+    return { name, steps: workflowNames, taskCount, workflowCount: rawWorkflows.length, taskGroups };
   }
 
   const tasks = parseTasks(parsed.tasks);
@@ -61,7 +73,24 @@ export function summarizePlanText(planText: string): PlanSummary | null {
   const ordered = topoSort(tasks);
   const steps = ordered.map((t) => summarizeDescription(t.description));
 
-  return { name, steps, taskCount: tasks.length };
+  return { name, steps, taskCount: tasks.length, taskGroups: [{ workflow: null, tasks: steps }] };
+}
+
+/**
+ * Deterministic per-task summary lines, grouped by workflow. This is the single
+ * source of truth for the plan summary the user reads on every surface, so a
+ * cut-off or verbose planner reply can never change what tasks are shown.
+ */
+export function formatPlanSummaryLines(summary: PlanSummary): string[] {
+  const lines: string[] = [];
+  const flat = summary.taskGroups.length === 1 && summary.taskGroups[0].workflow === null;
+  for (const group of summary.taskGroups) {
+    if (group.workflow && !flat) lines.push(group.workflow);
+    for (const task of group.tasks) {
+      lines.push(flat ? `• ${task}` : `   • ${task}`);
+    }
+  }
+  return lines;
 }
 
 // ── Internals ───────────────────────────────────────────────
