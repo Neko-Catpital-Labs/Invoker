@@ -9,6 +9,7 @@ import {
   parseUnifiedDiff,
   collectDiffAtomicityFindings,
   formatDiffAtomicityFindings,
+  lintDiffAtomicityForGit,
 } from './lint-pr-diff-atomicity.mjs';
 
 const scriptPath = fileURLToPath(new URL('./lint-pr-diff-atomicity.mjs', import.meta.url));
@@ -220,6 +221,38 @@ function kinds(findings) {
 
     writeFileSync(path.join(root, 'packages/core/src/thing.ts'), 'export function run() {\n  return 2;\n}\n');
     execFileSync('git', ['commit', '-aqm', 'clean'], { cwd: root, stdio: 'ignore' });
+    const passOutput = execFileSync(process.execPath, [scriptPath, '--root', root, '--base', 'HEAD~1'], { encoding: 'utf8' });
+    assert.match(passOutput, /Diff atomicity validation passed\./);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Temp git case: a full-context diff larger than Node's 1MB execFileSync
+// default still lints. `--unified=200000` scales output with whole-file size,
+// so a small edit to a large file can exceed the default and used to throw
+// ENOBUFS before the diff was ever parsed.
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'invoker-diff-atomicity-big-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: root, stdio: 'ignore' });
+    mkdirSync(path.join(root, 'packages/core/src'), { recursive: true });
+
+    const filler = 'export const padding = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";\n';
+    const fillerLines = Math.ceil((1024 * 1024 * 1.2) / filler.length);
+    const bigFile = path.join(root, 'packages/core/src/big.ts');
+    writeFileSync(bigFile, filler.repeat(fillerLines));
+    execFileSync('git', ['add', '.'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: root, stdio: 'ignore' });
+
+    writeFileSync(bigFile, `export const added = 1;\n${filler.repeat(fillerLines)}`);
+    execFileSync('git', ['commit', '-aqm', 'small edit to a large file'], { cwd: root, stdio: 'ignore' });
+
+    const findings = lintDiffAtomicityForGit({ root, baseRef: 'HEAD~1' });
+    assert.ok(Array.isArray(findings), 'expected findings for an over-1MB full-context diff');
+
     const passOutput = execFileSync(process.execPath, [scriptPath, '--root', root, '--base', 'HEAD~1'], { encoding: 'utf8' });
     assert.match(passOutput, /Diff atomicity validation passed\./);
   } finally {

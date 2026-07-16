@@ -51,10 +51,14 @@ function parseArgs(argv) {
   };
 }
 
+/** Diff output scales with the change, so a large PR outgrows Node's 1MB default. */
+const GIT_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
+
 function runGit(root, args) {
   return execFileSync('git', args, {
     cwd: root,
     encoding: 'utf8',
+    maxBuffer: GIT_MAX_BUFFER_BYTES,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
