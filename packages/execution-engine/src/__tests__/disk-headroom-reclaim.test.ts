@@ -12,6 +12,8 @@ import {
   isSafeRemoteInvokerHomePath,
   resolveDiskCleanupCooldownMs,
   resolveDiskCleanupEnabled,
+  TMP_SCRATCH_GLOBS,
+  TMP_SCRATCH_MIN_AGE_MINUTES,
 } from '../workers/disk-headroom-reclaim.js';
 
 const tempDirs: string[] = [];
@@ -56,6 +58,42 @@ describe('disk-headroom cleanup guards', () => {
     expect(script).not.toContain('$HOME/.cache/electron');
     expect(script).not.toContain('$HOME/.local/share/pnpm');
     expect(script).not.toContain('$HOME/.pnpm-store');
+  });
+
+  it('reclaims the pr-cron-work scratch dir', () => {
+    expect(DISK_RECLAIMABLE_DIRS).toContain('pr-cron-work');
+    const script = buildInvokerHomeCleanupScript('~/.invoker');
+    expect(script).toContain('$INVOKER_HOME/pr-cron-work');
+  });
+
+  it('sweeps only Invoker/test scratch from the shared temp dir, never a blanket /tmp wipe', () => {
+    const script = buildInvokerHomeCleanupScript('~/.invoker');
+    // Resolves the temp dir with a safe fallback, and re-anchors unsafe values to /tmp.
+    expect(script).toContain('TMP_CLEAN="${TMPDIR:-/tmp}"');
+    expect(script).toContain('TMP_CLEAN=/tmp');
+    for (const glob of TMP_SCRATCH_GLOBS) {
+      expect(script).toContain(glob);
+    }
+    // Age guard protects in-flight runs; system + lock entries are excluded.
+    expect(script).toContain(`-mmin +${TMP_SCRATCH_MIN_AGE_MINUTES}`);
+    expect(script).toContain("! -name 'systemd-private-*'");
+    expect(script).toContain("! -name 'ssh-*'");
+    expect(script).toContain("! -name '*.lock'");
+    // Must never wipe the whole temp dir.
+    expect(script).not.toMatch(/rm -rf ["']?\/tmp["']?\s/);
+    expect(script).not.toMatch(/rm -rf ["']?\$TMP_CLEAN["']?\s*$/m);
+    expect(script).not.toContain('rm -rf "$TMP_CLEAN"/*');
+  });
+
+  it('never reaps a temp entry that holds mineable .jsonl session data', () => {
+    const script = buildInvokerHomeCleanupScript('~/.invoker');
+    // The reaper skips any entry containing a .jsonl (agent-session transcripts).
+    expect(script).toContain('reap_tmp');
+    expect(script).toContain("-name '*.jsonl'");
+    // Every temp removal routes through the guard, not a raw rm.
+    expect(script).toContain('reap_tmp "$entry"');
+    expect(script).not.toContain('rm -rf "$TMP_CLEAN"/$pat');
+    expect(script).not.toMatch(/-mmin \+\d+[\s\S]*?-exec rm -rf/);
   });
 });
 
