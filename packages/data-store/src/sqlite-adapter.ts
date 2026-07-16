@@ -70,6 +70,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { SlowQueryAggregator, type SlowQueryShapeSummary } from './slow-query-aggregator.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -121,6 +122,51 @@ export interface SlowQueryInfo {
   durationMs: number;
   sql: string;
   rowCount?: number;
+}
+
+const SLOW_QUERY_SUMMARY_TOP_N = 10;
+const SLOW_QUERY_SUMMARY_THROTTLE_MS = 30_000;
+const SLOW_QUERY_SUMMARY_COUNT_INTERVAL = 1_000;
+
+function createDefaultSlowQuerySink(): (info: SlowQueryInfo) => void {
+  const aggregator = new SlowQueryAggregator({ defaultTopN: SLOW_QUERY_SUMMARY_TOP_N });
+  let lastSummaryAt = 0;
+  let slowQueryCount = 0;
+  let slowQueryCountAtLastSummary = 0;
+
+  return (info) => {
+    aggregator.record(info);
+    slowQueryCount += 1;
+    const now = Date.now();
+    const dueByTime = lastSummaryAt === 0 || now - lastSummaryAt >= SLOW_QUERY_SUMMARY_THROTTLE_MS;
+    const dueByCount = slowQueryCount - slowQueryCountAtLastSummary >= SLOW_QUERY_SUMMARY_COUNT_INTERVAL;
+    if (!dueByTime && !dueByCount) return;
+    lastSummaryAt = now;
+    slowQueryCountAtLastSummary = slowQueryCount;
+    console.warn(formatSlowQuerySummary(aggregator.topN(), slowQueryCount));
+  };
+}
+
+function formatSlowQuerySummary(entries: SlowQueryShapeSummary[], slowQueryCount: number): string {
+  const renderedEntries = entries.map((entry, index) => {
+    const rows = entry.maxRows === undefined ? '' : ` maxRows=${entry.maxRows}`;
+    return [
+      `${index + 1}. max=${formatMs(entry.maxMs)} p95=${formatMs(entry.p95Ms)} p50=${formatMs(entry.p50Ms)}`,
+      `count=${entry.count}${rows}`,
+      `first=${new Date(entry.firstSeenAt).toISOString()}`,
+      `last=${new Date(entry.lastSeenAt).toISOString()}`,
+      entry.shape.slice(0, 300),
+    ].join(' ');
+  });
+
+  return [
+    `[SQLiteAdapter] slow query summary top ${entries.length} after ${slowQueryCount} slow queries (ranked by maxMs, count tie-break)`,
+    ...renderedEntries,
+  ].join('\n');
+}
+
+function formatMs(value: number): string {
+  return `${value.toFixed(1)}ms`;
 }
 
 export type EphemeralSQLiteAdapterOptions = Pick<
@@ -551,13 +597,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.slowQueryThresholdMs = options?.slowQueryThresholdMs ?? 25;
     this.onSlowQuery = options?.onSlowQuery
       ?? (this.slowQueryThresholdMs > 0
-        ? (info) => {
-            console.warn(
-              `[SQLiteAdapter] slow query ${info.durationMs.toFixed(1)}ms` +
-                (info.rowCount === undefined ? '' : ` rows=${info.rowCount}`) +
-                `: ${info.sql.slice(0, 200)}`,
-            );
-          }
+        ? createDefaultSlowQuerySink()
         : null);
     this.corruptionRecovery = corruptionRecovery;
     this.taskAttemptRepo = new SqliteTaskAttemptRepository(this.executor, {
