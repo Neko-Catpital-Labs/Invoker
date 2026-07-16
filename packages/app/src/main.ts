@@ -64,7 +64,6 @@ import type {
   Logger,
   StartReadyRequest,
   StartReadyResult,
-  WorkflowMutationAcceptedResult,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -177,7 +176,6 @@ import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.j
 import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
-import { submitWorkflowMutationOrAcknowledgeDeleted } from './workflow-mutation-submit.js';
 import type { WorkflowMutationContext } from './persisted-workflow-mutation-coordinator.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import {
@@ -218,11 +216,8 @@ import {
   type GuiMutationRegistrationContext,
   type WorkflowScopedGuiMutationRegistrationContext,
 } from './ipc/ipc-registration.js';
-import {
-  createGuiMutationTaskActions,
-  registerGuiMutationIpcHandlers,
-  type GuiMutationTaskActions,
-} from './ipc/gui-mutation-handlers.js';
+import { acknowledgeNoTrackHeadlessExec, createGuiMutationTaskActions, logHeadlessExecReceived, registerGuiMutationIpcHandlers } from './ipc/gui-mutation-handlers.js';
+import type { GuiMutationTaskActions, HeadlessExecMutationContext, HeadlessRunMutationPayload, HeadlessResumeMutationPayload } from './ipc/gui-mutation-handlers.js';
 import { createTaskDeltaStreamSequence } from './task-delta-stream-sequence.js';
 import {
   createTerminalUiPerfCounters,
@@ -449,82 +444,16 @@ let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
 const appProcessStartedAt = Date.now();
 
-interface HeadlessRunMutationPayload {
-  planPath: string;
-  traceId?: string;
-}
-
-interface HeadlessResumeMutationPayload {
-  workflowId: string;
-  traceId?: string;
-}
-
-type HeadlessOwnerMode = 'standalone' | 'gui';
-function headlessExecLogFields(
-  payload: HeadlessExecMutationPayload,
-  mode: HeadlessOwnerMode,
-  extra: Record<string, string | number | undefined> = {},
-): string {
-  const fields: Record<string, string | number | undefined> = {
-    trace: payload.traceId ?? '<none>',
-    args: `"${payload.args.join(' ')}"`,
-    noTrack: payload.noTrack ? 'true' : 'false',
-    ...extra,
-    coordinator: workflowMutationCoordinator ? 'true' : 'false',
-    mode,
-  };
-  return Object.entries(fields)
-    .map(([key, value]) => `${key}=${value ?? '<none>'}`)
-    .join(' ');
-}
-
-function logHeadlessExecReceived(payload: HeadlessExecMutationPayload, mode: HeadlessOwnerMode): void {
-  logger.info(
-    `headless.exec received ${headlessExecLogFields(payload, mode, { ownerId: workflowMutationOwnerId })}`,
-    { module: 'ipc-delegate' },
-  );
-}
-
-function acknowledgeNoTrackHeadlessExec(
-  payload: HeadlessExecMutationPayload,
-  workflowId: string | undefined,
-  priority: WorkflowMutationPriority,
-  mode: HeadlessOwnerMode,
-): WorkflowMutationAcceptedResult | undefined {
-  logger.info(
-    `headless.exec decision ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId ?? '<none>'}"`, priority })}`,
-    { module: 'ipc-delegate' },
-  );
-
-  if (!payload.noTrack) return undefined;
-
-  if (workflowId && workflowMutationCoordinator) {
-    const result = submitWorkflowMutationOrAcknowledgeDeleted(workflowId, priority, 'headless.exec', [payload], {
-      coordinator: workflowMutationCoordinator,
-      workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
-      logger,
-      deferDrain: true,
-    });
-    logger.info(
-      `headless.exec accepted ${headlessExecLogFields(payload, mode, { workflow: `"${workflowId}"`, intent: result.intentId, priority })}`,
-      { module: 'ipc-delegate' },
-    );
-    return result;
-  }
-
-  const reason = !workflowId ? 'workflow-not-resolved' : 'coordinator-unavailable';
-  logger.error(
-    `headless.exec rejected ${headlessExecLogFields(payload, mode, { reason, workflow: `"${workflowId ?? '<none>'}"` })}`,
-    { module: 'ipc-delegate' },
-  );
-  throw new Error(`Fire-and-forget headless.exec could not be queued: ${reason}`);
-}
-
 let logger: Logger = new FileAndDbLogger({ module: 'main' });
 let guiInstanceLock: GuiInstanceLock | null = null;
 const buildSha = typeof __BUILD_SHA__ !== 'undefined' ? __BUILD_SHA__ : 'dev';
 const buildVersion = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev';
 logger.info(`Invoker ${buildVersion} (${buildSha})`, { module: 'startup' });
+
+const headlessExecMutationContext: HeadlessExecMutationContext = {
+  get logger() { return logger; }, ownerId: workflowMutationOwnerId,
+  getWorkflowMutationCoordinator: () => workflowMutationCoordinator, workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
+};
 
 process.on('uncaughtException', (err) => {
   logProcessError('uncaughtException', err, { logger, fallbackConsole: console });
@@ -1660,9 +1589,9 @@ function startHeadlessMode(): void {
             noTrack: delegatedNoTrack,
             traceId,
           };
-          logHeadlessExecReceived(payload, 'standalone');
+          logHeadlessExecReceived(payload, 'standalone', headlessExecMutationContext);
           const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
-          const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'standalone');
+          const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'standalone', headlessExecMutationContext);
           if (acknowledgement) return acknowledgement;
           await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
             await runHeadless(args, {
@@ -2644,9 +2573,9 @@ function createEmbeddedTerminalBackendFromConfig(
           noTrack: delegatedNoTrack,
           traceId,
         };
-        logHeadlessExecReceived(payload, 'gui');
+        logHeadlessExecReceived(payload, 'gui', headlessExecMutationContext);
         const { workflowId, priority } = mutationActions.classifyHeadlessExecMutation(payload);
-        const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'gui');
+        const acknowledgement = acknowledgeNoTrackHeadlessExec(payload, workflowId, priority, 'gui', headlessExecMutationContext);
         if (acknowledgement) return acknowledgement;
         return mutationActions.runWorkflowMutation(
           workflowId,
