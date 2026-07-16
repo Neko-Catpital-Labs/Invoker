@@ -491,6 +491,48 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('seeds a late first replay snapshot for an already mounted pane', async () => {
+    const session = makeTerminalSession('task-alpha', {
+      outputSnapshot: '',
+    });
+
+    const { rerender } = render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(xtermMock.instances).toHaveLength(1));
+    expect(xtermMock.writeLog).toEqual([]);
+
+    rerender(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[{ ...session, outputSnapshot: 'late replay\n' }]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['late replay\n']);
+    });
+    expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
+      'embedded_terminal_snapshot_write',
+      expect.objectContaining({
+        source: 'session_update',
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+      }),
+    );
+  });
+
   it('reports embedded terminal attach, snapshot, input, and output perf markers', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'early line\n',
