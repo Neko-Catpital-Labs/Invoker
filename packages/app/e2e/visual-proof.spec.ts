@@ -700,6 +700,28 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-delete-after-3s');
   });
 
+  test('mutation failure does not steal focus', async ({ page }) => {
+    const workflowId = await loadPlanAndSelectWorkflow(page, TEST_PLAN);
+    await expect(workflowNode(page, workflowId)).toBeVisible();
+    await expect(page.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+    await captureScreenshot(page, 'mutation-failure-focus-1-before');
+
+    // Asking for a fix with a harness that is not installed fails inside the
+    // mutation coordinator, which is the real path that emits a task-scoped
+    // failure event.
+    const tasks = await getTasks(page);
+    const targetTaskId = String(tasks[0].id);
+    await page.evaluate(
+      (id) => { void (window.invoker.fixWithAgent(id, 'not-a-real-harness') as Promise<unknown>).catch(() => {}); },
+      targetTaskId,
+    );
+
+    // The badge proves the failure actually landed. Without this the capture
+    // would look identical whether or not any event was ever emitted.
+    await expect(page.getByTestId('sidebar-attention')).toContainText('1', { timeout: 15000 });
+    await captureScreenshot(page, 'mutation-failure-focus-2-after');
+  });
+
   test('terminal planning loads graph', async ({ page }) => {
     const plannedYaml = yamlStringify(TERMINAL_PLANNED_PLAN);
     // Mirror the real planner reply shape: prose followed by the full fenced
