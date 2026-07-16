@@ -35,6 +35,7 @@ import type { WorkflowCancelResult } from './workflow-preemption.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
 import type { ReviewGateCiRepairCommandResult } from './review-gate-ci-repair-command.js';
+import type { ReviewGateMergeConflictRepairCommandResult } from './review-gate-merge-conflict-command.js';
 
 
 export interface HeadlessDeps {
@@ -61,6 +62,7 @@ export interface HeadlessDeps {
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
   repairReviewGateCi?: (prArg: string) => Promise<ReviewGateCiRepairCommandResult>;
+  repairReviewGateMergeConflict?: (prArg: string) => Promise<ReviewGateMergeConflictRepairCommandResult>;
   /** Abort signal from the workflow mutation coordinator, if running inside a coordinated mutation. */
   signal?: AbortSignal;
   mutationTiming?: WorkflowMutationTiming;

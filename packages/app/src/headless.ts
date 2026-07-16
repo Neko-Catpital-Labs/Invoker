@@ -88,6 +88,7 @@ import {
   headlessRebaseRetry,
   headlessRebaseRecreate,
   headlessRepairReviewGateCi,
+  headlessRepairReviewGateMergeConflict,
   headlessFix,
   headlessResolveConflict,
 } from './headless-run-resume.js';
@@ -310,6 +311,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'repair-review-gate-ci':
       await headlessRepairReviewGateCi(args[1], deps);
+      break;
+    case 'repair-review-gate-merge-conflict':
+      await headlessRepairReviewGateMergeConflict(args[1], deps);
       break;
     case 'fix':
       await headlessFix(args, deps);
@@ -550,6 +554,7 @@ ${BOLD}Execute:${RESET}
   rebase-retry <workflowId|mergeTaskId|taskId>        Refresh pool base, then retry incomplete work
   rebase-recreate <workflowId|mergeTaskId|taskId>     Refresh pool base, then recreate workflow
   repair-review-gate-ci <prNumber|prUrl>              Queue CI repair for one mapped review-gate PR
+  repair-review-gate-merge-conflict <prNumber|prUrl>  Queue merge-conflict repair for one mapped review-gate PR
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
 
 ${BOLD}Respond:${RESET}
