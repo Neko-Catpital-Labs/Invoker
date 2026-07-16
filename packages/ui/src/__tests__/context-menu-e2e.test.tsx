@@ -2,13 +2,13 @@
  * Component test: Context menu on task nodes.
  *
  * Demoted from packages/app/e2e/context-menu.spec.ts.
- * Tests right-click, Escape close, click-outside close, and menu items.
+ * Tests right-click, keyboard navigation, activation, and menu items.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
-import type { WorkflowMeta } from '../../types.js';
+import type { WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
@@ -73,6 +73,30 @@ describe('Context menu (component)', () => {
     });
   }
 
+  async function openWorkflowContextMenu() {
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+    return menu;
+  }
+
+  async function openTaskContextMenu() {
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(document.activeElement).toBe(menu));
+    return menu;
+  }
+
+  function pressMenuKey(key: string) {
+    const active = document.activeElement;
+    const target = active && active !== document.body ? active : document;
+    fireEvent.keyDown(target, { key, code: key === ' ' || key === 'Space' ? 'Space' : key });
+  }
+
   it('right-clicking a workflow shows workflow actions', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
@@ -110,6 +134,49 @@ describe('Context menu (component)', () => {
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
     fireEvent.click(await screen.findByText('Retry Workflow'));
     await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu keyboard navigation activates Copy Workflow ID', async () => {
+    await setup();
+    await openWorkflowContextMenu();
+
+    pressMenuKey('ArrowDown');
+    pressMenuKey('ArrowDown');
+    pressMenuKey('ArrowDown');
+    pressMenuKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu ArrowUp wraps to the last visible item', async () => {
+    await setup();
+    await openWorkflowContextMenu();
+
+    pressMenuKey('ArrowUp');
+
+    expect(screen.getByRole('menuitem', { name: 'More' })).toHaveClass('bg-gray-700');
+    pressMenuKey('Enter');
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+  });
+
+  it('task context menu keyboard navigation activates the next enabled task action with Enter', async () => {
+    await setup();
+    await openTaskContextMenu();
+
+    pressMenuKey('ArrowDown');
+    pressMenuKey('Enter');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+  });
+
+  it('task context menu Space activates the highlighted item', async () => {
+    await setup();
+    await openTaskContextMenu();
+
+    pressMenuKey('ArrowDown');
+    pressMenuKey(' ');
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
   });
 
   it('workflow context menu recreates workflow', async () => {
