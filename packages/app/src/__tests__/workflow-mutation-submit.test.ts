@@ -147,7 +147,7 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
     expect(result.accepted).toBe(true);
     expect(submit).toHaveBeenCalledTimes(1);
   });
-  it.fails('proof: headless recreate-task for a missing workflow is accepted without queueing', () => {
+  it('headless recreate-task for a missing workflow is accepted without queueing', () => {
     const submit = vi.fn(() => 42);
 
     const result = submitWorkflowMutationOrAcknowledgeDeleted(
@@ -166,7 +166,7 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
-  it.fails('proof: headless recreate-task foreign-key race is accepted when the workflow is gone', () => {
+  it('headless recreate-task foreign-key race is accepted when the workflow is gone', () => {
     const submit = vi.fn(() => {
       throw makeForeignKeyError();
     });

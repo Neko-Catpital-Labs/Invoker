@@ -33,6 +33,17 @@ function headlessExecCommand(args: unknown[]): string | undefined {
   return typeof command === 'string' ? command : undefined;
 }
 
+function matchesWorkflowTarget(target: unknown, workflowId: string): boolean {
+  if (target === workflowId) {
+    return true;
+  }
+  if (typeof target !== 'string') {
+    return false;
+  }
+  const slashIndex = target.indexOf('/');
+  return slashIndex > 0 && target.slice(0, slashIndex) === workflowId;
+}
+
 function isMissingWorkflowIdempotentMutation(channel: string, workflowId: string, args: unknown[]): boolean {
   if (
     channel === 'invoker:delete-workflow'
@@ -46,10 +57,10 @@ function isMissingWorkflowIdempotentMutation(channel: string, workflowId: string
   }
   const payload = args[0] as { args?: unknown[] } | undefined;
   const command = headlessExecCommand(args);
-  if (!command || !MISSING_WORKFLOW_IDEMPOTENT_COMMANDS.has(command)) {
+  if (!command || !MISSING_WORKFLOW_IDEMPOTENT_COMMANDS.has(command) || !Array.isArray(payload?.args)) {
     return false;
   }
-  return Array.isArray(payload?.args) && payload.args[1] === workflowId;
+  return matchesWorkflowTarget(payload.args[1], workflowId);
 }
 
 function isForeignKeyConstraintError(error: unknown): boolean {
