@@ -113,7 +113,7 @@ export function WorkerActivityCard({
 
   return (
     <div data-testid="worker-activity-card" className="flex min-h-0 flex-col">
-      {snapshot && showControls ? (
+      {snapshot && onSetWorkersEnabled ? (
         <div
           data-testid="worker-global-switch-row"
           className="mb-3 flex shrink-0 items-center justify-between gap-3 rounded border border-border bg-card/60 px-3 py-2"
@@ -122,8 +122,8 @@ export function WorkerActivityCard({
             <div className="text-sm text-foreground">All workers</div>
             <div className="text-xs text-muted-foreground">
               {globalEnabled
-                ? 'Workers run as configured below.'
-                : 'Master switch is off. No worker runs, and each worker keeps its own setting for when you turn this back on.'}
+                ? 'Each worker follows its own setting.'
+                : 'Nothing runs. Each worker keeps its setting.'}
             </div>
           </div>
           <button

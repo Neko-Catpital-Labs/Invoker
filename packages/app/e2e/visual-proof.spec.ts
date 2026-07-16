@@ -2139,6 +2139,28 @@ test.describe('Visual proof capture', () => {
 
 
 
+  test('global worker switch turns all workers off and back on from the Workers surface', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await page.getByTestId('sidebar-workers').click();
+    await expect(page.getByTestId('worker-processes-section')).toBeVisible();
+
+    const toggle = page.getByTestId('worker-global-switch');
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByTestId('worker-process-list')).toContainText('Running');
+    await captureScreenshot(page, 'workers-surface-switch-step-1-on');
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await expect(page.getByTestId('worker-process-list')).not.toContainText('Running');
+    await captureScreenshot(page, 'workers-surface-switch-step-2-off');
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByTestId('worker-process-list')).toContainText('Running');
+    await captureScreenshot(page, 'workers-surface-switch-step-3-back-on');
+  });
+
   test('global worker switch turns all workers off and back on', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await selectGraphMenuItem(page, 'rail-queue');

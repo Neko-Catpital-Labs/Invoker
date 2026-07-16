@@ -3769,6 +3769,8 @@ export function App() {
               snapshot={workerStatus}
               selectedWorkerKind={selectedWorkerKind}
               onSelectWorker={setSelectedWorkerKind}
+              onSetWorkersEnabled={handleSetWorkersEnabled}
+              readOnly={runtimeStatus?.readOnly === true}
               showControls={false}
             />
           </div>

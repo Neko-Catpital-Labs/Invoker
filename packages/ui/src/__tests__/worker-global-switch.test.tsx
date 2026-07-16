@@ -121,16 +121,48 @@ describe('worker global switch', () => {
     consoleError.mockRestore();
   });
 
-  it('hides the switch on read-only surfaces that render without controls', () => {
+  it('shows the switch on the Workers surface, which renders no per-worker buttons', () => {
     render(
       <WorkerActivityCard
         snapshot={makeSnapshot()}
         selectedWorkerKind={null}
         onSelectWorker={vi.fn()}
+        onSetWorkersEnabled={vi.fn()}
         showControls={false}
       />,
     );
 
+    expect(screen.getByTestId('worker-global-switch')).toBeVisible();
+    expect(screen.queryByTestId('worker-start-stop-ci-failure')).toBeNull();
+  });
+
+  it('hides the switch when the host offers no way to set it', () => {
+    render(
+      <WorkerActivityCard
+        snapshot={makeSnapshot()}
+        selectedWorkerKind={null}
+        onSelectWorker={vi.fn()}
+      />,
+    );
+
     expect(screen.queryByTestId('worker-global-switch')).toBeNull();
+  });
+
+  it('disables the switch in a read-only window', () => {
+    const onSetWorkersEnabled = vi.fn();
+    render(
+      <WorkerActivityCard
+        snapshot={makeSnapshot()}
+        selectedWorkerKind={null}
+        onSelectWorker={vi.fn()}
+        onSetWorkersEnabled={onSetWorkersEnabled}
+        readOnly
+      />,
+    );
+
+    const toggle = screen.getByTestId('worker-global-switch');
+    expect(toggle).toBeDisabled();
+    fireEvent.click(toggle);
+    expect(onSetWorkersEnabled).not.toHaveBeenCalled();
   });
 });
