@@ -47,6 +47,18 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('Task at index 0 must be an object with an "id" field');
   });
+  it('currently accepts pnpm vitest task commands', () => {
+    const yaml = `
+name: Bad Command Plan
+repoUrl: git@github.com:test/repo.git
+baseBranch: main
+tasks:
+  - id: test-it
+    description: Run tests
+    command: "cd packages/ui && pnpm vitest run src/__tests__/edge.test.tsx"
+`;
+    expect(() => parsePlan(yaml)).not.toThrow();
+  });
 
   it('parses and trims executionModel from task definitions', () => {
     const yaml = `
