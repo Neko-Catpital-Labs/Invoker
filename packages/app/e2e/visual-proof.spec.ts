@@ -560,6 +560,27 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflow-context-menu-organization');
   });
 
+  test('context menu keyboard navigation highlights active item', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const menu = await openContextMenu(page, page.locator('[data-testid^="workflow-node-"]'));
+    await expect(menu).toBeFocused();
+
+    await page.keyboard.press('ArrowDown');
+    await expect(page.getByRole('menuitem', { name: 'Open PR' })).toHaveClass(/bg-gray-700/);
+
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await expect(page.getByRole('menuitem', { name: 'More' })).toHaveClass(/bg-gray-700/);
+
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('menuitem', { name: 'Rebase and Retry' })).toHaveClass(/bg-gray-700/);
+    await expect(menu).toBeFocused();
+
+    await captureScreenshot(page, 'context-menu-keyboard-navigation');
+  });
+
   test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
