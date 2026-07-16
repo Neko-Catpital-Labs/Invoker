@@ -158,12 +158,12 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     let statusText: string;
     if (data.state === 'MERGED') {
       statusText = 'Merged';
+    } else if (data.state === 'CLOSED') {
+      statusText = 'Closed';
     } else if (data.reviewDecision === 'APPROVED') {
       statusText = 'Approved, awaiting merge';
     } else if (data.reviewDecision === 'CHANGES_REQUESTED') {
       statusText = 'Changes requested';
-    } else if (data.state === 'CLOSED') {
-      statusText = 'Closed';
     } else {
       statusText = 'Awaiting review';
     }
