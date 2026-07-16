@@ -93,6 +93,7 @@ const DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS = 30_000;
 const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 90_000;
 const POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
+const OPTIONAL_READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 2_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 15_000;
 const GENERIC_READ_OWNER_PING_TIMEOUT_MS = 10_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
@@ -261,9 +262,11 @@ async function delegateReadOnlyQuery(
     { messageBus: bus, refreshMessageBus, ensureStandaloneOwner: async () => {} },
     { discoveryTimeoutMs: 2_000 },
   );
-  const ownerResult = await resolver.waitForAny(READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS);
+  const ownerResult = await resolver.waitForAny(
+    isUiPerf ? READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS : OPTIONAL_READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS,
+  );
   if (!ownerResult.resolved) {
-    if (isActionGraph) return false;
+    if (isQueue || isActionGraph) return false;
     throw new Error(isUiPerf
       ? 'query ui-perf requires a running shared owner process'
       : 'query queue requires a running shared owner process');
