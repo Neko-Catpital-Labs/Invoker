@@ -260,15 +260,14 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
       deps.deferRunnableTasks(runnable);
     } else {
       const taskExecutor = createHeadlessExecutor(deps);
-      const launch = setTimeout(() => {
-        void taskExecutor.executeTasks(runnable).catch((err) => {
+      void Promise.resolve()
+        .then(() => taskExecutor.executeTasks(runnable))
+        .catch((err) => {
           deps.logger.error(
             `background no-track start-ready failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
             { module: 'headless' },
           );
         });
-      }, 25);
-      launch.unref?.();
     }
     process.stdout.write('[headless] --no-track enabled: start-ready accepted; exiting without tracking.\n');
     return;
@@ -321,15 +320,14 @@ export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Pro
           deps.deferRunnableTasks(dispatchable, restored.workflowId);
         } else {
           const taskExecutor = createHeadlessExecutor(deps);
-          const launch = setTimeout(() => {
-            void taskExecutor.executeTasks(dispatchable).catch((err) => {
+          void Promise.resolve()
+            .then(() => taskExecutor.executeTasks(dispatchable))
+            .catch((err) => {
               deps.logger.error(
                 `background no-track task retry failed for ${taskId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
                 { module: 'headless' },
               );
             });
-          }, 25);
-          launch.unref?.();
         }
       }
       process.stdout.write('[headless] --no-track enabled: retry-task accepted; exiting without tracking.\n');
@@ -850,15 +848,14 @@ export async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDe
       deps.deferRunnableTasks(dispatchable, workflowId);
     } else {
       const te = createHeadlessExecutor(deps);
-      const launch = setTimeout(() => {
-        void te.executeTasks(dispatchable).catch((err) => {
+      void Promise.resolve()
+        .then(() => te.executeTasks(dispatchable))
+        .catch((err) => {
           deps.logger.error(
             `background no-track workflow retry failed for ${workflowId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
             { module: 'headless' },
           );
         });
-      }, 25);
-      launch.unref?.();
     }
     process.stdout.write('[headless] --no-track enabled: retry accepted; exiting without tracking.\n');
     return;
