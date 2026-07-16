@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus } from './types.js';
 import type { ActionGraphNode } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -44,6 +44,28 @@ type ModalState =
   | { type: 'approval'; task: TaskState; action: 'approve' | 'reject' }
   | { type: 'experiment'; task: TaskState }
   | { type: 'replace'; task: TaskState };
+
+type SidebarSurface = 'home' | 'workflows' | 'attention';
+
+interface WorkflowMutationFailedEvent {
+  intentId: number;
+  workflowId: string;
+  channel: string;
+  taskId?: string;
+  headlessCommand?: string;
+  message: string;
+  failedAt: string;
+}
+
+interface WorkflowMutationFailedEvents {
+  onWorkflowMutationFailed?: (cb: (event: WorkflowMutationFailedEvent) => void) => () => void;
+}
+
+interface MutationFailureAttentionEntry {
+  task: TaskState;
+  workflow: WorkflowMeta | null;
+  failure: WorkflowMutationFailedEvent;
+}
 
 interface WorkflowContextMenuProps {
   x: number;
@@ -218,6 +240,18 @@ export function hasMergeConflictExecution(task: TaskState | undefined): boolean 
   }
 }
 
+function workflowMutationFailureTitle(failure: WorkflowMutationFailedEvent): string {
+  if (failure.channel === 'invoker:approve') return 'Approve failed';
+  if (failure.channel === 'invoker:reject') return 'Reject failed';
+  if (failure.headlessCommand === 'fix') return 'Fix failed';
+  return `Mutation failed (${failure.channel})`;
+}
+
+function displayTaskId(taskId: string): string {
+  const slash = taskId.lastIndexOf('/');
+  return slash >= 0 ? taskId.slice(slash + 1) : taskId;
+}
+
 export function App() {
   const { tasks, workflows, clearTasks, refreshTasks } = useTasks();
   const invoker = useInvoker();
@@ -247,6 +281,8 @@ export function App() {
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
+  const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
+  const [mutationFailuresByTaskId, setMutationFailuresByTaskId] = useState<Map<string, WorkflowMutationFailedEvent>>(new Map());
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
   const refreshSystemDiagnostics = useCallback(() => {
@@ -270,6 +306,25 @@ export function App() {
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
+
+  useEffect(() => {
+    const invokerWithMutationEvents = window.invoker as typeof window.invoker & WorkflowMutationFailedEvents;
+    return invokerWithMutationEvents.onWorkflowMutationFailed?.((event) => {
+      if (event.taskId) {
+        const failedTaskId = event.taskId;
+        setMutationFailuresByTaskId((prev) => new Map(prev).set(failedTaskId, event));
+        return;
+      }
+
+      setViewMode('dag');
+      setSidebarSurface('workflows');
+      setSelectedTaskId(null);
+      setWorkflowSelectionDismissed(false);
+      if (event.workflowId) {
+        setSelectedWorkflowId(event.workflowId);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -359,6 +414,24 @@ export function App() {
     }
     return next;
   }, [selectedWorkflow, selectedWorkflowId, tasks]);
+  const attentionEntries = useMemo<MutationFailureAttentionEntry[]>(() => {
+    const entries: MutationFailureAttentionEntry[] = [];
+    for (const [taskId, failure] of mutationFailuresByTaskId) {
+      const task = tasks.get(taskId);
+      if (!task) continue;
+      entries.push({
+        task,
+        workflow: task.config.workflowId ? workflows.get(task.config.workflowId) ?? null : null,
+        failure,
+      });
+    }
+    return entries;
+  }, [mutationFailuresByTaskId, tasks, workflows]);
+  const workflowEntries = useMemo(
+    () => [...workflows.values()].sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id)),
+    [workflows],
+  );
+  const selectedMutationFailure = selectedTaskId ? mutationFailuresByTaskId.get(selectedTaskId) ?? null : null;
 
   useEffect(() => {
     if (selectedTask?.config.workflowId) {
@@ -448,6 +521,33 @@ export function App() {
     setContextMenu(null);
     setWorkflowContextMenu({ x: event.clientX, y: event.clientY, workflowId });
   }, []);
+
+  const selectAttentionTask = useCallback((task: TaskState) => {
+    setViewMode('dag');
+    setSelectedTaskId(task.id);
+    setWorkflowSelectionDismissed(false);
+    if (task.config.workflowId) {
+      setSelectedWorkflowId(task.config.workflowId);
+    }
+    setWorkflowContextMenu(null);
+    setContextMenu(null);
+  }, []);
+
+  const handleOpenWorkflowsSurface = useCallback(() => {
+    setViewMode('dag');
+    setSidebarSurface('workflows');
+    setWorkflowSelectionDismissed(false);
+    setSelectedTaskId(null);
+  }, []);
+
+  const handleOpenAttentionSurface = useCallback(() => {
+    setViewMode('dag');
+    setSidebarSurface('attention');
+    const selectedIsAttentionEntry = attentionEntries.some((entry) => entry.task.id === selectedTaskId);
+    if (!selectedIsAttentionEntry && attentionEntries[0]) {
+      selectAttentionTask(attentionEntries[0].task);
+    }
+  }, [attentionEntries, selectAttentionTask, selectedTaskId]);
 
   const handleDagSurfaceClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (contextMenu || workflowContextMenu) {
@@ -713,6 +813,8 @@ export function App() {
       setOnFinish('merge');
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
+      setSidebarSurface('home');
+      setMutationFailuresByTaskId(new Map());
       setModal({ type: 'none' });
       setStatusFilters(new Set<WorkflowStatus>());
     } catch (err) {
@@ -734,6 +836,8 @@ export function App() {
       setPlanName(null);
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
+      setSidebarSurface('home');
+      setMutationFailuresByTaskId(new Map());
       setModal({ type: 'none' });
     } catch (err) {
       console.error('Failed to delete workflows:', err);
@@ -989,17 +1093,44 @@ export function App() {
               data-testid="rail-home"
               onClick={() => {
                 setViewMode('dag');
+                setSidebarSurface('home');
               }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'dag' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+              aria-current={sidebarSurface === 'home' && viewMode === 'dag' ? 'page' : undefined}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${sidebarSurface === 'home' && viewMode === 'dag' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
             >
-              Home
+              <span
+                data-testid="sidebar-home"
+                aria-current={sidebarSurface === 'home' && viewMode === 'dag' ? 'page' : undefined}
+                className="contents"
+              >
+                Home
+              </span>
             </button>
+            <button
+              data-testid="sidebar-workflows"
+              onClick={handleOpenWorkflowsSurface}
+              aria-current={sidebarSurface === 'workflows' ? 'page' : undefined}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${sidebarSurface === 'workflows' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+            >
+              Workflows
+            </button>
+            {attentionEntries.length > 0 && (
+              <button
+                data-testid="sidebar-attention"
+                onClick={handleOpenAttentionSurface}
+                aria-current={sidebarSurface === 'attention' ? 'page' : undefined}
+                className={`w-full rounded px-2 py-1.5 text-left text-xs ${sidebarSurface === 'attention' ? 'bg-amber-900/70 text-amber-100' : 'text-amber-200 hover:bg-amber-950/50'}`}
+              >
+                <span data-testid="rail-attention" className="contents">Needs Attention</span>
+              </button>
+            )}
             <button
               data-testid="rail-timeline"
               onClick={() => {
                 setViewMode('timeline');
+                setSidebarSurface('home');
               }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'timeline' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${sidebarSurface === 'home' && viewMode === 'timeline' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
             >
               Timeline
             </button>
@@ -1007,8 +1138,9 @@ export function App() {
               data-testid="rail-history"
               onClick={() => {
                 setViewMode('history');
+                setSidebarSurface('home');
               }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'history' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${sidebarSurface === 'home' && viewMode === 'history' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
             >
               History
             </button>
@@ -1016,10 +1148,11 @@ export function App() {
               data-testid="rail-action-graph"
               onClick={() => {
                 setViewMode('actionGraph');
+                setSidebarSurface('home');
                 setWorkflowSelectionDismissed(true);
                 setSelectedTaskId(null);
               }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'actionGraph' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${sidebarSurface === 'home' && viewMode === 'actionGraph' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
             >
               Action Graph
             </button>
@@ -1027,8 +1160,9 @@ export function App() {
               data-testid="rail-queue"
               onClick={() => {
                 setViewMode('queue');
+                setSidebarSurface('home');
               }}
-              className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'queue' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+              className={`w-full rounded px-2 py-1.5 text-left text-xs ${sidebarSurface === 'home' && viewMode === 'queue' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
             >
               Queue
             </button>
@@ -1070,6 +1204,75 @@ export function App() {
             </button>
           </div>
         </nav>
+
+        {sidebarSurface !== 'home' && (
+          <aside
+            data-testid="browser-rail"
+            className="w-72 shrink-0 border-r border-gray-800 bg-gray-950/80 flex flex-col"
+          >
+            <div className="border-b border-gray-800 px-3 py-3">
+              <h2 className="text-sm font-semibold text-gray-100">
+                {sidebarSurface === 'workflows' ? 'Workflows' : 'Needs Attention'}
+              </h2>
+              <p className="mt-1 text-xs text-gray-400">
+                {sidebarSurface === 'workflows'
+                  ? `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'}`
+                  : `${attentionEntries.length} mutation failure${attentionEntries.length === 1 ? '' : 's'}`}
+              </p>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {sidebarSurface === 'workflows' ? (
+                workflowEntries.length > 0 ? (
+                  <div className="space-y-1">
+                    {workflowEntries.map((workflow) => (
+                      <button
+                        key={workflow.id}
+                        type="button"
+                        onClick={() => handleWorkflowClick(workflow.id)}
+                        className={`w-full rounded border px-3 py-2 text-left text-xs ${
+                          selectedWorkflow?.id === workflow.id && !selectedTaskId
+                            ? 'border-blue-500/60 bg-blue-950/40 text-blue-100'
+                            : 'border-gray-800 bg-gray-900/70 text-gray-200 hover:border-gray-700 hover:bg-gray-900'
+                        }`}
+                      >
+                        <div className="truncate font-medium">{workflow.name || workflow.id}</div>
+                        <div className="mt-1 truncate text-[11px] text-gray-400">{workflow.status}</div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="px-2 py-8 text-center text-xs text-gray-500">No workflows yet</div>
+                )
+              ) : attentionEntries.length > 0 ? (
+                <div className="space-y-1">
+                  {attentionEntries.map((entry) => (
+                    <button
+                      key={entry.task.id}
+                      type="button"
+                      onClick={() => selectAttentionTask(entry.task)}
+                      className={`w-full rounded border px-3 py-2 text-left text-xs ${
+                        selectedTaskId === entry.task.id
+                          ? 'border-amber-500/60 bg-amber-950/40 text-amber-100'
+                          : 'border-gray-800 bg-gray-900/70 text-gray-200 hover:border-gray-700 hover:bg-gray-900'
+                      }`}
+                    >
+                      <div className="truncate font-medium">{entry.task.description || displayTaskId(entry.task.id)}</div>
+                      <div className="mt-1 truncate text-[11px] text-gray-400">
+                        {entry.workflow?.name ?? entry.failure.workflowId}
+                      </div>
+                      <div className="mt-1 truncate text-[11px] text-amber-300">
+                        {workflowMutationFailureTitle(entry.failure)}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-2 py-8 text-center text-xs text-gray-500">All clear</div>
+              )}
+            </div>
+          </aside>
+        )}
 
         <div className="flex-1 flex overflow-hidden">
           <div className="flex-1 flex flex-col overflow-hidden">
@@ -1148,26 +1351,48 @@ export function App() {
             )}
           </div>
 
-          <div className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150`}>
-            <WorkflowInspector
-              workflow={selectedWorkflow}
-              task={selectedTask}
-              workflowTasks={miniDagTasks}
-              remoteTargets={remoteTargets}
-              executionPools={executionPools}
-              executionAgents={executionAgents}
-              collapsed={inspectorCollapsed}
-              advancedExpanded={advancedMetadataExpanded}
-              actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
-              onEditType={handleEditType}
-              onEditPool={handleEditPool}
-              onEditAgent={handleEditAgent}
-              onEditPrompt={handleEditPrompt}
-              onEditCommand={handleEditCommand}
-              onSetMergeBranch={handleSetMergeBranch}
-              onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
-              onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
-            />
+          <div className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 flex flex-col`}>
+            <div className="min-h-0 flex-1">
+              <WorkflowInspector
+                workflow={selectedWorkflow}
+                task={selectedTask}
+                workflowTasks={miniDagTasks}
+                remoteTargets={remoteTargets}
+                executionPools={executionPools}
+                executionAgents={executionAgents}
+                collapsed={inspectorCollapsed}
+                advancedExpanded={advancedMetadataExpanded}
+                actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
+                onEditType={handleEditType}
+                onEditPool={handleEditPool}
+                onEditAgent={handleEditAgent}
+                onEditPrompt={handleEditPrompt}
+                onEditCommand={handleEditCommand}
+                onSetMergeBranch={handleSetMergeBranch}
+                onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
+                onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
+              />
+            </div>
+            {!inspectorCollapsed && selectedTask && selectedMutationFailure && (
+              <section
+                data-testid="task-mutation-failure-detail"
+                className="border-l border-t border-amber-800 bg-amber-950/50 p-3 text-xs text-amber-100"
+              >
+                <h3 className="font-semibold text-amber-50">
+                  {workflowMutationFailureTitle(selectedMutationFailure)}
+                </h3>
+                <div className="mt-2 space-y-1 text-amber-100/90">
+                  <div>Channel: {selectedMutationFailure.channel}</div>
+                  {selectedMutationFailure.headlessCommand && (
+                    <div>Command: {selectedMutationFailure.headlessCommand}</div>
+                  )}
+                  <div>Intent: {selectedMutationFailure.intentId}</div>
+                </div>
+                <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded border border-amber-800/70 bg-gray-950/70 p-2 font-mono text-[11px] leading-relaxed text-amber-100">
+                  {selectedMutationFailure.message}
+                </pre>
+              </section>
+            )}
           </div>
         </div>
       </div>
