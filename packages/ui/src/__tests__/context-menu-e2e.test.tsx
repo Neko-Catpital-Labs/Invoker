@@ -102,6 +102,17 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
   });
 
+  it('task context menu opened from mini DAG renders above the floating graph panel', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    expect(await screen.findByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+
+    expect(Number(menu.style.zIndex)).toBeGreaterThan(1000);
+  });
+
   it('workflow context menu retries workflow', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
