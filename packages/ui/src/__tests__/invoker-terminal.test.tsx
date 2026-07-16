@@ -700,7 +700,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('draft the full plan');
 
     await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('draft ready · "Mock Plan" · 2 steps');
+      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('draft ready · "Mock Plan" · 2 tasks');
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
@@ -726,6 +726,10 @@ describe('Invoker terminal (component)', () => {
         taskCount: 4,
         workflowCount: 2,
         steps: ['Workers Surface Contracts', 'Workers Surface UI'],
+        taskGroups: [
+          { workflow: 'Workers Surface Contracts', tasks: ['Define contracts', 'Verify contracts'] },
+          { workflow: 'Workers Surface UI', tasks: ['Build UI', 'Verify UI'] },
+        ],
       },
     })) as any;
     mock.api.planningChatSubmit = vi.fn(async () => ({
@@ -742,8 +746,15 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('draft the Workers Surface plan');
 
     await waitFor(() => {
-      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('draft ready · "Workers Surface" · 2 workflows');
+      expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('draft ready · "Workers Surface" · 2 workflows · 4 tasks');
     });
+
+    const tasks = screen.getByTestId('invoker-terminal-plan-tasks');
+    expect(tasks).toHaveTextContent('Workers Surface Contracts');
+    expect(tasks).toHaveTextContent('Define contracts');
+    expect(tasks).toHaveTextContent('Verify contracts');
+    expect(tasks).toHaveTextContent('Build UI');
+    expect(tasks).toHaveTextContent('Verify UI');
 
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
 
@@ -784,7 +795,7 @@ describe('Invoker terminal (component)', () => {
     expect(errorPanel).toHaveTextContent('Plan could not be submitted');
     expect(errorPanel).toHaveTextContent(submitError);
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(`Plan could not be submitted: ${submitError}`);
-    expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('draft ready · "Selected lists scroll" · 4 steps');
+    expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('draft ready · "Selected lists scroll" · 4 tasks');
     expect(mock.api.refreshTaskGraph).not.toHaveBeenCalled();
 
     fireEvent.click(within(errorPanel).getByRole('button', { name: 'Retry submit' }));
