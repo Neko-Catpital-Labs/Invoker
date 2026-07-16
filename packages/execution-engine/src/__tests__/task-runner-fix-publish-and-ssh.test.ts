@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
+import { getCurrentRequiredReviewArtifacts } from '../task-runner-review-gate.js';
 import { SshExecutor } from '../ssh-executor.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
@@ -2677,6 +2678,56 @@ describe('TaskRunner', () => {
           }),
         }),
       }), expect.objectContaining({ generation: 0 }));
+    });
+    it('stamps published stack artifacts with the merge task generation so the poller keeps them live', async () => {
+      const contractsTask = makeTask({
+        id: 'contracts',
+        status: 'completed',
+        config: { workflowId: 'wf-pub' },
+        execution: { branch: 'invoker/contracts' },
+        description: 'Contracts',
+      });
+
+      const { executor, mergeTask, orchestrator } = setupPublishAfterFix({
+        mergeMode: 'external_review',
+        featureBranch: 'plan/feature',
+        gateWorkspacePath: '/tmp/gate-clone',
+        taskBranches: [contractsTask],
+        repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+      });
+
+      mergeTask.execution.generation = 26;
+
+      (executor as any).publishReviewStackWithMakePrSkill = vi.fn().mockResolvedValue({
+        artifacts: [
+          {
+            id: 'contracts',
+            title: 'Define contracts',
+            url: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/1',
+            providerId: '1',
+            branch: 'stack/contracts',
+            baseBranch: 'master',
+            required: true,
+            status: 'open',
+            generation: 0,
+          },
+        ],
+        sessionId: 'sess-stack',
+        agentName: 'codex',
+      });
+
+      await executor.publishAfterFix(mergeTask);
+
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledTimes(1);
+      const [, changes] = (orchestrator.setTaskReviewReady as any).mock.calls[0];
+      const gate = changes.execution.reviewGate;
+      expect(gate.activeGeneration).toBe(26);
+      for (const artifact of gate.artifacts) {
+        expect(artifact.generation).toBe(gate.activeGeneration);
+      }
+
+      const publishedTask = { execution: changes.execution } as TaskState;
+      expect(getCurrentRequiredReviewArtifacts(publishedTask)).toHaveLength(1);
     });
     it('external_review mode: detaches HEAD, fetches, consolidates, creates PR', async () => {
       const completedTask = makeTask({
