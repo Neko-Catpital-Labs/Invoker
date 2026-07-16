@@ -11,8 +11,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
@@ -216,13 +216,21 @@ workflows:
 When submitted, Invoker creates one workflow per child in listed order. Each downstream workflow is based on the previous workflow's feature branch and waits on the previous merge gate.`;
 }
 
-function buildPlanSystemPrompt(defaultBranch: string, repoUrl?: string, preferStackedWorkflows = false): string {
+function buildPlanSystemPrompt(
+  defaultBranch: string,
+  repoUrl?: string,
+  preferStackedWorkflows = false,
+  planFilePath?: string,
+): string {
   const repoUrlLine = repoUrl
     ? `repoUrl: "${repoUrl}"          # git clone URL for the repository`
     : `repoUrl: "git@github.com:user/repo.git"  # git clone URL for the repository`;
   const stackedWorkflowSection = preferStackedWorkflows
     ? `\n${buildStackedWorkflowPrompt(repoUrlLine, defaultBranch)}\n`
     : '';
+  const outputInstruction = planFilePath
+    ? `When ready, write the COMPLETE YAML plan to the file at \`${planFilePath}\` using your file-writing tool. Do NOT paste the full YAML into your chat reply — a large plan pasted inline gets cut off at your output limit. Instead reply with a compact summary that still covers every task: the plan name, then each workflow's name with a one-line bullet under it for each of its tasks (the task's intent only — no commands, prompts, or YAML). For a flat plan with no workflows, list one short bullet per task. Keep every line short so the reply stays small.`
+    : 'When ready, output the plan inside a \`\`\`yaml code block.';
   return `You are an assistant for the Invoker orchestrator. The user explicitly requested an Invoker plan.
 
 Generate a YAML task plan as described below. Answer simple follow-up questions directly only when they are about the plan being drafted.
@@ -269,7 +277,7 @@ Rules:
    - If Invoker config auto-routes heavyweight commands, keep discovered test/build commands as normal command tasks unless the task must name a specific remote target
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
 7. Use meaningful task IDs (kebab-case).
-8. When ready, output the plan inside a \`\`\`yaml code block.
+8. ${outputInstruction}
 9. Always include \`dependencies\` (even if empty array).
 10. After generating a plan, tell the user they can submit it by replying with \`submit\`.
 11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically after explicit Slack approval.
@@ -403,6 +411,7 @@ export class PlanConversation {
     if (!this._initialized) await this.init();
     const tInit = Date.now();
 
+    this.resetPlanDraftFile();
     this.messages.push({ role: 'user', content: userMessage });
 
     const prompt = this.buildCursorPrompt();
@@ -471,6 +480,20 @@ export class PlanConversation {
     }
   }
 
+  // Remove any prior turn's plan file and ensure the directory exists, so a fresh
+  // write is required each turn (getDraftedPlan must never return a stale plan)
+  // and the planner's write into it succeeds.
+  private resetPlanDraftFile(): void {
+    const path = this.planDraftFilePath();
+    if (!path) return;
+    try {
+      rmSync(path, { force: true });
+      mkdirSync(dirname(path), { recursive: true });
+    } catch (err) {
+      this.log('plan-conversation', 'error', `Failed to reset plan draft file ${path}: ${err}`);
+    }
+  }
+
   /** Returns the conversation history. */
   get history(): readonly ConversationMessage[] {
     return this.messages.filter((m) => m.content.length > 0);
@@ -494,7 +517,7 @@ export class PlanConversation {
    */
   buildCursorPrompt(): string {
     const systemPrompt = this.mode === 'plan'
-      ? buildPlanSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl, this.preferStackedWorkflows)
+      ? buildPlanSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl, this.preferStackedWorkflows, this.planDraftFilePath() ?? undefined)
       : buildAgentSystemPrompt();
     const parts: string[] = [systemPrompt];
 
