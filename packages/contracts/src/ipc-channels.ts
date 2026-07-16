@@ -444,11 +444,17 @@ export interface PlanningPresetOption {
   isDefault: boolean;
 }
 
+export interface InAppPlanningPlanSummaryTaskGroup {
+  workflow: string | null;
+  tasks: string[];
+}
+
 export interface InAppPlanningPlanSummary {
   name: string;
   taskCount: number;
   workflowCount?: number;
   steps: string[];
+  taskGroups: InAppPlanningPlanSummaryTaskGroup[];
 }
 export type InAppPlanningSessionStatus =
   | 'still_discussing'
