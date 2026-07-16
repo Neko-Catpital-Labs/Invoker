@@ -16,6 +16,7 @@ const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
+const COMPONENT_INPUT_COMMIT_BUDGET_MS = 250;
 
 describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
@@ -468,6 +469,7 @@ describe('Invoker terminal (component)', () => {
     const commitPayload = lastPerfPayload('planning_chat_input_commit');
     expect(Number.isFinite(commitPayload.durationMs)).toBe(true);
     expect(commitPayload.durationMs).toBeGreaterThanOrEqual(0);
+    expect(commitPayload.durationMs).toBeLessThanOrEqual(COMPONENT_INPUT_COMMIT_BUDGET_MS);
     expect(commitPayload.transcriptLineCount).toBe(largeTranscript.length);
 
     const transcriptCommitsAfterTyping = vi.mocked(mock.api.reportUiPerf).mock.calls

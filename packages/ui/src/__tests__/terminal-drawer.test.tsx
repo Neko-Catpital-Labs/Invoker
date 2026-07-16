@@ -140,6 +140,24 @@ async function selectWorkflow(): Promise<void> {
   });
 }
 
+function terminalPerfPayloads(mock: MockInvoker, metric: string): Array<Record<string, any>> {
+  return vi.mocked(mock.api.reportUiPerf).mock.calls
+    .filter(([name]) => name === metric)
+    .map(([, data]) => data as Record<string, any>);
+}
+
+function lastTerminalPerfPayload(mock: MockInvoker, metric: string): Record<string, any> {
+  const payload = terminalPerfPayloads(mock, metric).at(-1);
+  if (!payload) throw new Error(`Missing ${metric} perf payload`);
+  return payload;
+}
+
+function expectComponentTerminalDuration(payload: Record<string, any>): void {
+  expect(Number.isFinite(payload.durationMs)).toBe(true);
+  expect(payload.durationMs).toBeGreaterThanOrEqual(0);
+  expect(payload.durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
+}
+
 describe('Terminal drawer (component)', () => {
   let mock: MockInvoker;
 
@@ -264,6 +282,7 @@ describe('Terminal drawer (component)', () => {
     render(<App />);
     act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
     await selectWorkflow();
+    vi.mocked(mock.api.reportUiPerf).mockClear();
 
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
 
@@ -277,12 +296,22 @@ describe('Terminal drawer (component)', () => {
     expect(drawer).not.toHaveClass('fixed');
     expect(screen.getByTestId('terminal-drawer-body')).toHaveStyle({ height: '280px' });
     expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha');
+    const openPayload = lastTerminalPerfPayload(mock, 'embedded_terminal_open_request');
+    expect(openPayload).toEqual(expect.objectContaining({
+      taskId: 'task-alpha',
+      opened: true,
+      previousDrawerState: 'minimized',
+      nextDrawerState: 'partial',
+      sessionCountBefore: 0,
+    }));
+    expectComponentTerminalDuration(openPayload);
   });
 
   it('cycles minimized → partial → maximized → minimized via the single button', async () => {
     render(<App />);
     act(() => mock.setTasks([taskAlpha], workflows));
     await selectWorkflow();
+    vi.mocked(mock.api.reportUiPerf).mockClear();
 
     const drawer = screen.getByTestId('terminal-drawer');
     expect(drawer).toHaveAttribute('data-state', 'minimized');
@@ -291,17 +320,38 @@ describe('Terminal drawer (component)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Partial terminal drawer' }));
     expect(drawer).toHaveAttribute('data-state', 'partial');
     expect(screen.getByTestId('terminal-drawer-body')).toHaveStyle({ height: '280px' });
+    const partialPayload = lastTerminalPerfPayload(mock, 'embedded_terminal_drawer_cycle');
+    expect(partialPayload).toEqual(expect.objectContaining({
+      fromState: 'minimized',
+      toState: 'partial',
+      sessionCount: 0,
+    }));
+    expectComponentTerminalDuration(partialPayload);
 
     // partial → maximized: body covers app content via fixed inset positioning.
     fireEvent.click(screen.getByRole('button', { name: 'Maximize terminal drawer' }));
     expect(drawer).toHaveAttribute('data-state', 'maximized');
     expect(drawer).toHaveClass('fixed');
     expect(screen.getByTestId('terminal-drawer-body')).toBeInTheDocument();
+    const maximizedPayload = lastTerminalPerfPayload(mock, 'embedded_terminal_drawer_cycle');
+    expect(maximizedPayload).toEqual(expect.objectContaining({
+      fromState: 'partial',
+      toState: 'maximized',
+      sessionCount: 0,
+    }));
+    expectComponentTerminalDuration(maximizedPayload);
 
     // maximized → minimized: body flattens away.
     fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
     expect(drawer).toHaveAttribute('data-state', 'minimized');
     expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
+    const minimizedPayload = lastTerminalPerfPayload(mock, 'embedded_terminal_drawer_cycle');
+    expect(minimizedPayload).toEqual(expect.objectContaining({
+      fromState: 'maximized',
+      toState: 'minimized',
+      sessionCount: 0,
+    }));
+    expectComponentTerminalDuration(minimizedPayload);
   });
 
   it('bounds the maximized terminal body so xterm owns scrollback', () => {
@@ -347,6 +397,7 @@ describe('Terminal drawer (component)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Maximize terminal drawer' }));
     fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
+    vi.mocked(mock.api.reportUiPerf).mockClear();
 
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
 
@@ -362,6 +413,15 @@ describe('Terminal drawer (component)', () => {
       'task-alpha',
       'task-beta',
     ]);
+    const reusePayload = lastTerminalPerfPayload(mock, 'embedded_terminal_open_existing');
+    expect(reusePayload).toEqual(expect.objectContaining({
+      taskId: 'task-alpha',
+      sessionId: 'mock-session-task-alpha',
+      previousDrawerState: 'minimized',
+      nextDrawerState: 'partial',
+      sessionCount: 2,
+    }));
+    expectComponentTerminalDuration(reusePayload);
   });
 
   it('renders distinct tabs for different tasks side by side', async () => {
@@ -748,9 +808,21 @@ describe('Terminal drawer (component)', () => {
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-beta'));
     await waitFor(() => expect(screen.getByTestId('terminal-tab-task-beta')).toBeInTheDocument());
     expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'true');
+    vi.mocked(mock.api.reportUiPerf).mockClear();
 
     fireEvent.click(screen.getByRole('tab', { name: /Alpha description/i }));
     expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
+    const tabSelectPayload = lastTerminalPerfPayload(mock, 'embedded_terminal_tab_select');
+    expect(tabSelectPayload).toEqual(expect.objectContaining({
+      fromSessionId: 'mock-session-task-beta',
+      fromTaskId: 'task-beta',
+      toSessionId: 'mock-session-task-alpha',
+      toTaskId: 'task-alpha',
+      drawerState: 'partial',
+      sessionCount: 2,
+      alreadyActive: false,
+    }));
+    expectComponentTerminalDuration(tabSelectPayload);
 
     act(() => {
       xtermMock.instances[0]?.emitData('pwd\n');
@@ -770,9 +842,19 @@ describe('Terminal drawer (component)', () => {
     // The duplicate preview row is gone; live output only reaches the xterm pane.
     expect(screen.queryByTestId('terminal-session-output-preview')).not.toBeInTheDocument();
 
+    vi.mocked(mock.api.reportUiPerf).mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Close terminal for Alpha description' }));
     await waitFor(() => {
       expect(mock.api.terminalClose).toHaveBeenCalledWith('mock-session-task-alpha');
     });
+    const closePayload = lastTerminalPerfPayload(mock, 'embedded_terminal_close');
+    expect(closePayload).toEqual(expect.objectContaining({
+      sessionId: 'mock-session-task-alpha',
+      taskId: 'task-alpha',
+      wasActive: true,
+      drawerState: 'partial',
+      sessionCountBefore: 2,
+    }));
+    expectComponentTerminalDuration(closePayload);
   });
 });

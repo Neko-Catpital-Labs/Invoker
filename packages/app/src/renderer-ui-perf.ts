@@ -27,6 +27,16 @@ export type RendererUiPerfCounters = {
   planningChatSubmits: number;
   embeddedTerminalAttachReports: number;
   maxEmbeddedTerminalAttachMs: number;
+  embeddedTerminalOpenRequestReports: number;
+  maxEmbeddedTerminalOpenRequestMs: number;
+  embeddedTerminalOpenExistingReports: number;
+  maxEmbeddedTerminalOpenExistingMs: number;
+  embeddedTerminalTabSelectReports: number;
+  maxEmbeddedTerminalTabSelectMs: number;
+  embeddedTerminalDrawerCycleReports: number;
+  maxEmbeddedTerminalDrawerCycleMs: number;
+  embeddedTerminalCloseReports: number;
+  maxEmbeddedTerminalCloseMs: number;
   embeddedTerminalInputReports: number;
   maxEmbeddedTerminalInputMs: number;
   maxEmbeddedTerminalInputBytes: number;
@@ -65,6 +75,16 @@ export function createRendererUiPerfCounters(): RendererUiPerfCounters {
     planningChatSubmits: 0,
     embeddedTerminalAttachReports: 0,
     maxEmbeddedTerminalAttachMs: 0,
+    embeddedTerminalOpenRequestReports: 0,
+    maxEmbeddedTerminalOpenRequestMs: 0,
+    embeddedTerminalOpenExistingReports: 0,
+    maxEmbeddedTerminalOpenExistingMs: 0,
+    embeddedTerminalTabSelectReports: 0,
+    maxEmbeddedTerminalTabSelectMs: 0,
+    embeddedTerminalDrawerCycleReports: 0,
+    maxEmbeddedTerminalDrawerCycleMs: 0,
+    embeddedTerminalCloseReports: 0,
+    maxEmbeddedTerminalCloseMs: 0,
     embeddedTerminalInputReports: 0,
     maxEmbeddedTerminalInputMs: 0,
     maxEmbeddedTerminalInputBytes: 0,
@@ -169,6 +189,36 @@ export function recordRendererUiPerfMetric(
   if (metric === 'embedded_terminal_attach') {
     counters.embeddedTerminalAttachReports += 1;
     updateMax(counters, 'maxEmbeddedTerminalAttachMs', numberField(data, 'durationMs'));
+    return;
+  }
+
+  if (metric === 'embedded_terminal_open_request') {
+    counters.embeddedTerminalOpenRequestReports += 1;
+    updateMax(counters, 'maxEmbeddedTerminalOpenRequestMs', numberField(data, 'durationMs'));
+    return;
+  }
+
+  if (metric === 'embedded_terminal_open_existing') {
+    counters.embeddedTerminalOpenExistingReports += 1;
+    updateMax(counters, 'maxEmbeddedTerminalOpenExistingMs', numberField(data, 'durationMs'));
+    return;
+  }
+
+  if (metric === 'embedded_terminal_tab_select') {
+    counters.embeddedTerminalTabSelectReports += 1;
+    updateMax(counters, 'maxEmbeddedTerminalTabSelectMs', numberField(data, 'durationMs'));
+    return;
+  }
+
+  if (metric === 'embedded_terminal_drawer_cycle') {
+    counters.embeddedTerminalDrawerCycleReports += 1;
+    updateMax(counters, 'maxEmbeddedTerminalDrawerCycleMs', numberField(data, 'durationMs'));
+    return;
+  }
+
+  if (metric === 'embedded_terminal_close') {
+    counters.embeddedTerminalCloseReports += 1;
+    updateMax(counters, 'maxEmbeddedTerminalCloseMs', numberField(data, 'durationMs'));
     return;
   }
 

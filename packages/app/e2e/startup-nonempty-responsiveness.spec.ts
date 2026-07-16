@@ -19,6 +19,7 @@ import {
 const repoRoot = resolveRepoRoot(__dirname);
 const STARTUP_BUDGET_MS = 12000;
 const PLANNING_PRESSURE_TURNS = 30;
+const PLANNING_TYPING_LAG_BUDGET_MS = 500;
 const PLANNING_INPUT_HANDLER_BUDGET_MS = 50;
 const PLANNING_INPUT_COMMIT_BUDGET_MS = 250;
 const PLANNING_INPUT_FILL_WALL_BUDGET_MS = 1500;
@@ -38,6 +39,7 @@ const STARTUP_NONEMPTY_BUDGETS = {
 
 const PLANNING_PRESSURE_BUDGETS = {
   pressureTurns: PLANNING_PRESSURE_TURNS,
+  maxTypingLagMs: PLANNING_TYPING_LAG_BUDGET_MS,
   maxInputHandlerMs: PLANNING_INPUT_HANDLER_BUDGET_MS,
   maxInputCommitMs: PLANNING_INPUT_COMMIT_BUDGET_MS,
   maxInputFillWallMs: PLANNING_INPUT_FILL_WALL_BUDGET_MS,
@@ -336,6 +338,10 @@ test('planning chat typing stays responsive with a large restored transcript', a
             payload.metric === 'planning_chat_input_commit'
             && payload.valueLength === typedText.length
             && Number(payload.transcriptLineCount) >= PLANNING_PRESSURE_TURNS * 2,
+          ) && payloads.some((payload) =>
+            payload.metric === 'planning_typing_lag_baseline'
+            && payload.targetName === 'invoker-terminal-input'
+            && payload.targetValueLength === typedText.length,
           );
         }, { timeout: 5000 })
         .toBe(true);
@@ -343,6 +349,11 @@ test('planning chat typing stays responsive with a large restored transcript', a
       const payloads = await uiPerfPayloadsSince(page, watermark);
       const inputChange = payloads.find((payload) => payload.metric === 'planning_chat_input_change' && payload.valueLength === typedText.length);
       const inputCommit = payloads.find((payload) => payload.metric === 'planning_chat_input_commit' && payload.valueLength === typedText.length);
+      const typingLag = payloads.find((payload) =>
+        payload.metric === 'planning_typing_lag_baseline'
+        && payload.targetName === 'invoker-terminal-input'
+        && payload.targetValueLength === typedText.length,
+      );
       const perf = await page.evaluate(async () => window.invoker.getUiPerfStats());
       const transcriptCommitPayloads = payloads.filter((payload) => payload.metric === 'planning_chat_transcript_commit');
       const longTaskPayloads = payloads.filter((payload) => payload.metric === 'renderer_long_task');
@@ -350,6 +361,7 @@ test('planning chat typing stays responsive with a large restored transcript', a
         pressureTurns: PLANNING_PRESSURE_TURNS,
         typedLength: typedText.length,
         fillWallMs,
+        typingLag,
         inputChange,
         inputCommit,
         transcriptCommitPayloads,
@@ -362,6 +374,16 @@ test('planning chat typing stays responsive with a large restored transcript', a
 
       expect(inputChange, planningEvidenceMessage).toBeTruthy();
       expect(inputCommit, planningEvidenceMessage).toBeTruthy();
+      expect(typingLag, planningEvidenceMessage).toBeTruthy();
+      expect(Number(typingLag?.lagMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_TYPING_LAG_BUDGET_MS);
+      expect(typingLag, planningEvidenceMessage).toEqual(expect.objectContaining({
+        activeSurface: 'planning',
+        targetName: 'invoker-terminal-input',
+        targetTagName: 'textarea',
+        targetValueLength: typedText.length,
+        targetReadOnly: false,
+        targetDisabled: false,
+      }));
       expect(Number(inputChange?.handlerDurationMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_HANDLER_BUDGET_MS);
       expect(Number(inputCommit?.durationMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_COMMIT_BUDGET_MS);
       expect(Number(inputCommit?.transcriptLineCount), planningEvidenceMessage).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
@@ -369,6 +391,8 @@ test('planning chat typing stays responsive with a large restored transcript', a
       expect(transcriptCommitPayloads.length, planningEvidenceMessage).toBe(0);
       expect(longTaskPayloads.length, planningEvidenceMessage).toBeLessThanOrEqual(MAX_PLANNING_RENDERER_LONG_TASK_COUNT);
 
+      expect(Number(perf.planningTypingLagReports), planningEvidenceMessage).toBeGreaterThanOrEqual(1);
+      expect(Number(perf.maxPlanningTypingLagMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_TYPING_LAG_BUDGET_MS);
       expect(Number(perf.planningChatInputChangeReports), planningEvidenceMessage).toBeGreaterThanOrEqual(1);
       expect(Number(perf.planningChatInputCommitReports), planningEvidenceMessage).toBeGreaterThanOrEqual(1);
       expect(Number(perf.maxPlanningChatInputHandlerMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_HANDLER_BUDGET_MS);

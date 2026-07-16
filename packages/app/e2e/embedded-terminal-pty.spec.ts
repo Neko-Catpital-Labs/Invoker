@@ -18,6 +18,9 @@ const TERMINAL_INPUT_BUDGET_MS = 100;
 const TERMINAL_OUTPUT_WRITE_BUDGET_MS = 250;
 const TERMINAL_RESIZE_BUDGET_MS = 250;
 const TERMINAL_SCROLL_BUDGET_MS = 50;
+const TERMINAL_OPEN_REQUEST_BUDGET_MS = 2000;
+const TERMINAL_TAB_SELECT_BUDGET_MS = 100;
+const TERMINAL_DRAWER_CYCLE_BUDGET_MS = 100;
 const TERMINAL_OPEN_WALL_BUDGET_MS = 2000;
 const TERMINAL_TAB_SWITCH_WALL_BUDGET_MS = 1000;
 const TERMINAL_SCROLL_WALL_BUDGET_MS = 2000;
@@ -30,6 +33,9 @@ const TERMINAL_PRESSURE_BUDGETS = {
   maxOutputWriteMs: TERMINAL_OUTPUT_WRITE_BUDGET_MS,
   maxResizeMs: TERMINAL_RESIZE_BUDGET_MS,
   maxScrollMs: TERMINAL_SCROLL_BUDGET_MS,
+  maxOpenRequestMs: TERMINAL_OPEN_REQUEST_BUDGET_MS,
+  maxTabSelectMs: TERMINAL_TAB_SELECT_BUDGET_MS,
+  maxDrawerCycleMs: TERMINAL_DRAWER_CYCLE_BUDGET_MS,
   maxOpenWallMs: TERMINAL_OPEN_WALL_BUDGET_MS,
   maxTabSwitchWallMs: TERMINAL_TAB_SWITCH_WALL_BUDGET_MS,
   maxScrollWallMs: TERMINAL_SCROLL_WALL_BUDGET_MS,
@@ -407,12 +413,18 @@ test.describe('Embedded terminal PTY', () => {
       .poll(async () => {
         const payloads = await uiPerfPayloadsSince(page, watermark);
         return payloads.some((payload) => payload.metric === 'embedded_terminal_output_write')
-          && payloads.some((payload) => payload.metric === 'embedded_terminal_scroll');
+          && payloads.some((payload) => payload.metric === 'embedded_terminal_scroll')
+          && payloads.some((payload) => payload.metric === 'embedded_terminal_open_request')
+          && payloads.some((payload) => payload.metric === 'embedded_terminal_tab_select')
+          && payloads.some((payload) => payload.metric === 'embedded_terminal_drawer_cycle');
       }, { timeout: 5000 })
       .toBe(true);
 
     const payloads = await uiPerfPayloadsSince(page, watermark);
     const attachPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_attach');
+    const openRequestPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_open_request');
+    const tabSelectPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_tab_select');
+    const drawerCyclePayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_drawer_cycle');
     const inputPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_input');
     const outputPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_output_write');
     const resizePayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_resize');
@@ -426,6 +438,9 @@ test.describe('Embedded terminal PTY', () => {
       switchWallMs,
       scrollWallMs,
       attachPayloads,
+      openRequestPayloads,
+      tabSelectPayloads,
+      drawerCyclePayloads,
       inputPayloads,
       outputPayloads,
       resizePayloads,
@@ -437,9 +452,45 @@ test.describe('Embedded terminal PTY', () => {
     const terminalEvidenceMessage = JSON.stringify(terminalEvidence);
 
     expect(attachPayloads.length, terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
+    expect(openRequestPayloads.length, terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
+    expect(tabSelectPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(drawerCyclePayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
     expect(inputPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
     expect(outputPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
     expect(scrollPayloads.length, terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(
+      openRequestPayloads.some((payload) =>
+        payload.taskId === fullAlphaTaskId
+        && payload.opened === true
+        && payload.nextDrawerState === 'partial',
+      ),
+      terminalEvidenceMessage,
+    ).toBe(true);
+    expect(
+      openRequestPayloads.some((payload) =>
+        payload.taskId === fullBetaTaskId
+        && payload.opened === true
+        && payload.nextDrawerState === 'partial',
+      ),
+      terminalEvidenceMessage,
+    ).toBe(true);
+    expect(
+      tabSelectPayloads.some((payload) =>
+        payload.fromTaskId === fullBetaTaskId
+        && payload.toTaskId === fullAlphaTaskId
+        && payload.drawerState === 'partial'
+        && payload.alreadyActive === false,
+      ),
+      terminalEvidenceMessage,
+    ).toBe(true);
+    expect(
+      drawerCyclePayloads.some((payload) =>
+        payload.fromState === 'partial'
+        && payload.toState === 'maximized'
+        && payload.activeSessionId
+      ),
+      terminalEvidenceMessage,
+    ).toBe(true);
     expect(
       scrollPayloads.some((payload) =>
         payload.taskId === fullAlphaTaskId
@@ -456,15 +507,24 @@ test.describe('Embedded terminal PTY', () => {
     expect(betaOpenWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_WALL_BUDGET_MS);
     expect(switchWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_TAB_SWITCH_WALL_BUDGET_MS);
     expect(scrollWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLL_WALL_BUDGET_MS);
+    expect(Math.max(...openRequestPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_REQUEST_BUDGET_MS);
+    expect(Math.max(...tabSelectPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_TAB_SELECT_BUDGET_MS);
+    expect(Math.max(...drawerCyclePayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_DRAWER_CYCLE_BUDGET_MS);
     expect(Math.max(...inputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
     expect(Math.max(...outputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
     expect(Math.max(...resizePayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
     expect(Math.max(...scrollPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLL_BUDGET_MS);
 
     expect(Number(perf.embeddedTerminalAttachReports), terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
+    expect(Number(perf.embeddedTerminalOpenRequestReports), terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
+    expect(Number(perf.embeddedTerminalTabSelectReports), terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(Number(perf.embeddedTerminalDrawerCycleReports), terminalEvidenceMessage).toBeGreaterThan(0);
     expect(Number(perf.embeddedTerminalInputReports), terminalEvidenceMessage).toBeGreaterThan(0);
     expect(Number(perf.embeddedTerminalOutputWriteReports), terminalEvidenceMessage).toBeGreaterThan(0);
     expect(Number(perf.embeddedTerminalScrollReports), terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(Number(perf.maxEmbeddedTerminalOpenRequestMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_REQUEST_BUDGET_MS);
+    expect(Number(perf.maxEmbeddedTerminalTabSelectMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_TAB_SELECT_BUDGET_MS);
+    expect(Number(perf.maxEmbeddedTerminalDrawerCycleMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_DRAWER_CYCLE_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalInputMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalOutputWriteMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalResizeMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);

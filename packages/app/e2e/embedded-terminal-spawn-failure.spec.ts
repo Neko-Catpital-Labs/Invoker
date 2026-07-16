@@ -80,12 +80,39 @@ test.describe('Embedded terminal spawn failure', () => {
     await page.getByRole('button', { name: 'Minimize terminal drawer' }).click();
     await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
 
+    await expect
+      .poll(async () => {
+        const rows = await page.evaluate(async () => window.invoker.getActivityLogs());
+        return rows
+          .filter((row) => row.source === 'ui-perf')
+          .map((row) => parseActivityPayload(row.message))
+          .some((payload) =>
+            payload?.metric === 'embedded_terminal_open_request'
+            && payload.opened === false
+            && payload.failureKind === 'refused',
+          );
+      }, { timeout: 5000 })
+      .toBe(true);
+
     const rows = await page.evaluate(async () => window.invoker.getActivityLogs());
-    const attachCount = rows
+    const perfPayloads = rows
       .filter((row) => row.source === 'ui-perf')
       .map((row) => parseActivityPayload(row.message))
+      .filter((payload) => payload !== null);
+    const attachCount = perfPayloads
       .filter((payload) => payload?.metric === 'embedded_terminal_attach')
       .length;
+    const openFailure = perfPayloads.find((payload) =>
+      payload?.metric === 'embedded_terminal_open_request'
+      && payload.opened === false
+      && payload.failureKind === 'refused',
+    );
+    expect(openFailure).toEqual(expect.objectContaining({
+      nextDrawerState: 'partial',
+      sessionCountBefore: 0,
+    }));
+    expect(String(openFailure?.taskId)).toContain('spawn-fail');
+    expect(String(openFailure?.reason)).toContain('Failed to start terminal session');
     expect(attachCount).toBe(0);
   });
 });

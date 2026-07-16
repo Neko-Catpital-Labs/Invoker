@@ -247,6 +247,23 @@ function relativePlanningUpdatedAt(value: string): string {
 const PLANNING_TYPING_LAG_METRIC = 'planning_typing_lag_baseline';
 const PLANNING_TYPING_SCENARIO = 'many-chats-many-messages-typing';
 
+function appPerfNowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function roundDurationMs(durationMs: number): number {
+  return Math.max(0, Math.round(durationMs));
+}
+
+function reportTerminalInteractionPerf(metric: string, data: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
+  void window.invoker?.reportUiPerf?.(metric, data);
+}
+
+function nextTerminalDrawerState(state: TerminalDrawerState): TerminalDrawerState {
+  return state === 'minimized' ? 'partial' : state === 'partial' ? 'maximized' : 'minimized';
+}
+
 interface PlanningTypingTelemetryState {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
@@ -853,6 +870,7 @@ export function App() {
   const [terminalDrawerState, setTerminalDrawerState] = useState<TerminalDrawerState>('minimized');
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionDescriptor[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState<string | null>(null);
+  const terminalSessionCount = terminalSessions.length;
   const [workflowContextMenu, setWorkflowContextMenu] = useState<WorkflowContextMenuState | null>(null);
   const [graphActionsMenuOpen, setGraphActionsMenuOpen] = useState(false);
   const [startReadyMenuOpen, setStartReadyMenuOpen] = useState(false);
@@ -1920,6 +1938,8 @@ export function App() {
   }, [selectTaskById]);
 
   const requestTerminalForTaskId = useCallback(async (taskId: string) => {
+    const startedAt = appPerfNowMs();
+    const previousDrawerState = terminalDrawerState;
     const task = tasks.get(taskId);
     if (task && isExperimentSpawnPivotTask(task)) {
       window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
@@ -1927,12 +1947,44 @@ export function App() {
     }
     setTerminalDrawerState('partial');
     const result = await (window.__INVOKER_TEST_OPEN_TERMINAL__ ?? window.invoker?.openTerminal)?.(taskId);
-    if (!result) return;
+    if (!result) {
+      reportTerminalInteractionPerf('embedded_terminal_open_request', {
+        durationMs: roundDurationMs(appPerfNowMs() - startedAt),
+        taskId,
+        opened: false,
+        failureKind: 'missing_handler',
+        previousDrawerState,
+        nextDrawerState: 'partial',
+        sessionCountBefore: terminalSessionCount,
+      });
+      return;
+    }
     if (!result.opened) {
+      reportTerminalInteractionPerf('embedded_terminal_open_request', {
+        durationMs: roundDurationMs(appPerfNowMs() - startedAt),
+        taskId,
+        opened: false,
+        failureKind: 'refused',
+        reason: result.reason,
+        previousDrawerState,
+        nextDrawerState: 'partial',
+        sessionCountBefore: terminalSessionCount,
+      });
       window.alert(result.reason ?? 'Cannot open terminal for this task.');
       return;
     }
     const session = result.session;
+    reportTerminalInteractionPerf('embedded_terminal_open_request', {
+      durationMs: roundDurationMs(appPerfNowMs() - startedAt),
+      taskId,
+      opened: true,
+      sessionId: session?.sessionId,
+      sessionStatus: session?.status,
+      sessionMode: session?.mode,
+      previousDrawerState,
+      nextDrawerState: 'partial',
+      sessionCountBefore: terminalSessionCount,
+    });
     if (session) {
       setTerminalSessions((prev) => {
         const idx = prev.findIndex((s) => s.sessionId === session.sessionId);
@@ -1945,20 +1997,30 @@ export function App() {
       });
       setActiveTerminalSessionId(session.sessionId);
     }
-  }, [tasks]);
+  }, [tasks, terminalDrawerState, terminalSessionCount]);
 
   const openTerminalForTaskId = useCallback(async (taskId: string) => {
     const existingRunningSession = terminalSessions.find(
       (session) => session.taskId === taskId && session.status === 'running',
     );
     if (existingRunningSession) {
+      const startedAt = appPerfNowMs();
       setTerminalDrawerState('partial');
       setActiveTerminalSessionId(existingRunningSession.sessionId);
+      reportTerminalInteractionPerf('embedded_terminal_open_existing', {
+        durationMs: roundDurationMs(appPerfNowMs() - startedAt),
+        taskId,
+        sessionId: existingRunningSession.sessionId,
+        sessionStatus: existingRunningSession.status,
+        previousDrawerState: terminalDrawerState,
+        nextDrawerState: 'partial',
+        sessionCount: terminalSessionCount,
+      });
       return;
     }
 
     await requestTerminalForTaskId(taskId);
-  }, [requestTerminalForTaskId, terminalSessions]);
+  }, [requestTerminalForTaskId, terminalDrawerState, terminalSessionCount, terminalSessions]);
 
   const handleTaskDoubleClick = useCallback(async (task: TaskState) => {
     setSelectedTaskId(task.id);
@@ -2126,19 +2188,62 @@ export function App() {
     [requestTerminalForTaskId],
   );
 
+  const handleCycleTerminalDrawer = useCallback(() => {
+    const startedAt = appPerfNowMs();
+    const previousState = terminalDrawerState;
+    const nextState = nextTerminalDrawerState(previousState);
+    setTerminalDrawerState(nextState);
+    reportTerminalInteractionPerf('embedded_terminal_drawer_cycle', {
+      durationMs: roundDurationMs(appPerfNowMs() - startedAt),
+      fromState: previousState,
+      toState: nextState,
+      activeSessionId: activeTerminalSessionId,
+      sessionCount: terminalSessionCount,
+    });
+  }, [activeTerminalSessionId, terminalDrawerState, terminalSessionCount]);
+
+  const handleSelectTerminalSession = useCallback((sessionId: string) => {
+    const startedAt = appPerfNowMs();
+    const previousSession = activeTerminalSessionId
+      ? terminalSessions.find((session) => session.sessionId === activeTerminalSessionId) ?? null
+      : null;
+    const nextSession = terminalSessions.find((session) => session.sessionId === sessionId) ?? null;
+    setActiveTerminalSessionId(sessionId);
+    reportTerminalInteractionPerf('embedded_terminal_tab_select', {
+      durationMs: roundDurationMs(appPerfNowMs() - startedAt),
+      fromSessionId: activeTerminalSessionId,
+      fromTaskId: previousSession?.taskId,
+      toSessionId: sessionId,
+      toTaskId: nextSession?.taskId,
+      alreadyActive: activeTerminalSessionId === sessionId,
+      drawerState: terminalDrawerState,
+      sessionCount: terminalSessionCount,
+    });
+  }, [activeTerminalSessionId, terminalDrawerState, terminalSessionCount, terminalSessions]);
+
   const handleCloseTerminalSession = useCallback(async (sessionId: string) => {
+    const startedAt = appPerfNowMs();
+    const session = terminalSessions.find((candidate) => candidate.sessionId === sessionId) ?? null;
     setTerminalSessions((prev) => prev.filter((session) => session.sessionId !== sessionId));
     setActiveTerminalSessionId((prev) => {
       if (prev !== sessionId) return prev;
       const remaining = terminalSessions.filter((session) => session.sessionId !== sessionId);
       return remaining[remaining.length - 1]?.sessionId ?? null;
     });
+    reportTerminalInteractionPerf('embedded_terminal_close', {
+      durationMs: roundDurationMs(appPerfNowMs() - startedAt),
+      sessionId,
+      taskId: session?.taskId,
+      wasActive: activeTerminalSessionId === sessionId,
+      drawerState: terminalDrawerState,
+      sessionCountBefore: terminalSessionCount,
+    });
     try {
       await window.invoker?.terminalClose?.(sessionId);
     } catch {
       /* best-effort */
     }
-  }, [terminalSessions]);
+  }, [activeTerminalSessionId, terminalDrawerState, terminalSessionCount, terminalSessions]);
 
   const terminalTaskLabels = useMemo(() => {
     const labels = new Map<string, string>();
@@ -3918,14 +4023,10 @@ export function App() {
       )}
       <TerminalDrawer
         state={terminalDrawerState}
-        onCycle={() =>
-          setTerminalDrawerState((prev) =>
-            prev === 'minimized' ? 'partial' : prev === 'partial' ? 'maximized' : 'minimized',
-          )
-        }
+        onCycle={handleCycleTerminalDrawer}
         sessions={terminalSessions}
         activeSessionId={activeTerminalSessionId}
-        onSelectSession={setActiveTerminalSessionId}
+        onSelectSession={handleSelectTerminalSession}
         onCloseSession={(sessionId) => void handleCloseTerminalSession(sessionId)}
         taskLabels={terminalTaskLabels}
       />

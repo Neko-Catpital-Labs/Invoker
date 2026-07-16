@@ -33,13 +33,18 @@ describe('renderer ui perf counters', () => {
     recordRendererUiPerfMetric(counters, 'planning_chat_transcript_autoscroll', { durationMs: 7 });
     recordRendererUiPerfMetric(counters, 'planning_chat_submit', {});
     recordRendererUiPerfMetric(counters, 'embedded_terminal_attach', { durationMs: 44 });
+    recordRendererUiPerfMetric(counters, 'embedded_terminal_open_request', { durationMs: 120 });
+    recordRendererUiPerfMetric(counters, 'embedded_terminal_open_existing', { durationMs: 8 });
+    recordRendererUiPerfMetric(counters, 'embedded_terminal_tab_select', { durationMs: 11 });
+    recordRendererUiPerfMetric(counters, 'embedded_terminal_drawer_cycle', { durationMs: 4 });
+    recordRendererUiPerfMetric(counters, 'embedded_terminal_close', { durationMs: 5 });
     recordRendererUiPerfMetric(counters, 'embedded_terminal_input', { durationMs: 3, bytes: 5 });
     recordRendererUiPerfMetric(counters, 'embedded_terminal_output_write', { durationMs: 80, bytes: 4096 });
     recordRendererUiPerfMetric(counters, 'embedded_terminal_resize', { durationMs: 18 });
     recordRendererUiPerfMetric(counters, 'embedded_terminal_scroll', { durationMs: 6 });
     recordRendererUiPerfMetric(counters, 'embedded_terminal_snapshot_write', { durationMs: 90, bytes: 8192 });
 
-    expect(counters.rendererReports).toBe(15);
+    expect(counters.rendererReports).toBe(20);
     expect(counters.maxRendererEventLoopLagMs).toBe(300);
     expect(counters.maxRendererHiddenEventLoopLagMs).toBe(900);
     expect(counters.maxRendererCumulativeLagMs).toBe(450);
@@ -60,6 +65,16 @@ describe('renderer ui perf counters', () => {
     expect(counters.planningChatSubmits).toBe(1);
     expect(counters.embeddedTerminalAttachReports).toBe(1);
     expect(counters.maxEmbeddedTerminalAttachMs).toBe(44);
+    expect(counters.embeddedTerminalOpenRequestReports).toBe(1);
+    expect(counters.maxEmbeddedTerminalOpenRequestMs).toBe(120);
+    expect(counters.embeddedTerminalOpenExistingReports).toBe(1);
+    expect(counters.maxEmbeddedTerminalOpenExistingMs).toBe(8);
+    expect(counters.embeddedTerminalTabSelectReports).toBe(1);
+    expect(counters.maxEmbeddedTerminalTabSelectMs).toBe(11);
+    expect(counters.embeddedTerminalDrawerCycleReports).toBe(1);
+    expect(counters.maxEmbeddedTerminalDrawerCycleMs).toBe(4);
+    expect(counters.embeddedTerminalCloseReports).toBe(1);
+    expect(counters.maxEmbeddedTerminalCloseMs).toBe(5);
     expect(counters.embeddedTerminalInputReports).toBe(1);
     expect(counters.maxEmbeddedTerminalInputMs).toBe(3);
     expect(counters.maxEmbeddedTerminalInputBytes).toBe(5);
@@ -79,6 +94,8 @@ describe('renderer ui perf counters', () => {
     expect(counters.rendererReports).toBe(0);
     expect(counters.maxPlanningTypingLagMs).toBe(0);
     expect(counters.maxPlanningChatInputCommitMs).toBe(0);
+    expect(counters.maxEmbeddedTerminalOpenRequestMs).toBe(0);
+    expect(counters.maxEmbeddedTerminalTabSelectMs).toBe(0);
     expect(counters.maxEmbeddedTerminalScrollMs).toBe(0);
     expect(counters.maxEmbeddedTerminalOutputWriteBytes).toBe(0);
   });
