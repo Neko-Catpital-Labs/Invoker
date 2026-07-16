@@ -143,28 +143,55 @@ if [[ $# -ne 1 ]]; then
 fi
 
 PAYLOAD_PATH=$1
-(
-  bash "$PAYLOAD_PATH"
-) &
-PAYLOAD_PID=$!
 INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
+HEARTBEAT_PID=""
+
+stop_heartbeat() {
+  if [ -n "\${HEARTBEAT_PID:-}" ]; then
+    kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
+    wait "$HEARTBEAT_PID" 2>/dev/null || true
+    HEARTBEAT_PID=""
+  fi
+}
+
+cleanup() {
+  local status="$?"
+  trap - EXIT HUP INT TERM
+  stop_heartbeat
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
 (
-  while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
-    sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
-    kill -0 "$PAYLOAD_PID" 2>/dev/null || break
+  HEARTBEAT_SLEEP_PID=""
+  stop_sleep() {
+    if [ -n "\${HEARTBEAT_SLEEP_PID:-}" ]; then
+      kill "$HEARTBEAT_SLEEP_PID" >/dev/null 2>&1 || true
+      wait "$HEARTBEAT_SLEEP_PID" 2>/dev/null || true
+      HEARTBEAT_SLEEP_PID=""
+    fi
+  }
+  trap 'stop_sleep; exit 0' EXIT HUP INT TERM
+  while true; do
+    sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS" &
+    HEARTBEAT_SLEEP_PID=$!
+    wait "$HEARTBEAT_SLEEP_PID" || exit 0
+    HEARTBEAT_SLEEP_PID=""
     printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
   done
 ) &
 HEARTBEAT_PID=$!
-if wait "$PAYLOAD_PID"; then
-  PAYLOAD_EXIT=0
-else
-  PAYLOAD_EXIT=$?
-fi
-kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
-wait "$HEARTBEAT_PID" 2>/dev/null || true
+
+set +e
+bash "$PAYLOAD_PATH"
+PAYLOAD_EXIT=$?
+set -e
 exit "$PAYLOAD_EXIT"
 `;
   }

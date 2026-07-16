@@ -49,6 +49,12 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function extractRunnerScript(bootstrapScript: string): string {
+  const match = bootstrapScript.match(/cat > "\$RUNNER_PATH" <<'([^']+)'\n([\s\S]*?)\n\1/);
+  if (!match?.[2]) throw new Error('runner heredoc not found');
+  return match[2];
+}
+
 // ---------------------------------------------------------------------------
 // Module-level spawn mock
 //
@@ -1101,6 +1107,50 @@ describe('SshExecutor entry lifecycle', () => {
     expect(script).not.toContain('base64 -d');
     proc.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
+  });
+
+  it('runs the remote payload in the foreground while the heartbeat loop is backgrounded', async () => {
+    const request = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'exit 7',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(request);
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const bootstrapScript = writeMock.mock.calls[0]![0] as string;
+    const runnerScript = extractRunnerScript(bootstrapScript);
+
+    expect(runnerScript).toContain('bash "$PAYLOAD_PATH"');
+    expect(runnerScript).toContain('stop_heartbeat');
+    expect(runnerScript).not.toContain('PAYLOAD_PID');
+    expect(runnerScript).not.toContain('wait "$PAYLOAD_PID"');
+
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-runner-foreground-home-'));
+    try {
+      const workspacePath = handle.workspacePath!.replace(/^~(?=\/|$)/, fakeHome);
+      mkdirSync(workspacePath, { recursive: true });
+
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('/bin/bash', ['-c', bootstrapScript], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: fakeHome },
+      });
+
+      expect(result.status).toBe(7);
+      expect(result.stdout).toContain('__INVOKER_REMOTE_HEARTBEAT__');
+      expect(result.stderr).not.toContain('wait_for');
+      expect(result.stderr).not.toContain('No record of process');
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+      proc.emit('close', 7, null);
+      await new Promise((r) => setTimeout(r, 50));
+    }
   });
 
   it('preserves stdout on execRemoteCapture error (Bug #4)', async () => {
