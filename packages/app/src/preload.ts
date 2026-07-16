@@ -22,7 +22,7 @@ const bootstrapState = ipcRenderer.sendSync('invoker:get-bootstrap-state-sync') 
   | undefined;
 const bootstrapDurationMs = Date.now() - bootstrapStartedAt;
 
-function yieldToPendingRendererInput(delayMs = 0): Promise<void> {
+export function yieldToPendingRendererInput(delayMs = 0): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(() => {
       const requestAnimationFrame = (globalThis as { requestAnimationFrame?: (callback: () => void) => number })
@@ -32,7 +32,7 @@ function yieldToPendingRendererInput(delayMs = 0): Promise<void> {
       } else {
         resolve();
       }
-    }, 0);
+    }, delayMs);
   });
 }
 
