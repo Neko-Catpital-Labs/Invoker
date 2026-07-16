@@ -76,7 +76,18 @@ export function createCiFailureTick(options: CiFailureWorkerPolicyOptions): Work
       const externalKey = ciFailureActionKey(event);
       if (seen.has(externalKey)) continue;
       seen.add(externalKey);
-      await queueReviewGateCiRepair(options, event);
+      try {
+        await queueReviewGateCiRepair(options, event);
+      } catch (error) {
+        options.logger.error(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-tick-error`, {
+          module: 'ci-failure-worker',
+          externalKey,
+          taskId: event.taskId,
+          workflowId: event.workflowId,
+          reviewId: event.reviewId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   };
 }
