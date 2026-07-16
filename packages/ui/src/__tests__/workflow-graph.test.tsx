@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -443,6 +443,70 @@ describe('WorkflowGraph', () => {
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     expect(fitViewMock).not.toHaveBeenCalled();
     expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('does not refit a user-panned camera on a data-change watchdog miss before bounded recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      const onManualViewport = vi.fn();
+
+      const { rerender } = render(
+        <WorkflowGraph
+          workflows={new Map([['wf-a', wf('wf-a', 'running')]])}
+          selectedWorkflowId={null}
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+          onManualViewport={onManualViewport}
+        />,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(16);
+      });
+      expect(fitViewMock).toHaveBeenCalledTimes(1);
+      fitViewMock.mockClear();
+      setCenterMock.mockClear();
+
+      const pane = screen.getByTestId('rf__pane');
+      fireEvent.pointerDown(pane, { pointerId: 1, clientX: 24, clientY: 24, button: 0, isPrimary: true });
+      fireEvent.pointerUp(pane, { pointerId: 1, clientX: 24, clientY: 24, button: 0, isPrimary: true });
+      expect(onManualViewport).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <WorkflowGraph
+          workflows={new Map([['wf-a', wf('wf-a', 'completed')]])}
+          selectedWorkflowId={null}
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+          onManualViewport={onManualViewport}
+        />,
+      );
+      expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('completed');
+
+      // No cameraCommand prop is supplied and no workflow is selected, so App
+      // command reissue, command consumption, and selection fallback cannot be
+      // responsible for a camera move. Hiding all rendered nodes then advancing
+      // the interval isolates the WorkflowGraph watchdog path.
+      for (const node of screen.getByTestId('workflow-graph-react-flow').querySelectorAll('.react-flow__node')) {
+        (node as HTMLElement).style.visibility = 'hidden';
+      }
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(fitViewMock).not.toHaveBeenCalled();
+      expect(setCenterMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+      expect(fitViewMock).toHaveBeenCalledTimes(1);
+      expect(setCenterMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('defers graph object updates while a manual viewport pan is active', async () => {
