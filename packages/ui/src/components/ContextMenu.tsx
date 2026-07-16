@@ -15,6 +15,8 @@ import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
+const TASK_CONTEXT_MENU_Z_INDEX = 1100;
+
 interface ContextMenuProps {
   x: number;
   y: number;
@@ -216,8 +218,8 @@ export function ContextMenu({
     <div
       ref={menuRef}
       role="menu"
-      className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
-      style={{ left: position.left, top: position.top }}
+      className="fixed z-[1100] bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+      style={{ left: position.left, top: position.top, zIndex: TASK_CONTEXT_MENU_Z_INDEX }}
       onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
