@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
@@ -68,7 +68,7 @@ describe('App launch (component)', () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
   });
 
-  it('opens read-only worker status from the left panel', async () => {
+  it('opens worker status and controls the selected worker from the details panel', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
     act(() => window.dispatchEvent(new Event('resize')));
     mock.setWorkerStatus({
@@ -143,8 +143,18 @@ describe('App launch (component)', () => {
     expect(screen.getAllByText('Source: Built In').length).toBeGreaterThan(0);
     expect(screen.getByText('Checked PR status')).toBeInTheDocument();
     expect(screen.getByText('PR check finished')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Start process' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Stop process' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('worker-start-stop-pr-status')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('worker-row-pr-status'));
+
+    const control = await screen.findByTestId('worker-detail-start-stop');
+    expect(control).toBeEnabled();
+    expect(control).toHaveTextContent('Disable worker');
+
+    fireEvent.click(control);
+
+    await waitFor(() => expect(mock.api.stopWorker).toHaveBeenCalledWith('pr-status'));
+    expect(mock.api.startWorker).not.toHaveBeenCalled();
   });
   it('renders the Apple-like source list without manual plan loading', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
