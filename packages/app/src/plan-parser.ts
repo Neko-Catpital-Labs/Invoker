@@ -248,6 +248,10 @@ function assertNoLegacyRoutingKeys(ownerLabel: string, value: object): void {
     }
   }
 }
+function findDisallowedVitestCommand(command: string): string | undefined {
+  const match = command.match(/\bnpx vitest run\b|\bpnpm vitest(?:\s+run)?\b/);
+  return match?.[0];
+}
 
 /**
  * Parse a YAML string into a validated PlanDefinition.
@@ -355,9 +359,12 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
       );
     }
 
-    if (task.command && /\bnpx vitest run\b/.test(task.command)) {
+    const disallowedVitestCommand = task.command
+      ? findDisallowedVitestCommand(task.command)
+      : undefined;
+    if (disallowedVitestCommand) {
       throw new PlanParseError(
-        `Task "${task.id}" uses 'npx vitest run' which may not resolve correctly. ` +
+        `Task "${task.id}" uses '${disallowedVitestCommand}' which may not resolve correctly. ` +
         `Use 'pnpm test' instead.`,
       );
     }
