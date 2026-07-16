@@ -73,6 +73,26 @@ describe('Context menu (component)', () => {
     });
   }
 
+  async function openTaskContextMenu() {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(menu).toHaveFocus());
+    return menu;
+  }
+
+  async function openWorkflowContextMenu() {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    const menu = await screen.findByRole('menu');
+    await waitFor(() => expect(menu).toHaveFocus());
+    return menu;
+  }
+
   it('right-clicking a workflow shows workflow actions', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
@@ -103,6 +123,64 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+  });
+
+  it('task context menu supports keyboard focus, navigation, and Enter activation', async () => {
+    const menu = await openTaskContextMenu();
+
+    expect(screen.getByRole('menuitem', { name: 'Restart Task' })).toHaveClass('bg-gray-700');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+
+    expect(screen.getByRole('menuitem', { name: 'Open Terminal' })).toHaveClass('bg-gray-700');
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('task context menu expands More with Space and highlights the first danger item', async () => {
+    const menu = await openTaskContextMenu();
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: 'More' })).toHaveClass('bg-gray-700');
+
+    fireEvent.keyDown(menu, { key: ' ' });
+
+    const terminate = await screen.findByRole('menuitem', { name: 'Terminate Task' });
+    expect(terminate).toHaveClass('bg-gray-700');
+    expect(menu).toHaveFocus();
+    expect(screen.getByRole('menuitem', { name: 'Recreate from Task' })).toBeInTheDocument();
+  });
+
+  it('workflow context menu supports keyboard focus, navigation, and Space activation', async () => {
+    const menu = await openWorkflowContextMenu();
+
+    expect(screen.getByRole('menuitem', { name: 'Open Workflow' })).toHaveClass('bg-gray-700');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+
+    expect(screen.getByRole('menuitem', { name: 'Retry Workflow' })).toHaveClass('bg-gray-700');
+    fireEvent.keyDown(menu, { key: ' ' });
+
+    await waitFor(() => expect(mock.api.retryWorkflow).toHaveBeenCalledWith('wf-1'));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('workflow context menu expands More with Enter and activates the first expanded action', async () => {
+    const menu = await openWorkflowContextMenu();
+
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    expect(screen.getByRole('menuitem', { name: 'More' })).toHaveClass('bg-gray-700');
+
+    fireEvent.keyDown(menu, { key: 'Enter' });
+
+    const rebaseRetry = await screen.findByRole('menuitem', { name: 'Rebase and Retry' });
+    expect(rebaseRetry).toHaveClass('bg-gray-700');
+    expect(menu).toHaveFocus();
+
+    fireEvent.keyDown(menu, { key: 'Enter' });
+    await waitFor(() => expect(mock.api.rebaseRetry).toHaveBeenCalledWith('wf-1'));
   });
 
   it('workflow context menu retries workflow', async () => {
