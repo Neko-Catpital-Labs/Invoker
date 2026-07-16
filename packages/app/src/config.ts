@@ -45,10 +45,9 @@ export interface DefaultExecutionConfig {
 /**
  * Owner-side PR-maintenance worker config.
  *
- * Disabled by default: the coderabbit-address and pr-conflict-rebase workers
- * only receive launch dependencies when `enabled` is true. The remaining fields
- * tune the shell entrypoint launch and fall back to the worker defaults when
- * omitted.
+ * Disabled by default: the coderabbit-address worker only receives launch
+ * dependencies when `enabled` is true. The remaining fields tune the shell
+ * entrypoint launch and fall back to the worker defaults when omitted.
  */
 export interface PrMaintenanceConfig {
   /**
@@ -345,8 +344,8 @@ export interface InvokerConfig {
   externalWorkers?: ExternalWorkerConfig[];
   /**
    * Owner-side PR-maintenance worker config. Disabled by default; when
-   * `enabled` is true the owner builds coderabbit-address and pr-conflict-rebase
-   * worker launch dependencies from this block.
+   * `enabled` is true the owner builds coderabbit-address worker launch
+   * dependencies from this block.
    */
   prMaintenance?: PrMaintenanceConfig;
 }
