@@ -131,6 +131,7 @@ The command plans first, writes `plans/invoker-handoff.md`, converts it to `plan
 
 - [Getting started](docs/getting-started.md) — prerequisites, install, config, quick start, troubleshooting
 - [Architecture](ARCHITECTURE.md) — package layering, mutation boundaries, error contracts
+- [invoker-ops skill](skills/invoker-ops/SKILL.md) — operate existing workflows: retry, restart, cancel, or inspect blocked tasks
 - [Slack native workflows](docs/slack-native-workflows.md) — lobby mentions, harness presets, per-workflow channels
 - [First agent workflow tutorial](docs/tutorial-first-agent-workflow.md) — guided first run
 - [Changelog](CHANGELOG.md)
