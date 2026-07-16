@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -75,6 +78,33 @@ describe('headless-client', () => {
     expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     expect(refreshMessageBus).toHaveBeenCalled();
     expect(runElectronHeadless).not.toHaveBeenCalled();
+  });
+
+  it('serves query workers locally without booting Electron or delegating to an owner', async () => {
+    const previousDbDir = process.env.INVOKER_DB_DIR;
+    const homeRoot = mkdtempSync(join(tmpdir(), 'invoker-query-workers-'));
+    process.env.INVOKER_DB_DIR = homeRoot;
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 23);
+    try {
+      const exitCode = await runHeadlessClientCommand(['query', 'workers', '--output', 'json'], {
+        messageBus: new LocalBus(),
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        refreshMessageBus: vi.fn(async () => new LocalBus()),
+        runElectronHeadless,
+      });
+
+      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+      const parsed = JSON.parse(output) as { workers?: Array<{ kind?: string }> };
+      expect(exitCode).toBe(0);
+      expect(runElectronHeadless).not.toHaveBeenCalled();
+      expect(parsed.workers?.some((worker) => worker.kind === 'autofix')).toBe(true);
+    } finally {
+      stdout.mockRestore();
+      if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = previousDbDir;
+      rmSync(homeRoot, { recursive: true, force: true });
+    }
   });
 
   it('falls back to direct execution for generic standalone reads when no owner exists', async () => {
