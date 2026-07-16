@@ -308,19 +308,19 @@ function listOpenRecreateIntentsForEvent(
 function shouldSkipExistingAction(
   options: ReviewGateMergeConflictWorkerPolicyOptions,
   event: ReviewGateMergeConflictLifecycleEvent,
-): boolean {
+): WorkerActionRecord | undefined {
   const externalKey = reviewGateMergeConflictActionKey(event);
   const existing = options.store.getWorkerAction?.(REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND, externalKey);
-  if (!existing) return false;
+  if (!existing) return undefined;
   if (isOpenOrCompletedActionStatus(existing.status)) {
     logReviewGateMergeConflictEvent(options, event, 'review-gate-merge-conflict-skip', {
       reason: 'already-recorded',
       existingStatus: existing.status,
       intentId: existing.intentId ?? null,
     });
-    return true;
+    return existing;
   }
-  return false;
+  return undefined;
 }
 
 function firstLine(text: string | undefined): string | undefined {
@@ -369,19 +369,32 @@ function reconcileFinishedIntentAction(
   });
 }
 
-async function handleReviewGateMergeConflictEvent(
+export interface QueueReviewGateMergeConflictRepairResult {
+  decision: 'queued' | 'skipped';
+  reason: string;
+  intentId?: number | string;
+}
+
+export async function queueReviewGateMergeConflictRepair(
   options: ReviewGateMergeConflictWorkerPolicyOptions,
   event: ReviewGateMergeConflictLifecycleEvent,
-): Promise<void> {
+): Promise<QueueReviewGateMergeConflictRepairResult> {
   const task = loadTaskForEvent(event, options);
   if (!task) {
     logReviewGateMergeConflictEvent(options, event, 'review-gate-merge-conflict-skip', { reason: 'task-not-found' });
-    return;
+    return { decision: 'skipped', reason: 'task-not-found' };
   }
 
   reconcileFinishedIntentAction(options, event);
 
-  if (shouldSkipExistingAction(options, event)) return;
+  const existingAction = shouldSkipExistingAction(options, event);
+  if (existingAction) {
+    return {
+      decision: 'skipped',
+      reason: 'already-recorded',
+      intentId: existingAction.intentId,
+    };
+  }
 
   const stale = staleReasonForEvent(event, task);
   if (stale.stale) {
@@ -389,7 +402,7 @@ async function handleReviewGateMergeConflictEvent(
       reason: stale.reason,
       ...stale.details,
     });
-    return;
+    return { decision: 'skipped', reason: stale.reason };
   }
 
   const openRecreateIntents = listOpenRecreateIntentsForEvent(options, event);
@@ -403,7 +416,7 @@ async function handleReviewGateMergeConflictEvent(
       reason: 'already-queued-intent',
       existingIntentIds: openRecreateIntents.map((intent) => intent.id),
     });
-    return;
+    return { decision: 'skipped', reason: 'already-queued-intent', intentId };
   }
 
   const intentId = options.submitter.submit(event.workflowId, 'high', REBASE_RECREATE_CHANNEL, [event.workflowId]);
@@ -419,6 +432,7 @@ async function handleReviewGateMergeConflictEvent(
     intentId,
     channel: REBASE_RECREATE_CHANNEL,
   });
+  return { decision: 'queued', reason: 'queued', intentId };
 }
 
 export function createReviewGateMergeConflictTick(options: ReviewGateMergeConflictWorkerPolicyOptions): WorkerTick {
@@ -429,10 +443,11 @@ export function createReviewGateMergeConflictTick(options: ReviewGateMergeConfli
       const externalKey = reviewGateMergeConflictActionKey(event);
       if (seen.has(externalKey)) continue;
       seen.add(externalKey);
-      await handleReviewGateMergeConflictEvent(options, event);
+      await queueReviewGateMergeConflictRepair(options, event);
     }
   };
 }
+
 
 function isReviewGateMergeConflictEvent(event: WorkflowLifecycleEvent): event is ReviewGateMergeConflictLifecycleEvent {
   return event.kind === 'review_gate.merge_conflict';
