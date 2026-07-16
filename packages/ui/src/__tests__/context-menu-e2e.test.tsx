@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, act, waitFor, fireEvent, within } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../../types.js';
 
@@ -89,10 +89,11 @@ describe('Context menu (component)', () => {
   it('task context menu still works in mini DAG', async () => {
     await setup();
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    const miniDag = await screen.findByTestId('selected-workflow-mini-dag');
     await waitFor(() => {
-      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+      expect(within(miniDag).getByTestId('rf__node-task-alpha')).toBeInTheDocument();
     });
-    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    fireEvent.contextMenu(within(miniDag).getByTestId('rf__node-task-alpha'));
     await waitFor(() => {
       expect(screen.getByText('Open Terminal')).toBeInTheDocument();
       expect(screen.getByText('Restart Task')).toBeInTheDocument();
@@ -100,6 +101,11 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+
+    const menuZIndex = Number(screen.getByRole('menu').style.zIndex);
+    const miniDagZIndex = Number.parseInt(getComputedStyle(miniDag).zIndex, 10);
+    const graphOverlayZIndex = Math.max(1000, Number.isFinite(miniDagZIndex) ? miniDagZIndex : 0);
+    expect(menuZIndex).toBeGreaterThan(graphOverlayZIndex);
   });
 
   it('workflow context menu retries workflow', async () => {

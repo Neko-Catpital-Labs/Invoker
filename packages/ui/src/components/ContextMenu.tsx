@@ -28,6 +28,8 @@ interface ContextMenuProps {
   onClose: () => void;
 }
 
+const TASK_CONTEXT_MENU_Z_INDEX = 1100;
+
 export function ContextMenu({
   x,
   y,
@@ -216,8 +218,8 @@ export function ContextMenu({
     <div
       ref={menuRef}
       role="menu"
-      className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
-      style={{ left: position.left, top: position.top }}
+      className="fixed bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+      style={{ left: position.left, top: position.top, zIndex: TASK_CONTEXT_MENU_Z_INDEX }}
       onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
