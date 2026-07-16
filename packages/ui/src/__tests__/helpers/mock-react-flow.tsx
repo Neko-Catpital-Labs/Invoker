@@ -110,6 +110,7 @@ export function createReactFlowMock() {
             data-source={edge.source}
             data-target={edge.target}
             data-kind={edge.data?.kind}
+            data-label={edge.data?.label ?? ''}
             data-stroke-dasharray={edge.style?.strokeDasharray ?? ''}
             aria-label={edge.ariaLabel}
           />
