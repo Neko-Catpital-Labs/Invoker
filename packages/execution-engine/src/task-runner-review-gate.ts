@@ -68,8 +68,8 @@ export interface ReviewGateMergeConflictLifecyclePublisher {
 /**
  * Subset of {@link TaskRunner} the review-gate polling family reads. Picked from
  * `TaskRunner` (not hand-written) so the host stays locked to the runner's real
- * member types. `reviewGateCiFailureInFlight` is single-cluster-owned: it lives
- * here as an `@internal` runner field and is picked into this host.
+ * member types. The in-flight dedupe sets are single-cluster-owned: they live
+ * here as `@internal` runner fields and are picked into this host.
  */
 export type TaskRunnerReviewGateHost = Pick<
   TaskRunner,
@@ -83,6 +83,8 @@ export type TaskRunnerReviewGateHost = Pick<
   // Review-gate cluster state
   | 'reviewGateCiFailurePublisher'
   | 'reviewGateCiFailureInFlight'
+  | 'reviewGateMergeConflictPublisher'
+  | 'reviewGateMergeConflictInFlight'
 >;
 
 export async function closeWorkflowReview(
@@ -281,6 +283,7 @@ export async function pollMergeGateTask(
         host.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
       } else if (status.lifecycle === 'open') {
         await maybePublishReviewGateCiFailure(host, current!, status, providerId);
+        await maybePublishReviewGateMergeConflict(host, current!, status, providerId);
       }
       continue;
     }
@@ -296,6 +299,7 @@ export async function pollMergeGateTask(
       host.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
     } else if (status.lifecycle === 'open') {
       await maybePublishReviewGateCiFailure(host, current!, status, providerId);
+      await maybePublishReviewGateMergeConflict(host, current!, status, providerId);
     }
   }
 }
@@ -365,5 +369,44 @@ export async function maybePublishReviewGateCiFailure(
     });
   } finally {
     host.reviewGateCiFailureInFlight.delete(key);
+  }
+}
+
+export async function maybePublishReviewGateMergeConflict(
+  host: TaskRunnerReviewGateHost,
+  task: TaskState,
+  status: MergeGateApprovalStatus,
+  reviewId: string = task.execution.reviewId ?? '',
+): Promise<void> {
+  if (!host.reviewGateMergeConflictPublisher) return;
+  if (!task.config.workflowId || !reviewId) return;
+  if (status.lifecycle !== 'open' || status.hasMergeConflict !== true) return;
+
+  const key = [
+    task.id,
+    task.execution.selectedAttemptId ?? 'no-attempt',
+    task.execution.generation ?? 0,
+    status.headSha ?? 'no-head-sha',
+  ].join(':');
+  if (host.reviewGateMergeConflictInFlight.has(key)) return;
+
+  host.reviewGateMergeConflictInFlight.add(key);
+  try {
+    await host.reviewGateMergeConflictPublisher.publish({
+      taskId: task.id,
+      workflowId: task.config.workflowId,
+      status: task.status,
+      taskStateVersion: task.taskStateVersion,
+      reviewId,
+      reviewUrl: status.url,
+      headSha: status.headSha,
+      headRef: status.headRef,
+      branch: task.execution.branch,
+      selectedAttemptId: task.execution.selectedAttemptId,
+      generation: task.execution.generation ?? 0,
+      statusText: status.statusText,
+    });
+  } finally {
+    host.reviewGateMergeConflictInFlight.delete(key);
   }
 }
