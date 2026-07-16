@@ -18,6 +18,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -100,6 +101,57 @@ export interface OutputChunk {
 }
 
 const SQLITE_EPHEMERAL_DATABASE = ':memory:';
+
+function ownerMarkerPath(dbPath: string): string {
+  return `${dbPath}.owner`;
+}
+
+/**
+ * PID of the writable owner currently holding `dbPath`, or null when none is
+ * live. A marker left behind by a crashed owner reports null so a dead process
+ * can never lock readers out permanently.
+ */
+function readLiveOwnerPid(dbPath: string): number | null {
+  const marker = ownerMarkerPath(dbPath);
+  if (!existsSync(marker)) return null;
+  let pid: number;
+  try {
+    pid = Number.parseInt(readFileSync(marker, 'utf-8').trim(), 10);
+  } catch {
+    return null;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (pid === process.pid) return pid;
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+function writeOwnerMarker(dbPath: string): void {
+  try {
+    writeFileSync(ownerMarkerPath(dbPath), String(process.pid), 'utf-8');
+  } catch (err) {
+    console.warn(
+      `[SQLiteAdapter] Could not write owner marker for ${dbPath}: ${err instanceof Error ? err.message : String(err)}. ` +
+      'Read-only opens cannot detect this owner and will be allowed alongside it.',
+    );
+  }
+}
+
+function clearOwnerMarker(dbPath: string): void {
+  const marker = ownerMarkerPath(dbPath);
+  try {
+    if (existsSync(marker) && readLiveOwnerPid(dbPath) === process.pid) rmSync(marker, { force: true });
+  } catch (err) {
+    console.warn(
+      `[SQLiteAdapter] Could not clear owner marker for ${dbPath}: ${err instanceof Error ? err.message : String(err)}. ` +
+      'A stale marker is ignored once this PID exits.',
+    );
+  }
+}
 
 interface SQLiteAdapterOptions {
   readOnly?: boolean;
@@ -615,11 +667,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
     }
 
+    // Sidecar files alone cannot prove a writable owner is live: opening a
+    // WAL-mode database read-only creates -wal/-shm itself, and a read-only
+    // connection has no write access to checkpoint them away on close. Gating
+    // on mere existence therefore lets the first reader wedge every reader
+    // after it. Only a live owner may turn a reader away.
     if (isFile && options?.readOnly === true && (existsSync(`${dbPath}-wal`) || existsSync(`${dbPath}-shm`))) {
-      throw new Error(
-        `Cannot open SQLite database read-only while WAL sidecars exist for ${dbPath}. ` +
-        'Close the writable owner cleanly before opening a file-backed read-only adapter.',
-      );
+      const ownerPid = readLiveOwnerPid(dbPath);
+      if (ownerPid !== null) {
+        throw new Error(
+          `Cannot open SQLite database read-only while writable owner PID ${ownerPid} holds live WAL sidecars for ${dbPath}. ` +
+          'Close the writable owner cleanly before opening a file-backed read-only adapter.',
+        );
+      }
     }
 
     // Enforce owner-only writable initialization for file-backed databases
@@ -639,6 +699,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     try {
       const { DatabaseSync } = await loadNativeSqlite();
       const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
+      if (isFile && requestWritable && options?.ownerCapability) writeOwnerMarker(dbPath);
       return new SQLiteAdapter(db, isFile ? dbPath : null, options);
     } catch (err) {
       if (!isFile || options?.readOnly === true || !existsSync(dbPath) || !isDatabaseCorruptionError(err)) {
@@ -2303,6 +2364,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.checkpointWal('PASSIVE');
     }
     this.db.close();
+    if (this.dbPath && !this.readOnly) {
+      clearOwnerMarker(this.dbPath);
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
@@ -64,12 +64,14 @@ describe('SQLiteAdapter exclusiveLocking', () => {
     try {
       owner.saveWorkflow(wf);
       expect(existsSync(`${dbPath}-shm`)).toBe(true);
+      expect(existsSync(`${dbPath}.owner`)).toBe(true);
       await expect(
         SQLiteAdapter.create(dbPath, { readOnly: true }),
-      ).rejects.toThrow(/WAL sidecars exist/i);
+      ).rejects.toThrow(/writable owner PID \d+ holds live WAL sidecars/i);
     } finally {
       owner.close();
     }
+    expect(existsSync(`${dbPath}.owner`)).toBe(false);
   });
 
   it('read-only opens are still allowed after a clean close', async () => {
@@ -87,6 +89,47 @@ describe('SQLiteAdapter exclusiveLocking', () => {
       expect(reader.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
     } finally {
       reader.close();
+    }
+  });
+
+  it('allows a second read-only open after an earlier reader left sidecars behind', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    owner.saveWorkflow(wf);
+    owner.close();
+
+    // A read-only connection creates -wal/-shm and cannot checkpoint them away
+    // on close, so the sidecars outlive it with no owner behind them.
+    const first = await SQLiteAdapter.create(dbPath, { readOnly: true });
+    first.close();
+    expect(existsSync(`${dbPath}-wal`) || existsSync(`${dbPath}-shm`)).toBe(true);
+
+    const second = await SQLiteAdapter.create(dbPath, { readOnly: true });
+    try {
+      expect(second.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
+    } finally {
+      second.close();
+    }
+  });
+
+  it('ignores an owner marker left by a dead process', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    owner.saveWorkflow(wf);
+    owner.close();
+
+    const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+    reader.close();
+    // PID 2^22 is above every configured pid_max, so it can never be alive.
+    writeFileSync(`${dbPath}.owner`, '4194304', 'utf-8');
+
+    const survivor = await SQLiteAdapter.create(dbPath, { readOnly: true });
+    try {
+      expect(survivor.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
+    } finally {
+      survivor.close();
     }
   });
 
