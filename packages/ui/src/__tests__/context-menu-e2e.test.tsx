@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, act, waitFor, fireEvent, within } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../../types.js';
 
@@ -45,6 +45,23 @@ const merge = makeUITask({
 const workflows: WorkflowMeta[] = [
   { id: 'wf-1', name: 'Test Workflow', status: 'running', baseBranch: 'master' },
 ];
+
+const FLOATING_GRAPH_PANEL_LAYER = 1000;
+
+function getRenderedZIndex(element: HTMLElement): number {
+  const inlineZIndex = Number.parseInt(element.style.zIndex, 10);
+  if (Number.isFinite(inlineZIndex)) return inlineZIndex;
+
+  for (const className of Array.from(element.classList)) {
+    const arbitraryZIndex = className.match(/^z-\[(\d+)\]$/);
+    if (arbitraryZIndex) return Number.parseInt(arbitraryZIndex[1], 10);
+
+    const tailwindZIndex = className.match(/^z-(\d+)$/);
+    if (tailwindZIndex) return Number.parseInt(tailwindZIndex[1], 10);
+  }
+
+  return 0;
+}
 
 describe('Context menu (component)', () => {
   let mock: MockInvoker;
@@ -100,6 +117,19 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+  });
+
+  it('task context menu opened from the mini DAG renders above the floating graph panel', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    const taskNode = await within(panel).findByTestId('rf__node-task-alpha');
+    fireEvent.contextMenu(taskNode);
+
+    const menu = await screen.findByRole('menu');
+    const panelLayer = Math.max(getRenderedZIndex(panel), FLOATING_GRAPH_PANEL_LAYER);
+    expect(getRenderedZIndex(menu)).toBeGreaterThan(panelLayer);
   });
 
   it('workflow context menu retries workflow', async () => {
