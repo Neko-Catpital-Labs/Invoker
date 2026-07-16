@@ -7,7 +7,8 @@
 # nothing and re-fired every tick indefinitely. The fix records an attempt on
 # every real try and caps on that ledger.
 #
-# This drives the REAL (non-dry) failure paths offline with fakes:
+# This drives the native worker path through REAL (non-dry) failure outcomes
+# offline with fakes:
 #   Job 2: fake `node` accepts the dispatch; CONFIRM_TIMEOUT=0 means it never
 #          confirms -> each run records one rebase-recreate-attempt and exits 1.
 #   Job 1: fake `gh repo clone` fails -> prepare_checkout fails after the
@@ -19,11 +20,59 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/repro-attempt-cap.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+WORKER_PROOF_TEST="$ROOT/packages/execution-engine/src/__pr_maintenance_repro_$$.test.ts"
+cleanup() {
+  rm -f "$WORKER_PROOF_TEST"
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 fail() { echo "[repro] FAIL: $1"; [ -n "${2:-}" ] && echo "----- output -----" && echo "$2"; exit 1; }
 
-mkdir -p "$TMP/bin"
+write_worker_proof_test() {
+  cat > "$WORKER_PROOF_TEST" <<'TS'
+import { describe, it } from 'vitest';
+import { appendFileSync } from 'node:fs';
+import { createCoderabbitAddressWorker, createPrConflictRebaseWorker } from './workers/pr-maintenance-workers.js';
+
+const logPath = process.env.REPRO_PR_MAINTENANCE_LOG;
+const log = (message: unknown): void => {
+  if (logPath) appendFileSync(logPath, `${String(message)}\n`);
+};
+const logger = { info: log, warn: log, error: log, debug: () => {}, trace: () => {}, child: () => logger };
+const rawConfig = JSON.parse(process.env.REPRO_PR_MAINTENANCE_CONFIG ?? '{}');
+const prMaintenance = rawConfig.prMaintenance ?? rawConfig;
+delete prMaintenance.enabled;
+
+describe('native PR-maintenance repro worker', () => {
+  it('runs one tick', async () => {
+    const options = { logger, ...prMaintenance };
+    const worker = process.env.REPRO_PR_MAINTENANCE_WORKER === 'coderabbit-address'
+      ? createCoderabbitAddressWorker(options as never)
+      : createPrConflictRebaseWorker(options as never);
+    await worker.tick('manual');
+    await worker.stop();
+  });
+});
+TS
+}
+
+run_native_worker() {
+  local worker="$1" config="$2"
+  local log="$TMP/native-worker.log"
+  local vitest_out code
+  write_worker_proof_test
+  : > "$log"
+  set +e
+  vitest_out="$(REPRO_PR_MAINTENANCE_WORKER="$worker" REPRO_PR_MAINTENANCE_CONFIG="$(cat "$config")" REPRO_PR_MAINTENANCE_LOG="$log" pnpm --filter @invoker/execution-engine exec vitest run "src/$(basename "$WORKER_PROOF_TEST")" 2>&1)"
+  code=$?
+  set -e
+  cat "$log"
+  printf '%s\n' "$vitest_out"
+  return "$code"
+}
+
+mkdir -p "$TMP/bin" "$TMP/home-j1" "$TMP/home-j2"
 
 # ---------------------------------------------------------------------------
 # Job 2 — rebase-recreate accepted but never confirmed.
@@ -49,15 +98,11 @@ RG
 chmod +x "$TMP/bin/gh" "$TMP/bin/node" "$TMP/review-gate.sh"
 
 J2_LEDGER="$TMP/j2.tsv"; : > "$J2_LEDGER"
-run_job2() {
-  PATH="$TMP/bin:$PATH" \
-  INVOKER_PR_CRON_DRY_RUN=0 \
-  INVOKER_PR_CONFLICT_STATE_FILE="$J2_LEDGER" \
-  INVOKER_PR_CRON_LOCK="$TMP/j2.lock" \
-  INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh" \
-  INVOKER_PR_REBASE_CONFIRM_TIMEOUT=0 \
-  bash scripts/cron-pr-conflict-rebase.sh 2>&1
-}
+J2_CONFIG="$TMP/j2-config.json"
+cat > "$J2_CONFIG" <<EOF
+{"prMaintenance":{"enabled":true,"repoRoot":"$ROOT","lockPath":"$TMP/j2.lock","env":{"PATH":"$TMP/bin:$PATH","INVOKER_PR_CRON_DRY_RUN":"0","INVOKER_PR_CONFLICT_STATE_FILE":"$J2_LEDGER","INVOKER_PR_CRON_LOCK":"$TMP/j2.lock","INVOKER_PR_CRON_REVIEW_GATE_CMD":"$TMP/review-gate.sh","INVOKER_PR_REBASE_CONFIRM_TIMEOUT":"0"}}}
+EOF
+run_job2() { run_native_worker pr-conflict-rebase "$J2_CONFIG"; }
 
 for i in 1 2 3; do
   out="$(run_job2 || true)"
@@ -104,15 +149,11 @@ RG
 chmod +x "$TMP/review-gate-empty.sh"
 
 J1_LEDGER="$TMP/j1.tsv"; : > "$J1_LEDGER"
-run_job1() {
-  PATH="$TMP/bin:$PATH" \
-  INVOKER_PR_CRON_DRY_RUN=0 \
-  INVOKER_PR_CODERABBIT_STATE_FILE="$J1_LEDGER" \
-  INVOKER_PR_CRON_LOCK="$TMP/j1.lock" \
-  INVOKER_PR_CRON_WORKDIR="$TMP/work" \
-  INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate-empty.sh" \
-  bash scripts/cron-coderabbit-address.sh 2>&1
-}
+J1_CONFIG="$TMP/j1-config.json"
+cat > "$J1_CONFIG" <<EOF
+{"prMaintenance":{"enabled":true,"repoRoot":"$ROOT","lockPath":"$TMP/j1.lock","env":{"PATH":"$TMP/bin:$PATH","INVOKER_PR_CRON_DRY_RUN":"0","INVOKER_PR_CODERABBIT_STATE_FILE":"$J1_LEDGER","INVOKER_PR_CRON_LOCK":"$TMP/j1.lock","INVOKER_PR_CRON_WORKDIR":"$TMP/work","INVOKER_PR_CRON_REVIEW_GATE_CMD":"$TMP/review-gate-empty.sh"}}}
+EOF
+run_job1() { run_native_worker coderabbit-address "$J1_CONFIG"; }
 
 for i in 1 2 3; do
   out="$(run_job1 || true)"
