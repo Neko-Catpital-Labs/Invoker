@@ -147,6 +147,50 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
     expect(result.accepted).toBe(true);
     expect(submit).toHaveBeenCalledTimes(1);
   });
+  it.fails('proof: headless recreate-task for a missing workflow is accepted without queueing', () => {
+    const submit = vi.fn(() => 42);
+
+    const result = submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-missing',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate-task', 'wf-missing/task-a'] }],
+      {
+        coordinator: { submit },
+        workflowExists: () => false,
+      },
+    );
+
+    expect(result.intentId).toBe(0);
+    expect(result.accepted).toBe(true);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it.fails('proof: headless recreate-task foreign-key race is accepted when the workflow is gone', () => {
+    const submit = vi.fn(() => {
+      throw makeForeignKeyError();
+    });
+    let exists = true;
+
+    const result = submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-missing',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate-task', 'wf-missing/task-a'] }],
+      {
+        coordinator: { submit },
+        workflowExists: () => {
+          const current = exists;
+          exists = false;
+          return current;
+        },
+      },
+    );
+
+    expect(result.intentId).toBe(0);
+    expect(result.accepted).toBe(true);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
 
   it('fixed: invoker retry-workflow for a missing workflow is accepted without queueing', () => {
     const submit = vi.fn(() => 42);
