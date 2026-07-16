@@ -30,15 +30,14 @@ describe('workflow-status', () => {
     expect(normalizeWorkflowStatus('Fixing_With_AI')).toBe('fixing_with_ai');
   });
 
-  it('maps every workflow status to the canonical task palette', () => {
-    for (const status of WORKFLOW_STATUSES) {
-      const visual = workflowStatusVisual(status);
-      const canonical = getStatusVisual(status);
-      expect(visual.borderClass).toBe(canonical.border);
-      expect(visual.railClass).toBe(canonical.rail);
-      expect(visual.textClass).toBe(canonical.text);
-      expect(visual.pulse).toBe(canonical.pulse);
-    }
+  it.each(WORKFLOW_STATUSES)('maps %s to the canonical task palette', (status) => {
+    const canonical = getStatusVisual(status);
+    expect(workflowStatusVisual(status)).toEqual({
+      borderClass: canonical.border,
+      railClass: canonical.rail,
+      textClass: canonical.text,
+      pulse: canonical.pulse,
+    });
   });
 
   it('normalizes closed as a supported workflow status', () => {
