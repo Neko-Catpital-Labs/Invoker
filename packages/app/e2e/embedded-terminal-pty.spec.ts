@@ -10,6 +10,7 @@ import {
 } from './fixtures/electron-app.js';
 import {
   activityLogWatermark,
+  maxPayloadNumber,
   numberOrZero,
   uiPerfPayloadsSince,
 } from './fixtures/ui-perf.js';
@@ -417,6 +418,8 @@ test.describe('Embedded terminal PTY', () => {
     const outputPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_output_write');
     const resizePayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_resize');
     const scrollPayloads = payloads.filter((payload) => payload.metric === 'embedded_terminal_scroll');
+    const eventLoopLagPayloads = payloads.filter((payload) => payload.metric === 'renderer_event_loop_lag');
+    const longTaskPayloads = payloads.filter((payload) => payload.metric === 'renderer_long_task');
     const perf = await page.evaluate(async () => window.invoker.getUiPerfStats());
     const terminalEvidence = {
       fullAlphaTaskId,
@@ -430,6 +433,8 @@ test.describe('Embedded terminal PTY', () => {
       outputPayloads,
       resizePayloads,
       scrollPayloads,
+      eventLoopLagPayloads,
+      longTaskPayloads,
       perf,
       budgets: TERMINAL_PRESSURE_BUDGETS,
     };
@@ -472,5 +477,7 @@ test.describe('Embedded terminal PTY', () => {
     expect(numberOrZero(perf.maxTerminalSessionUpsertMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SESSION_UPSERT_BUDGET_MS);
     expect(numberOrZero(perf.maxRendererEventLoopLagMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS);
     expect(numberOrZero(perf.maxRendererLongTaskMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_LONG_TASK_BUDGET_MS);
+    expect(maxPayloadNumber(payloads, 'renderer_event_loop_lag', 'lagMs'), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS);
+    expect(maxPayloadNumber(payloads, 'renderer_long_task', 'durationMs'), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_LONG_TASK_BUDGET_MS);
   });
 });
