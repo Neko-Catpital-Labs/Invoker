@@ -3,7 +3,7 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import type { WorkflowMeta, WorkflowStatus } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import type { WorkflowCoreActivity } from '../lib/workflow-core-activity.js';
-import { deriveWorkflowGraph, layoutWorkflowGraph, type WorkflowGraphEdge } from '../lib/workflow-graph.js';
+import { deriveWorkflowGraph, layoutWorkflowGraph, workflowGraphLayoutKey, type WorkflowGraphEdge, type WorkflowPosition } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
 import {
   Background,
@@ -313,12 +313,19 @@ function WorkflowGraphInner({
     graphMetricsRef.current.deriveMs = performance.now() - startedAt;
     return nextGraph;
   }, [workflows]);
+  const layoutKey = useMemo(() => workflowGraphLayoutKey(graph), [graph]);
+  const layoutRef = useRef<{ key: string; positions: Map<string, WorkflowPosition> } | null>(null);
   const positions = useMemo(() => {
+    const cached = layoutRef.current;
+    if (cached && cached.key === layoutKey) {
+      return cached.positions;
+    }
     const startedAt = performance.now();
     const nextPositions = layoutWorkflowGraph(graph);
     graphMetricsRef.current.layoutMs = performance.now() - startedAt;
+    layoutRef.current = { key: layoutKey, positions: nextPositions };
     return nextPositions;
-  }, [graph]);
+  }, [graph, layoutKey]);
 
   const nodes = useMemo<Node<WorkflowNodeData>[]>(() => {
     const startedAt = performance.now();
