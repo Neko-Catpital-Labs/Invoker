@@ -636,8 +636,23 @@ describe('Terminal drawer (component)', () => {
       .filter(([metric]) => metric === 'embedded_terminal_output_write')
       .map(([, data]) => data as Record<string, any>);
     expect(outputPayloads).toHaveLength(80);
+    expect(outputPayloads.reduce((total, payload) => total + Number(payload.bytes ?? 0), 0)).toBeGreaterThan(1000);
     expect(Math.max(...outputPayloads.map((payload) => payload.durationMs))).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
     expect(outputPayloads.every((payload) => payload.active === true)).toBe(true);
+
+    const tabSelectPayload = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([metric]) => metric === 'embedded_terminal_tab_select')
+      .map(([, data]) => data as Record<string, any>)
+      .at(-1);
+    expect(tabSelectPayload).toEqual(expect.objectContaining({
+      sessionId: beta.sessionId,
+      taskId: beta.taskId,
+      fromSessionId: alpha.sessionId,
+      alreadyActive: false,
+      drawerState: 'partial',
+      sessionCount: 2,
+    }));
+    expect(tabSelectPayload?.durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
 
     const inputPayload = vi.mocked(mock.api.reportUiPerf).mock.calls
       .filter(([metric]) => metric === 'embedded_terminal_input')

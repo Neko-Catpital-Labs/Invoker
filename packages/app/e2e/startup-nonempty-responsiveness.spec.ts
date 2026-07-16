@@ -362,7 +362,10 @@ test('planning chat typing stays responsive with a large restored transcript', a
 
       expect(inputChange, planningEvidenceMessage).toBeTruthy();
       expect(inputCommit, planningEvidenceMessage).toBeTruthy();
+      expect(inputChange?.conversationKey, planningEvidenceMessage).toBe(sessionId);
+      expect(inputCommit?.conversationKey, planningEvidenceMessage).toBe(sessionId);
       expect(Number(inputChange?.handlerDurationMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_HANDLER_BUDGET_MS);
+      expect(Number(inputChange?.transcriptLineCount), planningEvidenceMessage).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
       expect(Number(inputCommit?.durationMs), planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_COMMIT_BUDGET_MS);
       expect(Number(inputCommit?.transcriptLineCount), planningEvidenceMessage).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
       expect(fillWallMs, planningEvidenceMessage).toBeLessThanOrEqual(PLANNING_INPUT_FILL_WALL_BUDGET_MS);

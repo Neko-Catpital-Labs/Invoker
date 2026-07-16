@@ -407,7 +407,19 @@ export function TerminalDrawer({
                     type="button"
                     role="tab"
                     aria-selected={isActive}
-                    onClick={() => onSelectSession(session.sessionId)}
+                    onClick={() => {
+                      const startedAt = nowMs();
+                      onSelectSession(session.sessionId);
+                      reportTerminalPerf('embedded_terminal_tab_select', {
+                        durationMs: roundMs(nowMs() - startedAt),
+                        sessionId: session.sessionId,
+                        taskId: session.taskId,
+                        fromSessionId: activeSessionId,
+                        alreadyActive: isActive,
+                        drawerState: state,
+                        sessionCount: sessions.length,
+                      });
+                    }}
                     className="max-w-[180px] truncate px-2 py-0.5 text-xs"
                     title={label}
                   >
