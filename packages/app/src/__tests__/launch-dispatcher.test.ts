@@ -1042,4 +1042,33 @@ describe('LaunchDispatcher', () => {
       expect(after?.lastError).toMatch(/runner exploded synchronously/);
     });
   });
+  describe('capacity recovery', () => {
+    it('poll sweeps globally expired execution resource leases', () => {
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:expired',
+        resourceType: 'ssh',
+        holderId: 'holder-expired',
+        leaseMs: -1,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:live',
+        resourceType: 'ssh',
+        holderId: 'holder-live',
+        leaseMs: 60_000,
+      })).toBe(true);
+
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-sweep',
+        taskRunnerProvider: () => ({ executeTask: vi.fn() }),
+      });
+      dispatcher.poll();
+
+      const leases = adapter.listExecutionResourceLeases();
+      expect(leases).toHaveLength(1);
+      expect(leases[0]?.resourceKey).toBe('ssh:live');
+    });
+
+  });
+
 });
