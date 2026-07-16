@@ -569,7 +569,12 @@ export class SlackSurface implements Surface {
       const channel = this.resolveChannelForWorkflow(workflowId);
       const existingTs = this.progressCardTs.get(workflowId);
       if (existingTs) {
-        await this.updateMessage(channel, existingTs, message);
+        const updated = await this.updateMessage(channel, existingTs, message);
+        if (!updated) {
+          this.log('slack', 'warn', `[WORKFLOW_PROGRESS] Failed to update progress card, posting replacement (workflowId=${workflowId}, ts=${existingTs})`);
+          const replacementTs = await this.postMessage(message, channel);
+          if (replacementTs) this.progressCardTs.set(workflowId, replacementTs);
+        }
       } else {
         const ts = await this.postMessage(message, channel);
         if (ts) this.progressCardTs.set(workflowId, ts);
@@ -589,7 +594,14 @@ export class SlackSurface implements Surface {
 
       const existingTs = this.taskMessages.get(taskId);
       if (existingTs && delta.type === 'updated') {
-        await this.updateMessage(channel, existingTs, message);
+        const updated = await this.updateMessage(channel, existingTs, message);
+        if (!updated) {
+          this.log('slack', 'warn', `[TASK_DELTA] Failed to update task card, posting replacement (taskId=${taskId}, ts=${existingTs})`);
+          const replacementTs = await this.postMessage(message, channel);
+          if (replacementTs) {
+            this.taskMessages.set(taskId, replacementTs);
+          }
+        }
       } else {
         const ts = await this.postMessage(message, channel);
         if (ts) {

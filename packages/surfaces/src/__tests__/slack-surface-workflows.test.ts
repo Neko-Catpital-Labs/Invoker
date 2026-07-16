@@ -302,6 +302,52 @@ describe('outbound routing', () => {
     });
     expect(client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'CLOBBY' }));
   });
+  it('posts a replacement progress card when chat.update rejects invalid_blocks', async () => {
+    const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
+    const client = (surface.getApp() as any).client;
+    client.chat.postMessage
+      .mockResolvedValueOnce({ ts: 'progress-1' })
+      .mockResolvedValueOnce({ ts: 'progress-2' });
+
+    const progress = {
+      workflowId: 'wf-1-2',
+      name: 'Workflow',
+      percentComplete: 25,
+      counts: { total: 4, completed: 1, failed: 0, closed: 0, running: 1, pending: 2 },
+      tasks: [{ id: 'wf-1-2/api', name: 'API', status: 'running', phase: 'executing' }],
+    };
+
+    await surface.handleEvent({ type: 'workflow_progress', progress });
+    client.chat.update.mockRejectedValueOnce({ data: { error: 'invalid_blocks' } });
+    await surface.handleEvent({ type: 'workflow_progress', progress });
+
+    expect(client.chat.update).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C123', ts: 'progress-1' }));
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(((surface as any).progressCardTs as Map<string, string>).get('wf-1-2')).toBe('progress-2');
+  });
+
+  it('posts a replacement task card when chat.update rejects invalid_blocks', async () => {
+    const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
+    const client = (surface.getApp() as any).client;
+    client.chat.postMessage
+      .mockResolvedValueOnce({ ts: 'task-1' })
+      .mockResolvedValueOnce({ ts: 'task-2' });
+
+    await surface.handleEvent({
+      type: 'task_delta',
+      delta: { type: 'updated', taskId: 'wf-1-2/api', changes: { status: 'running' }, taskStateVersion: 1, previousTaskStateVersion: 0 },
+    });
+    client.chat.update.mockRejectedValueOnce({ data: { error: 'invalid_blocks' } });
+    await surface.handleEvent({
+      type: 'task_delta',
+      delta: { type: 'updated', taskId: 'wf-1-2/api', changes: { status: 'completed', summary: 'done' }, taskStateVersion: 2, previousTaskStateVersion: 1 },
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C123', ts: 'task-1' }));
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(surface.getTaskMessages().get('wf-1-2/api')).toBe('task-2');
+  });
+
 });
 
 // ── In-channel assistant ─────────────────────────────────────
