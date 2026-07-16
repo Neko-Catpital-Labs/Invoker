@@ -240,6 +240,42 @@ async function syncGateWorkspaceToFeatureBranch(
   await execGitInMergeSafe(host, ['checkout', featureBranch], gateWorkspacePath);
 }
 
+async function ensureComparableBranchRef(
+  host: MergeRunnerHost,
+  dir: string,
+  branch: string,
+): Promise<void> {
+  try {
+    await execGitInMergeSafe(host, ['rev-parse', '--verify', `${branch}^{commit}`], dir);
+    return;
+  } catch {
+    // Missing locally; fetch the short branch from origin for comparison.
+  }
+
+  await execGitInMergeSafe(
+    host,
+    ['fetch', 'origin', `+refs/heads/${branch}:refs/heads/${branch}`],
+    dir,
+  );
+  await execGitInMergeSafe(host, ['rev-parse', '--verify', `${branch}^{commit}`], dir);
+}
+
+async function featureBranchHasReviewableChanges(
+  host: MergeRunnerHost,
+  dir: string,
+  baseBranch: string,
+  featureBranch: string,
+): Promise<boolean> {
+  await ensureComparableBranchRef(host, dir, baseBranch);
+  await ensureComparableBranchRef(host, dir, featureBranch);
+  try {
+    await execGitInMergeSafe(host, ['diff', '--quiet', `${baseBranch}...${featureBranch}`, '--'], dir);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 // ── Host interface ───────────────────────────────────────
 
 /**
@@ -737,6 +773,7 @@ export async function runMergeGateActionImpl(
       reviewUrl: undefined,
       reviewId: undefined,
       reviewStatus: undefined,
+      reviewGate: undefined,
     },
   }, launchLineage);
 
@@ -824,6 +861,42 @@ export async function runMergeGateActionImpl(
           featureBranch,
         });
         await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
+        const hasReviewableChanges = await featureBranchHasReviewableChanges(
+          host,
+          gateWorkspacePath!,
+          baseBranch,
+          featureBranch!,
+        );
+        if (!hasReviewableChanges) {
+          logTaskProgress(host, task.id, 'info', 'No reviewable branch changes; completing merge gate', {
+            baseBranch,
+            featureBranch,
+          });
+          console.log(
+            `[merge] No reviewable changes between ${baseBranch} and ${featureBranch}; completing merge gate without review PR`,
+          );
+          response = {
+            requestId: `merge-${task.id}`,
+            actionId: task.id,
+            executionGeneration: task.execution.generation ?? 0,
+            status: 'completed',
+            outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
+          };
+          return {
+            response,
+            taskChanges: {
+              config: { summary },
+              execution: {
+                branch: featureBranch ?? undefined,
+                workspacePath: gateWorkspacePath,
+                reviewUrl: undefined,
+                reviewId: undefined,
+                reviewStatus: undefined,
+                reviewGate: undefined,
+              },
+            },
+          };
+        }
 
         const expectedGeneration = task.execution.generation ?? 0;
         let fullSummary = summary;
@@ -1325,6 +1398,47 @@ export async function publishAfterFixImpl(
       featureBranch,
     });
     await pushFeatureBranchWithRefLockRetry(host, consolidateDir, featureBranch);
+    const hasReviewableChanges = await featureBranchHasReviewableChanges(
+      host,
+      consolidateDir,
+      baseBranch,
+      featureBranch,
+    );
+    if (!hasReviewableChanges) {
+      logTaskProgress(host, task.id, 'info', 'No reviewable branch changes; completing merge gate', {
+        baseBranch,
+        featureBranch,
+      });
+      console.log(
+        `[merge] Post-fix: no reviewable changes between ${baseBranch} and ${featureBranch}; completing merge gate without review PR`,
+      );
+      updateMergeGateMetadataIfCurrent(host, task.id, {
+        config: { runnerKind: 'worktree', summary },
+        execution: {
+          branch: featureBranch,
+          workspacePath: gateWorkspacePath,
+          reviewUrl: undefined,
+          reviewId: undefined,
+          reviewStatus: undefined,
+          reviewGate: undefined,
+          fixedIntegrationSha: undefined,
+          fixedIntegrationRecordedAt: undefined,
+          fixedIntegrationSource: undefined,
+        },
+      }, captureMergeGateLineage(task));
+      const completedResponse: WorkResponse = {
+        requestId: `postfix-${task.id}`,
+        actionId: task.id,
+        executionGeneration: task.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0, summary, branch: featureBranch },
+      };
+      const newlyStarted = host.orchestrator.handleWorkerResponse(completedResponse) ?? [];
+      if (newlyStarted.length > 0) {
+        host.executeTasks(newlyStarted);
+      }
+      return;
+    }
 
     let fullSummary = summary;
     if (visualProof && host.runVisualProofCapture) {

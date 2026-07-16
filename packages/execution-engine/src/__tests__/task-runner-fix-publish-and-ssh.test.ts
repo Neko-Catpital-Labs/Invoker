@@ -2189,6 +2189,7 @@ describe('TaskRunner', () => {
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'deadbeef';
         if (args[0] === 'rev-parse' && args[1] === '--verify') return '';
         if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
@@ -2522,6 +2523,7 @@ describe('TaskRunner', () => {
       gateWorkspacePath?: string | null;
       taskBranches?: TaskState[];
       repoUrl?: string;
+      featureHasDiff?: boolean;
     }) {
       const mergeTaskId = '__merge__wf-pub';
       const workflowId = 'wf-pub';
@@ -2585,6 +2587,9 @@ describe('TaskRunner', () => {
         if (args[0] === 'rev-parse' && args[1] === '--verify') return '';
         // merge-base --is-ancestor exits non-zero when branch is NOT an ancestor of HEAD
         if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
+        if (args[0] === 'diff' && args[1] === '--quiet' && (opts.featureHasDiff ?? true)) {
+          throw new Error('branch has changes');
+        }
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
@@ -2678,6 +2683,40 @@ describe('TaskRunner', () => {
         }),
       }), expect.objectContaining({ generation: 0 }));
     });
+
+    it('external_review on Invoker completes without make-pr when the feature branch has no diff', async () => {
+      const completedTask = makeTask({
+        id: 'already-landed',
+        status: 'completed',
+        config: { workflowId: 'wf-pub' },
+        execution: { branch: 'invoker/already-landed' },
+        description: 'Already landed task',
+      });
+
+      const { executor, mergeTask, orchestrator, mergeGateProvider } = setupPublishAfterFix({
+        mergeMode: 'external_review',
+        featureBranch: 'plan/feature',
+        gateWorkspacePath: '/tmp/gate-clone',
+        taskBranches: [completedTask],
+        repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+        featureHasDiff: false,
+      });
+
+      (executor as any).publishReviewStackWithMakePrSkill = vi.fn();
+
+      await executor.publishAfterFix(mergeTask);
+
+      expect((executor as any).publishReviewStackWithMakePrSkill).not.toHaveBeenCalled();
+      expect(mergeGateProvider.createReview).not.toHaveBeenCalled();
+      expect(orchestrator.setTaskReviewReady).not.toHaveBeenCalled();
+      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'completed',
+        outputs: expect.objectContaining({
+          branch: 'plan/feature',
+        }),
+      }));
+    });
+
     it('external_review mode: detaches HEAD, fetches, consolidates, creates PR', async () => {
       const completedTask = makeTask({
         id: 't1',
@@ -4651,6 +4690,74 @@ describe('TaskRunner', () => {
   });
 
   describe('external_review propagation of authored PR body', () => {
+    it('Invoker external_review completes without make-pr when consolidation has no reviewable diff', async () => {
+      const allTasks = [
+        makeTask({
+          id: 't1',
+          config: { workflowId: 'wf-1' },
+          status: 'completed',
+          execution: { branch: 'experiment/t1' },
+        }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'none',
+          mergeMode: 'external_review',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+          repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+        }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      (executor as any).execGitReadonly = async () => '';
+      (executor as any).execGitIn = async () => '';
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary');
+      (executor as any).consolidateAndMerge = vi.fn().mockResolvedValue(undefined);
+      (executor as any).publishReviewStackWithMakePrSkill = vi.fn();
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect((executor as any).publishReviewStackWithMakePrSkill).not.toHaveBeenCalled();
+      expect(orchestrator.setTaskReviewReady).not.toHaveBeenCalled();
+      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'completed',
+        outputs: expect.objectContaining({ branch: 'plan/feature' }),
+      }));
+      expect(persistence.updateTask).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+        execution: expect.objectContaining({
+          branch: 'plan/feature',
+          workspacePath: '/tmp/mock-wt',
+          reviewGate: undefined,
+        }),
+      }));
+    });
+
     it('createReview receives the authored body, not the raw workflowSummary', async () => {
       const allTasks = [
         makeTask({
@@ -4699,7 +4806,10 @@ describe('TaskRunner', () => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
-      (executor as any).execGitIn = async () => '';
+      (executor as any).execGitIn = async (args: string[]) => {
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
+        return '';
+      };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue(rawSummary);
@@ -4774,7 +4884,10 @@ describe('TaskRunner', () => {
       });
 
       (executor as any).execGitReadonly = async () => '';
-      (executor as any).execGitIn = async () => '';
+      (executor as any).execGitIn = async (args: string[]) => {
+        if (args[0] === 'diff' && args[1] === '--quiet') throw new Error('branch has changes');
+        return '';
+      };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nWorkflow summary');
