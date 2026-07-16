@@ -1594,38 +1594,12 @@ export function App() {
       const failedTaskId = event.taskId;
       if (failedTaskId) {
         setMutationFailuresByTaskId((prev) => new Map(prev).set(failedTaskId, event));
-        const task = tasksRef.current.get(failedTaskId);
-        if (task) {
-          selectTaskById(task.id);
-        } else {
-          // Set selection from the event ids directly so the inspector opens even
-          // if the task map has not hydrated this id yet.
-          setSelectedTaskId(failedTaskId);
-          setWorkflowSelectionDismissed(false);
-          if (event.workflowId) {
-            setSelectedWorkflowId(event.workflowId);
-          }
-          setInspectorCollapsed(false);
-          setInspectorManualOpen(true);
-          setContextMenu(null);
-          setWorkflowContextMenu(null);
-          focusKeyboardRegion('taskGraph');
-        }
-        setSidebarSurface('attention');
-      } else if (event.workflowId) {
-        setSelectedWorkflowId(event.workflowId);
-        setSelectedTaskId(null);
-        setWorkflowSelectionDismissed(false);
-        setContextMenu(null);
-        setWorkflowContextMenu(null);
-        setSidebarSurface('workflows');
-        focusKeyboardRegion('workflowGraph');
-      } else {
-        notifyMutationError('Mutation failed', event.message);
+        return;
       }
+      notifyMutationError('Mutation failed', event.message);
     });
     return () => { unsubscribe?.(); };
-  }, [focusKeyboardRegion, selectTaskById]);
+  }, []);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';

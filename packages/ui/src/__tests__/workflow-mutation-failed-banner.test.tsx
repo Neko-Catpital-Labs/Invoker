@@ -1,11 +1,11 @@
 /**
  * Integration test: workflow-mutation-failed handling in <App />.
  *
- * Task-scoped mutation failures are surfaced through the Needs Attention
- * workflow/task browser: the relevant task is selected, the attention surface is
- * opened/focused, and the inspector shows a persistent mutation-failure detail
- * panel. Workflow-scoped failures open the Workflows browser. Routine failures
- * no longer render a global top banner.
+ * A mutation failure never moves the operator. It does not change the sidebar
+ * surface, the selection, or the camera. Task-scoped failures are recorded so
+ * Needs Attention counts them and the inspector shows the failure detail once
+ * the operator navigates there themselves. Failures with no task context are
+ * transient toast errors. No global top banner is rendered.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -33,7 +33,16 @@ const workflow: WorkflowMeta = {
   status: 'running',
 };
 
-describe('Workflow mutation failed banner', () => {
+const approveFailure = {
+  intentId: 42,
+  workflowId: 'wf-1',
+  channel: 'invoker:approve',
+  taskId: 'wf-1/verify-worker-summary-surface',
+  message: 'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"',
+  failedAt: '2026-07-08T10:00:00.000Z',
+};
+
+describe('Workflow mutation failed handling', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
@@ -62,14 +71,7 @@ describe('Workflow mutation failed banner', () => {
     await settleTasks();
 
     act(() => {
-      mock.fireWorkflowMutationFailed({
-        intentId: 42,
-        workflowId: 'wf-1',
-        channel: 'invoker:approve',
-        taskId: 'wf-1/verify-worker-summary-surface',
-        message: 'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"',
-        failedAt: '2026-07-08T10:00:00.000Z',
-      });
+      mock.fireWorkflowMutationFailed(approveFailure);
     });
 
     await waitFor(() => {
@@ -77,21 +79,76 @@ describe('Workflow mutation failed banner', () => {
     });
   });
 
-  it('selects the task, opens Needs Attention, and surfaces failure details in the inspector', async () => {
+  it('leaves the sidebar surface alone when a task-scoped failure arrives', async () => {
     render(<App />);
     await settleTasks();
+    expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+
+    act(() => {
+      mock.fireWorkflowMutationFailed(approveFailure);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('1');
+    });
+    expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('sidebar-attention')).not.toHaveAttribute('aria-current', 'page');
+  });
+
+  it('leaves the sidebar surface alone when a workflow-scoped failure arrives', async () => {
+    render(<App />);
+    await settleTasks();
+    expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
 
     act(() => {
       mock.fireWorkflowMutationFailed({
-        intentId: 42,
+        intentId: 47,
         workflowId: 'wf-1',
-        channel: 'invoker:approve',
-        taskId: 'wf-1/verify-worker-summary-surface',
-        message: 'Error: SSH target "remote_digital_ocean_3" cannot run codex: missing execution harness "codex"',
+        channel: 'invoker:recreate',
+        message: 'recreate failed',
         failedAt: '2026-07-08T10:00:00.000Z',
       });
     });
 
+    await waitFor(() => {
+      expect(screen.queryByTestId('workflow-mutation-failed-banner')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('sidebar-workflows')).not.toHaveAttribute('aria-current', 'page');
+  });
+
+  it('does not steal the selection while the operator is working elsewhere', async () => {
+    render(<App />);
+    await settleTasks();
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-workflows')).toHaveAttribute('aria-current', 'page');
+    });
+
+    act(() => {
+      mock.fireWorkflowMutationFailed(approveFailure);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('1');
+    });
+    expect(screen.getByTestId('sidebar-workflows')).toHaveAttribute('aria-current', 'page');
+    expect(screen.queryByTestId('task-mutation-failure-detail')).not.toBeInTheDocument();
+  });
+
+  it('surfaces failure details in the inspector once the operator opens Needs Attention', async () => {
+    render(<App />);
+    await settleTasks();
+
+    act(() => {
+      mock.fireWorkflowMutationFailed(approveFailure);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('1');
+    });
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
     await waitFor(() => {
       expect(screen.getByTestId('sidebar-attention')).toHaveAttribute('aria-current', 'page');
     });
@@ -126,6 +183,7 @@ describe('Workflow mutation failed banner', () => {
       });
     });
 
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
     await waitFor(() => {
       expect(screen.getByTestId('task-mutation-failure-detail')).toBeInTheDocument();
     });
@@ -146,31 +204,6 @@ describe('Workflow mutation failed banner', () => {
       expect(detail).toBeInTheDocument();
       expect(detail).toHaveTextContent('Fix failed');
       expect(detail).toHaveTextContent('Command: fix');
-    });
-  });
-
-  it('opens the Workflows browser for workflow-scoped failures', async () => {
-    render(<App />);
-    await settleTasks();
-
-    act(() => {
-      mock.fireWorkflowMutationFailed({
-        intentId: 47,
-        workflowId: 'wf-1',
-        channel: 'invoker:recreate',
-        message: 'recreate failed',
-        failedAt: '2026-07-08T10:00:00.000Z',
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByTestId('workflow-mutation-failed-banner')).not.toBeInTheDocument();
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId('sidebar-workflows')).toHaveAttribute('aria-current', 'page');
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId('browser-rail')).toHaveTextContent('Workflows');
     });
   });
 });
