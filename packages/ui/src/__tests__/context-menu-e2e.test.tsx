@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, act, waitFor, fireEvent, within } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../../types.js';
 
@@ -100,6 +100,20 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+  });
+
+  it('task context menu from the selected workflow mini DAG outranks the floating graph panel', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    panel.style.zIndex = '1000';
+
+    fireEvent.contextMenu(within(panel).getByTestId('rf__node-task-alpha'));
+
+    const menu = await screen.findByRole('menu');
+    expect(menu).toHaveTextContent('Open Terminal');
+    expect(Number(menu.style.zIndex)).toBeGreaterThan(Number(panel.style.zIndex));
   });
 
   it('workflow context menu retries workflow', async () => {
