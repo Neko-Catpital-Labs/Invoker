@@ -145,6 +145,7 @@ import {
   type HeadlessDeps,
 } from './headless.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
+import { repairReviewGateMergeConflictByPr } from './review-gate-merge-conflict-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
   startStandaloneLaunchDispatcher,
@@ -1049,6 +1050,15 @@ function startHeadlessMode(): void {
             attemptLedger: autoFixAttemptLedger,
           },
         }),
+        repairReviewGateMergeConflict: (prArg: string) => repairReviewGateMergeConflictByPr(prArg, {
+          persistence,
+          repoRoot,
+          policy: {
+            store: persistence,
+            submitter: { submit: submitRegisteredOwnerWorkerMutation },
+            logger,
+          },
+        }),
         runtimeServices,
         appRootDir: __dirname,
       } as HeadlessDeps;
@@ -1449,6 +1459,7 @@ function startHeadlessMode(): void {
             case 'resolve-conflict':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'normal' };
             case 'repair-review-gate-ci':
+            case 'repair-review-gate-merge-conflict':
               return { workflowId: standaloneWorkflowIdForReviewGatePrArg(arg0), priority: 'normal' };
             default:
               return { priority: 'normal' };
