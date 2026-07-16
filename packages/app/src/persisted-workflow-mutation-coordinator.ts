@@ -443,7 +443,11 @@ export class PersistedWorkflowMutationCoordinator {
         });
         const deferred = this.inFlightPromises.get(evictedId);
         if (evictedIntent) {
-          this.notifyIntentFailed(evictedIntent, evictedIntent.error ?? `Evicted by ${intent.channel}#${intent.id}`);
+          this.notifyIntentFailed(
+            evictedIntent,
+            evictedIntent.error ?? `Evicted by ${intent.channel}#${intent.id}`,
+            'preempted',
+          );
         }
         if (!deferred) continue;
         deferred.reject(new Error(`Workflow mutation intent ${evictedId} was evicted by ${intent.channel}#${intent.id}`));
@@ -505,7 +509,7 @@ export class PersistedWorkflowMutationCoordinator {
       }
       const reason = `Superseded by ${fenceKind} intent #${newIntentId}`;
       this.persistence.failWorkflowMutationIntent(activeIntentId, reason);
-      this.notifyIntentFailed(activeIntent, reason);
+      this.notifyIntentFailed(activeIntent, reason, 'preempted');
       this.createTiming(workflowId, activeIntent.channel, activeIntent.id, activeIntent.args)
         .mark('PersistedWorkflowMutationCoordinator.invalidateSupersededRunningIntent', 'invalidated', {
           newIntentId,
@@ -551,7 +555,11 @@ export class PersistedWorkflowMutationCoordinator {
     return null;
   }
 
-  private notifyIntentFailed(intent: WorkflowMutationIntent, message: string): void {
+  private notifyIntentFailed(
+    intent: WorkflowMutationIntent,
+    message: string,
+    cause: 'error' | 'preempted' = 'error',
+  ): void {
     const headlessCommand = intent.channel === 'headless.exec'
       ? resolveHeadlessExecCommand(intent.args ?? [])
       : undefined;
@@ -563,6 +571,7 @@ export class PersistedWorkflowMutationCoordinator {
       failedAt: new Date().toISOString(),
       taskId: this.resolveIntentFailureTaskId(intent),
       headlessCommand,
+      cause,
     });
     try {
       this.options?.onIntentFailed?.(event);

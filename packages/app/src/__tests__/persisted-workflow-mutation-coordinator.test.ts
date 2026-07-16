@@ -1100,7 +1100,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it('reports intents cancelled by a delete fence as task-scoped failures indistinguishable from real errors', async () => {
+  it('reports intents cancelled by a delete fence as preempted, not as real errors', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({ id: 'wf-1',
@@ -1130,16 +1130,36 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await expect(running).rejects.toThrow(/superseded by delete intent/i);
     await expect(queued).rejects.toThrow(/evicted/i);
 
-    // Deleting a workflow deliberately cancels its in-flight work, yet every
-    // cancellation is announced as a task-scoped failure carrying no marker that
-    // separates it from a genuine error. Renderers therefore treat a routine
-    // delete as work the user must attend to.
     expect(failedEvents).toHaveLength(2);
     expect(failedEvents.map((event) => event.taskId)).toEqual(['wf-1/blocker-task', 'wf-1/queued-task']);
     expect(failedEvents.map((event) => event.message)).toEqual([
       expect.stringMatching(/superseded by delete intent/i),
       expect.stringMatching(/evicted/i),
     ]);
+    expect(failedEvents.map((event) => event.cause)).toEqual(['preempted', 'preempted']);
+  });
+
+  it('reports a genuine handler error as an error cause', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
+
+    const failedEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => { throw new Error('harness exploded'); },
+      { onIntentFailed: (event) => failedEvents.push(event) },
+    );
+
+    await expect(
+      coordinator.enqueue<void>('wf-1', 'normal', 'invoker:approve', ['wf-1/approve-task']),
+    ).rejects.toThrow(/harness exploded/i);
+
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0].cause).toBe('error');
   });
 
   it('invalidates an older running workflow intent when delegated headless delete is enqueued', async () => {
