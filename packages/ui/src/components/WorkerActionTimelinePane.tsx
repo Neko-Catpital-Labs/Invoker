@@ -268,6 +268,7 @@ export function WorkerActionTimelinePane({
                   <li
                     key={`${row.action.id}-${row.eventKind}`}
                     data-testid={`worker-timeline-row-${row.action.id}-${row.eventKind}`}
+                    className={`border rounded-md ${selected ? 'bg-indigo-900/60 border-indigo-600' : 'bg-gray-800 border-gray-800 hover:border-gray-600'} transition-colors ${interactive ? '' : 'opacity-90'}`}
                   >
                     <button
                       type="button"
@@ -276,7 +277,7 @@ export function WorkerActionTimelinePane({
                       onClick={() => {
                         if (target.task) onTaskClick(target.task);
                       }}
-                      className={`w-full rounded px-3 py-2 text-left ${selected ? 'bg-secondary/60' : ''} ${interactive ? 'cursor-pointer hover:bg-secondary/40' : 'cursor-default opacity-90'}`}
+                      className={`w-full bg-transparent px-3 py-2 text-left ${interactive ? 'cursor-pointer' : 'cursor-default'}`}
                       title={`${worker.name} · ${formatWorkerValue(row.action.actionType)} · ${taskLabel}`}
                     >
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
