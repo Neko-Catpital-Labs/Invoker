@@ -5,9 +5,9 @@
  * Never touches invoker.db / config.json / the home root / paths outside the home.
  */
 
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { Logger } from '@invoker/contracts';
 
@@ -25,9 +25,30 @@ export const DISK_RECLAIMABLE_DIRS = [
   'worktrees',
   'merge-clones',
   'merge-launches',
+  'pr-cron-work',
 ] as const;
 
 export type DiskReclaimableDir = (typeof DISK_RECLAIMABLE_DIRS)[number];
+
+/**
+ * Invoker/test scratch name globs reclaimed from the shared temp dir. The
+ * disk-headroom cleaner never wipes `/tmp` wholesale — only entries matching
+ * these globs, plus stale mktemp leftovers older than the age threshold below.
+ */
+export const TMP_SCRATCH_GLOBS = [
+  'invoker-*',
+  'scoped_dir*',
+  'electron-download-*',
+  'playwright-artifacts-*',
+  'playwright-transform-cache-*',
+  'esbuild-*.map',
+  'node-compile-cache',
+  'runner-test-*',
+  'omp-*',
+] as const;
+
+/** Leave temp entries newer than this alone — an active run may still hold them. */
+export const TMP_SCRATCH_MIN_AGE_MINUTES = 60;
 
 export interface DiskCleanupResult {
   targetKey: string;
@@ -103,6 +124,7 @@ export function buildInvokerHomeCleanupScript(invokerHome: string): string {
   const mkdirArgs = DISK_RECLAIMABLE_DIRS
     .map((name) => `"$INVOKER_HOME/${name}"`)
     .join(' ');
+  const tmpGlobList = TMP_SCRATCH_GLOBS.join(' ');
   return `set +e
 INVOKER_HOME=${homeQ}
 ${bashNormalizeTildePath('INVOKER_HOME')}
@@ -136,6 +158,36 @@ ${removeCalls}
 rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
 mkdir -p ${mkdirArgs}
 chmod 700 ${mkdirArgs}
+# Shared temp dir: reclaim only Invoker/test scratch, never a blanket /tmp wipe.
+# Age guard leaves entries newer than ${TMP_SCRATCH_MIN_AGE_MINUTES}m alone (an active run may hold them).
+TMP_CLEAN="\${TMPDIR:-/tmp}"
+TMP_CLEAN="\${TMP_CLEAN%/}"
+case "$TMP_CLEAN" in
+  ""|"/"|"$HOME") TMP_CLEAN=/tmp ;;
+esac
+# Never reap a temp entry that holds mineable .jsonl session data (agent transcripts).
+reap_tmp() {
+  [ -e "$1" ] || return 0
+  if find "$1" -type f -name '*.jsonl' -print -quit 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  rm -rf "$1" >/dev/null 2>&1
+}
+set -f
+for pat in ${tmpGlobList}; do
+  find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -name "$pat" -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+    ! -path "$INVOKER_HOME" -print0 2>/dev/null | while IFS= read -r -d '' entry; do
+    reap_tmp "$entry"
+  done
+done
+set +f
+find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+  ! -path "$INVOKER_HOME" \\
+  ! -name 'systemd-private-*' ! -name 'snap-*' ! -name '.*-unix' \\
+  ! -name 'ssh-*' ! -name 'claude-*' ! -name '*.lock' \\
+  -print0 2>/dev/null | while IFS= read -r -d '' entry; do
+  reap_tmp "$entry"
+done
 echo "[disk-headroom-cleanup] done"
 df -h / | tail -1
 exit 0
@@ -174,11 +226,114 @@ function sweepLocalDeletingOrphans(home: string, errors: string[]): void {
   }
 }
 
+/**
+ * Blanket-sweep excludes: entries never removed by the age-gated blanket pass,
+ * even when stale. Mirrors the `! -name` guards in the remote cleanup script.
+ */
+export const TMP_SCRATCH_BLANKET_EXCLUDE_GLOBS = [
+  'systemd-private-*',
+  'snap-*',
+  '.*-unix',
+  'ssh-*',
+  'claude-*',
+  '*.lock',
+] as const;
+
+function tmpGlobToRegExp(glob: string): RegExp {
+  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`);
+}
+
+function matchesAnyTmpGlob(name: string, globs: readonly string[]): boolean {
+  return globs.some((glob) => tmpGlobToRegExp(glob).test(name));
+}
+
+/**
+ * True if `path` is, or contains, a mineable `.jsonl` (agent-session transcript).
+ * Never follows symlinks, so a symlinked dir cannot loop or escape the temp tree.
+ */
+export function holdsMineableSessionData(path: string): boolean {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    return false;
+  }
+  if (stat.isFile()) return path.endsWith('.jsonl');
+  if (!stat.isDirectory()) return false;
+  let names: string[];
+  try {
+    names = readdirSync(path);
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    if (name.endsWith('.jsonl')) return true;
+    if (holdsMineableSessionData(join(path, name))) return true;
+  }
+  return false;
+}
+
+/** Resolve the shared temp dir, re-anchoring unsafe values (``/``/`$HOME`) to `/tmp`. */
+export function resolveTmpScratchDir(
+  env: NodeJS.ProcessEnv = process.env,
+  userHome: string = homedir(),
+): string {
+  const raw = (env.TMPDIR ?? '/tmp').replace(/\/+$/, '');
+  if (!raw || raw === '/' || raw === userHome) return '/tmp';
+  return raw;
+}
+
+/**
+ * Reap stale Invoker/test scratch from the shared temp dir. Targeted globs plus
+ * an age-gated blanket sweep of everything else, minus system/lock excludes.
+ * Entries newer than {@link TMP_SCRATCH_MIN_AGE_MINUTES} and the live Invoker
+ * home ({@link opts.selfHome}) are always preserved.
+ */
+export function reapLocalTmpScratch(
+  opts: { tmpDir: string; nowMs: number; selfHome?: string },
+  errors: string[],
+): void {
+  const { tmpDir, nowMs } = opts;
+  if (!tmpDir || tmpDir === '/') return;
+  if (!existsSync(tmpDir)) return;
+  const cutoffMs = nowMs - TMP_SCRATCH_MIN_AGE_MINUTES * 60_000;
+  const selfHome = opts.selfHome ? resolve(opts.selfHome) : undefined;
+  let entries: string[];
+  try {
+    entries = readdirSync(tmpDir);
+  } catch (err) {
+    errors.push(`readdir ${tmpDir}: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  for (const name of entries) {
+    const full = join(tmpDir, name);
+    if (selfHome && resolve(full) === selfHome) continue;
+    let mtimeMs: number;
+    try {
+      mtimeMs = lstatSync(full).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (mtimeMs >= cutoffMs) continue;
+    const isScratch = matchesAnyTmpGlob(name, TMP_SCRATCH_GLOBS);
+    const isExcluded = matchesAnyTmpGlob(name, TMP_SCRATCH_BLANKET_EXCLUDE_GLOBS);
+    if (isScratch || !isExcluded) {
+      if (holdsMineableSessionData(full)) continue;
+      removeLocalDir(full, errors);
+    }
+  }
+}
+
 export async function cleanupLocalInvokerHome(opts: {
   invokerHome: string;
   targetKey?: string;
   logger?: Logger;
   userHome?: string;
+  /** Test seam: override the temp dir reaped for scratch (defaults to $TMPDIR/`/tmp`). */
+  tmpDir?: string;
+  /** Test seam: override the reference time for the scratch age guard. */
+  nowMs?: number;
 }): Promise<DiskCleanupResult> {
   const targetKey = opts.targetKey ?? `local ${opts.invokerHome}`;
   const userHome = opts.userHome ?? homedir();
@@ -200,6 +355,14 @@ export async function cleanupLocalInvokerHome(opts: {
   for (const name of DISK_RECLAIMABLE_DIRS) {
     ensureLocalDir(join(home, name), errors);
   }
+  reapLocalTmpScratch(
+    {
+      tmpDir: opts.tmpDir ?? resolveTmpScratchDir(process.env, userHome),
+      nowMs: opts.nowMs ?? Date.now(),
+      selfHome: home,
+    },
+    errors,
+  );
 
   if (errors.length > 0) {
     opts.logger?.warn?.(`[disk-headroom-cleanup] local partial failures`, {

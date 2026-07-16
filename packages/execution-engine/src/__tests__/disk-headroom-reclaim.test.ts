@@ -1,4 +1,12 @@
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  readdirSync,
+  rmSync,
+  utimesSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -10,9 +18,23 @@ import {
   DiskCleanupCooldownTracker,
   isSafeInvokerHome,
   isSafeRemoteInvokerHomePath,
+  reapLocalTmpScratch,
   resolveDiskCleanupCooldownMs,
   resolveDiskCleanupEnabled,
+  resolveTmpScratchDir,
+  TMP_SCRATCH_GLOBS,
+  TMP_SCRATCH_MIN_AGE_MINUTES,
 } from '../workers/disk-headroom-reclaim.js';
+
+/** Create a temp entry with an mtime `ageMinutes` in the past. */
+function makeAgedDir(parent: string, name: string, ageMinutes: number, nowMs: number): string {
+  const full = join(parent, name);
+  mkdirSync(full, { recursive: true });
+  writeFileSync(join(full, 'payload.bin'), 'x');
+  const seconds = (nowMs - ageMinutes * 60_000) / 1000;
+  utimesSync(full, seconds, seconds);
+  return full;
+}
 
 const tempDirs: string[] = [];
 
@@ -56,6 +78,43 @@ describe('disk-headroom cleanup guards', () => {
     expect(script).not.toContain('$HOME/.cache/electron');
     expect(script).not.toContain('$HOME/.local/share/pnpm');
     expect(script).not.toContain('$HOME/.pnpm-store');
+  });
+
+  it('reclaims the pr-cron-work scratch dir', () => {
+    expect(DISK_RECLAIMABLE_DIRS).toContain('pr-cron-work');
+    const script = buildInvokerHomeCleanupScript('~/.invoker');
+    expect(script).toContain('$INVOKER_HOME/pr-cron-work');
+  });
+
+  it('sweeps only Invoker/test scratch from the shared temp dir, never a blanket /tmp wipe', () => {
+    const script = buildInvokerHomeCleanupScript('~/.invoker');
+    // Resolves the temp dir with a safe fallback, and re-anchors unsafe values to /tmp.
+    expect(script).toContain('TMP_CLEAN="${TMPDIR:-/tmp}"');
+    expect(script).toContain('TMP_CLEAN=/tmp');
+    for (const glob of TMP_SCRATCH_GLOBS) {
+      expect(script).toContain(glob);
+    }
+    // Age guard protects in-flight runs; system + lock entries are excluded.
+    expect(script).toContain(`-mmin +${TMP_SCRATCH_MIN_AGE_MINUTES}`);
+    expect(script).toContain("! -name 'systemd-private-*'");
+    expect(script).toContain("! -name 'ssh-*'");
+    expect(script).toContain("! -name '*.lock'");
+    // Must never wipe the whole temp dir.
+    expect(script).not.toMatch(/rm -rf ["']?\/tmp["']?\s/);
+    expect(script).not.toMatch(/rm -rf ["']?\$TMP_CLEAN["']?\s*$/m);
+    expect(script).not.toContain('rm -rf "$TMP_CLEAN"/*');
+  });
+
+  it('age-gates the targeted glob sweep and never deletes the live invoker home', () => {
+    const script = buildInvokerHomeCleanupScript('~/.invoker');
+    // The targeted glob loop must be age-gated (find + -mmin), not an un-aged `rm -rf`.
+    expect(script).not.toContain('rm -rf "$TMP_CLEAN"/$pat');
+    expect(script).toMatch(/find "\$TMP_CLEAN"[^\n]*-name "\$pat"[^\n]*-mmin \+/);
+    // Globbing is disabled around the pattern loop so patterns can't expand against the CWD.
+    expect(script).toContain('set -f');
+    expect(script).toContain('set +f');
+    // Both sweeps refuse to touch the live invoker home.
+    expect(script.match(/! -path "\$INVOKER_HOME"/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -111,6 +170,9 @@ describe('cleanupLocalInvokerHome', () => {
     const result = await cleanupLocalInvokerHome({
       invokerHome: home,
       userHome,
+      // Isolate the scratch reap onto an empty sandbox so the test never
+      // touches the machine's real temp dir.
+      tmpDir: join(root, 'empty-tmp'),
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
     });
 
@@ -135,5 +197,96 @@ describe('cleanupLocalInvokerHome', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('path-guard');
+  });
+
+  it('reaps a stale orphaned scratch home from the shared temp dir', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-tmp-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    mkdirSync(home, { recursive: true });
+    const fakeTmp = join(root, 'tmp');
+    mkdirSync(fakeTmp, { recursive: true });
+    const nowMs = 1_000_000_000_000;
+    const stale = makeAgedDir(fakeTmp, 'invoker-e2e-db.OLD', 120, nowMs);
+    const fresh = makeAgedDir(fakeTmp, 'invoker-e2e-db.NEW', 5, nowMs);
+
+    const result = await cleanupLocalInvokerHome({
+      invokerHome: home,
+      userHome: root,
+      tmpDir: fakeTmp,
+      nowMs,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+  });
+});
+
+describe('resolveTmpScratchDir', () => {
+  it('uses TMPDIR when safe and falls back to /tmp otherwise', () => {
+    expect(resolveTmpScratchDir({ TMPDIR: '/scratch/tmp/' }, '/home/me')).toBe('/scratch/tmp');
+    expect(resolveTmpScratchDir({}, '/home/me')).toBe('/tmp');
+    expect(resolveTmpScratchDir({ TMPDIR: '/' }, '/home/me')).toBe('/tmp');
+    expect(resolveTmpScratchDir({ TMPDIR: '/home/me' }, '/home/me')).toBe('/tmp');
+  });
+});
+
+describe('reapLocalTmpScratch', () => {
+  const nowMs = 1_000_000_000_000;
+
+  function sandbox(): string {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-tmp-reap-'));
+    tempDirs.push(root);
+    return root;
+  }
+
+  it('removes stale Invoker/test scratch but preserves fresh entries', () => {
+    const tmp = sandbox();
+    const staleInvoker = makeAgedDir(tmp, 'invoker-e2e-db.old', 90, nowMs);
+    const staleEsbuild = makeAgedDir(tmp, 'esbuild-abc.map', 90, nowMs);
+    const freshInvoker = makeAgedDir(tmp, 'invoker-e2e-db.fresh', 10, nowMs);
+
+    const errors: string[] = [];
+    reapLocalTmpScratch({ tmpDir: tmp, nowMs }, errors);
+
+    expect(errors).toEqual([]);
+    expect(existsSync(staleInvoker)).toBe(false);
+    expect(existsSync(staleEsbuild)).toBe(false);
+    expect(existsSync(freshInvoker)).toBe(true);
+  });
+
+  it('blanket-sweeps stale non-Invoker entries but never excluded system/lock entries', () => {
+    const tmp = sandbox();
+    const staleJunk = makeAgedDir(tmp, 'random-junk', 90, nowMs);
+    const staleClaude = makeAgedDir(tmp, 'claude-1000', 90, nowMs);
+    const staleSystemd = makeAgedDir(tmp, 'systemd-private-abc', 90, nowMs);
+    const staleLock = makeAgedDir(tmp, 'session.lock', 90, nowMs);
+
+    const errors: string[] = [];
+    reapLocalTmpScratch({ tmpDir: tmp, nowMs }, errors);
+
+    expect(existsSync(staleJunk)).toBe(false);
+    expect(existsSync(staleClaude)).toBe(true);
+    expect(existsSync(staleSystemd)).toBe(true);
+    expect(existsSync(staleLock)).toBe(true);
+  });
+
+  it('never deletes the live invoker home even when it is stale scratch under /tmp', () => {
+    const tmp = sandbox();
+    const selfHome = makeAgedDir(tmp, 'invoker-e2e-db.self', 240, nowMs);
+
+    const errors: string[] = [];
+    reapLocalTmpScratch({ tmpDir: tmp, nowMs, selfHome }, errors);
+
+    expect(existsSync(selfHome)).toBe(true);
+  });
+
+  it('is a no-op for unsafe or missing temp dirs', () => {
+    const errors: string[] = [];
+    reapLocalTmpScratch({ tmpDir: '/', nowMs }, errors);
+    reapLocalTmpScratch({ tmpDir: '', nowMs }, errors);
+    reapLocalTmpScratch({ tmpDir: join(sandbox(), 'does-not-exist'), nowMs }, errors);
+    expect(errors).toEqual([]);
   });
 });
