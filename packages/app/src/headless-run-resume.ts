@@ -365,6 +365,21 @@ export async function headlessRepairReviewGateCi(prArg: string | undefined, deps
   const result = await deps.repairReviewGateCi(prArg);
   process.stdout.write(`${result.message}\n`);
 }
+export async function headlessRepairReviewGateMergeConflict(
+  prArg: string | undefined,
+  deps: HeadlessDeps,
+): Promise<void> {
+  if (!prArg) {
+    throw new Error(
+      'Missing PR argument. Usage: --headless repair-review-gate-merge-conflict <prNumber|prUrl>',
+    );
+  }
+  if (!deps.repairReviewGateMergeConflict) {
+    throw new Error('Review-gate merge-conflict repair is unavailable in this process.');
+  }
+  const result = await deps.repairReviewGateMergeConflict(prArg);
+  process.stdout.write(`${result.message}\n`);
+}
 
 export async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promise<void> {
   const parsed = parseHeadlessFixArgs(rawArgs);
