@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { WorkflowGraph } from '../components/WorkflowGraph.js';
@@ -66,6 +66,10 @@ async function renderAndSettleInitialFit(props: Parameters<typeof WorkflowGraph>
 }
 
 describe('WorkflowGraph', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     fitViewMock.mockClear();
     setCenterMock.mockClear();
@@ -443,6 +447,68 @@ describe('WorkflowGraph', () => {
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     expect(fitViewMock).not.toHaveBeenCalled();
     expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('does not fit on the first hidden-node watchdog miss after a completed user pan and data change', async () => {
+    const onManualViewport = vi.fn();
+
+    const { rerender } = await renderAndSettleInitialFit({
+      workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
+      selectedWorkflowId: null,
+      statusFilters: new Set(),
+      onSelectWorkflow: () => {},
+      onWorkflowContextMenu: () => {},
+      onManualViewport,
+    });
+
+    const pane = screen.getByTestId('rf__pane');
+    fireEvent.pointerDown(pane);
+    fireEvent.pointerUp(pane);
+    expect(onManualViewport).toHaveBeenCalledTimes(1);
+
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    vi.useFakeTimers();
+
+    rerender(
+      <WorkflowGraph
+        workflows={new Map([
+          ['wf-a', wf('wf-a', 'running')],
+          ['wf-b', wf('wf-b', 'pending')],
+        ])}
+        selectedWorkflowId={null}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+        onManualViewport={onManualViewport}
+      />,
+    );
+
+    const root = screen.getByTestId('workflow-graph-react-flow');
+    for (const node of root.querySelectorAll<HTMLElement>('.react-flow__node')) {
+      node.style.visibility = 'hidden';
+    }
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    // There is no App-issued command, selected workflow, or command prop here;
+    // hidden nodes isolate this to WorkflowGraph's watchdog path. One miss is
+    // not bounded blank-render recovery and must not yank the user's camera.
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+    expect(fitViewMock).toHaveBeenCalledTimes(1);
+    expect(setCenterMock).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(fitViewMock).toHaveBeenCalledTimes(1);
   });
 
   it('defers graph object updates while a manual viewport pan is active', async () => {
