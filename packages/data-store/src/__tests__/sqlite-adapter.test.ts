@@ -98,6 +98,7 @@ describe('SQLiteAdapter', () => {
         taskCount: 1,
         workflowCount: 1,
         steps: ['Update README'],
+        taskGroups: [{ workflow: 'Docs', tasks: ['Update README'] }],
       },
       submittedWorkflowId: 'wf-planning',
       submittedPlanName: 'README plan',
