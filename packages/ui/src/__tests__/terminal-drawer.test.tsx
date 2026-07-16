@@ -520,6 +520,11 @@ describe('Terminal drawer (component)', () => {
         }),
       );
     });
+    const attachPayload = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([metric]) => metric === 'embedded_terminal_attach')
+      .map(([, data]) => data as Record<string, any>)
+      .at(-1);
+    expect(attachPayload?.durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
     expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
       'embedded_terminal_snapshot_write',
       expect.objectContaining({

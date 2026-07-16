@@ -15,6 +15,7 @@ import {
 } from './fixtures/ui-perf.js';
 
 const TERMINAL_INPUT_BUDGET_MS = 100;
+const TERMINAL_ATTACH_BUDGET_MS = 250;
 const TERMINAL_OUTPUT_WRITE_BUDGET_MS = 250;
 const TERMINAL_RESIZE_BUDGET_MS = 250;
 const TERMINAL_SCROLL_BUDGET_MS = 50;
@@ -27,6 +28,7 @@ const TERMINAL_RENDERER_LONG_TASK_BUDGET_MS = 1500;
 
 const TERMINAL_PRESSURE_BUDGETS = {
   maxInputMs: TERMINAL_INPUT_BUDGET_MS,
+  maxAttachMs: TERMINAL_ATTACH_BUDGET_MS,
   maxOutputWriteMs: TERMINAL_OUTPUT_WRITE_BUDGET_MS,
   maxResizeMs: TERMINAL_RESIZE_BUDGET_MS,
   maxScrollMs: TERMINAL_SCROLL_BUDGET_MS,
@@ -456,15 +458,32 @@ test.describe('Embedded terminal PTY', () => {
     expect(betaOpenWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_WALL_BUDGET_MS);
     expect(switchWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_TAB_SWITCH_WALL_BUDGET_MS);
     expect(scrollWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLL_WALL_BUDGET_MS);
-    expect(Math.max(...inputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
-    expect(Math.max(...outputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
-    expect(Math.max(...resizePayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
-    expect(Math.max(...scrollPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLL_BUDGET_MS);
+    expect(
+      Math.max(...attachPayloads.map((payload) => Number(payload.durationMs))),
+      terminalEvidenceMessage,
+    ).toBeLessThanOrEqual(TERMINAL_ATTACH_BUDGET_MS);
+    expect(
+      Math.max(...inputPayloads.map((payload) => Number(payload.durationMs))),
+      terminalEvidenceMessage,
+    ).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
+    expect(
+      Math.max(...outputPayloads.map((payload) => Number(payload.durationMs))),
+      terminalEvidenceMessage,
+    ).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
+    expect(
+      Math.max(...resizePayloads.map((payload) => Number(payload.durationMs))),
+      terminalEvidenceMessage,
+    ).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
+    expect(
+      Math.max(...scrollPayloads.map((payload) => Number(payload.durationMs))),
+      terminalEvidenceMessage,
+    ).toBeLessThanOrEqual(TERMINAL_SCROLL_BUDGET_MS);
 
     expect(Number(perf.embeddedTerminalAttachReports), terminalEvidenceMessage).toBeGreaterThanOrEqual(2);
     expect(Number(perf.embeddedTerminalInputReports), terminalEvidenceMessage).toBeGreaterThan(0);
     expect(Number(perf.embeddedTerminalOutputWriteReports), terminalEvidenceMessage).toBeGreaterThan(0);
     expect(Number(perf.embeddedTerminalScrollReports), terminalEvidenceMessage).toBeGreaterThan(0);
+    expect(Number(perf.maxEmbeddedTerminalAttachMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_ATTACH_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalInputMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalOutputWriteMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OUTPUT_WRITE_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalResizeMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);

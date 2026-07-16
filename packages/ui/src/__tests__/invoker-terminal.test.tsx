@@ -462,10 +462,20 @@ describe('Invoker terminal (component)', () => {
     });
 
     const changePayload = lastPerfPayload('planning_chat_input_change');
+    expect(changePayload).toEqual(expect.objectContaining({
+      busy: false,
+      readOnly: false,
+      expanded: false,
+    }));
     expect(changePayload.handlerDurationMs).toBeLessThanOrEqual(COMPONENT_INPUT_HANDLER_BUDGET_MS);
     expect(changePayload.transcriptLineCount).toBe(largeTranscript.length);
 
     const commitPayload = lastPerfPayload('planning_chat_input_commit');
+    expect(commitPayload).toEqual(expect.objectContaining({
+      busy: false,
+      readOnly: false,
+      expanded: false,
+    }));
     expect(Number.isFinite(commitPayload.durationMs)).toBe(true);
     expect(commitPayload.durationMs).toBeGreaterThanOrEqual(0);
     expect(commitPayload.transcriptLineCount).toBe(largeTranscript.length);
