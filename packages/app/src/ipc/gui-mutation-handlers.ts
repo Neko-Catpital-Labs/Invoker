@@ -115,14 +115,100 @@ import {
   recoveryWorkerEventType,
 } from '../recovery-worker-observability.js';
 
-interface HeadlessRunMutationPayload {
+export interface HeadlessRunMutationPayload {
   planPath: string;
   traceId?: string;
 }
 
-interface HeadlessResumeMutationPayload {
+export interface HeadlessResumeMutationPayload {
   workflowId: string;
   traceId?: string;
+}
+
+export type HeadlessOwnerMode = 'standalone' | 'gui';
+
+interface HeadlessExecMutationCoordinator {
+  submit: (
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
+    options?: { deferDrain?: boolean },
+  ) => number;
+}
+
+export interface HeadlessExecMutationContext {
+  logger: Logger;
+  ownerId: string;
+  getWorkflowMutationCoordinator: () => HeadlessExecMutationCoordinator | null;
+  workflowExists: (workflowId: string) => boolean;
+}
+
+function headlessExecLogFields(
+  payload: HeadlessExecMutationPayload,
+  mode: HeadlessOwnerMode,
+  coordinatorAvailable: boolean,
+  extra: Record<string, string | number | undefined> = {},
+): string {
+  const fields: Record<string, string | number | undefined> = {
+    trace: payload.traceId ?? '<none>',
+    args: `"${payload.args.join(' ')}"`,
+    noTrack: payload.noTrack ? 'true' : 'false',
+    ...extra,
+    coordinator: coordinatorAvailable ? 'true' : 'false',
+    mode,
+  };
+  return Object.entries(fields)
+    .map(([key, value]) => `${key}=${value ?? '<none>'}`)
+    .join(' ');
+}
+
+export function logHeadlessExecReceived(
+  payload: HeadlessExecMutationPayload,
+  mode: HeadlessOwnerMode,
+  context: HeadlessExecMutationContext,
+): void {
+  context.logger.info(
+    `headless.exec received ${headlessExecLogFields(payload, mode, Boolean(context.getWorkflowMutationCoordinator()), { ownerId: context.ownerId })}`,
+    { module: 'ipc-delegate' },
+  );
+}
+
+export function acknowledgeNoTrackHeadlessExec(
+  payload: HeadlessExecMutationPayload,
+  workflowId: string | undefined,
+  priority: WorkflowMutationPriority,
+  mode: HeadlessOwnerMode,
+  context: HeadlessExecMutationContext,
+): WorkflowMutationAcceptedResult | undefined {
+  const workflowMutationCoordinator = context.getWorkflowMutationCoordinator();
+  context.logger.info(
+    `headless.exec decision ${headlessExecLogFields(payload, mode, Boolean(workflowMutationCoordinator), { workflow: `"${workflowId ?? '<none>'}"`, priority })}`,
+    { module: 'ipc-delegate' },
+  );
+
+  if (!payload.noTrack) return undefined;
+
+  if (workflowId && workflowMutationCoordinator) {
+    const result = submitWorkflowMutationOrAcknowledgeDeleted(workflowId, priority, 'headless.exec', [payload], {
+      coordinator: workflowMutationCoordinator,
+      workflowExists: context.workflowExists,
+      logger: context.logger,
+      deferDrain: true,
+    });
+    context.logger.info(
+      `headless.exec accepted ${headlessExecLogFields(payload, mode, Boolean(workflowMutationCoordinator), { workflow: `"${workflowId}"`, intent: result.intentId, priority })}`,
+      { module: 'ipc-delegate' },
+    );
+    return result;
+  }
+
+  const reason = !workflowId ? 'workflow-not-resolved' : 'coordinator-unavailable';
+  context.logger.error(
+    `headless.exec rejected ${headlessExecLogFields(payload, mode, Boolean(workflowMutationCoordinator), { reason, workflow: `"${workflowId ?? '<none>'}"` })}`,
+    { module: 'ipc-delegate' },
+  );
+  throw new Error(`Fire-and-forget headless.exec could not be queued: ${reason}`);
 }
 
 type RendererTaskFeed = ReturnType<typeof createRendererTaskFeed>;
