@@ -1,25 +1,74 @@
 #!/usr/bin/env bash
-# Dedup proof for Job 1 (scripts/cron-coderabbit-address.sh):
+# Dedup proof for the native coderabbit-address worker path:
 #   1. a PR with a coderabbitai[bot] comment updated at T -> "would launch omp ... at T"
 #   2. once T is in the ledger -> "no new CodeRabbit comments since T; skip"
 #   3. a newer comment T2 -> "would launch omp ... at T2" again
 #   4. once the per-PR attempt cap is reached -> "hit cap"
 #
-# Runs fully offline in dry-run with a fake `gh` serving captured comment JSON;
-# touches only a temp ledger/lock.
+# Runs fully offline through `./run.sh --headless worker coderabbit-address`
+# with a fake `gh` serving captured comment JSON; touches only temp state.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/repro-coderabbit.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+WORKER_PROOF_TEST="$ROOT/packages/execution-engine/src/__pr_maintenance_repro_$$.test.ts"
+cleanup() {
+  rm -f "$WORKER_PROOF_TEST"
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 fail() { echo "[repro] FAIL: $1"; [ -n "${2:-}" ] && echo "----- output -----" && echo "$2"; exit 1; }
 
-LEDGER="$TMP/ledger.tsv"; : > "$LEDGER"
+write_worker_proof_test() {
+  cat > "$WORKER_PROOF_TEST" <<'TS'
+import { describe, it } from 'vitest';
+import { appendFileSync } from 'node:fs';
+import { createCoderabbitAddressWorker, createPrConflictRebaseWorker } from './workers/pr-maintenance-workers.js';
 
-mkdir -p "$TMP/bin"
+const logPath = process.env.REPRO_PR_MAINTENANCE_LOG;
+const log = (message: unknown): void => {
+  if (logPath) appendFileSync(logPath, `${String(message)}\n`);
+};
+const logger = { info: log, warn: log, error: log, debug: () => {}, trace: () => {}, child: () => logger };
+const rawConfig = JSON.parse(process.env.REPRO_PR_MAINTENANCE_CONFIG ?? '{}');
+const prMaintenance = rawConfig.prMaintenance ?? rawConfig;
+delete prMaintenance.enabled;
+
+describe('native PR-maintenance repro worker', () => {
+  it('runs one tick', async () => {
+    const options = { logger, ...prMaintenance };
+    const worker = process.env.REPRO_PR_MAINTENANCE_WORKER === 'coderabbit-address'
+      ? createCoderabbitAddressWorker(options as never)
+      : createPrConflictRebaseWorker(options as never);
+    await worker.tick('manual');
+    await worker.stop();
+  });
+});
+TS
+}
+
+run_native_worker() {
+  local worker="$1" config="$2"
+  local log="$TMP/native-worker.log"
+  local vitest_out code
+  write_worker_proof_test
+  : > "$log"
+  set +e
+  vitest_out="$(REPRO_PR_MAINTENANCE_WORKER="$worker" REPRO_PR_MAINTENANCE_CONFIG="$(cat "$config")" REPRO_PR_MAINTENANCE_LOG="$log" pnpm --filter @invoker/execution-engine exec vitest run "src/$(basename "$WORKER_PROOF_TEST")" 2>&1)"
+  code=$?
+  set -e
+  cat "$log"
+  printf '%s\n' "$vitest_out"
+  return "$code"
+}
+
+LEDGER="$TMP/ledger.tsv"; : > "$LEDGER"
+CONFIG="$TMP/config.json"
+
+mkdir -p "$TMP/bin" "$TMP/home"
 cat > "$TMP/bin/gh" <<'GH'
 #!/usr/bin/env bash
 case "${1:-}" in
@@ -44,12 +93,11 @@ exit 1
 GH
 chmod +x "$TMP/bin/gh"
 
-export PATH="$TMP/bin:$PATH"
-export INVOKER_PR_CRON_DRY_RUN=1
-export INVOKER_PR_CODERABBIT_STATE_FILE="$LEDGER"
-export INVOKER_PR_CRON_LOCK="$TMP/crons.lock"
+cat > "$CONFIG" <<EOF
+{"prMaintenance":{"enabled":true,"repoRoot":"$ROOT","lockPath":"$TMP/crons.lock","env":{"PATH":"$TMP/bin:$PATH","INVOKER_PR_CRON_DRY_RUN":"1","INVOKER_PR_CODERABBIT_STATE_FILE":"$LEDGER","INVOKER_PR_CRON_LOCK":"$TMP/crons.lock"}}}
+EOF
 
-run() { bash scripts/cron-coderabbit-address.sh 2>&1; }
+run() { run_native_worker coderabbit-address "$CONFIG"; }
 
 T1="2026-06-25T08:00:00Z"
 T2="2026-06-25T09:30:00Z"
