@@ -475,6 +475,68 @@ describe('Invoker terminal (component)', () => {
     expect(transcriptCommitsAfterTyping).toHaveLength(0);
   });
 
+  it('keeps App planning chat typing responsive after restoring a large transcript', async () => {
+    const restoredMessages = Array.from({ length: 180 }, (_, index) => ({
+      id: index + 1,
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      text: `restored app pressure line ${index + 1}: ${'planning output '.repeat(10)}`,
+      createdAt: `2026-07-07T00:${String(index % 60).padStart(2, '0')}:00.000Z`,
+    }));
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'restored-large-chat',
+          title: 'Restored large chat',
+          status: 'still_discussing',
+          messages: restoredMessages,
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          updatedAt: '2026-07-07T01:00:00.000Z',
+        }),
+      ],
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('restored app pressure line 180');
+    });
+
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+    reportUiPerf.mockClear();
+
+    const typedText = 'type through a restored planning transcript';
+    const input = screen.getByTestId('invoker-terminal-input');
+    fireEvent.change(input, { target: { value: typedText } });
+
+    await waitFor(() => expect(input).toHaveValue(typedText));
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_commit',
+        expect.objectContaining({
+          valueLength: typedText.length,
+          previousValueLength: 0,
+          conversationKey: 'restored-large-chat',
+          transcriptLineCount: restoredMessages.length,
+        }),
+      );
+    });
+
+    const changePayload = lastPerfPayload('planning_chat_input_change');
+    expect(changePayload.handlerDurationMs).toBeLessThanOrEqual(COMPONENT_INPUT_HANDLER_BUDGET_MS);
+    expect(changePayload.transcriptLineCount).toBe(restoredMessages.length);
+
+    const commitPayload = lastPerfPayload('planning_chat_input_commit');
+    expect(Number.isFinite(commitPayload.durationMs)).toBe(true);
+    expect(commitPayload.durationMs).toBeGreaterThanOrEqual(0);
+    expect(commitPayload.transcriptLineCount).toBe(restoredMessages.length);
+
+    const transcriptCommitsAfterTyping = reportUiPerf.mock.calls
+      .filter(([metric]) => metric === 'planning_chat_transcript_commit');
+    expect(transcriptCommitsAfterTyping).toHaveLength(0);
+  });
+
   it('reports a many-workflow planning typing lag baseline from the task prompt editor', async () => {
     const { tasks, workflows } = makeManyWorkflowTypingBaseline();
     render(<App />);
