@@ -25,9 +25,30 @@ export const DISK_RECLAIMABLE_DIRS = [
   'worktrees',
   'merge-clones',
   'merge-launches',
+  'pr-cron-work',
 ] as const;
 
 export type DiskReclaimableDir = (typeof DISK_RECLAIMABLE_DIRS)[number];
+
+/**
+ * Invoker/test scratch name globs reclaimed from the shared temp dir. The
+ * disk-headroom cleaner never wipes `/tmp` wholesale — only entries matching
+ * these globs, plus stale mktemp leftovers older than the age threshold below.
+ */
+export const TMP_SCRATCH_GLOBS = [
+  'invoker-*',
+  'scoped_dir*',
+  'electron-download-*',
+  'playwright-artifacts-*',
+  'playwright-transform-cache-*',
+  'esbuild-*.map',
+  'node-compile-cache',
+  'runner-test-*',
+  'omp-*',
+] as const;
+
+/** Leave temp entries newer than this alone — an active run may still hold them. */
+export const TMP_SCRATCH_MIN_AGE_MINUTES = 60;
 
 export interface DiskCleanupResult {
   targetKey: string;
@@ -103,6 +124,7 @@ export function buildInvokerHomeCleanupScript(invokerHome: string): string {
   const mkdirArgs = DISK_RECLAIMABLE_DIRS
     .map((name) => `"$INVOKER_HOME/${name}"`)
     .join(' ');
+  const tmpGlobList = TMP_SCRATCH_GLOBS.join(' ');
   return `set +e
 INVOKER_HOME=${homeQ}
 ${bashNormalizeTildePath('INVOKER_HOME')}
@@ -136,6 +158,32 @@ ${removeCalls}
 rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
 mkdir -p ${mkdirArgs}
 chmod 700 ${mkdirArgs}
+# Shared temp dir: reclaim only Invoker/test scratch, never a blanket /tmp wipe.
+# Age guard leaves entries newer than ${TMP_SCRATCH_MIN_AGE_MINUTES}m alone (an active run may hold them).
+TMP_CLEAN="\${TMPDIR:-/tmp}"
+TMP_CLEAN="\${TMP_CLEAN%/}"
+case "$TMP_CLEAN" in
+  ""|"/"|"$HOME") TMP_CLEAN=/tmp ;;
+esac
+# Never reap a temp entry that holds mineable .jsonl session data (agent transcripts).
+reap_tmp() {
+  [ -e "$1" ] || return 0
+  if find "$1" -type f -name '*.jsonl' -print -quit 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  rm -rf "$1" >/dev/null 2>&1
+}
+for pat in ${tmpGlobList}; do
+  for entry in "$TMP_CLEAN"/$pat; do
+    reap_tmp "$entry"
+  done
+done
+find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+  ! -name 'systemd-private-*' ! -name 'snap-*' ! -name '.*-unix' \\
+  ! -name 'ssh-*' ! -name 'claude-*' ! -name '*.lock' \\
+  -print0 2>/dev/null | while IFS= read -r -d '' entry; do
+  reap_tmp "$entry"
+done
 echo "[disk-headroom-cleanup] done"
 df -h / | tail -1
 exit 0
