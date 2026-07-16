@@ -100,6 +100,27 @@ describe('worker global switch', () => {
     expect(screen.getByTestId('worker-global-switch')).toHaveAttribute('aria-checked', 'true');
   });
 
+  it('snaps back and logs when the host rejects the change', async () => {
+    const error = new Error('Worker runtime controller is unavailable');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(
+      <WorkerActivityCard
+        snapshot={makeSnapshot()}
+        selectedWorkerKind={null}
+        onSelectWorker={vi.fn()}
+        onSetWorkersEnabled={vi.fn(async () => { throw error; })}
+      />,
+    );
+
+    const toggle = screen.getByTestId('worker-global-switch');
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
+    expect(toggle).toHaveTextContent('Turn workers off');
+    expect(consoleError).toHaveBeenCalledWith('Failed to turn workers off', error);
+    consoleError.mockRestore();
+  });
+
   it('hides the switch on read-only surfaces that render without controls', () => {
     render(
       <WorkerActivityCard

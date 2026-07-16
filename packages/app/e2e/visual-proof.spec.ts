@@ -2139,6 +2139,31 @@ test.describe('Visual proof capture', () => {
 
 
 
+  test('global worker switch turns all workers off and back on', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await selectGraphMenuItem(page, 'rail-queue');
+    await expectQueueViewVisible(page);
+
+    const toggle = page.getByTestId('worker-global-switch');
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect(toggle).toHaveText('Turn workers off');
+    await expect(page.getByTestId('worker-process-list')).toContainText('Running');
+    await captureScreenshot(page, 'worker-global-switch-step-1-on');
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await expect(toggle).toHaveText('Turn workers on');
+    await expect(page.getByTestId('worker-process-list')).not.toContainText('Running');
+    await expect(page.getByTestId('worker-start-stop-pr-status')).toBeDisabled();
+    await captureScreenshot(page, 'worker-global-switch-step-2-off');
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByTestId('worker-process-list')).toContainText('Running');
+    await captureScreenshot(page, 'worker-global-switch-step-3-back-on');
+  });
+
   test('queue view concurrency display', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();

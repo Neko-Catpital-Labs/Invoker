@@ -141,7 +141,12 @@ export function WorkerActivityCard({
               const next = !globalEnabled;
               setOptimisticGlobalEnabled(next);
               setGlobalPending(true);
-              void Promise.resolve(onSetWorkersEnabled(next)).finally(() => setGlobalPending(false));
+              void Promise.resolve(onSetWorkersEnabled(next))
+                .catch((error: unknown) => {
+                  setOptimisticGlobalEnabled(null);
+                  console.error(`Failed to turn workers ${next ? 'on' : 'off'}`, error);
+                })
+                .finally(() => setGlobalPending(false));
             }}
           >
             {globalPending

@@ -779,6 +779,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:stop-worker':
         return { channel: 'headless.gui-mutation', request: payload };
+      case 'invoker:set-workers-enabled':
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resume-workflow': {
         const workflows = rendererTaskFeed.getDetachedViewerWorkflows() ?? persistence.listWorkflows();
         const firstWorkflow = workflows[0] as { id?: unknown } | undefined;
@@ -1649,6 +1651,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       throw new Error('Worker runtime controller is unavailable');
     }
     return workerRuntimeController.stop(String(kindArg));
+  });
+
+  registerGuiMutationHandler('invoker:set-workers-enabled', async (enabledArg: unknown) => {
+    if (!workerRuntimeController) {
+      throw new Error('Worker runtime controller is unavailable');
+    }
+    return workerRuntimeController.setGlobalEnabled(Boolean(enabledArg));
   });
 
   ipcMain.handle('invoker:get-queue-status', () => {
