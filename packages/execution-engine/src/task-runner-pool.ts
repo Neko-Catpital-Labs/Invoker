@@ -451,6 +451,43 @@ export function takeResolvedExecutionSelection(host: TaskRunnerPoolHost, taskId:
   return resolvedExecution;
 }
 
+/**
+ * Reclaim any in-memory execution slot this task still holds from a prior
+ * attempt whose executor was never reaped — a superseded/recreated launch
+ * whose kill hook no-oped or whose orphaned executor never fired `onComplete`.
+ * Left in `activeExecutions`, that stale entry counts against member capacity
+ * forever ({@link poolMemberLoad}), so every member can read full while nothing
+ * runs. Mirrors the `pendingPoolSelections` self-heal in `selectExecutor`; the
+ * current attempt is never touched. Best-effort kills the orphan so freeing the
+ * slot cannot over-subscribe the member.
+ */
+function reclaimSupersededExecutionSlots(host: TaskRunnerPoolHost, task: TaskState): void {
+  const liveAttemptId = task.execution.selectedAttemptId;
+  if (liveAttemptId === undefined) return;
+  for (const [attemptId, entry] of host.activeExecutions) {
+    if (entry.taskId !== task.id || attemptId === liveAttemptId) continue;
+    host.activeExecutions.delete(attemptId);
+    host.logger?.warn?.(
+      `[TaskRunner] reclaimed superseded execution slot task=${task.id} staleAttempt=${attemptId} ` +
+        `member=${entry.poolMemberKey ?? 'n/a'}; a prior attempt's executor was never reaped`,
+      { taskId: task.id, staleAttempt: attemptId, member: entry.poolMemberKey, module: 'task-runner' },
+    );
+    if (entry.leaseResourceKey && entry.leaseHolderId) {
+      host.persistence.releaseExecutionResourceLease?.(entry.leaseResourceKey, entry.leaseHolderId);
+    }
+    const onKillError = (err: unknown) =>
+      host.logger?.warn?.(
+        `[TaskRunner] best-effort kill of superseded execution failed task=${task.id} attempt=${attemptId}`,
+        { err, module: 'task-runner' },
+      );
+    try {
+      void Promise.resolve(entry.executor.kill(entry.handle)).catch(onKillError);
+    } catch (err) {
+      onKillError(err);
+    }
+  }
+}
+
 export function selectExecutor(
   host: TaskRunnerPoolHost & MergeRunnerHost,
   task: TaskState,
@@ -466,6 +503,7 @@ export function selectExecutor(
     executionModel: host.resolveExecutionModel(task),
   };
   host.pendingPoolSelections.delete(task.id);
+  reclaimSupersededExecutionSlots(host, task);
 
   if (task.config.poolId && explicitPoolMemberId) {
     const pool = host.getExecutionPools()[task.config.poolId];
