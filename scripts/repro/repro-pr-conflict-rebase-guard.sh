@@ -21,6 +21,19 @@ trap cleanup EXIT
 
 fail() { echo "[repro] FAIL: $1"; [ -n "${2:-}" ] && echo "----- output -----" && echo "$2"; exit 1; }
 
+VITEST_READY=0
+ensure_execution_engine_vitest() {
+  [ "$VITEST_READY" -eq 1 ] && return 0
+  if pnpm --filter @invoker/execution-engine exec vitest --version >/dev/null 2>&1; then
+    VITEST_READY=1
+    return 0
+  fi
+  echo "[repro] installing workspace dependencies for @invoker/execution-engine vitest"
+  pnpm install --frozen-lockfile || return $?
+  pnpm --filter @invoker/execution-engine exec vitest --version >/dev/null 2>&1 || return $?
+  VITEST_READY=1
+}
+
 write_worker_proof_test() {
   cat > "$WORKER_PROOF_TEST" <<'TS'
 import { describe, it } from 'vitest';
@@ -53,6 +66,7 @@ run_native_worker() {
   local worker="$1" config="$2"
   local log="$TMP/native-worker.log"
   local vitest_out code
+  ensure_execution_engine_vitest
   write_worker_proof_test
   : > "$log"
   set +e
@@ -95,7 +109,11 @@ EOF
 run() { run_native_worker pr-conflict-rebase "$CONFIG"; }
 
 # Branch 1: fresh ledger -> would rebase-recreate at generation 2.
+set +e
 out="$(INVOKER_TEST_WF_GEN=2 run)"
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "branch 1: native worker exited $code" "$out"
 echo "$out" | grep -q "would rebase-recreate wf-100-1 (generation 2)" \
   || fail "branch 1: expected 'would rebase-recreate ... (generation 2)'" "$out"
 
@@ -103,7 +121,11 @@ echo "$out" | grep -q "would rebase-recreate wf-100-1 (generation 2)" \
 printf 'rebase-recreate\twf-100-1\t2\t%s\n' "$(date +%s)" >> "$LEDGER"
 
 # Branch 2: same generation already fired -> skip.
+set +e
 out="$(INVOKER_TEST_WF_GEN=2 run)"
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "branch 2: native worker exited $code" "$out"
 echo "$out" | grep -q "already fired for generation 2; skip" \
   || fail "branch 2: expected 'already fired for generation 2; skip'" "$out"
 
@@ -112,12 +134,20 @@ echo "$out" | grep -q "already fired for generation 2; skip" \
 printf 'rebase-recreate-attempt\twf-100-1\t9\t%s\n' "$(date +%s)" >> "$LEDGER"
 printf 'rebase-recreate-attempt\twf-100-1\t9\t%s\n' "$(date +%s)" >> "$LEDGER"
 printf 'rebase-recreate-attempt\twf-100-1\t9\t%s\n' "$(date +%s)" >> "$LEDGER"
+set +e
 out="$(INVOKER_TEST_WF_GEN=9 run)"
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "branch 3: native worker exited $code" "$out"
 echo "$out" | grep -q "giving up" \
   || fail "branch 3: expected 'giving up' at the attempt cap" "$out"
 
 # Branch 4: a genuinely new conflict (generation 10) gets a fresh budget.
+set +e
 out="$(INVOKER_TEST_WF_GEN=10 run)"
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "branch 4: native worker exited $code" "$out"
 echo "$out" | grep -q "would rebase-recreate wf-100-1 (generation 10)" \
   || fail "branch 4: a new generation must get a fresh budget, not stay capped" "$out"
 

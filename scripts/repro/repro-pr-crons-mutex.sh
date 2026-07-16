@@ -25,6 +25,19 @@ trap cleanup EXIT
 
 fail() { echo "[repro] FAIL: $1"; [ -n "${2:-}" ] && echo "----- output -----" && echo "$2"; exit 1; }
 
+VITEST_READY=0
+ensure_execution_engine_vitest() {
+  [ "$VITEST_READY" -eq 1 ] && return 0
+  if pnpm --filter @invoker/execution-engine exec vitest --version >/dev/null 2>&1; then
+    VITEST_READY=1
+    return 0
+  fi
+  echo "[repro] installing workspace dependencies for @invoker/execution-engine vitest"
+  pnpm install --frozen-lockfile || return $?
+  pnpm --filter @invoker/execution-engine exec vitest --version >/dev/null 2>&1 || return $?
+  VITEST_READY=1
+}
+
 write_worker_proof_test() {
   cat > "$WORKER_PROOF_TEST" <<'TS'
 import { describe, it } from 'vitest';
@@ -57,6 +70,7 @@ run_native_worker() {
   local worker="$1" config="$2"
   local log="$TMP/native-worker.log"
   local vitest_out code
+  ensure_execution_engine_vitest
   write_worker_proof_test
   : > "$log"
   set +e
