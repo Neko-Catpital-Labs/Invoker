@@ -1,7 +1,7 @@
 /**
  * ContextMenu — Right-click context menu for task nodes in the DAG.
  *
- * Positioned absolutely at the click coordinates.
+ * Positioned fixed at the click coordinates.
  * Closes on click-outside or Escape.
  * Features:
  * - Status-adaptive ordering (failed → Fix first, running → Open Terminal first, etc.)
@@ -27,6 +27,8 @@ interface ContextMenuProps {
   onCancel?: (taskId: string) => void;
   onClose: () => void;
 }
+
+export const TASK_CONTEXT_MENU_Z_INDEX = 1100;
 
 export function ContextMenu({
   x,
@@ -216,8 +218,8 @@ export function ContextMenu({
     <div
       ref={menuRef}
       role="menu"
-      className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
-      style={{ left: position.left, top: position.top }}
+      className="fixed z-[1100] bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+      style={{ left: position.left, top: position.top, zIndex: TASK_CONTEXT_MENU_Z_INDEX }}
       onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
       tabIndex={-1}

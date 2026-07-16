@@ -16,6 +16,9 @@ vi.mock('@xyflow/react', async () => {
 });
 
 const { App } = await import('../App.js');
+const { TASK_CONTEXT_MENU_Z_INDEX } = await import('../components/ContextMenu.js');
+
+const FLOATING_GRAPH_PANEL_Z_INDEX = 1000;
 
 const alpha = makeUITask({
   id: 'task-alpha',
@@ -89,10 +92,12 @@ describe('Context menu (component)', () => {
   it('task context menu still works in mini DAG', async () => {
     await setup();
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
     await waitFor(() => {
       expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
     });
     fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    const menu = await screen.findByRole('menu');
     await waitFor(() => {
       expect(screen.getByText('Open Terminal')).toBeInTheDocument();
       expect(screen.getByText('Restart Task')).toBeInTheDocument();
@@ -100,6 +105,9 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+    const panelLayer = Number(panel.style.zIndex || FLOATING_GRAPH_PANEL_Z_INDEX);
+    expect(Number(menu.style.zIndex)).toBe(TASK_CONTEXT_MENU_Z_INDEX);
+    expect(Number(menu.style.zIndex)).toBeGreaterThan(panelLayer);
   });
 
   it('workflow context menu retries workflow', async () => {
