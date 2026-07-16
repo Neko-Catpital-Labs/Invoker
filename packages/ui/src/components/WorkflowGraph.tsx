@@ -712,13 +712,14 @@ function WorkflowGraphInner({
         const shouldRecover =
           watchdogMissCountRef.current >= WATCHDOG_RECOVERY_MISS_COUNT &&
           !watchdogRecoveryAttemptedRef.current;
-        performFitView();
         if (shouldRecover) {
           watchdogRecoveryAttemptedRef.current = true;
+          performFitView();
           setFlowInstanceKey((key) => key + 1);
         }
       } else {
         watchdogMissCountRef.current = 0;
+        watchdogRecoveryAttemptedRef.current = false;
       }
     }, 2000);
     return () => clearInterval(interval);

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -443,6 +443,82 @@ describe('WorkflowGraph', () => {
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     expect(fitViewMock).not.toHaveBeenCalled();
     expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('bounds watchdog recovery after a manual pan and workflow graph data change', async () => {
+    const watchdogCallbacks: Array<() => void> = [];
+    const realSetInterval = globalThis.setInterval;
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval').mockImplementation((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (timeout === 2000 && typeof handler === 'function') {
+        watchdogCallbacks.push(handler as () => void);
+        return 0 as unknown as ReturnType<typeof setInterval>;
+      }
+      return realSetInterval(handler, timeout, ...args);
+    });
+
+    try {
+      const onManualViewport = vi.fn();
+      const { rerender } = await renderAndSettleInitialFit({
+        workflows: new Map([['wf-a', wf('wf-a', 'running')]]),
+        selectedWorkflowId: null,
+        statusFilters: new Set(),
+        onSelectWorkflow: () => {},
+        onWorkflowContextMenu: () => {},
+        onManualViewport,
+      });
+      expect(watchdogCallbacks).toHaveLength(1);
+
+      const pane = screen.getByTestId('rf__pane');
+      fireEvent.pointerDown(pane, { button: 0, clientX: 10, clientY: 10 });
+      fireEvent.pointerUp(pane, { button: 0, clientX: 10, clientY: 10 });
+      expect(onManualViewport).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <WorkflowGraph
+          workflows={new Map([
+            ['wf-a', wf('wf-a', 'completed')],
+            ['wf-b', wf('wf-b', 'pending')],
+          ])}
+          selectedWorkflowId={null}
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+          onManualViewport={onManualViewport}
+        />,
+      );
+
+      expect(await screen.findByTestId('workflow-node-wf-b')).toBeInTheDocument();
+
+      const renderedNodes = screen
+        .getByTestId('workflow-graph-react-flow')
+        .querySelectorAll<HTMLElement>('.react-flow__node');
+      expect(renderedNodes.length).toBeGreaterThan(0);
+      renderedNodes.forEach((node) => {
+        node.style.visibility = 'hidden';
+      });
+
+      // No App-issued command is supplied, there is no selected workflow fallback
+      // target, and the command consumer has no command to consume. These manual
+      // calls isolate camera movement to the WorkflowGraph watchdog.
+      act(() => {
+        watchdogCallbacks[0]();
+        watchdogCallbacks[0]();
+      });
+      expect(fitViewMock).not.toHaveBeenCalled();
+      expect(setCenterMock).not.toHaveBeenCalled();
+
+      act(() => {
+        watchdogCallbacks[0]();
+      });
+      expect(fitViewMock).toHaveBeenCalledTimes(1);
+      expect(setCenterMock).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
   });
 
   it('defers graph object updates while a manual viewport pan is active', async () => {
