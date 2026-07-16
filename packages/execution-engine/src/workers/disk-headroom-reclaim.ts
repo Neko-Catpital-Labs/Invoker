@@ -173,12 +173,16 @@ reap_tmp() {
   fi
   rm -rf "$1" >/dev/null 2>&1
 }
+set -f
 for pat in ${tmpGlobList}; do
-  for entry in "$TMP_CLEAN"/$pat; do
+  find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -name "$pat" -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+    ! -path "$INVOKER_HOME" -print0 2>/dev/null | while IFS= read -r -d '' entry; do
     reap_tmp "$entry"
   done
 done
+set +f
 find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+  ! -path "$INVOKER_HOME" \\
   ! -name 'systemd-private-*' ! -name 'snap-*' ! -name '.*-unix' \\
   ! -name 'ssh-*' ! -name 'claude-*' ! -name '*.lock' \\
   -print0 2>/dev/null | while IFS= read -r -d '' entry; do
