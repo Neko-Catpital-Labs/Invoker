@@ -407,13 +407,25 @@ describe('auto-fix recovery candidate validation', () => {
 });
 
 describe('auto-fix recovery scan submission', () => {
-  it('submits a bare restart first, then escalates to fix-with-agent', async () => {
-    const harness = makeRecoveryPolicyHarness();
+  it('retries a failed task wakeup once before escalating to fix-with-agent', async () => {
+    const wakeup = {
+      eventKey: 'event-1',
+      eventKind: 'task.failed' as const,
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      taskStateVersion: 4,
+      generation: 1,
+      attemptId: 'attempt-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      reason: 'task_failure' as const,
+      authoritative: false as const,
+    };
+    const harness = makeRecoveryPolicyHarness(makeTask(), [], () => [wakeup]);
     const tick = createAutoFixRecoveryTick(harness.options);
 
     await tick({
       identity: { kind: 'recovery', instanceId: 'test' },
-      reason: 'startup',
+      reason: 'wake',
       tickNumber: 1,
     });
 
@@ -436,7 +448,7 @@ describe('auto-fix recovery scan submission', () => {
     harness.submit.mockClear();
     await tick({
       identity: { kind: 'recovery', instanceId: 'test' },
-      reason: 'startup',
+      reason: 'wake',
       tickNumber: 2,
     });
 
