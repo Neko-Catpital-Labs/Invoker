@@ -621,6 +621,7 @@ export interface WorkflowMutationFailedEvent {
   headlessCommand?: string;
   message: string;
   failedAt: string;
+  cause?: 'error' | 'preempted';
 }
 
 export interface CancelResult {
