@@ -35,6 +35,7 @@ import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { WorkerDetailsPanel } from './components/WorkerDetailsPanel.js';
+import { WorkerDetailControl } from './components/WorkerDetailControl.js';
 import { WorkerActivityCard } from './components/WorkerActivityCard.js';
 import { groupWorkflowCoreActivity } from './lib/workflow-core-activity.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
@@ -3667,15 +3668,23 @@ export function App() {
                 </span>
               </div>
             </div>
-            <button
-              type="button"
-              aria-label="Return home"
-              data-testid="workers-return-home"
-              onClick={handleDismissBrowserSurface}
-              className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
-            >
-              Home
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              <WorkerDetailControl
+                worker={selectedWorker}
+                readOnly={runtimeStatus?.readOnly === true}
+                onStartWorker={handleStartWorker}
+                onStopWorker={handleStopWorker}
+              />
+              <button
+                type="button"
+                aria-label="Return home"
+                data-testid="workers-return-home"
+                onClick={handleDismissBrowserSurface}
+                className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+              >
+                Home
+              </button>
+            </div>
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
