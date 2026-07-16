@@ -505,7 +505,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: 1-of-6
+          - name: 1-of-7
             files: >-
               e2e/visual-proof.spec.ts
               e2e/edit-task-command.spec.ts
@@ -513,8 +513,7 @@ jobs:
               e2e/launching-stall-watchdog.spec.ts
               e2e/embedded-terminal-pty.spec.ts
               e2e/keyboard-navigation.spec.ts
-              e2e/command-palette-open.spec.ts
-          - name: 2-of-6
+          - name: 2-of-7
             files: >-
               e2e/action-graph-visual-proof.spec.ts
               e2e/invalid-merge-workspace-visual.spec.ts
@@ -522,8 +521,7 @@ jobs:
               e2e/persistence-lifecycle.spec.ts
               e2e/task-death-logs.spec.ts
               e2e/restart-failed-task.spec.ts
-              e2e/task-new-attempt-reset.spec.ts
-          - name: 3-of-6
+          - name: 3-of-7
             files: >-
               e2e/ui-graph-drag-performance.spec.ts
               e2e/pending-review-gate-target-repo.proof.spec.ts
@@ -531,8 +529,7 @@ jobs:
               e2e/queue-running-vs-queued.spec.ts
               e2e/startup-window-liveness.spec.ts
               e2e/workflow-lifecycle.spec.ts
-              e2e/persistence-recovery.spec.ts
-          - name: 4-of-6
+          - name: 4-of-7
             files: >-
               e2e/edit-task-prompt.spec.ts
               e2e/fix-with-claude.spec.ts
@@ -540,8 +537,7 @@ jobs:
               e2e/autofix-worker-ui.spec.ts
               e2e/orphan-relaunch.spec.ts
               e2e/gap-recovery-bench.spec.ts
-              e2e/start-ready-production-click.spec.ts
-          - name: 5-of-6
+          - name: 5-of-7
             files: >-
               e2e/system-setup-visual-proof.spec.ts
               e2e/startup-nonempty-responsiveness.spec.ts
@@ -549,8 +545,7 @@ jobs:
               e2e/embedded-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-restart-persistence.spec.ts
               e2e/worker-tab-scroll.spec.ts
-              e2e/workers-surface.spec.ts
-          - name: 6-of-6
+          - name: 6-of-7
             files: >-
               e2e/workflow-delete-latency.spec.ts
               e2e/main-process-hitch-responsiveness.spec.ts
@@ -558,6 +553,13 @@ jobs:
               e2e/terminal-upsert-hitch-responsiveness.spec.ts
               e2e/attention-click-hitch-responsiveness.spec.ts
               e2e/focus-switch-hitch-responsiveness.spec.ts
+          - name: 7-of-7
+            files: >-
+              e2e/command-palette-open.spec.ts
+              e2e/task-new-attempt-reset.spec.ts
+              e2e/persistence-recovery.spec.ts
+              e2e/start-ready-production-click.spec.ts
+              e2e/workers-surface.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
