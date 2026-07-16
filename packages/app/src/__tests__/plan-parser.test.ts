@@ -539,6 +539,18 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('npx vitest run');
   });
+  it('rejects task commands using pnpm vitest run', () => {
+    const yaml = `
+name: Bad Command Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: test-it
+    description: "Run tests"
+    command: "cd packages/ui && pnpm vitest run src/__tests__/edge.test.tsx"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('pnpm vitest run');
+  });
 
   it('parses task with prompt instead of command', () => {
     const yaml = `

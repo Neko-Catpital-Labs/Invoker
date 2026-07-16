@@ -145,6 +145,10 @@ function assertNoLegacyRoutingKeys(ownerLabel: string, value: object): void {
     }
   }
 }
+function findDisallowedVitestCommand(command: string): string | undefined {
+  const match = command.match(/\bnpx vitest run\b|\bpnpm vitest(?:\s+run)?\b/);
+  return match?.[0];
+}
 
 export function parsePlan(yamlContent: string): PlanDefinition {
   let raw: RawPlan;
@@ -213,8 +217,13 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     if (hasOwn(task as object, 'autoFixRetries')) {
       throw new PlanParseError(`Task "${task.id}" uses "autoFixRetries", which is no longer supported in plan YAML. Configure "~/.invoker/config.json" with "autoFixRetries" instead.`);
     }
-    if (task.command && /\bnpx vitest run\b/.test(task.command)) {
-      throw new PlanParseError(`Task "${task.id}" uses 'npx vitest run' which may not resolve correctly. Use 'pnpm test' instead.`);
+    const disallowedVitestCommand = task.command
+      ? findDisallowedVitestCommand(task.command)
+      : undefined;
+    if (disallowedVitestCommand) {
+      throw new PlanParseError(
+        `Task "${task.id}" uses '${disallowedVitestCommand}' which may not resolve correctly. Use 'pnpm test' instead.`,
+      );
     }
 
     if (task.externalDependencies !== undefined) {
