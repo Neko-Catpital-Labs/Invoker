@@ -18,14 +18,22 @@ export interface SubmitWorkflowMutationOptions {
   deferDrain?: boolean;
 }
 
-const MISSING_WORKFLOW_IDEMPOTENT_COMMANDS = new Set([
+const MISSING_WORKFLOW_IDEMPOTENT_WORKFLOW_COMMANDS = new Set([
   'delete',
   'delete-workflow',
   'retry',
   'recreate',
+]);
+
+const MISSING_WORKFLOW_IDEMPOTENT_TASK_COMMANDS = new Set([
   'retry-task',
   'recreate-task',
 ]);
+
+function targetBelongsToWorkflow(target: unknown, workflowId: string): boolean {
+  if (typeof target !== 'string') return false;
+  return target === workflowId || target.startsWith(`${workflowId}/`);
+}
 
 function headlessExecCommand(args: unknown[]): string | undefined {
   const payload = args[0] as { args?: unknown[] } | undefined;
@@ -46,10 +54,16 @@ function isMissingWorkflowIdempotentMutation(channel: string, workflowId: string
   }
   const payload = args[0] as { args?: unknown[] } | undefined;
   const command = headlessExecCommand(args);
-  if (!command || !MISSING_WORKFLOW_IDEMPOTENT_COMMANDS.has(command)) {
+  if (!command || !Array.isArray(payload?.args)) {
     return false;
   }
-  return Array.isArray(payload?.args) && payload.args[1] === workflowId;
+  if (MISSING_WORKFLOW_IDEMPOTENT_WORKFLOW_COMMANDS.has(command)) {
+    return payload.args[1] === workflowId;
+  }
+  if (MISSING_WORKFLOW_IDEMPOTENT_TASK_COMMANDS.has(command)) {
+    return targetBelongsToWorkflow(payload.args[1], workflowId);
+  }
+  return false;
 }
 
 function isForeignKeyConstraintError(error: unknown): boolean {

@@ -151,6 +151,42 @@ describe('headless-client', () => {
     }));
   });
 
+  it('accepts a stale-owner FK failure for no-track recreate-task of an explicitly scoped missing workflow task', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => {
+      throw new Error('FOREIGN KEY constraint failed');
+    });
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-stale', mode: 'standalone' }));
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const exitCode = await runHeadlessClientCommand(['recreate-task', 'wf-missing/task-a', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ownerHandler).toHaveBeenCalledTimes(1);
+    expect(stdout).toHaveBeenCalledWith('Delegated to owner\n');
+    expect(stdout).toHaveBeenCalledWith('--no-track enabled: delegated submission accepted; exiting without tracking.\n');
+    stdout.mockRestore();
+  });
+
+  it('propagates stale-owner FK failures when recreate-task is tracked', async () => {
+    const bus = new LocalBus();
+    bus.onRequest('headless.exec', async () => {
+      throw new Error('FOREIGN KEY constraint failed');
+    });
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-stale', mode: 'standalone' }));
+
+    await expect(runHeadlessClientCommand(['recreate-task', 'wf-missing/task-a'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless: vi.fn(async () => 0),
+    })).rejects.toThrow('FOREIGN KEY constraint failed');
+  });
+
   it('delegates mutations to an existing GUI owner', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();
