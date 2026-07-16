@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -477,6 +477,78 @@ describe('WorkflowGraph', () => {
 
     fireEvent.pointerUp(pane);
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('completed'));
+  });
+
+  it('does not run watchdog fitView before bounded recovery after a post-pan graph data change', async () => {
+    vi.useFakeTimers();
+    const onManualViewport = vi.fn();
+
+    try {
+      const { rerender, unmount } = render(
+        <WorkflowGraph
+          workflows={new Map([['wf-a', wf('wf-a', 'running')]])}
+          selectedWorkflowId={null}
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+          onManualViewport={onManualViewport}
+        />,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+      });
+      expect(fitViewMock).toHaveBeenCalledTimes(1);
+      fitViewMock.mockClear();
+      setCenterMock.mockClear();
+
+      const pane = screen.getByTestId('rf__pane');
+      fireEvent.pointerDown(pane);
+      fireEvent.pointerUp(pane);
+      expect(onManualViewport).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <WorkflowGraph
+          workflows={new Map([
+            ['wf-a', wf('wf-a', 'running')],
+            ['wf-b', wf('wf-b', 'pending')],
+          ])}
+          selectedWorkflowId={null}
+          statusFilters={new Set()}
+          onSelectWorkflow={() => {}}
+          onWorkflowContextMenu={() => {}}
+          onManualViewport={onManualViewport}
+        />,
+      );
+
+      expect(screen.getByTestId('workflow-node-wf-b')).toBeInTheDocument();
+
+      const root = screen.getByTestId('workflow-graph-react-flow');
+      root.querySelectorAll<HTMLElement>('.react-flow__node').forEach((element) => {
+        element.style.visibility = 'hidden';
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+
+      // No App command is supplied, no node is selected, the command-consumption
+      // effect has no target, and this advances only the first two watchdog
+      // misses. A failure here isolates the source to the pre-recovery watchdog.
+      expect(fitViewMock).not.toHaveBeenCalled();
+      expect(setCenterMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(fitViewMock).toHaveBeenCalledTimes(1);
+      expect(setCenterMock).not.toHaveBeenCalled();
+
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('pans the workflow viewport from native pane mouse drags', async () => {
