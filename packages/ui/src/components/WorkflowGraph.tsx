@@ -98,7 +98,6 @@ function shouldStartPanePan(
   if (targetElement) {
     if (!root.contains(targetElement)) return false;
     if (targetElement.closest(PANE_PAN_BLOCK_SELECTOR)) return false;
-    if (targetElement.closest('.react-flow__node, [data-testid^="workflow-node-"]')) return false;
     if (targetElement.closest('.react-flow__pane')) return true;
   }
 
@@ -154,11 +153,13 @@ function schedulePanePanAnimation(pan: PanePan): void {
     const dy = pan.targetViewport.y - pan.visualViewport.y;
     const settled = Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5;
 
-    if (!pan.hasMoved && settled && pan.active) {
+    if (settled && pan.active) {
       pan.warmupFrame += 1;
+      const activePulse = ((pan.warmupFrame % 4) + 1) * 0.25;
       const warmupViewport = {
-        ...pan.visualViewport,
-        x: pan.visualViewport.x + Math.min(pan.warmupFrame, 20) * 0.05,
+        ...pan.targetViewport,
+        // Keep a compositor-visible transform changing while update IPC competes with mousemove delivery.
+        x: pan.targetViewport.x + (pan.hasMoved ? activePulse : Math.min(pan.warmupFrame, 20) * 0.05),
       };
       applyViewportTransform(pan.viewportElement, warmupViewport);
       pan.animationFrame = requestAnimationFrame(step);
@@ -487,6 +488,7 @@ function WorkflowGraphInner({
   }, [endViewportGesture]);
 
   const onPanePointerDownCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'mouse') return;
     if (event.button !== 0 || event.isPrimary === false) return;
     if (!shouldStartPanePan(event.currentTarget, event.target, event.clientX, event.clientY)) return;
 
@@ -509,7 +511,10 @@ function WorkflowGraphInner({
 
   const updatePanePanViewport = useCallback((pan: PanePan, clientX: number, clientY: number) => {
     pan.hasMoved = true;
+    pan.warmupFrame = 0;
     pan.targetViewport = getPanePanViewport(pan, clientX, clientY);
+    pan.visualViewport = { ...pan.targetViewport };
+    applyViewportTransform(pan.viewportElement, pan.visualViewport);
     schedulePanePanAnimation(pan);
   }, []);
 
