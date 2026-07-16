@@ -212,6 +212,27 @@ const WORKFLOW_STATUS_PROOF_STATUSES = [
   'stale',
 ] as const;
 
+const WORKFLOW_TASK_STATUS_PARITY_STATUSES = [
+  'review_ready',
+  'awaiting_approval',
+  'fixing_with_ai',
+  'running',
+  'failed',
+  'blocked',
+] as const;
+
+const WORKFLOW_TASK_STATUS_PARITY_PLAN = {
+  name: 'Workflow task status color parity',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: WORKFLOW_TASK_STATUS_PARITY_STATUSES.map((status) => ({
+    id: statusProofTaskId(status),
+    description: `Task ${statusProofLabel(status)}`,
+    command: `echo task ${status}`,
+    dependencies: [] as string[],
+  })),
+};
+
 const TASK_STATUS_PROOF_PLAN = {
   name: 'Task status all states proof',
   repoUrl: E2E_REPO_URL,
@@ -353,8 +374,27 @@ function statusProofWorkflowTaskId(status: string) {
   return `workflow-status-${status.replaceAll('_', '-')}`;
 }
 
+function statusProofTaskId(status: string) {
+  return `parity-task-${status.replaceAll('_', '-')}`;
+}
+
 function statusProofLabel(status: string) {
   return status.replaceAll('_', ' ');
+}
+
+function taskNodeStatusLabel(status: string) {
+  switch (status) {
+    case 'awaiting_approval':
+      return 'Approve';
+    case 'fixing_with_ai':
+      return 'Fixing with AI';
+    default:
+      return statusProofLabel(status);
+  }
+}
+
+function taskNodeStatusLabelPattern(status: string) {
+  return new RegExp(`^${taskNodeStatusLabel(status)}$`, 'i');
 }
 
 function taskStatusExecution(status: string, now: Date, earlier: Date) {
@@ -417,6 +457,25 @@ async function hideSelectedWorkflowMiniDagIfVisible(page: Page) {
       (element as HTMLElement).style.display = 'none';
     });
   }
+}
+
+async function layoutWorkflowTaskStatusParityProof(page: Page) {
+  await page.setViewportSize({ width: 1200, height: 771 });
+  await minimizeInspectorIfVisible(page);
+  const panel = page.getByTestId('selected-workflow-mini-dag');
+  await expect(panel).toBeVisible({ timeout: 10000 });
+  await panel.evaluate((element) => {
+    const panelElement = element as HTMLElement;
+    panelElement.style.left = '560px';
+    panelElement.style.right = 'auto';
+    panelElement.style.top = '42px';
+    panelElement.style.width = '600px';
+    panelElement.style.height = '660px';
+    panelElement.style.backgroundColor = '#111827';
+    const content = panelElement.children.item(1) as HTMLElement | null;
+    if (content) content.style.height = '628px';
+  });
+  await page.waitForTimeout(500);
 }
 
 async function viewportTransform(viewport: Locator): Promise<string> {
@@ -1826,59 +1885,86 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'interactive-status-hues');
   });
 
-  test('workflow-task-status-color-parity — workflow and task review_ready share canonical hue', async ({ page }) => {
-    // Load a small plan so the sidebar workflow node and the mini-DAG task nodes
-    // are visible side by side. The workflow status is derived from task counts;
-    // a single review_ready task with the rest completed drives the workflow to
-    // review_ready too (see computeWorkflowStatusFromCounts).
-    await loadPlan(page, TEST_PLAN);
+  test('workflow-task-status-color-parity — workflow and task statuses share canonical hues', async ({ page }) => {
+    const taskWorkflowId = await loadPlanAndSelectWorkflow(page, WORKFLOW_TASK_STATUS_PARITY_PLAN);
+    const workflowIds = new Map<string, string>();
+    const loadStatusWorkflow = async (
+      status: (typeof WORKFLOW_TASK_STATUS_PARITY_STATUSES)[number],
+      dependencies: readonly string[] = [],
+    ) => {
+      const workflowId = await loadPlanAndSelectWorkflow(page, {
+        name: `Parity ${statusProofLabel(status)}`,
+        repoUrl: E2E_REPO_URL,
+        onFinish: 'none' as const,
+        externalDependencies: dependencies.map((workflowId) => ({
+          workflowId,
+          gatePolicy: 'review_ready' as const,
+        })),
+        tasks: [
+          {
+            id: statusProofWorkflowTaskId(status),
+            description: `Workflow ${statusProofLabel(status)}`,
+            command: `echo workflow ${status}`,
+            dependencies: [] as string[],
+          },
+        ],
+      });
+      workflowIds.set(status, workflowId);
+      return workflowId;
+    };
+
+    const reviewReadyId = await loadStatusWorkflow('review_ready');
+    const awaitingApprovalId = await loadStatusWorkflow('awaiting_approval', [reviewReadyId]);
+    const fixingWithAiId = await loadStatusWorkflow('fixing_with_ai', [reviewReadyId]);
+    await loadStatusWorkflow('running', [awaitingApprovalId]);
+    await loadStatusWorkflow('failed', [fixingWithAiId]);
+    await loadStatusWorkflow('blocked', [awaitingApprovalId, fixingWithAiId]);
+
     const now = new Date();
     const earlier = new Date(Date.now() - 5000);
-    await injectTaskStates(page, [
-      {
-        taskId: 'task-alpha',
-        changes: {
-          status: 'review_ready',
-          execution: { startedAt: earlier },
-        },
-      },
-      {
-        taskId: 'task-beta',
-        changes: {
-          status: 'completed',
-          execution: { startedAt: earlier, completedAt: now },
-        },
-      },
-      {
-        taskId: 'task-gamma',
-        changes: {
-          status: 'completed',
-          execution: { startedAt: earlier, completedAt: now },
-        },
-      },
-    ]);
+    await injectTaskStates(
+      page,
+      [
+        ...WORKFLOW_TASK_STATUS_PARITY_STATUSES.map((status) => ({
+          taskId: statusProofTaskId(status),
+          changes: {
+            status,
+            execution: taskStatusExecution(status, now, earlier),
+          },
+        })),
+        ...WORKFLOW_TASK_STATUS_PARITY_STATUSES.map((status) => ({
+          taskId: statusProofWorkflowTaskId(status),
+          changes: {
+            status,
+            execution: taskStatusExecution(status, now, earlier),
+          },
+        })),
+        ...WORKFLOW_TASK_STATUS_PARITY_STATUSES.map((status) => ({
+          taskId: `__merge__${workflowIds.get(status)!}`,
+          changes: {
+            status,
+            execution: taskStatusExecution(status, now, earlier),
+          },
+        })),
+      ],
+    );
     await page.getByRole('button', { name: 'Refresh' }).click();
     await page.waitForTimeout(300);
 
-    const workflowId = await page.evaluate(async () => {
-      const workflows = await window.invoker.listWorkflows();
-      return workflows[0]?.id ?? null;
-    });
-    expect(workflowId).toBeTruthy();
+    await selectWorkflowNode(page, taskWorkflowId);
+    await layoutWorkflowTaskStatusParityProof(page);
 
-    // Re-select the workflow so the inspector reflects the derived workflow status.
-    await selectWorkflowNode(page, workflowId!);
-
-    // Workflow-level surface: sidebar workflow node displays the workflow-status hue.
-    await expect(workflowNode(page, workflowId!).getByText('review ready')).toBeVisible();
-
-    // Workflow-level surface: inspector header reflects the derived workflow status.
-    await expect(page.getByTestId('workflow-inspector-status-label')).toContainText('review ready');
-
-    // Task-level surface: mini-DAG task node displays the task-status hue.
-    await expect(
-      page.locator('.react-flow__node[data-testid$="task-alpha"]').getByText(/review ready/i),
-    ).toBeVisible();
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    for (const status of WORKFLOW_TASK_STATUS_PARITY_STATUSES) {
+      const workflowId = workflowIds.get(status);
+      expect(workflowId).toBeTruthy();
+      await expect(workflowNode(page, workflowId!).getByText(statusProofLabel(status), { exact: true })).toBeVisible();
+      await expect(
+        miniDag
+          .locator(`.react-flow__node[data-testid$="${statusProofTaskId(status)}"]`)
+          .getByText(taskNodeStatusLabelPattern(status)),
+      ).toBeVisible();
+    }
 
     await captureScreenshot(page, 'workflow-task-status-color-parity');
   });
