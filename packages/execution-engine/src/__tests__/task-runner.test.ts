@@ -5038,6 +5038,46 @@ console.log(JSON.stringify(out));
       expect(executeTasks).not.toHaveBeenCalled();
     });
 
+    it('closed PR transitions an awaiting_approval gate to closed on manual check', async () => {
+      const orchestrator = {
+        getTask: vi.fn((id: string) => ({
+          id,
+          status: 'awaiting_approval',
+          execution: { reviewId: 'owner/repo#44' },
+        })),
+        approve: vi.fn(),
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        checkApproval: vi.fn().mockResolvedValue({
+          lifecycle: 'closed',
+          rejected: false,
+          statusText: 'Closed',
+          url: 'https://github.com/owner/repo/pull/44',
+        }),
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+      const executeTasks = vi.spyOn(executor, 'executeTasks').mockResolvedValue(undefined);
+
+      await executor.checkPrApprovalNow('task-awaiting-closed');
+
+      expect(persistence.updateTask).toHaveBeenCalledWith('task-awaiting-closed', {
+        status: 'closed',
+        execution: { reviewStatus: 'Closed' },
+      });
+      expect(orchestrator.approve).not.toHaveBeenCalled();
+      expect(executeTasks).not.toHaveBeenCalled();
+    });
+
     it('merged PR completes the gate even when no poller is active (e.g. after process restart)', async () => {
       const downstream = makeTask({
         id: 'downstream-after-restart',

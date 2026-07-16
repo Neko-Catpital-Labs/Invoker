@@ -63,11 +63,17 @@ function mockSpawnChildErrorEvent(err: Error & { code?: string }) {
   return child;
 }
 
+async function resetSpawnMock() {
+  const { spawn } = await import('node:child_process');
+  vi.mocked(spawn).mockReset();
+}
+
 function makeExecutionAgent(buildFixCommand: ExecutionAgent['buildFixCommand']): ExecutionAgent {
   return {
     name: 'codex',
     stdinMode: 'ignore',
     linuxTerminalTail: 'exec_bash',
+    supportsModel: () => true,
     buildCommand: (fullPrompt: string) => ({ cmd: 'codex', args: ['exec', '--json', fullPrompt] }),
     buildResumeArgs: (sessionId: string) => ({ cmd: 'codex', args: ['resume', sessionId] }),
     buildFixCommand,
@@ -75,8 +81,8 @@ function makeExecutionAgent(buildFixCommand: ExecutionAgent['buildFixCommand']):
 }
 
 describe('fix prompt transport for oversized prompts', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    await resetSpawnMock();
   });
 
   it('local fix path replaces oversized prompt arg with file-backed bootstrap prompt', async () => {
@@ -164,6 +170,7 @@ describe('fix prompt transport for oversized prompts', () => {
       name: 'omp',
       stdinMode: 'ignore',
       linuxTerminalTail: 'exec_bash',
+      supportsModel: () => true,
       buildCommand: (fullPrompt: string) => ({ cmd: 'omp', args: ['-p', fullPrompt] }),
       buildResumeArgs: (sessionId: string) => ({ cmd: 'omp', args: ['resume', sessionId] }),
       buildFixCommand,
@@ -235,8 +242,8 @@ describe('fix prompt transport for oversized prompts', () => {
  * to recognize argv-size and OOM-kill failures.
  */
 describe('spawn errors during agent fix surface diagnostic info', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    await resetSpawnMock();
   });
 
   it('surfaces E2BIG when spawn emits an error event (argv too long)', async () => {
@@ -369,4 +376,3 @@ describe('spawn errors during agent fix surface diagnostic info', () => {
     expect(caught!.message).toContain('openai/codex#19945');
   });
 });
-

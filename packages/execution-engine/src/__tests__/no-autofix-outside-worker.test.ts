@@ -73,6 +73,25 @@ function sourcePathForModuleSpecifier(specifier: string): string {
   return relativeSpecifier.replace(/\.js$/, '.ts');
 }
 
+function importedLocalSourceFiles(source: string, importer: string): string[] {
+  const imports: string[] = [];
+  const importPattern = /import\s+(?:\{[^}]+?\}|\*\s+as\s+\w+|\w+)\s+from\s+'([^']+)'/g;
+  let match: RegExpExecArray | null;
+  const importerDir = dirname(importer);
+
+  while ((match = importPattern.exec(source)) !== null) {
+    const specifier = match[1];
+    if (!specifier.startsWith('./') && !specifier.startsWith('../')) continue;
+    const sourcePath = relative(SOURCE_ROOT, resolve(SOURCE_ROOT, importerDir, specifier))
+      .split(sep)
+      .join('/')
+      .replace(/\.js$/, '.ts');
+    imports.push(sourcePath);
+  }
+
+  return imports;
+}
+
 function extractExportedWorkerKinds(source: string): Set<string> {
   const workerKinds = new Set<string>();
   const workerKindPattern = /export\s+const\s+\w+_WORKER_KIND\s*=\s*'([^']+)'/g;
@@ -106,6 +125,13 @@ function registeredBuiltInWorkerSourceFiles(sourceFiles: SourceFiles): Set<strin
     const moduleWorkerKinds = extractExportedWorkerKinds(source ?? '');
     if ([...moduleWorkerKinds].some((kind) => registeredKinds.has(kind))) {
       allowedFiles.add(sourcePath);
+      for (const importedFile of importedLocalSourceFiles(source ?? '', sourcePath)) {
+        const importedSource = sourceFiles.get(importedFile);
+        if (importedSource && RECOVERY_ACTION_TRIGGER_PATTERN.test(importedSource)) {
+          allowedFiles.add(importedFile);
+        }
+        RECOVERY_ACTION_TRIGGER_PATTERN.lastIndex = 0;
+      }
     }
   }
 

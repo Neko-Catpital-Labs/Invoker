@@ -535,7 +535,7 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.statusText).toBe('Approved, awaiting merge');
     });
 
-    it('treats a closed non-merged PR as terminal with statusText "Closed"', async () => {
+    it('treats a closed unmerged PR as a closed lifecycle with statusText "Closed"', async () => {
       process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);

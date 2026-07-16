@@ -51,6 +51,10 @@ const expectedExecutionFields = [
   'launchStartedAt',
   'launchCompletedAt',
   'mergeConflict',
+  'crashPreservedAt',
+  'crashPreservedOwnerPid',
+  'crashPreservedReportPath',
+  'crashPreservedDiagnosticSummary',
   'selectedAttemptId',
 ].sort();
 
@@ -291,4 +295,3 @@ describe('task reset policy', () => {
       .not.toThrow();
   });
 });
-

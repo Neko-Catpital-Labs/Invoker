@@ -2291,6 +2291,11 @@ describe('Orchestrator', () => {
         name: 'workflow-gated-closed',
         tasks: [
           {
+            id: 'default-leaf',
+            description: 'default leaf waits for upstream merge completion',
+            externalDependencies: [{ workflowId: prereqWfId }],
+          },
+          {
             id: 'strict-leaf',
             description: 'strict leaf waits for upstream merge completion',
             externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
@@ -2302,6 +2307,7 @@ describe('Orchestrator', () => {
           },
         ],
       });
+      const defaultLeafId = sid(orchestrator, 1, 'default-leaf');
       const strictLeafId = sid(orchestrator, 1, 'strict-leaf');
       const reviewLeafId = sid(orchestrator, 1, 'review-leaf');
 
@@ -2311,8 +2317,10 @@ describe('Orchestrator', () => {
       orchestrator.syncAllFromDb();
 
       const startedAfterClosedGate = orchestrator.startExecution();
+      expect(startedAfterClosedGate.map((t) => t.id)).not.toContain(defaultLeafId);
       expect(startedAfterClosedGate.map((t) => t.id)).not.toContain(strictLeafId);
       expect(startedAfterClosedGate.map((t) => t.id)).not.toContain(reviewLeafId);
+      expect(orchestrator.getTask(defaultLeafId)!.status).toBe('pending');
       expect(orchestrator.getTask(strictLeafId)!.status).toBe('pending');
       expect(orchestrator.getTask(reviewLeafId)!.status).toBe('pending');
     });
