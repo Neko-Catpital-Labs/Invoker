@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summarizePlanText } from '../slack/plan-summary.js';
+import { summarizePlanText, formatPlanSummaryLines } from '../slack/plan-summary.js';
 
 describe('summarizePlanText', () => {
   it('returns name, one step per task, and taskCount for a valid 2-task plan', () => {
@@ -59,6 +59,63 @@ workflows:
     expect(summary!.workflowCount).toBe(2);
     expect(summary!.taskCount).toBe(4);
     expect(summary!.steps).toEqual(['Workers Surface Contracts', 'Workers Surface UI']);
+    expect(summary!.taskGroups).toEqual([
+      { workflow: 'Workers Surface Contracts', tasks: ['Define contracts', 'Verify contracts'] },
+      { workflow: 'Workers Surface UI', tasks: ['Build UI', 'Verify UI'] },
+    ]);
+  });
+
+  it('groups a flat plan under a single null-workflow group in execution order', () => {
+    const summary = summarizePlanText(`
+name: Flat plan
+tasks:
+  - id: b
+    description: Second task
+    dependencies: [a]
+  - id: a
+    description: First task
+`);
+    expect(summary!.taskGroups).toEqual([
+      { workflow: null, tasks: ['First task', 'Second task'] },
+    ]);
+  });
+});
+
+describe('formatPlanSummaryLines', () => {
+  it('lists every task under its workflow name for a stacked plan', () => {
+    const summary = summarizePlanText(`
+name: Dark mode
+workflows:
+  - name: Add theme tokens
+    tasks:
+      - id: t1
+        description: Add CSS variables
+      - id: t2
+        description: Test the tokens
+  - name: Wire the toggle
+    tasks:
+      - id: t3
+        description: Add the toggle control
+`)!;
+    expect(formatPlanSummaryLines(summary)).toEqual([
+      'Add theme tokens',
+      '   • Add CSS variables',
+      '   • Test the tokens',
+      'Wire the toggle',
+      '   • Add the toggle control',
+    ]);
+  });
+
+  it('lists one bullet per task with no workflow heading for a flat plan', () => {
+    const summary = summarizePlanText(`
+name: Flat plan
+tasks:
+  - id: a
+    description: First task
+  - id: b
+    description: Second task
+`)!;
+    expect(formatPlanSummaryLines(summary)).toEqual(['• First task', '• Second task']);
   });
 
   it('keeps long descriptions intact after normalizing whitespace', () => {
