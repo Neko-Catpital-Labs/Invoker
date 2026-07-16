@@ -9,6 +9,20 @@ import {
   formatSurfaceEvent,
 } from '../slack/slack-formatter.js';
 import type { SurfaceEvent } from '../surface.js';
+function extractMrkdwnTexts(message: { blocks: any[] }): string[] {
+  return message.blocks.flatMap((block: any) => {
+    const texts: string[] = [];
+    if (block.text?.type === 'mrkdwn') texts.push(block.text.text);
+    if (Array.isArray(block.elements)) {
+      for (const element of block.elements) {
+        if (typeof element.text === 'string') texts.push(element.text);
+        else if (element.text?.type === 'mrkdwn') texts.push(element.text.text);
+      }
+    }
+    return texts;
+  });
+}
+
 
 describe('formatTaskCreated', () => {
   it('returns message with pending status', () => {
@@ -165,6 +179,33 @@ describe('formatWorkflowProgress', () => {
     expect((footer as any).elements[0].text).toContain('approved');
     expect((footer as any).elements[0].text).toContain('<https://x/pr|PR>');
   });
+  it('caps every workflow progress block at Slack mrkdwn limits', () => {
+    const msg = formatWorkflowProgress({
+      workflowId: 'wf-long',
+      name: `Workflow ${'W'.repeat(3_500)}`,
+      percentComplete: 42,
+      counts: { total: 2, completed: 1, failed: 0, closed: 0, running: 1, pending: 0 },
+      tasks: [
+        {
+          id: `task-${'T'.repeat(2_500)}`,
+          name: `Task ${'N'.repeat(2_500)}`,
+          status: 'running',
+          phase: `phase-${'P'.repeat(1_500)}`,
+          reviewUrl: `https://example.com/${'r'.repeat(800)}`,
+        },
+      ],
+      prUrl: `https://example.com/pr/${'u'.repeat(2_800)}`,
+      reviewState: `review-${'R'.repeat(3_200)}`,
+    });
+
+    const texts = extractMrkdwnTexts(msg);
+    expect(texts).not.toHaveLength(0);
+    for (const text of texts) {
+      expect(text.length).toBeLessThanOrEqual(3_000);
+    }
+    expect(texts.some((text) => text.length === 3_000 && text.endsWith('…'))).toBe(true);
+  });
+
 });
 
 describe('formatExperimentSelection', () => {
@@ -199,6 +240,14 @@ describe('formatError', () => {
     expect(msg.text).toContain('Something went wrong');
     expect(msg.blocks[0].text!.text).toContain(':warning:');
   });
+  it('caps long error text with an ellipsis', () => {
+    const msg = formatError(`Boom ${'E'.repeat(3_500)}`);
+    expect(msg.text.length).toBeLessThanOrEqual(3_000);
+    expect(msg.text.endsWith('…')).toBe(true);
+    expect(msg.blocks[0].text!.text.length).toBeLessThanOrEqual(3_000);
+    expect(msg.blocks[0].text!.text.endsWith('…')).toBe(true);
+  });
+
 });
 
 describe('formatSurfaceEvent', () => {
