@@ -227,6 +227,57 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
   });
 
+  it('runs configured managed workspace provisioning before the task payload', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      provisionCommand: 'pnpm install --frozen-lockfile',
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'pnpm test',
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    const callScript = spawnStub.mock.calls[0]?.[3] as string;
+    expect(callScript).toContain('PROVISION_PATH="$STAGING_DIR/provision.sh"');
+    expect(callScript).toContain('cat > "$PROVISION_PATH" <<');
+    expect(callScript).toContain('pnpm install --frozen-lockfile');
+    expect(callScript).toContain('chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH" "$PROVISION_PATH"');
+
+    const provisionIndex = callScript.indexOf('echo "[SshExecutor] Provisioning remote worktree..."');
+    const runPayloadIndex = callScript.indexOf('echo "[SshExecutor] Running task payload..."');
+    expect(provisionIndex).toBeGreaterThan(-1);
+    expect(runPayloadIndex).toBeGreaterThan(provisionIndex);
+    expect(callScript.indexOf('"$RUNNER_PATH" "$PROVISION_PATH"', provisionIndex))
+      .toBeLessThan(runPayloadIndex);
+    expect(callScript).toContain('stop_bootstrap_heartbeat\n"$RUNNER_PATH" "$PAYLOAD_PATH"');
+  });
+
   it('reuses a managed SSH worktree by actionId when the old base is still compatible', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',

@@ -3035,6 +3035,36 @@ describe('TaskRunner', () => {
       expect(executor1.executor).not.toBe(executor2.executor);
     });
 
+    it('passes managed SSH workspace hydration config into the cached executor', () => {
+      const remoteTargets = {
+        'remote-a': {
+          host: 'dev.example.com',
+          user: 'deployer',
+          sshKeyPath: '/home/user/.ssh/id_rsa',
+          managedWorkspaces: true,
+          remoteInvokerHome: '/srv/invoker',
+          provisionCommand: 'pnpm install --frozen-lockfile',
+        },
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => remoteTargets,
+      });
+
+      const selected = executor.selectExecutor(makeTask({
+        id: 'task-hydrate',
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-a' },
+      }));
+
+      expect(selected.executor).toBeInstanceOf(SshExecutor);
+      expect((selected.executor as any).remoteInvokerHome).toBe('/srv/invoker');
+      expect((selected.executor as any).provisionCommand).toBe('pnpm install --frozen-lockfile');
+    });
+
     it('throws when SSH task has no poolMemberId', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
