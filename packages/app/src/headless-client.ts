@@ -28,6 +28,11 @@ import {
 } from './owner-endpoint.js';
 import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
 import { resolveWorkerControlMutation } from './worker-control-delegation.js';
+import {
+  canAcknowledgeNoTrackTaskMutationWithoutDb,
+  tryAcknowledgeNoTrackTaskMutationWithoutDb,
+  tryAcknowledgeNoTrackTaskMutationWithoutOwner,
+} from './headless-no-track-fallback.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -567,9 +572,20 @@ export async function runHeadlessClientCommand(
     return deps.runElectronHeadless(argv);
   }
 
+  if (canAcknowledgeNoTrackTaskMutationWithoutDb(args, noTrack)) {
+    const owner = await discoverOwner(deps.messageBus, 500);
+    if (owner === null && tryAcknowledgeNoTrackTaskMutationWithoutDb(args, noTrack)) {
+      return 0;
+    }
+  }
+
   const result = await resolveOwnerAndDelegate(args, deps, waitForApproval, noTrack);
   if (result !== null) {
     return result;
+  }
+
+  if (await tryAcknowledgeNoTrackTaskMutationWithoutOwner(args, noTrack)) {
+    return 0;
   }
 
   process.stderr.write(
