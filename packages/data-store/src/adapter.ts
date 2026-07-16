@@ -73,6 +73,13 @@ export interface Workflow {
 }
 export type WorkflowSaveInput = Omit<Workflow, 'status' | 'rollup'>;
 
+export interface CostAttributionAttempt {
+  id: string;
+  nodeId: string;
+  agentSessionId?: string;
+  createdAt: Date;
+}
+
 /**
  * Result of resolving a published PR back to its Invoker workflow via the merge
  * node. The PR↔workflow link lives only on the `__merge__<workflowId>` task
@@ -330,6 +337,7 @@ export interface PersistenceAdapter {
   // Attempts
   saveAttempt(attempt: Attempt): void;
   loadAttempts(nodeId: string): Attempt[];
+  loadCostAttributionAttempts(nodeId: string): CostAttributionAttempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
 

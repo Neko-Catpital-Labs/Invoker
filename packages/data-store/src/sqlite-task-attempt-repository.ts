@@ -19,6 +19,13 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
+interface CostAttributionAttemptRow {
+  id: string;
+  nodeId: string;
+  agentSessionId?: string;
+  createdAt: Date;
+}
+
 /**
  * Adapter-side task/attempt mutators that {@link SqliteTaskAttemptRepository.failTaskAndAttempt}
  * dispatches through inside its shared transaction. The adapter supplies its own
@@ -553,6 +560,22 @@ export class SqliteTaskAttemptRepository {
       [nodeId],
     );
     return rows.map((row) => mapRowToAttempt(row));
+  }
+
+  loadCostAttributionAttempts(nodeId: string): CostAttributionAttemptRow[] {
+    const rows = this.exec.queryAll(
+      `SELECT id, node_id, agent_session_id, created_at
+      FROM attempts
+      WHERE node_id = ?
+      ORDER BY created_at ASC`,
+      [nodeId],
+    );
+    return rows.map((row) => ({
+      id: String(row.id),
+      nodeId: String(row.node_id),
+      agentSessionId: row.agent_session_id ? String(row.agent_session_id) : undefined,
+      createdAt: new Date(String(row.created_at)),
+    }));
   }
 
   loadActionGraphAttempts(

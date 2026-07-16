@@ -35,6 +35,7 @@ import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
   PersistenceAdapter,
+  CostAttributionAttempt,
   ReviewGateLookup,
   Workflow,
   WorkflowSaveInput,
@@ -2179,6 +2180,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   loadAttempts(nodeId: string): Attempt[] {
     return this.taskAttemptRepo.loadAttempts(nodeId);
+  }
+
+  loadCostAttributionAttempts(nodeId: string): CostAttributionAttempt[] {
+    return this.taskAttemptRepo.loadCostAttributionAttempts(nodeId);
   }
 
   loadActionGraphAttempts(
