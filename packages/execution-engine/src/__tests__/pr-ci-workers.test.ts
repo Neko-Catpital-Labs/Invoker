@@ -280,7 +280,7 @@ describe('PR status and CI failure workers', () => {
     expect(publishMergeConflict).not.toHaveBeenCalled();
   });
 
-  it.fails('publishes only the merge-conflict repair event for actionable review conflicts', async () => {
+  it('publishes only the merge-conflict repair event for actionable review conflicts', async () => {
     const task = makeTask();
     const { host, publishCi, publishMergeConflict } = makeMergeConflictPublisherHarness({
       lifecycle: 'open',
