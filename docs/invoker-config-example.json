@@ -97,6 +97,18 @@
   "autoApproveAIFixes": true,
   "autoFixCi": false,
 
+  "prMaintenance": {
+    "comment": "Built-in owner-host PR maintenance workers. Enable on the host that owns the Invoker database; start/stop from Workers or run one scan with ./run.sh --headless worker <kind>.",
+    "enabled": true,
+    "repoRoot": "/srv/invoker",
+    "intervalMs": 300000,
+    "lockPath": "/tmp/invoker-pr-maintenance.lock",
+    "env": {
+      "INVOKER_GITHUB_TARGET_REPO": "acme/web",
+      "INVOKER_CODERABBIT_LOGIN": "coderabbitai[bot]"
+    }
+  },
+
   "webToken": "change-me-to-a-long-random-secret",
   "webHost": "127.0.0.1",
   "webPort": 4200,

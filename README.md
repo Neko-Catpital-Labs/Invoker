@@ -98,11 +98,11 @@ Spread work across SSH targets and remote machines you already manage — same a
 
 ## Workers
 
-Invoker recovery is driven by a worker registry, not a single hard-coded auto-fix loop. Built-in worker definitions are registered by stable kind; `autofix` remains the built-in default worker for failed-task recovery and submits normal `fix-with-agent` intents after reconciling persisted state.
+Invoker background work is owned by the built-in worker registry. `autofix` is the default failed-task recovery worker; it reconciles persisted state and submits normal `fix-with-agent` intents instead of running recovery from task-state producers.
 
-Manual headless worker runs use the registered kind (`./run.sh --headless worker autofix`) and take a single-instance lock named for that kind, so a second `autofix` scan is refused without blocking other worker kinds. The same registry powers desktop worker status and start/stop controls.
+Run workers on the Invoker owner host. Operators can start and stop them from the desktop Workers tab, inspect them with `./run.sh --headless worker status --output text|json|jsonl`, or trigger one explicit scan with `./run.sh --headless worker <kind>`. Each kind takes its own single-instance lock, so a second scan of the same worker is refused without blocking other worker kinds.
 
-External worker support is configured with `externalWorkers`, where each entry declares a registry `kind` and a `launch` command (`executable`, optional `args`, optional `cwd`). The loader registers each external worker kind and supervises its process boundary: start/wake launches the process, stop terminates it, and producers still only publish lifecycle wakeups rather than launching scripts directly.
+PR maintenance uses the same owner-host worker path. Enable the built-in `coderabbit-address`, `pr-conflict-rebase`, and `pr-ci-failure-scan` workers with the `prMaintenance` config block; do not install separate cron jobs or external worker launchers for the supported setup.
 
 ## Install
 
