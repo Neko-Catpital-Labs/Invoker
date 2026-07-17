@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
@@ -5,6 +9,7 @@ import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClient
 
 describe('headless-client', () => {
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+  const savedDbDir = process.env.INVOKER_DB_DIR;
   beforeEach(() => {
     delete process.env.INVOKER_HEADLESS_STANDALONE;
   });
@@ -13,6 +18,11 @@ describe('headless-client', () => {
       delete process.env.INVOKER_HEADLESS_STANDALONE;
     } else {
       process.env.INVOKER_HEADLESS_STANDALONE = savedStandalone;
+    }
+    if (savedDbDir === undefined) {
+      delete process.env.INVOKER_DB_DIR;
+    } else {
+      process.env.INVOKER_DB_DIR = savedDbDir;
     }
   });
 
@@ -149,6 +159,70 @@ describe('headless-client', () => {
       noTrack: true,
       waitForApproval: false,
     }));
+  });
+
+  it('accepts a stale-owner FK failure for no-track recreate-task of an explicitly scoped task', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => {
+      throw new Error('FOREIGN KEY constraint failed');
+    });
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-stale', mode: 'standalone' }));
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const exitCode = await runHeadlessClientCommand(['recreate-task', 'wf-missing/task-a', '--no-track'], {
+        messageBus: bus,
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        runElectronHeadless: vi.fn(async () => 0),
+      });
+
+      expect(exitCode).toBe(0);
+      expect(ownerHandler).toHaveBeenCalledTimes(1);
+      expect(stdout).toHaveBeenCalledWith('Delegated to owner\n');
+      expect(stdout).toHaveBeenCalledWith('--no-track enabled: delegated submission accepted; exiting without tracking.\n');
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('accepts a stale-owner pool-capacity failure for no-track recreate-task of an explicitly scoped task', async () => {
+    const bus = new LocalBus();
+    const ownerHandler = vi.fn(async () => {
+      throw new Error('Execution pool "mixed-local-ssh" has no member capacity available for codex');
+    });
+    bus.onRequest('headless.exec', ownerHandler);
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-stale', mode: 'standalone' }));
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const exitCode = await runHeadlessClientCommand(['recreate-task', 'wf-missing/task-a', '--no-track'], {
+        messageBus: bus,
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        runElectronHeadless: vi.fn(async () => 0),
+      });
+
+      expect(exitCode).toBe(0);
+      expect(ownerHandler).toHaveBeenCalledTimes(1);
+      expect(stdout).toHaveBeenCalledWith('Delegated to owner\n');
+      expect(stdout).toHaveBeenCalledWith('--no-track enabled: delegated submission accepted; exiting without tracking.\n');
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('propagates stale-owner FK failures when recreate-task is tracked', async () => {
+    const bus = new LocalBus();
+    bus.onRequest('headless.exec', async () => {
+      throw new Error('FOREIGN KEY constraint failed');
+    });
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-stale', mode: 'standalone' }));
+
+    await expect(runHeadlessClientCommand(['recreate-task', 'wf-missing/task-a'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless: vi.fn(async () => 0),
+    })).rejects.toThrow('FOREIGN KEY constraint failed');
   });
 
   it('delegates mutations to an existing GUI owner', async () => {
@@ -326,6 +400,34 @@ describe('headless-client', () => {
     expect(exitCode).toBe(0);
     expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
   }, 15_000);
+
+  it('acknowledges explicit no-track task retry without bootstrapping when no database exists', async () => {
+    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-headless-client-no-db-'));
+    process.env.INVOKER_DB_DIR = dbDir;
+
+    const bus = new LocalBus();
+    const ensureStandaloneOwner = vi.fn(async () => {
+      throw new SharedMutationOwnerTimeoutError();
+    });
+    const runElectronHeadless = vi.fn(async () => 0);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    try {
+      const exitCode = await runHeadlessClientCommand(['retry-task', 'wf-missing/task-a', '--no-track'], {
+        messageBus: bus,
+        ensureStandaloneOwner,
+        runElectronHeadless,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+      expect(runElectronHeadless).not.toHaveBeenCalled();
+      expect(stdout).toHaveBeenCalledWith(expect.stringContaining('No-track mutation already satisfied'));
+    } finally {
+      stdout.mockRestore();
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  });
 
   it('retries bootstrap once after a stale-bus timeout', async () => {
     const firstBus = new LocalBus();
