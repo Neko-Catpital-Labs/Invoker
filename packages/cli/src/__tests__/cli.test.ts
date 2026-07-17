@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -60,6 +61,15 @@ function captureProcessOutput() {
       stderrSpy.mockRestore();
     },
   };
+}
+function makeSpawnProcessStub() {
+  return vi.fn(() => {
+    const child = new EventEmitter() as ReturnType<typeof spawn>;
+    process.nextTick(() => {
+      child.emit('exit', 0, null);
+    });
+    return child;
+  });
 }
 
 describe('invoker-cli', () => {
@@ -135,6 +145,33 @@ describe('invoker-cli', () => {
 
     expect(code).toBe(0);
     expect(runMcpServer).toHaveBeenCalledTimes(1);
+  });
+  it('--help lists the headless owner command', async () => {
+    const result = await runCli(['--help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('invoker-cli owner serve');
+    expect(result.stdout).toContain('Start a headless Invoker owner process.');
+  });
+
+  it('owner serve launches the resolved headless owner command', async () => {
+    const spawnProcess = makeSpawnProcessStub();
+
+    const code = await main(['owner', 'serve'], {
+      resolveOwnerLaunchSpec: () => ({
+        command: '/usr/local/bin/invoker-ui',
+        args: ['--headless', 'owner-serve'],
+      }),
+      spawnProcess,
+    });
+
+    expect(code).toBe(0);
+    expect(spawnProcess).toHaveBeenCalledWith(
+      '/usr/local/bin/invoker-ui',
+      ['--headless', 'owner-serve'],
+      expect.objectContaining({
+        stdio: 'inherit',
+      }),
+    );
   });
 
   it('runs the hello-world fixture with an isolated db dir', async () => {
