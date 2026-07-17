@@ -253,12 +253,32 @@ export interface SystemDiagnostics {
   bundledSkills?: BundledSkillsStatus;
 }
 
+export interface InAppPlanningDeleteRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningDeleteResponse =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export type InAppPlanningDeleteSubmittedResponse =
+  | { ok: true; deletedSessionIds: string[] }
+  | { ok: false; error: string };
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
 
 export const IpcChannels = {
   // Plan & Workflow Management
+  'invoker:planning-chat-delete': {} as {
+    request: [request: InAppPlanningDeleteRequest];
+    response: InAppPlanningDeleteResponse;
+  },
+  'invoker:planning-chat-delete-submitted': {} as {
+    request: [];
+    response: InAppPlanningDeleteSubmittedResponse;
+  },
   'invoker:load-plan': {} as {
     request: [planText: string];
     response: void;
