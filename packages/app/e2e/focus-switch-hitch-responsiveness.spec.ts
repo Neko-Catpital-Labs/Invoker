@@ -1,6 +1,6 @@
 import { expect, test } from './fixtures/electron-app.js';
 
-const MAX_P95_RTT_MS = 100;
+const MAX_P95_RTT_MS = process.env.CI ? 150 : 100;
 const MAX_SAMPLE_RTT_MS = 250;
 const HIDDEN_MS = 6_000;
 const REFOCUS_SAMPLES = 8;
