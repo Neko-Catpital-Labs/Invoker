@@ -115,6 +115,7 @@ import {
 import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   assertExecutionCapacityInvariant,
+  resolveClampedMaxConcurrency,
   resolveEffectiveMaxConcurrency,
   shouldFatalOnExecutionCapacityOvercommit,
 } from './execution-capacity.js';
@@ -586,7 +587,15 @@ function getSafeInvokerConfigForLogging(config: InvokerConfig): Record<string, u
   return safeConfig;
 }
 
-const effectiveMaxConcurrency = resolveEffectiveMaxConcurrency(invokerConfig.maxConcurrency);
+const effectiveMaxConcurrency = resolveClampedMaxConcurrency(invokerConfig);
+if (
+  resolveEffectiveMaxConcurrency(invokerConfig.maxConcurrency) > effectiveMaxConcurrency
+) {
+  console.warn(
+    `[invoker] maxConcurrency=${resolveEffectiveMaxConcurrency(invokerConfig.maxConcurrency)} ` +
+      `exceeds pool capacity; clamping scheduler to ${effectiveMaxConcurrency}`,
+  );
+}
 
 async function maybeDelayWorkflowResumeForTest(): Promise<void> {
   if (process.env.NODE_ENV !== 'test') return;
@@ -2471,6 +2480,13 @@ function createEmbeddedTerminalBackendFromConfig(
         ownerId: workflowMutationOwnerId,
         logger,
       });
+      const sweptLeases = persistence.releaseExpiredExecutionResourceLeases?.() ?? 0;
+      if (sweptLeases > 0) {
+        logger.info('[init] swept expired execution resource leases on boot', {
+          released: sweptLeases,
+          module: 'init',
+        });
+      }
     } else {
       logger.info('Launched in follower mode; mutation execution is delegated to the current owner', {
         module: 'init',
