@@ -49,9 +49,7 @@ describe('Home workflow click mini-DAG dismiss race', () => {
     mock.cleanup();
   });
 
-  // Bug expectation: same-turn retargeted surface click clears the mini-DAG today.
-  // Flip to `it(...)` in the fix slice once dismiss suppression lands.
-  it.fails('keeps the mini-DAG when select is followed by a retargeted surface click in the same turn', async () => {
+  it('keeps the mini-DAG when select is followed by a retargeted surface click in the same turn', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
 

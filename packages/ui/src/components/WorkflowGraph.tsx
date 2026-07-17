@@ -539,7 +539,6 @@ function WorkflowGraphInner({
 
     if (shouldDeferPanePanFromNode(event.currentTarget, event.target, event.clientX, event.clientY)) {
       pendingPanePointerPanRef.current = pan;
-      event.currentTarget.setPointerCapture?.(event.pointerId);
       return;
     }
 
@@ -596,19 +595,19 @@ function WorkflowGraphInner({
       pan = pendingPan;
       viewportGestureActiveRef.current = true;
       onManualViewport?.();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
     }
     if (!pan || pan.pointerId !== event.pointerId) return;
 
     updatePanePanViewport(pan, event.clientX, event.clientY);
     event.preventDefault();
     event.stopPropagation();
-  }, [updatePanePanViewport]);
+  }, [onManualViewport, updatePanePanViewport]);
 
   const onPanePointerEndCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const pendingPan = pendingPanePointerPanRef.current;
     if (pendingPan?.pointerId === event.pointerId) {
       pendingPanePointerPanRef.current = null;
-      event.currentTarget.releasePointerCapture?.(event.pointerId);
       return;
     }
 
@@ -744,7 +743,8 @@ function WorkflowGraphInner({
     };
   }, [endViewportGesture, finishPanePan, getViewport, onManualViewport, updatePanePanViewport]);
 
-  const onNodeClick = useCallback((_event: ReactMouseEvent, node: Node) => {
+  const onNodeClick = useCallback((event: ReactMouseEvent, node: Node) => {
+    event.stopPropagation();
     onSelectWorkflow(node.id);
   }, [onSelectWorkflow]);
 
