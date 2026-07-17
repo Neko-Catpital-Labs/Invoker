@@ -94,6 +94,7 @@ function normalizeJsonValue(value: unknown, seen = new WeakSet<object>()): JsonS
 
 const STATUS_COLORS: Record<TaskStatus, string> = {
   pending: DIM,
+  queued: CYAN,
   running: YELLOW,
   fixing_with_ai: MAGENTA,
   completed: GREEN,
@@ -108,6 +109,7 @@ const STATUS_COLORS: Record<TaskStatus, string> = {
 
 const STATUS_ICONS: Record<TaskStatus, string> = {
   pending: '○',
+  queued: '◔',
   running: '●',
   fixing_with_ai: '🔧',
   completed: '✓',
@@ -135,7 +137,7 @@ export function formatTaskStatus(task: TaskState): string {
   const color = isFixing ? MAGENTA : isFixApproval ? YELLOW : (STATUS_COLORS[task.status] ?? RESET);
   const icon = isFixing ? '🔧' : isFixApproval ? '🔧' : (STATUS_ICONS[task.status] ?? '?');
   const label = isFixing ? 'fixing_with_ai' : isFixApproval ? 'fix_approval' : task.status;
-  const phaseSuffix = task.status === 'running' && task.execution.phase
+  const phaseSuffix = (task.status === 'running' || task.status === 'queued') && task.execution.phase
     ? ` (phase=${task.execution.phase})`
     : '';
   const conflictSuffix = task.execution.mergeConflict

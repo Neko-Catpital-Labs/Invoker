@@ -69,6 +69,8 @@ function taskStatusToActionStatus(status: TaskState['status']): ActionGraphNodeS
     case 'running':
     case 'pending':
       return status;
+    case 'queued':
+      return 'pending';
     case 'blocked':
     case 'needs_input':
     case 'awaiting_approval':
