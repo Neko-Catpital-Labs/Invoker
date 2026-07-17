@@ -100,4 +100,45 @@ describe('TaskDAG status filters', () => {
     });
     expect(edge.getAttribute('data-label')).not.toContain('wf-alpha');
   });
+
+  it('keeps the external cue while omitting workflow prefixes from external edge labels', async () => {
+    const upstreamTask = makeUITask({
+      id: 'wf-up/setup-task',
+      workflowId: 'wf-up',
+      status: 'completed',
+      description: 'Setup task',
+    });
+    const downstreamTask = makeUITask({
+      id: 'wf-down/render-task',
+      workflowId: 'wf-down',
+      status: 'pending',
+      description: 'Render task',
+      config: {
+        workflowId: 'wf-down',
+        externalDependencies: [
+          { workflowId: 'wf-up', taskId: 'setup-task', requiredStatus: 'completed' },
+        ],
+      },
+    });
+    const tasks = new Map<string, TaskState>([
+      [upstreamTask.id, upstreamTask],
+      [downstreamTask.id, downstreamTask],
+    ]);
+    const workflows = new Map<string, WorkflowMeta>([
+      ['wf-up', { id: 'wf-up', name: 'Upstream workflow', status: 'completed' }],
+      ['wf-down', { id: 'wf-down', name: 'Downstream workflow', status: 'running' }],
+    ]);
+
+    render(<TaskDAG tasks={tasks} workflows={workflows} />);
+
+    const edge = await screen.findByTestId(`rf__edge-external:${upstreamTask.id}->${downstreamTask.id}`);
+
+    await waitFor(() => {
+      expect(edge).toHaveAttribute('data-label', 'external setup-task → render-task');
+    });
+    expect(edge.getAttribute('data-label')).not.toContain('wf-up');
+    expect(edge.getAttribute('data-label')).not.toContain('wf-down');
+    expect(edge).toHaveAttribute('data-source', upstreamTask.id);
+    expect(edge).toHaveAttribute('data-target', downstreamTask.id);
+  });
 });

@@ -28,6 +28,7 @@ import { getEdgeStyle, getEffectiveVisualStatus, matchesStatusFilter } from '../
 import { TaskNode } from './TaskNode.js';
 import { BundledEdge, type BundledEdgeData } from './BundledEdge.js';
 import { MergeGateNode } from './MergeGateNode.js';
+import { displayWorkerTaskId } from '../lib/worker-display.js';
 import {
   isMergeGateId,
   groupTasksByWorkflow,
@@ -75,18 +76,10 @@ function truncateEdgeEndpoint(label: string): string {
   return label.length > 12 ? label.slice(0, 12) + '..' : label;
 }
 
-function unscopedTaskId(task: TaskState): string {
-  const workflowId = task.config.workflowId;
-  if (workflowId && task.id.startsWith(`${workflowId}/`)) {
-    return task.id.slice(workflowId.length + 1);
-  }
-  return task.id;
-}
-
 /** Short label for edge hover tooltip showing the dependency relationship. */
 function buildEdgeEndpointLabel(taskId: string, task?: TaskState): string {
   if (task?.config.isMergeNode || isMergeGateId(taskId)) return 'Merge';
-  return truncateEdgeEndpoint(task ? unscopedTaskId(task) : taskId);
+  return truncateEdgeEndpoint(displayWorkerTaskId(task?.id ?? taskId));
 }
 
 function buildEdgeLabel(
