@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { SQLiteAdapter } from '@invoker/data-store';
 
 export interface MainProcessDatabaseOptions {
@@ -9,6 +10,12 @@ export interface MainProcessDatabaseOptions {
 
 export async function openMainProcessDatabase(options: MainProcessDatabaseOptions): Promise<SQLiteAdapter> {
   if (options.detachedViewer) {
+    return openDetachedViewerDatabase();
+  }
+
+  // Read-only headless snapshots should report an empty store before the first
+  // owner creates invoker.db; opening SQLite read-only cannot create that file.
+  if (options.readOnly && !existsSync(options.dbPath)) {
     return openDetachedViewerDatabase();
   }
 

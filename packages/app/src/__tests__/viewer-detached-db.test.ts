@@ -30,6 +30,25 @@ const wf: Workflow = {
 };
 
 describe('detached viewer persistence boundary', () => {
+  it('uses empty in-memory persistence for read-only startup when the db file is absent', async () => {
+    const dir = makeDir();
+    const missingDbPath = join(dir, 'invoker.db');
+    const adapter = await openMainProcessDatabase({
+      dbPath: missingDbPath,
+      detachedViewer: false,
+      readOnly: true,
+      exclusiveLocking: false,
+    });
+
+    try {
+      expect(adapter.listWorkflows()).toEqual([]);
+      expect(existsSync(missingDbPath)).toBe(false);
+      expect(readdirSync(dir)).toEqual([]);
+    } finally {
+      adapter.close();
+    }
+  });
+
   it('ignores the real db path and opens no database file (no -shm to truncate)', async () => {
     const dir = makeDir();
     const probeDbPath = join(dir, 'invoker.db');
