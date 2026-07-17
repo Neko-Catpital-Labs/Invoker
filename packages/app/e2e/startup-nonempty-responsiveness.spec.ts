@@ -11,6 +11,7 @@ import { E2E_REPO_URL } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 import {
   activityLogWatermark,
+  maxPayloadNumber,
   numberOrZero,
   parseActivityPayload,
   uiPerfPayloadsSince,
@@ -186,8 +187,11 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
 
       const startupEntries = result.activityLogs
         .filter((entry) => entry.source === 'startup-phase' || entry.source === 'ui-perf')
-        .map((entry) => ({ source: entry.source, payload: parseActivityPayload(entry.message) }))
-        .filter((entry) => entry.payload !== null);
+        .flatMap((entry) => {
+          const payload = parseActivityPayload(entry.message);
+          return payload ? [{ source: entry.source, payload }] : [];
+        });
+      const startupPerfPayloads = startupEntries.map((entry) => entry.payload);
 
       const windowShow = [...startupEntries]
         .reverse()
@@ -226,6 +230,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
         taskCount: result.taskCount,
         perf: result.perf,
         startupEntries,
+        startupPerfPayloads,
         budgets: STARTUP_NONEMPTY_BUDGETS,
       };
       console.log(`STARTUP_NONEMPTY_BENCH_RESULT=${JSON.stringify(startupEvidence)}`);
@@ -241,6 +246,8 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       expect(elapsedMs, startupEvidenceMessage).toBeLessThanOrEqual(STARTUP_BUDGET_MS);
       expect(numberOrZero(result.perf.maxRendererEventLoopLagMs), startupEvidenceMessage).toBeLessThanOrEqual(MAX_STARTUP_RENDERER_EVENT_LOOP_LAG_MS);
       expect(numberOrZero(result.perf.maxRendererLongTaskMs), startupEvidenceMessage).toBeLessThanOrEqual(MAX_STARTUP_RENDERER_LONG_TASK_MS);
+      expect(maxPayloadNumber(startupPerfPayloads, 'renderer_event_loop_lag', 'lagMs'), startupEvidenceMessage).toBeLessThanOrEqual(MAX_STARTUP_RENDERER_EVENT_LOOP_LAG_MS);
+      expect(maxPayloadNumber(startupPerfPayloads, 'renderer_long_task', 'durationMs'), startupEvidenceMessage).toBeLessThanOrEqual(MAX_STARTUP_RENDERER_LONG_TASK_MS);
       expect([...phaseNames], startupEvidenceMessage).toEqual(expect.arrayContaining([
         'listWorkflowsByStartupRecency',
         'orchestrator.restore.full-snapshot',
@@ -345,6 +352,7 @@ test('planning chat typing stays responsive with a large restored transcript', a
       const inputCommit = payloads.find((payload) => payload.metric === 'planning_chat_input_commit' && payload.valueLength === typedText.length);
       const perf = await page.evaluate(async () => window.invoker.getUiPerfStats());
       const transcriptCommitPayloads = payloads.filter((payload) => payload.metric === 'planning_chat_transcript_commit');
+      const eventLoopLagPayloads = payloads.filter((payload) => payload.metric === 'renderer_event_loop_lag');
       const longTaskPayloads = payloads.filter((payload) => payload.metric === 'renderer_long_task');
       const planningEvidence = {
         pressureTurns: PLANNING_PRESSURE_TURNS,
@@ -353,6 +361,7 @@ test('planning chat typing stays responsive with a large restored transcript', a
         inputChange,
         inputCommit,
         transcriptCommitPayloads,
+        eventLoopLagPayloads,
         longTaskPayloads,
         perf,
         budgets: PLANNING_PRESSURE_BUDGETS,
@@ -376,6 +385,8 @@ test('planning chat typing stays responsive with a large restored transcript', a
       expect(Number(perf.maxPlanningChatTranscriptLines), planningEvidenceMessage).toBeGreaterThanOrEqual(PLANNING_PRESSURE_TURNS * 2);
       expect(numberOrZero(perf.maxRendererEventLoopLagMs), planningEvidenceMessage).toBeLessThanOrEqual(MAX_PLANNING_RENDERER_EVENT_LOOP_LAG_MS);
       expect(numberOrZero(perf.maxRendererLongTaskMs), planningEvidenceMessage).toBeLessThanOrEqual(MAX_PLANNING_RENDERER_LONG_TASK_MS);
+      expect(maxPayloadNumber(payloads, 'renderer_event_loop_lag', 'lagMs'), planningEvidenceMessage).toBeLessThanOrEqual(MAX_PLANNING_RENDERER_EVENT_LOOP_LAG_MS);
+      expect(maxPayloadNumber(payloads, 'renderer_long_task', 'durationMs'), planningEvidenceMessage).toBeLessThanOrEqual(MAX_PLANNING_RENDERER_LONG_TASK_MS);
     } finally {
       await app.close();
     }

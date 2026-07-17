@@ -15,6 +15,12 @@ import {
   startPlan,
   test,
 } from './fixtures/electron-app.js';
+import {
+  activityLogWatermark,
+  maxPayloadNumber,
+  numberOrZero,
+  uiPerfPayloadsSince,
+} from './fixtures/ui-perf.js';
 
 test.use({ guiOwnerMode: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'daemon' });
 
@@ -154,6 +160,7 @@ test.describe('Headless thundering herd', () => {
 
     await page.waitForTimeout(500);
 
+    const perfWatermark = await activityLogWatermark(page);
     const retryBurstStartedAt = Date.now();
     const burst = Array.from(workflowIds).map((workflowId) =>
       runHeadlessClient(testDir, ['retry', workflowId, '--no-track']),
@@ -180,6 +187,7 @@ test.describe('Headless thundering herd', () => {
     }
 
     const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
+    const perfPayloads = await uiPerfPayloadsSince(page, perfWatermark);
     const delegatedPerf = parseJsonStdout(
       (await runHeadlessClient(testDir, ['query', 'ui-perf', '--output', 'json'])).stdout,
     );
@@ -190,6 +198,7 @@ test.describe('Headless thundering herd', () => {
       firstInteractionMs,
       secondInteractionMs,
       perf,
+      perfPayloads,
       delegatedPerf,
       budgets: HEADLESS_HERD_BUDGETS,
     };
@@ -200,9 +209,11 @@ test.describe('Headless thundering herd', () => {
     expect(retryBurstWallMs, evidenceMessage).toBeLessThanOrEqual(MAX_RETRY_BURST_WALL_MS);
     expect(firstInteractionMs, evidenceMessage).toBeLessThanOrEqual(MAX_INSPECTOR_TOGGLE_MS);
     expect(secondInteractionMs, evidenceMessage).toBeLessThanOrEqual(MAX_INSPECTOR_TOGGLE_MS);
-    expect(Number(perf.maxRendererEventLoopLagMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
-    expect(Number(perf.maxRendererLongTaskMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
-    expect(delegatedPerf.ownerMode).toBe('standalone');
+    expect(numberOrZero(perf.maxRendererEventLoopLagMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
+    expect(numberOrZero(perf.maxRendererLongTaskMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
+    expect(maxPayloadNumber(perfPayloads, 'renderer_event_loop_lag', 'lagMs'), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
+    expect(maxPayloadNumber(perfPayloads, 'renderer_long_task', 'durationMs'), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
+    expect(delegatedPerf.ownerMode, evidenceMessage).toBe('standalone');
   });
 
   test('standalone owner serves delegated headless commands from isolated test paths', async ({ testDir }) => {
