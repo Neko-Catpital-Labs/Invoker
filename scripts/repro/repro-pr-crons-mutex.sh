@@ -90,7 +90,7 @@ exit 42
 SH
 chmod +x "$TMP/fail-if-spawned.sh"
 
-# Acquire and hold the lock out-of-band, mirroring cron-pr-lib.sh's mechanism.
+# Acquire and hold the shared PR-maintenance lock out-of-band.
 if command -v flock >/dev/null 2>&1; then
   READY="$TMP/holder.ready"
   ( exec 9>"$LOCK"; flock 9; : > "$READY"; sleep 60 ) &
@@ -103,7 +103,7 @@ if command -v flock >/dev/null 2>&1; then
   done
   [ -f "$READY" ] || fail "lock holder never acquired the flock"
 else
-  # Mirror the lib's mkdir lock, including the holder PID so the reaper treats it
+  # Mirror the native mkdir lock, including the holder PID so the reaper treats it
   # as a live lock (and never reaps it while this repro is running).
   mkdir "${LOCK}.d"
   printf '%s\n' "$$" > "${LOCK}.d/pid"

@@ -1,8 +1,47 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# shellcheck source=../../../scripts/cron-pr-lib.sh
-source "$(cd "$(dirname "$0")/../../.." && pwd)/scripts/cron-pr-lib.sh"
+# shellcheck source=../../../scripts/headless-lib.sh
+source "$(cd "$(dirname "$0")/../../.." && pwd)/scripts/headless-lib.sh"
+
+TARGET_REPO="${INVOKER_GITHUB_TARGET_REPO:-Neko-Catpital-Labs/Invoker}"
+CRON_LOCK="${INVOKER_PR_CRON_LOCK:-${TMPDIR:-/tmp}/invoker-pr-crons.lock}"
+
+log_line() {
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
+}
+
+cron_lock() {
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$CRON_LOCK"
+    if ! flock -n 9; then
+      log_line "another PR maintenance operation in progress; exiting"
+      exit 0
+    fi
+    return 0
+  fi
+
+  log_line "flock is required for pr-ci-failure-scan locking"
+  exit 1
+}
+
+gh_json() {
+  local out code
+  set +e
+  out="$(gh "$@" 2>&1)"
+  code=$?
+  if [ "$code" -ne 0 ]; then
+    sleep 2
+    out="$(gh "$@" 2>&1)"
+    code=$?
+  fi
+  set -e
+  if [ "$code" -ne 0 ]; then
+    log_line "gh failed (gh $*): $out" >&2
+    return "$code"
+  fi
+  printf '%s' "$out"
+}
 
 cron_lock
 
