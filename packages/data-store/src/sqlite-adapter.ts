@@ -130,6 +130,11 @@ function readLiveOwnerPid(dbPath: string): number | null {
   }
 }
 
+export function hasLiveWritableOwner(dbPath: string): boolean {
+  const sidecarsExist = existsSync(`${dbPath}-wal`) || existsSync(`${dbPath}-shm`);
+  return sidecarsExist && readLiveOwnerPid(dbPath) !== null;
+}
+
 function writeOwnerMarker(dbPath: string): void {
   try {
     writeFileSync(ownerMarkerPath(dbPath), String(process.pid), 'utf-8');
