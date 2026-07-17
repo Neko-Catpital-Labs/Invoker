@@ -457,7 +457,7 @@ invoker_e2e_task_status() {
   local task_id="$1"
   invoker_e2e_run_headless task-status "$task_id" 2>/dev/null \
     | sed 's/\x1b\[[0-9;]*m//g' \
-    | grep -E '^(pending|running|completed|failed|awaiting_approval|review_ready|fixing_with_ai|closed|skipped)$' \
+    | grep -E '^(pending|running|completed|failed|blocked|awaiting_approval|review_ready|fixing_with_ai|closed|skipped)$' \
     | tail -1
 }
 
