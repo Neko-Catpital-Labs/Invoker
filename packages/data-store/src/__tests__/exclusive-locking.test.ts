@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter } from '../sqlite-adapter.js';
+import { SQLiteAdapter, hasLiveWritableOwner } from '../sqlite-adapter.js';
 import type { Workflow } from '../adapter.js';
 
 /**
@@ -150,5 +150,47 @@ describe('SQLiteAdapter exclusiveLocking', () => {
     await expect(
       SQLiteAdapter.create(dbPath, { exclusiveLocking: true }),
     ).rejects.toThrow(/sole opener/);
+  });
+});
+
+describe('hasLiveWritableOwner', () => {
+  it('is true while a live owner holds the db with WAL sidecars', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    try {
+      owner.saveWorkflow(wf);
+      expect(existsSync(`${dbPath}-shm`)).toBe(true);
+      expect(existsSync(`${dbPath}.owner`)).toBe(true);
+      expect(hasLiveWritableOwner(dbPath)).toBe(true);
+    } finally {
+      owner.close();
+    }
+  });
+
+  it('is false after a clean close leaves no sidecars', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    owner.saveWorkflow(wf);
+    owner.close();
+    expect(hasLiveWritableOwner(dbPath)).toBe(false);
+  });
+
+  it('is false when sidecars exist but the owner marker names a dead process', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+    owner.saveWorkflow(wf);
+    owner.close();
+
+    // A read-only reader leaves -wal/-shm behind with no live owner.
+    const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+    reader.close();
+    expect(existsSync(`${dbPath}-wal`) || existsSync(`${dbPath}-shm`)).toBe(true);
+    // PID 2^22 is above every configured pid_max, so it can never be alive.
+    writeFileSync(`${dbPath}.owner`, '4194304', 'utf-8');
+
+    expect(hasLiveWritableOwner(dbPath)).toBe(false);
   });
 });

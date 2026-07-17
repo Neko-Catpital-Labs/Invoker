@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 
 import { resolveRepoRoot } from '@invoker/contracts';
+import { hasLiveWritableOwner } from '@invoker/data-store';
 import { IpcBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 
@@ -183,7 +184,7 @@ async function delegateGenericReadQuery(
     messageBus = await refreshMessageBus();
     owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
   }
-  if (!owner) return false;
+  if (!owner && !hasLiveWritableOwner(resolve(resolveInvokerHomeRoot(), 'invoker.db'))) return false;
 
   const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
