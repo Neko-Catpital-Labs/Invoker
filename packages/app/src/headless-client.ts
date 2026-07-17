@@ -1,10 +1,15 @@
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
-import { resolveRepoRoot } from '@invoker/contracts';
+import { resolveRepoRoot, type WorkerStatusSnapshot } from '@invoker/contracts';
 import { hasLiveWritableOwner } from '@invoker/data-store';
 import { IpcBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
+import {
+  createWorkerRegistry,
+  registerBuiltinWorkers,
+  type WorkerRuntimeDependencies,
+} from '@invoker/execution-engine';
 
 import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { isHeadlessMutatingCommand } from './headless-command-classification.js';
@@ -22,13 +27,16 @@ import {
   spawnDetachedStandaloneOwner,
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
-import { loadConfig } from './config.js';
+import { loadConfig, type InvokerConfig } from './config.js';
+import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
   discoverOwner,
   isStandaloneCapable,
 } from './owner-endpoint.js';
 import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
+import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot } from './worker-control.js';
 import { resolveWorkerControlMutation } from './worker-control-delegation.js';
+import { openMainProcessDatabase } from './viewer-db-boundary.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -160,7 +168,7 @@ function isGenericDelegatableReadCommand(args: string[]): boolean {
   const command = args[0];
   if (command === 'query') {
     const sub = args[1];
-    return sub !== undefined && sub !== 'queue' && sub !== 'ui-perf' && sub !== 'action-graph';
+    return sub !== undefined && sub !== 'workers' && sub !== 'queue' && sub !== 'ui-perf' && sub !== 'action-graph';
   }
   return command !== undefined && GENERIC_DELEGATABLE_READ_COMMANDS.has(command);
 }
@@ -340,6 +348,65 @@ async function delegateReadOnlyQuery(
   return true;
 }
 
+function isLocalWorkersQuery(args: string[]): boolean {
+  return args[0] === 'query' && args[1] === 'workers';
+}
+
+function readOutputFormat(args: string[]): string | undefined {
+  const outputIndex = args.indexOf('--output');
+  if (outputIndex < 0) return undefined;
+  return args[outputIndex + 1];
+}
+
+function writeWorkerSnapshot(snapshot: WorkerStatusSnapshot, args: string[]): void {
+  const output = readOutputFormat(args);
+  if (output === 'label') {
+    process.stdout.write(`${snapshot.workers.map((worker) => worker.kind).join('\n')}\n`);
+    return;
+  }
+  if (output === 'jsonl') {
+    process.stdout.write(`${JSON.stringify(snapshot)}\n`);
+    return;
+  }
+  if (output === 'json') {
+    process.stdout.write(`${JSON.stringify(snapshot)}\n`);
+    return;
+  }
+
+  process.stdout.write(`Workers\n`);
+  process.stdout.write(`  generatedAt: ${snapshot.generatedAt}\n`);
+  process.stdout.write(`  count: ${snapshot.workers.length}\n`);
+  for (const worker of snapshot.workers) {
+    const source = worker.source ? ` · ${worker.source}` : '';
+    process.stdout.write(`  - ${worker.kind}: ${worker.lifecycle} · ${worker.policy}${source}\n`);
+  }
+}
+
+async function runLocalWorkersQuery(args: string[], invokerConfig: InvokerConfig): Promise<number> {
+  const dbPath = join(resolveInvokerHomeRoot(), 'invoker.db');
+  const persistence = await openMainProcessDatabase({
+    dbPath,
+    detachedViewer: false,
+    readOnly: true,
+    exclusiveLocking: false,
+  });
+  try {
+    const registry = registerExternalWorkersFromConfig(
+      invokerConfig.externalWorkers,
+      registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+    );
+    const snapshot = createLocalWorkerStatusSnapshot({
+      registry,
+      persistence,
+      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+    });
+    writeWorkerSnapshot(snapshot, args);
+    return 0;
+  } finally {
+    persistence.close();
+  }
+}
+
 export interface HeadlessClientDeps {
   messageBus: MessageBus;
   ensureStandaloneOwner: (bus?: MessageBus) => Promise<void>;
@@ -483,7 +550,7 @@ export async function runHeadlessClientCommand(
 ): Promise<number> {
   // Validate config before any delegation path so malformed JSON fails fast
   // even for commands that do not boot the full Electron owner process.
-  loadConfig();
+  const invokerConfig = loadConfig();
 
   const { args, waitForApproval, noTrack } = parseArgs(argv);
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
@@ -509,6 +576,10 @@ export async function runHeadlessClientCommand(
       const exitCode = process.exitCode;
       return typeof exitCode === 'number' ? exitCode : 0;
     }
+  }
+
+  if (!internalOwnerServe && isLocalWorkersQuery(args)) {
+    return runLocalWorkersQuery(args, invokerConfig);
   }
 
   if (!shouldUseSharedMutationOwner(args, standaloneMode, internalOwnerServe)) {
