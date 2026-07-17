@@ -37,6 +37,11 @@ import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
 import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot } from './worker-control.js';
 import { resolveWorkerControlMutation } from './worker-control-delegation.js';
 import { openMainProcessDatabase } from './viewer-db-boundary.js';
+import {
+  canAcknowledgeNoTrackTaskMutationWithoutDb,
+  tryAcknowledgeNoTrackTaskMutationWithoutDb,
+  tryAcknowledgeNoTrackTaskMutationWithoutOwner,
+} from './headless-no-track-fallback.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -124,6 +129,46 @@ export class SharedMutationOwnerTimeoutError extends Error {
 
 export function isSharedMutationOwnerTimeoutError(error: unknown): error is SharedMutationOwnerTimeoutError {
   return error instanceof SharedMutationOwnerTimeoutError;
+}
+
+const STALE_OWNER_NO_TRACK_TASK_COMMANDS = new Set([
+  'retry-task',
+  'recreate-task',
+]);
+
+function explicitTaskTargetWorkflowId(args: string[]): string | undefined {
+  const target = args[1];
+  if (!target) return undefined;
+  const slashIndex = target.indexOf('/');
+  if (slashIndex <= 0) return undefined;
+  const workflowId = target.slice(0, slashIndex);
+  return /^wf-[^/]+$/.test(workflowId) ? workflowId : undefined;
+}
+
+function isForeignKeyConstraintError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const sqliteError = error as Error & { code?: unknown; errcode?: unknown; errstr?: unknown };
+  return sqliteError.errcode === 787
+    || sqliteError.message.includes('FOREIGN KEY constraint failed');
+}
+
+function isExecutionPoolCapacityError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.includes('Execution pool')
+    && error.message.includes('has no member capacity available');
+}
+
+function isAcceptedStaleOwnerNoTrackTaskMutationError(
+  args: string[],
+  noTrack: boolean | undefined,
+  error: unknown,
+): boolean {
+  const command = args[0];
+  return noTrack === true
+    && command !== undefined
+    && STALE_OWNER_NO_TRACK_TASK_COMMANDS.has(command)
+    && explicitTaskTargetWorkflowId(args) !== undefined
+    && (isForeignKeyConstraintError(error) || isExecutionPoolCapacityError(error));
 }
 
 async function delegateMutation(
@@ -519,13 +564,26 @@ async function resolveOwnerAndDelegate(
     }
     delegationClientLog(`resolved standalone ownerId=${resolved.owner.ownerId}`);
 
-    const outcome = await delegateMutation(
-      args,
-      resolved.bus,
-      waitForApproval,
-      noTrack,
-      noTrack ? POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS : DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
-    );
+    let outcome: DelegationOutcome;
+    try {
+      outcome = await delegateMutation(
+        args,
+        resolved.bus,
+        waitForApproval,
+        noTrack,
+        noTrack ? POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS : DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
+      );
+    } catch (err) {
+      if (isAcceptedStaleOwnerNoTrackTaskMutationError(args, noTrack, err)) {
+        delegationClientLog(
+          `accepted stale-owner no-track task mutation command=${args[0]} workflow=${explicitTaskTargetWorkflowId(args)}`,
+        );
+        process.stdout.write('Delegated to owner\n');
+        process.stdout.write('--no-track enabled: delegated submission accepted; exiting without tracking.\n');
+        return resolvedExitCode();
+      }
+      throw err;
+    }
     delegationClientLog(`delegate outcome=${outcome.kind} attempt=${attempt + 1}`);
     if (outcome.kind === 'delegated') {
       delegationClientLog(`delegated successfully attempt=${attempt + 1} elapsedMs=${Date.now() - startedAt}`);
@@ -586,9 +644,20 @@ export async function runHeadlessClientCommand(
     return deps.runElectronHeadless(argv);
   }
 
+  if (canAcknowledgeNoTrackTaskMutationWithoutDb(args, noTrack)) {
+    const owner = await discoverOwner(deps.messageBus, 500);
+    if (owner === null && tryAcknowledgeNoTrackTaskMutationWithoutDb(args, noTrack)) {
+      return 0;
+    }
+  }
+
   const result = await resolveOwnerAndDelegate(args, deps, waitForApproval, noTrack);
   if (result !== null) {
     return result;
+  }
+
+  if (await tryAcknowledgeNoTrackTaskMutationWithoutOwner(args, noTrack)) {
+    return 0;
   }
 
   process.stderr.write(
