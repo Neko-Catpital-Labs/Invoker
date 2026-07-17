@@ -93,7 +93,8 @@ describe('main-process read hot-path cost guards', () => {
     expect(status.wakeups + status.scans + status.submissions + status.skips).toBe(taskCount * eventsPerTask);
     expect(status.recent.length).toBeGreaterThan(0);
     expect(status.recent.length).toBeLessThanOrEqual(10);
-    expect(elapsedMs).toBeLessThan(750);
+    // Per-type indexed LIMIT+merge must stay well under a 2s UI poll budget.
+    expect(elapsedMs).toBeLessThan(50);
   });
 
   it('projects a stale-pointer task without scanning every attempt under large error blobs', async () => {
