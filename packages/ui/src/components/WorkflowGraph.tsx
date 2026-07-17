@@ -57,6 +57,8 @@ const nodeTypes = {
   workflowNode: WorkflowFlowNode,
 };
 const WATCHDOG_RECOVERY_MISS_COUNT = 3;
+const PANE_PAN_DRAG_THRESHOLD_PX = 6;
+const PANE_PAN_IMMEDIATE_STEP = 0.65;
 
 interface PanePan {
   startClientX: number;
@@ -106,6 +108,26 @@ function shouldStartPanePan(
   return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
 }
 
+function shouldDeferPanePanFromNode(
+  root: HTMLElement | null,
+  target: EventTarget | null,
+  clientX: number,
+  clientY: number,
+): boolean {
+  if (!root) return false;
+  const pane = root.querySelector<HTMLElement>('.react-flow__pane');
+  if (!pane) return false;
+
+  const targetElement = target instanceof Element ? target : null;
+  if (!targetElement) return false;
+  if (!root.contains(targetElement)) return false;
+  if (targetElement.closest(PANE_PAN_BLOCK_SELECTOR)) return false;
+  if (!targetElement.closest('.react-flow__node, [data-testid^="workflow-node-"]')) return false;
+
+  const rect = pane.getBoundingClientRect();
+  return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+}
+
 function createPanePan(
   startClientX: number,
   startClientY: number,
@@ -132,6 +154,12 @@ function getPanePanViewport(pan: PanePan, clientX: number, clientY: number): Gra
     y: pan.startViewport.y + clientY - pan.startClientY,
     zoom: pan.startViewport.zoom,
   };
+}
+
+function movedBeyondPanePanThreshold(pan: PanePan, clientX: number, clientY: number): boolean {
+  const dx = clientX - pan.startClientX;
+  const dy = clientY - pan.startClientY;
+  return dx * dx + dy * dy >= PANE_PAN_DRAG_THRESHOLD_PX * PANE_PAN_DRAG_THRESHOLD_PX;
 }
 
 function applyViewportTransform(viewportElement: HTMLElement | null, viewport: GraphViewport): void {
@@ -174,7 +202,7 @@ function schedulePanePanAnimation(pan: PanePan): void {
         };
     applyViewportTransform(pan.viewportElement, pan.visualViewport);
 
-    if (!settled) {
+    if (pan.active || !settled) {
       pan.animationFrame = requestAnimationFrame(step);
     }
   };
@@ -280,7 +308,9 @@ function WorkflowGraphInner({
   const pendingGestureNodesRef = useRef<Node<WorkflowNodeData>[] | null>(null);
   const pendingGestureEdgesRef = useRef<Edge[] | null>(null);
   const panePointerPanRef = useRef<PanePointerPan | null>(null);
+  const pendingPanePointerPanRef = useRef<PanePointerPan | null>(null);
   const paneMousePanRef = useRef<PanePan | null>(null);
+  const pendingPaneMousePanRef = useRef<PanePan | null>(null);
 
   const getViewportElement = useCallback(
     () => graphRootRef.current?.querySelector<HTMLElement>('.react-flow__viewport') ?? null,
@@ -298,6 +328,8 @@ function WorkflowGraphInner({
       }
       ref.current = null;
     }
+    pendingPanePointerPanRef.current = null;
+    pendingPaneMousePanRef.current = null;
   }, []);
 
   const performFitView = useCallback(() => {
@@ -495,9 +527,7 @@ function WorkflowGraphInner({
 
   const onPanePointerDownCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || event.isPrimary === false) return;
-    if (!shouldStartPanePan(event.currentTarget, event.target, event.clientX, event.clientY)) return;
-
-    panePointerPanRef.current = {
+    const pan = {
       ...createPanePan(
         event.clientX,
         event.clientY,
@@ -506,6 +536,16 @@ function WorkflowGraphInner({
       ),
       pointerId: event.pointerId,
     };
+
+    if (shouldDeferPanePanFromNode(event.currentTarget, event.target, event.clientX, event.clientY)) {
+      pendingPanePointerPanRef.current = pan;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      return;
+    }
+
+    if (!shouldStartPanePan(event.currentTarget, event.target, event.clientX, event.clientY)) return;
+
+    panePointerPanRef.current = pan;
     schedulePanePanAnimation(panePointerPanRef.current);
     viewportGestureActiveRef.current = true;
     onManualViewport?.();
@@ -516,9 +556,18 @@ function WorkflowGraphInner({
 
   const updatePanePanViewport = useCallback((pan: PanePan, clientX: number, clientY: number) => {
     pan.hasMoved = true;
-    pan.targetViewport = getPanePanViewport(pan, clientX, clientY);
+    pan.warmupFrame = 0;
+    pan.viewportElement = getViewportElement() ?? pan.viewportElement;
+    const nextViewport = getPanePanViewport(pan, clientX, clientY);
+    pan.targetViewport = nextViewport;
+    pan.visualViewport = {
+      x: pan.visualViewport.x + (nextViewport.x - pan.visualViewport.x) * PANE_PAN_IMMEDIATE_STEP,
+      y: pan.visualViewport.y + (nextViewport.y - pan.visualViewport.y) * PANE_PAN_IMMEDIATE_STEP,
+      zoom: nextViewport.zoom,
+    };
+    applyViewportTransform(pan.viewportElement, pan.visualViewport);
     schedulePanePanAnimation(pan);
-  }, []);
+  }, [getViewportElement]);
 
   const finishPanePan = useCallback((pan: PanePan) => {
     pan.active = false;
@@ -532,7 +581,22 @@ function WorkflowGraphInner({
   }, [setViewport]);
 
   const onPanePointerMoveCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const pan = panePointerPanRef.current;
+    let pan = panePointerPanRef.current;
+    if (!pan) {
+      const pendingPan = pendingPanePointerPanRef.current;
+      if (!pendingPan || pendingPan.pointerId !== event.pointerId) return;
+      if ((event.buttons & 1) !== 1) {
+        pendingPanePointerPanRef.current = null;
+        return;
+      }
+      if (!movedBeyondPanePanThreshold(pendingPan, event.clientX, event.clientY)) return;
+
+      pendingPanePointerPanRef.current = null;
+      panePointerPanRef.current = pendingPan;
+      pan = pendingPan;
+      viewportGestureActiveRef.current = true;
+      onManualViewport?.();
+    }
     if (!pan || pan.pointerId !== event.pointerId) return;
 
     updatePanePanViewport(pan, event.clientX, event.clientY);
@@ -541,6 +605,13 @@ function WorkflowGraphInner({
   }, [updatePanePanViewport]);
 
   const onPanePointerEndCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const pendingPan = pendingPanePointerPanRef.current;
+    if (pendingPan?.pointerId === event.pointerId) {
+      pendingPanePointerPanRef.current = null;
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+      return;
+    }
+
     const pan = panePointerPanRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
 
@@ -553,7 +624,7 @@ function WorkflowGraphInner({
   }, [endViewportGesture, finishPanePan]);
 
   const onPaneMouseDownCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || panePointerPanRef.current) return;
+    if (event.button !== 0 || panePointerPanRef.current || pendingPanePointerPanRef.current) return;
     if (!shouldStartPanePan(event.currentTarget, event.target, event.clientX, event.clientY)) return;
 
     paneMousePanRef.current = createPanePan(
@@ -594,15 +665,28 @@ function WorkflowGraphInner({
     if (!root) return;
 
     const beginPaneMousePan = (event: MouseEvent): void => {
-      if (event.button !== 0 || panePointerPanRef.current) return;
-      if (!shouldStartPanePan(root, event.target, event.clientX, event.clientY)) return;
+      if (
+        event.button !== 0 ||
+        panePointerPanRef.current ||
+        pendingPanePointerPanRef.current ||
+        paneMousePanRef.current
+      ) return;
 
-      paneMousePanRef.current = createPanePan(
+      const pan = createPanePan(
         event.clientX,
         event.clientY,
         getViewport(),
         root.querySelector('.react-flow__viewport'),
       );
+
+      if (shouldDeferPanePanFromNode(root, event.target, event.clientX, event.clientY)) {
+        pendingPaneMousePanRef.current = pan;
+        return;
+      }
+
+      if (!shouldStartPanePan(root, event.target, event.clientX, event.clientY)) return;
+
+      paneMousePanRef.current = pan;
       schedulePanePanAnimation(paneMousePanRef.current);
       viewportGestureActiveRef.current = true;
       onManualViewport?.();
@@ -611,7 +695,22 @@ function WorkflowGraphInner({
     };
 
     const updatePaneMousePan = (event: MouseEvent): void => {
-      const pan = paneMousePanRef.current;
+      let pan = paneMousePanRef.current;
+      if (!pan) {
+        const pendingPan = pendingPaneMousePanRef.current;
+        if (!pendingPan) return;
+        if ((event.buttons & 1) !== 1) {
+          pendingPaneMousePanRef.current = null;
+          return;
+        }
+        if (!movedBeyondPanePanThreshold(pendingPan, event.clientX, event.clientY)) return;
+
+        pendingPaneMousePanRef.current = null;
+        paneMousePanRef.current = pendingPan;
+        pan = pendingPan;
+        viewportGestureActiveRef.current = true;
+        onManualViewport?.();
+      }
       if (!pan) return;
 
       updatePanePanViewport(pan, event.clientX, event.clientY);
@@ -620,6 +719,11 @@ function WorkflowGraphInner({
     };
 
     const endPaneMousePan = (event: MouseEvent): void => {
+      if (pendingPaneMousePanRef.current) {
+        pendingPaneMousePanRef.current = null;
+        return;
+      }
+
       const pan = paneMousePanRef.current;
       if (!pan) return;
 

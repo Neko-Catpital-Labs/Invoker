@@ -69,9 +69,11 @@ export const test = base.extend<ElectronFixtures>({
     const configPath = path.join(testDir, 'e2e-config.json');
     const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
     const electronUserDataDir = path.join(testDir, 'electron-user-data');
+    const homeDir = path.join(testDir, 'home');
     await fs.mkdir(stubDir, { recursive: true });
     await fs.mkdir(markerRoot, { recursive: true });
     await fs.mkdir(electronUserDataDir, { recursive: true });
+    await fs.mkdir(homeDir, { recursive: true });
     registerTrackedBrowserUserDataDir(electronUserDataDir);
     writeFileSync(configPath, JSON.stringify(repoConfig), 'utf8');
     try {
@@ -175,6 +177,7 @@ exit 64
         INVOKER_TEST_FIXED_NOW: '2025-01-01T00:00:00.000Z',
         INVOKER_CLAUDE_COMMAND: claudeMarker,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
+        HOME: homeDir,
         ...(process.env.INVOKER_E2E_CODEX_DEMO
           ? { INVOKER_E2E_CODEX_DEMO: process.env.INVOKER_E2E_CODEX_DEMO }
           : {}),
