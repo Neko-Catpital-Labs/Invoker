@@ -4,6 +4,8 @@ import {
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
   assertExecutionCapacityInvariant,
   computeConfiguredExecutionCapacity,
+  fillableExecutionCapacity,
+  resolveClampedMaxConcurrency,
   resolveEffectiveMaxConcurrency,
   shouldFatalOnExecutionCapacityOvercommit,
 } from '../execution-capacity.js';
@@ -87,5 +89,46 @@ describe('execution-capacity', () => {
     expect(shouldFatalOnExecutionCapacityOvercommit({
       INVOKER_FATAL_ON_EXECUTION_CAPACITY_OVERCOMMIT: '1',
     })).toBe(true);
+  });
+
+  it('clamps maxConcurrency down to configured pool capacity', () => {
+    const config = {
+      maxConcurrency: 13,
+      executionPools: {
+        mixed: {
+          maxConcurrentTasksPerMember: 1,
+          members: [
+            { type: 'ssh' as const, id: 'a' },
+            { type: 'ssh' as const, id: 'b' },
+            { type: 'worktree' as const, id: 'local', maxConcurrentTasks: 6 },
+          ],
+        },
+      },
+    };
+    // 2 SSH + 6 worktree = 8
+    expect(computeConfiguredExecutionCapacity(config)).toBe(8);
+    expect(resolveClampedMaxConcurrency(config)).toBe(8);
+    expect(fillableExecutionCapacity(config)).toBe(8);
+  });
+
+  it('does not raise concurrency when pool capacity exceeds maxConcurrency', () => {
+    expect(resolveClampedMaxConcurrency({
+      maxConcurrency: 4,
+      executionPools: {
+        ssh: {
+          members: [
+            { type: 'ssh', id: 'a' },
+            { type: 'ssh', id: 'b' },
+            { type: 'ssh', id: 'c' },
+            { type: 'ssh', id: 'd' },
+            { type: 'ssh', id: 'e' },
+          ],
+        },
+      },
+    })).toBe(4);
+  });
+
+  it('preserves maxConcurrency when no pools are configured', () => {
+    expect(resolveClampedMaxConcurrency({ maxConcurrency: 13 })).toBe(13);
   });
 });

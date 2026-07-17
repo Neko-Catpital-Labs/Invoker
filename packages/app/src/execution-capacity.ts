@@ -23,6 +23,28 @@ export function resolveEffectiveMaxConcurrency(
     : DEFAULT_ORCHESTRATOR_MAX_CONCURRENCY;
 }
 
+/**
+ * Scheduler concurrency must not exceed configured pool hardware capacity.
+ * When pools are configured, clamp `maxConcurrency` down so the UI / drain
+ * loop cannot promise more slots than members can run.
+ */
+export function resolveClampedMaxConcurrency(config: ExecutionCapacityConfig): number {
+  const requested = resolveEffectiveMaxConcurrency(config.maxConcurrency);
+  const pools = config.executionPools ?? {};
+  if (Object.keys(pools).length === 0) {
+    return requested;
+  }
+  const poolCapacity = computeConfiguredExecutionCapacity(config);
+  if (!Number.isInteger(poolCapacity) || poolCapacity <= 0) {
+    return requested;
+  }
+  return Math.min(requested, poolCapacity);
+}
+
+export function fillableExecutionCapacity(config: ExecutionCapacityConfig): number {
+  return resolveClampedMaxConcurrency(config);
+}
+
 function positiveIntegerOrUndefined(value: unknown): number | undefined {
   return Number.isInteger(value) && Number(value) > 0 ? Number(value) : undefined;
 }
