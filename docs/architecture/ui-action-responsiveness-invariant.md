@@ -8,6 +8,11 @@ Any user-visible action must **acknowledge within 200ms**:
 - Electron **main-process event loop / IPC accept** must stay responsive: concurrent cheap IPC
   (`listWorkflows`, `getWorkerStatus`) under load should stay **p95 ≤ 200ms**, max sample ≤ 250ms.
 
+**Workflow select is tighter:** clicking a workflow node must show
+`selected-workflow-mini-dag` within **100ms**. That path is an in-memory task filter; it must not
+wait on SQLite. Main-thread stalls from status polls (for example a TEMP B-TREE `getEventsByTypes`)
+are what make this click feel laggy.
+
 This includes **right-click context menus** on workflow nodes and task nodes: the menu must become
 visible (and stay interactive) within 200ms. Opening the menu must not stall the main process.
 
@@ -19,7 +24,8 @@ in 200ms. Long work continues asynchronously after the action is acknowledged.
 | Action | Ack signal |
 | --- | --- |
 | Worker Start / Stop | Lifecycle label / control `data-action` flips |
-| Workflow / task select | Selection highlight / inspector binding |
+| Workflow select | `selected-workflow-mini-dag` visible within **100ms** |
+| Task select | Selection highlight / inspector binding |
 | Workflow right-click | `[data-testid="workflow-context-menu"]` visible |
 | Task right-click | `[data-testid="task-context-menu"]` visible |
 | Search / inspector / drawer | Overlay or panel visible |
@@ -38,7 +44,8 @@ the critical path.
 | Architecture | This doc; cross-links from [main-process read hot paths](./main-process-read-hot-paths.md) and [CI duration invariant](./ci-duration-invariant.md) |
 | Unit | `packages/app/src/__tests__/worker-runtime.test.ts` — default `stop()` returns promptly; `settleTimeoutMs` bounds quit |
 | PR Playwright | `packages/app/e2e/main-process-hitch-responsiveness.spec.ts` — fat DB + `startWorker`/`stopWorker` IPC accept ≤ 200ms |
-| Daily / extended | `packages/app/e2e/ui-action-responsiveness-battery.spec.ts` via `optional/41-ui-action-responsiveness.sh` (includes workflow + task right-click menus) |
+| PR Playwright | `packages/app/e2e/dag-click-hitch-responsiveness.spec.ts` — workflow select → mini-DAG ≤ 100ms under fat events table |
+| Daily / extended | `packages/app/e2e/ui-action-responsiveness-battery.spec.ts` via `optional/41-ui-action-responsiveness.sh` (workflow select ≤ 100ms; menus ≤ 200ms) |
 
 PR CI keeps the narrow hitch gate. The full interaction matrix runs only on the twice-daily
 extended e2e worker (`scripts/daily-e2e-do-submit.sh` / `INVOKER_TEST_ALL_EXTENDED=1`).
