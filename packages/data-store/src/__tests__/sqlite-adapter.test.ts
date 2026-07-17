@@ -983,6 +983,26 @@ describe('SQLiteAdapter', () => {
 
       expect(adapter.listExecutionResourceLeases()).toHaveLength(0);
     });
+
+    it('globally sweeps expired execution resource leases across keys', () => {
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:expired-a',
+        resourceType: 'ssh',
+        holderId: 'holder-a',
+        leaseMs: -1,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:live-b',
+        resourceType: 'ssh',
+        holderId: 'holder-b',
+        leaseMs: 60_000,
+      })).toBe(true);
+
+      expect(adapter.releaseExpiredExecutionResourceLeases()).toBe(1);
+      const leases = adapter.listExecutionResourceLeases();
+      expect(leases).toHaveLength(1);
+      expect(leases[0]?.resourceKey).toBe('ssh:live-b');
+    });
   });
 
   describe('task_launch_dispatch outbox', () => {
