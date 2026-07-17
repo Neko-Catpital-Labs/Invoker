@@ -36,6 +36,7 @@ function makeQueryDeps(): HeadlessQueryDeps {
         if (filters && (filters as { workflowId?: string }).workflowId === 'missing') return [];
         return workerActions;
       },
+      listTaskEvents: () => [],
       listWorkflows: () => [],
     } as unknown as HeadlessQueryDeps['persistence'],
     orchestrator: {} as unknown as HeadlessQueryDeps['orchestrator'],
@@ -45,6 +46,35 @@ function makeQueryDeps(): HeadlessQueryDeps {
     resetUiPerfStats: () => {},
   };
 }
+
+describe('headless query workers', () => {
+  it('returns the local worker fleet snapshot as JSON', async () => {
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'workers', '--output', 'json'],
+      makeQueryDeps(),
+    );
+
+    const parsed = JSON.parse(output) as {
+      generatedAt?: unknown;
+      workers?: Array<Record<string, unknown>>;
+    };
+    expect(typeof parsed.generatedAt).toBe('string');
+    expect(Array.isArray(parsed.workers)).toBe(true);
+    const autoFixWorker = parsed.workers?.find((worker) => worker.kind === 'autofix');
+    expect(autoFixWorker).toMatchObject({
+      kind: 'autofix',
+      lifecycle: 'stopped',
+      policy: 'unknown',
+      startable: false,
+      stoppable: false,
+      controlDisabledReason: 'Controls unavailable',
+      source: 'built-in',
+      availability: 'available',
+    });
+    expect(autoFixWorker).not.toHaveProperty('running');
+    expect(autoFixWorker?.recentActions).toEqual(workerActions.map((action) => expect.objectContaining({ id: action.id })));
+  });
+});
 
 describe('headless query worker-actions', () => {
   it('renders worker actions as JSON', async () => {
