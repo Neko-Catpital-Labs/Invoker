@@ -23,7 +23,7 @@ import { MergeGateExecutor } from './merge-gate-executor.js';
 import { SshExecutor } from './ssh-executor.js';
 import type { MergeRunnerHost } from './merge-runner.js';
 import { computePoolMemberCooldownMs } from './task-runner-launch-support.js';
-import type { TaskRunner } from './task-runner.js';
+import type { ActiveExecutionEntry, TaskRunner } from './task-runner.js';
 
 // ── Types ────────────────────────────────────────────────
 
@@ -451,6 +451,39 @@ export function takeResolvedExecutionSelection(host: TaskRunnerPoolHost, taskId:
   return resolvedExecution;
 }
 
+function releaseAndKillOrphanedExecution(
+  host: TaskRunnerPoolHost,
+  attemptId: string,
+  entry: ActiveExecutionEntry,
+  reason: string,
+): void {
+  host.activeExecutions.delete(attemptId);
+  host.logger?.warn?.(
+    `[TaskRunner] reclaimed ${reason} execution slot task=${entry.taskId} staleAttempt=${attemptId} ` +
+      `member=${entry.poolMemberKey ?? 'n/a'}; a prior attempt's executor was never reaped`,
+    {
+      taskId: entry.taskId,
+      staleAttempt: attemptId,
+      member: entry.poolMemberKey,
+      reason,
+      module: 'task-runner',
+    },
+  );
+  if (entry.leaseResourceKey && entry.leaseHolderId) {
+    host.persistence.releaseExecutionResourceLease?.(entry.leaseResourceKey, entry.leaseHolderId);
+  }
+  const onKillError = (err: unknown) =>
+    host.logger?.warn?.(
+      `[TaskRunner] best-effort kill of ${reason} execution failed task=${entry.taskId} attempt=${attemptId}`,
+      { err, module: 'task-runner' },
+    );
+  try {
+    void Promise.resolve(entry.executor.kill(entry.handle)).catch(onKillError);
+  } catch (err) {
+    onKillError(err);
+  }
+}
+
 /**
  * Reclaim any in-memory execution slot this task still holds from a prior
  * attempt whose executor was never reaped — a superseded/recreated launch
@@ -466,25 +499,33 @@ function reclaimSupersededExecutionSlots(host: TaskRunnerPoolHost, task: TaskSta
   if (liveAttemptId === undefined) return;
   for (const [attemptId, entry] of host.activeExecutions) {
     if (entry.taskId !== task.id || attemptId === liveAttemptId) continue;
-    host.activeExecutions.delete(attemptId);
-    host.logger?.warn?.(
-      `[TaskRunner] reclaimed superseded execution slot task=${task.id} staleAttempt=${attemptId} ` +
-        `member=${entry.poolMemberKey ?? 'n/a'}; a prior attempt's executor was never reaped`,
-      { taskId: task.id, staleAttempt: attemptId, member: entry.poolMemberKey, module: 'task-runner' },
-    );
-    if (entry.leaseResourceKey && entry.leaseHolderId) {
-      host.persistence.releaseExecutionResourceLease?.(entry.leaseResourceKey, entry.leaseHolderId);
+    releaseAndKillOrphanedExecution(host, attemptId, entry, 'superseded');
+  }
+}
+
+/**
+ * Reclaim in-memory slots for attempts that are no longer any task's live
+ * `selectedAttemptId`. Same-task superseded reclaim does not free capacity for
+ * *other* tasks waiting on a wedged member; this pass does, using orchestrator
+ * truth so genuinely live executions are never dropped.
+ */
+function reclaimOrphanedExecutionSlots(host: TaskRunnerPoolHost & MergeRunnerHost): void {
+  const getTask = host.orchestrator?.getTask?.bind(host.orchestrator);
+  if (!getTask) return;
+  const allTasks = host.orchestrator.getAllTasks?.() ?? [];
+  const knownTaskIds = new Set(allTasks.map((task) => task.id));
+  for (const [attemptId, entry] of [...host.activeExecutions.entries()]) {
+    const task = getTask(entry.taskId);
+    if (task) {
+      if (task.execution.selectedAttemptId === attemptId) continue;
+      releaseAndKillOrphanedExecution(host, attemptId, entry, 'orphaned');
+      continue;
     }
-    const onKillError = (err: unknown) =>
-      host.logger?.warn?.(
-        `[TaskRunner] best-effort kill of superseded execution failed task=${task.id} attempt=${attemptId}`,
-        { err, module: 'task-runner' },
-      );
-    try {
-      void Promise.resolve(entry.executor.kill(entry.handle)).catch(onKillError);
-    } catch (err) {
-      onKillError(err);
-    }
+    // Missing task record: only reclaim when the orchestrator has a non-empty
+    // task set and this id is absent (deleted). Empty getAllTasks() is common
+    // in stubs / early boot and must not wipe live map entries.
+    if (allTasks.length === 0 || knownTaskIds.has(entry.taskId)) continue;
+    releaseAndKillOrphanedExecution(host, attemptId, entry, 'orphaned');
   }
 }
 
@@ -504,6 +545,7 @@ export function selectExecutor(
   };
   host.pendingPoolSelections.delete(task.id);
   reclaimSupersededExecutionSlots(host, task);
+  reclaimOrphanedExecutionSlots(host);
 
   if (task.config.poolId && explicitPoolMemberId) {
     const pool = host.getExecutionPools()[task.config.poolId];
