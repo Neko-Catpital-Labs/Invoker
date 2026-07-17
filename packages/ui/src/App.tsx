@@ -45,6 +45,63 @@ type ModalState =
   | { type: 'experiment'; task: TaskState }
   | { type: 'replace'; task: TaskState };
 
+type AppViewMode = 'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph' | 'attention';
+
+interface WorkflowMutationFailedEvent {
+  readonly workflowId?: unknown;
+  readonly failedTaskId?: unknown;
+  readonly message?: unknown;
+  readonly error?: unknown;
+  readonly reason?: unknown;
+  readonly mutationKind?: unknown;
+  readonly functionName?: unknown;
+  readonly channel?: unknown;
+  readonly intentId?: unknown;
+}
+
+interface TaskMutationFailureDetail {
+  readonly taskId: string;
+  readonly workflowId?: string;
+  readonly message: string;
+  readonly mutationKind?: string;
+  readonly intentId?: string | number;
+}
+
+interface WorkflowMutationFailureEventApi {
+  onWorkflowMutationFailed?: (cb: (event: WorkflowMutationFailedEvent) => void) => () => void;
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function getTaskScopedFailureId(event: WorkflowMutationFailedEvent): string | undefined {
+  return stringField(event.failedTaskId);
+}
+
+function normalizeTaskMutationFailure(
+  event: WorkflowMutationFailedEvent,
+  taskId: string,
+): TaskMutationFailureDetail {
+  return {
+    taskId,
+    workflowId: stringField(event.workflowId),
+    message:
+      stringField(event.message) ??
+      stringField(event.error) ??
+      stringField(event.reason) ??
+      'Workflow mutation failed.',
+    mutationKind:
+      stringField(event.mutationKind) ??
+      stringField(event.functionName) ??
+      stringField(event.channel),
+    intentId:
+      typeof event.intentId === 'number' || typeof event.intentId === 'string'
+        ? event.intentId
+        : undefined,
+  };
+}
+
 interface WorkflowContextMenuProps {
   x: number;
   y: number;
@@ -231,7 +288,7 @@ export function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
-  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
+  const [viewMode, setViewMode] = useState<AppViewMode>('dag');
   const [selectedActionNode, setSelectedActionNode] = useState<ActionGraphNode | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
@@ -247,6 +304,9 @@ export function App() {
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
+  const [mutationFailuresByTaskId, setMutationFailuresByTaskId] = useState<Map<string, TaskMutationFailureDetail>>(
+    new Map(),
+  );
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
   const refreshSystemDiagnostics = useCallback(() => {
@@ -270,6 +330,32 @@ export function App() {
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.invoker) return;
+    const eventApi = window.invoker as typeof window.invoker & WorkflowMutationFailureEventApi;
+    if (typeof eventApi.onWorkflowMutationFailed !== 'function') return;
+
+    return eventApi.onWorkflowMutationFailed((event) => {
+      const failedTaskId = getTaskScopedFailureId(event);
+      if (failedTaskId) {
+        setMutationFailuresByTaskId((prev) => {
+          const next = new Map(prev);
+          next.set(failedTaskId, normalizeTaskMutationFailure(event, failedTaskId));
+          return next;
+        });
+        return;
+      }
+
+      const workflowId = stringField(event.workflowId);
+      if (workflowId) {
+        setViewMode('dag');
+        setWorkflowSelectionDismissed(false);
+        setSelectedTaskId(null);
+        setSelectedWorkflowId(workflowId);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -359,6 +445,18 @@ export function App() {
     }
     return next;
   }, [selectedWorkflow, selectedWorkflowId, tasks]);
+  const attentionEntries = useMemo(
+    () =>
+      [...mutationFailuresByTaskId.entries()].map(([taskId, failure]) => ({
+        taskId,
+        task: tasks.get(taskId) ?? null,
+        failure,
+      })),
+    [mutationFailuresByTaskId, tasks],
+  );
+  const selectedTaskMutationFailure = selectedTaskId
+    ? mutationFailuresByTaskId.get(selectedTaskId) ?? null
+    : null;
 
   useEffect(() => {
     if (selectedTask?.config.workflowId) {
@@ -399,6 +497,35 @@ export function App() {
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
   const needsBundledSkillsPrompt = Boolean(systemDiagnostics?.isPackaged && systemDiagnostics?.bundledSkills?.promptRecommended);
+
+  const handleOpenAttention = useCallback(() => {
+    setViewMode('attention');
+    const selectedHasAttention = selectedTaskId ? mutationFailuresByTaskId.has(selectedTaskId) : false;
+    if (selectedHasAttention) return;
+
+    const firstEntry = attentionEntries[0];
+    if (!firstEntry) return;
+    setSelectedTaskId(firstEntry.taskId);
+    setWorkflowSelectionDismissed(false);
+    const workflowId = firstEntry.task?.config.workflowId ?? firstEntry.failure.workflowId;
+    if (workflowId) {
+      setSelectedWorkflowId(workflowId);
+    }
+  }, [attentionEntries, mutationFailuresByTaskId, selectedTaskId]);
+
+  const handleAttentionEntryClick = useCallback(
+    (taskId: string) => {
+      const task = tasks.get(taskId);
+      const failure = mutationFailuresByTaskId.get(taskId);
+      setSelectedTaskId(taskId);
+      setWorkflowSelectionDismissed(false);
+      const workflowId = task?.config.workflowId ?? failure?.workflowId;
+      if (workflowId) {
+        setSelectedWorkflowId(workflowId);
+      }
+    },
+    [mutationFailuresByTaskId, tasks],
+  );
 
   // ── DAG interaction ───────────────────────────────────────
   const handleTaskClick = useCallback((task: TaskState) => {
@@ -715,6 +842,7 @@ export function App() {
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
       setStatusFilters(new Set<WorkflowStatus>());
+      setMutationFailuresByTaskId(new Map());
     } catch (err) {
       console.error('Failed to clear:', err);
     }
@@ -735,6 +863,7 @@ export function App() {
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
+      setMutationFailuresByTaskId(new Map());
     } catch (err) {
       console.error('Failed to delete workflows:', err);
     }
@@ -1032,6 +1161,18 @@ export function App() {
             >
               Queue
             </button>
+            {attentionEntries.length > 0 && (
+              <button
+                data-testid="rail-attention"
+                onClick={handleOpenAttention}
+                className={`w-full rounded px-2 py-1.5 text-left text-xs ${viewMode === 'attention' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800/70'}`}
+              >
+                <span>Needs Attention</span>
+                <span data-testid="rail-attention-count" className="ml-1 text-[10px] text-amber-300">
+                  {attentionEntries.length}
+                </span>
+              </button>
+            )}
             </div>
 
             <div className="space-y-1 border-t border-gray-800 pt-3">
@@ -1086,6 +1227,37 @@ export function App() {
                   onCancel={handleCancelTask}
                   selectedTaskId={selectedTaskId}
                 />
+              ) : viewMode === 'attention' ? (
+                <div data-testid="needs-attention-surface" className="h-full overflow-y-auto bg-gray-900 p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h2 className="text-sm font-semibold text-amber-200">Needs Attention</h2>
+                    <span className="text-xs text-gray-400">{attentionEntries.length}</span>
+                  </div>
+                  <div className="space-y-2">
+                    {attentionEntries.map((entry) => (
+                      <button
+                        key={entry.taskId}
+                        data-testid={`attention-entry-${entry.taskId}`}
+                        onClick={() => handleAttentionEntryClick(entry.taskId)}
+                        className={`w-full rounded border px-3 py-2 text-left ${
+                          selectedTaskId === entry.taskId
+                            ? 'border-amber-400 bg-amber-950/40'
+                            : 'border-gray-700 bg-gray-800/70 hover:bg-gray-800'
+                        }`}
+                      >
+                        <div className="truncate text-sm text-gray-100">
+                          {entry.task?.description ?? entry.taskId}
+                        </div>
+                        <div className="mt-1 truncate text-xs text-amber-200">
+                          {entry.failure.message}
+                        </div>
+                        <div className="mt-1 text-[11px] text-gray-500">
+                          {entry.failure.workflowId ?? entry.task?.config.workflowId ?? 'workflow unknown'}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ) : viewMode === 'history' ? (
                 <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
               ) : viewMode === 'timeline' ? (
@@ -1156,6 +1328,7 @@ export function App() {
               remoteTargets={remoteTargets}
               executionPools={executionPools}
               executionAgents={executionAgents}
+              mutationFailure={selectedTaskMutationFailure}
               collapsed={inspectorCollapsed}
               advancedExpanded={advancedMetadataExpanded}
               actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
