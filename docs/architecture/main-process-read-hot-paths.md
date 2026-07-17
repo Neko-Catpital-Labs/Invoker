@@ -65,7 +65,10 @@ timer ticks into a main-thread SQLite convoy (macOS beachball).
 - Events (UI/IPC): `getEvents(taskId, { limit, sortBy?, beforeId? })` via
   `getEventsPage` — never the 1-arg unbounded adapter overload.
 - Events (status): `countEventsByTypes`, `getEventsByTypes(..., limit)` — not
-  full per-task history for status summaries.
+  full per-task history for status summaries. `getEventsByTypes` must query each
+  type with indexed `LIMIT` and merge in process (never multi-type `IN` +
+  `ORDER BY created_at`, which forces `USE TEMP B-TREE`). Fetch only the rows
+  the snapshot keeps (recovery status uses limit 10).
 - Events (headless full audit): loop pages server-side (`loadAllEventsPaged`) —
   never one giant IPC payload.
 - Attempts: indexed `LIMIT 1` for "newest active" — not `loadAttempts(nodeId)`
