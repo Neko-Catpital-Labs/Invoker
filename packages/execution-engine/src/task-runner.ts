@@ -1458,6 +1458,7 @@ export class TaskRunner {
     featureBranch: string;
     workflowSummary: string;
     cwd: string;
+    expectedGeneration: number;
     reviewGate?: ReviewGateState;
   }): Promise<{ artifacts: ReviewGateArtifact[]; sessionId: string; agentName: string }> {
     if (!this.executionAgentRegistry) {
@@ -1573,7 +1574,7 @@ export class TaskRunner {
         }
 
         const nowIso = new Date().toISOString();
-        const generation = args.reviewGate?.activeGeneration ?? 0;
+        const generation = args.expectedGeneration;
         const artifacts: ReviewGateArtifact[] = parsedArtifacts.map(({ body: _body, ...artifact }) => ({
           ...artifact,
           provider: 'github',
