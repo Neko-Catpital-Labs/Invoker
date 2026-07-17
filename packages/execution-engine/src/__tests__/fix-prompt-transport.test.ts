@@ -71,12 +71,17 @@ function makeExecutionAgent(buildFixCommand: ExecutionAgent['buildFixCommand']):
     buildCommand: (fullPrompt: string) => ({ cmd: 'codex', args: ['exec', '--json', fullPrompt] }),
     buildResumeArgs: (sessionId: string) => ({ cmd: 'codex', args: ['resume', sessionId] }),
     buildFixCommand,
+    supportsModel: () => true,
   };
 }
 
 describe('fix prompt transport for oversized prompts', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // Reset the spawn mock's once-queue so a test that rejects before calling
+    // spawn cannot leak its queued child into the next test.
+    const { spawn } = await import('node:child_process');
+    vi.mocked(spawn).mockReset();
   });
 
   it('local fix path replaces oversized prompt arg with file-backed bootstrap prompt', async () => {
@@ -167,6 +172,7 @@ describe('fix prompt transport for oversized prompts', () => {
       buildCommand: (fullPrompt: string) => ({ cmd: 'omp', args: ['-p', fullPrompt] }),
       buildResumeArgs: (sessionId: string) => ({ cmd: 'omp', args: ['resume', sessionId] }),
       buildFixCommand,
+      supportsModel: () => true,
     };
 
     vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('ok', 0) as any);
@@ -202,8 +208,8 @@ describe('fix prompt transport for oversized prompts', () => {
     vi.mocked(spawn).mockReturnValueOnce(child);
 
     const registry = {
-      get: () => ({ name: 'omp', buildFixCommand }),
-      getOrThrow: () => ({ name: 'omp', buildFixCommand }),
+      get: () => ({ name: 'omp', buildFixCommand, supportsModel: () => true }),
+      getOrThrow: () => ({ name: 'omp', buildFixCommand, supportsModel: () => true }),
       getSessionDriver: () => undefined,
     } as unknown as AgentRegistry;
 
@@ -235,8 +241,12 @@ describe('fix prompt transport for oversized prompts', () => {
  * to recognize argv-size and OOM-kill failures.
  */
 describe('spawn errors during agent fix surface diagnostic info', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // Reset the spawn mock's once-queue so a test that rejects before calling
+    // spawn cannot leak its queued child into the next test.
+    const { spawn } = await import('node:child_process');
+    vi.mocked(spawn).mockReset();
   });
 
   it('surfaces E2BIG when spawn emits an error event (argv too long)', async () => {
