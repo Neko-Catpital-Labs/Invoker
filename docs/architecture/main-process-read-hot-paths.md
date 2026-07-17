@@ -91,8 +91,9 @@ timer ticks into a main-thread SQLite convoy (macOS beachball).
 - Unit cost: `packages/app/src/__tests__/focus-switch-main-process-cost.test.ts`
   keeps Action Graph snapshot under 100ms on a 200-task fat events table.
 - DAG-click hitch e2e (`packages/app/e2e/dag-click-hitch-responsiveness.spec.ts`):
-  seed fat events, click task nodes, assert `listWorkflows` RTT stays under the
-  same hitch budget. Included in GitHub Playwright shards (merge-queue / master)
+  seed fat events, assert workflow select shows `selected-workflow-mini-dag`
+  within 100ms, then click task nodes and assert `listWorkflows` RTT stays under
+  the hitch budget. Included in GitHub Playwright shards (merge-queue / master)
   and in the extended Playwright battery used by the twice-daily e2e worker.
 - Slow-query telemetry: `SQLiteAdapter` logs statements slower than 25ms
   (`slowQueryThresholdMs` / `onSlowQuery`) so the next spike shows up without
