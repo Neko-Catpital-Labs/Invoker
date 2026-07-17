@@ -70,6 +70,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { SlowQueryAggregator } from './slow-query-aggregator.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -91,6 +92,9 @@ const DEFAULT_ACTIVITY_LOG_MAX_ROWS = 100_000;
 const ACTIVITY_LOG_PRUNE_INTERVAL = 1_000; // prune at most once per N writes
 
 const OUTPUT_DIAGNOSTIC_TAIL_CHARS = 8_000;
+const SLOW_QUERY_SUMMARY_TOP_N = 10;
+const SLOW_QUERY_SUMMARY_INTERVAL_MS = 30_000;
+const SLOW_QUERY_SUMMARY_MIN_RECORDS = 100;
 
 export interface OutputChunk {
   offset: number;
@@ -524,6 +528,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private readonly workflowRepo: SqliteWorkflowRepository;
   private readonly slowQueryThresholdMs: number;
   private readonly onSlowQuery: ((info: SlowQueryInfo) => void) | null;
+  private readonly slowQueryAggregator: SlowQueryAggregator | null;
+  private slowQuerySummaryWindowStartedAtMs = 0;
+  private slowQuerySummaryLastEmittedAtMs = 0;
+  private slowQuerySummaryRecordsSinceEmit = 0;
 
   /**
    * Non-null only when this adapter was opened via the corruption-recovery
@@ -549,16 +557,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
     this.exclusiveLocking = options?.exclusiveLocking === true;
     this.slowQueryThresholdMs = options?.slowQueryThresholdMs ?? 25;
+    const useDefaultSlowQueryAggregator = !options?.onSlowQuery && this.slowQueryThresholdMs > 0;
+    this.slowQueryAggregator = useDefaultSlowQueryAggregator ? new SlowQueryAggregator() : null;
     this.onSlowQuery = options?.onSlowQuery
-      ?? (this.slowQueryThresholdMs > 0
-        ? (info) => {
-            console.warn(
-              `[SQLiteAdapter] slow query ${info.durationMs.toFixed(1)}ms` +
-                (info.rowCount === undefined ? '' : ` rows=${info.rowCount}`) +
-                `: ${info.sql.slice(0, 200)}`,
-            );
-          }
-        : null);
+      ?? (this.slowQueryAggregator ? (info) => this.recordDefaultSlowQuery(info) : null);
     this.corruptionRecovery = corruptionRecovery;
     this.taskAttemptRepo = new SqliteTaskAttemptRepository(this.executor, {
       updateTask: (taskId, changes) => this.updateTask(taskId, changes),
@@ -732,6 +734,57 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   // ── SQLite Helpers ───────────────────────────────────────
+
+  private recordDefaultSlowQuery(info: SlowQueryInfo): void {
+    if (!this.slowQueryAggregator) return;
+
+    this.slowQueryAggregator.record(info);
+    this.slowQuerySummaryRecordsSinceEmit += 1;
+
+    const now = Date.now();
+    if (this.slowQuerySummaryWindowStartedAtMs === 0) {
+      this.slowQuerySummaryWindowStartedAtMs = now;
+    }
+
+    const elapsedSinceWindowStarted = now - this.slowQuerySummaryWindowStartedAtMs;
+    const elapsedSinceLastEmit = this.slowQuerySummaryLastEmittedAtMs === 0
+      ? Number.POSITIVE_INFINITY
+      : now - this.slowQuerySummaryLastEmittedAtMs;
+    const firstSummaryReady = this.slowQuerySummaryLastEmittedAtMs === 0
+      && (
+        this.slowQuerySummaryRecordsSinceEmit >= SLOW_QUERY_SUMMARY_MIN_RECORDS ||
+        elapsedSinceWindowStarted >= SLOW_QUERY_SUMMARY_INTERVAL_MS
+      );
+    const nextSummaryReady = this.slowQuerySummaryLastEmittedAtMs !== 0
+      && elapsedSinceLastEmit >= SLOW_QUERY_SUMMARY_INTERVAL_MS;
+
+    if (!firstSummaryReady && !nextSummaryReady) return;
+
+    this.emitSlowQuerySummary(now);
+  }
+
+  private emitSlowQuerySummary(now: number): void {
+    if (!this.slowQueryAggregator) return;
+
+    const rows = this.slowQueryAggregator.topN(SLOW_QUERY_SUMMARY_TOP_N);
+    if (rows.length === 0) return;
+
+    const lines = rows.map((row, index) => {
+      const maxRows = row.maxRows === undefined ? '' : ` maxRows=${row.maxRows}`;
+      return `${index + 1}. max=${row.maxMs.toFixed(1)}ms p95=${row.p95Ms.toFixed(1)}ms ` +
+        `p50=${row.p50Ms.toFixed(1)}ms count=${row.count}${maxRows} ` +
+        `first=${row.firstSeenAt} last=${row.lastSeenAt} sql=${row.shape.slice(0, 240)}`;
+    });
+    console.warn(
+      `[SQLiteAdapter] slow query summary top ${rows.length} ` +
+        `(threshold=${this.slowQueryThresholdMs}ms, retained since process start)\n` +
+        lines.join('\n'),
+    );
+
+    this.slowQuerySummaryLastEmittedAtMs = now;
+    this.slowQuerySummaryWindowStartedAtMs = now;
+    this.slowQuerySummaryRecordsSinceEmit = 0;
+  }
 
   private noteSlowQuery(startedAt: number, sql: string, rowCount?: number): void {
     if (this.slowQueryThresholdMs <= 0 || !this.onSlowQuery) return;
