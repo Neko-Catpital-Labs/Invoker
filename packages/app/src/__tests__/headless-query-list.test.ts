@@ -177,3 +177,61 @@ describe('headless query worker-decisions', () => {
     ).rejects.toThrow('Invalid --decision');
   });
 });
+
+function makeTaskQueryDeps(overrides: {
+  taskOutput?: string;
+  containerId?: string | null;
+}): HeadlessQueryDeps {
+  return {
+    persistence: {
+      listWorkflows: () => [{ id: 'wf-1' }],
+      loadTasks: (workflowId: string) =>
+        workflowId === 'wf-1' ? [{ id: 'wf-1/task-1' }] : [],
+      getTaskOutput: () => overrides.taskOutput ?? '',
+      getContainerId: () => overrides.containerId ?? null,
+    } as unknown as HeadlessQueryDeps['persistence'],
+    orchestrator: {
+      syncFromDb: () => {},
+    } as unknown as HeadlessQueryDeps['orchestrator'],
+    executionAgentRegistry: undefined,
+    invokerConfig: {} as unknown as HeadlessQueryDeps['invokerConfig'],
+    getUiPerfStats: () => ({}),
+    resetUiPerfStats: () => {},
+  };
+}
+
+describe('headless query task-output', () => {
+  it('prints the task output for a short task id', async () => {
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'task-output', 'task-1'],
+      makeTaskQueryDeps({ taskOutput: 'build ok\n' }),
+    );
+    expect(output).toBe('build ok\n');
+  });
+
+  it('emits the resolved id and output as JSON', async () => {
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'task-output', 'task-1', '--output', 'json'],
+      makeTaskQueryDeps({ taskOutput: 'log line' }),
+    );
+    expect(JSON.parse(output)).toEqual({ id: 'wf-1/task-1', output: 'log line' });
+  });
+});
+
+describe('headless query container-id', () => {
+  it('prints the container id for a short task id', async () => {
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'container-id', 'task-1'],
+      makeTaskQueryDeps({ containerId: 'container-abc' }),
+    );
+    expect(output).toBe('container-abc\n');
+  });
+
+  it('prints an empty line when there is no container', async () => {
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'container-id', 'task-1'],
+      makeTaskQueryDeps({ containerId: null }),
+    );
+    expect(output).toBe('\n');
+  });
+});
