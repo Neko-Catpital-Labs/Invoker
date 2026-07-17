@@ -38,7 +38,10 @@ export function WorkflowNode({
       data-testid={`workflow-node-${workflow.id}`}
       role="button"
       tabIndex={0}
-      onClick={onClick}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
       onContextMenu={onContextMenu}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'Enter' || event.key === ' ') {
