@@ -1,12 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { LocalBus } from '@invoker/transport';
 
 import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+  const savedDbDir = process.env.INVOKER_DB_DIR;
+  let dbDir: string;
   beforeEach(() => {
     delete process.env.INVOKER_HEADLESS_STANDALONE;
+    // Isolate the resolved DB path so the owner-marker liveness check in
+    // delegateGenericReadQuery cannot see a real ~/.invoker owner on the dev box.
+    dbDir = mkdtempSync(join(tmpdir(), 'headless-client-'));
+    process.env.INVOKER_DB_DIR = dbDir;
   });
   afterEach(() => {
     if (savedStandalone === undefined) {
@@ -14,6 +23,12 @@ describe('headless-client', () => {
     } else {
       process.env.INVOKER_HEADLESS_STANDALONE = savedStandalone;
     }
+    if (savedDbDir === undefined) {
+      delete process.env.INVOKER_DB_DIR;
+    } else {
+      process.env.INVOKER_DB_DIR = savedDbDir;
+    }
+    rmSync(dbDir, { recursive: true, force: true });
   });
 
   it('passes Linux headless stability flags before the app entry point', () => {
@@ -83,6 +98,39 @@ describe('headless-client', () => {
     expect(refreshMessageBus).toHaveBeenCalledTimes(1);
     expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     expect(runElectronHeadless).toHaveBeenCalledWith(argv);
+  });
+
+  it('keeps delegating a read when the ping misses but a live owner marker exists', async () => {
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+    // A live owner holds the DB (marker names this process, sidecars present),
+    // so a direct read-only open would be rejected by the WAL guard. The owner
+    // is too busy to answer the discovery ping, but still serves cli-query.
+    const dbPath = join(dbDir, 'invoker.db');
+    writeFileSync(dbPath, '');
+    writeFileSync(`${dbPath}-wal`, '');
+    writeFileSync(`${dbPath}.owner`, String(process.pid), 'utf-8');
+
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    // No owner-ping handler → discovery misses; cli-query still succeeds.
+    secondBus.onRequest('headless.query', async (request: { kind: string; args: string[] }) => {
+      expect(request).toEqual({ kind: 'cli-query', args: ['query', 'tasks', '--output', 'json'] });
+      return { output: '[]\n' };
+    });
+
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const refreshMessageBus = vi.fn().mockResolvedValue(secondBus);
+    const runElectronHeadless = vi.fn(async () => 23);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'tasks', '--output', 'json'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner,
+      refreshMessageBus,
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
   });
 
   it('delegates mutating commands to a standalone-capable owner endpoint', async () => {
