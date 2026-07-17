@@ -58,6 +58,34 @@ usage() {
   exit "${1:-1}"
 }
 
+has_validate_dependencies() {
+  pnpm --dir packages/ui exec vitest --version >/dev/null 2>&1
+}
+
+has_capture_dependencies() {
+  has_validate_dependencies \
+    && pnpm --dir packages/app exec playwright --version >/dev/null 2>&1 \
+    && node scripts/electron.cjs --ensure-only >/dev/null 2>&1
+}
+
+ensure_workspace_dependencies() {
+  local mode="$1"
+
+  if [[ "$mode" == "capture" ]]; then
+    has_capture_dependencies && return 0
+  else
+    has_validate_dependencies && return 0
+  fi
+
+  echo "[visual-proof] Installing workspace dependencies (${mode})..." >&2
+  if [[ "$mode" == "validate" ]]; then
+    pnpm install --frozen-lockfile --ignore-scripts
+  else
+    pnpm install --frozen-lockfile
+    node scripts/electron.cjs --install-only
+  fi
+}
+
 check_prerequisite_ffmpeg() {
   if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "[visual-proof] ERROR: ffmpeg not found in PATH" >&2
@@ -94,6 +122,7 @@ run_capture() {
   mkdir -p "${CAPTURE_DIR}"
 
   if [[ "${skip_build}" == "false" ]]; then
+    ensure_workspace_dependencies "capture"
     echo "[visual-proof] Building UI and app..." >&2
     pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build || {
       echo "[visual-proof] ERROR: Build failed" >&2
@@ -269,7 +298,8 @@ case "$SUBCOMMAND" in
     ;;
   validate)
     echo "[visual-proof] Running DOM snapshot tests..." >&2
-    cd packages/ui && pnpm test -- --run src/__tests__/visual-proof-snapshots.test.tsx
+    ensure_workspace_dependencies "validate"
+    pnpm --dir packages/ui exec vitest run src/__tests__/visual-proof-snapshots.test.tsx
     ;;
   compare)
     subcommand_compare

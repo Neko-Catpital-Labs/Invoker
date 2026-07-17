@@ -51,6 +51,11 @@ export interface SshExecutorConfig {
    * Default: ~/.invoker
    */
   remoteInvokerHome?: string;
+  /**
+   * Optional repo hydration command for managed workspaces. Runs in the checked
+   * out worktree before the task payload, for example `pnpm install --frozen-lockfile`.
+   */
+  provisionCommand?: string;
   /** Opt-in: export agent API keys from secretsFile into remote task shells. */
   useApiKey?: boolean;
   /** Optional local secrets file used when useApiKey is true. */
@@ -87,6 +92,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly agentRegistry?: AgentRegistry;
   private readonly managedWorkspaces: boolean;
   private readonly remoteInvokerHome: string;
+  private readonly provisionCommand: string | undefined;
   private readonly useApiKey: boolean;
   private readonly secretsFile: string | undefined;
   private readonly remoteHeartbeatIntervalSeconds: number;
@@ -101,6 +107,8 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.agentRegistry = config.agentRegistry;
     this.managedWorkspaces = config.managedWorkspaces ?? false;
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
+    const provisionCommand = config.provisionCommand?.trim();
+    this.provisionCommand = provisionCommand ? provisionCommand : undefined;
     this.useApiKey = config.useApiKey === true;
     this.secretsFile = config.secretsFile;
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
@@ -229,9 +237,22 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
   }): string {
     const runner = this.buildRunnerScript();
     const payload = this.buildPayloadScript(options.payload);
+    const provision = options.managed && this.provisionCommand
+      ? this.buildPayloadScript(this.provisionCommand)
+      : undefined;
     const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const provisionPathAssignment = provision ? `PROVISION_PATH="$STAGING_DIR/provision.sh"\n` : '';
+    const renderProvision = provision ? this.renderHeredocFile('"$PROVISION_PATH"', provision, 'provision') : '';
+    const chmodTargets = provision
+      ? 'chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH" "$PROVISION_PATH"'
+      : 'chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"';
+    const provisionSection = provision
+      ? `echo "[SshExecutor] Provisioning remote worktree..."
+"$RUNNER_PATH" "$PROVISION_PATH"
+`
+      : '';
     const runPayloadSection = `echo "[SshExecutor] Running task payload..."
 `;
 
@@ -241,6 +262,7 @@ INVOKER_HOME=$(normalize_remote_path ${this.shellQuote(this.remoteInvokerHome)})
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
+${provisionPathAssignment}
 cleanup_runtime() {
   local status="$1"
   trap - EXIT HUP INT TERM
@@ -275,12 +297,12 @@ trap 'cleanup_runtime 143' TERM
 rm -rf "$STAGING_DIR" 2>/dev/null || true
 mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
-${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
+${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}${renderProvision}${chmodTargets}
 WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
 cd "$WT"
 ${options.envExports}
 start_bootstrap_heartbeat
-${runPayloadSection}stop_bootstrap_heartbeat
+${provisionSection}${runPayloadSection}stop_bootstrap_heartbeat
 "$RUNNER_PATH" "$PAYLOAD_PATH"
 `;
   }
