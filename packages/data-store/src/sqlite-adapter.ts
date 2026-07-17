@@ -1587,16 +1587,30 @@ export class SQLiteAdapter implements PersistenceAdapter {
     limit = 50,
   ): TaskEvent[] {
     if (eventTypes.length === 0 || limit <= 0) return [];
+    const pageLimit = Math.floor(limit);
     const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
-    const placeholders = eventTypes.map(() => '?').join(', ');
-    const rows = this.queryAll(
-      `SELECT * FROM events
-       WHERE event_type IN (${placeholders})
-       ORDER BY created_at ${orderBy}, id ${orderBy}
-       LIMIT ?`,
-      [...eventTypes, Math.floor(limit)],
-    );
-    return rows.map((row: any) => this.rowToTaskEvent(row));
+    // One multi-type IN + ORDER BY created_at forces USE TEMP B-TREE over every
+    // matching row before LIMIT. Query each type via idx_events_type_created
+    // with LIMIT, then merge in process.
+    const merged: TaskEvent[] = [];
+    for (const eventType of eventTypes) {
+      const rows = this.queryAll(
+        `SELECT * FROM events
+         WHERE event_type = ?
+         ORDER BY created_at ${orderBy}, id ${orderBy}
+         LIMIT ?`,
+        [eventType, pageLimit],
+      );
+      for (const row of rows) {
+        merged.push(this.rowToTaskEvent(row));
+      }
+    }
+    merged.sort((a, b) => {
+      const byCreated = a.createdAt.localeCompare(b.createdAt);
+      if (byCreated !== 0) return sortBy === 'desc' ? -byCreated : byCreated;
+      return sortBy === 'desc' ? b.id - a.id : a.id - b.id;
+    });
+    return merged.slice(0, pageLimit);
   }
 
   countEventsByTypes(eventTypes: readonly string[]): Array<{
