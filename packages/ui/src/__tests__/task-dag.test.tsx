@@ -68,4 +68,36 @@ describe('TaskDAG status filters', () => {
     expect(assigningNode.className).not.toContain('opacity-20');
     expect(pendingNode.className).toContain('opacity-20');
   });
+
+  it('omits workflow prefixes from generated edge labels for scoped task ids', async () => {
+    const setupTask = makeUITask({
+      id: 'wf-alpha/setup-task',
+      workflowId: 'wf-alpha',
+      status: 'completed',
+      description: 'Setup task',
+    });
+    const renderTask = makeUITask({
+      id: 'wf-alpha/render-task',
+      workflowId: 'wf-alpha',
+      status: 'pending',
+      description: 'Render task',
+      dependencies: ['wf-alpha/setup-task'],
+    });
+    const tasks = new Map<string, TaskState>([
+      [setupTask.id, setupTask],
+      [renderTask.id, renderTask],
+    ]);
+    const workflows = new Map<string, WorkflowMeta>([
+      ['wf-alpha', { id: 'wf-alpha', name: 'Alpha workflow', status: 'running' }],
+    ]);
+
+    render(<TaskDAG tasks={tasks} workflows={workflows} />);
+
+    const edge = await screen.findByTestId(`rf__edge-local:${setupTask.id}->${renderTask.id}`);
+
+    await waitFor(() => {
+      expect(edge).toHaveAttribute('data-label', 'setup-task → render-task');
+    });
+    expect(edge.getAttribute('data-label')).not.toContain('wf-alpha');
+  });
 });

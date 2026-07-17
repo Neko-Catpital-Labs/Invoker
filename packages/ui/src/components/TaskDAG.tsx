@@ -71,11 +71,31 @@ type LayoutState = {
   result: TaskGraphLayout;
 };
 
+function truncateEdgeEndpoint(label: string): string {
+  return label.length > 12 ? label.slice(0, 12) + '..' : label;
+}
+
+function unscopedTaskId(task: TaskState): string {
+  const workflowId = task.config.workflowId;
+  if (workflowId && task.id.startsWith(`${workflowId}/`)) {
+    return task.id.slice(workflowId.length + 1);
+  }
+  return task.id;
+}
+
 /** Short label for edge hover tooltip showing the dependency relationship. */
-function buildEdgeLabel(source: TaskState, target: TaskState): string {
-  const srcId = source.id.length > 12 ? source.id.slice(0, 12) + '..' : source.id;
-  const tgtId = target.id.length > 12 ? target.id.slice(0, 12) + '..' : target.id;
-  return `${srcId} → ${tgtId}`;
+function buildEdgeEndpointLabel(taskId: string, task?: TaskState): string {
+  if (task?.config.isMergeNode || isMergeGateId(taskId)) return 'Merge';
+  return truncateEdgeEndpoint(task ? unscopedTaskId(task) : taskId);
+}
+
+function buildEdgeLabel(
+  sourceId: string,
+  targetId: string,
+  sourceTask?: TaskState,
+  targetTask?: TaskState,
+): string {
+  return `${buildEdgeEndpointLabel(sourceId, sourceTask)} → ${buildEdgeEndpointLabel(targetId, targetTask)}`;
 }
 
 function resolveExternalDependencyTaskId(
@@ -384,13 +404,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       const targetStatus = targetTask?.status ?? rawGraph.gateStatuses.get(e.target) ?? 'pending';
       const edgeStyle = getEdgeStyle(sourceStatus, targetStatus);
 
-      const srcIsMerge = tasks.get(e.source)?.config.isMergeNode || isMergeGateId(e.source);
-      const tgtIsMerge = tasks.get(e.target)?.config.isMergeNode || isMergeGateId(e.target);
-      const srcLabel = srcIsMerge ? 'Merge' : e.source;
-      const tgtLabel = tgtIsMerge ? 'Merge' : e.target;
-      const truncSrc = srcLabel.length > 12 ? srcLabel.slice(0, 12) + '..' : srcLabel;
-      const truncTgt = tgtLabel.length > 12 ? tgtLabel.slice(0, 12) + '..' : tgtLabel;
-      const label = `${truncSrc} → ${truncTgt}`;
+      const label = buildEdgeLabel(e.source, e.target, sourceTask, targetTask);
 
       const edgeDimmed = rawGraph.dimmedNodeIds.has(e.source) || rawGraph.dimmedNodeIds.has(e.target);
       const selectionActive = selectedTaskId === e.source || selectedTaskId === e.target;
