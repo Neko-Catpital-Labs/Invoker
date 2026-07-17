@@ -1,7 +1,13 @@
 import { expect, test, E2E_REPO_URL } from './fixtures/electron-app.js';
 import { stringify as yamlStringify } from 'yaml';
 import type { Page } from '@playwright/test';
-import { numberOrZero } from './fixtures/ui-perf.js';
+import {
+  activityLogWatermark,
+  maxPayloadNumber,
+  numberOrZero,
+  uiPerfPayloadsSince,
+  type UiPerfPayload,
+} from './fixtures/ui-perf.js';
 
 const WORKFLOW_COUNT = 50;
 const TASKS_PER_WORKFLOW = 8;
@@ -198,8 +204,12 @@ async function streamTaskUpdatesDuringDrag(page: Page): Promise<number> {
   return updateCount;
 }
 
-function expectSmoothDrag(result: DragPerfResult, perf: Record<string, unknown>): void {
-  const evidence = JSON.stringify({ ...result, perf, budgets: DRAG_PERF_BUDGETS });
+function expectSmoothDrag(
+  result: DragPerfResult,
+  perf: Record<string, unknown>,
+  perfPayloads: readonly UiPerfPayload[],
+): void {
+  const evidence = JSON.stringify({ ...result, perf, perfPayloads, budgets: DRAG_PERF_BUDGETS });
   expect(result.frameCount, evidence).toBeGreaterThanOrEqual(MIN_FRAME_COUNT);
   expect(result.p95FrameGapMs, evidence).toBeLessThanOrEqual(MAX_P95_FRAME_GAP_MS);
   expect(result.maxFrameGapMs, evidence).toBeLessThanOrEqual(MAX_FRAME_GAP_MS);
@@ -208,33 +218,39 @@ function expectSmoothDrag(result: DragPerfResult, perf: Record<string, unknown>)
   expect(result.firstTransformMs ?? Number.POSITIVE_INFINITY, evidence).toBeLessThanOrEqual(MAX_FIRST_TRANSFORM_MS);
   expect(numberOrZero(perf.maxRendererEventLoopLagMs), evidence).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
   expect(numberOrZero(perf.maxRendererLongTaskMs), evidence).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
+  expect(maxPayloadNumber(perfPayloads, 'renderer_event_loop_lag', 'lagMs'), evidence).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
+  expect(maxPayloadNumber(perfPayloads, 'renderer_long_task', 'durationMs'), evidence).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
   expect(numberOrZero(perf.maxTaskDeltaBatchSize), evidence).toBeLessThanOrEqual(MAX_TASK_DELTA_BATCH_SIZE);
 }
 
 test('workflow graph pan stays responsive under a large persisted graph', async ({ page }) => {
   await seedLargeWorkflowGraph(page);
 
+  const perfWatermark = await activityLogWatermark(page);
   const result = await recordDragPerformance(
     page,
     '[data-testid="workflow-graph-react-flow"] .react-flow__pane',
     '[data-testid="workflow-graph-react-flow"] .react-flow__viewport',
   );
+  const perfPayloads = await uiPerfPayloadsSince(page, perfWatermark);
   const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
 
   console.log(`UI_GRAPH_DRAG_BENCH_RESULT=${JSON.stringify({
     ...result,
     workflowCount: WORKFLOW_COUNT,
     taskCount: WORKFLOW_COUNT * TASKS_PER_WORKFLOW,
+    perfPayloads,
     perf,
     budgets: DRAG_PERF_BUDGETS,
   })}`);
-  expectSmoothDrag(result, perf);
+  expectSmoothDrag(result, perf, perfPayloads);
 });
 
 test('workflow graph pan stays responsive while task updates arrive', async ({ page }) => {
   await seedLargeWorkflowGraph(page);
 
   let updateCount = 0;
+  const perfWatermark = await activityLogWatermark(page);
   const result = await recordDragPerformance(
     page,
     '[data-testid="workflow-graph-react-flow"] .react-flow__pane',
@@ -243,6 +259,7 @@ test('workflow graph pan stays responsive while task updates arrive', async ({ p
       updateCount = await streamTaskUpdatesDuringDrag(page);
     },
   );
+  const perfPayloads = await uiPerfPayloadsSince(page, perfWatermark);
   const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
 
   console.log(`UI_GRAPH_DRAG_WITH_UPDATES_BENCH_RESULT=${JSON.stringify({
@@ -252,10 +269,11 @@ test('workflow graph pan stays responsive while task updates arrive', async ({ p
     updateCount,
     updateBursts: UPDATE_BURSTS,
     updatesPerBurst: UPDATES_PER_BURST,
+    perfPayloads,
     perf,
     budgets: DRAG_PERF_BUDGETS,
   })}`);
-  const evidence = JSON.stringify({ ...result, updateCount, perf, budgets: DRAG_PERF_BUDGETS });
+  const evidence = JSON.stringify({ ...result, updateCount, perfPayloads, perf, budgets: DRAG_PERF_BUDGETS });
   expect(updateCount, evidence).toBe(UPDATE_BURSTS * UPDATES_PER_BURST);
-  expectSmoothDrag(result, perf);
+  expectSmoothDrag(result, perf, perfPayloads);
 });
