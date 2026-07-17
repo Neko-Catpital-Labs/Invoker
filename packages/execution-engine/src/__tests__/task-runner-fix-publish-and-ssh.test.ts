@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { getCurrentRequiredReviewArtifacts } from '../task-runner-review-gate.js';
+import { ResourceLimitError } from '../repo-pool.js';
 import { SshExecutor } from '../ssh-executor.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
@@ -105,8 +106,8 @@ function createTempWorkspace(): string {
   tempWorkspaces.push(dir);
   return dir;
 }
-
 afterEach(() => {
+  vi.useRealTimers();
   if (originalGithubTargetRepo === undefined) {
     delete process.env.INVOKER_GITHUB_TARGET_REPO;
   } else {
@@ -800,7 +801,7 @@ describe('TaskRunner', () => {
         commit: 'abc1234',
       });
     });
-    it.skip('retries approved-fix publish when SSH capacity is full', async () => {
+    it('waits for SSH capacity instead of failing approved-fix publish', async () => {
       vi.useFakeTimers();
       const publishSpy = vi.spyOn(SshExecutor.prototype, 'publishApprovedFix').mockResolvedValue({
         commitHash: 'queued123',

@@ -88,11 +88,11 @@ import {
 import type {
   ExecutionPoolMember,
   ExecutionPoolConfig,
+  PoolMemberHealth,
   PoolSelection,
   RemoteTargetDisplay,
   ResolvedExecutionSelection,
   SelectedExecutor,
-  PoolMemberHealth,
 } from './task-runner-pool.js';
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
@@ -178,6 +178,7 @@ export interface TaskRunnerConfig {
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
+    provisionCommand?: string;
     use_api_key?: boolean;
     secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
@@ -880,7 +881,30 @@ export class TaskRunner {
       }
     }
 
-    const selectedExecutor = this.selectExecutor(task);
+    let selectedExecutor: SelectedExecutor;
+    let capacityWaitAttempts = 0;
+    for (;;) {
+      try {
+        selectedExecutor = this.selectExecutor(task);
+        break;
+      } catch (err) {
+        if (!(err instanceof ResourceLimitError)) {
+          throw err;
+        }
+        capacityWaitAttempts += 1;
+        const retryMs = Math.min(15_000 * 2 ** Math.max(0, capacityWaitAttempts - 1), 5 * 60_000);
+        this.persistence.logEvent?.(task.id, 'task.approved_fix_waiting', {
+          attempts: capacityWaitAttempts,
+          message: err.message,
+          nextRetryAt: new Date(Date.now() + retryMs),
+        });
+        this.logger.info(
+          `[TaskRunner] approved-fix publish waiting for capacity task=${task.id} retryInMs=${retryMs}: ${err.message}`,
+          { taskId: task.id, attempts: capacityWaitAttempts, retryMs },
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, retryMs));
+      }
+    }
     const executor = selectedExecutor.executor;
     let result: { commitHash?: string; error?: string };
     if (executor instanceof SshExecutor) {
@@ -1681,6 +1705,7 @@ export class TaskRunner {
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
+    provisionCommand?: string;
     use_api_key?: boolean;
     secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
