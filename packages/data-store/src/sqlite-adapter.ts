@@ -2871,6 +2871,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
     );
   }
 
+  /**
+   * Globally delete expired execution-resource leases. Claim-time reclaim only
+   * clears the same `resource_key`; after owner restart, orphaned keys would
+   * otherwise sit until something tries that key again.
+   */
+  releaseExpiredExecutionResourceLeases(nowIso?: string): number {
+    const cutoff = nowIso ?? new Date().toISOString();
+    this.execRun(
+      'DELETE FROM execution_resource_leases WHERE lease_expires_at <= ?',
+      [cutoff],
+    );
+    return (this.db.getRowsModified?.() ?? 0) as number;
+  }
+
   listExecutionResourceLeases(): ExecutionResourceLease[] {
     return this.queryAll(
       'SELECT * FROM execution_resource_leases ORDER BY resource_key ASC, acquired_at ASC',

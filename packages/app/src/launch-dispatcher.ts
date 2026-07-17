@@ -25,7 +25,9 @@ export type LaunchDispatcherPersistence = Pick<
   | 'listExecutionResourceLeasesByTask'
   | 'releaseExecutionResourceLease'
   | 'logEvent'
->;
+> & {
+  releaseExpiredExecutionResourceLeases?(nowIso?: string): number;
+};
 
 /**
  * Narrow interface for the orchestrator surface the dispatcher needs.
@@ -102,17 +104,40 @@ export class LaunchDispatcher {
   /**
    * Single dispatcher tick:
    *
-   *   1. Abandon leased rows that are out of retries or have sat in
+   *   1. Sweep expired SSH/worktree execution-resource leases globally.
+   *   2. Abandon leased rows that are out of retries or have sat in
    *      launch long enough to be treated as stuck.
-   *   2. Reap any remaining leased rows whose dispatch lease expired.
-   *   3. Top up ready tasks into the durable launch outbox.
-   *   4. Lease and dispatch enqueued rows.
+   *   3. Reap any remaining leased rows whose dispatch lease expired.
+   *   4. Top up ready tasks into the durable launch outbox.
+   *   5. Lease and dispatch enqueued rows.
    */
   poll(): void {
+    this.sweepExpiredResourceLeases();
     this.abandonStuckLeases();
     this.reapExpiredLeases();
     this.topUpReadyLaunches();
     this.dispatchActive();
+  }
+
+  private sweepExpiredResourceLeases(): void {
+    const sweep = this.persistence.releaseExpiredExecutionResourceLeases;
+    if (typeof sweep !== 'function') return;
+    try {
+      const released = sweep.call(this.persistence);
+      if (released > 0) {
+        this.logger?.info?.('[launch-dispatcher] swept expired execution resource leases', {
+          ownerId: this.ownerId,
+          released,
+          module: 'launch-dispatcher',
+        });
+      }
+    } catch (err) {
+      this.logger?.warn?.('[launch-dispatcher] expired execution resource lease sweep failed', {
+        ownerId: this.ownerId,
+        error: err instanceof Error ? err.message : String(err),
+        module: 'launch-dispatcher',
+      });
+    }
   }
 
   private topUpReadyLaunches(): void {
