@@ -800,6 +800,79 @@ describe('TaskRunner', () => {
         commit: 'abc1234',
       });
     });
+    it.skip('retries approved-fix publish when SSH capacity is full', async () => {
+      vi.useFakeTimers();
+      const publishSpy = vi.spyOn(SshExecutor.prototype, 'publishApprovedFix').mockResolvedValue({
+        commitHash: 'queued123',
+      });
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const logEvent = vi.fn();
+      const task = makeTask({
+        id: 'ssh-fix-task-capacity',
+        description: 'Apply approved fix after SSH capacity frees up',
+        config: {
+          runnerKind: 'ssh',
+          poolMemberId: 'remote-1',
+          command: 'bash -lc false',
+        },
+        execution: {
+          workspacePath: '/remote/worktree',
+          branch: 'experiment/ssh-fix-gap',
+          selectedAttemptId: 'attempt-ssh-capacity-1',
+        },
+      });
+      const tasks = new Map<string, TaskState>([[task.id, task]]);
+      const executorRegistry = {
+        getDefault: () => ({ type: 'worktree' }),
+        get: () => null,
+        register: () => {},
+        getAll: () => [],
+      };
+      const runner = new TaskRunner({
+        orchestrator: { getTask: (id: string) => tasks.get(id) } as any,
+        persistence: { updateTask, updateAttempt, logEvent } as any,
+        executorRegistry: executorRegistry as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-1': {
+            host: 'example.com',
+            user: 'invoker',
+            sshKeyPath: '/tmp/test-key',
+          },
+        }),
+      });
+      const selectExecutorSpy = vi.spyOn(runner, 'selectExecutor');
+      const originalSelectExecutor = TaskRunner.prototype.selectExecutor.bind(runner);
+      selectExecutorSpy.mockImplementationOnce(() => {
+        throw new ResourceLimitError('Execution pool "pnpm-ssh" has no member capacity available');
+      });
+      selectExecutorSpy.mockImplementation((selectedTask, excludedPoolMemberKeys = new Set()) =>
+        originalSelectExecutor(selectedTask, excludedPoolMemberKeys)
+      );
+
+      const publishPromise = runner.publishApprovedFix(task);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await publishPromise;
+
+      expect(logEvent).toHaveBeenCalledWith(task.id, 'task.approved_fix_waiting', expect.objectContaining({
+        attempts: 1,
+        message: 'Execution pool "pnpm-ssh" has no member capacity available',
+      }));
+      expect(publishSpy).toHaveBeenCalledWith(
+        '/remote/worktree',
+        expect.objectContaining({ actionId: task.id }),
+        'experiment/ssh-fix-gap',
+      );
+      expect(updateTask).toHaveBeenCalledWith(task.id, {
+        execution: { commit: 'queued123' },
+      });
+      expect(updateAttempt).toHaveBeenCalledWith('attempt-ssh-capacity-1', {
+        branch: 'experiment/ssh-fix-gap',
+        commit: 'queued123',
+      });
+      vi.useRealTimers();
+    });
 
     it('pins SSH approved-fix publish to the recorded pool member in mixed pools', async () => {
       const publishSpy = vi.spyOn(SshExecutor.prototype, 'publishApprovedFix').mockResolvedValue({
