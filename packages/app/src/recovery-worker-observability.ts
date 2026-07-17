@@ -148,15 +148,18 @@ function collectFromAggregates(
   const lastScanAt = countByType.get(RECOVERY_EVENT_TYPES.scan)?.lastCreatedAt ?? undefined;
   const lastSubmitAt = countByType.get(RECOVERY_EVENT_TYPES.submit)?.lastCreatedAt ?? undefined;
 
-  const recentEvents = persistence.getEventsByTypes!(ALL_RECOVERY_EVENT_TYPES, 'desc', 50)
+  const recentEvents = persistence.getEventsByTypes!(ALL_RECOVERY_EVENT_TYPES, 'desc', 10)
     .filter((event): event is TaskEvent & { eventType: RecoveryWorkerAuditEventType } =>
       isRecoveryWorkerAuditEventType(event.eventType))
     .map((event) => toStatusEvent(event));
 
-  const lastSkipEvent = persistence.getEventsByTypes!([RECOVERY_EVENT_TYPES.skip], 'desc', 1)[0];
-  const lastSkip = lastSkipEvent && isRecoveryWorkerAuditEventType(lastSkipEvent.eventType)
-    ? toStatusEvent(lastSkipEvent as TaskEvent & { eventType: RecoveryWorkerAuditEventType })
-    : undefined;
+  let lastSkip = recentEvents.find((event) => event.action === 'skip');
+  if (!lastSkip) {
+    const lastSkipEvent = persistence.getEventsByTypes!([RECOVERY_EVENT_TYPES.skip], 'desc', 1)[0];
+    if (lastSkipEvent && isRecoveryWorkerAuditEventType(lastSkipEvent.eventType)) {
+      lastSkip = toStatusEvent(lastSkipEvent as TaskEvent & { eventType: RecoveryWorkerAuditEventType });
+    }
+  }
 
   return {
     ...status,
@@ -172,7 +175,7 @@ function collectFromAggregates(
     scans,
     submissions,
     skips,
-    recent: recentEvents.slice(0, 10),
+    recent: recentEvents,
   };
 }
 
