@@ -66,7 +66,7 @@ export type HeadlessQueryDeps = Pick<
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|queue|review-gate|action-graph|audit|session|workers|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|task-output|container-id|queue|review-gate|action-graph|audit|session|workers|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -167,6 +167,33 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         case 'json':  writeOut(formatAsJson(serializeTask(task)) + '\n'); break;
         case 'jsonl': writeOut(formatAsJsonl([serializeTask(task)]) + '\n'); break;
         default:      writeOut(task.status + '\n'); break;
+      }
+      break;
+    }
+    case 'task-output': {
+      const taskId = flags.positional[0];
+      if (!taskId) throw new Error('Usage: --headless query task-output <taskId>');
+      const resolved = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+      const output = deps.persistence.getTaskOutput(resolved);
+
+      switch (flags.output) {
+        case 'label': writeOut(output + '\n'); break;
+        case 'json':  writeOut(formatAsJson({ id: resolved, output }) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl([{ id: resolved, output }]) + '\n'); break;
+        default:      writeOut(output); break;
+      }
+      break;
+    }
+    case 'container-id': {
+      const taskId = flags.positional[0];
+      if (!taskId) throw new Error('Usage: --headless query container-id <taskId>');
+      const resolved = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+      const containerId = deps.persistence.getContainerId(resolved);
+
+      switch (flags.output) {
+        case 'json':  writeOut(formatAsJson({ id: resolved, containerId }) + '\n'); break;
+        case 'jsonl': writeOut(formatAsJsonl([{ id: resolved, containerId }]) + '\n'); break;
+        default:      writeOut((containerId ?? '') + '\n'); break;
       }
       break;
     }
@@ -401,7 +428,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, cost, cost-events, costs, ui-perf, stats`);
   }
 }
 
