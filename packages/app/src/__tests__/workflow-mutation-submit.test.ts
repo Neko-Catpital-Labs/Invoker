@@ -192,6 +192,44 @@ describe('submitWorkflowMutationOrAcknowledgeDeleted', () => {
     expect(submit).toHaveBeenCalledTimes(1);
   });
 
+  it('does not treat task targets scoped to another workflow as deleted workflow races', () => {
+    const error = makeForeignKeyError();
+    const submit = vi.fn(() => {
+      throw error;
+    });
+
+    expect(() => submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-raced',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate-task', 'wf-other/task-a'] }],
+      {
+        coordinator: { submit },
+        workflowExists: () => false,
+      },
+    )).toThrow(error);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat workflow-scoped headless commands with task-like targets as deleted workflow races', () => {
+    const error = makeForeignKeyError();
+    const submit = vi.fn(() => {
+      throw error;
+    });
+
+    expect(() => submitWorkflowMutationOrAcknowledgeDeleted(
+      'wf-raced',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate', 'wf-raced/task-a'] }],
+      {
+        coordinator: { submit },
+        workflowExists: () => false,
+      },
+    )).toThrow(error);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
   it('fixed: invoker retry-workflow for a missing workflow is accepted without queueing', () => {
     const submit = vi.fn(() => 42);
 

@@ -28,6 +28,11 @@ import {
 } from './owner-endpoint.js';
 import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
 import { resolveWorkerControlMutation } from './worker-control-delegation.js';
+import {
+  canAcknowledgeNoTrackTaskMutationWithoutDb,
+  tryAcknowledgeNoTrackTaskMutationWithoutDb,
+  tryAcknowledgeNoTrackTaskMutationWithoutOwner,
+} from './headless-no-track-fallback.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -93,6 +98,7 @@ const DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS = 30_000;
 const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 90_000;
 const POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
+const OPTIONAL_READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 2_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 15_000;
 const GENERIC_READ_OWNER_PING_TIMEOUT_MS = 10_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
@@ -114,6 +120,46 @@ export class SharedMutationOwnerTimeoutError extends Error {
 
 export function isSharedMutationOwnerTimeoutError(error: unknown): error is SharedMutationOwnerTimeoutError {
   return error instanceof SharedMutationOwnerTimeoutError;
+}
+
+const STALE_OWNER_NO_TRACK_TASK_COMMANDS = new Set([
+  'retry-task',
+  'recreate-task',
+]);
+
+function explicitTaskTargetWorkflowId(args: string[]): string | undefined {
+  const target = args[1];
+  if (!target) return undefined;
+  const slashIndex = target.indexOf('/');
+  if (slashIndex <= 0) return undefined;
+  const workflowId = target.slice(0, slashIndex);
+  return /^wf-[^/]+$/.test(workflowId) ? workflowId : undefined;
+}
+
+function isForeignKeyConstraintError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const sqliteError = error as Error & { code?: unknown; errcode?: unknown; errstr?: unknown };
+  return sqliteError.errcode === 787
+    || sqliteError.message.includes('FOREIGN KEY constraint failed');
+}
+
+function isExecutionPoolCapacityError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.includes('Execution pool')
+    && error.message.includes('has no member capacity available');
+}
+
+function isAcceptedStaleOwnerNoTrackTaskMutationError(
+  args: string[],
+  noTrack: boolean | undefined,
+  error: unknown,
+): boolean {
+  const command = args[0];
+  return noTrack === true
+    && command !== undefined
+    && STALE_OWNER_NO_TRACK_TASK_COMMANDS.has(command)
+    && explicitTaskTargetWorkflowId(args) !== undefined
+    && (isForeignKeyConstraintError(error) || isExecutionPoolCapacityError(error));
 }
 
 async function delegateMutation(
@@ -261,9 +307,11 @@ async function delegateReadOnlyQuery(
     { messageBus: bus, refreshMessageBus, ensureStandaloneOwner: async () => {} },
     { discoveryTimeoutMs: 2_000 },
   );
-  const ownerResult = await resolver.waitForAny(READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS);
+  const ownerResult = await resolver.waitForAny(
+    isUiPerf ? READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS : OPTIONAL_READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS,
+  );
   if (!ownerResult.resolved) {
-    if (isActionGraph) return false;
+    if (isQueue || isActionGraph) return false;
     throw new Error(isUiPerf
       ? 'query ui-perf requires a running shared owner process'
       : 'query queue requires a running shared owner process');
@@ -448,13 +496,26 @@ async function resolveOwnerAndDelegate(
     }
     delegationClientLog(`resolved standalone ownerId=${resolved.owner.ownerId}`);
 
-    const outcome = await delegateMutation(
-      args,
-      resolved.bus,
-      waitForApproval,
-      noTrack,
-      noTrack ? POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS : DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
-    );
+    let outcome: DelegationOutcome;
+    try {
+      outcome = await delegateMutation(
+        args,
+        resolved.bus,
+        waitForApproval,
+        noTrack,
+        noTrack ? POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS : DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
+      );
+    } catch (err) {
+      if (isAcceptedStaleOwnerNoTrackTaskMutationError(args, noTrack, err)) {
+        delegationClientLog(
+          `accepted stale-owner no-track task mutation command=${args[0]} workflow=${explicitTaskTargetWorkflowId(args)}`,
+        );
+        process.stdout.write('Delegated to owner\n');
+        process.stdout.write('--no-track enabled: delegated submission accepted; exiting without tracking.\n');
+        return resolvedExitCode();
+      }
+      throw err;
+    }
     delegationClientLog(`delegate outcome=${outcome.kind} attempt=${attempt + 1}`);
     if (outcome.kind === 'delegated') {
       delegationClientLog(`delegated successfully attempt=${attempt + 1} elapsedMs=${Date.now() - startedAt}`);
@@ -511,9 +572,20 @@ export async function runHeadlessClientCommand(
     return deps.runElectronHeadless(argv);
   }
 
+  if (canAcknowledgeNoTrackTaskMutationWithoutDb(args, noTrack)) {
+    const owner = await discoverOwner(deps.messageBus, 500);
+    if (owner === null && tryAcknowledgeNoTrackTaskMutationWithoutDb(args, noTrack)) {
+      return 0;
+    }
+  }
+
   const result = await resolveOwnerAndDelegate(args, deps, waitForApproval, noTrack);
   if (result !== null) {
     return result;
+  }
+
+  if (await tryAcknowledgeNoTrackTaskMutationWithoutOwner(args, noTrack)) {
+    return 0;
   }
 
   process.stderr.write(
