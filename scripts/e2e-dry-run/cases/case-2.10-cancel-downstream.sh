@@ -43,9 +43,10 @@ if ! invoker_e2e_wait_task_status e2e-g2210-taskA failed 180; then
 fi
 
 STB=$(invoker_e2e_task_status e2e-g2210-taskB)
-# B may be 'failed' (cascade cancel) or 'pending' (not yet cascaded) — both valid.
-if [ "$STB" != "failed" ] && [ "$STB" != "pending" ]; then
-  echo "FAIL case 2.10: expected B=failed|pending, got B='$STB'"
+# B is a never-started dependent of the cancelled root, so the cascade marks it
+# 'blocked' (#3473). 'pending' is valid if the cascade hasn't reached it yet.
+if [ "$STB" != "blocked" ] && [ "$STB" != "pending" ]; then
+  echo "FAIL case 2.10: expected B=blocked|pending, got B='$STB'"
   invoker_e2e_run_headless status 2>&1 || true
   exit 1
 fi
