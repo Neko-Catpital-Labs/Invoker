@@ -2472,7 +2472,17 @@ function createEmbeddedTerminalBackendFromConfig(
       );
       launchDispatcher = new LaunchDispatcher({
         persistence,
-        orchestrator,
+        orchestrator: {
+          prepareTaskForNewAttempt: (taskId, reason) =>
+            orchestrator.prepareTaskForNewAttempt(taskId, reason),
+          syncFromDb: (workflowId) => orchestrator.syncFromDb(workflowId),
+          getTask: (taskId) => orchestrator.getTask(taskId),
+          getTaskLaunchReadiness: (taskId) => orchestrator.getTaskLaunchReadiness(taskId),
+          getExecutableReadyTasks: () => orchestrator.getExecutableReadyTasks(),
+          getQueueStatus: () => orchestrator.getQueueStatus({ refresh: false }),
+          isLaunchParked: (taskId, now) => orchestrator.isLaunchParked(taskId, now),
+          startExecution: () => orchestrator.startExecution(),
+        },
         // taskExecutor is re-built by rebuildTaskRunner(); read via
         // a provider so the dispatcher always picks up the current
         // instance instead of capturing a stale reference.

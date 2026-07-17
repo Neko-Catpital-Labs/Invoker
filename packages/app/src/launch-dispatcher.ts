@@ -41,6 +41,13 @@ export interface LaunchDispatcherOrchestrator {
   syncFromDb?(workflowId: string): void;
   getTask?(taskId: string): TaskState | undefined;
   getTaskLaunchReadiness?(taskId: string): TaskLaunchReadiness;
+  /**
+   * Optional: when startExecution leaves free slots idle with ready work that
+   * has no launching phase (lost outbox after cancel/recreate), mint attempts.
+   */
+  getExecutableReadyTasks?(): TaskState[];
+  getQueueStatus?(): { runningCount: number; maxConcurrency: number };
+  isLaunchParked?(taskId: string, now?: number): boolean;
   startExecution?(): TaskState[];
 }
 
@@ -142,7 +149,43 @@ export class LaunchDispatcher {
 
   private topUpReadyLaunches(): void {
     try {
-      const started = this.orchestrator?.startExecution?.() ?? [];
+      let started = this.orchestrator?.startExecution?.() ?? [];
+      // Ready pending roots can lose their outbox row after cancel/recreate while
+      // free scheduler slots remain. Mint a fresh attempt only for non-parked
+      // ready work, then drain again.
+      if (
+        started.length === 0
+        && typeof this.orchestrator?.getExecutableReadyTasks === 'function'
+        && typeof this.orchestrator.prepareTaskForNewAttempt === 'function'
+      ) {
+        const queue = this.orchestrator.getQueueStatus?.();
+        const freeSlots = queue
+          ? Math.max(0, queue.maxConcurrency - queue.runningCount)
+          : 0;
+        if (freeSlots > 0) {
+          const now = Date.now();
+          const stranded = this.orchestrator.getExecutableReadyTasks().filter((task) => {
+            if (task.status !== 'pending' || task.execution.phase === 'launching') return false;
+            if (this.orchestrator?.isLaunchParked?.(task.id, now)) return false;
+            return true;
+          });
+          const toRecover = stranded.slice(0, freeSlots);
+          for (const task of toRecover) {
+            this.orchestrator.prepareTaskForNewAttempt(task.id, 'launch-dispatcher-ready-topup');
+          }
+          if (toRecover.length > 0) {
+            started = this.orchestrator.startExecution?.() ?? [];
+            this.logger?.info?.('[launch-dispatcher] re-topped ready launches after stranded pending', {
+              ownerId: this.ownerId,
+              stranded: toRecover.length,
+              freeSlots,
+              started: started.length,
+              taskIds: toRecover.map((task) => task.id),
+              module: 'launch-dispatcher',
+            });
+          }
+        }
+      }
       if (started.length > 0) {
         this.logger?.info?.('[launch-dispatcher] topped up ready launches', {
           ownerId: this.ownerId,
