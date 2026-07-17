@@ -996,120 +996,8 @@ describe('TaskPanel double-click editing', () => {
     });
   });
 
-  describe('Execution agent selector', () => {
-    const mockOnEditAgent = vi.fn();
-
-    it('renders agent selector for prompt tasks when onEditAgent + executionAgents provided', () => {
-      const task = makeTask({ prompt: 'Write a test', status: 'pending' });
-      render(
-        <TaskPanel
-          task={task}
-          executionAgents={['claude', 'codex']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditAgent={mockOnEditAgent}
-        />,
-      );
-
-      expect(screen.getByTestId('execution-agent-select')).toBeInTheDocument();
-    });
-
-    it('does not render agent selector for command-only tasks', () => {
-      const task = makeTask({ command: 'echo test', status: 'pending' });
-      render(
-        <TaskPanel
-          task={task}
-          executionAgents={['claude', 'codex']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditAgent={mockOnEditAgent}
-        />,
-      );
-
-      expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
-    });
-
-    it('populates options from executionAgents prop with capitalized labels', () => {
-      const task = makeTask({ prompt: 'Write a test', status: 'pending' });
-      render(
-        <TaskPanel
-          task={task}
-          executionAgents={['claude', 'codex']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditAgent={mockOnEditAgent}
-        />,
-      );
-
-      const select = screen.getByTestId('execution-agent-select');
-      const options = select.querySelectorAll('option');
-      expect(options).toHaveLength(2);
-      expect(options[0]).toHaveTextContent('Claude Task');
-      expect(options[1]).toHaveTextContent('Codex Task');
-    });
-
-    it('calls onEditAgent with selected value on change', () => {
-      const task = makeTask({ prompt: 'Write a test', status: 'pending' });
-      render(
-        <TaskPanel
-          task={task}
-          executionAgents={['claude', 'codex']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditAgent={mockOnEditAgent}
-        />,
-      );
-
-      const select = screen.getByTestId('execution-agent-select');
-      fireEvent.change(select, { target: { value: 'codex' } });
-      expect(mockOnEditAgent).toHaveBeenCalledWith('test-task-1', 'codex');
-    });
-
-    it('disables selector when task is running', () => {
-      const task = makeTask({ prompt: 'Write a test', status: 'running' });
-      render(
-        <TaskPanel
-          task={task}
-          executionAgents={['claude', 'codex']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditAgent={mockOnEditAgent}
-        />,
-      );
-
-      const select = screen.getByTestId('execution-agent-select');
-      expect(select).toBeDisabled();
-    });
-
-    it('defaults to claude when executionAgent config is unset', () => {
-      const task = makeTask({ prompt: 'Write a test', status: 'pending' });
-      render(
-        <TaskPanel
-          task={task}
-          executionAgents={['claude', 'codex']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          onEditAgent={mockOnEditAgent}
-        />,
-      );
-
-      const select = screen.getByTestId('execution-agent-select') as HTMLSelectElement;
-      expect(select.value).toBe('claude');
-    });
-
-    it('selects current agent when executionAgent is set', () => {
+  describe('Planning agent display', () => {
+    it('shows the configured planning agent badge for prompt tasks', () => {
       const task = {
         ...makeTask({ prompt: 'Write a test', status: 'pending' }),
         config: { prompt: 'Write a test', executionAgent: 'codex' },
@@ -1117,74 +1005,31 @@ describe('TaskPanel double-click editing', () => {
       render(
         <TaskPanel
           task={task}
-          executionAgents={['claude', 'codex']}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
           onSelectExperiment={mockOnSelectExperiment}
-          onEditAgent={mockOnEditAgent}
         />,
       );
 
-      const select = screen.getByTestId('execution-agent-select') as HTMLSelectElement;
-      expect(select.value).toBe('codex');
-    });
-
-    it('fallback badge shows capitalized agent name when onEditAgent not provided', () => {
-      const task = {
-        ...makeTask({ prompt: 'Write a test', status: 'pending' }),
-        config: { prompt: 'Write a test', executionAgent: 'codex' },
-      } as TaskState;
-      render(
-        <TaskPanel
-          task={task}
-          executionAgents={['claude', 'codex']}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          // no onEditAgent
-        />,
-      );
-
-      expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
       expect(screen.getByText('Codex Task')).toBeInTheDocument();
-    });
-
-    it('fallback badge defaults to "Claude Task" when executionAgent unset', () => {
-      const task = makeTask({ prompt: 'Write a test', status: 'pending' });
-      render(
-        <TaskPanel
-          task={task}
-          onProvideInput={mockOnProvideInput}
-          onApprove={mockOnApprove}
-          onReject={mockOnReject}
-          onSelectExperiment={mockOnSelectExperiment}
-          // no onEditAgent
-        />,
-      );
-
       expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
-      expect(screen.getByText('Claude Task')).toBeInTheDocument();
     });
 
-    it('renders empty selector gracefully when executionAgents is empty', () => {
+    it('defaults prompt tasks to the Claude badge when no planning agent is set', () => {
       const task = makeTask({ prompt: 'Write a test', status: 'pending' });
       render(
         <TaskPanel
           task={task}
-          executionAgents={[]}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
           onSelectExperiment={mockOnSelectExperiment}
-          onEditAgent={mockOnEditAgent}
         />,
       );
 
-      const select = screen.getByTestId('execution-agent-select');
-      const options = select.querySelectorAll('option');
-      expect(options).toHaveLength(0);
+      expect(screen.getByText('Claude Task')).toBeInTheDocument();
+      expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
     });
   });
 

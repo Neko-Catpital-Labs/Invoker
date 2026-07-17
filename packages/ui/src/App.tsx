@@ -236,7 +236,6 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionPools, setExecutionPools] = useState<string[]>([]);
-  const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
@@ -267,7 +266,6 @@ export function App() {
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
-    window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
 
@@ -838,18 +836,6 @@ export function App() {
     [invoker],
   );
 
-  // ── Edit task execution agent ────────────────────────────
-  const handleEditAgent = useCallback(
-    async (taskId: string, agentName: string) => {
-      if (!invoker) return;
-      try {
-        await invoker.editTaskAgent(taskId, agentName);
-      } catch (err) {
-        console.error('Failed to edit task agent:', err);
-      }
-    },
-    [invoker],
-  );
 
   const handleSetExternalGatePolicies = useCallback(
     async (taskId: string, updates: ExternalGatePolicyUpdate[]) => {
@@ -1155,13 +1141,11 @@ export function App() {
               workflowTasks={miniDagTasks}
               remoteTargets={remoteTargets}
               executionPools={executionPools}
-              executionAgents={executionAgents}
               collapsed={inspectorCollapsed}
               advancedExpanded={advancedMetadataExpanded}
               actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
               onEditType={handleEditType}
               onEditPool={handleEditPool}
-              onEditAgent={handleEditAgent}
               onEditPrompt={handleEditPrompt}
               onEditCommand={handleEditCommand}
               onSetMergeBranch={handleSetMergeBranch}

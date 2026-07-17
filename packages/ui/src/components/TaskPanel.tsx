@@ -102,7 +102,6 @@ interface TaskPanelProps {
   baseBranch?: string;
   workflowRepoUrl?: string;
   remoteTargets?: string[];
-  executionAgents?: string[];
   onProvideInput: (task: TaskState) => void;
   onApprove: (task: TaskState) => void;
   onReject: (task: TaskState) => void;
@@ -110,7 +109,6 @@ interface TaskPanelProps {
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
-  onEditAgent?: (taskId: string, agentName: string) => void;
   onSetExternalGatePolicies?: (taskId: string, updates: ExternalGatePolicyUpdate[]) => Promise<void>;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   mergeMode?: string;
@@ -224,7 +222,6 @@ export function TaskPanel({
   baseBranch,
   workflowRepoUrl,
   remoteTargets,
-  executionAgents,
   onProvideInput,
   onApprove,
   onReject,
@@ -232,7 +229,6 @@ export function TaskPanel({
   onEditCommand,
   onEditPrompt,
   onEditType,
-  onEditAgent,
   onSetExternalGatePolicies,
   onSetMergeBranch,
   mergeMode,
@@ -514,22 +510,6 @@ export function TaskPanel({
         </div>
       )}
 
-      {task.config.prompt && onEditAgent && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Agent</span>
-          <select
-            value={task.config.executionAgent ?? 'claude'}
-            onChange={(e) => onEditAgent(task.id, e.target.value)}
-            disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
-            className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            data-testid="execution-agent-select"
-          >
-            {(executionAgents ?? []).map(name => (
-              <option key={name} value={name}>{capitalize(name)} Task</option>
-            ))}
-          </select>
-        </div>
-      )}
 
       {/* Advanced section (collapsed by default) */}
       {(

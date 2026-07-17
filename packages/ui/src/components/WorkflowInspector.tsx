@@ -9,13 +9,11 @@ interface WorkflowInspectorProps {
   workflowTasks?: Map<string, TaskState>;
   remoteTargets?: string[];
   executionPools?: string[];
-  executionAgents?: string[];
   actionNode?: unknown;
   collapsed: boolean;
   advancedExpanded: boolean;
   onEditType?: (taskId: string, runnerKind: string, poolMemberId?: string) => void;
   onEditPool?: (taskId: string, poolId: string) => void;
-  onEditAgent?: (taskId: string, agentName: string) => void;
   onEditPrompt?: (taskId: string, newPrompt: string) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
@@ -47,11 +45,9 @@ export function WorkflowInspector({
   task,
   workflowTasks,
   executionPools,
-  executionAgents,
   collapsed,
   advancedExpanded,
   onEditPool,
-  onEditAgent,
   onEditPrompt,
   onEditCommand,
   onSetMergeBranch,
@@ -84,11 +80,6 @@ export function WorkflowInspector({
   const showsWorkflowMergeDetails = Boolean(!task && workflow?.id && workflow.onFinish === 'pull_request');
   const isMergeNode = Boolean((task?.config.isMergeNode || showsWorkflowMergeDetails) && workflow?.id);
   const currentAgent = task?.config.executionAgent ?? task?.execution.agentName ?? 'claude';
-  const agentOptions = useMemo(() => {
-    const names = new Set(executionAgents ?? []);
-    names.add(currentAgent);
-    return [...names].filter(Boolean);
-  }, [currentAgent, executionAgents]);
   const poolOptions = useMemo(() => {
     const ids = new Set(executionPools ?? []);
     if (task?.config.poolId) ids.add(task.config.poolId);
@@ -213,22 +204,14 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {task?.config.prompt && onEditAgent && (
+        {task?.config.prompt && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-xs uppercase tracking-wide text-gray-400">AI Agent</span>
-              <select
-                value={currentAgent}
-                onChange={(event) => onEditAgent(task.id, event.target.value)}
-                disabled={isTaskBusy || agentOptions.length === 0}
-                className="min-w-0 max-w-[190px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
-                data-testid="execution-agent-select"
-              >
-                {agentOptions.map((agentName) => (
-                  <option key={agentName} value={agentName}>{capitalize(agentName)}</option>
-                ))}
-              </select>
-            </label>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs uppercase tracking-wide text-gray-400">Planning Agent</span>
+              <span className="rounded border border-gray-600 bg-gray-700 px-2 py-1 text-xs text-gray-100" data-testid="planning-agent-value">
+                {capitalize(currentAgent)}
+              </span>
+            </div>
           </section>
         )}
 

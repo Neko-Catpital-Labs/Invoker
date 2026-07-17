@@ -196,23 +196,21 @@ describe('WorkflowInspector', () => {
     expect(screen.queryByText('No prompt or command available.')).not.toBeInTheDocument();
   });
 
-  it('edits AI agent from a dropdown', () => {
-    const onEditAgent = vi.fn();
+  it('shows the planning agent as read-only task metadata', () => {
     render(
       <WorkflowInspector
         workflow={workflow}
         task={makeTask()}
-        executionAgents={['claude', 'codex']}
         collapsed={false}
         advancedExpanded={false}
-        onEditAgent={onEditAgent}
         onToggleCollapsed={() => {}}
         onToggleAdvanced={() => {}}
       />,
     );
 
-    fireEvent.change(screen.getByTestId('execution-agent-select'), { target: { value: 'claude' } });
-    expect(onEditAgent).toHaveBeenCalledWith('task-1', 'claude');
+    expect(screen.getByText('Planning Agent')).toBeInTheDocument();
+    expect(screen.getByTestId('planning-agent-value')).toHaveTextContent('Codex');
+    expect(screen.queryByTestId('execution-agent-select')).not.toBeInTheDocument();
   });
 
   it('double-click edits prompt and saves through callback', () => {
