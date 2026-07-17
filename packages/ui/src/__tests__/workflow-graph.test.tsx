@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { WorkflowGraph } from '../components/WorkflowGraph.js';
@@ -67,6 +67,7 @@ async function renderAndSettleInitialFit(props: Parameters<typeof WorkflowGraph>
 
 describe('WorkflowGraph', () => {
   beforeEach(() => {
+    vi.useRealTimers();
     fitViewMock.mockClear();
     setCenterMock.mockClear();
     setViewportMock.mockClear();
@@ -74,6 +75,9 @@ describe('WorkflowGraph', () => {
     getZoomMock.mockReturnValue(1);
     getViewportMock.mockReset();
     getViewportMock.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('calls selection and context menu handlers', () => {
@@ -415,6 +419,73 @@ describe('WorkflowGraph', () => {
     // selected, mock nodes are visible, and the watchdog timer is not advanced.
     // A failure here isolates the source to WorkflowGraph's React Flow remount.
     expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('does not let pre-recovery watchdog misses refit after a manual pan and graph data change', async () => {
+    const onManualViewport = vi.fn();
+
+    const { rerender } = await renderAndSettleInitialFit({
+      workflows: new Map([
+        ['wf-a', wf('wf-a', 'running')],
+        ['wf-b', wf('wf-b', 'pending')],
+      ]),
+      selectedWorkflowId: 'wf-a',
+      statusFilters: new Set(),
+      onSelectWorkflow: () => {},
+      onWorkflowContextMenu: () => {},
+      onManualViewport,
+    });
+
+    const pane = screen.getByTestId('rf__pane');
+    fireEvent.pointerDown(pane);
+    fireEvent.pointerUp(pane);
+    expect(onManualViewport).toHaveBeenCalled();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockClear();
+
+    vi.useFakeTimers();
+    rerender(
+      <WorkflowGraph
+        workflows={new Map([
+          ['wf-a', wf('wf-a', 'completed')],
+          ['wf-b', wf('wf-b', 'pending')],
+          ['wf-c', wf('wf-c', 'running')],
+        ])}
+        selectedWorkflowId="wf-a"
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+        onManualViewport={onManualViewport}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-node-wf-c')).toBeInTheDocument();
+    for (const element of document.querySelectorAll<HTMLElement>('.react-flow__node')) {
+      element.style.visibility = 'hidden';
+    }
+
+    // No App is mounted and no cameraCommand is supplied, so App command
+    // reissue, WorkflowGraph command consumption, and selection fallback are
+    // ruled out. Advancing the watchdog isolates the source to blank-render
+    // recovery; only the bounded recovery threshold may move the camera.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fitViewMock).toHaveBeenCalledTimes(1);
     expect(setCenterMock).not.toHaveBeenCalled();
   });
 
