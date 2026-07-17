@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import { ConversationRepository } from '../conversation-repository.js';
 import type { ConversationMessageEntry } from '../conversation-repository.js';
@@ -97,6 +97,36 @@ describe('ConversationRepository', () => {
 
       const loaded = repo.loadConversation('ts-1');
       expect(loaded!.messages).toHaveLength(3);
+    });
+
+    it('does not load the full transcript to compute the append offset', () => {
+      const existingMessages: ConversationMessageEntry[] = Array.from({ length: 1_000 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `message-${index}`,
+      }));
+      repo.saveConversation('ts-large', existingMessages);
+
+      const loadMessages = vi.spyOn(adapter, 'loadMessages').mockImplementation(() => {
+        throw new Error('saveConversation should not read the full transcript');
+      });
+      const appendMessage = vi.spyOn(adapter, 'appendMessage');
+
+      repo.saveConversation('ts-large', [
+        ...existingMessages,
+        { role: 'user', content: 'one more turn' },
+      ]);
+
+      expect(loadMessages).not.toHaveBeenCalled();
+      expect(appendMessage).toHaveBeenCalledTimes(1);
+      expect(adapter.countMessages('ts-large')).toBe(1_001);
+
+      loadMessages.mockRestore();
+      appendMessage.mockRestore();
+      const loaded = repo.loadConversation('ts-large');
+      expect(loaded!.messages.at(-1)).toEqual({
+        role: 'user',
+        content: 'one more turn',
+      });
     });
 
     it('handles complex message content (arrays of blocks)', () => {
