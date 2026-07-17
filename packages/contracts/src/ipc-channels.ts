@@ -253,6 +253,32 @@ export interface SystemDiagnostics {
   bundledSkills?: BundledSkillsStatus;
 }
 
+export interface PlanningChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface PlanningChatOpenResponse {
+  threadTs: string;
+  messages: PlanningChatMessage[];
+  planSubmitted: boolean;
+  submittedPlanText: string | null;
+}
+
+export interface PlanningChatSendResponse extends PlanningChatOpenResponse {
+  reply: string;
+}
+
+export interface PlanningChatSeedMessage {
+  role: 'user' | 'assistant';
+  content: unknown;
+}
+
+export interface PlanningChatSeedTranscriptResponse {
+  threadTs: string;
+  messageCount: number;
+}
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
@@ -298,6 +324,14 @@ export const IpcChannels = {
   'invoker:load-workflow': {} as {
     request: [workflowId: string];
     response: { workflow: unknown; tasks: unknown[] };
+  },
+  'invoker:planning-chat-open': {} as {
+    request: [threadTs: string];
+    response: PlanningChatOpenResponse;
+  },
+  'invoker:planning-chat-send': {} as {
+    request: [threadTs: string, message: string];
+    response: PlanningChatSendResponse;
   },
 
   // Task Queries
@@ -531,6 +565,10 @@ export const IpcTestOnlyChannels = {
   'invoker:inject-task-states': {} as {
     request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
     response: void;
+  },
+  'invoker:seed-planning-chat-transcript': {} as {
+    request: [threadTs: string, messages: PlanningChatSeedMessage[]];
+    response: PlanningChatSeedTranscriptResponse;
   },
 } as const;
 
