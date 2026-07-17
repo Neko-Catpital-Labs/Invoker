@@ -75,7 +75,7 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
     env: {
       ...process.env,
       NODE_ENV: 'test',
-          INVOKER_TEST_WORKFLOW_IDS: '1',
+      INVOKER_TEST_WORKFLOW_IDS: '1',
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
       INVOKER_DB_DIR: testDir,
       INVOKER_IPC_SOCKET: ipcSocketPath,
