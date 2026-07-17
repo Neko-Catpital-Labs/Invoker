@@ -86,9 +86,7 @@ describe('getEventsByTypes query plans', () => {
     expect(detail).not.toContain('USE TEMP B-TREE');
   });
 
-  // Desired behavior for the adapter: never issue the multi-type TEMP B-TREE SQL.
-  // PR1 keeps this failing; PR2 flips it.fails → it once getEventsByTypes merges per-type.
-  it.fails('getEventsByTypes avoids multi-type IN ORDER BY that forces TEMP B-TREE', async () => {
+  it('getEventsByTypes avoids multi-type IN ORDER BY that forces TEMP B-TREE', async () => {
     adapter = await SQLiteAdapter.create(':memory:');
     adapter.saveWorkflow(makeWorkflow('wf-1'));
     adapter.saveTask('wf-1', makeTask('t1'));
@@ -114,5 +112,40 @@ describe('getEventsByTypes query plans', () => {
       && /ORDER BY\s+created_at/i.test(sql),
     )).toBe(true);
     queryAll.mockRestore();
+  });
+
+  it('getEventsByTypes merges newest-across-types order and respects limit', async () => {
+    adapter = await SQLiteAdapter.create(':memory:');
+    adapter.saveWorkflow(makeWorkflow('wf-1'));
+    adapter.saveTask('wf-1', makeTask('t1'));
+
+    const stamps = [
+      { type: RECOVERY_TYPES[0], at: '2026-07-01T00:00:01.000Z' },
+      { type: RECOVERY_TYPES[1], at: '2026-07-01T00:00:03.000Z' },
+      { type: RECOVERY_TYPES[2], at: '2026-07-01T00:00:02.000Z' },
+      { type: RECOVERY_TYPES[3], at: '2026-07-01T00:00:04.000Z' },
+      { type: RECOVERY_TYPES[0], at: '2026-07-01T00:00:05.000Z' },
+    ];
+    for (const stamp of stamps) {
+      (adapter as unknown as {
+        db: { run: (sql: string, params?: unknown[]) => void };
+      }).db.run(
+        'INSERT INTO events (task_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)',
+        ['t1', stamp.type, JSON.stringify({ at: stamp.at }), stamp.at],
+      );
+    }
+
+    const desc = adapter.getEventsByTypes(RECOVERY_TYPES, 'desc', 3);
+    expect(desc.map((event) => event.createdAt)).toEqual([
+      '2026-07-01T00:00:05.000Z',
+      '2026-07-01T00:00:04.000Z',
+      '2026-07-01T00:00:03.000Z',
+    ]);
+
+    const asc = adapter.getEventsByTypes(RECOVERY_TYPES, 'asc', 2);
+    expect(asc.map((event) => event.createdAt)).toEqual([
+      '2026-07-01T00:00:01.000Z',
+      '2026-07-01T00:00:02.000Z',
+    ]);
   });
 });
