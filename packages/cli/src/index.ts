@@ -1,8 +1,16 @@
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, resolveInvokerHomeRoot, type Logger } from '@invoker/contracts';
+import {
+  DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
+  resolveHeadlessOwnerLaunchSpec,
+  resolveInvokerHomeRoot,
+  resolveRepoRoot,
+  type HeadlessOwnerLaunchSpec,
+  type Logger,
+} from '@invoker/contracts';
 import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
@@ -71,6 +79,8 @@ type LiveSubmissionResult = {
 type CliDeps = {
   createMessageBus?: () => Promise<MessageBus> | MessageBus;
   runMcpServer?: () => Promise<void>;
+  resolveOwnerLaunchSpec?: (repoRoot: string) => HeadlessOwnerLaunchSpec;
+  spawnProcess?: typeof spawn;
 };
 
 type CliRuntimeConfig = {
@@ -129,6 +139,7 @@ function usage(): string {
   return [
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+    '  invoker-cli owner serve',
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli setup [planner|slack] [--check|--from-env] [--json]',
     '  invoker-cli mcp',
@@ -138,11 +149,11 @@ function usage(): string {
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
+    '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
     '  mcp             Start the Invoker MCP stdio server.',
     '  worker [kind|list]  Run a registry-selected worker or list available worker kinds.',
-    '',
     'Options:',
     '  --planner-url <url>   Planner service URL for `setup planner`.',
     '  --access-token <tok>  Planner service access token for `setup planner`.',
@@ -578,6 +589,28 @@ async function runWorker(definition: WorkerDefinition<WorkerRuntimeDependencies>
   process.stdout.write(`${workerDisplayName(definition.kind)} worker stopped.\n`);
   return 0;
 }
+async function runHeadlessOwnerServe(deps: CliDeps): Promise<number> {
+  const repoRoot = resolveRepoRoot(__dirname, { fallback: resolve(__dirname, '../../../..') });
+  const launchSpec = (deps.resolveOwnerLaunchSpec ?? resolveHeadlessOwnerLaunchSpec)(repoRoot);
+  const child = (deps.spawnProcess ?? spawn)(launchSpec.command, launchSpec.args, {
+    cwd: launchSpec.cwd,
+    env: {
+      ...process.env,
+      LIBGL_ALWAYS_SOFTWARE: process.platform === 'linux' ? '1' : process.env.LIBGL_ALWAYS_SOFTWARE,
+    },
+    stdio: 'inherit',
+  });
+  return await new Promise<number>((resolveExit, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (signal) {
+        reject(new Error(`headless owner exited with signal ${signal}`));
+        return;
+      }
+      resolveExit(code ?? 0);
+    });
+  });
+}
 
 export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps = {}): Promise<number> {
   let bus: MessageBus | undefined;
@@ -591,6 +624,12 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     if (argv[0] === 'mcp') {
       await (deps.runMcpServer ?? runMcpServer)();
       return 0;
+    }
+    if (argv[0] === 'owner') {
+      if (argv[1] !== 'serve') {
+        throw new Error('Unknown owner command. Usage: invoker-cli owner serve');
+      }
+      return await runHeadlessOwnerServe(deps);
     }
     if (argv[0] === 'worker') {
       const subcommand = argv[1] ?? 'list';

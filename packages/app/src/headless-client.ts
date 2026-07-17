@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
 
-import { resolveRepoRoot, type WorkerStatusSnapshot } from '@invoker/contracts';
+import { buildElectronHeadlessArgs, resolveRepoRoot, type WorkerStatusSnapshot } from '@invoker/contracts';
 import { hasLiveWritableOwner } from '@invoker/data-store';
 import { IpcBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -52,22 +52,7 @@ function delegationClientLog(message: string): void {
 }
 
 export function electronCommandArgs(args: string[], platform: NodeJS.Platform = process.platform): string[] {
-  const mainJs = resolve(__dirname, 'main.js');
-  return [
-    ...(platform === 'linux'
-      ? [
-          '--no-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
-          '--disable-gpu-compositing',
-          '--disable-gpu-sandbox',
-          '--disable-software-rasterizer',
-        ]
-      : []),
-    mainJs,
-    '--headless',
-    ...args,
-  ];
+  return buildElectronHeadlessArgs(resolve(__dirname, 'main.js'), args, platform);
 }
 
 async function runElectronHeadless(args: string[]): Promise<number> {
