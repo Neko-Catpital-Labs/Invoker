@@ -1008,7 +1008,7 @@ export class Orchestrator {
   ): boolean {
     if (isCrashPreservedExecution(task.execution)) return false;
     if (attempt && this.isAttemptLeaseActive(attempt, now)) {
-      return task.status === 'pending' || task.status === 'running' || task.status === 'fixing_with_ai';
+      return task.status === 'pending' || task.status === 'queued' || task.status === 'running' || task.status === 'fixing_with_ai';
     }
     if (attempt && this.isAttemptLeaseExpired(attempt, now)) {
       return false;
@@ -1022,7 +1022,7 @@ export class Orchestrator {
     return task.status === 'running'
       || task.status === 'fixing_with_ai'
       || (
-        task.status === 'pending'
+        (task.status === 'pending' || task.status === 'queued')
         && task.execution.phase === 'launching'
         && !!task.execution.selectedAttemptId
       );
@@ -2726,7 +2726,7 @@ export class Orchestrator {
    */
   private isRecoverableResumeTask(task: TaskState): boolean {
     if (task.status === 'running') return true;
-    if (task.status !== 'pending' || !task.execution.selectedAttemptId) return false;
+    if ((task.status !== 'pending' && task.status !== 'queued') || !task.execution.selectedAttemptId) return false;
     if (task.execution.phase === 'launching') return true;
 
     return Boolean(
@@ -3133,7 +3133,7 @@ export class Orchestrator {
       .filter((task) =>
         task.status === 'running'
         || task.status === 'fixing_with_ai'
-        || (task.status === 'pending' && !!task.execution.selectedAttemptId),
+        || ((task.status === 'pending' || task.status === 'queued') && !!task.execution.selectedAttemptId),
       )
       .map((task) => {
         const attemptId = task.execution.selectedAttemptId;
@@ -3155,7 +3155,7 @@ export class Orchestrator {
       this as unknown as SchedulerDomainHost,
       this.stateMachine
         .getReadyTasks()
-        .filter((task) => task.status === 'pending')
+        .filter((task) => task.status === 'pending' || task.status === 'queued')
         .filter((task) => !activeTaskIds.has(task.id))
         .filter((task) => !isExternallyBlocked(task))
         .map((task) => ({
@@ -3167,7 +3167,7 @@ export class Orchestrator {
     const queuedTasks = queuedJobs
       .map((job) => {
         const task = this.stateGetTask(job.taskId);
-        if (!task || task.status !== 'pending') return undefined;
+        if (!task || (task.status !== 'pending' && task.status !== 'queued')) return undefined;
         if (activeTaskIds.has(task.id) || isExternallyBlocked(task)) return undefined;
         return {
           taskId: task.id,
@@ -3691,7 +3691,7 @@ export class Orchestrator {
       return false;
     }
 
-    if (task.status !== 'running' && task.status !== 'pending' && task.status !== 'fixing_with_ai') {
+    if (task.status !== 'running' && task.status !== 'pending' && task.status !== 'queued' && task.status !== 'fixing_with_ai') {
       this.logger.info('[orchestrator] markTaskRunningAfterLaunch: reject', {
         taskId,
         attemptId,
@@ -3710,7 +3710,7 @@ export class Orchestrator {
         launchStartedAt: task.execution.launchStartedAt ?? task.execution.startedAt ?? launchedAt,
         launchCompletedAt: launchedAt,
       };
-      const changes: TaskStateChanges = task.status === 'pending'
+      const changes: TaskStateChanges = (task.status === 'pending' || task.status === 'queued')
         ? {
             status: 'running',
             execution: {

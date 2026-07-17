@@ -381,11 +381,14 @@ export function deferTaskImpl(
   const id = task.id;
   host.invalidateLaunchArtifactsForTasks([id], 'task deferred');
 
-  // Transition running → pending. A deferred launch must not retain the
-  // launch-claimed phase; otherwise it can be mistaken for an actively
+  // Transition launching/running → queued. A deferred launch must not retain
+  // the launch-claimed phase; otherwise it can be mistaken for an actively
   // dispatchable launch with no executor owner.
-  const changes: TaskStateChanges = buildTaskResetChanges('defer');
-  const deferUpdated = host.writeResetAndSync(task, 'defer', changes);
+  const changes: TaskStateChanges = {
+    ...buildTaskResetChanges('defer'),
+    status: 'queued',
+  };
+  const deferUpdated = host.writeAndSync(id, changes);
   const delta: TaskDelta = host.buildUpdateDelta(task, deferUpdated, changes);
   host.persistence.logEvent?.(id, 'task.deferred', {
     ...changes,

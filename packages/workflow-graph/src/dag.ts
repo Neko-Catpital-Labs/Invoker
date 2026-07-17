@@ -257,8 +257,7 @@ export function getReadyTasks(tasks: TaskState[]): TaskState[] {
   }
 
   return tasks.filter((task) => {
-    if (task.status !== 'pending') return false;
-
+    if (task.status !== 'pending' && task.status !== 'queued') return false;
     return task.dependencies.every((dep) => statusMap.get(dep) === 'completed');
   });
 }

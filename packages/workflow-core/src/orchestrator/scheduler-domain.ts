@@ -100,7 +100,7 @@ function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJo
   const mergedJobs = new Map<string, TaskJob>();
   for (const sourceJob of [...host.scheduler.getQueuedJobs(), ...candidateJobs]) {
     const task = host.stateGetTask(sourceJob.taskId);
-    if (!task || task.status !== 'pending') continue;
+    if (!task || (task.status !== 'pending' && task.status !== 'queued')) continue;
     if (host.getExternalDependencyBlocker(task) !== undefined) continue;
     const knownAttemptId = sourceJob.attemptId ?? task.execution.selectedAttemptId;
     if (hasActiveLaunchAttempt(host, task, knownAttemptId)) continue;
@@ -297,7 +297,7 @@ export function getTaskLaunchReadinessImpl(
   if (!task) {
     return { ready: false, reason: `task ${taskId} not found` };
   }
-  if (task.status !== 'pending') {
+  if (task.status !== 'pending' && task.status !== 'queued') {
     return { ready: false, reason: `task status is ${task.status}`, task };
   }
 
@@ -414,7 +414,7 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
 
     const changes: TaskStateChanges = host.deferRunningUntilLaunch
       ? {
-          status: 'pending',
+          status: 'queued',
           execution: {
             selectedAttemptId: launchAttemptId,
             generation: host.getExecutionGeneration(task),

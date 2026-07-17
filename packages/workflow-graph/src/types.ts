@@ -9,6 +9,7 @@
 
 export type TaskStatus =
   | 'pending'
+  | 'queued'
   | 'running'
   | 'fixing_with_ai'
   | 'completed'
@@ -19,7 +20,6 @@ export type TaskStatus =
   | 'review_ready'
   | 'awaiting_approval'
   | 'stale';
-
 // ── Task Config (definition / spec) ────────────────────────
 // Copied wholesale when cloning/forking: clone.config = original.config
 

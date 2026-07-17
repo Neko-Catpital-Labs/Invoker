@@ -165,7 +165,7 @@ export class LaunchDispatcher {
         if (freeSlots > 0) {
           const now = Date.now();
           const stranded = this.orchestrator.getExecutableReadyTasks().filter((task) => {
-            if (task.status !== 'pending' || task.execution.phase === 'launching') return false;
+            if ((task.status !== 'pending' && task.status !== 'queued') || task.execution.phase === 'launching') return false;
             if (this.orchestrator?.isLaunchParked?.(task.id, now)) return false;
             return true;
           });

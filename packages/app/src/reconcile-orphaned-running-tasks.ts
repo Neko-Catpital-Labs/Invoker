@@ -9,7 +9,7 @@ export function isTaskInFlightForForcedStop(task: TaskState): boolean {
   if (isCrashPreservedExecution(task.execution)) return false;
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
-    || (task.status === 'pending' && task.execution.phase === 'launching');
+    || ((task.status === 'pending' || task.status === 'queued') && task.execution.phase === 'launching');
 }
 
 type BootReconcileOrchestrator = {

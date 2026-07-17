@@ -172,7 +172,10 @@ export function handleCompletedImpl(
   // Re-enqueue deferred tasks now that a slot freed up
   if (host.deferredTaskIds.size > 0) {
     const deferredTaskIds = [...host.deferredTaskIds]
-      .filter((id) => host.stateGetTask(id)?.status === 'pending');
+      .filter((id) => {
+        const status = host.stateGetTask(id)?.status;
+        return status === 'pending' || status === 'queued';
+      });
     host.deferredTaskIds.clear();
     started.push(...host.autoStartReadyTasks(deferredTaskIds));
   }
@@ -250,7 +253,10 @@ export function finalizeFailedTaskImpl(
   // Re-enqueue deferred tasks now that a slot freed up
   if (host.deferredTaskIds.size > 0) {
     const deferredTaskIds = [...host.deferredTaskIds]
-      .filter((id) => host.stateGetTask(id)?.status === 'pending');
+      .filter((id) => {
+        const status = host.stateGetTask(id)?.status;
+        return status === 'pending' || status === 'queued';
+      });
     host.deferredTaskIds.clear();
     started.push(...host.autoStartReadyTasks(deferredTaskIds));
   }

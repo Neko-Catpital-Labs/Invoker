@@ -25,7 +25,7 @@ function collectRecoverableTasks(orchestrator: StartReadyOrchestrator): TaskStat
 
 export function isTaskRecoverableOnExplicitResume(task: TaskState): boolean {
   if (task.status === 'running') return true;
-  if (task.status !== 'pending' || !task.execution.selectedAttemptId) return false;
+  if ((task.status !== 'pending' && task.status !== 'queued') || !task.execution.selectedAttemptId) return false;
   if (task.execution.phase === 'launching') return true;
 
   return Boolean(
