@@ -993,6 +993,14 @@ export class Orchestrator {
     return attempt.leaseExpiresAt.getTime() >= now;
   }
 
+  private isAttemptLeaseExpired(attempt: Attempt | undefined, now: number = Date.now()): boolean {
+    if (!attempt) return false;
+    if (isDiscardedAttempt(attempt)) return false;
+    if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
+    if (!attempt.leaseExpiresAt) return false;
+    return attempt.leaseExpiresAt.getTime() < now;
+  }
+
   private isTaskExecutionActive(
     task: TaskState,
     attempt: Attempt | undefined,
@@ -1001,6 +1009,9 @@ export class Orchestrator {
     if (isCrashPreservedExecution(task.execution)) return false;
     if (attempt && this.isAttemptLeaseActive(attempt, now)) {
       return task.status === 'pending' || task.status === 'running' || task.status === 'fixing_with_ai';
+    }
+    if (attempt && this.isAttemptLeaseExpired(attempt, now)) {
+      return false;
     }
 
     return task.status === 'running' || task.status === 'fixing_with_ai';
