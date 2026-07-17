@@ -102,6 +102,9 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Open Terminal'));
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
   });
 
   it('task context menu opened from the selected workflow mini DAG layers above the floating graph panel', async () => {
