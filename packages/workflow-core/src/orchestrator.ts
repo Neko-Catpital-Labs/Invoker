@@ -3365,7 +3365,8 @@ export class Orchestrator {
   private findExternalDependencyTask(workflowId: string, taskId?: string): TaskState | undefined {
     const normalizedTaskId = taskId?.trim() || '__merge__';
     if (normalizedTaskId === '__merge__') {
-      return this.getMergeNode(workflowId);
+      return this.getMergeNode(workflowId)
+        ?? this.persistence.loadTasks(workflowId).find((t) => t.config.isMergeNode);
     }
     const tasks = this.persistence.loadTasks(workflowId);
     if (normalizedTaskId.includes('/')) {
