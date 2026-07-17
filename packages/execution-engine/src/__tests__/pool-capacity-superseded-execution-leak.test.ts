@@ -14,9 +14,10 @@ import type { TaskState } from '@invoker/workflow-core';
  * runs, so all launches fail with "no member capacity".
  *
  * `selectExecutor` now reclaims a task's own superseded slot before selecting,
- * so its next launch frees its member instead of deferring forever.
+ * and also reclaims other tasks' orphaned non-live attempts so cross-task
+ * wedges cannot starve the pool.
  */
-function makeRunner() {
+function makeRunner(orchestratorOverrides: Record<string, unknown> = {}) {
   const kill = vi.fn().mockResolvedValue(undefined);
   const sshExecutor = {
     type: 'ssh',
@@ -28,7 +29,12 @@ function makeRunner() {
     destroyAll: vi.fn(),
   };
   const runner = new TaskRunner({
-    orchestrator: { getTask: () => null, getAllTasks: () => [], deferTask: vi.fn() } as never,
+    orchestrator: {
+      getTask: () => null,
+      getAllTasks: () => [],
+      deferTask: vi.fn(),
+      ...orchestratorOverrides,
+    } as never,
     persistence: { logEvent: vi.fn(), releaseExecutionResourceLease: vi.fn() } as never,
     executorRegistry: {
       getDefault: () => sshExecutor,
@@ -88,7 +94,12 @@ describe('pool capacity: superseded execution slot leak', () => {
   });
 
   it("does not reclaim another task's live execution slot (no over-subscription)", () => {
-    const { runner, sshExecutor, kill } = makeRunner();
+    const liveTask = makeTask('wf-1/task-a', 'wf-1/task-a-live');
+    liveTask.status = 'running';
+    const { runner, sshExecutor, kill } = makeRunner({
+      getTask: (id: string) => (id === liveTask.id ? liveTask : null),
+      getAllTasks: () => [liveTask],
+    });
     // task-a is genuinely running on remote-a.
     strandActiveExecution(runner, sshExecutor, 'wf-1/task-a', 'wf-1/task-a-live');
 
@@ -96,5 +107,21 @@ describe('pool capacity: superseded execution slot leak', () => {
     expect(() => runner.selectExecutor(makeTask('wf-2/task-b', 'wf-2/task-b-attempt'))).toThrow(/no member capacity/);
     expect((runner as unknown as { activeExecutions: Map<string, unknown> }).activeExecutions.has('wf-1/task-a-live')).toBe(true);
     expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("reclaims another task's orphaned non-live attempt so a waiter can fill the member", () => {
+    // task-a was recreated: live selected attempt is new, but the old attempt
+    // still occupies activeExecutions (kill/onComplete never ran).
+    const taskA = makeTask('wf-1/task-a', 'wf-1/task-a-new');
+    const { runner, sshExecutor, kill } = makeRunner({
+      getTask: (id: string) => (id === taskA.id ? taskA : null),
+      getAllTasks: () => [taskA],
+    });
+    strandActiveExecution(runner, sshExecutor, 'wf-1/task-a', 'wf-1/task-a-old');
+
+    expect(() => runner.selectExecutor(makeTask('wf-2/task-b', 'wf-2/task-b-attempt'))).not.toThrow();
+    expect((runner as unknown as { activeExecutions: Map<string, unknown> }).activeExecutions.has('wf-1/task-a-old')).toBe(false);
+    expect(runner.pendingPoolSelections.get('wf-2/task-b')?.member.id).toBe('remote-a');
+    expect(kill).toHaveBeenCalledTimes(1);
   });
 });
