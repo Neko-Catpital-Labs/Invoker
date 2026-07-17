@@ -46,6 +46,8 @@ const workflows: WorkflowMeta[] = [
   { id: 'wf-1', name: 'Test Workflow', status: 'running', baseBranch: 'master' },
 ];
 
+const FLOATING_GRAPH_PANEL_Z_INDEX = 1000;
+
 describe('Context menu (component)', () => {
   let mock: MockInvoker;
 
@@ -100,6 +102,19 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+  });
+
+  it('task context menu opened from the selected workflow mini DAG layers above the floating graph panel', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+
+    const menu = await screen.findByRole('menu');
+    expect(panel).toBeInTheDocument();
+    expect(menu).toHaveStyle({ zIndex: String(FLOATING_GRAPH_PANEL_Z_INDEX + 100) });
+    expect(Number(menu.style.zIndex)).toBeGreaterThan(FLOATING_GRAPH_PANEL_Z_INDEX);
   });
 
   it('workflow context menu retries workflow', async () => {
