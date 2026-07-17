@@ -51,6 +51,10 @@ const expectedExecutionFields = [
   'launchStartedAt',
   'launchCompletedAt',
   'mergeConflict',
+  'crashPreservedAt',
+  'crashPreservedOwnerPid',
+  'crashPreservedReportPath',
+  'crashPreservedDiagnosticSummary',
   'selectedAttemptId',
 ].sort();
 
