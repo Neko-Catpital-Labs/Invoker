@@ -85,6 +85,24 @@ function extractExportedWorkerKinds(source: string): Set<string> {
   return workerKinds;
 }
 
+function localValueImportSpecifiers(source: string): string[] {
+  const specifiers: string[] = [];
+  const pattern = /(?:^|\n)\s*(?:import|export)\s+(?!type\s)[^;]*?\sfrom\s+'(\.[^']+)'/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source)) !== null) specifiers.push(match[1]);
+  return specifiers;
+}
+
+function resolveLocalImport(fromFile: string, specifier: string): string {
+  const parts = fromFile.includes('/') ? fromFile.slice(0, fromFile.lastIndexOf('/')).split('/') : [];
+  for (const segment of specifier.replace(/\.js$/, '.ts').split('/')) {
+    if (segment === '.' || segment === '') continue;
+    if (segment === '..') parts.pop();
+    else parts.push(segment);
+  }
+  return parts.join('/');
+}
+
 function registeredBuiltInWorkerSourceFiles(sourceFiles: SourceFiles): Set<string> {
   const builtinWorkers = sourceFiles.get(BUILTIN_WORKERS_SOURCE);
   expect(builtinWorkers).toBeDefined();
@@ -106,6 +124,24 @@ function registeredBuiltInWorkerSourceFiles(sourceFiles: SourceFiles): Set<strin
     const moduleWorkerKinds = extractExportedWorkerKinds(source ?? '');
     if ([...moduleWorkerKinds].some((kind) => registeredKinds.has(kind))) {
       allowedFiles.add(sourcePath);
+    }
+  }
+
+  // Recovery helpers factored out of a registered worker (and imported by it)
+  // are part of that worker's implementation, so follow value imports to keep
+  // their submitter.submit() calls sanctioned. Files no worker reaches stay
+  // unsanctioned and are still caught as violations.
+  const queue = [...allowedFiles];
+  while (queue.length > 0) {
+    const file = queue.pop() as string;
+    const source = sourceFiles.get(file);
+    if (!source) continue;
+    for (const specifier of localValueImportSpecifiers(source)) {
+      const importedPath = resolveLocalImport(file, specifier);
+      if (sourceFiles.has(importedPath) && !allowedFiles.has(importedPath)) {
+        allowedFiles.add(importedPath);
+        queue.push(importedPath);
+      }
     }
   }
 
