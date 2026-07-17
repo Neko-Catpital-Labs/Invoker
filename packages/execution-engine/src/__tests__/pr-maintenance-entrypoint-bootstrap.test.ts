@@ -9,11 +9,10 @@ import { resolveRepoRoot } from '@invoker/contracts';
 
 const repoRoot = resolveRepoRoot(process.cwd());
 
-// Every registered PR-maintenance cron entrypoint. Add a new worker's script
-// here so this guard proves the script can source its shared library.
+// Registered PR-maintenance shell entrypoints. Unsupported owner-host cron
+// wrappers are intentionally retired; this guard only covers the remaining
+// worker-owned shell entrypoint.
 const PR_MAINTENANCE_ENTRYPOINTS = [
-  { kind: 'coderabbit-address', scriptRelativePath: 'scripts/cron-coderabbit-address.sh' },
-  { kind: 'pr-conflict-rebase', scriptRelativePath: 'scripts/cron-pr-conflict-rebase.sh' },
   { kind: 'pr-ci-failure-scan', scriptRelativePath: 'packages/execution-engine/scripts/cron-pr-ci-failure.sh' },
 ] as const;
 
@@ -24,9 +23,8 @@ describe('PR maintenance entrypoints bootstrap', () => {
   beforeEach(() => {
     stubBin = mkdtempSync(join(tmpdir(), 'pr-maintenance-stub-bin-'));
     // Force every entrypoint down its lock-held early-exit: a `flock` stub that
-    // always reports the lock busy makes cron_lock return exit 0 right after the
-    // script sources cron-pr-lib.sh — so the run only proves the source resolved,
-    // never touching gh/git/the network.
+    // always reports the lock busy makes cron_lock return exit 0 right after
+    // bootstrap — so the run never touches gh/git/the network.
     const flockStub = join(stubBin, 'flock');
     writeFileSync(flockStub, '#!/usr/bin/env bash\nexit 1\n', { mode: 0o755 });
     chmodSync(flockStub, 0o755);
