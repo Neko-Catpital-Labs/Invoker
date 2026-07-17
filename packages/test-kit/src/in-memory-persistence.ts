@@ -135,6 +135,17 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     return this.attempts.get(nodeId) ?? [];
   }
 
+  loadCostAttributionAttempts(nodeId: string): Array<{ id: string; nodeId: string; agentSessionId?: string; createdAt: string }> {
+    return [...this.loadAttempts(nodeId)]
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((attempt) => ({
+        id: attempt.id,
+        nodeId: attempt.nodeId,
+        agentSessionId: attempt.agentSessionId,
+        createdAt: attempt.createdAt.toISOString(),
+      }));
+  }
+
   loadAttempt(attemptId: string): Attempt | undefined {
     for (const list of this.attempts.values()) {
       const found = list.find(a => a.id === attemptId);

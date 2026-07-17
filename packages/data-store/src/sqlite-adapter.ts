@@ -40,6 +40,7 @@ import type {
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
+  CostAttributionAttempt,
   ActivityLogEntry,
   Conversation,
   ConversationMessage,
@@ -2193,6 +2194,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   loadAttempts(nodeId: string): Attempt[] {
     return this.taskAttemptRepo.loadAttempts(nodeId);
+  }
+
+  loadCostAttributionAttempts(nodeId: string): CostAttributionAttempt[] {
+    return this.taskAttemptRepo.loadCostAttributionAttempts(nodeId);
   }
 
   loadActionGraphAttempts(

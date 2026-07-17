@@ -102,7 +102,7 @@ describe('headless query costs', () => {
         readOnly: false,
         listWorkflows: vi.fn(() => [makeWorkflow('wf-1', 'completed')]),
         loadTasks: vi.fn(() => []),
-        loadAttempts: vi.fn((taskId: string) => attemptsByTaskId.get(taskId) ?? []),
+        loadCostAttributionAttempts: vi.fn((taskId: string) => attemptsByTaskId.get(taskId) ?? []),
       } as unknown as SQLiteAdapter,
       commandService: {} as CommandService,
       executorRegistry: {} as any,
@@ -201,7 +201,7 @@ describe('headless query costs', () => {
         } as any,
       }),
     ] as any);
-    (mockDeps.persistence.loadAttempts as any) = vi.fn(() => [
+    (mockDeps.persistence.loadCostAttributionAttempts as any) = vi.fn(() => [
       { id: 'wf-1/task-a-selected', agentSessionId: 'sess-stale' },
       { id: 'wf-1/task-a-exact', agentSessionId: 'sess-wf-1-task-a' },
     ]);
@@ -225,7 +225,7 @@ describe('headless query costs', () => {
         } as any,
       }),
     ] as any);
-    (mockDeps.persistence.loadAttempts as any) = vi.fn((taskId: string) => {
+    (mockDeps.persistence.loadCostAttributionAttempts as any) = vi.fn((taskId: string) => {
       if (taskId === 'wf-1/task-a') {
         return [
           { id: 'wf-1/task-a-older', agentSessionId: 'sess-old' },

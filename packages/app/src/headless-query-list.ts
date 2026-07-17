@@ -11,8 +11,9 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { Attempt, TaskState } from '@invoker/workflow-core';
+import type { TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent } from '@invoker/contracts';
+import type { CostAttributionAttempt } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
@@ -449,8 +450,8 @@ type CostQueryDeps = Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'execut
 
 function resolveCostAttributionAttempt(
   task: TaskState,
-  attempts: readonly Attempt[],
-): Attempt | undefined {
+  attempts: readonly CostAttributionAttempt[],
+): CostAttributionAttempt | undefined {
   const sessionId = task.execution.agentSessionId?.trim();
   if (sessionId) {
     const exactSessionAttempt = attempts.find((attempt) => attempt.agentSessionId?.trim() === sessionId);
@@ -493,7 +494,7 @@ async function collectCostEvents(
     );
 
     for (const task of tasks) {
-      const attempts = deps.persistence.loadAttempts(task.id);
+      const attempts = deps.persistence.loadCostAttributionAttempts(task.id);
       const attributedAttempt = resolveCostAttributionAttempt(task, attempts);
       const ctx = buildAttributionContext({
         id: task.id,
