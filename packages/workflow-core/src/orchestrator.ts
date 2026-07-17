@@ -3073,7 +3073,7 @@ export class Orchestrator {
    * deferred set (retry / cancel / recreate / completion re-enqueue) releases
    * the park immediately, without a per-transition clear at every call site.
    */
-  private isLaunchParked(taskId: string, now: number): boolean {
+  isLaunchParked(taskId: string, now: number = Date.now()): boolean {
     const deferral = this.launchDeferrals.get(taskId);
     return deferral !== undefined
       && this.deferredTaskIds.has(taskId)

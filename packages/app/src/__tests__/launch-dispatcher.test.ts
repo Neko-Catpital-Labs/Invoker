@@ -1069,6 +1069,56 @@ describe('LaunchDispatcher', () => {
       expect(leases[0]?.resourceKey).toBe('ssh:live');
     });
 
-  });
+    it('re-tops stranded ready work when free scheduler slots remain', () => {
+      const strandedTask = {
+        id: 'wf/ready',
+        status: 'pending',
+        execution: { selectedAttemptId: 'wf/ready-a1', generation: 0 },
+      };
+      const prepare = vi.fn();
+      const startExecution = vi.fn()
+        .mockReturnValueOnce([])
+        .mockReturnValueOnce([strandedTask]);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-topup',
+        orchestrator: {
+          prepareTaskForNewAttempt: prepare,
+          getExecutableReadyTasks: () => [strandedTask as any],
+          getQueueStatus: () => ({ runningCount: 2, maxConcurrency: 13 }),
+          isLaunchParked: () => false,
+          startExecution,
+        },
+        taskRunnerProvider: () => ({ executeTask: vi.fn() }),
+      });
+      dispatcher.poll();
+      expect(prepare).toHaveBeenCalledWith('wf/ready', 'launch-dispatcher-ready-topup');
+      expect(startExecution).toHaveBeenCalledTimes(2);
+    });
 
+    it('does not thrash parked ready tasks when slots are free', () => {
+      const parkedTask = {
+        id: 'wf/parked',
+        status: 'pending',
+        execution: { selectedAttemptId: 'wf/parked-a1', generation: 0 },
+      };
+      const prepare = vi.fn();
+      const startExecution = vi.fn().mockReturnValue([]);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-parked',
+        orchestrator: {
+          prepareTaskForNewAttempt: prepare,
+          getExecutableReadyTasks: () => [parkedTask as any],
+          getQueueStatus: () => ({ runningCount: 0, maxConcurrency: 13 }),
+          isLaunchParked: () => true,
+          startExecution,
+        },
+        taskRunnerProvider: () => ({ executeTask: vi.fn() }),
+      });
+      dispatcher.poll();
+      expect(prepare).not.toHaveBeenCalled();
+      expect(startExecution).toHaveBeenCalledTimes(1);
+    });
+  });
 });
