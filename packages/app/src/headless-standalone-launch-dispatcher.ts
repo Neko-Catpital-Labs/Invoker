@@ -32,13 +32,7 @@ export function startStandaloneLaunchDispatcher(
 
   const dispatcher = new LaunchDispatcher({
     persistence: headlessDeps.persistence,
-    orchestrator: {
-      prepareTaskForNewAttempt: (taskId, reason) =>
-        headlessDeps.orchestrator.prepareTaskForNewAttempt(taskId, reason),
-      syncFromDb: (workflowId) => headlessDeps.orchestrator.syncFromDb(workflowId),
-      getTask: (taskId) => headlessDeps.orchestrator.getTask(taskId),
-      getTaskLaunchReadiness: (taskId) => headlessDeps.orchestrator.getTaskLaunchReadiness(taskId),
-    },
+    orchestrator: headlessDeps.orchestrator,
     taskRunnerProvider: () => executor,
     ownerId,
     logger: headlessDeps.logger,
