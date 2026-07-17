@@ -769,6 +769,7 @@ export function App() {
   const graphActionsMenuRef = useRef<HTMLDivElement>(null);
   const startReadyMenuRef = useRef<HTMLDivElement>(null);
   const lastGoodSelectedWorkflowGraphRef = useRef<SelectedWorkflowGraphSnapshot | null>(null);
+  const suppressDagSurfaceDismissRef = useRef(false);
   const contextMenuTaskRef = useRef<TaskState | null>(null);
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -1563,7 +1564,15 @@ export function App() {
     cameraSuppressedRef.current = true;
   }, []);
 
+  const armSuppressDagSurfaceDismiss = useCallback(() => {
+    suppressDagSurfaceDismissRef.current = true;
+    queueMicrotask(() => {
+      suppressDagSurfaceDismissRef.current = false;
+    });
+  }, []);
+
   const selectWorkflowById = useCallback((workflowId: string) => {
+    armSuppressDagSurfaceDismiss();
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
     setSelectedTaskId(null);
@@ -1571,7 +1580,7 @@ export function App() {
     setWorkflowContextMenu(null);
     recenterForSelection('workflow', workflowId);
     focusKeyboardRegion('workflowGraph');
-  }, [focusKeyboardRegion, recenterForSelection]);
+  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion, recenterForSelection]);
 
   const selectTaskById = useCallback((taskId: string) => {
     const task = tasksRef.current.get(taskId);
@@ -1951,13 +1960,14 @@ export function App() {
   }, []);
 
   const handleWorkflowClick = useCallback((workflowId: string) => {
+    armSuppressDagSurfaceDismiss();
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
     recenterForSelection('workflow', workflowId);
-  }, [recenterForSelection]);
+  }, [armSuppressDagSurfaceDismiss, recenterForSelection]);
 
   const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<Element>, workflowId: string) => {
     event.preventDefault();
@@ -2064,6 +2074,10 @@ export function App() {
     if (contextMenu || workflowContextMenu) {
       setContextMenu(null);
       setWorkflowContextMenu(null);
+      return;
+    }
+
+    if (suppressDagSurfaceDismissRef.current) {
       return;
     }
 
