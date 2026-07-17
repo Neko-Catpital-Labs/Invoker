@@ -67,7 +67,17 @@ describe('recovery-worker-observability', () => {
     const status = collectRecoveryWorkerStatus({ getEventsByTypes, countEventsByTypes });
 
     expect(countEventsByTypes).toHaveBeenCalled();
-    expect(getEventsByTypes).toHaveBeenCalled();
+    expect(getEventsByTypes).toHaveBeenCalledTimes(1);
+    expect(getEventsByTypes).toHaveBeenCalledWith(
+      [
+        recoveryWorkerEventType('wakeup'),
+        recoveryWorkerEventType('scan'),
+        recoveryWorkerEventType('submit'),
+        recoveryWorkerEventType('skip'),
+      ],
+      'desc',
+      10,
+    );
     expect(status).toMatchObject({
       kind: 'recovery',
       workerId: 'auto-fix-recovery',
@@ -88,6 +98,37 @@ describe('recovery-worker-observability', () => {
       taskId: 'wf-1/task-b',
       reason: 'already-queued-intent',
     });
+  });
+
+  it('loads last skip with a second typed query only when recent page has no skip', () => {
+    const recentWithoutSkip = allEvents
+      .filter((event) => event.eventType !== recoveryWorkerEventType('skip'))
+      .slice()
+      .reverse();
+    const getEventsByTypes = vi.fn((eventTypes: readonly string[], _sortBy: 'asc' | 'desc', limit: number) => {
+      if (eventTypes.length === 1 && eventTypes[0] === recoveryWorkerEventType('skip')) {
+        return allEvents
+          .filter((event) => event.eventType === recoveryWorkerEventType('skip'))
+          .slice()
+          .reverse()
+          .slice(0, limit);
+      }
+      return recentWithoutSkip.slice(0, limit);
+    });
+    const countEventsByTypes = vi.fn((eventTypes: readonly string[]) =>
+      eventTypes.map((eventType) => ({
+        eventType,
+        count: allEvents.filter((event) => event.eventType === eventType).length,
+        lastCreatedAt: allEvents.filter((event) => event.eventType === eventType).at(-1)?.createdAt ?? null,
+      })),
+    );
+
+    const status = collectRecoveryWorkerStatus({ getEventsByTypes, countEventsByTypes });
+
+    expect(getEventsByTypes).toHaveBeenCalledTimes(2);
+    expect(getEventsByTypes).toHaveBeenNthCalledWith(2, [recoveryWorkerEventType('skip')], 'desc', 1);
+    expect(status.lastSkipReason).toBe('already-queued-intent');
+    expect(status.lastSkipTaskId).toBe('wf-1/task-b');
   });
 
   it('falls back to per-task event scans when aggregate APIs are unavailable', () => {
