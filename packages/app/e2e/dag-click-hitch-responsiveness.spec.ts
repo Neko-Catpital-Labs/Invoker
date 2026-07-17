@@ -1,9 +1,11 @@
-import { expect, test } from './fixtures/electron-app.js';
+import { expect, test, E2E_REPO_URL } from './fixtures/electron-app.js';
+import { stringify as yamlStringify } from 'yaml';
 import type { Page } from '@playwright/test';
 
 const MAX_P95_RTT_MS = 100;
 const MAX_SAMPLE_RTT_MS = 250;
 const CLICK_SAMPLES = 8;
+const WORKFLOW_SELECT_ACK_BUDGET_MS = 100;
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
@@ -32,6 +34,66 @@ async function selectWorkflowForMiniDag(page: Page, workflowId: string) {
   await expect(miniDag).toBeVisible({ timeout: 10_000 });
   return miniDag;
 }
+
+test('workflow select shows mini-DAG within 100ms under a fat events table', async ({ page }) => {
+  const seeded = await page.evaluate(async () => {
+    if (!window.invoker.seedMainProcessHitchFixture) {
+      throw new Error('seedMainProcessHitchFixture is not exposed (NODE_ENV=test required)');
+    }
+    return window.invoker.seedMainProcessHitchFixture();
+  });
+  expect(seeded.eventCount).toBeGreaterThanOrEqual(10_000);
+
+  // Small plan so React Flow paint cost is not the variable under test; the fat
+  // hitch fixture keeps the main-thread SQLite poll busy in the background.
+  const planText = yamlStringify({
+    name: 'Workflow Select Ack Plan',
+    repoUrl: E2E_REPO_URL,
+    onFinish: 'none',
+    tasks: [
+      { id: 'alpha', description: 'Alpha', command: 'echo alpha', dependencies: [] },
+      { id: 'beta', description: 'Beta', command: 'echo beta', dependencies: ['alpha'] },
+    ],
+  });
+  const beforeIds = new Set(
+    (await page.evaluate(async () => window.invoker.listWorkflows())).map((workflow) => workflow.id),
+  );
+  await page.evaluate(async (text) => {
+    await window.invoker.loadPlan(text);
+  }, planText);
+  await page.getByRole('button', { name: 'Refresh' }).click();
+
+  const smallId = await page.waitForFunction(
+    (knownIds) => window.invoker.listWorkflows().then((workflows) => {
+      const created = workflows.find((workflow) => !knownIds.includes(workflow.id));
+      return created?.id ?? null;
+    }),
+    [...beforeIds],
+    { timeout: 30_000 },
+  ).then(async (handle) => handle.jsonValue());
+  expect(smallId, 'expected newly loaded ack plan workflow').toBeTruthy();
+
+  const workflowNode = page.getByTestId(`workflow-node-${smallId}`);
+  await workflowNode.waitFor({ state: 'attached', timeout: 15_000 });
+
+  // Click a different workflow first (hitch fixture), then measure re-select of the small one.
+  const hitchNode = page.getByTestId(`workflow-node-${seeded.workflowId}`);
+  await hitchNode.waitFor({ state: 'attached', timeout: 15_000 });
+  await hitchNode.dispatchEvent('click', { bubbles: true });
+  await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: 10_000 });
+
+  const started = await page.evaluate(() => performance.now());
+  await workflowNode.dispatchEvent('click', { bubbles: true });
+  await expect(page.getByTestId('selected-workflow-mini-dag')).toContainText('Workflow Select Ack', {
+    timeout: WORKFLOW_SELECT_ACK_BUDGET_MS + 1500,
+  });
+  const ackMs = await page.evaluate((start) => performance.now() - start, started);
+
+  expect(
+    ackMs,
+    `workflow select → mini-DAG ack ${ackMs.toFixed(1)}ms exceeded ${WORKFLOW_SELECT_ACK_BUDGET_MS}ms`,
+  ).toBeLessThanOrEqual(WORKFLOW_SELECT_ACK_BUDGET_MS);
+});
 
 test('DAG task clicks keep listWorkflows IPC responsive under a fat events table', async ({ page }) => {
   const seeded = await page.evaluate(async () => {
