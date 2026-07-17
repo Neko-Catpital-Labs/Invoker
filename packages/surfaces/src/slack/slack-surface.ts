@@ -25,7 +25,7 @@ import {
 import type { ConversationMode, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
-import { summarizePlanText } from './plan-summary.js';
+import { summarizePlanText, formatPlanSummaryLines, type PlanSummary } from './plan-summary.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
 import { buildAssistantPrompt, parseWorkflowControl, SLACK_DIRECT_ANSWER_GUIDANCE } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
@@ -35,10 +35,6 @@ function truncateWords(text: string, maxWords: number): string {
   const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
   if (words.length <= maxWords) return words.join(' ');
   return `${words.slice(0, maxWords).join(' ')} ...`;
-}
-
-function asSentence(text: string): string {
-  return text.endsWith('...') || text.endsWith('…') ? text : `${text}.`;
 }
 
 // ── Config ──────────────────────────────────────────────────
@@ -1037,23 +1033,14 @@ export class SlackSurface implements Surface {
     await this.stageConfirm(threadTs, channel, { kind: 'submit', planText, ctx, channel, lobbyThreadTs: threadTs }, this.renderPlanSummary(summary), say);
   }
 
-  /** Short plain-English plan view: the user approves this, not YAML. */
-  private renderPlanSummary(summary: { name: string; steps: string[]; taskCount: number }): string {
-    const title = truncateWords(summary.name, 5);
-    const first = truncateWords(summary.steps[0] ?? 'Run the plan', 6);
-    const parts = [
-      `I'll start "${title}": ${summary.taskCount} step${summary.taskCount === 1 ? '' : 's'} in order.`,
-      `First: ${asSentence(first)}`,
-    ];
-
-    if (summary.steps.length > 1) {
-      parts.push(`Then: ${asSentence(truncateWords(summary.steps[1], 6))}`);
-    }
-    if (summary.steps.length > 2) {
-      parts.push(`Then ${summary.steps.length - 2} more.`);
-    }
-
-    return parts.join(' ');
+  /** Per-task plan view: the user approves this, not YAML. */
+  private renderPlanSummary(summary: PlanSummary): string {
+    const title = truncateWords(summary.name, 8);
+    const workflowNote = summary.workflowCount && summary.workflowCount > 1
+      ? `${summary.workflowCount} workflows, `
+      : '';
+    const header = `*${title}* — ${workflowNote}${summary.taskCount} task${summary.taskCount === 1 ? '' : 's'}:`;
+    return [header, ...formatPlanSummaryLines(summary)].join('\n');
   }
 
   private buildConfirmBlocks(prompt: string, confirmKey: string): unknown[] {
