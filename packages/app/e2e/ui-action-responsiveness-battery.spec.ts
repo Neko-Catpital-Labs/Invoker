@@ -5,6 +5,8 @@ import type { Page } from '@playwright/test';
 const WORKFLOW_COUNT = 30;
 const TASKS_PER_WORKFLOW = 4;
 const ACK_BUDGET_MS = 200;
+/** Workflow select → selected-workflow-mini-dag must paint in ≤100ms (in-memory filter). */
+const WORKFLOW_SELECT_ACK_BUDGET_MS = 100;
 const IPC_P95_BUDGET_MS = 200;
 const IPC_MAX_BUDGET_MS = 250;
 const IPC_SAMPLE_INTERVAL_MS = 100;
@@ -164,9 +166,13 @@ test('UI actions acknowledge within 200ms under fat DB + large graph', async ({ 
   ack = await measureAck(
     page,
     async () => { await workflowNode.dispatchEvent('click', { bubbles: true }); },
-    async () => { await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({ timeout: ACK_BUDGET_MS + 1500 }); },
+    async () => {
+      await expect(page.getByTestId('selected-workflow-mini-dag')).toBeVisible({
+        timeout: WORKFLOW_SELECT_ACK_BUDGET_MS + 1500,
+      });
+    },
   );
-  expect(ack, `workflow select ack ${ack}ms`).toBeLessThanOrEqual(ACK_BUDGET_MS + 50);
+  expect(ack, `workflow select ack ${ack}ms`).toBeLessThanOrEqual(WORKFLOW_SELECT_ACK_BUDGET_MS);
 
   // Workflow right-click context menu (must paint within 200ms under load)
   ack = await measureAck(
