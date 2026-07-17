@@ -18,9 +18,7 @@ trap cleanup EXIT
 mkdir -p "$DB_DIR" "$TEST_DIR"
 
 cat > "$TEST_FILE" <<'TS'
-import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
 import { Orchestrator } from '@invoker/workflow-core';
@@ -40,8 +38,10 @@ afterEach(() => {
 
 describe('downstream gate blind to a DB-completed but unhydrated upstream', () => {
   it('clears the completed external gate from the DB when the upstream is not in memory', async () => {
-    const dbDir = mkdtempSync(join(tmpdir(), 'invoker-gate-db-vs-memory-'));
-    process.env.INVOKER_DB_DIR = dbDir;
+    const dbDir = process.env.INVOKER_DB_DIR;
+    if (!dbDir) {
+      throw new Error('INVOKER_DB_DIR is required');
+    }
     const adapter = await SQLiteAdapter.create(join(dbDir, 'invoker.db'), { ownerCapability: true });
     adapters.push(adapter);
 
