@@ -50,8 +50,12 @@ describe('CodeRabbit PR #3050 — submitted planning stays read-only after start
       expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(1);
     });
 
-    await openPlanningTerminal();
     await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.');
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
+      expect(screen.queryByText('Plan graph')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
+    });
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
     fireEvent.click(await screen.findByTestId('rail-start-ready'));
