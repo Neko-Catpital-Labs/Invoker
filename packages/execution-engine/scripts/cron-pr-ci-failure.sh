@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# shellcheck source=scripts/cron-pr-lib.sh
-source "$(dirname "$0")/cron-pr-lib.sh"
+# shellcheck source=../../../scripts/cron-pr-lib.sh
+source "$(cd "$(dirname "$0")/../../.." && pwd)/scripts/cron-pr-lib.sh"
 
 cron_lock
 
