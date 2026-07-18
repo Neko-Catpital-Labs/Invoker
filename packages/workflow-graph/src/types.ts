@@ -9,6 +9,7 @@
 
 export type TaskStatus =
   | 'pending'
+  | 'queued'
   | 'running'
   | 'fixing_with_ai'
   | 'completed'
