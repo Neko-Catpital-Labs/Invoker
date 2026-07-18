@@ -969,6 +969,9 @@ describe('SQLiteAdapter', () => {
       const leases = adapter.listExecutionResourceLeases();
       expect(leases).toHaveLength(1);
       expect(leases[0].holderId).toBe('holder-2');
+      expect(adapter.listExecutionResourceLeasesByKey('ssh:invoker@example.com:22')).toEqual([
+        expect.objectContaining({ holderId: 'holder-2' }),
+      ]);
     });
 
     it('renews and releases resource leases by holder', () => {

@@ -2884,12 +2884,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return Number(row?.cnt ?? 0);
   }
 
-  listExecutionResourceLeasesByKey(resourceKey: string): ExecutionResourceLease[] {
+  listExecutionResourceLeasesByKey(resourceKey: string, nowIso?: string): ExecutionResourceLease[] {
+    const cutoff = nowIso ?? new Date().toISOString();
     return this.queryAll(
       `SELECT * FROM execution_resource_leases
        WHERE resource_key = ?
+         AND lease_expires_at > ?
        ORDER BY acquired_at ASC`,
-      [resourceKey],
+      [resourceKey, cutoff],
     ).map((row) => ({
       resourceKey: String(row.resource_key),
       resourceType: String(row.resource_type),
