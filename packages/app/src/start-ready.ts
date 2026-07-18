@@ -16,6 +16,19 @@ type StartReadyOrchestrator = Pick<
   | 'startExecution'
 >;
 
+type StartReadyRequestExt = StartReadyRequest & {
+  recreateFailedAndPending?: boolean;
+  recreateFailedPendingAndRunning?: boolean;
+};
+
+type StartReadyPreviewExt = StartReadyPreview & {
+  pendingWorkflowIds: string[];
+  runningWorkflowIds: string[];
+  skipped: StartReadyPreview['skipped'] & {
+    pendingTasks: number;
+    runningTasks: number;
+  };
+};
 function collectRecoverableTasks(orchestrator: StartReadyOrchestrator): TaskState[] {
   const activeTaskIds = orchestrator.getPersistedActiveTaskIds();
   return orchestrator
@@ -64,31 +77,71 @@ function uniqueTasks(tasks: readonly TaskState[]): TaskState[] {
   return result;
 }
 
+function isPendingOrQueued(task: TaskState): boolean {
+  return task.status === 'pending' || (task.status as string) === 'queued';
+}
+
+function unionWorkflowIds(...groups: readonly (readonly string[])[]): string[] {
+  const ids = new Set<string>();
+  for (const group of groups) {
+    for (const id of group) ids.add(id);
+  }
+  return Array.from(ids);
+}
+
+function workflowIdsToRecreate(
+  request: StartReadyRequestExt,
+  preview: StartReadyPreviewExt,
+): string[] {
+  if (request.recreateFailedPendingAndRunning) {
+    return unionWorkflowIds(
+      preview.failedWorkflowIds,
+      preview.pendingWorkflowIds,
+      preview.runningWorkflowIds,
+    );
+  }
+  if (request.recreateFailedAndPending) {
+    return unionWorkflowIds(preview.failedWorkflowIds, preview.pendingWorkflowIds);
+  }
+  if (request.recreateFailed) {
+    return [...preview.failedWorkflowIds];
+  }
+  return [];
+}
+
 export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): StartReadyPreview {
   const tasks = orchestrator.getAllTasks();
   const readyTasks = orchestrator.getExecutableReadyTasks();
   const recoverableTasks = collectRecoverableTasks(orchestrator);
   const failedTasks = tasks.filter((task) => task.status === 'failed');
+  const pendingTasks = tasks.filter((task) => isPendingOrQueued(task));
+  const runningTasks = tasks.filter((task) => task.status === 'running');
 
-  return {
+  const preview: StartReadyPreviewExt = {
     readyTaskIds: readyTasks.map((task) => task.id),
     recoverableTaskIds: recoverableTasks.map((task) => task.id),
     failedWorkflowIds: uniqueWorkflowIds(failedTasks),
+    pendingWorkflowIds: uniqueWorkflowIds(pendingTasks),
+    runningWorkflowIds: uniqueWorkflowIds(runningTasks),
     skipped: {
       awaitingApproval: tasks.filter((task) => task.status === 'awaiting_approval').length,
       reviewReady: tasks.filter((task) => task.status === 'review_ready').length,
       blocked: tasks.filter((task) => task.status === 'blocked' || task.status === 'needs_input').length,
       failedTasks: failedTasks.length,
+      pendingTasks: pendingTasks.length,
+      runningTasks: runningTasks.length,
     },
   };
+  return preview;
 }
 
 export function runStartReady(
   orchestrator: StartReadyOrchestrator,
   request: StartReadyRequest = {},
 ): StartReadyResult {
+  const extendedRequest = request as StartReadyRequestExt;
   orchestrator.syncAllFromDb();
-  const preview = collectStartReadyPreview(orchestrator);
+  const preview = collectStartReadyPreview(orchestrator) as StartReadyPreviewExt;
   if (request.dryRun) {
     return {
       preview,
@@ -100,11 +153,9 @@ export function runStartReady(
 
   const started: TaskState[] = [];
   const recreatedWorkflowIds: string[] = [];
-  if (request.recreateFailed) {
-    for (const workflowId of preview.failedWorkflowIds) {
-      started.push(...orchestrator.recreateWorkflow(workflowId));
-      recreatedWorkflowIds.push(workflowId);
-    }
+  for (const workflowId of workflowIdsToRecreate(extendedRequest, preview)) {
+    started.push(...orchestrator.recreateWorkflow(workflowId));
+    recreatedWorkflowIds.push(workflowId);
   }
 
   const recoverableTasks = collectRecoverableTasks(orchestrator);
