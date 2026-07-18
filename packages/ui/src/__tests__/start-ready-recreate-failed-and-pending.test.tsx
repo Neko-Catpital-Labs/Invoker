@@ -18,6 +18,7 @@ const previewResult: StartReadyResult = {
     failedWorkflowIds: ['wf-2'],
     pendingWorkflowIds: ['wf-1', 'wf-3'],
     runningWorkflowIds: [],
+    completedWorkflowIds: [],
     skipped: {
       awaitingApproval: 0,
       reviewReady: 0,
@@ -25,6 +26,7 @@ const previewResult: StartReadyResult = {
       failedTasks: 1,
       pendingTasks: 2,
       runningTasks: 0,
+      completedTasks: 0,
     },
   },
   started: [],

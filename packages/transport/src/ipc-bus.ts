@@ -239,7 +239,11 @@ export const DEFAULT_SOCKET_PATH = resolveDefaultSocketPath();
 /** Requests that can legitimately run much longer than the default transport round-trip.
  *  Until request cancellation is threaded through the bus, these channels get a longer
  *  caller deadline so the responder is less likely to finish after the requester has given up. */
-const LONG_REQUEST_DEADLINE_CHANNELS = new Set(['invoker:plan-from-goal']);
+const LONG_REQUEST_DEADLINE_CHANNELS = new Set([
+  'invoker:plan-from-goal',
+  // start-ready --recreate-all and other bulk mutations run inline on the owner.
+  'headless.exec',
+]);
 export const LONG_REQUEST_DEADLINE_MS = 2 * 60 * 60 * 1000;
 export const DEFAULT_REQUEST_DEADLINE_MS = 30_000;
 

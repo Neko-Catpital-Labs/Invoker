@@ -189,6 +189,17 @@ export function acknowledgeNoTrackHeadlessExec(
 
   if (!payload.noTrack) return undefined;
 
+  const command = Array.isArray(payload.args) ? payload.args[0] : undefined;
+  // Global commands are not workflow-scoped. Fall through to inline execution
+  // instead of requiring a mutation-intent workflow id.
+  if (command === 'start-ready') {
+    context.logger.info(
+      `headless.exec start-ready noTrack fallthrough ${headlessExecLogFields(payload, mode, Boolean(workflowMutationCoordinator), { workflow: '"<global>"', priority })}`,
+      { module: 'ipc-delegate' },
+    );
+    return undefined;
+  }
+
   if (workflowId && workflowMutationCoordinator) {
     const result = submitWorkflowMutationOrAcknowledgeDeleted(workflowId, priority, 'headless.exec', [payload], {
       coordinator: workflowMutationCoordinator,
