@@ -456,19 +456,6 @@ export function App() {
       return;
     }
 
-    const target = event.target as HTMLElement;
-    if (
-      target.closest('[data-testid^="workflow-node-"]') ||
-      target.closest('[data-testid="selected-workflow-mini-dag"]') ||
-      target.closest('.react-flow__node') ||
-      target.closest('[role="menu"]')
-    ) {
-      return;
-    }
-
-    setSelectedTaskId(null);
-    setSelectedWorkflowId(null);
-    setWorkflowSelectionDismissed(true);
   }, [contextMenu, workflowContextMenu]);
 
   const handleRestartTask = useCallback(async (taskId: string) => {
