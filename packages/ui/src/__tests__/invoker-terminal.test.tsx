@@ -46,6 +46,14 @@ describe('Invoker terminal (component)', () => {
     expect(list.parentElement).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col');
   }
 
+  function expectPlanningSurfaceVisibleAfterSubmit() {
+    expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('heading', { name: 'Planning chat window' })).toBeInTheDocument();
+    expect(screen.queryByText('Plan graph')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+  }
+
   async function expectSurfaceRailList(surface: 'planning' | 'workflows' | 'attention', listTestId: string) {
     fireEvent.click(await screen.findByTestId(`sidebar-${surface}`));
     await waitFor(() => {
@@ -708,9 +716,8 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(screen.getByText('Plan graph')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expectPlanningSurfaceVisibleAfterSubmit();
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.');
     expect(mock.api.start).not.toHaveBeenCalled();
   });
@@ -761,9 +768,8 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(screen.getByText('Plan graph')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expectPlanningSurfaceVisibleAfterSubmit();
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
       'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then use Start ready work.',
     );
@@ -803,9 +809,8 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(2);
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(screen.getByText('Plan graph')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expectPlanningSurfaceVisibleAfterSubmit();
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. Review it, then use Start ready work.');
     expect(screen.queryByTestId('invoker-terminal-submit-error')).not.toBeInTheDocument();
   });
