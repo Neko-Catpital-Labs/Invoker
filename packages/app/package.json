@@ -57,7 +57,7 @@
     "dist": "electron-builder --publish never",
     "dist:linux": "electron-builder --linux AppImage deb --publish never",
     "dist:mac": "electron-builder --mac dmg --publish never",
-    "test": "vitest run",
+    "test": "node ../../scripts/run-vitest.cjs",
     "start": "unset ELECTRON_RUN_AS_NODE && node ../../scripts/electron.cjs dist/main.js",
     "dev": "tsup src/main.ts src/preload.ts --format cjs --outDir dist --external electron && unset ELECTRON_RUN_AS_NODE && node ../../scripts/electron.cjs dist/main.js",
     "test:e2e": "xvfb-run --auto-servernum playwright test"

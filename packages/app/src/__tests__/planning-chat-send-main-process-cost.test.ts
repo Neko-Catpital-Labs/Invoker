@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConversationRepository, SQLiteAdapter } from '@invoker/data-store';
 import type { ConversationMessageEntry } from '@invoker/data-store';
-import { PlanConversation } from '../../../surfaces/src/index.ts';
+import { PlanConversation } from '@invoker/surfaces';
 
 describe('planning chat send main-process cost guard', () => {
   afterEach(() => {
