@@ -466,7 +466,26 @@ describe('PlanConversation', () => {
     expect(conversation.submittedPlanText).toBeNull();
   });
 
-  it('confirmation extracts and submits the latest plan as text', async () => {
+  it('getDraftedPlan returns the newest plan from consecutive assistant turns without submitting', async () => {
+    const firstYaml = '```yaml\nname: "First"\ntasks:\n  - id: t1\n    description: "one"\n    dependencies: []\n```';
+    const secondYaml = '```yaml\nname: "Second"\ntasks:\n  - id: t2\n    description: "two"\n    dependencies: []\n```';
+
+    mockCursorResponse(firstYaml);
+    await conversation.sendMessage('Generate plan');
+    mockCursorResponse(secondYaml);
+    await conversation.sendMessage('Change the name');
+
+    const drafted = conversation.getDraftedPlan();
+    expect(typeof drafted).toBe('string');
+    const plan = parsePlanText(drafted!);
+    expect(plan.name).toBe('Second');
+    expect(plan.tasks[0].description).toBe('two');
+    expect(drafted).not.toContain('First');
+    expect(conversation.planSubmitted).toBe(false);
+    expect(conversation.submittedPlanText).toBeNull();
+  });
+
+  it('confirmation summarizes and submits the newest plan from consecutive assistant turns', async () => {
     const firstYaml = '```yaml\nname: "First"\ntasks:\n  - id: t1\n    description: "one"\n    dependencies: []\n```';
     const secondYaml = '```yaml\nname: "Second"\ntasks:\n  - id: t2\n    description: "two"\n    dependencies: []\n```';
 
@@ -476,10 +495,12 @@ describe('PlanConversation', () => {
     await conversation.sendMessage('Change the name');
 
     const reply = await conversation.sendMessage('yes');
-    expect(reply).toContain('Second');
+    expect(reply).toBe('Plan "Second" submitted for execution.');
     expect(typeof conversation.submittedPlanText).toBe('string');
     const plan = parsePlanText(conversation.submittedPlanText!);
     expect(plan.name).toBe('Second');
+    expect(plan.tasks[0].description).toBe('two');
+    expect(conversation.submittedPlanText).not.toContain('First');
     expect(conversation.planSubmitted).toBe(true);
     expect(mockSpawn).toHaveBeenCalledTimes(2); // not called for confirmation
   });
