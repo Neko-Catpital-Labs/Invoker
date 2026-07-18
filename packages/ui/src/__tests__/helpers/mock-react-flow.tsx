@@ -18,6 +18,8 @@ import { vi } from 'vitest';
 
 export function createReactFlowMock() {
   const fitView = vi.fn();
+  const setCenter = vi.fn();
+  const getZoom = vi.fn(() => 1);
   const MockReactFlow = React.forwardRef(function MockReactFlow(
     props: {
       nodes?: Array<{
@@ -86,8 +88,10 @@ export function createReactFlowMock() {
   return {
     ReactFlow: MockReactFlow,
     ReactFlowProvider: MockReactFlowProvider,
-    useReactFlow: () => ({ fitView }),
+    useReactFlow: () => ({ fitView, setCenter, getZoom }),
     __fitViewMock: fitView,
+    __setCenterMock: setCenter,
+    __getZoomMock: getZoom,
     applyNodeChanges: vi.fn((changes: unknown[], nodes: unknown[]) => nodes),
     Background: () => null,
     Controls: () => null,

@@ -25,6 +25,12 @@ export interface MockInvoker {
   fireDelta: (delta: TaskDelta) => void;
   /** Fire a workflows-changed event. */
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
+  /** Fire a workflow mutation failure event. */
+  fireWorkflowMutationFailed: (event: {
+    workflowId?: string;
+    taskId?: string;
+    message?: string;
+  }) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -39,8 +45,21 @@ export function createMockInvoker(
   let workflowSnapshot = initialWorkflows;
   let deltaCallback: ((delta: TaskDelta) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
+  let workflowMutationFailedCallback: ((event: {
+    workflowId?: string;
+    taskId?: string;
+    message?: string;
+  }) => void) | undefined;
 
-  const api: InvokerAPI = {
+  const api: InvokerAPI & {
+    onWorkflowMutationFailed?: (
+      callback: (event: {
+        workflowId?: string;
+        taskId?: string;
+        message?: string;
+      }) => void,
+    ) => () => void;
+  } = {
     // Defer resolution one microtask so snapshot is read after synchronous setTasks()
     // in tests (useTasks fetchAll races mount vs setTasks; real IPC resolves later too).
     getTasks: vi.fn(
@@ -61,6 +80,14 @@ export function createMockInvoker(
     onWorkflowsChanged: vi.fn((cb: (workflows: unknown[]) => void) => {
       workflowsCallback = cb;
       return () => { workflowsCallback = undefined; };
+    }),
+    onWorkflowMutationFailed: vi.fn((cb: (event: {
+      workflowId?: string;
+      taskId?: string;
+      message?: string;
+    }) => void) => {
+      workflowMutationFailedCallback = cb;
+      return () => { workflowMutationFailedCallback = undefined; };
     }),
     onTaskOutput: vi.fn(() => () => {}),
     onActivityLog: vi.fn(() => () => {}),
@@ -175,6 +202,14 @@ export function createMockInvoker(
     workflowsCallback?.(workflows);
   }
 
+  function fireWorkflowMutationFailed(event: {
+    workflowId?: string;
+    taskId?: string;
+    message?: string;
+  }) {
+    workflowMutationFailedCallback?.(event);
+  }
+
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[] } }).__INVOKER_BOOTSTRAP__ = {
@@ -188,7 +223,7 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
-  return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+  return { api, setTasks, fireDelta, fireWorkflowsChanged, fireWorkflowMutationFailed, install, cleanup };
 }
 
 /** Create a minimal TaskState for testing. */
