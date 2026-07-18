@@ -888,53 +888,61 @@ export class TaskRunner {
         selectedExecutor = this.selectExecutor(task);
         break;
       } catch (err) {
-        if (!(err instanceof ResourceLimitError)) {
+        const cause = err instanceof Error ? err.cause : undefined;
+        if (!(err instanceof ResourceLimitError) && !(cause instanceof ResourceLimitError)) {
           throw err;
         }
         capacityWaitAttempts += 1;
         const retryMs = Math.min(15_000 * 2 ** Math.max(0, capacityWaitAttempts - 1), 5 * 60_000);
+        const message = err instanceof Error ? err.message : String(err);
         this.persistence.logEvent?.(task.id, 'task.approved_fix_waiting', {
           attempts: capacityWaitAttempts,
-          message: err.message,
+          message,
           nextRetryAt: new Date(Date.now() + retryMs),
         });
         this.logger.info(
-          `[TaskRunner] approved-fix publish waiting for capacity task=${task.id} retryInMs=${retryMs}: ${err.message}`,
+          `[TaskRunner] approved-fix publish waiting for capacity task=${task.id} retryInMs=${retryMs}: ${message}`,
           { taskId: task.id, attempts: capacityWaitAttempts, retryMs },
         );
         await new Promise<void>((resolve) => setTimeout(resolve, retryMs));
       }
     }
-    const executor = selectedExecutor.executor;
-    let result: { commitHash?: string; error?: string };
-    if (executor instanceof SshExecutor) {
-      result = await executor.publishApprovedFix(publishWorkspacePath, request, branch);
-    } else if (executor instanceof BaseExecutor) {
-      result = await executor.publishApprovedFix(publishWorkspacePath, request, branch);
-    } else {
-      throw new Error(
-        `Executor ${executor.type} does not support approved-fix publish for task ${task.id}`,
-      );
-    }
+    const poolSelection = this.pendingPoolSelections.get(task.id);
+    try {
+      const executor = selectedExecutor.executor;
+      let result: { commitHash?: string; error?: string };
+      if (executor instanceof SshExecutor) {
+        result = await executor.publishApprovedFix(publishWorkspacePath, request, branch);
+      } else if (executor instanceof BaseExecutor) {
+        result = await executor.publishApprovedFix(publishWorkspacePath, request, branch);
+      } else {
+        throw new Error(
+          `Executor ${executor.type} does not support approved-fix publish for task ${task.id}`,
+        );
+      }
 
-    if (result.error) {
-      throw new Error(result.error);
-    }
-    if (!result.commitHash) {
-      throw new Error(`Approved-fix publish produced no commit hash for task ${task.id}`);
-    }
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      if (!result.commitHash) {
+        throw new Error(`Approved-fix publish produced no commit hash for task ${task.id}`);
+      }
 
-    this.persistence.updateTask(task.id, {
-      execution: {
-        commit: result.commitHash,
-      },
-    });
-    const attemptId = task.execution.selectedAttemptId;
-    if (attemptId) {
-      this.persistence.updateAttempt(attemptId, {
-        branch,
-        commit: result.commitHash,
+      this.persistence.updateTask(task.id, {
+        execution: {
+          commit: result.commitHash,
+        },
       });
+      const attemptId = task.execution.selectedAttemptId;
+      if (attemptId) {
+        this.persistence.updateAttempt(attemptId, {
+          branch,
+          commit: result.commitHash,
+        });
+      }
+    } finally {
+      this.releasePoolSelectionLease(poolSelection);
+      this.pendingPoolSelections.delete(task.id);
     }
   }
 
