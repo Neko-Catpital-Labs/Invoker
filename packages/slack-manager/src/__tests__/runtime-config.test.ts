@@ -20,12 +20,10 @@ describe('runtime-config', () => {
   it('falls back to the owner env preset when no config default is present', () => {
     expect(resolveDefaultHarnessPreset('omp+codex', undefined)).toBe('omp+codex');
   });
-
-  // `it.fails`: this asserts the DESIRED behavior, which the current standalone
-  // Slack manager does not satisfy — it documents the stale owner-env override
-  // bug and stays green in CI. The fix slice removes `.fails` once
-  // ~/.invoker/config.json wins over a stale INVOKER_SLACK_DEFAULT_PRESET.
-  it.fails('prefers ~/.invoker/config.json over a stale owner env preset', () => {
+  // The standalone Slack manager should follow ~/.invoker/config.json first so
+  // the documented default preset cannot be shadowed by a stale
+  // INVOKER_SLACK_DEFAULT_PRESET in ~/.invoker/.slack-owner.env.
+  it('prefers ~/.invoker/config.json over a stale owner env preset', () => {
     expect(resolveDefaultHarnessPreset('omp+codex', 'codex')).toBe('codex');
   });
 });
