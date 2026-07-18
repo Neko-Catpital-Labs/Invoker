@@ -2185,7 +2185,7 @@ describe('Orchestrator', () => {
   });
 
   describe('deferTask', () => {
-    it('transitions a running task back to pending', () => {
+    it('transitions a running task back to queued', () => {
       orchestrator.loadPlan({
         name: 'defer-test',
         tasks: [{ id: 'task-a', description: 'Task A' }],
@@ -2197,7 +2197,7 @@ describe('Orchestrator', () => {
       orchestrator.deferTask('task-a');
 
       const task = orchestrator.getTask('task-a')!;
-      expect(task.status).toBe('pending');
+      expect(task.status).toBe('queued');
       expect(task.execution.startedAt).toBeUndefined();
       expect(task.execution.lastHeartbeatAt).toBeUndefined();
     });
@@ -2232,13 +2232,13 @@ describe('Orchestrator', () => {
       });
       const started = launchingOrchestrator.startExecution();
       expect(started.length).toBe(1);
-      expect(launchingOrchestrator.getTask('task-a')!.status).toBe('pending');
+      expect(launchingOrchestrator.getTask('task-a')!.status).toBe('queued');
       expect(launchingOrchestrator.getTask('task-a')!.execution.phase).toBe('launching');
 
       launchingOrchestrator.deferTask('task-a');
 
       const task = launchingOrchestrator.getTask('task-a')!;
-      expect(task.status).toBe('pending');
+      expect(task.status).toBe('queued');
       expect(task.execution.phase).toBeUndefined();
       expect(task.execution.launchStartedAt).toBeUndefined();
       expect(task.execution.launchCompletedAt).toBeUndefined();
@@ -2303,7 +2303,7 @@ describe('Orchestrator', () => {
 
       // Defer task-a
       orchestrator.deferTask(started[0].id);
-      expect(orchestrator.getTask('task-a')!.status).toBe('pending');
+      expect(orchestrator.getTask('task-a')!.status).toBe('queued');
 
       // Complete task-b → should re-enqueue task-a
       const newlyStarted = orchestrator.handleWorkerResponse(
@@ -2384,12 +2384,12 @@ describe('Orchestrator', () => {
         attemptId: parkOrchestrator.getTask(taskId)!.execution.selectedAttemptId,
         phase: 'launching',
       });
-      expect(parkOrchestrator.getTask(taskId)!.status).toBe('pending');
+      expect(parkOrchestrator.getTask(taskId)!.status).toBe('queued');
 
       // The next scheduler poll must leave the parked task in line, not re-dispatch it.
       const restarted = parkOrchestrator.startExecution();
       expect(restarted.map((t) => t.id)).not.toContain(taskId);
-      expect(parkOrchestrator.getTask(taskId)!.status).toBe('pending');
+      expect(parkOrchestrator.getTask(taskId)!.status).toBe('queued');
 
       // A heartbeat proves the task is still alive and waiting in line.
       const waiting = persistence.events.filter((e) => e.eventType === 'task.launch_waiting');
@@ -2450,7 +2450,7 @@ describe('Orchestrator', () => {
         message: 'Execution pool "pnpm-ssh" has no member capacity available',
         attemptId: parkOrchestrator.getTask(taskAId)!.execution.selectedAttemptId,
       });
-      expect(parkOrchestrator.getTask(taskAId)!.status).toBe('pending');
+      expect(parkOrchestrator.getTask(taskAId)!.status).toBe('queued');
       // Periodic poll keeps it parked behind the long backoff.
       expect(parkOrchestrator.startExecution().map((t) => t.id)).not.toContain(taskAId);
 
