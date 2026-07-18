@@ -7,13 +7,14 @@ export const DEFAULT_WORKTREE_PROVISION_COMMAND =
     echo "[provision] No package.json/pnpm-workspace.yaml found; skipping pnpm install"; \
     exit 0; \
   fi; \
-  if ! NODE_ENV=development pnpm install --frozen-lockfile; then \
+  invoker_pnpm_install_with_dev() { NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false NPM_CONFIG_PRODUCTION=false pnpm install --prod=false "$@"; }; \
+  if ! invoker_pnpm_install_with_dev --frozen-lockfile; then \
     echo "[provision] frozen-lockfile install failed; refreshing lockfile and retrying"; \
-    NODE_ENV=development pnpm install --lockfile-only; \
-    NODE_ENV=development pnpm install --frozen-lockfile; \
+    invoker_pnpm_install_with_dev --lockfile-only; \
+    invoker_pnpm_install_with_dev --frozen-lockfile; \
   fi && ( \
   [ ! -f pnpm-workspace.yaml ] || ( \
-    echo "[provision] pnpm config production (debug): $(pnpm config get production 2>/dev/null || echo unknown)" && \
+    echo "[provision] pnpm config production (debug): $(PNPM_CONFIG_PRODUCTION=false npm_config_production=false NPM_CONFIG_PRODUCTION=false pnpm config get production 2>/dev/null || echo unknown)" && \
     ( [ -f packages/transport/node_modules/@types/node/package.json ] && echo "[provision] @types/node linked under packages/transport" ) || \
     ( FOUND_TYPES=0 && for f in node_modules/.pnpm/@types+node@*/node_modules/@types/node/package.json; do [ -f "$f" ] && FOUND_TYPES=1 && echo "[provision] @types/node in pnpm store: $f" && break; done && [ "$FOUND_TYPES" -eq 1 ] ) || \
     ( \

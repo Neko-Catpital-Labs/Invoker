@@ -51,7 +51,7 @@ export interface SshExecutorConfig {
   remoteInvokerHome?: string;
   /**
    * Optional provision command to run in the worktree after creation (e.g., pnpm install).
-   * Only used in managed mode. Default: pnpm install --frozen-lockfile
+   * Only used in managed mode. Default: shared worktree provision command.
    */
   provisionCommand?: string;
   /**
@@ -633,7 +633,13 @@ elif [[ "\${WT:0:2}" == '~/' ]]; then
 fi
 cd "$WT"
 echo "[SshExecutor] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}..."
-eval "$(echo ${provB64} | base64 -d)"
+(
+  export NODE_ENV=development
+  export PNPM_CONFIG_PRODUCTION=false
+  export npm_config_production=false
+  export NPM_CONFIG_PRODUCTION=false
+  eval "$(echo ${provB64} | base64 -d)"
+)
 echo "[SshExecutor] Running task payload..."
 ${this.buildPayloadExecutionScript(payloadB64)}
 `;

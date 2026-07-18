@@ -478,6 +478,10 @@ branch refs/heads/${targetBranch}
 
     // Verify provision command 'exit 42' is embedded in the script
     expect(capturedScript).toContain('exit 42');
+    expect(capturedScript).toContain('export NODE_ENV=development');
+    expect(capturedScript).toContain('export PNPM_CONFIG_PRODUCTION=false');
+    expect(capturedScript).toContain('export npm_config_production=false');
+    expect(capturedScript).toContain('export NPM_CONFIG_PRODUCTION=false');
     // Note: We're testing that the provision command is included in the script.
     // The actual exit code propagation is tested by integration tests with real SSH.
   });

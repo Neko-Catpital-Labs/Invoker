@@ -299,6 +299,7 @@ describe('WorktreeExecutor', () => {
     );
     expect(pnpmCall).toBeDefined();
     expect((pnpmCall![1] as string[])[1]).toContain('--frozen-lockfile');
+    expect((pnpmCall![1] as string[])[1]).toContain('--prod=false');
 
     const taskCall = mockedSpawn.mock.calls.find(
       ([cmd, args]) => cmd === '/bin/bash' && (args as string[])?.[1] === 'echo hello',

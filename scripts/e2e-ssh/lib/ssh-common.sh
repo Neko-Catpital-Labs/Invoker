@@ -102,7 +102,7 @@ invoker_e2e_ssh_write_config() {
   local remote_home
   local provision_cmd
   remote_home="$_INVOKER_E2E_SSH_TMPDIR/remote-invoker-home"
-  provision_cmd="$(command -v pnpm) install --frozen-lockfile"
+  provision_cmd="NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false NPM_CONFIG_PRODUCTION=false $(command -v pnpm) install --prod=false --frozen-lockfile"
 
   cat > "$config_file" <<EOJSON
 {

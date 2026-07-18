@@ -33,8 +33,10 @@ const tasks = [
 /** Yield past `count` animation frames so scheduled camera moves can run. */
 async function flushFrames(count: number): Promise<void> {
   for (let i = 0; i < count; i += 1) {
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
     });
   }
 }
@@ -87,6 +89,7 @@ describe('Browser-surface camera (component)', () => {
     mock.setTasks(tasks, workflows);
     render(<App />);
 
+    await waitFor(() => expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha Workflow'));
     fireEvent.click(await screen.findByTestId('rf__node-wf-b'));
     await waitFor(() => expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Beta Workflow'));
 
