@@ -2070,11 +2070,10 @@ export function App() {
   ]);
 
 
-  const handleDagSurfaceClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+  const handleDagSurfaceClick = useCallback(() => {
     if (contextMenu || workflowContextMenu) {
       setContextMenu(null);
       setWorkflowContextMenu(null);
-      return;
     }
 
     if (suppressDagSurfaceDismissRef.current) {
