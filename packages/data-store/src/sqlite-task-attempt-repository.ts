@@ -14,8 +14,9 @@ import {
   isDiscardedAttempt,
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
-import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
+import { mapRowToTask, mapRowToAttempt, mapRowToCostAttributionAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
+import type { CostAttributionAttempt } from './adapter.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
@@ -553,6 +554,17 @@ export class SqliteTaskAttemptRepository {
       [nodeId],
     );
     return rows.map((row) => mapRowToAttempt(row));
+  }
+
+  loadCostAttributionAttempts(nodeId: string): CostAttributionAttempt[] {
+    const rows = this.exec.queryAll(
+      `SELECT id, node_id, agent_session_id, created_at
+      FROM attempts
+      WHERE node_id = ?
+      ORDER BY created_at ASC`,
+      [nodeId],
+    );
+    return rows.map((row) => mapRowToCostAttributionAttempt(row));
   }
 
   loadActionGraphAttempts(

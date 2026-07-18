@@ -256,6 +256,13 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   | 'updatedAt'
 >>;
 
+export interface CostAttributionAttempt {
+  id: string;
+  nodeId: string;
+  agentSessionId?: string;
+  createdAt: Date;
+}
+
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: WorkflowSaveInput): void;
@@ -330,6 +337,7 @@ export interface PersistenceAdapter {
   // Attempts
   saveAttempt(attempt: Attempt): void;
   loadAttempts(nodeId: string): Attempt[];
+  loadCostAttributionAttempts(nodeId: string): CostAttributionAttempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
 

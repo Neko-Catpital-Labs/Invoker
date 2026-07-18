@@ -16,7 +16,7 @@ import type {
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
 import { normalizeRunnerKind } from '@invoker/workflow-core';
-import type { WorkerActionRecord, Workflow } from './adapter.js';
+import type { CostAttributionAttempt, WorkerActionRecord, Workflow } from './adapter.js';
 import type {
   TaskLaunchDispatch,
   TaskLaunchDispatchPriority,
@@ -158,6 +158,15 @@ export function mapRowToAttempt(row: any): Attempt {
     supersedesAttemptId: row.supersedes_attempt_id ?? undefined,
     createdAt: new Date(row.created_at),
     mergeConflict: row.merge_conflict ? JSON.parse(row.merge_conflict) : undefined,
+  };
+}
+
+export function mapRowToCostAttributionAttempt(row: Record<string, unknown>): CostAttributionAttempt {
+  return {
+    id: String(row.id),
+    nodeId: String(row.node_id),
+    agentSessionId: row.agent_session_id ? String(row.agent_session_id) : undefined,
+    createdAt: new Date(String(row.created_at)),
   };
 }
 

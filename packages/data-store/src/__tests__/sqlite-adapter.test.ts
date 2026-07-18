@@ -2051,6 +2051,53 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('loadCostAttributionAttempts', () => {
+    it('returns ordered narrow attempt attribution rows without error blobs', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+      adapter.saveAttempt({
+        ...createAttempt('t1', { status: 'failed' }),
+        id: 'older',
+        agentSessionId: 'session-older',
+        error: 'x'.repeat(10_000),
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      });
+      adapter.saveAttempt({
+        ...createAttempt('t1', { status: 'completed' }),
+        id: 'newer',
+        agentSessionId: 'session-newer',
+        error: 'y'.repeat(10_000),
+        createdAt: new Date('2026-01-01T00:01:00.000Z'),
+      });
+      adapter.saveAttempt({
+        ...createAttempt('t2', { status: 'completed' }),
+        id: 'unrelated',
+        agentSessionId: 'session-unrelated',
+        createdAt: new Date('2026-01-01T00:02:00.000Z'),
+      });
+
+      const rows = adapter.loadCostAttributionAttempts('t1');
+
+      expect(rows).toEqual([
+        {
+          id: 'older',
+          nodeId: 't1',
+          agentSessionId: 'session-older',
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+        {
+          id: 'newer',
+          nodeId: 't1',
+          agentSessionId: 'session-newer',
+          createdAt: new Date('2026-01-01T00:01:00.000Z'),
+        },
+      ]);
+      expect(rows[0]).not.toHaveProperty('error');
+      expect(rows[0]).not.toHaveProperty('summary');
+    });
+  });
+
   describe('saveWorkflow + loadWorkflow', () => {
     it('round-trips a workflow', () => {
       adapter.saveWorkflow(testWorkflow);

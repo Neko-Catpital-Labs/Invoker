@@ -51,6 +51,7 @@ import type {
   TerminalSessionRecord,
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
+  CostAttributionAttempt,
 } from './adapter.js';
 import { SCHEMA_DDL } from './sqlite-schema.js';
 import {
@@ -2155,6 +2156,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   loadAttempts(nodeId: string): Attempt[] {
     return this.taskAttemptRepo.loadAttempts(nodeId);
+  }
+
+  loadCostAttributionAttempts(nodeId: string): CostAttributionAttempt[] {
+    return this.taskAttemptRepo.loadCostAttributionAttempts(nodeId);
   }
 
   loadActionGraphAttempts(
