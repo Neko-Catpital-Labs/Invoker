@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Proof / gate for durable SSH lease capacity authority.
 #
-# Default: run the proof suite (it.fails documents today's memory-backed bugs).
-# Pass --gate after slices 2–4 land to require the fixed (non-.fails) suite.
+# Default: run the authority proof suite.
+# Pass --gate to also require the lease-capacity battery.
 set -euo pipefail
 
 RUN_GATES=0
