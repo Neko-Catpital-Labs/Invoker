@@ -56,10 +56,10 @@ tasks:
 
   - id: verify-tests-pass
     description: "Run utils package tests"
-    command: "cd packages/utils && pnpm test 2>&1"
+    command: "pnpm install --frozen-lockfile && cd packages/utils && pnpm test 2>&1"
     dependencies: [write-tests]
 
   - id: verify-build
     description: "Verify the package builds without errors"
-    command: "cd packages/utils && pnpm build 2>&1"
+    command: "pnpm install --frozen-lockfile && cd packages/utils && pnpm build 2>&1"
     dependencies: [verify-tests-pass]

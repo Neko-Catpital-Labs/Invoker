@@ -91,6 +91,7 @@ Rules:
 These will cause validation failures:
 
 - **`npx vitest run`** — parser rejects it (ABI mismatch). Use a repo-supported script or explicit package-local command.
+- **`pnpm …` without a leading `pnpm install`** — managed worktrees do not auto-provision `node_modules`. Every pnpm command task must start with `pnpm install --frozen-lockfile` (then `&&` the real command, or put install on the first line of a multiline command).
 - **`pnpm test <path>` from repo root** — runs `pnpm -r test` across all packages. If you choose package tests, run them from that package directory.
 - **Invented test filenames** — verify they exist before referencing them in commands.
 - **`command` + `prompt` on same task** — pick one. Shell logic → `command`. Reasoning → `prompt`.

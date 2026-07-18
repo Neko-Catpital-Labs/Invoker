@@ -12,5 +12,5 @@ repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: test-core
     description: "Run core tests"
-    command: "pnpm test packages/core/src/__tests__/foo.test.ts"
+    command: "pnpm install --frozen-lockfile && pnpm test packages/core/src/__tests__/foo.test.ts"
     dependencies: []

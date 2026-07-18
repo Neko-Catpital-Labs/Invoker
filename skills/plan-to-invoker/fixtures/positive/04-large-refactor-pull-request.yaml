@@ -145,15 +145,15 @@ tasks:
 
   - id: verify-graph-tests
     description: "Run graph package tests"
-    command: "cd packages/graph && pnpm test 2>&1"
+    command: "pnpm install --frozen-lockfile && cd packages/graph && pnpm test 2>&1"
     dependencies: [write-graph-tests]
 
   - id: verify-core-tests
     description: "Run core package tests to verify backward compatibility"
-    command: "cd packages/core && pnpm test 2>&1"
+    command: "pnpm install --frozen-lockfile && cd packages/core && pnpm test 2>&1"
     dependencies: [refactor-state-machine, verify-graph-tests]
 
   - id: verify-full-build
     description: "Build all packages to verify no breakage"
-    command: "pnpm build 2>&1"
+    command: "pnpm install --frozen-lockfile && pnpm build 2>&1"
     dependencies: [verify-core-tests]

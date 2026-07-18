@@ -97,5 +97,5 @@ tasks:
       - Do not modify source files.
       Layer: app_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "pnpm install --frozen-lockfile && pnpm run test:all"
     dependencies: [implement-all-in-one-autofix-recovery]

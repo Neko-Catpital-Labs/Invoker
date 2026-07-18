@@ -47,7 +47,7 @@ tasks:
 
   - id: verify-validator
     description: "Run validator tests"
-    command: "cd packages/config && pnpm test -- src/__tests__/validator.test.ts 2>&1"
+    command: "pnpm install --frozen-lockfile && cd packages/config && pnpm test -- src/__tests__/validator.test.ts 2>&1"
     dependencies: [add-validator-tests]
 
   - id: add-schema-types
@@ -64,5 +64,5 @@ tasks:
 
   - id: verify-all-tests
     description: "Run full config package test suite"
-    command: "cd packages/config && pnpm test 2>&1"
+    command: "pnpm install --frozen-lockfile && cd packages/config && pnpm test 2>&1"
     dependencies: [add-schema-types]

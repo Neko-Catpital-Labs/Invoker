@@ -51,5 +51,5 @@ tasks:
       - Execute root-level test gate after implementation task.
       Layer: app_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "pnpm install --frozen-lockfile && pnpm run test:all"
     dependencies: [implement-runtime-flow]

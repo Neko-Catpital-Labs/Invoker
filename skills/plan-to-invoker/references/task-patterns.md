@@ -6,21 +6,21 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 
 | What you see in the plan | Task type | Template |
 |--------------------------|-----------|----------|
-| "Run tests" / "verify" / "check" | `command` | Smallest deterministic command that proves the behavior |
-| "Run specific test file" | `command` | Package-local command only when that test is the smallest proof |
-| "Run final regression suite" | `command` | Optional full-suite command only when explicitly requested or risk-justified |
+| "Run tests" / "verify" / "check" | `command` | `pnpm install --frozen-lockfile &&` + smallest deterministic command that proves the behavior |
+| "Run specific test file" | `command` | `pnpm install --frozen-lockfile &&` + package-local command only when that test is the smallest proof |
+| "Run final regression suite" | `command` | `pnpm install --frozen-lockfile &&` + optional full-suite command only when explicitly requested or risk-justified |
 | "Refactor X" / "Add feature Y" | `prompt` | Detailed instructions with file paths, line numbers, acceptance criteria |
-| "Build/compile" | `command` | `pnpm --filter @invoker/<pkg> build` |
-| "Build all" / "verify compilation" | `command` | `pnpm build` |
+| "Build/compile" | `command` | `pnpm install --frozen-lockfile && pnpm --filter @invoker/<pkg> build` |
+| "Build all" / "verify compilation" | `command` | `pnpm install --frozen-lockfile && pnpm build` |
 | "Create file X with content Y" | `prompt` | Specify exact path, content structure, what it should export |
 | "Run in Docker" | `command` + `dockerImage` | Command string, set `dockerImage` |
-| "Lint / type-check" | `command` | `pnpm --filter @invoker/<pkg> lint` or `pnpm --filter @invoker/<pkg> typecheck` |
+| "Lint / type-check" | `command` | `pnpm install --frozen-lockfile && pnpm --filter @invoker/<pkg> lint` (or typecheck) |
 | "Check file exists" | `command` | `test -f <path>` |
 | "Check pattern in file" | `command` | `grep -q '<pattern>' <path>` |
 | **Post-fix / regression** | `command` | Focused repro or proof command tied to the changed behavior; full-suite gates are optional |
 | "Modify UI component" / "Fix layout" / "Change Electron window UI" | `prompt` + `visualProof: true` | Set `visualProof: true` at plan level; include `description` |
 | **Add visual proof E2E test case** | `prompt` | Add a test to `packages/app/e2e/visual-proof.spec.ts` that sets up the exact UI state being changed and calls `captureScreenshot(page, '<plan-slug>-<state>')`. See `skills/visual-proof/SKILL.md`. |
-| **Capture visual proof (after)** | `command` | `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` — depends on **all** implementation tasks |
+| **Capture visual proof (after)** | `command` | Multiline: `pnpm install --frozen-lockfile` then `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` — depends on **all** implementation tasks |
 | **Invoker-on-Invoker PR publication** | repo-level workflow note | Keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the commit stack with `mergify stack push` once the branch is ready |
 
 Command tasks run under the platform default shell unless the command explicitly invokes another shell. Keep commands POSIX-shell portable by default. If a command needs bash-only options such as `set -o pipefail` or `set -euo pipefail`, wrap it explicitly, for example `bash -lc 'set -euo pipefail; ...'`.
@@ -279,7 +279,9 @@ tasks:
     dependencies: []
   - id: capture-visual-proof
     description: "Build and capture after-state screenshots"
-    command: "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after"
+    command: |
+      pnpm install --frozen-lockfile
+      pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after
     dependencies: [fix-layout, add-visual-proof-test]
 ```
 

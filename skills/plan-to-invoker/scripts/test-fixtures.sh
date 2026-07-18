@@ -531,7 +531,7 @@ tasks:
       - Execute the repository test gate.
       Layer: e2e_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "pnpm install --frozen-lockfile && pnpm run test:all"
     dependencies: [implement-surface, implement-bridge]
 EOF
 
@@ -812,7 +812,7 @@ tasks:
       Run full regression gate.
       Layer: app_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "pnpm install --frozen-lockfile && pnpm run test:all"
     dependencies: [implement-bridge]
 EOF
 
@@ -953,7 +953,7 @@ tasks:
       - Do not modify source files.
       Layer: app_regression
       Feature state: active
-    command: "cd packages/app && pnpm test"
+    command: "pnpm install --frozen-lockfile && cd packages/app && pnpm test"
     dependencies: [implement-bridge]
 EOF
 
@@ -979,7 +979,7 @@ tasks:
       Feature state: active
       Acceptance criteria:
       - Ensure focused tests pass.
-    command: "cd packages/app && pnpm test"
+    command: "pnpm install --frozen-lockfile && cd packages/app && pnpm test"
     dependencies: []
   - id: final-regression
     description: |
@@ -1006,7 +1006,7 @@ tasks:
       - Do not modify source files.
       Layer: app_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "pnpm install --frozen-lockfile && pnpm run test:all"
     dependencies: [run-focused-verification]
 EOF
 
@@ -1122,7 +1122,7 @@ tasks:
       - Do not modify source files.
       Layer: app_regression
       Feature state: active
-    command: "cd packages/execution-engine && pnpm test"
+    command: "pnpm install --frozen-lockfile && cd packages/execution-engine && pnpm test"
     dependencies: [implement-runtime-flow]
 EOF
 
@@ -1180,7 +1180,7 @@ tasks:
       - Execute root-level test gate after implementation task.
       Layer: app_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "pnpm install --frozen-lockfile && pnpm run test:all"
     dependencies: [implement-runtime-flow]
 EOF
 
@@ -1286,7 +1286,7 @@ tasks:
       - Do not modify code.
       Layer: app_regression
       Feature state: active
-    command: "pnpm run test:all"
+    command: "pnpm install --frozen-lockfile && pnpm run test:all"
     dependencies: [implement-owner-fallback]
 EOF
 

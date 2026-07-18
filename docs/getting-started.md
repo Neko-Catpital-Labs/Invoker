@@ -187,12 +187,12 @@ baseBranch: master
 tasks:
   - id: test-a
     description: Run checks on remote target A
-    command: pnpm test
+    command: pnpm install --frozen-lockfile && pnpm test
     poolId: staging-a
 
   - id: test-b
     description: Run checks on remote target B
-    command: pnpm test
+    command: pnpm install --frozen-lockfile && pnpm test
     poolId: staging-b
 ```
 

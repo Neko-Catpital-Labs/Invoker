@@ -240,5 +240,5 @@ tasks:
       - none
       Acceptance criteria:
       - Ensure the focused app-package regression passes after all prompt-edit slices land.
-    command: "cd packages/app && pnpm test 2>&1"
+    command: "pnpm install --frozen-lockfile && cd packages/app && pnpm test 2>&1"
     dependencies: [prompt-edit-contact-surface, app-bridge-and-owner-delegation, ui-prompt-editing-activation, app-and-e2e-regressions]

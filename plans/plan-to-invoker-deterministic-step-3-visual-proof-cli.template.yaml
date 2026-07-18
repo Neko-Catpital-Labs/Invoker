@@ -39,7 +39,7 @@ tasks:
 
   - id: run-visual-proof-e2e
     description: "Terminal focused proof: run app suite that exercises visual-proof subcommands"
-    command: "cd packages/app && pnpm test"
+    command: "pnpm install --frozen-lockfile && cd packages/app && pnpm test"
     poolId: remote_digital_ocean_1_pool
     dependencies:
       - update-visual-proof-skill-doc

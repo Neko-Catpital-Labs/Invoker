@@ -78,6 +78,27 @@ function isExplicitBashCommand(command) {
   return EXPLICIT_BASH_COMMAND.test(command);
 }
 
+/** True when a command invokes pnpm for anything other than bootstrap alone. */
+function commandUsesPnpm(command) {
+  return /\bpnpm\b/.test(command);
+}
+
+/**
+ * Managed worktrees do not auto-install deps. Any pnpm command task must start
+ * with an explicit `pnpm install` (usually `--frozen-lockfile`) so the checkout
+ * has node_modules before later pnpm steps run.
+ */
+function commandHasLeadingPnpmInstall(command) {
+  const body = command.replace(/^\uFEFF/, '').trim();
+  const firstLine = body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0 && !line.startsWith('#'));
+  if (!firstLine) return false;
+  const firstCommand = firstLine.split('&&')[0]?.trim() ?? '';
+  return /^pnpm\s+install\b/.test(firstCommand);
+}
+
 function findRepoRoot(startDir) {
   try {
     return execFileSync('git', ['rev-parse', '--show-toplevel'], {
@@ -707,6 +728,20 @@ function validatePlan(yamlContent, repoRoot) {
         field: 'command',
         taskId,
         message: `Task "${taskId}" uses 'npx vitest run' which may not resolve correctly. Use a repo-supported script or explicit package-local command instead.`,
+        value: task.command,
+      });
+    }
+
+    if (
+      typeof task.command === 'string'
+      && commandUsesPnpm(task.command)
+      && !commandHasLeadingPnpmInstall(task.command)
+    ) {
+      errors.push({
+        errorType: 'banned_pattern',
+        field: 'command',
+        taskId,
+        message: `Task "${taskId}" runs pnpm without a leading pnpm install. Prepend \`pnpm install --frozen-lockfile\` (managed worktrees do not auto-provision node_modules).`,
         value: task.command,
       });
     }

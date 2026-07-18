@@ -55,10 +55,12 @@ tasks:
 
   - id: run-sidebar-unit-tests
     description: "Run UI package unit tests to verify sidebar fix"
-    command: "cd packages/ui && pnpm test 2>&1"
+    command: "pnpm install --frozen-lockfile && cd packages/ui && pnpm test 2>&1"
     dependencies: [fix-sidebar-transition]
 
   - id: capture-visual-proof
     description: "Build UI and app packages then capture after-state screenshots"
-    command: "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after"
+    command: |
+      pnpm install --frozen-lockfile
+      pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after
     dependencies: [fix-sidebar-transition, add-visual-proof-test]

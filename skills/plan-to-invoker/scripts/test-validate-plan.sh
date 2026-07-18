@@ -305,6 +305,75 @@ EOF
   return 0
 }
 
+# Test: pnpm commands must start with pnpm install
+test_pnpm_without_install() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: test-plan
+repoUrl: git@github.com:user/repo.git
+tasks:
+  - id: task-missing-install
+    description: Task using pnpm without install
+    command: cd packages/app && pnpm test
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  set -e
+
+  if ! echo "$output" | jq -e '[.[] | select(.errorType == "banned_pattern" and .taskId == "task-missing-install")] | length > 0' &>/dev/null; then
+    echo "Expected banned_pattern error for task-missing-install" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+  if ! echo "$output" | grep -q 'leading pnpm install'; then
+    echo "Expected leading pnpm install message" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+test_pnpm_with_install_validates() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: test-plan
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:user/repo.git
+tasks:
+  - id: task-with-install
+    description: Task using pnpm after install
+    command: pnpm install --frozen-lockfile && cd packages/app && pnpm test
+EOF
+
+  local output
+  set +e
+  output=$(bash "$VALIDATE_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Expected exit code 0, got $exit_code" >&2
+    echo "Output: $output" >&2
+    return 1
+  fi
+  if ! echo "$output" | grep -q '"valid"[[:space:]]*:[[:space:]]*true'; then
+    echo "Expected valid:true in output, got: $output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 # Test: nested shell command strings must not use shell variables
 test_nested_shell_variable_expansion_fails() {
   local temp_plan
@@ -924,6 +993,8 @@ run_test "Minimal invalid plan should report missing fields" test_minimal_invali
 run_test "Command+prompt conflict should be detected" test_command_prompt_conflict
 run_test "Invalid dependency should be detected" test_invalid_dependency
 run_test "Banned pattern (npx vitest run) should be detected" test_banned_pattern
+run_test "pnpm without leading install should be detected" test_pnpm_without_install
+run_test "pnpm with leading install should validate" test_pnpm_with_install_validates
 run_test "Nested shell variable expansion should be rejected" test_nested_shell_variable_expansion_fails
 run_test "Literal smoke command should validate" test_literal_smoke_command_validates
 run_test "Direct shell variable command should validate" test_direct_shell_variable_command_validates

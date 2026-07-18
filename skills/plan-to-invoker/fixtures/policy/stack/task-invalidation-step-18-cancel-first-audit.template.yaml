@@ -14,12 +14,12 @@ repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: check-core-tests
     description: "Run core package tests"
-    command: "cd packages/core && pnpm test 2>&1"
+    command: "pnpm install --frozen-lockfile && cd packages/core && pnpm test 2>&1"
     dependencies: []
 
   - id: check-executor-tests
     description: "Run executor package tests"
-    command: "cd packages/executors && pnpm test 2>&1"
+    command: "pnpm install --frozen-lockfile && cd packages/executors && pnpm test 2>&1"
     dependencies: []
 
   - id: check-all-pass

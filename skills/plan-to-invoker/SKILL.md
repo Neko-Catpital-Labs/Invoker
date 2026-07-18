@@ -141,6 +141,8 @@ For portable command-only smoke plans, avoid nested `sh -c`, `bash -c`, or `bash
 
 Command tasks run under the platform default shell unless the command explicitly invokes another shell. Keep generated commands POSIX-shell portable; if a command needs bash-only behavior such as `set -o pipefail` or `set -euo pipefail`, write it as an explicit bash command, for example `bash -lc 'set -euo pipefail; ...'`.
 
+**pnpm hydrate (required):** Managed worktrees do not auto-install dependencies. Every command task that invokes `pnpm` must start with `pnpm install --frozen-lockfile` (then `&&` the real step, or put install on the first line of a multiline command). `validate-plan` rejects pnpm commands that omit this.
+
 ### Fallback commands (for debugging individual checks)
 
 If `skill-doctor.sh` fails, run individual checks to isolate the problem:

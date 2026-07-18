@@ -45,13 +45,16 @@ All packages use standard `vitest run` via `pnpm test`. The persistence layer us
 command: "cd packages/surfaces && npx vitest run"
 command: "cd packages/surfaces && vitest run"
 
-# Right — uses package.json test script:
+# Wrong — managed worktrees do not auto-install node_modules:
 command: "cd packages/surfaces && pnpm test"
+
+# Right — hydrate the checkout, then use package.json test script:
+command: "pnpm install --frozen-lockfile && cd packages/surfaces && pnpm test"
 ```
 
 ### Worktree provisioning
 
-Git worktrees created by `WorktreeExecutor` run `pnpm install --frozen-lockfile` to provision dependencies. No rebuild step needed.
+Managed worktrees do **not** run `pnpm install` for you. Command tasks that use pnpm must start with `pnpm install --frozen-lockfile` (enforced by plan-to-invoker validate-plan).
 
 Verify worktree provisioning end-to-end:
 

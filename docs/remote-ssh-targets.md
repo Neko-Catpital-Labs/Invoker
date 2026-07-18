@@ -77,12 +77,12 @@ baseBranch: master
 tasks:
   - id: check-a
     description: "Run tests on remote A"
-    command: "pnpm test"
+    command: "pnpm install --frozen-lockfile && pnpm test"
     poolId: staging-server
 
   - id: check-b
     description: "Run tests on remote B"
-    command: "pnpm test"
+    command: "pnpm install --frozen-lockfile && pnpm test"
     poolId: staging-server-b
 ```
 
