@@ -2079,6 +2079,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     `, [threadTs, nextSeq, role, content]);
   }
 
+  countMessages(threadTs: string): number {
+    const row = this.queryOne(
+      'SELECT COUNT(*) AS count FROM conversation_messages WHERE thread_ts = ?',
+      [threadTs],
+    ) as { count?: number } | undefined;
+    return Number(row?.count ?? 0);
+  }
+
   loadMessages(threadTs: string): ConversationMessage[] {
     const rows = this.queryAll(
       'SELECT * FROM conversation_messages WHERE thread_ts = ? ORDER BY seq ASC',
