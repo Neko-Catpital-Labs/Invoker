@@ -132,7 +132,7 @@ function executeRunnableTasks({
 export function isDispatchableLaunch(task: TaskState): boolean {
   return task.status === 'running'
     || (
-      task.status === 'pending'
+      (task.status === 'pending' || (task.status as string) === 'queued')
       && task.execution.phase === 'launching'
       && !!task.execution.selectedAttemptId
     );

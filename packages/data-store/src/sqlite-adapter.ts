@@ -3146,12 +3146,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
         const candidateId = Number(candidate.id);
 
         let staleReason: string | undefined;
+        const taskStatus = String(candidate.current_task_status ?? '');
+        const launchClaimable = taskStatus === 'pending' || taskStatus === 'queued';
         if (!candidate.current_task_id) {
           staleReason = `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} no longer exists`;
-        } else if (String(candidate.current_task_status) !== 'pending') {
+        } else if (!launchClaimable) {
           staleReason =
             `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} ` +
-            `status is ${String(candidate.current_task_status)}`;
+            `status is ${taskStatus}`;
         } else if (String(candidate.current_selected_attempt_id ?? '') !== String(candidate.attempt_id)) {
           staleReason =
             `Launch dispatch ${candidateId} is stale: attempt ${String(candidate.attempt_id)} ` +
