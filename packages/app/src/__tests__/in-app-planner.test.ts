@@ -4,6 +4,8 @@ import {
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
+  deletePlanningChat,
+  deleteSubmittedPlanningChats,
   listInAppPlanningPresets,
   listPlanningChatSessions,
   planFromGoal,
@@ -924,6 +926,187 @@ tasks:
 
     expect(resetPlanningChat({ sessionId: 'session-1' }, { sessions })).toEqual({ ok: true });
     expect(sessions.has('session-1')).toBe(false);
+  });
+
+  it('deletes a planning chat session, its terminal, persistence, and override conversation', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const sessions = createInAppPlanningChatSessions();
+      sessions.set('session-1', {
+        id: 'session-1',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        terminalSessionId: 'term-1',
+        conversation: new PlanConversation({}),
+      } as any);
+      adapter.upsertInAppPlanningSession({
+        id: 'session-1',
+        title: 'Session 1',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        messages: [],
+        terminalSessionId: 'term-1',
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:00.000Z',
+      });
+      conversationRepo.saveConversation('session-1', [
+        { role: 'user', content: 'Plan it' },
+      ], null, false, undefined, undefined, 'plan');
+      const closeTerminal = vi.fn();
+
+      expect(deletePlanningChat({ sessionId: 'session-1' }, {
+        sessions,
+        planningSessionStore: adapter,
+        conversationRepo,
+        closeTerminal,
+      })).toEqual({ ok: true });
+
+      expect(closeTerminal).toHaveBeenCalledWith('term-1');
+      expect(sessions.has('session-1')).toBe(false);
+      expect(adapter.loadInAppPlanningSession('session-1')).toBeUndefined();
+      expect(conversationRepo.loadConversation('session-1')).toBeNull();
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('deletes persisted planning and conversation rows even when the session is unknown in memory', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const sessions = createInAppPlanningChatSessions();
+      adapter.upsertInAppPlanningSession({
+        id: 'unknown-session',
+        title: 'Unknown',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        messages: [],
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:00.000Z',
+      });
+      conversationRepo.saveConversation('unknown-session', [
+        { role: 'assistant', content: 'Draft' },
+      ], null, false, undefined, undefined, 'plan');
+      const closeTerminal = vi.fn();
+
+      expect(deletePlanningChat({ sessionId: 'unknown-session' }, {
+        sessions,
+        planningSessionStore: adapter,
+        conversationRepo,
+        closeTerminal,
+      })).toEqual({ ok: true });
+
+      expect(closeTerminal).not.toHaveBeenCalled();
+      expect(adapter.loadInAppPlanningSession('unknown-session')).toBeUndefined();
+      expect(conversationRepo.loadConversation('unknown-session')).toBeNull();
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('bulk deletes only submitted planning chat sessions', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const sessions = createInAppPlanningChatSessions();
+      sessions.set('submitted-1', {
+        id: 'submitted-1',
+        presetKey: 'codex',
+        status: 'submitted',
+        terminalSessionId: 'term-submitted-1',
+        conversation: new PlanConversation({}),
+      } as any);
+      sessions.set('draft-1', {
+        id: 'draft-1',
+        presetKey: 'codex',
+        status: 'draft_ready',
+        terminalSessionId: 'term-draft-1',
+        conversation: new PlanConversation({}),
+      } as any);
+      for (const [id, status] of [
+        ['submitted-1', 'submitted'],
+        ['draft-1', 'draft_ready'],
+      ] as const) {
+        adapter.upsertInAppPlanningSession({
+          id,
+          title: id,
+          presetKey: 'codex',
+          status,
+          messages: [],
+          submittedWorkflowId: status === 'submitted' ? 'wf-1' : undefined,
+          submittedPlanName: status === 'submitted' ? 'Submitted' : undefined,
+          pendingResponse: false,
+          createdAt: '2026-07-07T00:00:00.000Z',
+          updatedAt: '2026-07-07T00:00:00.000Z',
+        });
+        conversationRepo.saveConversation(id, [
+          { role: 'user', content: id },
+        ], null, false, undefined, undefined, 'plan');
+      }
+      const closeTerminal = vi.fn();
+
+      expect(deleteSubmittedPlanningChats({
+        sessions,
+        planningSessionStore: adapter,
+        conversationRepo,
+        closeTerminal,
+      })).toEqual({ ok: true, deletedSessionIds: ['submitted-1'] });
+
+      expect(closeTerminal).toHaveBeenCalledWith('term-submitted-1');
+      expect(closeTerminal).not.toHaveBeenCalledWith('term-draft-1');
+      expect(sessions.has('submitted-1')).toBe(false);
+      expect(sessions.has('draft-1')).toBe(true);
+      expect(adapter.loadInAppPlanningSession('submitted-1')).toBeUndefined();
+      expect(adapter.loadInAppPlanningSession('draft-1')).toBeDefined();
+      expect(conversationRepo.loadConversation('submitted-1')).toBeNull();
+      expect(conversationRepo.loadConversation('draft-1')).not.toBeNull();
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('logs cleanup failures and continues deleting the remaining planning resources', () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('session-1', {
+      id: 'session-1',
+      presetKey: 'codex',
+      status: 'submitted',
+      terminalSessionId: 'term-1',
+      conversation: new PlanConversation({}),
+    } as any);
+    const logger = { error: vi.fn() };
+    const planningSessionStore = {
+      deleteInAppPlanningSession: vi.fn(() => {
+        throw new Error('store failed');
+      }),
+    };
+    const conversationRepo = {
+      deleteConversation: vi.fn(),
+    };
+
+    expect(deletePlanningChat({ sessionId: 'session-1' }, {
+      sessions,
+      planningSessionStore,
+      conversationRepo,
+      closeTerminal: vi.fn(() => {
+        throw new Error('close failed');
+      }),
+      logger,
+    })).toEqual({ ok: true });
+
+    expect(sessions.has('session-1')).toBe(false);
+    expect(conversationRepo.deleteConversation).toHaveBeenCalledWith('session-1');
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('session="session-1" step="close-terminal"'),
+      { module: 'planning-chat' },
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('session="session-1" step="delete-persisted-planning-session"'),
+      { module: 'planning-chat' },
+    );
   });
 });
 

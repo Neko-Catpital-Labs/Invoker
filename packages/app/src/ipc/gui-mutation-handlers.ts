@@ -7,6 +7,7 @@ import type {
   InAppPlanRequest,
   InAppPlanningChatRequest,
   InAppPlanningCreateSessionRequest,
+  InAppPlanningDeleteRequest,
   InAppPlanningResetRequest,
   InAppPlanningSetTerminalModeRequest,
   InAppPlanningStreamEvent,
@@ -75,6 +76,8 @@ import {
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
+  deletePlanningChat,
+  deleteSubmittedPlanningChats,
   listInAppPlanningPresets,
   listPlanningChatSessions,
   planFromGoal as planFromGoalInApp,
@@ -303,6 +306,7 @@ export interface RegisterGuiMutationIpcHandlersContext extends GuiMutationTaskAc
   actions: GuiMutationTaskActions;
   planningChatSessions: ReturnType<typeof createInAppPlanningChatSessions>;
   planningCommandBuilder: ReturnType<typeof createPlanningCommandBuilderFromRegistry>;
+  closePlanningTerminalSession?: (terminalSessionId: string) => void;
   emitPlanningChatStream: (event: InAppPlanningStreamEvent) => void;
   taskGraphEventPublisher: TaskGraphEventPublisher;
   loadTaskByIdFromPersistence: (taskId: string) => TaskState | undefined;
@@ -850,6 +854,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       case 'invoker:planning-chat-send':
       case 'invoker:planning-chat-submit':
       case 'invoker:planning-chat-reset':
+      case 'invoker:planning-chat-delete':
+      case 'invoker:planning-chat-delete-submitted':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:load-plan':
         return { channel: 'headless.gui-mutation', request: payload };
@@ -1040,6 +1046,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     actions,
     planningChatSessions,
     planningCommandBuilder,
+    closePlanningTerminalSession,
     emitPlanningChatStream,
     taskGraphEventPublisher,
     loadTaskByIdFromPersistence,
@@ -1287,6 +1294,24 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return resetPlanningChat(request as InAppPlanningResetRequest, {
       sessions: planningChatSessions,
       planningSessionStore: ownerMode ? persistence : undefined,
+    });
+  });
+  registerGuiMutationHandler('invoker:planning-chat-delete', async (request: unknown) => {
+    return deletePlanningChat(request as InAppPlanningDeleteRequest, {
+      sessions: planningChatSessions,
+      planningSessionStore: ownerMode ? persistence : undefined,
+      conversationRepo: planningConversationRepo,
+      closeTerminal: closePlanningTerminalSession,
+      logger,
+    });
+  });
+  registerGuiMutationHandler('invoker:planning-chat-delete-submitted', async () => {
+    return deleteSubmittedPlanningChats({
+      sessions: planningChatSessions,
+      planningSessionStore: ownerMode ? persistence : undefined,
+      conversationRepo: planningConversationRepo,
+      closeTerminal: closePlanningTerminalSession,
+      logger,
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-set-terminal-mode', async (request: unknown) => {

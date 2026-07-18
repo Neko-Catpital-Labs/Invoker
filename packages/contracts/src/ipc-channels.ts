@@ -560,6 +560,18 @@ export interface InAppPlanningResetRequest {
 
 export type InAppPlanningResetResponse = { ok: true };
 
+export interface InAppPlanningDeleteRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningDeleteResponse =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export type InAppPlanningDeleteSubmittedResponse =
+  | { ok: true; deletedSessionIds: string[] }
+  | { ok: false; error: string };
+
 export interface InAppPlanningSetTerminalModeRequest {
   sessionId: string;
   mode: PlanningTerminalMode;
@@ -860,6 +872,14 @@ export const IpcChannels = {
   'invoker:planning-chat-reset': {} as {
     request: [request: InAppPlanningResetRequest];
     response: InAppPlanningResetResponse;
+  },
+  'invoker:planning-chat-delete': {} as {
+    request: [request: InAppPlanningDeleteRequest];
+    response: InAppPlanningDeleteResponse;
+  },
+  'invoker:planning-chat-delete-submitted': {} as {
+    request: [];
+    response: InAppPlanningDeleteSubmittedResponse;
   },
   'invoker:planning-chat-set-terminal-mode': {} as {
     request: [request: InAppPlanningSetTerminalModeRequest];
