@@ -59,7 +59,14 @@ import type {
   TaskStateChanges,
 } from '@invoker/workflow-core';
 import { makeEnvelope, CommandError } from '@invoker/contracts';
-import type { WorkResponse } from '@invoker/contracts';
+import type {
+  PlanningChatMessage,
+  PlanningChatOpenResponse,
+  PlanningChatSeedMessage,
+  PlanningChatSeedTranscriptResponse,
+  PlanningChatSendResponse,
+  WorkResponse,
+} from '@invoker/contracts';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels, TransportError, TransportErrorCode } from '@invoker/transport';
@@ -251,6 +258,15 @@ interface HeadlessExecMutationPayload {
   traceId?: string;
 }
 
+interface PlanningConversationInstance {
+  init(): Promise<void>;
+  sendMessage(message: string): Promise<string>;
+  spawnCursor(prompt: string): Promise<string>;
+  readonly history: readonly { role: 'user' | 'assistant'; content: unknown }[];
+  readonly planSubmitted: boolean;
+  readonly submittedPlanText: string | null;
+}
+
 // Root logger: created early in initServices() once persistence is available.
 // Before initServices(), use the pre-init logger (file-only, no DB).
 let logger: Logger = new FileAndDbLogger({ module: 'main' });
@@ -314,6 +330,37 @@ async function maybeDelayWorkflowResumeForTest(): Promise<void> {
   const delayMs = Number(raw);
   if (!Number.isFinite(delayMs) || delayMs <= 0) return;
   await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function normalizePlanningChatMessageContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (
+          block
+          && typeof block === 'object'
+          && 'type' in block
+          && (block as { type?: unknown }).type === 'text'
+          && typeof (block as { text?: unknown }).text === 'string'
+        ) {
+          return (block as { text: string }).text;
+        }
+        return '';
+      })
+      .join('');
+  }
+  if (content === null || content === undefined) return '';
+  return JSON.stringify(content);
+}
+
+function normalizePlanningChatHistory(
+  messages: readonly { role: 'user' | 'assistant'; content: unknown }[],
+): PlanningChatMessage[] {
+  return messages.map((message) => ({
+    role: message.role,
+    content: normalizePlanningChatMessageContent(message.content),
+  }));
 }
 
 function assertDeleteAllEnabled(): void {
@@ -2675,6 +2722,66 @@ if (isHeadless) {
       recordStartupMark('owner-ipc-ready');
     }
 
+    const planningConversationRepo = new ConversationRepository(persistence, {
+      info: (msg) => { logger.info(msg, { module: 'planning-chat-repo' }); },
+      warn: (msg) => { logger.warn(msg, { module: 'planning-chat-repo' }); },
+      error: (msg) => { logger.error(msg, { module: 'planning-chat-repo' }); },
+    });
+    const planningConversations = new Map<string, PlanningConversationInstance>();
+
+    const planningChatSnapshot = (
+      threadTs: string,
+      conversation: PlanningConversationInstance,
+    ): PlanningChatOpenResponse => ({
+      threadTs,
+      messages: normalizePlanningChatHistory(conversation.history ?? []),
+      planSubmitted: Boolean(conversation.planSubmitted),
+      submittedPlanText: conversation.submittedPlanText ?? null,
+    });
+
+    const getPlanningConversation = async (threadTs: string): Promise<PlanningConversationInstance> => {
+      let conversation = planningConversations.get(threadTs);
+      if (!conversation) {
+        const surfaces = loadSurfaces();
+        conversation = new surfaces.PlanConversation({
+          threadTs,
+          conversationRepo: planningConversationRepo,
+          cursorCommand: process.env.CURSOR_COMMAND ?? 'agent',
+          model: process.env.CURSOR_MODEL,
+          workingDir: repoRoot,
+          defaultBranch: invokerConfig.defaultBranch,
+          repoUrl: process.env.INVOKER_REPO_URL,
+          timeoutMs: (invokerConfig.planningTimeoutSeconds ?? 7_200) * 1_000,
+          log: (source: string, level: string, message: string) => {
+            if (level === 'error') {
+              logger.error(message, { module: source });
+            } else if (level === 'warn') {
+              logger.warn(message, { module: source });
+            } else {
+              logger.info(message, { module: source });
+            }
+          },
+        }) as PlanningConversationInstance;
+
+        const testOverrideResponse = process.env.NODE_ENV === 'test'
+          ? process.env.INVOKER_TEST_PLANNING_CHAT_RESPONSE
+          : undefined;
+        if (testOverrideResponse !== undefined) {
+          conversation.spawnCursor = async () => {
+            const delayMs = Number(process.env.INVOKER_TEST_PLANNING_CHAT_RESPONSE_DELAY_MS ?? '0');
+            if (Number.isFinite(delayMs) && delayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+            }
+            return testOverrideResponse;
+          };
+        }
+
+        planningConversations.set(threadTs, conversation);
+      }
+      await conversation.init();
+      return conversation;
+    };
+
     bootstrapInitialWorkflowState();
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
@@ -2772,6 +2879,27 @@ if (isHeadless) {
       });
       event.returnValue = payload;
     });
+
+    ipcMain.handle('invoker:planning-chat-open', async (_event, threadTsArg: unknown): Promise<PlanningChatOpenResponse> => {
+      const threadTs = String(threadTsArg);
+      const conversation = await getPlanningConversation(threadTs);
+      return planningChatSnapshot(threadTs, conversation);
+    });
+
+    registerGuiMutationHandler('invoker:planning-chat-send', async (
+      threadTsArg: unknown,
+      messageArg: unknown,
+    ): Promise<PlanningChatSendResponse> => {
+      const threadTs = String(threadTsArg);
+      const message = String(messageArg);
+      const conversation = await getPlanningConversation(threadTs);
+      const reply = await conversation.sendMessage(message);
+      return {
+        ...planningChatSnapshot(threadTs, conversation),
+        reply,
+      };
+    });
+
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
       const { parsePlan } = await import('./plan-parser.js');
@@ -2783,6 +2911,37 @@ if (isHeadless) {
     });
 
     if (process.env.NODE_ENV === 'test') {
+      ipcMain.handle(
+        'invoker:seed-planning-chat-transcript',
+        async (
+          _event,
+          threadTsArg: unknown,
+          messagesArg: unknown,
+        ): Promise<PlanningChatSeedTranscriptResponse> => {
+          const threadTs = String(threadTsArg);
+          if (!Array.isArray(messagesArg)) {
+            throw new Error('seed-planning-chat-transcript requires an array of messages');
+          }
+          const messages: PlanningChatSeedMessage[] = messagesArg.map((message, index) => {
+            if (!message || typeof message !== 'object') {
+              throw new Error(`seed-planning-chat-transcript message ${index} must be an object`);
+            }
+            const role = (message as { role?: unknown }).role;
+            if (role !== 'user' && role !== 'assistant') {
+              throw new Error(`seed-planning-chat-transcript message ${index} has invalid role`);
+            }
+            return {
+              role,
+              content: (message as { content?: unknown }).content ?? '',
+            };
+          });
+          planningConversations.delete(threadTs);
+          planningConversationRepo.deleteConversation(threadTs);
+          planningConversationRepo.saveConversation(threadTs, messages, null, false, 'e2e', 'e2e');
+          return { threadTs, messageCount: messages.length };
+        },
+      );
+
       ipcMain.handle(
         'invoker:inject-task-states',
         async (_event, updates: Array<{ taskId: string; changes: TaskStateChanges }>) => {
