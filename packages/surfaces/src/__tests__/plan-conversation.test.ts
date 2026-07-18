@@ -475,8 +475,15 @@ describe('PlanConversation', () => {
     mockCursorResponse(secondYaml);
     await conversation.sendMessage('Change the name');
 
+    const drafted = conversation.getDraftedPlan();
+    expect(typeof drafted).toBe('string');
+    const draftedPlan = parsePlanText(drafted!);
+    expect(draftedPlan.name).toBe('Second');
+    expect(draftedPlan.name).not.toBe('First');
+
     const reply = await conversation.sendMessage('yes');
     expect(reply).toContain('Second');
+    expect(reply).not.toContain('First');
     expect(typeof conversation.submittedPlanText).toBe('string');
     const plan = parsePlanText(conversation.submittedPlanText!);
     expect(plan.name).toBe('Second');
