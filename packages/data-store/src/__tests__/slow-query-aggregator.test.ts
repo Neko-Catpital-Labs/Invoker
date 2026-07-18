@@ -32,6 +32,36 @@ describe('SlowQueryAggregator', () => {
     ]);
   });
 
+  it('ignores SQL comments when normalizing query shapes', () => {
+    const first = normalizeSlowQuerySql(`
+      SELECT '-- not a comment' AS marker, * FROM attempts -- trace '123
+      WHERE node_id = 'node-a' /* attempt ids: '1, 2, 3 */ AND attempt_id IN (1, 2)
+    `);
+    const second = normalizeSlowQuerySql(
+      'SELECT ? AS marker, * FROM attempts WHERE node_id = ? AND attempt_id IN (?, ?, ?)',
+    );
+
+    expect(first).toBe(second);
+
+    const aggregator = new SlowQueryAggregator();
+    aggregator.record({
+      durationMs: 40,
+      sql: "SELECT * FROM attempts -- trace '123\nWHERE node_id = 'node-a' AND attempt_id IN (1, 2)",
+    });
+    aggregator.record({
+      durationMs: 50,
+      sql: 'SELECT * FROM attempts /* trace 456 */ WHERE node_id = ? AND attempt_id IN (?, ?, ?)',
+    });
+
+    expect(aggregator.topN()).toEqual([
+      expect.objectContaining({
+        shape: 'SELECT * FROM attempts WHERE node_id = ? AND attempt_id IN (?)',
+        count: 2,
+        maxMs: 50,
+      }),
+    ]);
+  });
+
   it('computes nearest-rank p50 and p95 per SQL shape', () => {
     let now = 1_000;
     const aggregator = new SlowQueryAggregator({ now: () => now++ });

@@ -40,7 +40,7 @@ const NUMBER_LITERAL_PATTERN =
 const IN_PARAMETER_LIST_PATTERN = /\bIN\s*\(\s*\?(?:\s*,\s*\?)+\s*\)/gi;
 
 export function normalizeSlowQuerySql(sql: string): string {
-  return sql
+  return stripSqlComments(sql)
     .replace(BLOB_LITERAL_PATTERN, '?')
     .replace(STRING_LITERAL_PATTERN, '?')
     .replace(PARAMETER_PATTERN, '?')
@@ -53,6 +53,82 @@ export function normalizeSlowQuerySql(sql: string): string {
     .replace(IN_PARAMETER_LIST_PATTERN, 'IN (?)')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function stripSqlComments(sql: string): string {
+  let normalized = '';
+  let index = 0;
+
+  while (index < sql.length) {
+    const char = sql[index];
+    const next = sql[index + 1];
+
+    if (char === '-' && next === '-') {
+      normalized += ' ';
+      index += 2;
+      while (index < sql.length && sql[index] !== '\n' && sql[index] !== '\r') index += 1;
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      normalized += ' ';
+      index += 2;
+      while (index < sql.length && !(sql[index] === '*' && sql[index + 1] === '/')) index += 1;
+      index = Math.min(sql.length, index + 2);
+      continue;
+    }
+
+    if (char === '\'' || char === '"' || char === '`') {
+      const consumed = consumeQuotedSql(sql, index, char);
+      normalized += sql.slice(index, consumed);
+      index = consumed;
+      continue;
+    }
+
+    if (char === '[') {
+      const consumed = consumeBracketQuotedIdentifier(sql, index);
+      normalized += sql.slice(index, consumed);
+      index = consumed;
+      continue;
+    }
+
+    normalized += char;
+    index += 1;
+  }
+
+  return normalized;
+}
+
+function consumeQuotedSql(sql: string, startIndex: number, quote: string): number {
+  let index = startIndex + 1;
+  while (index < sql.length) {
+    if (sql[index] !== quote) {
+      index += 1;
+      continue;
+    }
+    if (sql[index + 1] === quote) {
+      index += 2;
+      continue;
+    }
+    return index + 1;
+  }
+  return sql.length;
+}
+
+function consumeBracketQuotedIdentifier(sql: string, startIndex: number): number {
+  let index = startIndex + 1;
+  while (index < sql.length) {
+    if (sql[index] !== ']') {
+      index += 1;
+      continue;
+    }
+    if (sql[index + 1] === ']') {
+      index += 2;
+      continue;
+    }
+    return index + 1;
+  }
+  return sql.length;
 }
 
 function percentileNearestRank(values: number[], percentile: number): number {
