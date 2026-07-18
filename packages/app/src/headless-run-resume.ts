@@ -9,7 +9,6 @@
  */
 
 import { makeEnvelope, type StartReadyRequest } from '@invoker/contracts';
-
 import type { TaskState } from '@invoker/workflow-core';
 import {
   remoteFetchForPool,
@@ -52,6 +51,7 @@ import {
 import { runStartReady } from './start-ready.js';
 type StartReadyRequestExt = StartReadyRequest & {
   recreateFailedAndPending?: boolean;
+  recreateFailedPendingAndRunning?: boolean;
 };
 
 type StartReadyPreviewExt = {
@@ -59,12 +59,14 @@ type StartReadyPreviewExt = {
   recoverableTaskIds: string[];
   failedWorkflowIds: string[];
   pendingWorkflowIds: string[];
+  runningWorkflowIds: string[];
   skipped: {
     awaitingApproval: number;
     reviewReady: number;
     blocked: number;
     failedTasks: number;
     pendingTasks: number;
+    runningTasks: number;
   };
 };
 
@@ -248,11 +250,14 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
       case '--recreate-failed-and-pending':
         request.recreateFailedAndPending = true;
         break;
+      case '--recreate-failed-pending-and-running':
+        request.recreateFailedPendingAndRunning = true;
+        break;
       case '--no-track':
         noTrack = true;
         break;
       default:
-        throw new Error(`Unknown start-ready option "${arg}". Usage: --headless start-ready [--dry-run] [--recreate-failed] [--recreate-failed-and-pending] [--no-track]`);
+        throw new Error(`Unknown start-ready option "${arg}". Usage: --headless start-ready [--dry-run] [--recreate-failed] [--recreate-failed-and-pending] [--recreate-failed-pending-and-running] [--no-track]`);
     }
   }
   return { request, noTrack };
@@ -260,23 +265,28 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
 
 export async function headlessStartReady(args: string[], deps: HeadlessDeps): Promise<void> {
   const { request, noTrack } = parseStartReadyArgs(args, deps.noTrack);
-  const result = runStartReady(deps.orchestrator, request) as typeof runStartReady extends (...args: any[]) => infer T
-    ? T & { preview: StartReadyPreviewExt }
-    : never;
+  const result = runStartReady(deps.orchestrator, request) as ReturnType<typeof runStartReady> & {
+    preview: StartReadyPreviewExt;
+  };
   const runnable = result.started.filter(isDispatchableLaunch);
   const preview = result.preview;
 
-  const modeLabel = request.recreateFailedAndPending
-    ? 'Start and recreate failed and pending'
-    : request.recreateFailed
-      ? 'Start and recreate failed'
-      : 'Start ready work';
+  const modeLabel = request.recreateFailedPendingAndRunning
+    ? 'Start and recreate failed, pending, and running'
+    : request.recreateFailedAndPending
+      ? 'Start and recreate failed and pending'
+      : request.recreateFailed
+        ? 'Start and recreate failed'
+        : 'Start ready work';
   process.stdout.write(`${modeLabel}: ${result.dryRun ? 'preview' : 'submitted'}\n`);
   process.stdout.write(`  ready: ${preview.readyTaskIds.length}\n`);
   process.stdout.write(`  recoverable: ${preview.recoverableTaskIds.length}\n`);
   process.stdout.write(`  failed workflows: ${preview.failedWorkflowIds.length}\n`);
-  if (request.recreateFailedAndPending) {
+  if (request.recreateFailedAndPending || request.recreateFailedPendingAndRunning) {
     process.stdout.write(`  pending workflows: ${preview.pendingWorkflowIds.length}\n`);
+  }
+  if (request.recreateFailedPendingAndRunning) {
+    process.stdout.write(`  running workflows: ${preview.runningWorkflowIds.length}\n`);
   }
   process.stdout.write(`  recreated workflows: ${result.recreatedWorkflowIds.length}\n`);
   process.stdout.write(`  started: ${runnable.length}\n`);

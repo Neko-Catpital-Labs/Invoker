@@ -16,15 +16,15 @@ const previewResult: StartReadyResult = {
     readyTaskIds: ['wf-1/ready'],
     recoverableTaskIds: [],
     failedWorkflowIds: ['wf-2'],
-    pendingWorkflowIds: ['wf-1', 'wf-3'],
-    runningWorkflowIds: [],
+    pendingWorkflowIds: ['wf-1'],
+    runningWorkflowIds: ['wf-3'],
     skipped: {
       awaitingApproval: 0,
       reviewReady: 0,
       blocked: 0,
       failedTasks: 1,
-      pendingTasks: 2,
-      runningTasks: 0,
+      pendingTasks: 1,
+      runningTasks: 1,
     },
   },
   started: [],
@@ -32,14 +32,18 @@ const previewResult: StartReadyResult = {
   dryRun: true,
 };
 
-describe('Start and recreate failed and pending', () => {
+describe('Start and recreate failed, pending, and running', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
     mock = createMockInvoker();
     mock.api.startReady = vi.fn(async (request) => {
       if (request?.dryRun) return previewResult;
-      return { ...previewResult, dryRun: false, recreatedWorkflowIds: ['wf-1', 'wf-2', 'wf-3'] };
+      return {
+        ...previewResult,
+        dryRun: false,
+        recreatedWorkflowIds: ['wf-1', 'wf-2', 'wf-3'],
+      };
     });
     mock.install();
   });
@@ -48,16 +52,18 @@ describe('Start and recreate failed and pending', () => {
     mock.cleanup();
   });
 
-  it('opens the preview dialog for failed-and-pending and confirms with the broader flag', async () => {
+  it('opens the preview dialog for failed-pending-and-running and confirms with the broader flag', async () => {
     const workflows: WorkflowMeta[] = [
       { id: 'wf-1', name: 'Alpha', status: 'running' },
       { id: 'wf-2', name: 'Beta', status: 'failed' },
+      { id: 'wf-3', name: 'Gamma', status: 'running' },
     ];
     const pending = makeUITask({ id: 'wf-1/ready', description: 'Ready', status: 'pending', workflowId: 'wf-1' });
     const failed = makeUITask({ id: 'wf-2/failed', description: 'Failed', status: 'failed', workflowId: 'wf-2' });
+    const running = makeUITask({ id: 'wf-3/running', description: 'Running', status: 'running', workflowId: 'wf-3' });
 
     render(<App />);
-    act(() => mock.setTasks([pending, failed], workflows));
+    act(() => mock.setTasks([pending, failed, running], workflows));
     fireEvent.click(await screen.findByTestId('sidebar-home'));
 
     await waitFor(() => {
@@ -65,23 +71,24 @@ describe('Start and recreate failed and pending', () => {
     });
 
     fireEvent.click(screen.getByTestId('rail-start-ready-menu'));
-    fireEvent.click(await screen.findByTestId('rail-start-ready-recreate-failed-and-pending'));
+    fireEvent.click(await screen.findByTestId('rail-start-ready-recreate-failed-pending-and-running'));
 
     await waitFor(() => {
       expect(mock.api.startReady).toHaveBeenCalledWith({
         dryRun: true,
-        recreateFailedAndPending: true,
+        recreateFailedPendingAndRunning: true,
       });
     });
 
     expect(await screen.findByTestId('start-ready-preview-dialog')).toBeInTheDocument();
-    expect(screen.getByText('Start and recreate failed and pending')).toBeInTheDocument();
+    expect(screen.getByText('Start and recreate failed, pending, and running')).toBeInTheDocument();
     expect(screen.getByText('Pending workflows')).toBeInTheDocument();
-    expect(screen.getByText('Pending tasks')).toBeInTheDocument();
+    expect(screen.getByText('Running workflows')).toBeInTheDocument();
+    expect(screen.getByText('Running tasks')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('start-ready-preview-confirm'));
     await waitFor(() => {
-      expect(mock.api.startReady).toHaveBeenCalledWith({ recreateFailedAndPending: true });
+      expect(mock.api.startReady).toHaveBeenCalledWith({ recreateFailedPendingAndRunning: true });
     });
   });
 });
