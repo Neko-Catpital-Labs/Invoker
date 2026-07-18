@@ -623,6 +623,117 @@ describe('GitHubMergeGateProvider', () => {
       });
     });
 
+    it('uses only the latest check run per name from historical statusCheckRollup', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: 'APPROVED',
+            url: 'https://github.com/owner/repo/pull/4583',
+            headRefOid: 'headsha',
+            headRefName: 'stack/ui-responsiveness',
+            mergeStateStatus: 'CLEAN',
+            statusCheckRollup: [
+              {
+                name: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                completedAt: '2026-07-15T04:02:25Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/1',
+              },
+              {
+                name: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'CANCELLED',
+                completedAt: '2026-07-15T05:00:00Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/2',
+              },
+              {
+                name: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                completedAt: '2026-07-15T06:00:00Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/3',
+              },
+              {
+                name: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                completedAt: '2026-07-15T09:10:14Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/4',
+              },
+              {
+                name: 'quality / TypeScript Types',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                completedAt: '2026-07-15T09:11:00Z',
+              },
+            ],
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '4583', cwd: '/tmp/repo' });
+
+      expect(result.checks).toEqual({ state: 'success', failed: [] });
+    });
+
+    it('reports failure from the latest check when older runs of the same name succeeded', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string) => {
+        if (cmd === 'gh') {
+          return mockSpawnResult(JSON.stringify({
+            state: 'OPEN',
+            reviewDecision: null,
+            url: 'https://github.com/owner/repo/pull/9',
+            headRefOid: 'headsha',
+            headRefName: 'feature/regressed',
+            mergeStateStatus: 'CLEAN',
+            statusCheckRollup: [
+              {
+                name: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'SUCCESS',
+                completedAt: '2026-07-15T01:00:00Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/old',
+              },
+              {
+                name: 'PR Body',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                completedAt: '2026-07-15T09:00:00Z',
+                detailsUrl: 'https://github.com/owner/repo/actions/runs/new',
+                summary: 'Body invalid',
+              },
+            ],
+          }), 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      const result = await provider.checkApproval({ identifier: '9', cwd: '/tmp/repo' });
+
+      expect(result.checks).toEqual({
+        state: 'failure',
+        failed: [
+          {
+            name: 'PR Body',
+            conclusion: 'FAILURE',
+            detailsUrl: 'https://github.com/owner/repo/actions/runs/new',
+            summary: 'Body invalid',
+          },
+        ],
+      });
+    });
+
     it('marks only DIRTY merge state as a merge conflict signal', async () => {
       process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
       const { spawn } = await import('node:child_process');
