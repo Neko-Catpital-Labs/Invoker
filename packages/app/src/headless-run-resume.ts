@@ -227,11 +227,14 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
       case '--recreate-failed':
         request.recreateFailed = true;
         break;
+      case '--recreate-failed-and-pending':
+        request.recreateFailedAndPending = true;
+        break;
       case '--no-track':
         noTrack = true;
         break;
       default:
-        throw new Error(`Unknown start-ready option "${arg}". Usage: --headless start-ready [--dry-run] [--recreate-failed] [--no-track]`);
+        throw new Error(`Unknown start-ready option "${arg}". Usage: --headless start-ready [--dry-run] [--recreate-failed] [--recreate-failed-and-pending] [--no-track]`);
     }
   }
   return { request, noTrack };
@@ -243,11 +246,18 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
   const runnable = result.started.filter(isDispatchableLaunch);
   const preview = result.preview;
 
-  const modeLabel = request.recreateFailed ? 'Start and recreate failed' : 'Start ready work';
+  const modeLabel = request.recreateFailedAndPending
+    ? 'Start and recreate failed and pending'
+    : request.recreateFailed
+      ? 'Start and recreate failed'
+      : 'Start ready work';
   process.stdout.write(`${modeLabel}: ${result.dryRun ? 'preview' : 'submitted'}\n`);
   process.stdout.write(`  ready: ${preview.readyTaskIds.length}\n`);
   process.stdout.write(`  recoverable: ${preview.recoverableTaskIds.length}\n`);
   process.stdout.write(`  failed workflows: ${preview.failedWorkflowIds.length}\n`);
+  if (request.recreateFailedAndPending) {
+    process.stdout.write(`  pending workflows: ${preview.pendingWorkflowIds.length}\n`);
+  }
   process.stdout.write(`  recreated workflows: ${result.recreatedWorkflowIds.length}\n`);
   process.stdout.write(`  started: ${runnable.length}\n`);
 

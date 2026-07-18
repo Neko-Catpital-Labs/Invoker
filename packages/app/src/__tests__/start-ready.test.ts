@@ -36,7 +36,8 @@ function harness(initialTasks: TaskState[], readyTasks: TaskState[], activeTaskI
     }),
     recreateWorkflow: vi.fn((workflowId: string) => {
       const recreated = makeTask(`${workflowId}/recreated`, 'pending');
-      tasks = tasks.filter((task) => task.config.workflowId !== workflowId || task.status !== 'failed');
+      tasks = tasks.filter((task) => task.config.workflowId !== workflowId
+        || (task.status !== 'failed' && task.status !== 'pending' && (task.status as string) !== 'queued'));
       tasks.push(recreated);
       readyTasks.push(recreated);
       return [recreated];
@@ -61,11 +62,13 @@ describe('start-ready', () => {
       readyTaskIds: ['wf-1/ready'],
       recoverableTaskIds: ['wf-1/recoverable'],
       failedWorkflowIds: ['wf-2'],
+      pendingWorkflowIds: ['wf-1'],
       skipped: {
         awaitingApproval: 1,
         reviewReady: 0,
         blocked: 1,
         failedTasks: 1,
+        pendingTasks: 2,
       },
     });
   });
@@ -113,12 +116,41 @@ describe('start-ready', () => {
 
   it('recreates failed workflows only when requested', () => {
     const failed = makeTask('wf-1/failed', 'failed');
-    const orchestrator = harness([failed], []);
+    const pendingOnly = makeTask('wf-2/pending', 'pending');
+    const orchestrator = harness([failed, pendingOnly], []);
 
     const result = runStartReady(orchestrator, { recreateFailed: true });
 
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalledWith('wf-2');
     expect(result.recreatedWorkflowIds).toEqual(['wf-1']);
     expect(result.started.map((task) => task.id)).toEqual(['wf-1/recreated']);
+  });
+
+  it('recreates failed and pending/queued workflows when requested', () => {
+    const failed = makeTask('wf-1/failed', 'failed');
+    const pendingOnly = makeTask('wf-2/pending', 'pending');
+    const queuedOnly = makeTask('wf-3/queued', 'queued' as TaskState['status']);
+    const orchestrator = harness([failed, pendingOnly, queuedOnly], []);
+
+    const result = runStartReady(orchestrator, { recreateFailedAndPending: true });
+
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2');
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-3');
+    expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-2', 'wf-3']);
+  });
+
+  it('prefers failed-and-pending union when both recreate flags are set', () => {
+    const failed = makeTask('wf-1/failed', 'failed');
+    const pendingOnly = makeTask('wf-2/pending', 'pending');
+    const orchestrator = harness([failed, pendingOnly], []);
+
+    const result = runStartReady(orchestrator, {
+      recreateFailed: true,
+      recreateFailedAndPending: true,
+    });
+
+    expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-2']);
   });
 });

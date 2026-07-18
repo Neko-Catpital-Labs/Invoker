@@ -596,6 +596,7 @@ export interface WorkflowMutationAcceptedResult {
 
 export interface StartReadyRequest {
   recreateFailed?: boolean;
+  recreateFailedAndPending?: boolean;
   dryRun?: boolean;
 }
 
@@ -603,11 +604,13 @@ export interface StartReadyPreview {
   readyTaskIds: string[];
   recoverableTaskIds: string[];
   failedWorkflowIds: string[];
+  pendingWorkflowIds: string[];
   skipped: {
     awaitingApproval: number;
     reviewReady: number;
     blocked: number;
     failedTasks: number;
+    pendingTasks: number;
   };
 }
 

@@ -380,11 +380,13 @@ export function createMockInvoker(
         readyTaskIds: [],
         recoverableTaskIds: [],
         failedWorkflowIds: [],
+        pendingWorkflowIds: [],
         skipped: {
           awaitingApproval: 0,
           reviewReady: 0,
           blocked: 0,
           failedTasks: 0,
+          pendingTasks: 0,
         },
       },
       started: [],

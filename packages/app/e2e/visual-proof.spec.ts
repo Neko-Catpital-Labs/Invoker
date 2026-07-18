@@ -2722,4 +2722,21 @@ test.describe('Visual proof capture', () => {
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
   });
+
+  test('start-ready-recreate-failed-and-pending — menu option and preview dialog', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await page.getByTestId('rail-start-ready-menu').click();
+    const menu = page.getByTestId('rail-start-ready-options');
+    await expect(menu).toBeVisible();
+    await expect(page.getByTestId('rail-start-ready-recreate-failed')).toBeVisible();
+    await expect(page.getByTestId('rail-start-ready-recreate-failed-and-pending')).toBeVisible();
+    await captureScreenshot(page, 'start-ready-recreate-failed-and-pending-menu');
+
+    await page.getByTestId('rail-start-ready-recreate-failed-and-pending').click();
+    const dialog = page.getByTestId('start-ready-preview-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('Start and recreate failed and pending')).toBeVisible();
+    await expect(dialog.getByText('Pending workflows')).toBeVisible();
+    await captureScreenshot(page, 'start-ready-recreate-failed-and-pending-dialog');
+  });
 });
