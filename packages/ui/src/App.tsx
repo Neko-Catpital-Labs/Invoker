@@ -458,7 +458,7 @@ export function App() {
     ? mutationFailuresByTaskId.get(selectedTaskId) ?? null
     : null;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (selectedTask?.config.workflowId) {
       setWorkflowSelectionDismissed(false);
       setSelectedWorkflowId(selectedTask.config.workflowId);
