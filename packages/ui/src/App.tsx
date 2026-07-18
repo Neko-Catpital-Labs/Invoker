@@ -16,6 +16,7 @@ import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowM
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
 
+
 import { useTasks } from './hooks/useTasks.js';
 import { useQueueStatus } from './hooks/useQueueStatus.js';
 import { useWorkerStatus } from './hooks/useWorkerStatus.js';
@@ -73,6 +74,20 @@ import {
   type GraphScope,
 } from './lib/graph-camera.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
+type StartReadyRequestExt = StartReadyRequest & {
+  recreateFailedAndPending?: boolean;
+};
+
+type StartReadyPreviewExt = StartReadyResult['preview'] & {
+  pendingWorkflowIds: string[];
+  skipped: StartReadyResult['preview']['skipped'] & {
+    pendingTasks: number;
+  };
+};
+
+type StartReadyResultExt = StartReadyResult & {
+  preview: StartReadyPreviewExt;
+};
 
 type ModalState =
   | { type: 'none' }
@@ -859,7 +874,8 @@ export function App() {
   const [graphActionsMenuOpen, setGraphActionsMenuOpen] = useState(false);
   const [startReadyMenuOpen, setStartReadyMenuOpen] = useState(false);
   const [startReadyBusy, setStartReadyBusy] = useState(false);
-  const [startReadyPreview, setStartReadyPreview] = useState<StartReadyResult | null>(null);
+  const [startReadyPreview, setStartReadyPreview] = useState<StartReadyResultExt | null>(null);
+  const [startReadyPreviewMode, setStartReadyPreviewMode] = useState<'failed' | 'failedAndPending'>('failed');
   // Transient, user-visible outcome line for a confirmed workflow detach.
   const [detachNotice, setDetachNotice] = useState<string | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
@@ -2436,13 +2452,13 @@ export function App() {
   }, [updateActivePlanningSession]);
 
   const handleStartReadyAction = useCallback(async (
-    request: StartReadyRequest = {},
-  ): Promise<StartReadyResult | null> => {
+    request: StartReadyRequestExt = {},
+  ): Promise<StartReadyResultExt | null> => {
     if (!invoker?.startReady) return null;
     setStartReadyBusy(true);
     setStartReadyMenuOpen(false);
     try {
-      const result = await invoker.startReady(request);
+      const result = await invoker.startReady(request as StartReadyRequest) as StartReadyResultExt;
       if (!result.dryRun) {
         await refreshTaskGraph();
         void refreshActionGraph();
@@ -2472,12 +2488,17 @@ export function App() {
     }
   }, [invoker, refreshActionGraph, refreshTaskGraph]);
 
-  const handleStartReadyPreview = useCallback(async () => {
+  const handleStartReadyPreview = useCallback(async (mode: 'failed' | 'failedAndPending') => {
     if (!invoker?.startReady) return;
     setStartReadyBusy(true);
     setStartReadyMenuOpen(false);
+    setStartReadyPreviewMode(mode);
     try {
-      const result = await invoker.startReady({ dryRun: true, recreateFailed: true });
+      const result = await invoker.startReady(
+        (mode === 'failedAndPending'
+          ? { dryRun: true, recreateFailedAndPending: true }
+          : { dryRun: true, recreateFailed: true }) as StartReadyRequest,
+      ) as StartReadyResultExt;
       setStartReadyPreview(result);
     } catch (err) {
       notifyMutationError('Failed to preview ready work:', err);
@@ -2487,9 +2508,13 @@ export function App() {
   }, [invoker]);
 
   const handleConfirmStartAndRecreateFailed = useCallback(async () => {
-    const result = await handleStartReadyAction({ recreateFailed: true });
+    const result = await handleStartReadyAction(
+      startReadyPreviewMode === 'failedAndPending'
+        ? { recreateFailedAndPending: true }
+        : { recreateFailed: true },
+    );
     if (result) setStartReadyPreview(null);
-  }, [handleStartReadyAction]);
+  }, [handleStartReadyAction, startReadyPreviewMode]);
 
   const handlePlanningSubmitDraft = useCallback(async () => {
     if (activePlanningReadOnly) {
@@ -3263,10 +3288,18 @@ export function App() {
               <button
                 type="button"
                 data-testid="rail-start-ready-recreate-failed"
-                onClick={() => void handleStartReadyPreview()}
+                onClick={() => void handleStartReadyPreview('failed')}
                 className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
                 Start and recreate failed…
+              </button>
+              <button
+                type="button"
+                data-testid="rail-start-ready-recreate-failed-and-pending"
+                onClick={() => void handleStartReadyPreview('failedAndPending')}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
+              >
+                Start and recreate failed and pending…
               </button>
             </div>
           )}
@@ -4311,13 +4344,23 @@ export function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <div className="border-b border-border px-4 py-3">
-              <h2 id="start-ready-preview-title" className="text-sm font-semibold text-foreground">Start and recreate failed</h2>
+              <h2 id="start-ready-preview-title" className="text-sm font-semibold text-foreground">
+                {startReadyPreviewMode === 'failedAndPending'
+                  ? 'Start and recreate failed and pending'
+                  : 'Start and recreate failed'}
+              </h2>
             </div>
             <div className="space-y-2 px-4 py-4 text-sm">
               {([
                 ['Ready tasks', startReadyPreview.preview.readyTaskIds.length],
                 ['Recoverable tasks', startReadyPreview.preview.recoverableTaskIds.length],
                 ['Failed workflows', startReadyPreview.preview.failedWorkflowIds.length],
+                ...(startReadyPreviewMode === 'failedAndPending'
+                  ? [
+                      ['Pending workflows', startReadyPreview.preview.pendingWorkflowIds.length] as [string, number],
+                      ['Pending tasks', startReadyPreview.preview.skipped.pendingTasks] as [string, number],
+                    ]
+                  : []),
                 ['Awaiting approval', startReadyPreview.preview.skipped.awaitingApproval],
                 ['Review ready', startReadyPreview.preview.skipped.reviewReady],
                 ['Blocked', startReadyPreview.preview.skipped.blocked],
