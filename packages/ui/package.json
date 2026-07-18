@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "NODE_OPTIONS='--max-old-space-size=4096' vite build && tsup src/lib/workflow-core-activity.ts --format esm --out-dir dist/lib --clean false",
-    "test": "vitest run"
+    "test": "node ../../scripts/run-ui-vitest.mjs"
   },
   "dependencies": {
     "@invoker/contracts": "workspace:*",
