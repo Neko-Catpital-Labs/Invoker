@@ -296,7 +296,7 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
             const leaseExpiresAt = parseExecutionDate(selectedAttempt?.leaseExpiresAt);
             const remoteHeartbeat = parseExecutionDate(task.execution.remoteHeartbeatAt);
 
-            if (task.status === 'running' || (task.status === 'pending' && task.execution.phase === 'launching')) {
+            if (task.status === 'running' || ((task.status === 'pending' || task.status === 'queued') && task.execution.phase === 'launching')) {
               // CC.1: launch-stall watchdog removed. The
               // LaunchDispatcher's reapExpiredLeases /
               // abandonStuckLeases reapers (Phase B, CB.3) are the

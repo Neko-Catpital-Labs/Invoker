@@ -35,6 +35,7 @@ const ATTENTION_STATUS_PRIORITY: Partial<Record<TaskStatus, number>> = {
 };
 
 const RUNNING_TASK_STATUS: Partial<Record<TaskStatus, true>> = {
+  queued: true,
   running: true,
   fixing_with_ai: true,
 };
