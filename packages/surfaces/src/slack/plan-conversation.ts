@@ -11,6 +11,8 @@
  */
 
 import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import type { LogFn } from '../surface.js';
@@ -68,11 +70,18 @@ export function isConfirmation(text: string): boolean {
 
 // ── System Prompt ───────────────────────────────────────────
 
-function buildSystemPrompt(defaultBranch: string, repoUrl?: string): string {
+function buildSystemPrompt(defaultBranch: string, repoUrl?: string, planFilePath?: string): string {
   const repoUrlLine = repoUrl
     ? `repoUrl: "${repoUrl}"          # git clone URL for the repository`
     : `repoUrl: "git@github.com:user/repo.git"  # git clone URL for the repository`;
-  return `You are an assistant for the Invoker orchestrator. You have two modes:
+  const deliveryDirective = planFilePath
+    ? `HOW TO DELIVER THE PLAN (read first): write the COMPLETE YAML plan to the file at \`${planFilePath}\`, then reply in chat with ONLY a short summary — one or two sentences. NEVER paste the YAML plan into your chat reply; Invoker reads it from the file and shows the user a per-task summary. Every YAML block below is the format for that file, not for your chat reply.\n\n`
+    : '';
+  const outputInstruction = planFilePath
+    ? `Write the COMPLETE YAML plan to the file at \`${planFilePath}\`, and reply in chat with only a one-or-two-sentence summary. Never paste the YAML plan into chat.`
+    : 'When ready, output the plan inside a ```yaml code block.';
+
+  return `${deliveryDirective}You are an assistant for the Invoker orchestrator. You have two modes:
 
 **Direct answer mode** — For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase). Explore the codebase as needed and report the result directly. Do NOT generate a YAML plan for these.
 
@@ -120,7 +129,7 @@ Rules:
    - If Invoker config auto-routes heavyweight commands, keep \`pnpm ...\` as a normal command unless the task must name a specific remote target
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
 7. Use meaningful task IDs (kebab-case).
-8. When ready, output the plan inside a \`\`\`yaml code block.
+8. ${outputInstruction}
 9. Always include \`dependencies\` (even if empty array).
 10. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
 11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.`;
@@ -224,8 +233,8 @@ export class PlanConversation {
 
   /**
    * Send a user message and get Cursor's response.
-   * If the message is a confirmation (e.g. "yes", "go"), extracts the last
-   * YAML plan from history and submits it. Otherwise spawns the Cursor CLI.
+   * If the message is a confirmation (e.g. "yes", "go"), extracts the current
+   * drafted plan and submits it. Otherwise spawns the Cursor CLI.
    */
   async sendMessage(userMessage: string): Promise<string> {
     const t0 = Date.now();
@@ -235,10 +244,12 @@ export class PlanConversation {
     if (!this._initialized) await this.init();
     const tInit = Date.now();
 
+    const draftPlanBeforeReset = isConfirmation(userMessage) ? this.readPlanDraftFile() : null;
+    this.resetPlanDraftFile();
     this.messages.push({ role: 'user', content: userMessage });
 
     if (isConfirmation(userMessage)) {
-      const planText = this.extractLastPlanFromMessages();
+      const planText = draftPlanBeforeReset ?? this.extractLastPlanFromMessages();
       if (planText) {
         this._submittedPlanText = planText;
         this._planSubmitted = true;
@@ -286,6 +297,17 @@ export class PlanConversation {
     return this._planSubmitted;
   }
 
+  /** Returns the last complete YAML plan drafted in this conversation, or null. */
+  getDraftedPlan(): string | null {
+    return this.readPlanDraftFile() ?? this.extractLastPlanFromMessages();
+  }
+
+  planDraftFilePath(): string | null {
+    if (!this.workingDir || !this.threadTs) return null;
+    const safeId = this.threadTs.replace(/[^a-zA-Z0-9._-]/g, '_');
+    return join(this.workingDir, '.invoker', 'plan-drafts', `${safeId}.yaml`);
+  }
+
   /** Returns the conversation history. */
   get history(): readonly ConversationMessage[] {
     return this.messages.filter((m) => m.content.length > 0);
@@ -308,7 +330,7 @@ export class PlanConversation {
    * and the complete conversation history.
    */
   buildCursorPrompt(): string {
-    const systemPrompt = buildSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl);
+    const systemPrompt = buildSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl, this.planDraftFilePath() ?? undefined);
     const parts: string[] = [systemPrompt];
 
     if (this.messages.length > 1) {
@@ -389,6 +411,30 @@ export class PlanConversation {
   }
 
   // ── Plan Extraction ────────────────────────────────────
+
+  private readPlanDraftFile(): string | null {
+    const path = this.planDraftFilePath();
+    if (!path) return null;
+    try {
+      if (!existsSync(path)) return null;
+      const content = readFileSync(path, 'utf8').trim();
+      return content.length > 0 ? content : null;
+    } catch (err) {
+      this.log('plan-conversation', 'error', `Failed to read plan draft file ${path}: ${err}`);
+      return null;
+    }
+  }
+
+  private resetPlanDraftFile(): void {
+    const path = this.planDraftFilePath();
+    if (!path) return;
+    try {
+      rmSync(path, { force: true });
+      mkdirSync(dirname(path), { recursive: true });
+    } catch (err) {
+      this.log('plan-conversation', 'error', `Failed to reset plan draft file ${path}: ${err}`);
+    }
+  }
 
   private extractLastPlanFromMessages(): string | null {
     for (let i = this.messages.length - 1; i >= 0; i--) {
