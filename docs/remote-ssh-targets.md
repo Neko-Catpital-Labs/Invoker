@@ -132,6 +132,18 @@ The executor uses these SSH options by default:
 - `-o StrictHostKeyChecking=accept-new` — auto-accept new host keys (TOFU), reject changed keys
 - `-o BatchMode=yes` — fail immediately if interactive auth is needed (no password prompts)
 
+## SSH Pool Capacity (Lease-Backed)
+
+SSH member capacity is decided by durable host-keyed leases in `execution_resource_leases`, not by in-memory runner maps.
+
+- **Resource key:** `ssh:user@host:port`. The same droplet listed in multiple pools (for example `mixed-local-ssh` and `pnpm-ssh`) shares one capacity budget.
+- **Counted holders:** a key may hold up to `maxConcurrentTasksPerMember` (or the member override) live leases. Limit `1` is the exclusive case used in production today.
+- **Claim-at-select:** the runner acquires the lease while selecting a pool member, before start. Dispatch renews an already-held lease instead of claiming again.
+- **In-memory maps:** `activeExecutions` / `pendingPoolSelections` still drive kill, heartbeat, and start plumbing, but they do **not** contribute to SSH `poolMemberLoad`. Worktree pool members still use in-memory load.
+- **Reclaim:** orphan-executor reclaim remains useful cleanup; it is not the source of truth for “is this host full?”.
+- **Inspect:** with the GUI/owner up, `./run.sh --headless query execution-leases [--output json|text|label]` lists live holders (`resourceKey`, `poolId`, `poolMemberId`, `taskId`, `holderId`, expiry).
+- **Regression gate:** `bash scripts/repro/repro-ssh-lease-capacity-battery.sh --gate` (orphan ghosts, cross-pool exclusivity, churn refill, lease/occupancy parity).
+
 ## Member Health & Circuit Breaker
 
 When an SSH pool member fails to *start* a task with a transport-level error — connection timed out, connection reset, `exit=255`, broken pipe, banner-exchange / `kex_exchange_identification` failure, or an operation timeout — the runner takes that member **out of rotation** instead of offering it to the next task and eating another connection-timeout stall.
