@@ -65,10 +65,14 @@ function buildPlan(index: number) {
 
 async function waitForWorkflowGraphVisible(page: Page, timeoutMs: number): Promise<number> {
   const startedAt = Date.now();
-  await page.locator('[data-testid^="workflow-node-"]').first().waitFor({
-    state: 'visible',
-    timeout: timeoutMs,
-  });
+  await page
+    .getByTestId('workflow-graph-content')
+    .locator('[data-testid^="workflow-node-"]:visible')
+    .first()
+    .waitFor({
+      state: 'visible',
+      timeout: timeoutMs,
+    });
   return Date.now() - startedAt;
 }
 
@@ -81,8 +85,9 @@ function parseActivityPayload(message: string): Record<string, unknown> | null {
 }
 
 async function dragGraphAndAssertViewportMoves(page: Page): Promise<void> {
-  const viewport = page.locator('.react-flow__viewport').first();
-  const pane = page.locator('.react-flow__pane').first();
+  const workflowGraph = page.getByTestId('workflow-graph-content');
+  const viewport = workflowGraph.locator('.react-flow__viewport').first();
+  const pane = workflowGraph.locator('.react-flow__pane').first();
   const before = await viewport.evaluate((el) => getComputedStyle(el).transform);
   const box = await pane.boundingBox();
   if (!box) {
