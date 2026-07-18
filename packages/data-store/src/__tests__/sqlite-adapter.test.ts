@@ -1564,6 +1564,28 @@ describe('SQLiteAdapter', () => {
         expect(after?.lastError).toMatch(/status is failed/);
       });
 
+      it('claims queued launch-wait tasks written by deferRunningUntilLaunch', () => {
+        setupWorkflowAndTask('wf-launch', 'wf-launch/t1', {
+          selectedAttemptId: 'attempt-queued-task',
+          status: 'queued',
+        });
+        const row = adapter.enqueueLaunchDispatch({
+          taskId: 'wf-launch/t1',
+          attemptId: 'attempt-queued-task',
+          workflowId: 'wf-launch',
+          generation: 0,
+        });
+
+        const claimed = adapter.claimLaunchDispatchAtomic({
+          ownerId: 'runner-queued',
+          nowIso: '2026-06-03T00:02:30.000Z',
+        });
+
+        expect(claimed?.id).toBe(row.id);
+        expect(claimed?.state).toBe('leased');
+        expect(adapter.loadLaunchDispatchById(row.id)?.state).toBe('leased');
+      });
+
       it('abandons missing-task candidates', () => {
         adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
         (adapter as any).db.run('PRAGMA foreign_keys = OFF');
