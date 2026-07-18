@@ -1,16 +1,97 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { QueueView } from '../components/QueueView.js';
 import { makeUITask } from './helpers/mock-invoker.js';
-import type { TaskState } from '../types.js';
+import type { TaskState, WorkerActionSummary, WorkerStatusEntry, WorkerStatusSnapshot, WorkflowMeta } from '../types.js';
 
 describe('QueueView', () => {
   const onTaskClick = vi.fn();
-  const onCancel = vi.fn();
+  const onStartWorker = vi.fn();
+  const onStopWorker = vi.fn();
+  const onSelectWorker = vi.fn();
+
+  const EMPTY_WORKER_STATUS: WorkerStatusSnapshot = {
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    workers: [],
+  };
+
+  const DEFAULT_WORKFLOWS = new Map<string, WorkflowMeta>([
+    ['wf-1', { id: 'wf-1', name: 'My Workflow', status: 'running' }],
+  ]);
+
+  function makeWorkerAction(overrides: Partial<WorkerActionSummary> = {}): WorkerActionSummary {
+    return {
+      id: 'action-1',
+      workerKind: 'autofix',
+      actionType: 'fix-with-agent',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/fix-target',
+      subjectType: 'task',
+      subjectId: 'wf-1/fix-target',
+      externalKey: 'wf-1/fix-target',
+      status: 'running',
+      attemptCount: 1,
+      summary: 'Fix running',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  function makeWorker(overrides: Partial<WorkerStatusEntry> = {}): WorkerStatusEntry {
+    return {
+      kind: 'autofix',
+      note: 'Auto-fixes failed tasks.',
+      source: 'built-in',
+      availability: 'available',
+      running: true,
+      lifecycle: 'running',
+      policy: 'enabled',
+      autoStarts: true,
+      startable: false,
+      stoppable: true,
+      recentActions: [],
+      recentLogs: [],
+      ...overrides,
+    };
+  }
+
+  function makeWorkerStatus(workers: WorkerStatusSnapshot['workers']): WorkerStatusSnapshot {
+    return {
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      workers,
+    };
+  }
+
+  function renderQueueView(
+    tasks: Map<string, TaskState>,
+    workerStatus: WorkerStatusSnapshot = EMPTY_WORKER_STATUS,
+    selectedTaskId: string | null = null,
+    readOnly = false,
+    selectedWorkerKind: string | null = null,
+    workflows: Map<string, WorkflowMeta> = DEFAULT_WORKFLOWS,
+  ) {
+    render(
+      <QueueView
+        tasks={tasks}
+        workflows={workflows}
+        workerStatus={workerStatus}
+        readOnly={readOnly}
+        onStartWorker={onStartWorker}
+        onStopWorker={onStopWorker}
+        onTaskClick={onTaskClick}
+        selectedTaskId={selectedTaskId}
+        selectedWorkerKind={selectedWorkerKind}
+        onSelectWorker={onSelectWorker}
+      />,
+    );
+  }
 
   beforeEach(() => {
     onTaskClick.mockReset();
-    onCancel.mockReset();
+    onStartWorker.mockReset();
+    onStopWorker.mockReset();
+    onSelectWorker.mockReset();
     vi.stubGlobal('confirm', vi.fn(() => true));
   });
 
@@ -18,581 +99,449 @@ describe('QueueView', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders action queue in running-then-queued order and separates backlog', async () => {
-    const runningTask = makeUITask({
-      id: 'wf-1/running-task',
+  it('shows only active work recorded by worker processes', () => {
+    const targetTask = makeUITask({
+      id: 'wf-1/fix-target',
+      status: 'fixing_with_ai',
+      description: 'needs fix',
+    });
+    const randomRunningTask = makeUITask({
+      id: 'wf-1/random-runner',
       status: 'running',
-      description: 'running task',
-      execution: { phase: 'executing' },
+      description: 'normal scheduler work',
     });
-    const queuedTask = makeUITask({
-      id: 'wf-1/queued-task',
-      status: 'pending',
-      description: 'queued task',
-    });
-    const blockedTask = makeUITask({
-      id: 'wf-1/pending-task',
-      status: 'blocked',
-      description: 'pending task',
-      dependencies: ['wf-1/running-task'],
-    });
-    const tasks = new Map<string, TaskState>([
-      [runningTask.id, runningTask],
-      [queuedTask.id, queuedTask],
-      [blockedTask.id, blockedTask],
-    ]);
-
-    const getQueueStatus = vi.fn(async () => ({
-      maxConcurrency: 6,
-      runningCount: 1,
-      running: [{ taskId: runningTask.id, description: runningTask.description }],
-      queued: [{ taskId: queuedTask.id, priority: 0, description: queuedTask.description }],
-    }));
-    (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
-
-    render(
-      <QueueView
-        tasks={tasks}
-        onTaskClick={onTaskClick}
-        onCancel={onCancel}
-        selectedTaskId={null}
-      />,
-    );
-
-    await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-    expect(screen.getByText('Action Queue (2)')).toBeInTheDocument();
-    expect(screen.getByText('Backlog (1)')).toBeInTheDocument();
-    expect(screen.getByText('#1')).toBeInTheDocument();
-    expect(screen.getByText('#2')).toBeInTheDocument();
-    // Canonical status labels instead of raw "running"/"queued"
-    expect(screen.getByText('Running')).toBeInTheDocument();
-    expect(screen.getByText('Pending')).toBeInTheDocument();
-    expect(screen.getByText('phase: Executing')).toBeInTheDocument();
-    expect(screen.getByText('priority: 0')).toBeInTheDocument();
-    expect(screen.getByText('deps: running-task')).toBeInTheDocument();
-    // Backlog rows now show canonical status badge
-    expect(screen.getByText('Blocked')).toBeInTheDocument();
-  });
-
-  it('supports click-through and cancel actions in queue rows', async () => {
-    const runningTask = makeUITask({
-      id: 'wf-1/run-all-fixture-tests',
-      status: 'running',
-      description: 'failing task',
-      execution: { phase: 'executing' },
-    });
-    const queuedTask = makeUITask({
-      id: 'wf-2/another-task',
-      status: 'pending',
-      description: 'another task',
-    });
-    const tasks = new Map<string, TaskState>([
-      [runningTask.id, runningTask],
-      [queuedTask.id, queuedTask],
-    ]);
-
-    const getQueueStatus = vi.fn(async () => ({
-      maxConcurrency: 6,
-      runningCount: 1,
-      running: [{ taskId: runningTask.id, description: runningTask.description }],
-      queued: [{ taskId: queuedTask.id, priority: 1, description: queuedTask.description }],
-    }));
-    (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
-
-    render(
-      <QueueView
-        tasks={tasks}
-        onTaskClick={onTaskClick}
-        onCancel={onCancel}
-        selectedTaskId={null}
-      />,
-    );
-
-    await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-
-    fireEvent.click(screen.getByText('run-all-fixture-tests'));
-    expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: runningTask.id }));
-
-    fireEvent.click(screen.getAllByText('Terminate')[0]);
-    expect(onCancel).toHaveBeenCalledWith(runningTask.id);
-    // Confirm dialog uses display-friendly task ID, not raw ID
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining('run-all-fixture-tests'),
-    );
-    expect(window.confirm).not.toHaveBeenCalledWith(
-      expect.stringContaining('wf-1/'),
-    );
-  });
-
-  it('renders merge gate ids with a stable label', async () => {
     const mergeGateTask = makeUITask({
-      id: '__merge__wf-123',
+      id: '__merge__wf-1',
       status: 'blocked',
       description: 'Workflow gate for queued merge',
-      dependencies: ['wf-1/build'],
     });
     const tasks = new Map<string, TaskState>([
+      [targetTask.id, targetTask],
+      [randomRunningTask.id, randomRunningTask],
       [mergeGateTask.id, mergeGateTask],
     ]);
 
-    const getQueueStatus = vi.fn(async () => ({
-      maxConcurrency: 6,
-      runningCount: 0,
-      running: [],
-      queued: [],
-    }));
-    (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
-
-    render(
-      <QueueView
-        tasks={tasks}
-        onTaskClick={onTaskClick}
-        onCancel={onCancel}
-        selectedTaskId={null}
-      />,
+    renderQueueView(
+      tasks,
+      makeWorkerStatus([
+        makeWorker({
+          recentActions: [
+            makeWorkerAction({ taskId: targetTask.id, subjectId: targetTask.id, externalKey: targetTask.id }),
+            makeWorkerAction({ id: 'completed-action', status: 'completed', taskId: randomRunningTask.id }),
+          ],
+        }),
+      ]),
     );
 
-    await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-    expect(screen.getByText('merge gate')).toBeInTheDocument();
-    expect(screen.queryByText('__merge__wf-123')).not.toBeInTheDocument();
+    expect(screen.getByText('Worker Actions (1)')).toBeInTheDocument();
+    expect(screen.getByText('Only work started by a worker process appears here.')).toBeInTheDocument();
+    expect(screen.getByText('needs fix')).toBeInTheDocument();
+    expect(screen.getByText('Autofix · Fix With Agent · My Workflow')).toBeInTheDocument();
+    expect(screen.queryByText('normal scheduler work')).not.toBeInTheDocument();
+    expect(screen.queryByText('Workflow gate for queued merge')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Backlog/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Action Queue/)).not.toBeInTheDocument();
   });
 
-  it('places manual-action tasks in Action Queue with canonical labels', async () => {
-    const fixingTask = makeUITask({
-      id: 'wf-1/fixing-task',
-      status: 'fixing_with_ai',
-      description: 'AI fix in progress',
+  it('opens the affected task from a worker action row', () => {
+    const task = makeUITask({ id: 'wf-1/fix-target', status: 'failed', description: 'needs fix' });
+    renderQueueView(
+      new Map([[task.id, task]]),
+      makeWorkerStatus([
+        makeWorker({ recentActions: [makeWorkerAction({ taskId: task.id, subjectId: task.id })] }),
+      ]),
+    );
+
+    fireEvent.click(screen.getByText('needs fix'));
+
+    expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
+  });
+
+  it('distinguishes CI failure repair rows by target task title', () => {
+    const taskA = makeUITask({ id: 'wf-1/gate-a', status: 'failed', description: 'Review gate A' });
+    const taskB = makeUITask({ id: 'wf-1/gate-b', status: 'failed', description: 'Review gate B' });
+    renderQueueView(
+      new Map([[taskA.id, taskA], [taskB.id, taskB]]),
+      makeWorkerStatus([
+        makeWorker({
+          kind: 'ci-failure',
+          recentActions: [
+            makeWorkerAction({
+              id: 'ci-a',
+              workerKind: 'ci-failure',
+              actionType: 'fix-ci-failure',
+              taskId: taskA.id,
+              subjectId: taskA.id,
+            }),
+            makeWorkerAction({
+              id: 'ci-b',
+              workerKind: 'ci-failure',
+              actionType: 'fix-ci-failure',
+              taskId: taskB.id,
+              subjectId: taskB.id,
+            }),
+          ],
+        }),
+      ]),
+    );
+
+    expect(screen.getByText('Review gate A')).toBeInTheDocument();
+    expect(screen.getByText('Review gate B')).toBeInTheDocument();
+    expect(screen.getAllByText('CI failure repair · Fix Ci Failure · My Workflow')).toHaveLength(2);
+  });
+
+  it('keeps worker actions and worker processes in independent scroll panes', () => {
+    const task = makeUITask({ id: 'wf-1/action-task', status: 'running', description: 'running task' });
+    renderQueueView(
+      new Map([[task.id, task]]),
+      makeWorkerStatus([
+        makeWorker({
+          kind: 'autofix',
+          recentActions: [makeWorkerAction({ taskId: task.id, subjectId: task.id })],
+        }),
+      ]),
+    );
+
+    const actionSection = screen.getByTestId('action-queue-section');
+    const actionList = screen.getByTestId('worker-action-list');
+    const workersSection = screen.getByTestId('worker-processes-section');
+    const workersScroll = screen.getByTestId('worker-process-scroll');
+
+    expect(actionSection.parentElement).toHaveClass('grid-rows-[minmax(0,1fr)]');
+    expect(actionSection.compareDocumentPosition(workersSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(actionSection.className).toContain('overflow-hidden');
+    expect(actionList.className).toContain('overflow-y-auto');
+    expect(workersSection.className).toContain('overflow-hidden');
+    expect(workersScroll).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+    expect(within(actionSection).getByText('Worker Actions (1)')).toBeInTheDocument();
+    expect(within(workersSection).queryByText('Worker processes (1)')).not.toBeInTheDocument();
+    expect(within(workersSection).getByTestId('worker-row-autofix')).toBeInTheDocument();
+    expect(within(actionSection).queryByTestId('worker-row-autofix')).not.toBeInTheDocument();
+  });
+
+  it('keeps tall worker-process rows inside the middle pane scroll owner', () => {
+    const workers = Array.from({ length: 24 }, (_, index) =>
+      makeWorker({
+        kind: `worker-${index}`,
+        note: `Worker ${index}`,
+        lifecycle: index % 2 === 0 ? 'running' : 'stopped',
+        autoStarts: false,
+        startable: true,
+        stoppable: false,
+      }),
+    );
+
+    renderQueueView(new Map(), makeWorkerStatus(workers));
+
+    const workersScroll = screen.getByTestId('worker-process-scroll');
+    const workerCard = screen.getByTestId('worker-activity-card');
+    const processList = screen.getByTestId('worker-process-list');
+    const firstRow = screen.getByTestId('worker-row-worker-0');
+    const lastRow = screen.getByTestId('worker-row-worker-23');
+
+    expect(workersScroll).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+    expect(workerCard).toHaveClass('flex', 'min-h-0', 'flex-col');
+    expect(processList).toHaveClass('min-h-0');
+    expect(processList.closest('.overflow-y-auto')).toBe(workersScroll);
+    expect(firstRow.closest('[data-testid="worker-process-scroll"]')).toBe(workersScroll);
+    expect(lastRow.closest('[data-testid="worker-process-scroll"]')).toBe(workersScroll);
+    expect(lastRow.closest('[data-testid="worker-action-list"]')).toBeNull();
+    expect(screen.getAllByTestId(/^worker-row-/)).toHaveLength(24);
+  });
+
+  it('shows an empty worker-action state without showing unrelated tasks', () => {
+    const unrelatedTask = makeUITask({ id: 'wf-1/random-task', status: 'running', description: 'not worker owned' });
+    renderQueueView(
+      new Map([[unrelatedTask.id, unrelatedTask]]),
+      makeWorkerStatus([
+        makeWorker({ kind: 'pr-status', note: 'Checks pull request status.', recentActions: [] }),
+      ]),
+    );
+
+    expect(screen.getByText('Worker Actions (0)')).toBeInTheDocument();
+    expect(screen.getByText('No worker action is running.')).toBeInTheDocument();
+    expect(screen.queryByText('not worker owned')).not.toBeInTheDocument();
+    expect(screen.getByText('PR status')).toBeInTheDocument();
+  });
+
+  it('renders missing worker action targets without linking a random task', () => {
+    renderQueueView(
+      new Map(),
+      makeWorkerStatus([
+        makeWorker({
+          recentActions: [makeWorkerAction({ taskId: 'wf-1/missing-target', subjectId: 'wf-1/missing-target' })],
+        }),
+      ]),
+    );
+
+    expect(screen.getByText('missing-target')).toBeInTheDocument();
+    expect(screen.getByText('Autofix · Fix With Agent · My Workflow')).toBeInTheDocument();
+    expect(screen.getByText('Target task is not loaded.')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('missing-target'));
+    expect(onTaskClick).not.toHaveBeenCalled();
+  });
+
+  it('shows all built-in workers in snapshot order', () => {
+    renderQueueView(
+      new Map(),
+      makeWorkerStatus([
+        makeWorker({
+          kind: 'autofix',
+          note: 'Auto-fixes failed tasks.',
+          lifecycle: 'stopped',
+          autoStarts: false,
+          startable: true,
+          stoppable: false,
+        }),
+        makeWorker({
+          kind: 'pr-status',
+          note: 'Checks pull request status.',
+          lifecycle: 'running',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
+        makeWorker({
+          kind: 'ci-failure',
+          note: 'Repairs failed CI.',
+          lifecycle: 'running',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
+        makeWorker({
+          kind: 'coderabbit-address',
+          note: 'Addresses CodeRabbit review comments.',
+          lifecycle: 'running',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
+        makeWorker({
+          kind: 'pr-conflict-rebase',
+          note: 'Rebases conflicted pull requests.',
+          lifecycle: 'running',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
+        makeWorker({
+          kind: 'pr-ci-failure-scan',
+          note: 'Scans mapped PRs for failing CI.',
+          lifecycle: 'running',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
+      ]),
+    );
+
+    const rows = screen.getAllByTestId(/^worker-row-/);
+    expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual([
+      'worker-row-autofix',
+      'worker-row-pr-status',
+      'worker-row-ci-failure',
+      'worker-row-coderabbit-address',
+      'worker-row-pr-conflict-rebase',
+      'worker-row-pr-ci-failure-scan',
+    ]);
+    expect(screen.queryByText('Worker processes (6)')).not.toBeInTheDocument();
+    expect(screen.getByText('Autofix')).toBeInTheDocument();
+    expect(screen.getByText('PR status')).toBeInTheDocument();
+    expect(screen.getByText('CI failure repair')).toBeInTheDocument();
+    expect(screen.getByText('Coderabbit Address')).toBeInTheDocument();
+    expect(screen.getByText('Pr Conflict Rebase')).toBeInTheDocument();
+    expect(screen.getByText('PR CI scan')).toBeInTheDocument();
+  });
+
+  it('shows disabled Autofix and CI rows when policy is disabled', () => {
+    renderQueueView(
+      new Map(),
+      makeWorkerStatus([
+        makeWorker({
+          kind: 'autofix',
+          lifecycle: 'stopped',
+          policy: 'disabled',
+          policyReason: 'autoFixRetries=0',
+          controlDisabledReason: 'autoFixRetries=0',
+          autoStarts: false,
+          startable: false,
+          stoppable: false,
+        }),
+        makeWorker({
+          kind: 'ci-failure',
+          lifecycle: 'stopped',
+          policy: 'disabled',
+          policyReason: 'autoFixRetries=0',
+          controlDisabledReason: 'autoFixRetries=0',
+          autoStarts: true,
+          startable: false,
+          stoppable: false,
+        }),
+      ]),
+    );
+
+    expect(within(screen.getByTestId('worker-row-autofix')).getByText('Disabled · autoFixRetries=0')).toBeInTheDocument();
+    expect(within(screen.getByTestId('worker-row-ci-failure')).getByText('Disabled · autoFixRetries=0')).toBeInTheDocument();
+    expect(within(screen.getByTestId('worker-row-ci-failure')).getByText('Starts on launch')).toBeInTheDocument();
+  });
+
+  it('calls start worker for a stopped row', () => {
+    renderQueueView(
+      new Map(),
+      makeWorkerStatus([
+        makeWorker({
+          lifecycle: 'stopped',
+          autoStarts: false,
+          startable: true,
+          stoppable: false,
+        }),
+      ]),
+    );
+
+    fireEvent.click(within(screen.getByTestId('worker-row-autofix')).getByRole('button', { name: 'Enable worker' }));
+    expect(onStartWorker).toHaveBeenCalledWith('autofix');
+  });
+
+  it('calls stop worker for a running row', () => {
+    renderQueueView(
+      new Map(),
+      makeWorkerStatus([
+        makeWorker({
+          kind: 'ci-failure',
+          autoStarts: true,
+          startable: false,
+          stoppable: true,
+        }),
+      ]),
+    );
+
+    fireEvent.click(within(screen.getByTestId('worker-row-ci-failure')).getByRole('button', { name: 'Disable worker' }));
+    expect(onStopWorker).toHaveBeenCalledWith('ci-failure');
+  });
+
+  it('disables worker controls in read-only mode', () => {
+    renderQueueView(
+      new Map(),
+      makeWorkerStatus([
+        makeWorker({
+          lifecycle: 'stopped',
+          autoStarts: false,
+          startable: true,
+          stoppable: false,
+        }),
+      ]),
+      null,
+      true,
+    );
+
+    const start = within(screen.getByTestId('worker-row-autofix')).getByRole('button', { name: 'Enable worker' });
+    expect(start).toBeDisabled();
+    expect(start).toHaveAttribute('title', 'Read-only window');
+  });
+
+  it('selects worker rows and keeps action details out of the process list', () => {
+    const task = makeUITask({ id: 'wf-1/fix-target', status: 'failed', description: 'needs fix' });
+    renderQueueView(
+      new Map([[task.id, task]]),
+      makeWorkerStatus([
+        makeWorker({
+          kind: 'ci-failure',
+          recentActions: [makeWorkerAction({
+            workerKind: 'ci-failure',
+            taskId: task.id,
+            subjectId: task.id,
+          })],
+        }),
+      ]),
+      null,
+      false,
+      'ci-failure',
+    );
+
+    const row = screen.getByTestId('worker-row-ci-failure');
+    expect(row.className).toContain('ring-cyan');
+    expect(within(row).getByText('Active work')).toBeInTheDocument();
+    expect(within(row).getByText('Active work: Fix With Agent · Running')).toBeInTheDocument();
+    expect(within(row).queryByText('Last recorded action')).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Open task: fix-target' })).not.toBeInTheDocument();
+
+    fireEvent.click(row);
+    expect(onSelectWorker).toHaveBeenCalledWith('ci-failure');
+  });
+
+  it('expands relationships only for the affected worker action task', () => {
+    const buildTask = makeUITask({
+      id: 'wf-1/build',
+      status: 'running',
+      description: 'Build the project',
+      dependencies: [],
     });
-    const needsInputTask = makeUITask({
-      id: 'wf-1/input-task',
-      status: 'needs_input',
-      description: 'waiting for input',
-    });
-    const reviewTask = makeUITask({
-      id: 'wf-1/review-task',
-      status: 'review_ready',
-      description: 'ready for review',
-    });
-    const approvalTask = makeUITask({
-      id: 'wf-1/approval-task',
-      status: 'awaiting_approval',
-      description: 'needs approval',
-    });
-    const blockedTask = makeUITask({
-      id: 'wf-1/blocked-task',
+    const deployTask = makeUITask({
+      id: 'wf-1/deploy',
       status: 'blocked',
-      description: 'blocked by something',
-      dependencies: ['wf-1/fixing-task'],
+      description: 'Deploy after build',
+      dependencies: ['wf-1/build'],
     });
     const tasks = new Map<string, TaskState>([
-      [fixingTask.id, fixingTask],
-      [needsInputTask.id, needsInputTask],
-      [reviewTask.id, reviewTask],
-      [approvalTask.id, approvalTask],
-      [blockedTask.id, blockedTask],
+      [buildTask.id, buildTask],
+      [deployTask.id, deployTask],
     ]);
 
-    const getQueueStatus = vi.fn(async () => ({
-      maxConcurrency: 6,
-      runningCount: 0,
-      running: [],
-      queued: [],
-    }));
-    (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
-
-    render(
-      <QueueView
-        tasks={tasks}
-        onTaskClick={onTaskClick}
-        onCancel={onCancel}
-        selectedTaskId={null}
-      />,
+    renderQueueView(
+      tasks,
+      makeWorkerStatus([
+        makeWorker({ recentActions: [makeWorkerAction({ taskId: buildTask.id, subjectId: buildTask.id })] }),
+      ]),
     );
 
-    await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
+    expect(screen.getByTestId('queue-rels-toggle-action-wf-1/build')).toBeInTheDocument();
+    expect(screen.queryByTestId('queue-rels-toggle-backlog-wf-1/deploy')).not.toBeInTheDocument();
 
-    // All manual-action tasks land in Action Queue
-    expect(screen.getByText('Action Queue (4)')).toBeInTheDocument();
-    expect(screen.getByText('Backlog (1)')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Expand relationships'));
 
-    // Canonical status labels
-    expect(screen.getByText('Fixing With AI')).toBeInTheDocument();
-    expect(screen.getByText('Needs Input')).toBeInTheDocument();
-    expect(screen.getByText('Review Ready')).toBeInTheDocument();
-    expect(screen.getByText('Awaiting Approval')).toBeInTheDocument();
+    const relsSection = screen.getByTestId('rels-wf-1/build');
+    expect(relsSection.textContent).toContain('downstream:');
+    expect(relsSection.textContent).toContain('Deploy after build');
 
-    // Blocked task stays in backlog
-    expect(screen.getByText('blocked by something')).toBeInTheDocument();
+    const deployChip = relsSection.querySelector('button');
+    expect(deployChip).not.toBeNull();
+    fireEvent.click(deployChip!);
+    expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: deployTask.id }));
   });
 
-  it('shows pending tasks in Action Queue when scheduler-queued with canonical Pending label', async () => {
-    const pendingTask = makeUITask({
-      id: 'wf-1/pending-task',
-      status: 'pending',
-      description: 'waiting to run',
+  it('selection highlight persists on expanded worker action rows', () => {
+    const buildTask = makeUITask({
+      id: 'wf-1/build',
+      status: 'running',
+      description: 'Build the project',
+      dependencies: [],
+    });
+    const deployTask = makeUITask({
+      id: 'wf-1/deploy',
+      status: 'blocked',
+      description: 'Deploy after build',
+      dependencies: ['wf-1/build'],
     });
     const tasks = new Map<string, TaskState>([
-      [pendingTask.id, pendingTask],
+      [buildTask.id, buildTask],
+      [deployTask.id, deployTask],
     ]);
 
-    const getQueueStatus = vi.fn(async () => ({
-      maxConcurrency: 6,
-      runningCount: 0,
-      running: [],
-      queued: [{ taskId: pendingTask.id, priority: 5, description: pendingTask.description }],
-    }));
-    (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
-
-    render(
-      <QueueView
-        tasks={tasks}
-        onTaskClick={onTaskClick}
-        onCancel={onCancel}
-        selectedTaskId={null}
-      />,
+    renderQueueView(
+      tasks,
+      makeWorkerStatus([
+        makeWorker({ recentActions: [makeWorkerAction({ taskId: buildTask.id, subjectId: buildTask.id })] }),
+      ]),
+      buildTask.id,
     );
 
-    await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-    expect(screen.getByText('Action Queue (1)')).toBeInTheDocument();
-    expect(screen.getByText('Backlog (0)')).toBeInTheDocument();
-    expect(screen.getByText('Pending')).toBeInTheDocument();
-    expect(screen.getByText('priority: 5')).toBeInTheDocument();
-  });
+    const selectedRow = screen.getByText('Build the project').closest('[data-row-id]');
+    expect(selectedRow?.className).toContain('bg-cyan-950/30');
 
-  describe('relationship expander', () => {
-    function setupRelationshipScenario() {
-      // A -> B -> C chain: A has no deps, B depends on A, C depends on B.
-      // This gives A downstream=[B], B upstream=[A] downstream=[C], C upstream=[B].
-      const taskA = makeUITask({
-        id: 'wf-1/task-a',
-        status: 'running',
-        description: 'first task',
-        dependencies: [],
-      });
-      const taskB = makeUITask({
-        id: 'wf-1/task-b',
-        status: 'blocked',
-        description: 'second task',
-        dependencies: ['wf-1/task-a'],
-      });
-      const taskC = makeUITask({
-        id: 'wf-1/task-c',
-        status: 'blocked',
-        description: 'third task',
-        dependencies: ['wf-1/task-b'],
-      });
-      const tasks = new Map<string, TaskState>([
-        [taskA.id, taskA],
-        [taskB.id, taskB],
-        [taskC.id, taskC],
-      ]);
+    fireEvent.click(screen.getByLabelText('Expand relationships'));
 
-      const getQueueStatus = vi.fn(async () => ({
-        maxConcurrency: 6,
-        runningCount: 1,
-        running: [{ taskId: taskA.id, description: taskA.description }],
-        queued: [],
-      }));
-      (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
-
-      return { tasks, taskA, taskB, taskC, getQueueStatus };
-    }
-
-    it('relationships are collapsed by default', async () => {
-      const { tasks, getQueueStatus } = setupRelationshipScenario();
-
-      render(
-        <QueueView
-          tasks={tasks}
-          onTaskClick={onTaskClick}
-          onCancel={onCancel}
-          selectedTaskId={null}
-        />,
-      );
-
-      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-
-      // The rels toggle buttons should be present (tasks have relationships).
-      // task-a is in Action Queue; task-b and task-c are in Backlog.
-      expect(screen.getByTestId('queue-rels-toggle-action-wf-1/task-a')).toBeInTheDocument();
-      expect(screen.getByTestId('queue-rels-toggle-backlog-wf-1/task-b')).toBeInTheDocument();
-      expect(screen.getByTestId('queue-rels-toggle-backlog-wf-1/task-c')).toBeInTheDocument();
-
-      // But no upstream/downstream labels should be visible (collapsed)
-      expect(screen.queryByText('upstream:')).not.toBeInTheDocument();
-      expect(screen.queryByText('downstream:')).not.toBeInTheDocument();
-    });
-
-    it('clicking expander toggles relationship section per row', async () => {
-      const { tasks, getQueueStatus } = setupRelationshipScenario();
-
-      render(
-        <QueueView
-          tasks={tasks}
-          onTaskClick={onTaskClick}
-          onCancel={onCancel}
-          selectedTaskId={null}
-        />,
-      );
-
-      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-
-      // task-a is in Action Queue; it has downstream only (task-b depends on it).
-      // Expand task-a's relationships.
-      const expandButtons = screen.getAllByLabelText('Expand relationships');
-      // Click the first one (task-a in Action Queue)
-      fireEvent.click(expandButtons[0]);
-
-      // Now the relationship section for task-a should appear
-      const relsSection = screen.getByTestId('rels-wf-1/task-a');
-      expect(relsSection).toBeInTheDocument();
-      expect(relsSection.textContent).toContain('downstream:');
-      expect(relsSection.textContent).toContain('task-b');
-
-      // Click again to collapse
-      const collapseButton = screen.getByLabelText('Collapse relationships');
-      fireEvent.click(collapseButton);
-      expect(screen.queryByTestId('rels-wf-1/task-a')).not.toBeInTheDocument();
-    });
-
-    it('shows both upstream and downstream in expanded row', async () => {
-      const { tasks, getQueueStatus } = setupRelationshipScenario();
-
-      render(
-        <QueueView
-          tasks={tasks}
-          onTaskClick={onTaskClick}
-          onCancel={onCancel}
-          selectedTaskId={null}
-        />,
-      );
-
-      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-
-      // task-b is in Backlog (blocked), has upstream=[task-a] and downstream=[task-c].
-      // Find the rels button for task-b in backlog.
-      // The backlog has task-b and task-c. task-b has both directions.
-      const expandButtons = screen.getAllByLabelText('Expand relationships');
-      // There should be buttons for task-a (action queue), task-b (backlog), task-c (backlog).
-      // task-a has only downstream, task-b has both, task-c has only upstream.
-      // Expand task-b (second expand button, index 1)
-      fireEvent.click(expandButtons[1]);
-
-      expect(screen.getByText('upstream:')).toBeInTheDocument();
-      expect(screen.getByText('downstream:')).toBeInTheDocument();
-      // upstream chip shows task-a
-      expect(screen.getByTestId('rels-wf-1/task-b')).toBeInTheDocument();
-    });
-
-    it('clicking a related task chip selects and navigates to that task', async () => {
-      const { tasks, getQueueStatus } = setupRelationshipScenario();
-
-      render(
-        <QueueView
-          tasks={tasks}
-          onTaskClick={onTaskClick}
-          onCancel={onCancel}
-          selectedTaskId={null}
-        />,
-      );
-
-      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-
-      // Expand task-a to see downstream task-b chip
-      const expandButtons = screen.getAllByLabelText('Expand relationships');
-      fireEvent.click(expandButtons[0]);
-
-      // The downstream chip for task-b is inside the rels section
-      const relsSection = screen.getByTestId('rels-wf-1/task-a');
-      const taskBChip = relsSection.querySelector('button');
-      expect(taskBChip).not.toBeNull();
-      fireEvent.click(taskBChip!);
-
-      // onTaskClick should have been called with task-b's state
-      expect(onTaskClick).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'wf-1/task-b' }),
-      );
-    });
-
-    it('does not show rels button for tasks with no relationships', async () => {
-      const loneTask = makeUITask({
-        id: 'wf-1/lone-task',
-        status: 'pending',
-        description: 'no deps',
-        dependencies: [],
-      });
-      const tasks = new Map<string, TaskState>([
-        [loneTask.id, loneTask],
-      ]);
-
-      const getQueueStatus = vi.fn(async () => ({
-        maxConcurrency: 6,
-        runningCount: 0,
-        running: [],
-        queued: [{ taskId: loneTask.id, priority: 0, description: loneTask.description }],
-      }));
-      (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
-
-      render(
-        <QueueView
-          tasks={tasks}
-          onTaskClick={onTaskClick}
-          onCancel={onCancel}
-          selectedTaskId={null}
-        />,
-      );
-
-      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-      expect(screen.queryByTestId('queue-rels-toggle-action-wf-1/lone-task')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('queue-rels-toggle-backlog-wf-1/lone-task')).not.toBeInTheDocument();
-    });
-  });
-
-  describe('integrated queue hardening', () => {
-    it('canonical labels, expanded rels, and Terminate coexist in a composed queue', async () => {
-      // Scenario: running task with a downstream blocked dep, plus a manual-action task.
-      // Exercises all three prior-workflow features together:
-      // 1. Canonical status labels (Running, Fixing With AI, Blocked)
-      // 2. Relationship expanders (upstream/downstream chips)
-      // 3. Task-level Terminate wording on action buttons
-      const runningTask = makeUITask({
-        id: 'wf-1/build',
-        status: 'running',
-        description: 'Build the project',
-        execution: { phase: 'executing' },
-        dependencies: [],
-      });
-      const fixingTask = makeUITask({
-        id: 'wf-1/lint',
-        status: 'fixing_with_ai',
-        description: 'Lint with AI fix',
-        dependencies: [],
-      });
-      const blockedTask = makeUITask({
-        id: 'wf-1/deploy',
-        status: 'blocked',
-        description: 'Deploy after build',
-        dependencies: ['wf-1/build'],
-      });
-
-      const tasks = new Map<string, TaskState>([
-        [runningTask.id, runningTask],
-        [fixingTask.id, fixingTask],
-        [blockedTask.id, blockedTask],
-      ]);
-
-      const getQueueStatus = vi.fn(async () => ({
-        maxConcurrency: 4,
-        runningCount: 1,
-        running: [{ taskId: runningTask.id, description: runningTask.description }],
-        queued: [],
-      }));
-      (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
-
-      render(
-        <QueueView
-          tasks={tasks}
-          onTaskClick={onTaskClick}
-          onCancel={onCancel}
-          selectedTaskId={null}
-        />,
-      );
-
-      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-
-      // 1. Canonical status labels present in both sections
-      expect(screen.getByText('Action Queue (2)')).toBeInTheDocument();
-      expect(screen.getByText('Backlog (1)')).toBeInTheDocument();
-      expect(screen.getByText('Running')).toBeInTheDocument();
-      expect(screen.getByText('Fixing With AI')).toBeInTheDocument();
-      expect(screen.getByText('Blocked')).toBeInTheDocument();
-      expect(screen.getByText('phase: Executing')).toBeInTheDocument();
-
-      // 2. Relationship expanders visible on tasks with deps
-      const expandButtons = screen.getAllByLabelText('Expand relationships');
-      expect(expandButtons.length).toBe(2); // build (downstream) and deploy (upstream)
-
-      // Expand the running task (build) to see downstream
-      fireEvent.click(expandButtons[0]);
-      const buildRels = screen.getByTestId('rels-wf-1/build');
-      expect(buildRels.textContent).toContain('downstream:');
-      expect(buildRels.textContent).toContain('deploy');
-
-      // Expand the blocked task (deploy) to see upstream
-      fireEvent.click(expandButtons[1]);
-      const deployRels = screen.getByTestId('rels-wf-1/deploy');
-      expect(deployRels.textContent).toContain('upstream:');
-      expect(deployRels.textContent).toContain('build');
-
-      // 3. Task-level Terminate buttons present on all action rows
-      const terminateButtons = screen.getAllByText('Terminate');
-      expect(terminateButtons.length).toBe(3); // 2 action + 1 backlog
-
-      // Click Terminate on the running task — confirm uses display-friendly ID
-      fireEvent.click(terminateButtons[0]);
-      expect(window.confirm).toHaveBeenCalledWith(
-        expect.stringContaining('build'),
-      );
-      expect(onCancel).toHaveBeenCalledWith(runningTask.id);
-
-      // Navigate via relationship chip: click "deploy" chip in build's rels
-      const deployChip = buildRels.querySelector('button');
-      expect(deployChip).not.toBeNull();
-      fireEvent.click(deployChip!);
-      expect(onTaskClick).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'wf-1/deploy' }),
-      );
-    });
-
-    it('selection highlight persists on expanded rows', async () => {
-      const taskA = makeUITask({
-        id: 'wf-1/task-a',
-        status: 'running',
-        description: 'task a',
-        dependencies: [],
-      });
-      const taskB = makeUITask({
-        id: 'wf-1/task-b',
-        status: 'blocked',
-        description: 'task b',
-        dependencies: ['wf-1/task-a'],
-      });
-      const tasks = new Map<string, TaskState>([
-        [taskA.id, taskA],
-        [taskB.id, taskB],
-      ]);
-
-      const getQueueStatus = vi.fn(async () => ({
-        maxConcurrency: 4,
-        runningCount: 1,
-        running: [{ taskId: taskA.id, description: taskA.description }],
-        queued: [],
-      }));
-      (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
-
-      // Render with task-a selected
-      render(
-        <QueueView
-          tasks={tasks}
-          onTaskClick={onTaskClick}
-          onCancel={onCancel}
-          selectedTaskId="wf-1/task-a"
-        />,
-      );
-
-      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-
-      // The selected row should have bg-gray-600 highlight
-      const selectedRow = screen.getByText('task-a').closest('[data-row-id]');
-      expect(selectedRow?.className).toContain('bg-gray-600');
-
-      // Expand relationships on the selected row
-      const expandButtons = screen.getAllByLabelText('Expand relationships');
-      fireEvent.click(expandButtons[0]);
-
-      // Selection highlight still applies after expansion
-      expect(selectedRow?.className).toContain('bg-gray-600');
-      expect(screen.getByTestId('rels-wf-1/task-a')).toBeInTheDocument();
-    });
+    expect(selectedRow?.className).toContain('bg-cyan-950/30');
+    expect(screen.getByTestId('rels-wf-1/build')).toBeInTheDocument();
   });
 });

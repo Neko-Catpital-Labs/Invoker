@@ -7,7 +7,7 @@ import type {
   ActivityLogEntry,
   QueueStatus,
 } from '@invoker/contracts';
-import type { TaskEvent, WorkflowMutationIntent, WorkflowMutationLease } from '@invoker/data-store';
+import type { TaskEvent, TaskLaunchDispatch, WorkflowMutationIntent, WorkflowMutationLease } from '@invoker/data-store';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { Workflow } from '@invoker/data-store';
 import type { InvokerConfig } from './config.js';
@@ -23,6 +23,19 @@ export function resolveActionDiagnosticsStallThresholdMs(config: InvokerConfig, 
   const parsed = raw ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_STALL_THRESHOLD_MS;
 }
+const ACTION_GRAPH_TEXT_LIMITS = {
+  label: 2_048,
+  latestError: 8_192,
+  historyMessage: 2_048,
+} as const;
+
+function truncateActionGraphText(value: string, maxLength: number): string;
+function truncateActionGraphText(value: string | undefined, maxLength: number): string | undefined;
+function truncateActionGraphText(value: string | undefined, maxLength: number): string | undefined {
+  if (value === undefined || value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}… [truncated ${value.length - maxLength} chars]`;
+}
+
 
 export interface ActionGraphDiagnosticsInput {
   workflows: Workflow[];
@@ -35,6 +48,7 @@ export interface ActionGraphDiagnosticsInput {
   activityLogs: ActivityLogEntry[];
   stallThresholdMs: number;
   now?: Date;
+  launchDispatches?: TaskLaunchDispatch[];
 }
 
 function iso(value: Date | string | undefined): string | undefined {
@@ -62,6 +76,8 @@ function taskStatusToActionStatus(status: TaskState['status']): ActionGraphNodeS
       return 'waiting';
     case 'stale':
       return 'cancelled';
+    case 'closed':
+      return 'failed';
     case 'fixing_with_ai':
       return 'running';
   }
@@ -75,7 +91,7 @@ function attemptStatusToActionStatus(status: Attempt['status']): ActionGraphNode
     case 'pending':
       return status;
     case 'claimed':
-      return 'queued';
+      return 'pending';
     case 'needs_input':
       return 'waiting';
     case 'superseded':
@@ -92,14 +108,14 @@ function compactHistory(events: TaskEvent[], activityLogs: ActivityLogEntry[]): 
     id: `event:${event.id}`,
     timestamp: event.createdAt,
     source: event.eventType,
-    message: event.payload ?? event.eventType,
+    message: truncateActionGraphText(event.payload ?? event.eventType, ACTION_GRAPH_TEXT_LIMITS.historyMessage),
   }));
   const logs = activityLogs.slice(-10).map((entry) => ({
     id: `activity:${entry.id}`,
     timestamp: entry.timestamp,
     source: entry.source,
     level: entry.level,
-    message: entry.message,
+    message: truncateActionGraphText(entry.message, ACTION_GRAPH_TEXT_LIMITS.historyMessage),
   }));
   return [...taskEvents, ...logs].sort((a, b) => a.timestamp.localeCompare(b.timestamp)).slice(-25);
 }
@@ -126,13 +142,18 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
   const workflowsById = new Map(input.workflows.map((workflow) => [workflow.id, workflow]));
   const runningQueueIds = new Set(input.queueStatus.running.map((item) => item.taskId));
   const queuedQueueIds = new Set(input.queueStatus.queued.map((item) => item.taskId));
+  const visibleAttemptIds = new Set<string>();
+  for (const attempts of input.attemptsByTaskId.values()) {
+    for (const attempt of attempts) visibleAttemptIds.add(attempt.id);
+  }
+
 
   for (const workflow of input.workflows) {
     const actionId = `action:${workflow.id}`;
     nodes.push({
       id: actionId,
       type: 'user-action',
-      label: workflow.name || workflow.id,
+      label: truncateActionGraphText(workflow.name || workflow.id, ACTION_GRAPH_TEXT_LIMITS.label) ?? workflow.id,
       status: taskStatusToActionStatus(workflow.status as TaskState['status']),
       workflowId: workflow.id,
       createdAt: workflow.createdAt,
@@ -168,7 +189,7 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
       createdAt: intent.createdAt,
       startedAt: intent.startedAt,
       completedAt: intent.completedAt,
-      latestError: intent.error,
+      latestError: truncateActionGraphText(intent.error, ACTION_GRAPH_TEXT_LIMITS.latestError),
       durations: {
         queuedMs: intent.status === 'queued' ? ageMs(nowMs, intent.createdAt) : undefined,
         runningMs: intent.status === 'running' ? ageMs(nowMs, intent.startedAt) : undefined,
@@ -211,6 +232,52 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
     edges.push({ id: edgeId(source, id, 'lease'), source, target: id, label: 'lease' });
   }
 
+  for (const dispatch of input.launchDispatches ?? []) {
+    const status: ActionGraphNodeStatus =
+      dispatch.state === 'enqueued' ? 'queued'
+        : dispatch.state === 'leased' ? 'running'
+          : dispatch.state === 'completed' ? 'completed'
+            : 'failed';
+    const id = `launch-dispatch:${dispatch.id}`;
+    nodes.push({
+      id,
+      type: 'launch-dispatch',
+      label: `Launch ${dispatch.taskId}`,
+      status,
+      workflowId: dispatch.workflowId,
+      taskId: dispatch.taskId,
+      attemptId: dispatch.attemptId,
+      ownerId: dispatch.dispatchOwner,
+      priority: dispatch.priority === 'high' ? 1 : dispatch.priority === 'normal' ? 0 : -1,
+      createdAt: dispatch.enqueuedAt,
+      startedAt: dispatch.leasedAt,
+      completedAt: dispatch.completedAt,
+      leaseExpiresAt: dispatch.fencedUntil,
+      latestError: dispatch.lastError,
+      durations: {
+        queuedMs: dispatch.state === 'enqueued' ? ageMs(nowMs, dispatch.enqueuedAt) : undefined,
+        runningMs: dispatch.state === 'leased' ? ageMs(nowMs, dispatch.leasedAt) : undefined,
+        leaseExpiresInMs: dispatch.fencedUntil ? Date.parse(dispatch.fencedUntil) - nowMs : undefined,
+      },
+      details: {
+        state: dispatch.state,
+        attemptsCount: dispatch.attemptsCount,
+        generation: dispatch.generation,
+      },
+      suggestedNextAction: dispatch.state === 'enqueued'
+        ? 'The task is queued for launch, but no owner has accepted it yet.'
+        : dispatch.state === 'abandoned'
+          ? 'Inspect the launch dispatch error, then retry the task if needed.'
+          : undefined,
+    });
+    edges.push({
+      id: edgeId(id, `attempt:${dispatch.attemptId}`, 'launch'),
+      source: id,
+      target: `attempt:${dispatch.attemptId}`,
+      label: 'launch',
+    });
+  }
+
   for (const task of input.tasks) {
     const workflowId = task.config.workflowId;
     const actionId = workflowId ? `action:${workflowId}` : undefined;
@@ -218,6 +285,10 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
     const selectedAttemptId = task.execution.selectedAttemptId ?? attempts.at(-1)?.id ?? task.id;
     const selectedNodeId = `attempt:${selectedAttemptId}`;
     const taskEvents = input.eventsByTaskId.get(task.id) ?? [];
+    if (attempts.length === 0) {
+      visibleAttemptIds.add(selectedAttemptId);
+    }
+
 
     for (const attempt of attempts.length > 0 ? attempts : [{
       id: selectedAttemptId,
@@ -244,7 +315,7 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
       nodes.push({
         id: nodeId,
         type: 'task-attempt',
-        label: task.description,
+        label: truncateActionGraphText(task.description, ACTION_GRAPH_TEXT_LIMITS.label) ?? task.id,
         status: stalled ? 'stalled' : attemptStatusToActionStatus(attempt.status),
         workflowId,
         taskId: task.id,
@@ -255,7 +326,7 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
         completedAt: iso(attempt.completedAt),
         heartbeatAt: iso(attempt.lastHeartbeatAt),
         leaseExpiresAt: iso(attempt.leaseExpiresAt),
-        latestError: attempt.error ?? task.execution.error,
+        latestError: truncateActionGraphText(attempt.error ?? task.execution.error, ACTION_GRAPH_TEXT_LIMITS.latestError),
         history: attempt.id === selectedAttemptId ? compactHistory(taskEvents, input.activityLogs) : undefined,
         durations: {
           queuedMs: queuedQueueIds.has(task.id) ? ageMs(nowMs, attempt.createdAt) : undefined,
@@ -279,12 +350,14 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
       });
 
       for (const upstreamAttemptId of attempt.upstreamAttemptIds) {
-        edges.push({
-          id: edgeId(`attempt:${upstreamAttemptId}`, nodeId, 'upstream'),
-          source: `attempt:${upstreamAttemptId}`,
-          target: nodeId,
-          label: 'upstream',
-        });
+        if (visibleAttemptIds.has(upstreamAttemptId)) {
+          edges.push({
+            id: edgeId(`attempt:${upstreamAttemptId}`, nodeId, 'upstream'),
+            source: `attempt:${upstreamAttemptId}`,
+            target: nodeId,
+            label: 'upstream',
+          });
+        }
       }
     }
 
@@ -365,6 +438,8 @@ export function buildActionGraphDiagnostics(input: ActionGraphDiagnosticsInput):
         selectedNode.durations = { ...selectedNode.durations, waitingMs: ageMs(nowMs, task.createdAt) };
       }
     }
+
+
   }
 
   const uniqueEdges = new Map(edges.map((edge) => [edge.id, edge]));

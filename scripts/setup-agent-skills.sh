@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Bootstrap local Invoker prerequisites and skill symlinks for Cursor + Codex.
-# Safe to run repeatedly (replaces stale symlinks). Supports macOS/Linux/WSL.
+# Install bundled Invoker skills into local agent skill directories.
+# Safe to run repeatedly. Installs prefixed copies such as invoker-plan-to-invoker.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,73 +29,22 @@ check_required_commands() {
   log "Core tools present: git, node, pnpm"
 }
 
-ensure_cursor_cli() {
-  if command -v cursor >/dev/null 2>&1; then
-    log "Cursor CLI found on PATH: $(command -v cursor)"
-    log "Cursor CLI version: $(cursor --version 2>/dev/null || echo 'unknown')"
-    return 0
-  fi
+build_headless_installer() {
+  log "Building bundled invoker-cli artifact..."
+  pnpm --filter @invoker/cli build
 
-  local app_cli="/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
-  if [ -x "$app_cli" ]; then
-    log "Cursor app bundle detected but CLI is not on PATH."
-    log "Fallback: export CURSOR_COMMAND=\"$app_cli\""
-    log "Tip: add to shell profile so future shells can run 'cursor' directly."
-    return 0
-  fi
-
-  if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
-    log "Cursor CLI missing; attempting install via Homebrew cask..."
-    # If app is already installed, this can fail with a non-fatal "already exists" message.
-    if brew install --cask cursor >/dev/null 2>&1; then
-      log "Homebrew install completed."
-    else
-      log "Homebrew install did not complete cleanly (possibly already installed app). Continuing with detection."
-    fi
-
-    if command -v cursor >/dev/null 2>&1; then
-      log "Cursor CLI now available on PATH: $(command -v cursor)"
-      log "Cursor CLI version: $(cursor --version 2>/dev/null || echo 'unknown')"
-      return 0
-    fi
-
-    if [ -x "$app_cli" ]; then
-      log "Cursor app exists but PATH still missing CLI."
-      log "Use CURSOR_COMMAND fallback: export CURSOR_COMMAND=\"$app_cli\""
-      return 0
-    fi
-  fi
-
-  log "Cursor CLI not found. Continuing setup so Codex/Claude skills still work."
-  log "Optional: install Cursor, then verify with 'cursor --version', or set CURSOR_COMMAND to an absolute CLI path."
-  return 0
+  log "Building headless app runtime..."
+  pnpm --filter @invoker/app build
 }
 
-link_cursor_skills() {
-  local canonical="$REPO_ROOT/.claude/skills/plan-to-invoker"
-  if [ ! -f "$canonical/SKILL.md" ]; then
-    fail "expected skill at $canonical/SKILL.md"
-  fi
-
-  mkdir -p "$REPO_ROOT/.cursor/skills"
-  cd "$REPO_ROOT/.cursor/skills"
-  ln -sfn ../../skills/plan-to-invoker plan-to-invoker
-  log "Cursor skill linked at .cursor/skills/plan-to-invoker -> skills/plan-to-invoker"
-}
-
-link_codex_skills() {
-  local canonical="$REPO_ROOT/.claude/skills/plan-to-invoker"
-  if [ ! -f "$canonical/SKILL.md" ]; then
-    fail "expected skill at $canonical/SKILL.md"
-  fi
-
-  mkdir -p "$HOME/.codex/skills"
-  ln -sfn "$canonical" "$HOME/.codex/skills/plan-to-invoker"
-  log "Codex skill linked at ~/.codex/skills/plan-to-invoker -> .claude/skills/plan-to-invoker"
+install_bundled_skills() {
+  local mode="${1:-reinstall}"
+  log "Installing bundled Invoker skills with prefix invoker-..."
+  unset ELECTRON_RUN_AS_NODE
+  node scripts/electron.cjs packages/app/dist/main.js --headless install-skills "$mode"
 }
 
 check_required_commands
-ensure_cursor_cli
-link_cursor_skills
-link_codex_skills
+build_headless_installer
+install_bundled_skills "${1:-reinstall}"
 log "Setup complete."

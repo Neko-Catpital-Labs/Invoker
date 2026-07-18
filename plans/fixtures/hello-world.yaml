@@ -1,0 +1,8 @@
+name: Hello World CLI
+description: Standalone CLI smoke fixture.
+repoUrl: .
+onFinish: none
+tasks:
+  - id: hello
+    description: Print hello from the standalone CLI.
+    command: echo hello-from-invoker-cli

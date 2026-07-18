@@ -4,7 +4,12 @@ import {
   sortTasksForTimeline,
   computeBarWidths,
 } from '../components/TimelineView.js';
-import type { TaskState } from '../types.js';
+import {
+  buildWorkerTimelineEventRows,
+  sortWorkerTimelineActions,
+  sortWorkerTimelineEventRows,
+} from '../lib/worker-timeline.js';
+import type { TaskState, WorkerActionSummary } from '../types.js';
 
 function makeTask(overrides: Partial<TaskState> & { id: string } & { startedAt?: Date; completedAt?: Date }): TaskState {
   const { startedAt, completedAt, ...rest } = overrides;
@@ -17,6 +22,24 @@ function makeTask(overrides: Partial<TaskState> & { id: string } & { startedAt?:
     execution: { startedAt, completedAt },
     ...rest,
   } as TaskState;
+}
+
+function makeWorkerAction(overrides: Partial<WorkerActionSummary> & { id: string; workerKind: string; createdAt: string }): WorkerActionSummary {
+  return {
+    id: overrides.id,
+    workerKind: overrides.workerKind,
+    actionType: 'repair',
+    workflowId: 'wf-1',
+    taskId: 'wf-1/task-a',
+    subjectType: 'task',
+    subjectId: 'wf-1/task-a',
+    externalKey: `external:${overrides.id}`,
+    status: 'completed',
+    attemptCount: 1,
+    createdAt: overrides.createdAt,
+    updatedAt: overrides.createdAt,
+    ...overrides,
+  };
 }
 
 describe('formatElapsed', () => {
@@ -90,8 +113,8 @@ describe('sortTasksForTimeline', () => {
 
 describe('computeBarWidths', () => {
   const T0 = new Date('2024-01-01T00:00:00Z').getTime();
-  const T1 = new Date('2024-01-01T00:01:00Z').getTime(); // +60s
-  const T2 = new Date('2024-01-01T00:02:00Z').getTime(); // +120s
+  const T1 = new Date('2024-01-01T00:01:00Z').getTime();
+  const T2 = new Date('2024-01-01T00:02:00Z').getTime();
 
   it('returns zero-width bars for tasks with no startedAt', () => {
     const tasks = [makeTask({ id: 'a', status: 'pending' })];
@@ -106,7 +129,7 @@ describe('computeBarWidths', () => {
       makeTask({ id: 'b', status: 'blocked' }),
     ];
     const bars = computeBarWidths(tasks, T2);
-    expect(bars.every((b) => b.widthPercent === 0)).toBe(true);
+    expect(bars.every((bar) => bar.widthPercent === 0)).toBe(true);
   });
 
   it('computes correct offset and width for a single completed task', () => {
@@ -140,8 +163,8 @@ describe('computeBarWidths', () => {
       }),
     ];
     const bars = computeBarWidths(tasks, T2);
-    const first = bars.find((b) => b.taskId === 'first')!;
-    const second = bars.find((b) => b.taskId === 'second')!;
+    const first = bars.find((bar) => bar.taskId === 'first')!;
+    const second = bars.find((bar) => bar.taskId === 'second')!;
 
     expect(first.offsetPercent).toBe(0);
     expect(first.widthPercent).toBe(50);
@@ -171,5 +194,115 @@ describe('computeBarWidths', () => {
     const bars = computeBarWidths(tasks, T2);
     expect(bars[0].taskId).toBe('x');
     expect(bars[1].taskId).toBe('y');
+  });
+});
+
+describe('worker timeline helpers', () => {
+  it('expands completed actions into launched and finished rows', () => {
+    const rows = buildWorkerTimelineEventRows(
+      makeWorkerAction({
+        id: 'repair',
+        workerKind: 'autofix',
+        createdAt: '2024-01-01T00:00:10Z',
+        completedAt: '2024-01-01T00:00:20Z',
+      }),
+      Date.parse('2024-01-01T00:01:00Z'),
+    );
+
+    expect(rows).toEqual([
+      expect.objectContaining({ eventKind: 'launched', timestampMs: Date.parse('2024-01-01T00:00:10Z') }),
+      expect.objectContaining({ eventKind: 'finished', timestampMs: Date.parse('2024-01-01T00:00:20Z') }),
+    ]);
+  });
+
+  it('drops the finished row when completedAt is invalid but keeps the launched row', () => {
+    const rows = buildWorkerTimelineEventRows(
+      makeWorkerAction({
+        id: 'repair',
+        workerKind: 'autofix',
+        createdAt: '2024-01-01T00:00:10Z',
+        completedAt: 'not-a-timestamp',
+        updatedAt: '2024-01-01T00:00:40Z',
+      }),
+      Date.parse('2024-01-01T00:01:00Z'),
+    );
+
+    expect(rows).toEqual([
+      expect.objectContaining({ eventKind: 'launched', timestampMs: Date.parse('2024-01-01T00:00:10Z') }),
+    ]);
+  });
+
+  it('sorts event rows by timestamp, then action id, with launched before finished for one action', () => {
+    const earlierRows = buildWorkerTimelineEventRows(
+      makeWorkerAction({
+        id: 'earlier',
+        workerKind: 'autofix',
+        createdAt: '2024-01-01T00:00:10Z',
+      }),
+      Date.parse('2024-01-01T00:01:00Z'),
+    ) ?? [];
+    const sameActionRows = buildWorkerTimelineEventRows(
+      makeWorkerAction({
+        id: 'same',
+        workerKind: 'autofix',
+        createdAt: '2024-01-01T00:00:20Z',
+        completedAt: '2024-01-01T00:00:20Z',
+      }),
+      Date.parse('2024-01-01T00:01:00Z'),
+    ) ?? [];
+    const laterRows = buildWorkerTimelineEventRows(
+      makeWorkerAction({
+        id: 'later',
+        workerKind: 'autofix',
+        createdAt: '2024-01-01T00:00:20Z',
+      }),
+      Date.parse('2024-01-01T00:01:00Z'),
+    ) ?? [];
+
+    const sorted = sortWorkerTimelineEventRows([
+      laterRows[0]!,
+      sameActionRows[1]!,
+      sameActionRows[0]!,
+      earlierRows[0]!,
+    ]);
+
+    expect(sorted.map((row) => `${row.action.id}-${row.eventKind}`)).toEqual([
+      'earlier-launched',
+      'later-launched',
+      'same-launched',
+      'same-finished',
+    ]);
+  });
+
+  it('re-sorts combined pages into ascending createdAt order', () => {
+    const combined = sortWorkerTimelineActions([
+      makeWorkerAction({
+        id: 'newer-page',
+        workerKind: 'autofix',
+        createdAt: '2024-01-01T00:00:20Z',
+      }),
+      makeWorkerAction({
+        id: 'older-page',
+        workerKind: 'autofix',
+        createdAt: '2024-01-01T00:00:10Z',
+      }),
+      makeWorkerAction({
+        id: 'same-time-b',
+        workerKind: 'autofix',
+        createdAt: '2024-01-01T00:00:20Z',
+      }),
+      makeWorkerAction({
+        id: 'same-time-a',
+        workerKind: 'autofix',
+        createdAt: '2024-01-01T00:00:20Z',
+      }),
+    ]);
+
+    expect(combined.map((action) => action.id)).toEqual([
+      'older-page',
+      'newer-page',
+      'same-time-a',
+      'same-time-b',
+    ]);
   });
 });

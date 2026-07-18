@@ -14,7 +14,7 @@ unset ELECTRON_RUN_AS_NODE
 echo "==> case 2.15: delete-all"
 invoker_e2e_run_headless delete-all
 
-PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.15-plan.XXXXXX.yaml")"
+PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.15-plan.yaml.XXXXXX")"
 cat > "$PLAN_PATH" <<'EOF'
 name: e2e-dry-run group2 2.15 recreate-preempt
 repoUrl: git@github.com:invoker/workflow-test.git
@@ -25,7 +25,7 @@ tasks:
 EOF
 
 echo "==> case 2.15: submit plan (background — sleep 8 blocks)"
-SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.15-submit.XXXXXX.log")"
+SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.15-submit.log.XXXXXX")"
 invoker_e2e_submit_plan_no_track_capture "$PLAN_PATH" "$SUBMIT_LOG"
 
 WF_ID="$(invoker_e2e_extract_workflow_id_from_log "$SUBMIT_LOG")"
@@ -74,15 +74,18 @@ for i in $(seq 1 60); do
   STATUS_AFTER="$(printf '%s' "$TASK_JSON_AFTER" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status",""))')"
   AUDIT_JSON="$(invoker_e2e_run_headless query audit "$TASK_ID" --output json 2>/dev/null || true)"
 
-  if printf '%s' "$AUDIT_JSON" | grep -Fq 'task.cancelled' && printf '%s' "$AUDIT_JSON" | grep -Fq 'task.pending'; then
-    echo "==> case 2.15: observed cancel + reset audit events (poll $i)"
+  if printf '%s' "$AUDIT_JSON" | grep -Eq 'task\.(cancelled|failed)' && printf '%s' "$AUDIT_JSON" | grep -Fq 'task.pending'; then
+    echo "==> case 2.15: observed preempt + reset audit events (poll $i)"
     break
   fi
   sleep 1
 done
 
-if ! printf '%s' "$AUDIT_JSON" | grep -Fq 'task.cancelled'; then
-  echo "FAIL case 2.15: expected task.cancelled audit event after recreate preempt"
+# Standalone-headless recreate boots a fresh owner that reaps the orphaned
+# in-flight attempt as task.failed before the cancel-first path runs (#4411);
+# the long-lived GUI owner still emits task.cancelled. Accept either preempt event.
+if ! printf '%s' "$AUDIT_JSON" | grep -Eq 'task\.(cancelled|failed)'; then
+  echo "FAIL case 2.15: expected task.cancelled or task.failed audit event after recreate preempt"
   printf '%s\n' "$AUDIT_JSON"
   exit 1
 fi

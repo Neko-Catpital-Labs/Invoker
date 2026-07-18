@@ -94,6 +94,108 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('renders task.worker_action events in the task timeline', async () => {
+    const task = makeUITask({
+      id: 'task-worker-action',
+      description: 'Worker action target',
+      status: 'completed',
+      workflowId: 'wf-a',
+      command: 'pnpm test',
+    });
+    mock.setEvents(task.id, [{
+      id: 1,
+      taskId: task.id,
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        summary: 'Updated PR body with Invoker pipeline summary',
+        reviewId: '123',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    render(<App />);
+    act(() => mock.setTasks([task], workflows));
+
+    fireEvent.click(await screen.findByTestId('rf__node-task-worker-action'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent(
+        'pr-summary-refresh/refresh-pr-summary completed: Updated PR body with Invoker pipeline summary',
+      );
+      expect(screen.getByTestId('task-logs-section')).toHaveTextContent('"workerKind":"pr-summary-refresh"');
+    });
+  });
+
+  it('lets prompt tasks change harness and model from the inspector', async () => {
+    const promptTask = makeUITask({
+      id: 'task-ai',
+      description: 'AI task',
+      status: 'pending',
+      workflowId: 'wf-a',
+      prompt: 'Write a test',
+      config: {
+        workflowId: 'wf-a',
+        prompt: 'Write a test',
+        executionAgent: 'omp',
+      },
+    });
+    vi.mocked(mock.api.getExecutionDefaults).mockResolvedValue({
+      executionAgent: 'omp',
+      executionModel: 'chatgpt-5.4',
+    });
+
+    render(<App />);
+    act(() => mock.setTasks([promptTask], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(await screen.findByTestId('rf__node-task-ai'));
+    await waitFor(() => {
+      expect(screen.getByTestId('execution-agent-select')).toBeInTheDocument();
+      expect(screen.getByTestId('execution-model-select')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('execution-agent-select'), { target: { value: 'codex' } });
+    await waitFor(() => {
+      expect(mock.api.editTaskAgent).toHaveBeenCalledWith('task-ai', 'codex');
+    });
+
+    fireEvent.change(screen.getByTestId('execution-model-select'), { target: { value: 'openai/gpt-5-codex' } });
+    await waitFor(() => {
+      expect(mock.api.editTaskModel).toHaveBeenCalledWith('task-ai', 'openai/gpt-5-codex');
+    });
+  });
+
+  it('clicking a task expands a minimized inspector', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText('Minimize inspector'));
+    expect(await screen.findByLabelText('Maximize inspector')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Minimize inspector')).toBeInTheDocument();
+      expect(screen.getByText('echo hello-alpha')).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText('Maximize inspector')).not.toBeInTheDocument();
+  });
+
   it('clicking workflow graph background dismisses the selected mini DAG', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
@@ -222,5 +324,29 @@ describe('Task interaction (component)', () => {
     fireEvent(handle, new MouseEvent('pointerup', { bubbles: true, clientX: 1200, clientY: 900 }));
 
     expect(panel).toHaveStyle({ left: '468px', top: '308px' });
+  });
+
+  it('opens and closes the maximized graph without clearing selection', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Full graph ⤢' }));
+    expect(screen.getByTestId('graph-maximized-overlay')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('graph-maximized-overlay')).not.toBeInTheDocument();
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
+    });
   });
 });

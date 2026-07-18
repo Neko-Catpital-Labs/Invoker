@@ -8,33 +8,157 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   CI: true
   NODE_VERSION: '26'
 
 jobs:
-  build-release:
+  build-cli:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - runner: macos-latest
+            platform: darwin
+            arch: arm64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check release version sync
+        run: pnpm run check:versions
+
+      - name: Build standalone CLI
+        env:
+          INVOKER_TARGET_PLATFORM: ${{ matrix.platform }}
+          INVOKER_TARGET_ARCH: ${{ matrix.arch }}
+        run: pnpm run dist:cli
+
+      - name: Upload CLI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/invoker-cli-*
+          if-no-files-found: error
+
+  build-slack:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - runner: macos-latest
+            platform: darwin
+            arch: arm64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check release version sync
+        run: pnpm run check:versions
+
+      - name: Build standalone Slack manager
+        env:
+          INVOKER_TARGET_PLATFORM: ${{ matrix.platform }}
+          INVOKER_TARGET_ARCH: ${{ matrix.arch }}
+        run: pnpm run dist:slack
+
+      - name: Upload Slack artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/invoker-slack-*
+          if-no-files-found: error
+
+  build-desktop:
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-latest
             build_command: pnpm run dist:desktop:linux
-            artifact_name: release-linux
+            artifact_name: desktop-linux-x64
+            artifact_glob: |
+              release/*.AppImage
+              release/*.deb
+          - runner: ubuntu-24.04-arm
+            build_command: pnpm run dist:desktop:linux
+            artifact_name: desktop-linux-arm64
             artifact_glob: |
               release/*.AppImage
               release/*.deb
           - runner: macos-latest
             build_command: pnpm run dist:desktop:mac:arm64
-            artifact_name: release-mac-arm64
+            artifact_name: desktop-mac-arm64
             artifact_glob: |
               release/*.dmg
-          - runner: macos-13
+              release/*.zip
+          - runner: macos-15-intel
             build_command: pnpm run dist:desktop:mac:x64
-            artifact_name: release-mac-x64
+            artifact_name: desktop-mac-x64
             artifact_glob: |
               release/*.dmg
+              release/*.zip
 
     runs-on: ${{ matrix.runner }}
 
@@ -69,25 +193,118 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    needs: build-release
+    needs:
+      - build-cli
+      - build-slack
+      - build-desktop
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: release-*
+          pattern: '*'
           merge-multiple: true
           path: release
 
       - name: Generate combined checksums
         run: bash scripts/release-sha256.sh
 
+      - name: Verify complete release asset set
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          required=(
+            "invoker-cli-${version}-linux-x64.tar.gz"
+            "invoker-cli-${version}-linux-arm64.tar.gz"
+            "invoker-cli-${version}-darwin-x64.tar.gz"
+            "invoker-cli-${version}-darwin-arm64.tar.gz"
+            "invoker-slack-${version}-linux-x64.tar.gz"
+            "invoker-slack-${version}-linux-arm64.tar.gz"
+            "invoker-slack-${version}-darwin-x64.tar.gz"
+            "invoker-slack-${version}-darwin-arm64.tar.gz"
+            "Invoker-${version}-x86_64.AppImage"
+            "Invoker-${version}-arm64.AppImage"
+            "Invoker-${version}-amd64.deb"
+            "Invoker-${version}-arm64.deb"
+            "Invoker-${version}-x64.dmg"
+            "Invoker-${version}-arm64.dmg"
+            "Invoker-${version}-x64.zip"
+            "Invoker-${version}-arm64.zip"
+            "SHA256SUMS"
+          )
+          missing=0
+          for asset in "${required[@]}"; do
+            if [ ! -f "release/${asset}" ]; then
+              echo "Missing release asset: ${asset}" >&2
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Generate release notes from CHANGELOG
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          node scripts/extract-changelog-section.mjs "$version" --out release/RELEASE_NOTES.md
+          cat release/RELEASE_NOTES.md
+
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release/RELEASE_NOTES.md
           files: |
             release/*.dmg
             release/*.deb
             release/*.AppImage
+            release/*.zip
+            release/invoker-cli-*
+            release/invoker-slack-*
             release/SHA256SUMS
+
+      - name: Install pnpm
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies for npm publish
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Publish npm packages
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          publish_if_missing() {
+            local package_dir="$1"
+            local name
+            local version
+
+            name="$(node -p "require('./${package_dir}/package.json').name")"
+            version="$(node -p "require('./${package_dir}/package.json').version")"
+
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already published; skipping"
+              return
+            fi
+
+            # Pack with pnpm (rewrites workspace:* deps to the exact version),
+            # then publish the tarball with npm (which would not rewrite them).
+            local tarball
+            tarball="$(pnpm --filter "${name}" pack --pack-destination "${RUNNER_TEMP}" | tail -n 1)"
+            npm publish "${tarball}" --access public
+          }
+
+          publish_if_missing packages/npm-cli
+          publish_if_missing packages/npm-ui
+          publish_if_missing packages/npm-slack

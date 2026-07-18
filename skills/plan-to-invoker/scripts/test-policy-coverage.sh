@@ -150,4 +150,31 @@ bash "$DOCTOR_SCRIPT" --skip-atomicity --source-file "$SOURCE_DOC" --coverage-ma
   fail "expected skill-doctor to pass with source file and valid coverage map"
 }
 
-echo "OK: policy coverage extraction, projection, traceability, and stack-manifest checks passed"
+source_plan="$tmpdir/source-plan.yaml"
+wrong_smoke_plan="$tmpdir/wrong-smoke-plan.yaml"
+cp "$POSITIVE_PLAN" "$source_plan"
+cat > "$wrong_smoke_plan" <<'YAML'
+name: Benchmark Manual Merge Smoke
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: verify-smoke
+    description: "Generic smoke check"
+    command: "echo smoke"
+    dependencies: []
+YAML
+
+bash "$DOCTOR_SCRIPT" --skip-atomicity --source-file "$source_plan" "$source_plan" >/dev/null || {
+  fail "expected skill-doctor to pass when generated plan preserves source task IDs"
+}
+
+doctor_wrong_source="$tmpdir/doctor-wrong-source-plan.json"
+if bash "$DOCTOR_SCRIPT" --skip-atomicity --source-file "$source_plan" "$wrong_smoke_plan" > "$doctor_wrong_source" 2>/dev/null; then
+  fail "expected skill-doctor to reject generated plan that replaces source tasks with smoke plan"
+fi
+jq -e '.firstFailedStep == "check-source-plan-coverage"' "$doctor_wrong_source" >/dev/null || {
+  fail "expected source-plan mismatch to fail at check-source-plan-coverage"
+}
+
+echo "OK: policy coverage extraction, projection, traceability, stack-manifest, and source-plan checks passed"

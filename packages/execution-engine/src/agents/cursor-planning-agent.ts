@@ -20,10 +20,13 @@ export class CursorPlanningAgent implements PlanningAgent {
     this.command = config.command ?? 'cursor';
   }
 
-  buildPlanningCommand(prompt: string): { command: string; args: string[] } {
+  buildPlanningCommand(
+    prompt: string,
+    options?: { model?: string },
+  ): { command: string; args: string[] } {
     return {
       command: this.command,
-      args: ['agent', '--print', '--trust', prompt],
+      args: ['agent', '--print', '--trust', ...(options?.model ? ['--model', options.model] : []), prompt],
     };
   }
 }

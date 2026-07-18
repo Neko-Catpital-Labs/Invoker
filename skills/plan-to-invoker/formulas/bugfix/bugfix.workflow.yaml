@@ -1,0 +1,65 @@
+name: "Bugfix: {{bug_summary}}"
+description: |
+  Fix {{bug_summary}} and prove it with the shared repro/verify command
+  `{{verify_command}}` (fails before the fix, passes after).
+
+  REPLACE_ME: describe the root cause and the fix in 1-3 paragraphs before
+  submitting. This recipe locks the workflow shape; the author supplies the
+  root-cause narrative and specializes each REPLACE_ME line.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: {{base_branch}}
+repoUrl: {{repo_url}}
+
+tasks:
+  - id: fix-{{bug_slug}}
+    description: |
+      Implement the fix for {{bug_summary}}.
+      Review claim: The change corrects {{bug_summary}} at its source with no unrelated edits. REPLACE_ME with the precise defect claim.
+      Review lane: behavior
+      Safety invariant: All other behavior in {{fix_file}} stays identical; only the defect path changes.
+      Slice rationale: One behavior slice: the defect and its deterministic proof, nothing else.
+      Architectural effect: None; no new module boundaries or interfaces.
+      Goal: Make `{{verify_command}}` pass by correcting the defect at its source.
+      Motivation: {{bug_summary}} is a real defect. REPLACE_ME with user impact.
+      Alternative considerations: A local workaround was rejected; the correction belongs at the source. REPLACE_ME.
+      Implementation details: Correct the defect in {{fix_file}}; keep everything else identical. REPLACE_ME with the concrete change.
+      Non-goals: No refactor, no new fields, no unrelated cleanup, no doc edits.
+      Layer: domain
+      Feature state: active
+      Files: {{fix_file}}
+      Change types:
+      - {{fix_file}}: modify
+      Acceptance criteria:
+      - `{{verify_command}}` exits 0 after the change.
+    prompt: |
+      Goal: Correct {{bug_summary}} at its source so the shared repro/verify passes.
+      Review lane: behavior
+      Motivation: {{bug_summary}} is a real defect that must be fixed at the root. REPLACE_ME with user impact.
+      Alternative considerations: Do not mask the symptom; correct the root cause. REPLACE_ME.
+      Implementation details: Edit {{fix_file}} to correct the defect; touch nothing else. REPLACE_ME with the concrete change.
+      Non-goals: No refactor, no new fields, no unrelated cleanup.
+      Assume no prior context. You are given only this task.
+      Correct the defect described above in {{fix_file}}. Do not change unrelated behavior.
+      Acceptance criteria:
+      - `{{verify_command}}` exits 0 after your change (this is the pass condition).
+    dependencies: []
+
+  - id: verify-{{bug_slug}}
+    description: |
+      Run the shared repro/verify command proving {{bug_summary}} is fixed.
+      Review claim: `{{verify_command}}` passes only when {{bug_summary}} is fixed.
+      Review lane: proof
+      Safety invariant: The command is identical before and after the fix; it fails before and passes after.
+      Slice rationale: One proof slice: the deterministic verification only.
+      Architectural effect: None; adds no product behavior.
+      Goal: Deterministically prove the fix with a single command.
+      Motivation: A shared repro/verify guards against regression. REPLACE_ME if the repro differs.
+      Alternative considerations: Manual verification was rejected as non-deterministic.
+      Implementation details: Execute `{{verify_command}}` as the terminal proof.
+      Non-goals: No product edits here; proof only.
+      Layer: e2e_regression
+      Feature state: active
+    command: "{{verify_command}}"
+    dependencies:
+      - fix-{{bug_slug}}

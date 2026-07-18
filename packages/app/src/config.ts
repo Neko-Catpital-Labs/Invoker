@@ -2,15 +2,91 @@
  * Configuration loader for Invoker.
  *
  * Reads from ~/.invoker/config.json (user-level config).
- * Override with INVOKER_REPO_CONFIG_PATH env var (for tests).
+ * INVOKER_REPO_CONFIG_PATH is a test/CLI override only.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveInvokerConfigPath } from '@invoker/contracts';
+import { validateInvokerConfig } from './config-validation.js';
+import type { PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
+
+const BUILT_IN_DEFAULT_EXECUTION_AGENT = 'codex';
+
+export interface ExternalWorkerLaunchConfig {
+  /** Executable used to start the external worker process. */
+  executable: string;
+  /** Optional argv passed after the executable. */
+  args?: string[];
+  /** Optional process working directory for the worker launch. */
+  cwd?: string;
+}
+
+export interface ExternalWorkerConfig {
+  /** Stable worker registry kind declared by the operator. */
+  kind: string;
+  /** Process invocation used by the loader to start the external worker. */
+  launch: ExternalWorkerLaunchConfig;
+}
+export interface DefaultExecutionConfig {
+  /**
+   * Default task execution harness when a task omits executionAgent.
+   * Falls back to the built-in default agent when unset.
+   */
+  executionAgent?: string;
+  /**
+   * Default task execution model paired with executionAgent.
+   * Only applied when the resolved task executionAgent matches this default agent.
+   */
+  executionModel?: string;
+}
+
+/**
+ * Owner-side PR-maintenance worker config.
+ *
+ * Disabled by default: the coderabbit-address and pr-conflict-rebase workers
+ * only receive launch dependencies when `enabled` is true. The remaining fields
+ * tune the shell entrypoint launch and fall back to the worker defaults when
+ * omitted.
+ */
+export interface PrMaintenanceConfig {
+  /**
+   * Gate for building PR-maintenance worker dependencies at owner startup.
+   * Default: false (workers get no launch config).
+   */
+  enabled?: boolean;
+  /** Repository root that owns the PR-maintenance shell scripts. Defaults to the Invoker repo root. */
+  repoRoot?: string;
+  /** Environment overrides forwarded to the shell entrypoint. `undefined` removes a variable. */
+  env?: Record<string, string | undefined>;
+  /** Poll cadence for both PR-maintenance workers in milliseconds. Defaults to five minutes. */
+  intervalMs?: number;
+  /** Shared cron lock path. Defaults to the shell script's INVOKER_PR_CRON_LOCK behavior. */
+  lockPath?: string;
+  /** Shell executable used to run the entrypoint. Defaults to bash. */
+  shell?: string;
+}
 
 export interface InvokerConfig {
   defaultBranch?: string;
+  /**
+   * Web surface (browser mirror of the desktop app) shared-secret token.
+   * When set (or via INVOKER_WEB_TOKEN), the owner process serves the UI at
+   * http://<webHost>:<webPort>/?token=<token>. Unset disables the web surface.
+   * INVOKER_WEB_TOKEN takes precedence over this value.
+   */
+  webToken?: string;
+  /**
+   * Host the web surface binds to. Default '127.0.0.1' (localhost only).
+   * Set '0.0.0.0' to expose it on a remote box (e.g. the DigitalOcean host).
+   * INVOKER_WEB_HOST takes precedence.
+   */
+  webHost?: string;
+  /**
+   * Port the web surface binds to. Default 4200. INVOKER_WEB_PORT takes precedence.
+   */
+  webPort?: number;
   /**
    * When true, skip relaunching orphaned running tasks on GUI startup.
    * Useful when you want to inspect state before tasks resume automatically.
@@ -30,6 +106,16 @@ export interface InvokerConfig {
    */
   autoFixRetries?: number;
   /**
+   * When true, the owner process auto-starts the e2e-autofix worker (runs the
+   * extended battery on a schedule and opens one fix PR per failing suite).
+   * Default: false.
+   */
+  e2eAutoFixEnabled?: boolean;
+  /** Cadence for the e2e-autofix worker in milliseconds. Default: 43_200_000 (12h). */
+  e2eAutoFixIntervalMs?: number;
+  stallRequeueRetries?: number;
+  stallRequeueBackoffMs?: number;
+  /**
    * When true, successful AI-applied fixes are automatically approved.
    * This skips the manual "Approve Fix" step for fix-with-agent and
    * resolve-conflict flows.
@@ -38,11 +124,46 @@ export interface InvokerConfig {
    */
   autoApproveAIFixes?: boolean;
   /**
+   * EXPERIMENTAL_PLANNER. When true, redirect the planning step to the
+   * experimental external planner (via the redirect MCP server) instead of the
+   * native planning skill. The redirect server also reads this flag and serves no
+   * tools when off, so planning falls back to native. Default: false.
+   */
+  experimentalPlanner?: boolean;
+  /**
    * Preferred execution agent for automatic fix retries.
    * When unset, auto-fix falls back to the task's executionAgent,
    * then to the built-in default agent.
    */
   autoFixAgent?: string;
+  /**
+   * Preferred execution agent for resolve-conflict (git merge conflicts).
+   * When unset, resolve-conflict uses the entry-point path default
+   * (explicit CLI/UI agent, then defaultExecutionAgent / autoFixAgent).
+   */
+  conflictResolutionAgent?: string;
+  /**
+   * Preferred execution model for resolve-conflict only.
+   * When set, wins over task.config.executionModel / defaultExecutionModel
+   * so conflict resolution can use a cheaper model than normal task work.
+   */
+  conflictResolutionModel?: string;
+  /** Default execution harness for prompt-backed tasks when the task does not override it. */
+  defaultExecutionAgent?: string;
+  /** Default execution model for prompt-backed tasks when the task does not override it. */
+  defaultExecutionModel?: string;
+  /**
+   * Config-owned default execution harness/model for tasks that omit them.
+   * This is separate from Slack planning presets and applies across surfaces.
+   */
+  defaultExecution?: DefaultExecutionConfig;
+  /**
+   * When true, failed CI checks on Invoker-created review-gate PRs can
+   * trigger the same auto-fix recovery flow used for task failures.
+   *
+   * Default: false.
+   */
+  autoFixCi?: boolean;
   /**
    * Read-only diagnostics tuning for the Action Graph view.
    * Default stall threshold: 60000ms. Env fallback:
@@ -55,10 +176,35 @@ export interface InvokerConfig {
   planningTimeoutSeconds?: number;
   /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */
   planningHeartbeatIntervalSeconds?: number;
+  /**
+   * How many additional attempts to make when the planner CLI exits 0 with
+   * empty stdout (typically an auth-token refresh window or a one-off rate
+   * limit). Only retries the silent-success case; non-zero exits and spawn
+   * errors are not retried. Default: 2 (3 attempts total).
+   */
+  plannerRetryLimit?: number;
+  /**
+   * Base delay in milliseconds between planner empty-output retry attempts.
+   * Each subsequent retry doubles this value. Default: 500ms.
+   */
+  plannerRetryBaseDelayMs?: number;
+  /** Named Slack planning harness presets: preset key → {tool, model}; built-ins apply when omitted. */
+  slackHarnessPresets?: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }>;
+  /** Default harness preset key when the message carries no `[preset]` tag. Default: 'cursor+claude'. */
+  defaultSlackHarnessPreset?: string;
+  /** Slack repo aliases: alias → git URL, resolved from a `[repo:<alias>]` tag. */
+  slackRepos?: Record<string, string>;
+  /** Repo URL used for Slack planning when the message carries no `[repo:]` tag. */
+  defaultRepoUrl?: string;
   /** Maximum number of tasks that can run concurrently. Default: 6. */
   maxConcurrency?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */
   browser?: string;
+  /** GUI embedded terminal options. Headless open-terminal ignores this. */
+  terminal?: {
+    /** Backend for GUI embedded spawned terminals. Default: bash. */
+    embeddedBackend?: 'bash' | 'pty';
+  };
   /** Cloudflare R2 (or S3-compatible) storage for PR images. Env var fallback: R2_*. */
   imageStorage?: {
     provider: 'r2';
@@ -101,13 +247,21 @@ export interface InvokerConfig {
     /**
      * Remote invoker home directory (e.g., ~/.invoker). Only used in managed mode.
      * Default: ~/.invoker
+     *
+     * Invoker does not run repo bootstrap automatically. If a repo needs hydration,
+     * make the task command run the repo-owned setup explicitly.
      */
     remoteInvokerHome?: string;
     /**
-     * Optional provision command to run in the worktree after creation (e.g., pnpm install).
-     * Only used in managed mode. Default: pnpm install --frozen-lockfile
+     * When true, export agent API keys from the local secrets file into SSH task/fix
+     * shells. Default false so remote Claude/Codex CLI account auth is preserved.
      */
-    provisionCommand?: string;
+    use_api_key?: boolean;
+    /**
+     * Optional local KEY=value secrets file used when use_api_key is true.
+     * Defaults to docker.secretsFile/fallback when unset.
+     */
+    secretsFile?: string;
     /**
      * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
      * Used for SSH executing-stall liveness checks. Default: 30.
@@ -184,7 +338,26 @@ export interface InvokerConfig {
     /** Routing strategy. Defaults to "enforce". */
     strategy?: 'enforce' | 'route';
   }>;
+  /**
+   * Operator-declared external worker list, with each worker identified by registry kind.
+   * The loader consumes this later; absent means no external workers.
+   */
+  externalWorkers?: ExternalWorkerConfig[];
+  /**
+   * Owner-side PR-maintenance worker config. Disabled by default; when
+   * `enabled` is true the owner builds coderabbit-address and pr-conflict-rebase
+   * worker launch dependencies from this block.
+   */
+  prMaintenance?: PrMaintenanceConfig;
 }
+export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
+  'cursor+claude': { tool: 'cursor', model: 'claude' },
+  'cursor+codex': { tool: 'cursor', model: 'codex' },
+  'omp+claude': { tool: 'omp', model: 'claude' },
+  'omp+codex': { tool: 'omp', model: 'codex' },
+  omp: { tool: 'omp' },
+  codex: { tool: 'codex' },
+};
 
 function readJsonSafe(path: string): InvokerConfig {
   if (!existsSync(path)) {
@@ -207,11 +380,96 @@ function readJsonSafe(path: string): InvokerConfig {
   return parsed as InvokerConfig;
 }
 
+export function resolveConfigFilePath(): string {
+  return resolveInvokerConfigPath(process.env, homedir());
+}
+
+export function resolveConfigFileState(): { path: string; exists: boolean } {
+  const path = resolveConfigFilePath();
+  return { path, exists: existsSync(path) };
+}
 export function loadConfig(): InvokerConfig {
-  if (process.env.INVOKER_REPO_CONFIG_PATH) {
-    return readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH);
-  }
-  return readJsonSafe(join(homedir(), '.invoker', 'config.json'));
+  const config = readJsonSafe(resolveConfigFilePath());
+  return validateInvokerConfig(config);
+}
+export function resolveDefaultExecutionAgent(config: InvokerConfig): string {
+  const configured = config.defaultExecutionAgent?.trim();
+  return configured && configured.length > 0 ? configured : BUILT_IN_DEFAULT_EXECUTION_AGENT;
+}
+
+
+export interface DefaultTaskExecutionSettings {
+  executionAgent: string;
+  executionModel?: string;
+}
+
+export function resolveDefaultTaskExecutionSettings(config: InvokerConfig): DefaultTaskExecutionSettings {
+  const configuredAgent = config.defaultExecutionAgent?.trim();
+  const configuredModel = config.defaultExecutionModel?.trim();
+  return {
+    executionAgent: configuredAgent && configuredAgent.length > 0 ? configuredAgent : BUILT_IN_DEFAULT_EXECUTION_AGENT,
+    ...(configuredModel && configuredModel.length > 0 ? { executionModel: configuredModel } : {}),
+  };
+}
+export function resolveAutoFixExecutionModel(config: InvokerConfig): string | undefined {
+  const autoFixAgent = config.autoFixAgent?.trim();
+  if (!autoFixAgent) return undefined;
+  const defaults = resolveDefaultTaskExecutionSettings(config);
+  return autoFixAgent === defaults.executionAgent ? defaults.executionModel : undefined;
+}
+
+
+
+export interface ConflictResolutionSettings {
+  agent?: string;
+  model?: string;
+}
+
+/**
+ * Resolve agent/model for resolve-conflict.
+ *
+ * Precedence for agent: explicitAgent → conflictResolutionAgent → pathDefaultAgent.
+ * Model: conflictResolutionModel when set (wins over task/default execution models).
+ */
+export function resolveConflictResolutionSettings(
+  config: Pick<InvokerConfig, 'conflictResolutionAgent' | 'conflictResolutionModel'>,
+  options?: {
+    explicitAgent?: string;
+    pathDefaultAgent?: string;
+  },
+): ConflictResolutionSettings {
+  const explicit = options?.explicitAgent?.trim();
+  const configAgent = config.conflictResolutionAgent?.trim();
+  const configModel = config.conflictResolutionModel?.trim();
+  const pathDefault = options?.pathDefaultAgent?.trim();
+
+  const agent = (explicit && explicit.length > 0)
+    ? explicit
+    : (configAgent && configAgent.length > 0)
+      ? configAgent
+      : (pathDefault && pathDefault.length > 0)
+        ? pathDefault
+        : undefined;
+
+  return {
+    ...(agent ? { agent } : {}),
+    ...(configModel && configModel.length > 0 ? { model: configModel } : {}),
+  };
+}
+
+export type EmbeddedTerminalBackendConfig = 'bash' | 'pty';
+
+export function resolveEmbeddedTerminalBackendConfig(
+  config: InvokerConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): EmbeddedTerminalBackendConfig {
+  const rawValue = env.INVOKER_EMBEDDED_TERMINAL_BACKEND ?? config.terminal?.embeddedBackend ?? 'pty';
+  const raw = typeof rawValue === 'string' ? rawValue : String(rawValue);
+  const value = raw.trim().toLowerCase();
+  if (value === 'bash' || value === 'pty') return value;
+  throw new Error(
+    `Invalid embedded terminal backend "${raw}". Expected "bash" or "pty".`,
+  );
 }
 
 /**
@@ -231,4 +489,29 @@ export function resolveSecretsFilePath(config: InvokerConfig): string | undefine
   const fallback = join(homedir(), '.config', 'invoker', 'secrets.env');
   if (existsSync(fallback)) return fallback;
   return undefined;
+}
+
+/**
+ * Build PR-maintenance worker launch dependencies from config.
+ *
+ * Returns `undefined` when the block is absent or `enabled` is not true, so the
+ * owner keeps PR-maintenance workers disabled by default. When enabled, returns
+ * only the launch fields (the `enabled` gate is dropped) for injection as the
+ * worker runtime `prMaintenance` dependency; omitted fields fall back to the
+ * worker defaults.
+ */
+export function resolvePrMaintenanceWorkerConfig(
+  config: InvokerConfig,
+): PrMaintenanceWorkerConfig | undefined {
+  const prMaintenance = config.prMaintenance;
+  if (!prMaintenance?.enabled) {
+    return undefined;
+  }
+  const launch: PrMaintenanceWorkerConfig = {};
+  if (prMaintenance.repoRoot !== undefined) launch.repoRoot = prMaintenance.repoRoot;
+  if (prMaintenance.env !== undefined) launch.env = prMaintenance.env;
+  if (prMaintenance.intervalMs !== undefined) launch.intervalMs = prMaintenance.intervalMs;
+  if (prMaintenance.lockPath !== undefined) launch.lockPath = prMaintenance.lockPath;
+  if (prMaintenance.shell !== undefined) launch.shell = prMaintenance.shell;
+  return launch;
 }

@@ -39,7 +39,7 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
  */
 function mockPool(fam: WorktreeExecutor) {
   const pool = {
-    ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+    ensureCloneThroughRepoQueue: vi.fn().mockResolvedValue('/fake/cache/clone'),
     acquireWorktree: vi.fn().mockImplementation((_repoUrl: string, branch: string) => {
       const sanitized = branch.replace(/\//g, '-');
       return Promise.resolve({
@@ -113,14 +113,6 @@ function setupSpawnMock(): {
       });
 
       return gitProc as any;
-    }
-
-    // Auto-succeed pnpm install (worktree provisioning)
-    const argsArr = args as string[] | undefined;
-    if (cmd === '/bin/bash' && argsArr?.[1]?.includes('pnpm install')) {
-      const installProc = createMockProcess();
-      Promise.resolve().then(() => installProc.emit('close', 0, null));
-      return installProc as any;
     }
 
     // For non-git commands (task execution), return the task process
@@ -211,7 +203,7 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
     expect((executor as any).entries.size).toBe(0);
   });
 
-  it('should call pool.ensureClone (which fetches) before branching when baseBranch is set', async () => {
+  it('should call pool.ensureCloneThroughRepoQueue (which fetches) before branching when baseBranch is set', async () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest({
@@ -219,9 +211,9 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
     });
     await executor.start(request);
 
-    // pool.ensureClone handles fetching internally (git fetch --all on existing clones)
+    // pool.ensureCloneThroughRepoQueue handles fetching internally (git fetch --all on existing clones)
     const pool = (executor as any).pool;
-    expect(pool.ensureClone).toHaveBeenCalledWith('git@github.com:test/repo.git');
+    expect(pool.ensureCloneThroughRepoQueue).toHaveBeenCalledWith('git@github.com:test/repo.git');
 
     // Cleanup
     taskProcess.emit('close', 0, null);
