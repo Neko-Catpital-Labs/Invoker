@@ -1076,7 +1076,7 @@ export function App() {
             <div
               ref={graphSurfaceRef}
               data-testid="workflow-graph-surface"
-              className="flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900"
+              className="flex-1 relative isolate overflow-hidden border-r border-gray-800 bg-gray-900"
               onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
             >
               {viewMode === 'queue' ? (
@@ -1101,14 +1101,16 @@ export function App() {
                 />
               ) : (
                 <>
-                  <WorkflowGraph
-                    tasks={tasks}
-                    workflows={workflows}
-                    selectedWorkflowId={selectedWorkflow?.id ?? null}
-                    statusFilters={statusFilters}
-                    onSelectWorkflow={handleWorkflowClick}
-                    onWorkflowContextMenu={handleWorkflowContextMenu}
-                  />
+                  <div data-testid="workflow-graph-content-layer" className="relative z-0 h-full w-full">
+                    <WorkflowGraph
+                      tasks={tasks}
+                      workflows={workflows}
+                      selectedWorkflowId={selectedWorkflow?.id ?? null}
+                      statusFilters={statusFilters}
+                      onSelectWorkflow={handleWorkflowClick}
+                      onWorkflowContextMenu={handleWorkflowContextMenu}
+                    />
+                  </div>
                   {selectedWorkflow && miniDagTasks.size > 0 && (
                     <FloatingGraphPanel
                       key={selectedWorkflow.id}
