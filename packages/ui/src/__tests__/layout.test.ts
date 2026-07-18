@@ -128,10 +128,10 @@ describe('layoutNodes', () => {
     expect(posA.x).toBe(posX.x);
     expect(posA.y).not.toBe(posX.y);
 
-    // The gap between A and X should be > base gap (40)
+    // The gap between A and X should be > base gap (24)
     // because A has 4 children (4 connections)
-    const gap = Math.abs(posA.y - posX.y) - 80; // subtract NODE_HEIGHT
-    expect(gap).toBeGreaterThan(40);
+    const gap = Math.abs(posA.y - posX.y) - 40; // subtract NODE_HEIGHT
+    expect(gap).toBeGreaterThan(24);
   });
 
   it('reduces edge crossings in a diamond+crossing pattern', () => {
