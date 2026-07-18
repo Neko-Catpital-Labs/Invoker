@@ -229,7 +229,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       for (const workflow of workflows) {
         deps.orchestrator.syncFromDb(workflow.id);
       }
-      const status = deps.orchestrator.getQueueStatus();
+      const status = deps.orchestrator.getQueueStatus({ refresh: false });
 
       switch (flags.output) {
         case 'label': {
