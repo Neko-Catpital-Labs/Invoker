@@ -158,6 +158,7 @@ export function getEdgeStyle(sourceStatus: string, targetStatus: string): EdgeSt
 export function formatStatusLabel(status: TaskStatus): string {
   const labelMap: Record<TaskStatus, string> = {
     pending: 'Pending',
+    queued: 'Queued',
     running: 'Running',
     review_ready: 'Review Ready',
     awaiting_approval: 'Awaiting Approval',
