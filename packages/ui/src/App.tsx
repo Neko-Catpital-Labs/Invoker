@@ -889,7 +889,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchActiveIndex, setSearchActiveIndex] = useState(0);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
-  const planningTypingStateRef = useRef<PlanningTypingTelemetryState | null>(null);
+  const planningTypingContextRef = useRef<Record<string, unknown> | null>(null);
   const planningTypingSequenceRef = useRef(0);
   const planningTypingFrameIdsRef = useRef<Set<number>>(new Set());
   const systemSetupAutoOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1194,7 +1194,7 @@ export function App() {
     };
   }, []);
   useEffect(() => {
-    planningTypingStateRef.current = {
+    planningTypingContextRef.current = createPlanningTypingTelemetryContext({
       tasks,
       workflows,
       viewMode,
@@ -1202,7 +1202,7 @@ export function App() {
       selectedTaskId,
       selectedWorkflowId,
       hasLoadedPlan,
-    };
+    });
   }, [
     tasks,
     workflows,
@@ -1245,9 +1245,9 @@ export function App() {
 
       const frameId = scheduleFrame(() => {
         planningTypingFrameIdsRef.current.delete(frameId);
-        const telemetryState = planningTypingStateRef.current;
+        const telemetryContext = planningTypingContextRef.current;
         void window.invoker?.reportUiPerf?.(PLANNING_TYPING_LAG_METRIC, {
-          ...(telemetryState ? createPlanningTypingTelemetryContext(telemetryState) : {}),
+          ...(telemetryContext ?? {}),
           sequence,
           eventType: event.type,
           lagMs: Math.round(performance.now() - startedAt),
