@@ -985,20 +985,31 @@ export class Orchestrator {
     return loadAttempt.call(this.persistence, attemptId);
   }
 
+    private attemptLeaseAnchor(attempt: Attempt): Date | undefined {
+    return attempt.lastHeartbeatAt ?? attempt.claimedAt ?? attempt.startedAt;
+  }
   private isAttemptLeaseActive(attempt: Attempt | undefined, now: number = Date.now()): boolean {
     if (!attempt) return false;
     if (isDiscardedAttempt(attempt)) return false;
     if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
-    if (!attempt.leaseExpiresAt) return true;
-    return attempt.leaseExpiresAt.getTime() >= now;
+    if (attempt.leaseExpiresAt) {
+      return attempt.leaseExpiresAt.getTime() >= now;
+    }
+    const anchor = this.attemptLeaseAnchor(attempt);
+    if (!anchor) return true;
+    return anchor.getTime() + ATTEMPT_LEASE_MS >= now;
   }
 
   private isAttemptLeaseExpired(attempt: Attempt | undefined, now: number = Date.now()): boolean {
     if (!attempt) return false;
     if (isDiscardedAttempt(attempt)) return false;
     if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
-    if (!attempt.leaseExpiresAt) return false;
-    return attempt.leaseExpiresAt.getTime() < now;
+    if (attempt.leaseExpiresAt) {
+      return attempt.leaseExpiresAt.getTime() < now;
+    }
+    const anchor = this.attemptLeaseAnchor(attempt);
+    if (!anchor) return false;
+    return anchor.getTime() + ATTEMPT_LEASE_MS < now;
   }
 
   private isTaskExecutionActive(
@@ -1014,7 +1025,20 @@ export class Orchestrator {
       return false;
     }
 
-    return task.status === 'running' || task.status === 'fixing_with_ai';
+    if (task.status !== 'running' && task.status !== 'fixing_with_ai') {
+      return false;
+    }
+    const raw = task.execution.lastHeartbeatAt
+      ?? task.execution.startedAt
+      ?? task.execution.launchStartedAt;
+    if (!raw) return true;
+    const ts = raw instanceof Date
+      ? raw.getTime()
+      : typeof raw === 'string'
+        ? Date.parse(raw)
+        : Number.NaN;
+    if (!Number.isFinite(ts)) return true;
+    return ts + ATTEMPT_LEASE_MS >= now;
   }
 
   private isExecutableResponseTask(task: TaskState): boolean {

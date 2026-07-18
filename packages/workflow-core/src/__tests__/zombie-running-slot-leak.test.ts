@@ -51,4 +51,39 @@ describe('zombie running task consumes a concurrency slot', () => {
     expect(started.map((t) => t.id)).toContain(waitingId);
     expect(orchestrator.getTask(waitingId)!.status).toBe('running');
   });
+
+  it('does not count a running task with a missing leaseExpiresAt and stale heartbeat', () => {
+    const persistence = new InMemoryPersistence();
+    const orchestrator = makeOrchestratorWith(persistence, 1);
+
+    orchestrator.loadPlan({
+      name: 'zombie-no-lease-expiry',
+      baseBranch: 'master',
+      featureBranch: 'feature/zombie-no-lease',
+      tasks: [{ id: 'stuck', description: 'runs then strands without lease expiry' }],
+    });
+    const zombieId = orchestrator.getAllTasks().find((t) => t.id.endsWith('/stuck'))!.id;
+    orchestrator.startExecution();
+    expect(orchestrator.getTask(zombieId)!.status).toBe('running');
+
+    const attemptId = orchestrator.getTask(zombieId)!.execution.selectedAttemptId!;
+    const longAgo = new Date(Date.now() - 60 * 60 * 1000);
+    (persistence.updateAttempt as (id: string, changes: Record<string, unknown>) => void)(attemptId, {
+      leaseExpiresAt: undefined,
+      lastHeartbeatAt: longAgo,
+      claimedAt: longAgo,
+    });
+
+    orchestrator.loadPlan({
+      name: 'blocked-by-stale-heartbeat',
+      baseBranch: 'master',
+      featureBranch: 'feature/blocked-stale',
+      tasks: [{ id: 'wants-slot', description: 'ready, waiting for capacity' }],
+    });
+    const waitingId = orchestrator.getAllTasks().find((t) => t.id.endsWith('/wants-slot'))!.id;
+
+    const started = orchestrator.startExecution();
+    expect(started.map((t) => t.id)).toContain(waitingId);
+    expect(orchestrator.getQueueStatus({ refresh: true }).runningCount).toBeLessThanOrEqual(1);
+  });
 });
