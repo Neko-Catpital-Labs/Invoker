@@ -112,7 +112,7 @@ export function poolMemberKey(member: ExecutionPoolMember): string {
   return `${member.type}:${member.id}`;
 }
 
-function poolMemberLoad(host: TaskRunnerPoolHost, poolId: string, memberKey: string): number {
+function memoryPoolMemberLoad(host: TaskRunnerPoolHost, poolId: string, memberKey: string): number {
   let load = 0;
   for (const selection of host.pendingPoolSelections.values()) {
     if (selection.poolId === poolId && selection.memberKey === memberKey) load += 1;
@@ -123,13 +123,36 @@ function poolMemberLoad(host: TaskRunnerPoolHost, poolId: string, memberKey: str
   return load;
 }
 
+function sshHostLeaseLoad(host: TaskRunnerPoolHost, member: Extract<ExecutionPoolMember, { type: 'ssh' }>): number | undefined {
+  const target = host.getRemoteTargets()[member.id];
+  if (!target) return undefined;
+  const resourceKey = sshResourceKey(target);
+  const countFn = host.persistence.countExecutionResourceLeases?.bind(host.persistence);
+  if (countFn) return countFn(resourceKey);
+  const listFn = host.persistence.listExecutionResourceLeases?.bind(host.persistence);
+  if (!listFn) return undefined;
+  const nowIso = new Date().toISOString();
+  return listFn().filter((lease) => (
+    lease.resourceKey === resourceKey
+    && (!lease.leaseExpiresAt || lease.leaseExpiresAt > nowIso)
+  )).length;
+}
+
+function poolMemberLoad(host: TaskRunnerPoolHost, poolId: string, member: ExecutionPoolMember): number {
+  if (member.type === 'ssh') {
+    const leaseLoad = sshHostLeaseLoad(host, member);
+    if (leaseLoad !== undefined) return leaseLoad;
+  }
+  return memoryPoolMemberLoad(host, poolId, poolMemberKey(member));
+}
+
 function poolMemberLimit(pool: ExecutionPoolConfig, member: ExecutionPoolMember): number | undefined {
   return member.maxConcurrentTasks ?? pool.maxConcurrentTasksPerMember;
 }
 
 function poolMemberHasCapacity(host: TaskRunnerPoolHost, poolId: string, pool: ExecutionPoolConfig, member: ExecutionPoolMember): boolean {
   const limit = poolMemberLimit(pool, member);
-  return limit === undefined || poolMemberLoad(host, poolId, poolMemberKey(member)) < limit;
+  return limit === undefined || poolMemberLoad(host, poolId, member) < limit;
 }
 
 function isPoolMemberDown(host: TaskRunnerPoolHost, memberKey: string, now: number = Date.now()): boolean {
@@ -218,8 +241,7 @@ export function selectPoolMember(
     .filter((member) => !excludedMemberKeys.has(poolMemberKey(member)))
     .filter((member) => !isPoolMemberDown(host, poolMemberKey(member)))
     .map((member, index) => {
-      const memberKey = poolMemberKey(member);
-      const load = poolMemberLoad(host, poolId, memberKey);
+      const load = poolMemberLoad(host, poolId, member);
       const limit = poolMemberLimit(pool, member);
       return {
         member,
@@ -255,7 +277,7 @@ function poolCapacitySnapshot(
     return {
       memberId: member.id,
       memberType: member.type,
-      load: poolMemberLoad(host, poolId, memberKey),
+      load: poolMemberLoad(host, poolId, member),
       limit: poolMemberLimit(pool, member),
       excluded: excludedMemberKeys.has(memberKey),
       down,

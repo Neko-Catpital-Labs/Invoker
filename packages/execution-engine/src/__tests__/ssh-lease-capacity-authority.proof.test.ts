@@ -83,10 +83,8 @@ function makeDualPoolRunner(opts: {
 }
 
 describe('SSH lease capacity authority (proof)', () => {
-  // Desired: a live-looking activeExecutions row with no durable lease must not
-  // wedge capacity. Today reclaim leaves matching selectedAttemptId entries in
-  // place, so poolMemberLoad still reports full while leases are empty.
-  it.fails('does not wedge SSH capacity on a lease-less activeExecutions ghost', () => {
+  // Lease-backed SSH load ignores lease-less activeExecutions ghosts.
+  it('does not wedge SSH capacity on a lease-less activeExecutions ghost', () => {
     const liveTask = makeTask('wf-1/task-a', 'pnpm-ssh', 'wf-1/task-a-live');
     liveTask.status = 'running';
     const sshExecutor = makeSshExecutor();
