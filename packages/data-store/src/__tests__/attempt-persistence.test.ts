@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import { createAttempt, createTaskState } from '@invoker/workflow-core';
 
@@ -60,6 +60,76 @@ describe('Attempt persistence', () => {
     expect(attempts[0].id).toBe(a1.id);
     expect(attempts[1].id).toBe(a2.id);
     expect(attempts[2].id).toBe(a3.id);
+  });
+
+  it('loadCostAttributionAttempts projects only attribution columns in created_at order', () => {
+    const older = {
+      ...createAttempt('taskA', {
+        status: 'failed',
+        agentSessionId: 'sess-old',
+        error: 'x'.repeat(100_000),
+      }),
+      id: 'attempt-old',
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
+    };
+    const newer = {
+      ...createAttempt('taskA', {
+        status: 'completed',
+        agentSessionId: 'sess-new',
+        error: 'y'.repeat(100_000),
+      }),
+      id: 'attempt-new',
+      createdAt: new Date('2026-07-01T00:01:00.000Z'),
+    };
+    adapter.saveAttempt(newer);
+    adapter.saveAttempt(older);
+
+    const queryAll = vi.spyOn(
+      adapter as unknown as { queryAll: (sql: string, params?: unknown[]) => Record<string, unknown>[] },
+      'queryAll',
+    );
+    let sql = '';
+    try {
+      expect(adapter.loadCostAttributionAttempts('taskA')).toEqual([
+        {
+          id: 'attempt-old',
+          nodeId: 'taskA',
+          agentSessionId: 'sess-old',
+          createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        },
+        {
+          id: 'attempt-new',
+          nodeId: 'taskA',
+          agentSessionId: 'sess-new',
+          createdAt: new Date('2026-07-01T00:01:00.000Z'),
+        },
+      ]);
+      sql = String(queryAll.mock.calls[0]?.[0] ?? '');
+    } finally {
+      queryAll.mockRestore();
+    }
+
+    expect(sql).toMatch(/SELECT id, node_id, agent_session_id, created_at\s+FROM attempts\s+WHERE node_id = \?\s+ORDER BY created_at ASC/);
+    expect(sql).not.toMatch(/SELECT\s+\*/i);
+    expect(sql).not.toMatch(/\berror\b/i);
+  });
+
+  it('uses the node_id, created_at index for cost attribution attempt reads', () => {
+    const planRows = (adapter as any).db
+      .prepare(`
+        EXPLAIN QUERY PLAN
+        SELECT id, node_id, agent_session_id, created_at
+        FROM attempts
+        WHERE node_id = ?
+        ORDER BY created_at ASC
+      `)
+      .all('taskA') as Array<{ detail: string }>;
+    const detail = planRows.map((row) => row.detail).join('\n');
+
+    expect(detail).toContain('SEARCH attempts');
+    expect(detail).toContain('idx_attempts_node_created');
+    expect(detail).not.toContain('SCAN attempts');
+    expect(detail).not.toContain('USE TEMP B-TREE');
   });
 
   it('loadAttempt returns undefined for missing ID', () => {
