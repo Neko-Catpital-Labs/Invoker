@@ -449,26 +449,11 @@ export function App() {
     setWorkflowContextMenu({ x: event.clientX, y: event.clientY, workflowId });
   }, []);
 
-  const handleDagSurfaceClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+  const handleDagSurfaceClick = useCallback(() => {
     if (contextMenu || workflowContextMenu) {
       setContextMenu(null);
       setWorkflowContextMenu(null);
-      return;
     }
-
-    const target = event.target as HTMLElement;
-    if (
-      target.closest('[data-testid^="workflow-node-"]') ||
-      target.closest('[data-testid="selected-workflow-mini-dag"]') ||
-      target.closest('.react-flow__node') ||
-      target.closest('[role="menu"]')
-    ) {
-      return;
-    }
-
-    setSelectedTaskId(null);
-    setSelectedWorkflowId(null);
-    setWorkflowSelectionDismissed(true);
   }, [contextMenu, workflowContextMenu]);
 
   const handleRestartTask = useCallback(async (taskId: string) => {

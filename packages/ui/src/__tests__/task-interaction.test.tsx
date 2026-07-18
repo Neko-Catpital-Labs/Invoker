@@ -94,7 +94,7 @@ describe('Task interaction (component)', () => {
     });
   });
 
-  it('clicking workflow graph background dismisses the selected mini DAG', async () => {
+  it('clicking workflow graph background keeps the selected mini DAG and task selection', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
 
@@ -107,11 +107,17 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
     });
 
-    fireEvent.click(screen.getByTestId('workflow-graph-react-flow'));
-
+    fireEvent.click(screen.getByTestId('rf__node-task-alpha'));
     await waitFor(() => {
-      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+      expect(screen.getByText('echo hello-alpha')).toBeInTheDocument();
     });
+
+    fireEvent.click(screen.getByTestId('workflow-graph-react-flow'));
+    fireEvent.click(screen.getByTestId('workflow-graph-surface'));
+
+    expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('First test task');
+    expect(screen.getByText('echo hello-alpha')).toBeInTheDocument();
   });
 
   it('clicking inside the mini DAG panel keeps the workflow selected', async () => {
